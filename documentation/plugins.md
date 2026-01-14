@@ -52,7 +52,8 @@ exports.init = function () {
         href: '/admin/plugin/hello-world',
         label: 'Hello World',
         icon: 'fa-smile', // FontAwesome icon
-        order: 100
+        order: 100,
+        cap: 'manage_options' // OPTIONAL: Required capability to see this menu
     });
 
     console.log('Hello World plugin initialized!');

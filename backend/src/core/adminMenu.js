@@ -25,7 +25,8 @@ function registerAdminMenu(pluginSlug, item) {
             href: item.href,
             label: item.label,
             icon: item.icon || 'fa-puzzle-piece',
-            order: item.order || 100
+            order: item.order || 100,
+            cap: item.cap || item.capability || null
         });
     }
 }

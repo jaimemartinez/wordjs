@@ -315,7 +315,8 @@ exports.init = function () {
         href: '/admin/plugin/videos',
         label: 'Videos',
         icon: 'fa-video',
-        order: 35
+        order: 35,
+        cap: 'upload_files'
     });
 
     console.log('   ✓ Video Gallery plugin initialized');

@@ -30,3 +30,12 @@ WordJS uses **Puck** for its visual editor.
 *   **Public Access:** Accessed via Gateway on port `3000` (or `80`/`443` in prod).
 
 Ensure `NEXT_PUBLIC_API_URL` points to the Gateway URL, not direct backend port.
+
+## RBAC & Sidebar Filtering
+
+The Admin sidebar dynamically adjusts based on user permissions.
+*   **Role-Based Access Control:** User objects now include a `capabilities` array.
+*   **Dynamic Filtering:** Each sidebar menu item is mapped to a required backend capability (e.g., `edit_posts`, `manage_options`).
+*   **Implementation:** The `Sidebar` component filters the `coreMenuItems` and `pluginMenus` lists in real-time. If a user lacks a capability, the corresponding menu item is hidden.
+
+Ensure `AuthContext` is used to access the `user.capabilities` array for any custom permission checks in the UI.

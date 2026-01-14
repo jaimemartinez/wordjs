@@ -180,7 +180,8 @@ exports.init = function () {
         href: '/admin/plugin/carousels',
         label: 'Carousels',
         icon: 'fa-images',
-        order: 50
+        order: 50,
+        cap: 'upload_files'
     });
 
     console.log('Photo Carousel plugin v2.0 initialized!');

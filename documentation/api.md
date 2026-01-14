@@ -49,11 +49,18 @@ Located in `backend/src/middleware/permissions.js`.
 | `isAdmin`         | Strict check for 'administrator' role. | `router.delete('/', authenticate, isAdmin, ...)`                         |
 | `ownerOrCan(cap)` | resource owner OR capability.          | `router.put('/:id', authenticate, ownerOrCan('edit_others_posts'), ...)` |
 
-### 2.3 User Capabilities
-Roles are defined in `backend/src/config/app.js`:
+### 2.3 Dynamic Roles & Capabilities
+Roles are no longer hardcoded. They are stored in the database (table `options`) under the key `wordjs_user_roles`.
+
+*   **Logic:** `backend/src/core/roles.js` manages the abstraction.
+*   **Initialization:** Default roles are seeded during installation but can be modified via the Roles UI.
+*   **Capabilities:** Users' capabilities are resolved at runtime based on their assigned role in the `roles` manager.
+
+Default roles include:
 *   **Administrator:** `*` (All capabilities).
 *   **Editor:** `publish_posts`, `edit_others_posts`, etc.
-*   **Author:** `publish_posts`, `edit_posts` (own only).
+*   **Author:** `publish_posts`, `edit_posts`.
+*   **Contributor:** `edit_posts` (cannot publish).
 *   **Subscriber:** `read` only.
 
 ---
@@ -160,13 +167,17 @@ All routes are prefixed with `/api/v1`.
 | `GET`  | `/export`                 | Admin | Download a database backup            |
 
 ### 6.4 Advanced Management
-| Method | Endpoint              | Auth  | Description                     |
-| :----- | :-------------------- | :---- | :------------------------------ |
-| `GET`  | `/users`              | Admin | List all registered users       |
-| `PUT`  | `/users/:id`          | Admin | Change user role or profile     |
-| `GET`  | `/menus`              | JWT   | Get all navigation menus        |
-| `GET`  | `/widgets/sidebars`   | No    | Get sidebar regions and widgets |
-| `GET`  | `/revisions/post/:id` | JWT   | Get history of a post           |
+| Method   | Endpoint              | Auth  | Description                     |
+| :------- | :-------------------- | :---- | :------------------------------ |
+| `GET`    | `/users`              | Admin | List all registered users       |
+| `PUT`    | `/users/:id`          | Admin | Change user role or profile     |
+| `GET`    | `/roles`              | Admin | List all dynamic roles          |
+| `POST`   | `/roles`              | Admin | Create or update a role         |
+| `DELETE` | `/roles/:slug`        | Admin | Delete a custom role            |
+| `GET`    | `/roles/capabilities` | Admin | List all available capabilities |
+| `GET`    | `/menus`              | JWT   | Get all navigation menus        |
+| `GET`    | `/widgets/sidebars`   | No    | Get sidebar regions and widgets |
+| `GET`    | `/revisions/post/:id` | JWT   | Get history of a post           |
 
 ---
 
