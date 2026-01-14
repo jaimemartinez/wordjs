@@ -1,0 +1,233 @@
+.video-gallery-section {
+    background: #f8f9fa;
+    /* Light gray background for contrast */
+    padding: 3rem 1rem;
+    width: 100%;
+    overflow: hidden;
+}
+
+.video-gallery-title {
+    font-family: 'Oswald', sans-serif;
+    font-size: 2.5rem;
+    font-weight: 700;
+    color: #1a1a2e;
+    /* Dark text for title to contrast with light bg */
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-bottom: 2rem;
+    text-align: center;
+}
+
+.video-carousel-container {
+    display: flex;
+    gap: 1.5rem;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    padding: 0.5rem;
+    padding-bottom: 1rem;
+}
+
+.video-carousel-container::-webkit-scrollbar {
+    display: none;
+}
+
+.video-card {
+    flex: 0 0 320px;
+    background: #1584A3;
+    /* Blue background matching reference */
+    border-radius: 8px;
+    /* Slightly less rounded */
+    overflow: hidden;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    scroll-snap-align: start;
+    transition: transform 0.3s ease, box-shadow 0.3s ease;
+    display: flex;
+    flex-direction: column;
+}
+
+.video-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 12px 24px rgba(0, 0, 0, 0.2);
+}
+
+.video-thumbnail {
+    width: 100%;
+    height: 180px;
+    object-fit: cover;
+    display: block;
+}
+
+.video-thumbnail-placeholder {
+    width: 100%;
+    height: 180px;
+    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.video-thumbnail-placeholder::after {
+    content: "▶";
+    font-size: 3rem;
+    color: rgba(255, 255, 255, 0.7);
+}
+
+.video-content {
+    padding: 1.5rem;
+    display: flex;
+    flex-direction: column;
+    gap: 1.5rem;
+    flex-grow: 1;
+    justify-content: space-between;
+}
+
+.video-title {
+    font-family: 'Oswald', 'Arial', sans-serif;
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: white;
+    /* White text on blue bg */
+    line-height: 1.3;
+    margin: 0;
+}
+
+.video-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: white;
+    /* White button */
+    color: #1584A3;
+    /* Blue text */
+    border: none;
+    border-radius: 20px;
+    /* Pill shape */
+    font-family: 'Oswald', sans-serif;
+    font-size: 0.8rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    text-decoration: none;
+    transition: all 0.2s ease;
+    width: fit-content;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+.video-button:hover {
+    background: #f0f0f0;
+    color: #0e5a70;
+    transform: translateY(-1px);
+}
+
+.video-button svg {
+    width: 16px;
+    height: 16px;
+}
+
+/* Scroll arrows */
+.video-carousel-wrapper {
+    position: relative;
+    max-width: 1200px;
+    margin: 0 auto;
+}
+
+.video-scroll-arrow {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 48px;
+    height: 48px;
+    background: rgba(255, 255, 255, 0.9);
+    border: none;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    transition: all 0.2s ease;
+    z-index: 10;
+}
+
+.video-scroll-arrow:hover {
+    background: white;
+    transform: translateY(-50%) scale(1.1);
+}
+
+.video-scroll-arrow.left {
+    left: -20px;
+}
+
+.video-scroll-arrow.right {
+    right: -20px;
+}
+
+.video-scroll-arrow svg {
+    width: 20px;
+    height: 20px;
+    color: #0077B6;
+}
+
+/* Mobile responsive */
+@media (max-width: 768px) {
+    .video-gallery-section {
+        padding: 2rem 0;
+        /* Remove side padding to allow full bleed scroll */
+    }
+
+    .video-gallery-title {
+        font-size: 1.75rem;
+        padding: 0 1rem;
+    }
+
+    .video-carousel-container {
+        padding: 0.5rem 1rem 1.5rem 1rem;
+        /* Add padding to container so first card isn't flush */
+        gap: 1rem;
+    }
+
+    .video-card {
+        flex: 0 0 85vw;
+        /* Make cards responsive width */
+        max-width: 320px;
+    }
+
+    .video-scroll-arrow {
+        display: flex;
+        width: 32px;
+        height: 32px;
+        background: rgba(255, 255, 255, 0.95);
+    }
+
+    .video-scroll-arrow svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    .video-scroll-arrow.left {
+        left: 0;
+    }
+
+    .video-scroll-arrow.right {
+        right: 0;
+    }
+}
+
+@media (max-width: 480px) {
+    .video-card {
+        flex: 0 0 80vw;
+        /* Peek the next card more obvious */
+    }
+}
+
+/* Empty state */
+.video-gallery-empty {
+    text-align: center;
+    color: rgba(255, 255, 255, 0.8);
+    padding: 3rem 1rem;
+    font-size: 1.125rem;
+}

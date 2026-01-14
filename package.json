@@ -1,0 +1,22 @@
+{
+    "name": "wordjs-gateway",
+    "version": "1.0.0",
+    "license": "MIT",
+    "description": "Dynamic Service Gateway for WordJS",
+    "main": "gateway.js",
+    "scripts": {
+        "start": "node gateway.js",
+        "dev": "concurrently -k -p \"[{name}]\" -n \"GATEWAY,BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold,bgGreen.bold\" \"npm start\" \"npm run start:backend\" \"npm run start:frontend\"",
+        "start:backend": "cd backend && npm start",
+        "start:frontend": "cd admin-next && npm run dev -- -p 3001"
+    },
+    "dependencies": {
+        "dotenv": "^17.2.3",
+        "express": "^5.2.1",
+        "express-rate-limit": "^8.2.1",
+        "http-proxy": "^1.18.1"
+    },
+    "devDependencies": {
+        "concurrently": "^9.2.1"
+    }
+}

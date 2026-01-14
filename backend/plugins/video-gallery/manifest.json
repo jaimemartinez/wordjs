@@ -1,0 +1,49 @@
+{
+    "id": "video-gallery",
+    "name": "Video Gallery",
+    "version": "1.0.0",
+    "description": "Manage and display YouTube video carousels",
+    "author": "WordJS",
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "components": [
+            {
+                "name": "VideoCarousel",
+                "entry": "client/components/VideoCarousel.tsx",
+                "locations": [
+                    "videos"
+                ],
+                "props": {}
+            }
+        ],
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "videos"
+        },
+        "puckComponents": null
+    },
+    "api": {
+        "baseUrl": "/api/v1/videos",
+        "endpoints": [
+            "list",
+            "get",
+            "create",
+            "update",
+            "delete"
+        ]
+    },
+    "shortcodes": [
+        {
+            "tag": "videos",
+            "requiredAttrs": []
+        }
+    ],
+    "adminMenu": {
+        "label": "Videos",
+        "icon": "fa-video",
+        "href": "/admin/plugin/videos",
+        "order": 60
+    }
+}

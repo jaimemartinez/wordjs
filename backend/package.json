@@ -1,0 +1,46 @@
+{
+  "name": "wordjs",
+  "version": "1.0.0",
+  "description": "WordPress-like CMS built with Node.js and SQLite",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "migrate": "node src/database/migrate.js",
+    "seed": "node src/database/seed.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "keywords": [
+    "cms",
+    "wordpress",
+    "nodejs",
+    "sqlite",
+    "rest-api"
+  ],
+  "author": "",
+  "license": "GPL-3.0",
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.21.0",
+    "express-rate-limit": "^8.2.1",
+    "file-type": "^16.5.4",
+    "helmet": "^8.1.0",
+    "http-proxy": "^1.18.1",
+    "jsonwebtoken": "^9.0.2",
+    "multer": "^1.4.5-lts.1",
+    "sanitize-html": "^2.17.0",
+    "slugify": "^1.6.6",
+    "sql.js": "^1.10.0",
+    "uuid": "^10.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.5.0",
+    "tailwindcss": "^4.1.18"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

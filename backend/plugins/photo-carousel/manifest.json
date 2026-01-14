@@ -1,0 +1,55 @@
+{
+    "id": "photo-carousel",
+    "name": "Photo Carousel",
+    "version": "2.0.0",
+    "description": "Create and manage image carousels with admin UI",
+    "author": "WordJS",
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "components": [
+            {
+                "name": "HeroCarousel",
+                "entry": "client/components/HeroCarousel.tsx",
+                "locations": [
+                    "hero"
+                ],
+                "props": {
+                    "carousel": "object"
+                }
+            }
+        ],
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "carousels"
+        },
+        "puckComponents": {
+            "entry": "client/puck/PhotoCarouselPuck.tsx"
+        }
+    },
+    "api": {
+        "baseUrl": "/api/v1/carousels",
+        "endpoints": [
+            "list",
+            "get",
+            "create",
+            "update",
+            "delete"
+        ]
+    },
+    "shortcodes": [
+        {
+            "tag": "carousel",
+            "requiredAttrs": [
+                "id"
+            ]
+        }
+    ],
+    "adminMenu": {
+        "label": "Carousels",
+        "icon": "fa-images",
+        "href": "/admin/plugin/carousels",
+        "order": 50
+    }
+}

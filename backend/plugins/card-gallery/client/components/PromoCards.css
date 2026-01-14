@@ -1,0 +1,269 @@
+.promo-cards-container {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    /* Ensure no gaps between cards */
+    gap: 0;
+    overflow: hidden;
+}
+
+.promo-card {
+    position: relative;
+    width: 100%;
+    height: 280px;
+    display: flex;
+    overflow: hidden;
+    border-top-left-radius: 15px;
+    border-top-right-radius: 15px;
+    margin-bottom: -30px;
+    /* The next card sits ON TOP of this one because of zIndex and negative margin */
+    /* Remove shadow that might be causing "dark lines" */
+    box-shadow: none;
+    transition: height 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+    /* Premium smooth curve */
+}
+
+/* Expansion on Hover - disabled on mobile for touch-friendly UX */
+@media (min-width: 768px) {
+    .promo-card:hover {
+        height: 600px;
+    }
+}
+
+/* ZigZag Alignment */
+.promo-card.align-left {
+    flex-direction: row;
+}
+
+.promo-card.align-right {
+    flex-direction: row-reverse;
+}
+
+@media (min-width: 768px) {
+    .promo-card {
+        height: 400px;
+        border-top-left-radius: 30px;
+        border-top-right-radius: 30px;
+        margin-bottom: -40px;
+    }
+}
+
+@media (min-width: 1024px) {
+    .promo-card {
+        height: 500px;
+    }
+}
+
+/* The last card also has rounded bottom corners */
+.promo-card:last-child {
+    border-bottom-left-radius: 15px;
+    border-bottom-right-radius: 15px;
+    margin-bottom: 0;
+}
+
+@media (min-width: 768px) {
+    .promo-card:last-child {
+        border-bottom-left-radius: 30px;
+        border-bottom-right-radius: 30px;
+    }
+}
+
+.promo-card-bg {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    z-index: 0;
+    transition: transform 0.7s ease;
+}
+
+.promo-card:hover .promo-card-bg {
+    transform: scale(1.05);
+}
+
+.promo-card-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+}
+
+/* Mobile: Center gradient */
+.promo-card .promo-card-overlay {
+    background: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.4) 50%, transparent 100%);
+}
+
+/* Desktop: align-right: Button Left, Content Right. Gradient from Right to Left. */
+@media (min-width: 768px) {
+    .promo-card.align-right .promo-card-overlay {
+        background: linear-gradient(to left, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.2) 40%, transparent 100%);
+    }
+
+    /* align-left: Content Left, Button Right. Gradient from Left to Right. */
+    .promo-card.align-left .promo-card-overlay {
+        background: linear-gradient(to right, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.2) 40%, transparent 100%);
+    }
+}
+
+.promo-card-content {
+    position: relative;
+    z-index: 2;
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-end;
+    padding: 1.5rem;
+}
+
+@media (min-width: 768px) {
+    .promo-card-content {
+        justify-content: center;
+        padding: 0 3rem;
+    }
+}
+
+@media (min-width: 1024px) {
+    .promo-card-content {
+        padding: 0 5rem;
+    }
+}
+
+/* Title Styling with Oswald */
+.promo-title {
+    color: white;
+    font-size: 1.5rem;
+    font-weight: 900;
+    text-transform: uppercase;
+    line-height: 1;
+    margin-bottom: 0.25rem;
+    font-family: 'Oswald', sans-serif;
+    letter-spacing: -0.025em;
+    text-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+}
+
+@media (min-width: 640px) {
+    .promo-title {
+        font-size: 2rem;
+    }
+}
+
+@media (min-width: 768px) {
+    .promo-title {
+        font-size: 3rem;
+    }
+}
+
+@media (min-width: 1024px) {
+    .promo-title {
+        font-size: 4rem;
+    }
+}
+
+.promo-subtitle {
+    color: rgba(255, 255, 255, 0.9);
+    font-size: 0.875rem;
+    font-weight: 300;
+    text-transform: uppercase;
+    letter-spacing: 0.15em;
+    margin-bottom: 0.5rem;
+    text-shadow: 0 2px 5px rgba(0, 0, 0, 0.5);
+}
+
+@media (min-width: 640px) {
+    .promo-subtitle {
+        font-size: 1rem;
+    }
+}
+
+@media (min-width: 768px) {
+    .promo-subtitle {
+        font-size: 1.5rem;
+        letter-spacing: 0.2em;
+    }
+}
+
+@media (min-width: 1024px) {
+    .promo-subtitle {
+        font-size: 1.875rem;
+    }
+}
+
+.promo-dates {
+    color: #00A9CE;
+    /* Highlight color from mockup */
+    font-size: 1.25rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    margin-bottom: 1rem;
+    text-shadow: 0 2px 5px rgba(0, 0, 0, 0.3);
+}
+
+@media (min-width: 640px) {
+    .promo-dates {
+        font-size: 1.5rem;
+    }
+}
+
+@media (min-width: 768px) {
+    .promo-dates {
+        font-size: 2rem;
+        margin-bottom: 2rem;
+    }
+}
+
+@media (min-width: 1024px) {
+    .promo-dates {
+        font-size: 2.5rem;
+    }
+}
+
+.promo-button {
+    display: inline-block;
+    background-color: white;
+    color: #2F6D86;
+    /* Brand color */
+    font-size: 0.875rem;
+    font-weight: 800;
+    text-transform: uppercase;
+    padding: 0.5rem 1.5rem;
+    border-radius: 9999px;
+    text-decoration: none;
+    transition: all 0.3s ease;
+    box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+    width: fit-content;
+}
+
+@media (min-width: 768px) {
+    .promo-button {
+        font-size: 1rem;
+        padding: 0.625rem 2rem;
+    }
+}
+
+@media (min-width: 1024px) {
+    .promo-button {
+        font-size: 1.125rem;
+        padding: 0.75rem 2.5rem;
+    }
+}
+
+.promo-button:hover {
+    background-color: #f9fafb;
+    transform: translateY(-2px);
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+}
+
+/* Animations */
+.promo-content-wrapper {
+    opacity: 0;
+    transform: translateY(20px);
+    animation: fadeInUp 0.7s forwards ease-out;
+}
+
+@keyframes fadeInUp {
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}

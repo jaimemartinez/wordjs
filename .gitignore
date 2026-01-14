@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+backend/node_modules/
+admin-next/node_modules/
+
+# Production Build
+admin-next/.next/
+admin-next/out/
+backend/dist/
+
+# Local Data & Uploads
+data/*.db
+data/*.db-journal
+backend/data/*.db
+backend/data/*.db-journal
+uploads/
+backend/uploads/
+backend/wordjs-config.json
+
+# Environment & Secrets
+.env
+backend/.env
+admin-next/.env.local
+gateway-secret.txt
+
+# OS Files
+.DS_Store
+Thumbs.db
+*.log
+
+# Legacy / Temp
+backend/wordpress-6.9/
+backend/os-tmp/

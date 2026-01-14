@@ -1,0 +1,51 @@
+{
+    "id": "card-gallery",
+    "name": "Card Gallery",
+    "version": "1.0.0",
+    "description": "Manage event promo cards with zigzag layout",
+    "author": "WordJS",
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "components": [
+            {
+                "name": "PromoCards",
+                "entry": "client/components/PromoCards.tsx",
+                "locations": [
+                    "cards"
+                ],
+                "props": {}
+            }
+        ],
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "cards"
+        },
+        "puckComponents": {
+            "entry": "client/puck/CardGalleryPuck.tsx"
+        }
+    },
+    "api": {
+        "baseUrl": "/api/v1/cards",
+        "endpoints": [
+            "list",
+            "get",
+            "create",
+            "update",
+            "delete"
+        ]
+    },
+    "shortcodes": [
+        {
+            "tag": "cards",
+            "requiredAttrs": []
+        }
+    ],
+    "adminMenu": {
+        "label": "Card Gallery",
+        "icon": "fa-id-card",
+        "href": "/admin/plugin/cards",
+        "order": 55
+    }
+}

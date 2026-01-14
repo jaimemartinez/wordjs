@@ -1,0 +1,235 @@
+/**
+ * WordJS - Media Model
+ * For handling file uploads and media library
+ */
+
+const { db } = require('../config/database');
+const Post = require('./Post');
+const config = require('../config/app');
+const path = require('path');
+const fs = require('fs');
+
+class Media {
+    /**
+     * Create a media attachment
+     * This creates a post of type 'attachment'
+     */
+    static async create(data) {
+        const {
+            authorId,
+            title,
+            filename,
+            mimeType,
+            filePath,
+            fileSize,
+            width,
+            height,
+            description = '',
+            caption = '',
+            alt = ''
+        } = data;
+
+        // Create attachment post
+        const attachment = await Post.create({
+            authorId,
+            title: title || filename,
+            content: description,
+            excerpt: caption,
+            status: 'inherit',
+            type: 'attachment',
+            mimeType
+        });
+
+        // Update GUID to file URL
+        const fileUrl = `${config.site.url}/uploads/${filename}`;
+        db.prepare('UPDATE posts SET guid = ? WHERE id = ?').run(fileUrl, attachment.id);
+
+        // Store attachment metadata
+        const metadata = {
+            file: filePath,
+            width: width || 0,
+            height: height || 0,
+            filesize: fileSize,
+            sizes: {}
+        };
+
+        Post.updateMeta(attachment.id, '_wp_attachment_metadata', metadata);
+        Post.updateMeta(attachment.id, '_wp_attached_file', filename);
+
+        if (alt) {
+            Post.updateMeta(attachment.id, '_wp_attachment_image_alt', alt);
+        }
+
+        return Media.findById(attachment.id);
+    }
+
+    /**
+     * Find media by ID
+     */
+    static findById(id) {
+        const post = Post.findById(id);
+        if (!post || post.postType !== 'attachment') return null;
+        return Media.formatAttachment(post);
+    }
+
+    /**
+     * Get all media
+     */
+    static findAll(options = {}) {
+        const posts = Post.findAll({
+            ...options,
+            type: 'attachment',
+            status: 'inherit'
+        });
+        return posts.map(post => Media.formatAttachment(post));
+    }
+
+    /**
+     * Format attachment post to media object
+     */
+    static formatAttachment(post) {
+        const metadata = Post.getMeta(post.id, '_wp_attachment_metadata') || {};
+        const alt = Post.getMeta(post.id, '_wp_attachment_image_alt') || '';
+
+        return {
+            id: post.id,
+            date: post.postDate,
+            dateGmt: post.postDateGmt,
+            modified: post.postModified,
+            modifiedGmt: post.postModifiedGmt,
+            slug: post.postName,
+            title: post.postTitle,
+            description: post.postContent,
+            caption: post.postExcerpt,
+            alt,
+            author: post.authorId,
+            mimeType: post.postMimeType,
+            guid: post.guid,
+            sourceUrl: post.guid,
+            mediaDetails: {
+                width: metadata.width || 0,
+                height: metadata.height || 0,
+                file: metadata.file || '',
+                filesize: metadata.filesize || 0,
+                sizes: metadata.sizes || {}
+            }
+        };
+    }
+
+    /**
+     * Update media
+     */
+    static async update(id, data) {
+        const media = Media.findById(id);
+        if (!media) throw new Error('Media not found');
+
+        const updates = {};
+
+        if (data.title !== undefined) updates.title = data.title;
+        if (data.description !== undefined) updates.content = data.description;
+        if (data.caption !== undefined) updates.excerpt = data.caption;
+
+        if (Object.keys(updates).length > 0) {
+            await Post.update(id, updates);
+        }
+
+        if (data.alt !== undefined) {
+            Post.updateMeta(id, '_wp_attachment_image_alt', data.alt);
+        }
+
+        return Media.findById(id);
+    }
+
+    /**
+     * Delete media
+     */
+    static async delete(id, deleteFile = true) {
+        const media = Media.findById(id);
+        if (!media) return false;
+
+        // Delete the actual file
+        if (deleteFile && media.mediaDetails.file) {
+            const filePath = path.join(config.uploads.dir, media.mediaDetails.file);
+            if (fs.existsSync(filePath)) {
+                fs.unlinkSync(filePath);
+            }
+        }
+
+        // Delete the post
+        return Post.delete(id, true);
+    }
+
+    /**
+     * Get media by post (attached to)
+     */
+    static getByPost(postId) {
+        return Post.findAll({
+            type: 'attachment',
+            parent: postId,
+            status: 'inherit'
+        }).map(post => Media.formatAttachment(post));
+    }
+
+    /**
+     * Count media
+     */
+    static count(options = {}) {
+        return Post.count({
+            ...options,
+            type: 'attachment'
+        });
+    }
+
+    /**
+     * Get allowed MIME types
+     */
+    static getAllowedMimeTypes() {
+        return {
+            // Images
+            'jpg|jpeg|jpe': 'image/jpeg',
+            'gif': 'image/gif',
+            'png': 'image/png',
+            'webp': 'image/webp',
+            'ico': 'image/x-icon',
+            'svg': 'image/svg+xml',
+
+            // Documents
+            'pdf': 'application/pdf',
+            'doc': 'application/msword',
+            'docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            'xls': 'application/vnd.ms-excel',
+            'xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            'ppt': 'application/vnd.ms-powerpoint',
+            'pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+
+            // Text
+            'txt': 'text/plain',
+            'csv': 'text/csv',
+            'json': 'application/json',
+
+            // Audio
+            'mp3': 'audio/mpeg',
+            'ogg': 'audio/ogg',
+            'wav': 'audio/wav',
+
+            // Video
+            'mp4': 'video/mp4',
+            'webm': 'video/webm',
+            'ogv': 'video/ogg',
+
+            // Archives
+            'zip': 'application/zip',
+            'rar': 'application/x-rar-compressed'
+        };
+    }
+
+    /**
+     * Check if MIME type is allowed
+     */
+    static isAllowedMimeType(mimeType) {
+        const allowed = Object.values(Media.getAllowedMimeTypes());
+        return allowed.includes(mimeType);
+    }
+}
+
+module.exports = Media;

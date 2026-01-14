@@ -1,0 +1,120 @@
+@import url('https://fonts.googleapis.com/css2?family=Oswald:wght@200..700&display=swap');
+@import "tailwindcss";
+
+@source "../../../plugins/**/*.{js,ts,jsx,tsx}";
+
+/* Tailwind CSS v4 Configuration */
+@theme {
+  --font-oswald: "Oswald", sans-serif;
+  --color-brand-blue: #306E88;
+  --color-brand-cyan: #00A9CE;
+}
+
+/* Sync main content transition with sidebar */
+.main-content-wrapper {
+  transition: all 300ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+:root {
+  --background: #ffffff;
+  --foreground: #171717;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #0a0a0a;
+    --foreground: #ededed;
+  }
+}
+
+
+html {
+  scroll-behavior: smooth;
+  scroll-padding-top: 100px;
+  /* Adjust based on header height */
+  overflow-x: hidden;
+  /* Prevent horizontal scroll */
+  max-width: 100%;
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: Arial, Helvetica, sans-serif;
+  overflow-x: hidden;
+  /* Prevent horizontal scroll */
+  max-width: 100%;
+}
+
+/* Puck Editor - Fill Screen Layout */
+.puck-container {
+  height: 100vh;
+  width: 100%;
+}
+
+/* Allow the specific library CSS to handle internal height */
+/* We keep the minimal scrollbar styles as they are non-invasive */
+
+/* Puck Editor - Refined Split Sidebars (50/50) */
+/* Target the main left sidebar container */
+.puck-container [class*="_Sidebar--left_"] {
+  display: flex !important;
+  flex-direction: column !important;
+  height: 100% !important;
+  /* Fill parent grid cell */
+  overflow: hidden !important;
+  /* No double scroll */
+  background-color: #ffffff !important;
+}
+
+/* Target the sections (Components & Outline) */
+.puck-container [class*="_SidebarSection_"] {
+  flex: 1 1 50% !important;
+  /* Split available space exactly */
+  min-height: 0 !important;
+  /* Allow shrinking */
+  display: flex !important;
+  flex-direction: column !important;
+  position: relative !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.05) !important;
+}
+
+/* Make internal list scrollable and clean */
+.puck-container [class*="_SidebarSection_"]>div:last-child {
+  flex: 1 !important;
+  overflow-y: auto !important;
+  padding-bottom: 20px !important;
+}
+
+/* Hide the native scrollbars and use custom ones */
+.puck-container [class*="_SidebarSection_"]>div:last-child::-webkit-scrollbar {
+  width: 4px !important;
+}
+
+.puck-container [class*="_SidebarSection_"]>div:last-child::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1) !important;
+  border-radius: 10px !important;
+}
+
+.puck-container [class*="_SidebarSection_"]>div:last-child::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2) !important;
+}
+
+.puck-container [class*="_SidebarSection_"]:last-child {
+  border-bottom: none !important;
+}
+
+/* Style headers to be sticky and clean */
+.puck-container [class*="_SidebarSection_"] h2 {
+  position: sticky !important;
+  top: 0 !important;
+  background: white !important;
+  z-index: 10 !important;
+  padding: 12px 16px !important;
+  margin: 0 !important;
+  font-size: 11px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.1em !important;
+  color: #64748b !important;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.02) !important;
+}
