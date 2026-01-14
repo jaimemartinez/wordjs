@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import SmartLink from "./SmartLink";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useMenu } from "@/contexts/MenuContext";
 import { useEffect, useState } from "react";
@@ -24,7 +24,8 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/footer", label: "Footer", icon: "fa-shoe-prints", cap: "edit_theme_options" },
     { href: "/admin/widgets", label: "Widgets", icon: "fa-shapes", cap: "edit_theme_options" },
     { href: "/admin/comments", label: "Comments", icon: "fa-comments", cap: "moderate_comments" },
-    { href: "/admin/users", label: "Users", icon: "fa-users", cap: "list_users" },
+    { href: "/admin/users", label: "Team", icon: "fa-users", cap: "list_users" },
+    { href: "/admin/users?type=subscribers", label: "Subscribers", icon: "fa-user-group", cap: "list_users" },
     { href: "/admin/users/roles", label: "Roles", icon: "fa-shield-halved", cap: "manage_options" },
     { href: "/admin/categories", label: "Categories", icon: "fa-folder", cap: "manage_categories" },
     { href: "/admin/plugins", label: "Plugins", icon: "fa-plug", cap: "activate_plugins" },
@@ -40,6 +41,7 @@ interface SidebarProps {
 
 export default function Sidebar({ isOpen, onClose, isCollapsed = false }: SidebarProps) {
     const pathname = usePathname();
+    const searchParams = useSearchParams();
     const { logout, user } = useAuth();
     const { pluginMenus } = useMenu(); // Use global context
     const [logoUrl, setLogoUrl] = useState<string | null>(null);
@@ -74,6 +76,48 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
         ...pluginMenus.filter(item => can(item.cap)),
         ...coreMenuItems.slice(6).filter(item => can(item.cap))
     ];
+
+    const renderMenuItem = (item: SidebarMenuItem) => {
+        const itemUrl = new URL(item.href, 'http://localhost'); // Dummy base for URL parsing
+        const itemType = itemUrl.searchParams.get('type');
+        const currentType = searchParams.get('type');
+
+        const isActive = pathname === itemUrl.pathname && currentType === itemType;
+
+        return (
+            <div
+                key={item.href}
+                className="w-full relative"
+                onMouseEnter={(e) => {
+                    if (isCollapsed) {
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        setHoveredItem({ label: item.label, top: rect.top + (rect.height / 2) });
+                    }
+                }}
+                onMouseLeave={() => setHoveredItem(null)}
+            >
+                <SmartLink
+                    href={item.href}
+                    onClick={() => onClose()} // Close on navigation (mobile)
+                    title={undefined} // Remove title to prevent native tooltip
+                    className={`flex items-center gap-3.5 rounded-2xl transition-all duration-200 group relative pointer-events-auto ${isActive
+                        ? (isCollapsed ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20" : "bg-blue-600/10 text-blue-400 font-bold")
+                        : "text-gray-400 hover:bg-white/5 hover:text-white"
+                        } ${isCollapsed ? "w-14 h-14 justify-center mx-auto" : "px-4 py-3"}`}
+                >
+                    {isActive && !isCollapsed && (
+                        <div className="absolute -left-[4px] bottom-3 top-3 w-1.5 bg-blue-500 rounded-r-full shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                    )}
+                    <i className={`fa-solid ${item.icon} transition-transform group-hover:scale-110 ${isCollapsed ? 'text-lg' : 'w-5 text-center text-sm'} ${isActive ? (isCollapsed ? 'text-white' : 'text-blue-500') : 'text-gray-500 group-hover:text-blue-400'}`}></i>
+                    {!isCollapsed && (
+                        <span className="text-sm tracking-wide truncate transition-all duration-300 opacity-100 translate-x-0">
+                            {item.label}
+                        </span>
+                    )}
+                </SmartLink>
+            </div>
+        );
+    };
 
     return (
         <>
@@ -125,47 +169,26 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
 
                 {/* Navigation - Scrollable */}
                 <nav className={`
-                    flex-1 overflow-y-auto min-h-0 space-y-3 custom-scrollbar transition-all duration-300
+                    flex-1 overflow-y-auto min-h-0 space-y-6 custom-scrollbar transition-all duration-300
                     ${isCollapsed ? "px-4 py-8 scrollbar-hide" : "px-5 py-2"}
                 `}>
-                    {allMenuItems.map((item) => {
-                        const isActive = pathname === item.href ||
-                            (item.href !== "/admin" && pathname.startsWith(item.href));
-
-                        return (
-                            <div
-                                key={item.href}
-                                className="w-full relative"
-                                onMouseEnter={(e) => {
-                                    if (isCollapsed) {
-                                        const rect = e.currentTarget.getBoundingClientRect();
-                                        setHoveredItem({ label: item.label, top: rect.top + (rect.height / 2) });
-                                    }
-                                }}
-                                onMouseLeave={() => setHoveredItem(null)}
-                            >
-                                <SmartLink
-                                    href={item.href}
-                                    onClick={() => onClose()} // Close on navigation (mobile)
-                                    title={undefined} // Remove title to prevent native tooltip
-                                    className={`flex items-center gap-3.5 rounded-2xl transition-all duration-200 group relative pointer-events-auto ${isActive
-                                        ? (isCollapsed ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20" : "bg-blue-600/10 text-blue-400 font-bold")
-                                        : "text-gray-400 hover:bg-white/5 hover:text-white"
-                                        } ${isCollapsed ? "w-14 h-14 justify-center mx-auto" : "px-4 py-3"}`}
-                                >
-                                    {isActive && !isCollapsed && (
-                                        <div className="absolute -left-[4px] bottom-3 top-3 w-1.5 bg-blue-500 rounded-r-full shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
-                                    )}
-                                    <i className={`fa-solid ${item.icon} transition-transform group-hover:scale-110 ${isCollapsed ? 'text-lg' : 'w-5 text-center text-sm'} ${isActive ? (isCollapsed ? 'text-white' : 'text-blue-500') : 'text-gray-500 group-hover:text-blue-400'}`}></i>
-                                    {!isCollapsed && (
-                                        <span className="text-sm tracking-wide truncate transition-all duration-300 opacity-100 translate-x-0">
-                                            {item.label}
-                                        </span>
-                                    )}
-                                </SmartLink>
+                    <div className="space-y-1">
+                        {!isCollapsed && (
+                            <div className="px-4 mb-2">
+                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Core</span>
                             </div>
-                        );
-                    })}
+                        )}
+                        {allMenuItems.slice(0, 6 + pluginMenus.length).map((item) => renderMenuItem(item))}
+                    </div>
+
+                    <div className="space-y-1">
+                        {!isCollapsed && (
+                            <div className="px-4 mb-2">
+                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Management</span>
+                            </div>
+                        )}
+                        {allMenuItems.slice(6 + pluginMenus.length).map((item) => renderMenuItem(item))}
+                    </div>
                 </nav>
 
                 {/* User info & Logout - Fixed at bottom */}

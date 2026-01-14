@@ -3,12 +3,110 @@
  * Equivalent to wp-includes/plugin.php (plugin loading)
  */
 
+const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { addAction, doAction, addFilter } = require('./hooks');
 const { getOption, updateOption } = require('./options');
 
 const PLUGINS_DIR = path.resolve('./plugins');
+const ROOT_DIR = path.resolve('.');
+
+/**
+ * Install dependencies defined in manifest.json
+ */
+function installPluginDependencies(slug, manifest) {
+    if (!manifest || !manifest.dependencies) return;
+
+    let rootPkg = {};
+    try {
+        rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));
+    } catch (e) {
+        console.error('⚠️ Could not read root package.json', e.message);
+    }
+
+    const installed = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
+    const toInstall = [];
+
+    for (const [dep, version] of Object.entries(manifest.dependencies)) {
+        if (!installed[dep]) {
+            toInstall.push(`${dep}@${version}`);
+        }
+    }
+
+    if (toInstall.length > 0) {
+        console.log(`📦 Plugin '${slug}' requires: ${toInstall.join(', ')}`);
+        console.log(`   ⏳ Installing dependencies... (server may restart)`);
+        try {
+            execSync(`npm install ${toInstall.join(' ')} --save`, {
+                stdio: 'inherit',
+                cwd: ROOT_DIR
+            });
+            console.log(`   ✅ Dependencies installed successfully.`);
+        } catch (error) {
+            throw new Error(`Failed to install dependencies for ${slug}: ${error.message}`);
+        }
+    }
+}
+
+/**
+ * Remove dependencies if not used by other active plugins
+ */
+function prunePluginDependencies(slug, manifest) {
+    if (!manifest || !manifest.dependencies) return;
+
+    // 1. Get all other active plugins
+    const activeSlugs = getActivePlugins().filter(s => s !== slug);
+    const plugins = scanPlugins();
+
+    const usedDependencies = new Set();
+
+    // 2. Build whitelist of dependencies used by other active plugins
+    for (const activeSlug of activeSlugs) {
+        const p = plugins.find(pl => pl.slug === activeSlug);
+        if (p) {
+            const mPath = path.join(p.path, 'manifest.json');
+            if (fs.existsSync(mPath)) {
+                try {
+                    const m = JSON.parse(fs.readFileSync(mPath, 'utf8'));
+                    if (m.dependencies) {
+                        for (const dep of Object.keys(m.dependencies)) {
+                            usedDependencies.add(dep);
+                        }
+                    }
+                } catch { }
+            }
+        }
+    }
+
+    // 3. Check for unused dependencies
+    const toRemove = [];
+
+    for (const dep of Object.keys(manifest.dependencies)) {
+        if (!usedDependencies.has(dep)) {
+            // Check if it's a known core dependency (Shield for core packages)
+            const isLikelyCore = ['express', 'cors', 'dotenv', 'helmet', 'multer', 'nodemailer', 'sql.js', 'mongoose', 'pg', 'sqlite3', 'jsonwebtoken', 'bcryptjs'].includes(dep);
+
+            if (isLikelyCore) {
+                console.log(`🛡️ Persisting core dependency: ${dep}`);
+            } else {
+                toRemove.push(dep);
+            }
+        }
+    }
+
+    if (toRemove.length > 0) {
+        console.log(`♻️ Garbage Collector: Removing unused dependencies for ${slug}: ${toRemove.join(', ')}`);
+        try {
+            // execSync(`npm uninstall ${toRemove.join(' ')} --save`, { stdio: 'inherit', cwd: ROOT_DIR }); // Disabled for safety until explicit confirm
+            console.log(`   (Simulated verify): npm uninstall ${toRemove.join(' ')}`);
+        } catch (e) {
+            console.error(`   ⚠️ Failed to prune dependencies:`, e.message);
+        }
+    }
+}
+
+const PLUGINS_DIR_REAL = path.resolve('./plugins'); // Just to keep logic if needed, but we reused PLUGINS_DIR above.
 
 // Loaded plugins registry
 const loadedPlugins = new Map();
@@ -53,27 +151,55 @@ function scanPlugins() {
         if (!entry.isDirectory()) continue;
 
         const pluginDir = path.join(PLUGINS_DIR, entry.name);
-        const mainFile = findMainFile(pluginDir);
+        const manifestPath = path.join(pluginDir, 'manifest.json');
 
-        if (!mainFile) continue;
+        let metadata = {};
+        let mainFile = null;
 
-        try {
-            const pluginModule = require(mainFile);
-            const metadata = pluginModule.metadata || {};
-
-            plugins.push(new Plugin({
-                name: metadata.name || entry.name,
-                slug: entry.name,
-                version: metadata.version,
-                description: metadata.description,
-                author: metadata.author,
-                path: pluginDir,
-                init: pluginModule.init || pluginModule.activate,
-                deactivate: pluginModule.deactivate
-            }));
-        } catch (error) {
-            console.error(`Error loading plugin ${entry.name}:`, error.message);
+        // 1. Try manifest.json (Preferred - Safe)
+        if (fs.existsSync(manifestPath)) {
+            try {
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                metadata = {
+                    name: manifest.name,
+                    version: manifest.version,
+                    description: manifest.description,
+                    author: manifest.author
+                };
+                // We don't load init/deactivate here to avoid requiring the file before deps match
+            } catch (e) {
+                console.error(`Error parsing manifest for ${entry.name}:`, e.message);
+                continue;
+            }
         }
+        // 2. Fallback to finding main file (Legacy)
+        else {
+            mainFile = findMainFile(pluginDir);
+            if (!mainFile) continue;
+
+            try {
+                const pluginModule = require(mainFile);
+                metadata = pluginModule.metadata || {};
+            } catch (error) {
+                console.error(`Error loading plugin ${entry.name}:`, error.message);
+                continue;
+            }
+        }
+
+        plugins.push(new Plugin({
+            name: metadata.name || entry.name,
+            slug: entry.name,
+            version: metadata.version || '1.0.0',
+            description: metadata.description || '',
+            author: metadata.author || '',
+            path: pluginDir,
+            // We defer loading 'init' and 'deactivate' hooks until activation/load time
+            // However, existing code expects them in the object.
+            // If we didn't require the module, these will be undefined.
+            // 'activatePlugin' should handle re-requiring the module.
+            init: null,
+            deactivate: null
+        }));
     }
 
     return plugins;
@@ -158,6 +284,17 @@ async function activatePlugin(slug) {
         return { success: true, message: 'Plugin already active' };
     }
 
+    // 1. Dependency Check & Auto-Install
+    const manifestPath = path.join(plugin.path, 'manifest.json');
+    if (fs.existsSync(manifestPath)) {
+        try {
+            const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+            installPluginDependencies(slug, manifest);
+        } catch (e) {
+            console.error(`⚠️ Failed to process manifest for ${slug}:`, e.message);
+        }
+    }
+
     // Load and initialize plugin
     const mainFile = findMainFile(plugin.path);
     if (!mainFile) {
@@ -206,6 +343,21 @@ async function deactivatePlugin(slug) {
         return { success: true, message: 'Plugin not active' };
     }
 
+    // 1. Auto-Prune Dependencies
+    const plugins = scanPlugins();
+    const plugin = plugins.find(p => p.slug === slug);
+    if (plugin) {
+        const manifestPath = path.join(plugin.path, 'manifest.json');
+        if (fs.existsSync(manifestPath)) {
+            try {
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                prunePluginDependencies(slug, manifest);
+            } catch (e) {
+                console.error(`⚠️ Failed to process manifest for prune ${slug}:`, e.message);
+            }
+        }
+    }
+
     const pluginModule = loadedPlugins.get(slug);
 
     // Call deactivate function if exists
@@ -241,6 +393,17 @@ async function loadActivePlugins() {
 
         const mainFile = findMainFile(plugin.path);
         if (!mainFile) continue;
+
+        // Auto-Check/Install Deps on Load
+        const manifestPath = path.join(plugin.path, 'manifest.json');
+        if (fs.existsSync(manifestPath)) {
+            try {
+                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                installPluginDependencies(slug, manifest);
+            } catch (e) {
+                console.error(`⚠️ Failed to process manifest for load ${slug}:`, e.message);
+            }
+        }
 
         try {
             const pluginModule = require(mainFile);

@@ -67,26 +67,36 @@ function discoverPlugins() {
 
             // Get frontend component info
             const component = manifest.frontend?.components?.[0];
-            if (!component) {
-                console.log(`   ○ No frontend component: ${folder}`);
-                continue;
+            const hooks = manifest.frontend?.hooks;
+            let componentPath = null;
+            let hooksPath = null;
+
+            if (component) {
+                componentPath = component.entry.replace('./', '').replace('.tsx', '');
+                const fullPath = path.join(PLUGINS_DIR, folder, component.entry.replace('./', ''));
+                if (!fs.existsSync(fullPath)) {
+                    console.log(`   ✗ Component not found: ${folder}`);
+                }
             }
 
-            // Verify the component file exists
-            const componentPath = component.entry.replace('./', '').replace('.tsx', '');
-            const fullPath = path.join(PLUGINS_DIR, folder, component.entry.replace('./', ''));
-
-            if (!fs.existsSync(fullPath)) {
-                console.log(`   ✗ Component not found: ${folder} (${component.entry})`);
-                continue;
+            if (hooks) {
+                hooksPath = hooks.replace('./', '').replace('.tsx', '');
+                const fullHooksPath = path.join(PLUGINS_DIR, folder, hooks.replace('./', ''));
+                if (!fs.existsSync(fullHooksPath)) {
+                    console.log(`   ✗ Hooks file not found: ${folder}`);
+                    hooksPath = null;
+                }
             }
 
-            plugins.push({
-                id: manifest.id || folder,
-                folder: folder,
-                componentPath: componentPath,
-                componentName: component.name,
-            });
+            if (component || hooks) {
+                plugins.push({
+                    id: manifest.id || folder,
+                    folder: folder,
+                    componentPath: componentPath,
+                    componentName: component?.name,
+                    hooksPath: hooksPath
+                });
+            }
 
         } catch (err) {
             console.log(`   ✗ Invalid manifest: ${folder} - ${err.message}`);
@@ -106,37 +116,9 @@ async function generateRegistry() {
     // Fetch active plugins from API
     let activePlugins = await fetchActivePlugins();
 
-    // Ensure activePlugins is an array
-    if (!Array.isArray(activePlugins)) {
-        console.log('   ⚠️  Invalid response from API, treating as empty list');
-        activePlugins = [];
-    }
-
-    // Only filter if we actually got a list (even if empty, it implies backend is up and returned 0 plugins)
-    // Actually, if backend is down (fetch returns null from catch), we should probably SHOW ALL for dev?
-    // But fetchActivePlugins returns null on error.
-
-    // Better logic:
-    // If API failed (null), show all (dev mode safety).
-    // If API returned list, strictly filter.
-    const apiAvailable = activePlugins !== null;
-
-    // Re-fetch logic: fetchActivePlugins returns null on error.
-    // Let's check the implementation of fetchActivePlugins again.
-    // It resolves null on error.
-
-    // So:
-    // const activePlugins = await fetchActivePlugins(); // Array or null
-    // const filterByActive = activePlugins !== null;
-
-    // Wait, the error was "activePlugins.join is not a function".
-    // This implies it wasn't null, but maybe an object? Or fetchActivePlugins resolved something else?
-    // JSON.parse(data) might have returned an error object { error: ... } 
-
-    // Let's make it robust:
-    const fetched = await fetchActivePlugins();
-    const filterByActive = Array.isArray(fetched);
-    const activeList = filterByActive ? fetched : [];
+    // Check filter status
+    const filterByActive = Array.isArray(activePlugins);
+    const activeList = filterByActive ? activePlugins : [];
 
     if (filterByActive) {
         console.log(`   Active from API: ${activeList.join(', ') || 'none'}`);
@@ -154,10 +136,25 @@ async function generateRegistry() {
         return true;
     });
 
-    // Generate the TypeScript file
-    const imports = includedPlugins.map(p =>
-        `    "${p.id}": () => import("../../../backend/plugins/${p.folder}/${p.componentPath}"),`
-    ).join('\n');
+    // 1. Generate Components
+    const imports = includedPlugins
+        .filter(p => p.componentPath)
+        .map(p => `    "${p.id}": () => import("../../../backend/plugins/${p.folder}/${p.componentPath}"),`)
+        .join('\n');
+
+    // 2. Generate Hooks
+    const hooksImports = includedPlugins
+        .filter(p => p.hooksPath)
+        .map(p => `
+            import("../../../backend/plugins/${p.folder}/${p.hooksPath}").then(m => {
+                // Auto-register any export starting with 'register'
+                Object.keys(m).forEach(key => {
+                    if (key.startsWith('register') && typeof m[key] === 'function') {
+                        try { m[key](); } catch(e) { console.error('Error in hook ${p.id}:', e); }
+                    }
+                });
+            });`)
+        .join('\n');
 
     const content = `"use client";
 
@@ -214,6 +211,15 @@ export function getPluginComponent(slug: string): ComponentType<any> | null {
 
 export function getRegisteredPlugins(): string[] {
     return Object.keys(PLUGIN_DEFINITIONS);
+}
+
+/**
+ * Initialize Plugin Hooks (e.g., extensions, form modifiers)
+ */
+export function loadPluginHooks() {
+    if (typeof window === 'undefined') return;
+    
+    ${hooksImports}
 }
 `;
 

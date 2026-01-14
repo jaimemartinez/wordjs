@@ -5,12 +5,18 @@ import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Sidebar from "@/components/Sidebar";
 import { UnsavedChangesProvider } from "@/contexts/UnsavedChangesContext";
+import { initPlugins } from "@/lib/plugins";
 
 function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
-    const { user, isLoading } = useAuth();
+    const { user, isLoading, logout } = useAuth();
     const router = useRouter();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
+
+    // Initialize frontend plugins
+    useEffect(() => {
+        initPlugins();
+    }, []);
 
     // Persist sidebar state
     useEffect(() => {
@@ -25,8 +31,13 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     }, [isCollapsed]);
 
     useEffect(() => {
-        if (!isLoading && !user) {
-            router.push("/login");
+        if (!isLoading) {
+            if (!user) {
+                router.push("/login");
+            } else if (user.capabilities && !user.capabilities.includes("access_admin_panel") && !user.capabilities.includes("*")) {
+                console.warn("User does not have admin access");
+                logout(); // Logout if they managed to get a token but shouldn't be here
+            }
         }
     }, [user, isLoading, router]);
 

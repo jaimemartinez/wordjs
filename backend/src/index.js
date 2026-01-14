@@ -237,6 +237,10 @@ async function initialize() {
     console.log('⚙️  Setting up default options...');
     initDefaultOptions(config);
 
+    // Sync roles to ensure capabilities are up to date
+    const { syncRoles } = require('./core/roles');
+    syncRoles(config.roles);
+
     // Create default admin user if no users exist
     const User = require('./models/User');
     const userCount = User.count();

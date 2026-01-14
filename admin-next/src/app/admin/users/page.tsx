@@ -3,19 +3,28 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usersApi, User } from "@/lib/api";
+import { useSearchParams } from "next/navigation";
 
 export default function UsersPage() {
+    const searchParams = useSearchParams();
+    const type = searchParams.get("type"); // subscribers
     const [users, setUsers] = useState<User[]>([]);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
         loadUsers();
-    }, []);
+    }, [type]);
 
     const loadUsers = async () => {
+        setLoading(true);
         try {
             const data = await usersApi.list();
-            setUsers(data);
+            // Filter based on type
+            if (type === "subscribers") {
+                setUsers(data.filter(u => u.role === "subscriber"));
+            } else {
+                setUsers(data.filter(u => u.role !== "subscriber"));
+            }
         } catch (error) {
             console.error("Failed to load users:", error);
         } finally {
@@ -37,7 +46,9 @@ export default function UsersPage() {
     return (
         <div className="p-6 h-full overflow-auto">
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold text-gray-800">Users</h1>
+                <h1 className="text-2xl font-bold text-gray-800 capitalize">
+                    {type === "subscribers" ? "Subscribers" : "Team Members"}
+                </h1>
                 <Link
                     href="/admin/users/new"
                     className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"

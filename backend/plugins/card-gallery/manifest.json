@@ -47,5 +47,8 @@
         "icon": "fa-id-card",
         "href": "/admin/plugin/cards",
         "order": 55
+    },
+    "dependencies": {
+        "uuid": "^10.0.0"
     }
 }

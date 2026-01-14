@@ -112,6 +112,7 @@ function initDefaultOptions(fullConfig) {
         comments_notify: 1,
         moderation_notify: 1,
         comment_moderation: 0,
+        comment_registration: 0,
         require_name_email: 1,
         comment_previously_approved: 1,
         comment_max_links: 2,
@@ -125,6 +126,7 @@ function initDefaultOptions(fullConfig) {
         medium_size_h: 300,
         large_size_w: 1024,
         large_size_h: 1024,
+        default_role: 'subscriber',
         wordjs_user_roles: fullConfig.roles || {}
     };
 

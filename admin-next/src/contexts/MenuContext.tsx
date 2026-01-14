@@ -25,16 +25,9 @@ export function MenuProvider({ children }: { children: React.ReactNode }) {
 
     const refreshMenus = useCallback(async () => {
         try {
-            // Use relative path for client-side fetch (handled by next.config.js or direct relative path)
-            // or use specific API URL if needed. Assuming relative path works as per previous tasks.
-            const res = await fetch("/api/v1/plugins/menus");
-            if (res.ok) {
-                const data = await res.json();
-                setPluginMenus(data || []);
-            } else {
-                console.error("Failed to fetch menus");
-                setPluginMenus([]);
-            }
+            const { apiGet } = await import("@/lib/api");
+            const data = await apiGet<MenuItem[]>("/plugins/menus");
+            setPluginMenus(data || []);
         } catch (error) {
             console.error("Error refreshing menus:", error);
             setPluginMenus([]);

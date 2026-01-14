@@ -1,6 +1,6 @@
 # WordJS Plugin Development Guide
 
-This guide will teach you how to create a plugin for WordJS from scratch. WordJS plugins are "full-stack": they can extend the server (API) and the browser (Admin UI).
+This guide will teach you how to create a plugin for WordJS from scratch. WordJS plugins are "full-stack": they can extend the server (API), the browser (Admin UI), and manage their own dependencies automatically.
 
 ---
 
@@ -9,6 +9,7 @@ This guide will teach you how to create a plugin for WordJS from scratch. WordJS
 A WordJS plugin is simply a folder inside `backend/plugins/`.
 *   **Backend (`index.js`):** Runs on the server. Defines API routes and registers the plugin into the system.
 *   **Frontend (`client/`):** Runs in the user's browser. Defines the Admin interface and visual blocks for the editor.
+*   **Manifest (`manifest.json`):** The brain. Defines name, version, **npm dependencies**, and **frontend hooks**.
 
 ---
 
@@ -25,39 +26,51 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
   "slug": "hello-world",
   "version": "1.0.0",
   "description": "My first WordJS plugin",
-  "author": "Your Name"
+  "author": "Your Name",
+  "dependencies": {
+      "uuid": "^10.0.0" 
+  },
+  "frontend": {
+      "adminPage": {
+          "entry": "client/admin/page.tsx",
+          "slug": "hello-ui"
+      },
+      "hooks": "client/hooks.tsx"
+  }
 }
 ```
 
+> **🔥 Auto-Dependency Management:** 
+> WordJS reads the `dependencies` object. When you activate the plugin, the system **automatically installs** missing packages (`npm install`). When you deactivate it, if no other plugin needs them, it **garbage collects** them (`npm uninstall`). Zero manual work.
+
 ### Step 2: Backend Entry Point (`index.js`)
-Create `index.js` in the plugin folder. This is where you tell WordJS: "I exist, and here is my menu item."
+Create `index.js`. You can now require your dependencies safely!
 
 ```javascript
 exports.init = function () {
     const express = require('express');
     const router = express.Router();
+    const { v4: uuidv4 } = require('uuid'); // Safe to use!
     const { registerAdminMenu } = require('../../src/core/adminMenu');
     const { getApp } = require('../../src/core/appRegistry');
 
     // 1. Define a simple API route
     router.get('/message', (req, res) => {
-        res.json({ text: "Hello from the Backend!" });
+        res.json({ text: "Hello! Unique ID: " + uuidv4() });
     });
 
-    // 2. Register the API under /api/v1/hello-world
+    // 2. Register the API
     getApp().use('/api/v1/hello-world', router);
 
-    // 3. Add a link to the Admin Sidebar
+    // 3. Add link to Sidebar
     registerAdminMenu('hello-world', {
         href: '/admin/plugin/hello-world',
         label: 'Hello World',
         icon: 'fa-smile',
         order: 100,
-        cap: 'manage_hello_world' // RECOMMENDED: Unique capability name
+        cap: 'manage_hello_world'
     });
 
-    // NOTE: WordJS automatically detects the 'cap' you define here
-    // and adds it to the list in 'Users > Roles'.
     console.log('Hello World plugin initialized!');
 };
 ```
@@ -95,21 +108,38 @@ export default function HelloWorldAdmin() {
 }
 ```
 
+### Step 4: Frontend Hooks (`client/hooks.tsx`)
+If you want to modify existing WordJS pages (like adding a field to the User Form), use a Hook file.
+
+```tsx
+"use client";
+import React from 'react';
+import { pluginHooks } from '@/lib/plugin-hooks';
+
+// This function is auto-executed when the plugin loads
+export const registerMyHooks = () => {
+    pluginHooks.addAction('user_form_before_email', (data) => (
+        <div className="alert">Hello from the hook!</div>
+    ));
+};
+```
+
+> **React Dynamic Loading:** WordJS generates a dynamic registry. Your hooks file is lazy-loaded only when the plugin is active.
+
 ---
 
 ## 3. How to Install and Activate
 
 ### The Distribution Workflow (Standard)
-1.  Compress your plugin folder into a **.zip** file (ensure `manifest.json` is at the root of the zip).
+1.  Compress your plugin folder into a **.zip** file.
 2.  Go to **Plugins** -> **Add New / Upload**.
-3.  Upload your `.zip`. WordJS will extract it correctly into the system.
-4.  Click **Activate**.
+3.  Upload your `.zip`.
+4.  Click **Activate**. The system will pause briefly to **install dependencies**.
 
 ### The Local Development Workflow (Fast)
-If you are developing locally, you can skip the zip step:
-1.  Create your folder directly in `backend/plugins/` as shown in the tutorial.
-2.  Refresh the **Plugins** list in the admin panel.
-3.  Click **Activate**.
+1.  Create your folder directly in `backend/plugins/`.
+2.  Refresh the **Plugins** list.
+3.  Click **Activate**. Watch the server logs to see the dependency magic happening.
 
 ---
 
@@ -118,21 +148,16 @@ If you are developing locally, you can skip the zip step:
 | File/Folder             | Purpose                                         |
 | :---------------------- | :---------------------------------------------- |
 | `index.js`              | **Server-side**. Initialization, Routes, Hooks. |
-| `manifest.json`         | Metadata (name, version, author).               |
+| `manifest.json`         | Metadata, **Dependencies**, Entry Points.       |
 | `client/admin/page.tsx` | The UI shown when clicking the sidebar link.    |
-| `client/puck/`          | Visual blocks for the Page Builder (advanced).  |
-| `client/components/`    | Reusable React components for your UI.          |
+| `client/hooks.tsx`      | **Global Hooks**. Runs on app load (if active). |
+| `client/puck/`          | Visual blocks for the Page Builder.             |
 
 ---
 
 ## 5. Developer Rules of Gold 🏆
 
-1.  **Auth First:** Never fetch data from the server without the `Authorization: Bearer <token>` header.
-2.  **Relative Imports:** In your `index.js`, use `../../src/...` to access WordJS core modules.
-3.  **Unique Slugs:** Ensure your plugin folder name and slug are unique to avoid conflicts.
-4.  **Admin UI:** Use TailwindCSS for your Admin pages to keep the design consistent with WordJS.
-
----
-
-## 6. Advanced: Adding Editor Blocks
-If you want your plugin to add blocks to the "Puck" page builder, create a file in `client/puck/MyBlock.tsx`. WordJS will automatically pick it up if you export the correct configuration. (See existing plugins like `card-gallery` for examples).
+1.  **Auth First:** Never fetch data from the server without headers.
+2.  **Declare Dependencies:** Don't assume `nodemailer` or `uuid` exists in standard WordJS. **Declare it in manifest.json**.
+3.  **Relative Imports:** In `index.js`, use `../../src/...` to access Core.
+4.  **Unique Slugs:** Ensure your plugin folder name and slug are unique.

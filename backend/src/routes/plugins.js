@@ -33,7 +33,7 @@ const upload = multer({
  * Called when plugins are activated/deactivated
  */
 function regenerateRegistry() {
-    const scriptsDir = path.resolve(__dirname, '../../admin-next/scripts');
+    const scriptsDir = path.resolve(__dirname, '../../../admin-next/scripts');
     const scripts = [
         'generate-plugin-registry.js',         // Frontend components
         'generate-admin-plugin-registry.js',   // Admin pages
@@ -310,18 +310,23 @@ router.post('/sample', authenticate, isAdmin, asyncHandler(async (req, res) => {
 /**
  * GET /plugins/menus
  * Get all admin menu items registered by ACTIVE plugins only
+ * Uses filters to allow dynamic visibility rules
  */
-router.get('/menus', asyncHandler(async (req, res) => {
+router.get('/menus', authenticate, (req, res) => {
     const { getAdminMenuItems } = require('../core/adminMenu');
     const { getActivePlugins } = require('../core/plugins');
+    const { applyFiltersSync } = require('../core/hooks');
 
     const allMenus = getAdminMenuItems();
     const activePlugins = getActivePlugins();
 
-    // Filter menus to only include those from active plugins
-    const activeMenus = allMenus.filter(menu => activePlugins.includes(menu.plugin));
+    // 1. Filter menus to only include those from active plugins
+    let activeMenus = allMenus.filter(menu => activePlugins.includes(menu.plugin));
+
+    // 2. Apply filters to allows plugins to hide/modify items per user
+    activeMenus = applyFiltersSync('admin_menu_items', activeMenus, { user: req.user });
 
     res.json(activeMenus);
-}));
+});
 
 module.exports = router;

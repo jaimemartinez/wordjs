@@ -97,11 +97,49 @@ function getAllAvailableCapabilities() {
     return Array.from(caps);
 }
 
+/**
+ * Sync roles with configuration on startup
+ * Ensures critical capabilities are present
+ */
+function syncRoles(configRoles) {
+    const dbRoles = getRoles();
+    let changed = false;
+
+    // Check subscriber specifically for the new capability
+    if (dbRoles.subscriber && configRoles.subscriber) {
+        const dbCaps = dbRoles.subscriber.capabilities || [];
+        const configCaps = configRoles.subscriber.capabilities || [];
+
+        // If DB is missing access_admin_panel but Config has it, FORCE update
+        if (!dbCaps.includes('access_admin_panel') && configCaps.includes('access_admin_panel')) {
+            console.log('🔄 Syncing Subscriber roles: Adding access_admin_panel');
+            dbRoles.subscriber.capabilities = configCaps;
+            changed = true;
+        }
+    }
+
+    // General sync for missing roles
+    for (const [slug, role] of Object.entries(configRoles)) {
+        if (!dbRoles[slug]) {
+            console.log(`➕ Adding missing role: ${slug}`);
+            dbRoles[slug] = role;
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        updateOption(ROLES_OPTION_NAME, dbRoles);
+        return true;
+    }
+    return false;
+}
+
 module.exports = {
     getRoles,
     getRole,
     setRole,
     removeRole,
     updateRoleCapabilities,
-    getAllAvailableCapabilities
+    getAllAvailableCapabilities,
+    syncRoles
 };

@@ -8,12 +8,23 @@ const router = express.Router();
 const User = require('../models/User');
 const { authenticate, generateToken } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { getOption } = require('../core/options');
 
 /**
  * POST /auth/register
  * Register a new user
  */
 router.post('/register', asyncHandler(async (req, res) => {
+    // Check if registration is allowed
+    const registrationAllowed = getOption('users_can_register', 0);
+    if (!registrationAllowed || registrationAllowed == '0') {
+        return res.status(403).json({
+            code: 'rest_cannot_register',
+            message: 'User registration is currently disabled.',
+            data: { status: 403 }
+        });
+    }
+
     const { username, email, password, displayName } = req.body;
 
     if (!username || !email || !password) {
@@ -49,11 +60,13 @@ router.post('/register', asyncHandler(async (req, res) => {
     // Keeping it simple but lengthier for now as requested.
 
     try {
+        const defaultRole = getOption('default_role', 'subscriber');
         const user = await User.create({
             username,
             email,
             password,
-            displayName: displayName || username
+            displayName: displayName || username,
+            role: defaultRole
         });
 
         const token = generateToken(user);

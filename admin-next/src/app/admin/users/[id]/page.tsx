@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { usersApi } from "@/lib/api";
 import ModernSelect from "@/components/ModernSelect";
+import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
 
 export default function UserEditorPage() {
     const router = useRouter();
@@ -19,9 +20,12 @@ export default function UserEditorPage() {
         password: "",
     });
     const [saving, setSaving] = useState(false);
+    const [, setHookTick] = useState(0);
 
     useEffect(() => {
         if (userId) loadUser();
+        // Listen for plugin hook changes (e.g. toggle auto-email)
+        return pluginHooks.subscribe(() => setHookTick(t => t + 1));
     }, [userId]);
 
     const loadUser = async () => {
@@ -90,14 +94,18 @@ export default function UserEditorPage() {
                             required
                         />
                     </div>
+                    <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-1">Email</label>
                         <input
                             type="email"
                             value={formData.email}
                             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                            className="w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                            required
+                            {...pluginHooks.applyFilters('user_form_email_input_props', {
+                                className: "w-full px-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500",
+                                required: true,
+                                readOnly: false
+                            }, { formData, isNew })}
                         />
                     </div>
                     <div>

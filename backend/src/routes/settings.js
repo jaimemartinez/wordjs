@@ -27,14 +27,16 @@ const PUBLIC_SETTINGS = [
     'footer_copyright',
     'footer_socials',
     'comments_enabled',
-    'site_icon'
+    'site_icon',
+    'users_can_register',
+    'admin_email',
+    'default_role',
+    'comment_registration'
 ];
 
 // All settings that can be modified
 const ALL_SETTINGS = [
     ...PUBLIC_SETTINGS,
-    'admin_email',
-    'users_can_register',
     'default_category',
     'default_post_format',
     'show_on_front',

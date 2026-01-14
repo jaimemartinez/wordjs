@@ -48,11 +48,12 @@ const config = {
   roles: {
     administrator: {
       name: 'Administrator',
-      capabilities: ['*'] // All capabilities
+      capabilities: ['*', 'access_admin_panel'] // All capabilities + explicit dash access
     },
     editor: {
       name: 'Editor',
       capabilities: [
+        'access_admin_panel',
         'edit_posts', 'edit_others_posts', 'publish_posts', 'delete_posts',
         'edit_pages', 'edit_others_pages', 'publish_pages', 'delete_pages',
         'manage_categories', 'moderate_comments', 'upload_files', 'edit_comments'
@@ -61,16 +62,17 @@ const config = {
     author: {
       name: 'Author',
       capabilities: [
+        'access_admin_panel',
         'edit_posts', 'publish_posts', 'delete_posts', 'upload_files'
       ]
     },
     contributor: {
       name: 'Contributor',
-      capabilities: ['edit_posts', 'delete_posts']
+      capabilities: ['access_admin_panel', 'edit_posts', 'delete_posts']
     },
     subscriber: {
       name: 'Subscriber',
-      capabilities: ['read']
+      capabilities: ['read', 'access_admin_panel']
     }
   },
 

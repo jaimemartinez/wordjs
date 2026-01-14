@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { settingsApi, MediaItem, postsApi, Post } from "@/lib/api";
+import { settingsApi, MediaItem, postsApi, Post, rolesApi, Role } from "@/lib/api";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import ModernSelect from "@/components/ModernSelect";
 
@@ -15,7 +15,11 @@ export default function SettingsPage() {
         site_icon: "",
         homepage_id: "",
         comments_enabled: "1",
+        users_can_register: "0",
+        default_role: "subscriber",
+        comment_registration: "0",
     });
+    const [roles, setRoles] = useState<Record<string, Role>>({});
     const [saving, setSaving] = useState(false);
     const [saved, setSaved] = useState(false);
     const [activePicker, setActivePicker] = useState<"logo" | "icon" | null>(null);
@@ -24,7 +28,17 @@ export default function SettingsPage() {
     useEffect(() => {
         loadSettings();
         loadPages();
+        loadRoles();
     }, []);
+
+    const loadRoles = async () => {
+        try {
+            const data = await rolesApi.list();
+            setRoles(data);
+        } catch (error) {
+            console.error("Failed to load roles:", error);
+        }
+    };
 
     const loadPages = async () => {
         try {
@@ -46,7 +60,10 @@ export default function SettingsPage() {
                 site_logo: data.site_logo || "",
                 site_icon: data.site_icon || "",
                 homepage_id: data.homepage_id || "",
-                comments_enabled: data.comments_enabled !== undefined ? data.comments_enabled : "1",
+                comments_enabled: data.comments_enabled !== undefined ? String(data.comments_enabled) : "1",
+                users_can_register: data.users_can_register !== undefined ? String(data.users_can_register) : "0",
+                default_role: data.default_role || "subscriber",
+                comment_registration: data.comment_registration !== undefined ? String(data.comment_registration) : "0",
             });
         } catch (error) {
             console.error("Failed to load settings:", error);
@@ -261,6 +278,43 @@ export default function SettingsPage() {
                                 </div>
                             </div>
 
+                            <div className="p-5 bg-blue-50/50 rounded-2xl border border-blue-100 space-y-4 group hover:bg-blue-100/50 transition-colors">
+                                <div className="flex items-center justify-between gap-6">
+                                    <div className="flex gap-4 items-center">
+                                        <div className="bg-white p-3 rounded-xl shadow-sm border border-blue-200 text-blue-600">
+                                            <i className="fa-solid fa-user-plus text-xl"></i>
+                                        </div>
+                                        <div>
+                                            <h4 className="text-sm font-bold text-gray-900">Membership</h4>
+                                            <p className="text-xs text-gray-500 mt-0.5">Anyone can register as a new user on the site.</p>
+                                        </div>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        onClick={() => setSettings({ ...settings, users_can_register: settings.users_can_register === "1" ? "0" : "1" })}
+                                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.users_can_register === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
+                                    >
+                                        <span
+                                            className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.users_can_register === "1" ? 'translate-x-6' : 'translate-x-1'}`}
+                                        />
+                                    </button>
+                                </div>
+
+                                {settings.users_can_register === "1" && (
+                                    <div className="pl-16 pt-2 animate-in fade-in slide-in-from-top-2 duration-300">
+                                        <ModernSelect
+                                            label="New User Default Role"
+                                            value={settings.default_role}
+                                            onChange={(e) => setSettings({ ...settings, default_role: e.target.value })}
+                                            options={Object.entries(roles).map(([slug, role]) => ({
+                                                value: slug,
+                                                label: role.name
+                                            }))}
+                                        />
+                                    </div>
+                                )}
+                            </div>
+
                             <div className="p-5 bg-amber-50 rounded-2xl border border-amber-100 flex items-center justify-between gap-6 group hover:bg-amber-100/50 transition-colors">
                                 <div className="flex gap-4 items-center">
                                     <div className="bg-white p-3 rounded-xl shadow-sm border border-amber-200 text-amber-600">
@@ -278,6 +332,27 @@ export default function SettingsPage() {
                                 >
                                     <span
                                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.comments_enabled === "1" ? 'translate-x-6' : 'translate-x-1'}`}
+                                    />
+                                </button>
+                            </div>
+
+                            <div className="p-5 bg-emerald-50/50 rounded-2xl border border-emerald-100 flex items-center justify-between gap-6 group hover:bg-emerald-100/50 transition-colors">
+                                <div className="flex gap-4 items-center">
+                                    <div className="bg-white p-3 rounded-xl shadow-sm border border-emerald-200 text-emerald-600">
+                                        <i className="fa-solid fa-user-lock text-xl"></i>
+                                    </div>
+                                    <div>
+                                        <h4 className="text-sm font-bold text-gray-900">Registered Comments</h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">Users must be registered and logged in to comment.</p>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setSettings({ ...settings, comment_registration: settings.comment_registration === "1" ? "0" : "1" })}
+                                    className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${settings.comment_registration === "1" ? 'bg-emerald-500' : 'bg-gray-200'}`}
+                                >
+                                    <span
+                                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.comment_registration === "1" ? 'translate-x-6' : 'translate-x-1'}`}
                                     />
                                 </button>
                             </div>

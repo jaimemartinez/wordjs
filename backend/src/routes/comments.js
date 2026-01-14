@@ -7,6 +7,7 @@ const express = require('express');
 const router = express.Router();
 const Comment = require('../models/Comment');
 const Post = require('../models/Post');
+const { getOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -112,6 +113,16 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
             code: 'rest_missing_param',
             message: 'Post ID and content are required.',
             data: { status: 400 }
+        });
+    }
+
+    // Check if registration is required to comment
+    const requireRegistration = getOption('comment_registration', '0') === '1';
+    if (requireRegistration && !req.user) {
+        return res.status(401).json({
+            code: 'rest_comment_login_required',
+            message: 'Sorry, you must be logged in to post a comment.',
+            data: { status: 401 }
         });
     }
 

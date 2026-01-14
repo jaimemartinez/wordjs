@@ -45,5 +45,8 @@
         "icon": "fa-video",
         "href": "/admin/plugin/videos",
         "order": 60
+    },
+    "dependencies": {
+        "uuid": "^10.0.0"
     }
 }

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { postsApi, usersApi, commentsApi, Comment } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
 
 interface Stats {
     posts: number;
@@ -11,6 +12,7 @@ interface Stats {
 }
 
 export default function DashboardPage() {
+    const { user, can } = useAuth();
     const [stats, setStats] = useState<Stats>({ posts: 0, pages: 0, comments: 0, users: 0 });
     const [recentComments, setRecentComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
@@ -21,20 +23,23 @@ export default function DashboardPage() {
 
     const loadData = async () => {
         try {
+            const fetchUsers = can('list_users') ? usersApi.list() : Promise.resolve([]);
+            const fetchComments = can('moderate_comments') ? commentsApi.list({ per_page: 5 }) : Promise.resolve([]);
+
             const [posts, pages, users, comments] = await Promise.all([
                 postsApi.list("post"),
                 postsApi.list("page"),
-                usersApi.list(),
-                commentsApi.list({ per_page: 5 })
+                fetchUsers,
+                fetchComments
             ]);
 
             setStats({
                 posts: posts.length,
                 pages: pages.length,
-                comments: comments.length, // This might need a count API for real scale, but for now list is fine
-                users: users.length,
+                comments: comments?.length || 0,
+                users: users?.length || 0,
             });
-            setRecentComments(comments.slice(0, 5));
+            setRecentComments(Array.isArray(comments) ? comments.slice(0, 5) : []);
         } catch (error) {
             console.error("Failed to load data:", error);
         } finally {
@@ -54,7 +59,7 @@ export default function DashboardPage() {
             <div className="flex justify-between items-center mb-8">
                 <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Dashboard Overview</h1>
                 <div className="text-sm text-gray-500 bg-white px-3 py-1 rounded-full shadow-sm border border-gray-100 italic">
-                    Welcome back, Admin
+                    Welcome back, {user?.displayName || user?.username || 'User'}
                 </div>
             </div>
 

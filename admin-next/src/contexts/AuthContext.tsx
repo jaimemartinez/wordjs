@@ -18,6 +18,7 @@ interface AuthContextType {
     login: (username: string, password: string) => Promise<boolean>;
     logout: () => void;
     isLoading: boolean;
+    can: (capability: string) => boolean;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -89,8 +90,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         router.push("/login");
     };
 
+    const can = (capability: string): boolean => {
+        if (!user) return false;
+        if (user.role === 'administrator' || user.capabilities.includes('*')) return true;
+        return user.capabilities.includes(capability);
+    };
+
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, isLoading }}>
+        <AuthContext.Provider value={{ user, token, login, logout, isLoading, can }}>
             {children}
         </AuthContext.Provider>
     );

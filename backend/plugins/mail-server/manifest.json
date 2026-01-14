@@ -1,0 +1,28 @@
+{
+    "id": "mail-server",
+    "name": "Mail Server",
+    "version": "1.0.0",
+    "description": "Manage SMTP settings and send automated emails",
+    "author": "WordJS",
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "emails"
+        },
+        "hooks": "client/UserFormExtension.tsx"
+    },
+    "adminMenu": {
+        "label": "Email Settings",
+        "icon": "fa-envelope",
+        "href": "/admin/plugin/emails",
+        "order": 90
+    },
+    "dependencies": {
+        "nodemailer": "^7.0.12",
+        "smtp-server": "^3.18.0",
+        "mailparser": "^3.9.1"
+    }
+}

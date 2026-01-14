@@ -9,7 +9,7 @@
 - **🚀 Performance-First:** Server Side Rendering (SSR) via Next.js for instant page loads.
 - **🛡️ Secure by Design:** Built-in Gateway architecture, JWT authentication, and strict sanitization.
 - **🎨 Visual Builder:** Integrated with **Puck** for a drag-and-drop editing experience.
-- **🔌 Full-Stack Plugins:** Extend both the API and the Admin UI with a few lines of code.
+- **🔌 Autonomous Plugins:** Full-stack extension with **auto-managed npm dependencies** and dynamic frontend hooks.
 - **⚙️ Zero Config:** Smart defaults and SQLite storage let you start in seconds, not hours.
 - **📄 SEO Ready:** Best practices out of the box (Semantic HTML, Meta Tags, JSON-LD).
 - **🛡️ Dynamic Roles:** Full Control over user permissions with a database-driven Role Manager.
