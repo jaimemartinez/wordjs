@@ -105,6 +105,12 @@ export interface User {
     email: string;
     displayName: string;
     role: string;
+    capabilities: string[];
+}
+
+export interface Role {
+    name: string;
+    capabilities: string[];
 }
 
 export interface Plugin {
@@ -285,6 +291,13 @@ export const themesApi = {
 export const settingsApi = {
     get: () => apiGet<Record<string, string>>("/settings"),
     update: (data: Record<string, string>) => apiPut("/settings", data),
+};
+
+export const rolesApi = {
+    list: () => apiGet<Record<string, Role>>("/roles"),
+    getCapabilities: () => apiGet<string[]>("/roles/capabilities"),
+    save: (slug: string, data: { name: string; capabilities: string[] }) => apiPost<Role>("/roles", { slug, ...data }),
+    delete: (slug: string) => apiDelete(`/roles/${slug}`),
 };
 
 // Media API

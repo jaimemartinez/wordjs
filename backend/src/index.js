@@ -235,7 +235,7 @@ async function initialize() {
 
     // Initialize default options
     console.log('⚙️  Setting up default options...');
-    initDefaultOptions(config.site);
+    initDefaultOptions(config);
 
     // Create default admin user if no users exist
     const User = require('./models/User');

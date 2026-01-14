@@ -7,6 +7,7 @@ const { db } = require('../config/database');
 const bcrypt = require('bcryptjs');
 const config = require('../config/app');
 const { sanitizeTitle, currentTimeGMT } = require('../core/formatting');
+const { getRoles } = require('../core/roles');
 
 const SALT_ROUNDS = 10;
 
@@ -40,7 +41,8 @@ class User {
 
     getCapabilities() {
         const role = this.getRole();
-        return config.roles[role]?.capabilities || [];
+        const roles = getRoles();
+        return roles[role]?.capabilities || [];
     }
 
     can(capability) {
@@ -48,7 +50,6 @@ class User {
         if (caps.includes('*')) return true;
         return caps.includes(capability);
     }
-
     toJSON() {
         return {
             id: this.id,
@@ -59,6 +60,7 @@ class User {
             registered: this.userRegistered,
             displayName: this.displayName,
             role: this.getRole(),
+            capabilities: this.getCapabilities(),
             avatarUrl: this.getAvatarUrl()
         };
     }

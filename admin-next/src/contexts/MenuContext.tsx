@@ -8,6 +8,7 @@ interface MenuItem {
     icon: string;
     order: number;
     plugin: string;
+    cap?: string;
 }
 
 interface MenuContextType {

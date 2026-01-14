@@ -7,30 +7,30 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useMenu } from "@/contexts/MenuContext";
 import { useEffect, useState } from "react";
 
-// Core menu items (always shown)
-const coreMenuItems = [
-    { href: "/admin", label: "Dashboard", icon: "fa-chart-pie" },
-    { href: "/admin/posts", label: "Posts", icon: "fa-pen-to-square" },
-    { href: "/admin/pages", label: "Pages", icon: "fa-file-lines" },
-    { href: "/admin/media", label: "Media", icon: "fa-images" },
-    { href: "/admin/menus", label: "Menus", icon: "fa-bars" },
-    { href: "/admin/footer", label: "Footer", icon: "fa-shoe-prints" },
-    { href: "/admin/widgets", label: "Widgets", icon: "fa-shapes" },
-    { href: "/admin/comments", label: "Comments", icon: "fa-comments" },
-    { href: "/admin/users", label: "Users", icon: "fa-users" },
-    { href: "/admin/categories", label: "Categories", icon: "fa-folder" },
-    { href: "/admin/plugins", label: "Plugins", icon: "fa-plug" },
-    { href: "/admin/themes", label: "Themes", icon: "fa-palette" },
-    { href: "/admin/settings", label: "Settings", icon: "fa-gear" },
-];
-
-interface PluginMenuItem {
+interface SidebarMenuItem {
     href: string;
     label: string;
     icon: string;
-    order: number;
-    plugin: string;
+    cap?: string;
 }
+
+// Core menu items with required capabilities
+const coreMenuItems: SidebarMenuItem[] = [
+    { href: "/admin", label: "Dashboard", icon: "fa-chart-pie", cap: "read" },
+    { href: "/admin/posts", label: "Posts", icon: "fa-pen-to-square", cap: "edit_posts" },
+    { href: "/admin/pages", label: "Pages", icon: "fa-file-lines", cap: "edit_pages" },
+    { href: "/admin/media", label: "Media", icon: "fa-images", cap: "upload_files" },
+    { href: "/admin/menus", label: "Menus", icon: "fa-bars", cap: "edit_theme_options" },
+    { href: "/admin/footer", label: "Footer", icon: "fa-shoe-prints", cap: "edit_theme_options" },
+    { href: "/admin/widgets", label: "Widgets", icon: "fa-shapes", cap: "edit_theme_options" },
+    { href: "/admin/comments", label: "Comments", icon: "fa-comments", cap: "moderate_comments" },
+    { href: "/admin/users", label: "Users", icon: "fa-users", cap: "list_users" },
+    { href: "/admin/users/roles", label: "Roles", icon: "fa-shield-halved", cap: "manage_options" },
+    { href: "/admin/categories", label: "Categories", icon: "fa-folder", cap: "manage_categories" },
+    { href: "/admin/plugins", label: "Plugins", icon: "fa-plug", cap: "activate_plugins" },
+    { href: "/admin/themes", label: "Themes", icon: "fa-palette", cap: "switch_themes" },
+    { href: "/admin/settings", label: "Settings", icon: "fa-gear", cap: "manage_options" },
+];
 
 interface SidebarProps {
     isOpen: boolean;
@@ -46,6 +46,14 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     const [siteTitle, setSiteTitle] = useState("WordJS");
     const [hoveredItem, setHoveredItem] = useState<{ label: string; top: number } | null>(null);
 
+    // Helper to check capabilities
+    const can = (cap: string | undefined) => {
+        if (!cap) return true;
+        if (!user || !user.capabilities) return false;
+        if (user.capabilities.includes("*")) return true;
+        return user.capabilities.includes(cap);
+    };
+
     useEffect(() => {
         const fetchSettings = async () => {
             try {
@@ -60,11 +68,11 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
         fetchSettings();
     }, []);
 
-    // Combine core + plugin menus
+    // Combine core + plugin menus and FILTER by capability
     const allMenuItems = [
-        ...coreMenuItems.slice(0, 6), // Dashboard through Widgets
-        ...pluginMenus, // Plugin menus inserted here
-        ...coreMenuItems.slice(6) // Comments through Settings
+        ...coreMenuItems.slice(0, 6).filter(item => can(item.cap)),
+        ...pluginMenus.filter(item => can(item.cap)),
+        ...coreMenuItems.slice(6).filter(item => can(item.cap))
     ];
 
     return (

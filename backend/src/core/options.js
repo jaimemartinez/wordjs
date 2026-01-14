@@ -87,12 +87,12 @@ function getAutoloadedOptions() {
 /**
  * Initialize default options
  */
-function initDefaultOptions(siteConfig) {
+function initDefaultOptions(fullConfig) {
     const defaults = {
-        siteurl: siteConfig.url,
-        home: siteConfig.url,
-        blogname: siteConfig.name || 'WordJS',
-        blogdescription: siteConfig.description || 'Just another WordJS site',
+        siteurl: fullConfig.site.url,
+        home: fullConfig.site.url,
+        blogname: fullConfig.site.name || 'WordJS',
+        blogdescription: fullConfig.site.description || 'Just another WordJS site',
         users_can_register: 0,
         admin_email: 'admin@example.com',
         start_of_week: 1,
@@ -124,7 +124,8 @@ function initDefaultOptions(siteConfig) {
         medium_size_w: 300,
         medium_size_h: 300,
         large_size_w: 1024,
-        large_size_h: 1024
+        large_size_h: 1024,
+        wordjs_user_roles: fullConfig.roles || {}
     };
 
     for (const [name, value] of Object.entries(defaults)) {
