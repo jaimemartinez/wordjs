@@ -313,10 +313,10 @@ exports.init = function () {
 
     registerAdminMenu('video-gallery', {
         href: '/admin/plugin/videos',
-        label: 'Videos',
+        label: 'Video Gallery',
         icon: 'fa-video',
         order: 35,
-        cap: 'upload_files'
+        cap: 'manage_videos'
     });
 
     console.log('   ✓ Video Gallery plugin initialized');

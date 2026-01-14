@@ -53,6 +53,7 @@ Located in `backend/src/middleware/permissions.js`.
 Roles are no longer hardcoded. They are stored in the database (table `options`) under the key `wordjs_user_roles`.
 
 *   **Logic:** `backend/src/core/roles.js` manages the abstraction.
+*   **Discovery:** The system automatically aggregates all unique `cap` identifiers registered by plugins via `adminMenu.js`. These are then presented as toggleable options in the Roles Management UI.
 *   **Initialization:** Default roles are seeded during installation but can be modified via the Roles UI.
 *   **Capabilities:** Users' capabilities are resolved at runtime based on their assigned role in the `roles` manager.
 

@@ -178,10 +178,10 @@ exports.init = function () {
     const { registerAdminMenu } = require('../../src/core/adminMenu');
     registerAdminMenu('photo-carousel', {
         href: '/admin/plugin/carousels',
-        label: 'Carousels',
+        label: 'Photo Carousel',
         icon: 'fa-images',
         order: 50,
-        cap: 'upload_files'
+        cap: 'manage_carousels'
     });
 
     console.log('Photo Carousel plugin v2.0 initialized!');

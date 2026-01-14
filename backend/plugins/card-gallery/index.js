@@ -147,7 +147,7 @@ exports.init = function () {
         label: 'Card Gallery',
         icon: 'fa-images',
         order: 55,
-        cap: 'upload_files'
+        cap: 'manage_cards'
     });
 
     console.log('Card Gallery plugin v2.0 initialized!');

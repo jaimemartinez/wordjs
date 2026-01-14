@@ -51,11 +51,13 @@ exports.init = function () {
     registerAdminMenu('hello-world', {
         href: '/admin/plugin/hello-world',
         label: 'Hello World',
-        icon: 'fa-smile', // FontAwesome icon
+        icon: 'fa-smile',
         order: 100,
-        cap: 'manage_options' // OPTIONAL: Required capability to see this menu
+        cap: 'manage_hello_world' // RECOMMENDED: Unique capability name
     });
 
+    // NOTE: WordJS automatically detects the 'cap' you define here
+    // and adds it to the list in 'Users > Roles'.
     console.log('Hello World plugin initialized!');
 };
 ```

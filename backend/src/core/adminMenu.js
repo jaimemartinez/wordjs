@@ -53,8 +53,22 @@ function getAdminMenuItems() {
     return items.sort((a, b) => a.order - b.order);
 }
 
+/**
+ * Get all unique capabilities required by registered items
+ */
+function getAllRegisteredCapabilities() {
+    const caps = new Set();
+    for (const [slug, menus] of adminMenuItems) {
+        for (const menu of menus) {
+            if (menu.cap) caps.add(menu.cap);
+        }
+    }
+    return Array.from(caps);
+}
+
 module.exports = {
     registerAdminMenu,
     unregisterAdminMenu,
-    getAdminMenuItems
+    getAdminMenuItems,
+    getAllRegisteredCapabilities
 };

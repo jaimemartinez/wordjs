@@ -85,6 +85,15 @@ function getAllAvailableCapabilities() {
     ];
     coreCaps.forEach(cap => caps.add(cap));
 
+    // Add capabilities from registered menus (plugins)
+    try {
+        const { getAllRegisteredCapabilities } = require('./adminMenu');
+        const pluginCaps = getAllRegisteredCapabilities();
+        pluginCaps.forEach(cap => caps.add(cap));
+    } catch (err) {
+        console.warn('Could not load plugin capabilities:', err.message);
+    }
+
     return Array.from(caps);
 }
 
