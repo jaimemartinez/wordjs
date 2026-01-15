@@ -4,7 +4,7 @@
  */
 
 const { dbAsync } = require('../config/database');
-const { verifyPermission } = require('./plugin-context');
+const { verifyPermission, runWithContext } = require('./plugin-context');
 
 /**
  * Get an option value
@@ -13,21 +13,24 @@ const { verifyPermission } = require('./plugin-context');
 async function getOption(name, defaultValue = null) {
     // Only verify if we are in a plugin context
     verifyPermission('settings', 'read');
-    try {
-        const row = await dbAsync.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
 
-        if (!row) return defaultValue;
-
-        // Try to parse JSON
+    return runWithContext(null, async () => {
         try {
-            return JSON.parse(row.option_value);
-        } catch {
-            return row.option_value;
+            const row = await dbAsync.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
+
+            if (!row) return defaultValue;
+
+            // Try to parse JSON
+            try {
+                return JSON.parse(row.option_value);
+            } catch {
+                return row.option_value;
+            }
+        } catch (e) {
+            console.error(`Error getting option ${name}:`, e.message);
+            return defaultValue;
         }
-    } catch (e) {
-        console.error(`Error getting option ${name}:`, e.message);
-        return defaultValue;
-    }
+    });
 }
 
 /**
@@ -36,18 +39,21 @@ async function getOption(name, defaultValue = null) {
  */
 async function updateOption(name, value, autoload = 'yes') {
     verifyPermission('settings', 'write');
-    const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
-    // Check strict existence first
-    const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
+    return runWithContext(null, async () => {
+        const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
-    if (existing) {
-        await dbAsync.run('UPDATE options SET option_value = ?, autoload = ? WHERE option_name = ?', [serialized, autoload, name]);
-    } else {
-        await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
-    }
+        // Check strict existence first
+        const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
 
-    return true;
+        if (existing) {
+            await dbAsync.run('UPDATE options SET option_value = ?, autoload = ? WHERE option_name = ?', [serialized, autoload, name]);
+        } else {
+            await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
+        }
+
+        return true;
+    });
 }
 
 /**
@@ -56,12 +62,15 @@ async function updateOption(name, value, autoload = 'yes') {
  */
 async function addOption(name, value, autoload = 'yes') {
     verifyPermission('settings', 'write');
-    const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
-    if (existing) return false;
 
-    const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
-    await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
-    return true;
+    return runWithContext(null, async () => {
+        const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
+        if (existing) return false;
+
+        const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
+        return true;
+    });
 }
 
 /**
@@ -70,25 +79,30 @@ async function addOption(name, value, autoload = 'yes') {
  */
 async function deleteOption(name) {
     verifyPermission('settings', 'write');
-    const result = await dbAsync.run('DELETE FROM options WHERE option_name = ?', [name]);
-    return result.changes > 0;
+
+    return runWithContext(null, async () => {
+        const result = await dbAsync.run('DELETE FROM options WHERE option_name = ?', [name]);
+        return result.changes > 0;
+    });
 }
 
 /**
  * Get all autoloaded options
  */
 async function getAutoloadedOptions() {
-    const rows = await dbAsync.all('SELECT option_name, option_value FROM options WHERE autoload = ?', ['yes']);
+    return runWithContext(null, async () => {
+        const rows = await dbAsync.all('SELECT option_name, option_value FROM options WHERE autoload = ?', ['yes']);
 
-    const options = {};
-    for (const row of rows) {
-        try {
-            options[row.option_name] = JSON.parse(row.option_value);
-        } catch {
-            options[row.option_name] = row.option_value;
+        const options = {};
+        for (const row of rows) {
+            try {
+                options[row.option_name] = JSON.parse(row.option_value);
+            } catch {
+                options[row.option_name] = row.option_value;
+            }
         }
-    }
-    return options;
+        return options;
+    });
 }
 
 /**

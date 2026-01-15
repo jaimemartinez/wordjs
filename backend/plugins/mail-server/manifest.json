@@ -23,6 +23,11 @@
     "permissions": [
         {
             "scope": "database",
+            "access": "read",
+            "reason": "Required to list and search archived emails."
+        },
+        {
+            "scope": "database",
             "access": "write",
             "reason": "Required to log emails and manage server state."
         },
@@ -30,6 +35,21 @@
             "scope": "settings",
             "access": "write",
             "reason": "Required to manage SMTP and global email configurations."
+        },
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Required to read SMTP and global email configurations."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Required for MX resolution (DNS) and direct SMTP delivery (NET)."
+        },
+        {
+            "scope": "notifications",
+            "access": "send",
+            "reason": "Required to alert users about new inbound emails in real-time."
         }
     ],
     "dependencies": {

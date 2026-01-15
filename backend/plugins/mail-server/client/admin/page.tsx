@@ -65,6 +65,21 @@ export default function MailServerAdmin() {
         loadData();
     }, [folder]);
 
+    // Real-time refresh on notification
+    useEffect(() => {
+        const handleNotification = (e: any) => {
+            const notif = e.detail;
+            // Refresh if it's an email notification and we are in the inbox
+            if (folder === 'inbox' && notif.type === 'email') {
+                console.log("📬 Real-time email notification received. Refreshing inbox...");
+                loadData();
+            }
+        };
+
+        window.addEventListener('wordjs:notification' as any, handleNotification);
+        return () => window.removeEventListener('wordjs:notification' as any, handleNotification);
+    }, [folder]);
+
     const loadData = async () => {
         setLoading(true);
         try {
@@ -279,7 +294,7 @@ export default function MailServerAdmin() {
                                                                 {new Date(msg.date_received).toLocaleString()}
                                                             </span>
                                                         </div>
-                                                        <div className="text-xs text-gray-500 mb-3">to me</div>
+                                                        <div className="text-xs text-gray-500 mb-3">to {msg.to_address}</div>
 
                                                         {/* Message Body */}
                                                         <div className="subpixel-antialiased text-gray-800 text-sm leading-relaxed overflow-hidden">
