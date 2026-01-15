@@ -24,6 +24,7 @@ const postTypesRoutes = require('./post-types');
 const exportRoutes = require('./export');
 const setupRoutes = require('./setup');
 const rolesRoutes = require('./roles');
+const notificationsRoutes = require('./notifications');
 
 // API Info endpoint
 router.get('/', (req, res) => {
@@ -48,7 +49,8 @@ router.get('/', (req, res) => {
             types: '/api/v1/types',
             export: '/api/v1/export',
             import: '/api/v1/import',
-            roles: '/api/v1/roles'
+            roles: '/api/v1/roles',
+            notifications: '/api/v1/notifications'
         }
     });
 });
@@ -70,6 +72,7 @@ router.use('/revisions', revisionsRoutes);
 router.use('/types', postTypesRoutes);
 router.use('/setup', setupRoutes);
 router.use('/roles', rolesRoutes);
+router.use('/notifications', notificationsRoutes);
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)

@@ -1,0 +1,22 @@
+{
+  "siteUrl": "http://localhost:3001",
+  "frontendUrl": "http://localhost:3001",
+  "port": "4000",
+  "host": "localhost",
+  "updatedAt": "2026-01-15T15:41:36.524Z",
+  "gatewaySecret": "8280f373eda00c98d53be3cbb36b14125733120da863cff29e8924bbcdc0fd0e",
+  "dbDriver": "sqlite-native",
+  "dbPath": "./data/wordjs-native.db",
+  "dbHost": "localhost",
+  "dbUser": "postgres",
+  "dbPassword": "password",
+  "dbName": "wordjs",
+  "dbPort": "5433",
+  "db": {
+    "host": "localhost",
+    "port": "5433",
+    "user": "postgres",
+    "name": "wordjs",
+    "password": "password"
+  }
+}

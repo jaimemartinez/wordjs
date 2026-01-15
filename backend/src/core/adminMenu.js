@@ -27,7 +27,8 @@ function registerAdminMenu(pluginSlug, item) {
             label: item.label,
             icon: item.icon || 'fa-puzzle-piece',
             order: item.order || 100,
-            cap: item.cap || item.capability || null
+            cap: item.cap || item.capability || null,
+            section: item.section || 'core'
         });
     }
 }
@@ -51,7 +52,14 @@ function getAdminMenuItems() {
             items.push({ ...menu, plugin: slug });
         }
     }
-    return items.sort((a, b) => a.order - b.order);
+    return items.sort((a, b) => {
+        // Primary: Order (ASC)
+        const orderDiff = (a.order || 100) - (b.order || 100);
+        if (orderDiff !== 0) return orderDiff;
+
+        // Secondary: Label (ABC)
+        return a.label.localeCompare(b.label);
+    });
 }
 
 /**

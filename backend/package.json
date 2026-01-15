@@ -4,7 +4,7 @@
   "description": "WordPress-like CMS built with Node.js and SQLite",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
+    "start": "node server.js",
     "dev": "node --watch src/index.js",
     "migrate": "node src/database/migrate.js",
     "seed": "node src/database/seed.js",

@@ -91,7 +91,7 @@ function getProtectedEnv() {
             const pluginSlug = getCurrentPlugin();
             if (pluginSlug && sensitiveKeys.includes(prop.toString())) {
                 console.warn(`[Security] Plugin '${pluginSlug}' tried to access sensitive ENV: ${prop.toString()}`);
-                return '******** (Protected)';
+                return undefined; // Return undefined instead of masked string to mimic non-existence
             }
             return target[prop];
         },
@@ -99,10 +99,26 @@ function getProtectedEnv() {
             const pluginSlug = getCurrentPlugin();
             if (pluginSlug && sensitiveKeys.includes(prop.toString())) {
                 console.warn(`[Security] Plugin '${pluginSlug}' attempted to modify sensitive ENV: ${prop.toString()}`);
-                return false; // Silently fail set for plugins
+                return false;
             }
             target[prop] = value;
             return true;
+        },
+        // Hide keys from Object.keys(), for...in, JSON.stringify()
+        ownKeys(target) {
+            const pluginSlug = getCurrentPlugin();
+            if (pluginSlug) {
+                return Reflect.ownKeys(target).filter(key => !sensitiveKeys.includes(key.toString()));
+            }
+            return Reflect.ownKeys(target);
+        },
+        // Ensure hidden keys are reported as non-configurable/non-enumerable if accessed directly
+        getOwnPropertyDescriptor(target, prop) {
+            const pluginSlug = getCurrentPlugin();
+            if (pluginSlug && sensitiveKeys.includes(prop.toString())) {
+                return undefined;
+            }
+            return Reflect.getOwnPropertyDescriptor(target, prop);
         }
     });
 }

@@ -12,6 +12,10 @@ require('dotenv').config();
 
 // Import configuration
 const config = require('./config/app');
+
+// SECURITY: Initialize IO Guard before anything else
+require('./core/io-guard');
+
 const { initSqlJsDb, initializeDatabase, db, saveDatabase } = require('./config/database');
 
 // Import middleware

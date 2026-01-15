@@ -61,3 +61,32 @@ WordJS provides a high level of isolation, but it is not a virtual machine.
 *   **Resource Limits:** The system does not currently enforce strict CPU or RAM quotas for plugins (DoS protection).
 
 For ultra-high security environments, we recommend auditing third-party plugin dependencies before installation.
+
+---
+
+## 5. Permission Reference 📚
+
+These are the valid scopes and access levels you can declare in `manifest.json`.
+
+| Scope               | Access  | Description                                                 |
+| :------------------ | :------ | :---------------------------------------------------------- |
+| **`database`**      | `read`  | Allows reading from custom tables using `dbAsync`.          |
+|                     | `write` | Allows INSERT/UPDATE/DELETE operations.                     |
+|                     | `admin` | Full control (DROP/CREATE tables).                          |
+| **`settings`**      | `read`  | Can read site options via `getOption()`.                    |
+|                     | `write` | Can modify site options via `updateOption()`.               |
+| **`filesystem`**    | `read`  | Read files (e.g., templates, assets) using `fs` or `path`.  |
+|                     | `write` | Write files to disk (Use cautiously).                       |
+| **`network`**       | `admin` | allows `require('http')`, `require('net')`, outbound calls. |
+| **`email`**         | `admin` | allows `nodemailer`, sending via SMTP.                      |
+| **`notifications`** | `send`  | Allows sending alerts to users via `notificationService`.   |
+| **`system`**        | `admin` | **DANGEROUS**: Bypasses AST scans. Allows `child_process`.  |
+
+### Example Manifest declaration:
+
+```json
+"permissions": [
+    { "scope": "database", "access": "write", "reason": "Storing poll results" },
+    { "scope": "notifications", "access": "send", "reason": "Alerting admin on new votes" }
+]
+```

@@ -66,7 +66,8 @@ export default function PluginsPage() {
             addToast(`Plugin activated`, "success");
         } catch (error: any) {
             console.error("Failed to activate plugin:", error);
-            addToast("Activation failed: " + (error.message || "Unknown error"), "error");
+            // Persistent toast (duration: 0) so user can read the security error
+            addToast("Activation failed: " + (error.message || "Unknown error"), "error", 0);
         }
     };
 
@@ -122,9 +123,9 @@ export default function PluginsPage() {
     };
 
     return (
-        <div className="min-h-full p-8 relative overflow-hidden">
+        <div className="h-full p-8 relative overflow-y-auto custom-scrollbar">
             {/* Animated Background */}
-            <div className="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
+            <div className="fixed inset-0 overflow-hidden z-0 pointer-events-none">
                 <div className="absolute top-10 left-10 w-96 h-96 bg-blue-400/20 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob"></div>
                 <div className="absolute top-10 right-10 w-96 h-96 bg-purple-400/20 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
                 <div className="absolute -bottom-8 left-20 w-96 h-96 bg-pink-400/20 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
@@ -187,50 +188,58 @@ export default function PluginsPage() {
             {/* Plugin Permissions Modal */}
             {permissionModalOpen && pluginToActivate && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
-                    <div className="bg-white rounded-2xl p-8 max-w-lg w-full shadow-2xl transform transition-all scale-100 border border-white/20">
-                        <div className="flex items-center gap-4 mb-6 text-blue-600">
-                            <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
-                                <FaPlug className="text-xl" />
-                            </div>
-                            <h3 className="text-xl font-bold text-gray-900">Authorize Plugin</h3>
-                        </div>
+                    <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl transform transition-all scale-100 border border-white/20 max-h-[85vh] flex flex-col">
 
-                        <p className="mb-4 text-gray-600 leading-relaxed">
-                            The plugin <strong className="text-gray-900">{pluginToActivate.name}</strong> requests the following permissions to function:
-                        </p>
-
-                        <div className="space-y-3 mb-8">
-                            {pluginToActivate.permissions && pluginToActivate.permissions.length > 0 ? (
-                                pluginToActivate.permissions.map((p, idx) => (
-                                    <div key={idx} className="flex gap-3 p-4 bg-gray-50 rounded-xl border border-gray-100">
-                                        <div className={`w-2 h-2 rounded-full mt-2 shrink-0 ${p.scope === 'database' ? 'bg-purple-500' :
-                                            p.scope === 'filesystem' ? 'bg-orange-500' : 'bg-blue-500'
-                                            }`} />
-                                        <div>
-                                            <div className="flex items-center gap-2 mb-1">
-                                                <span className="font-bold text-sm text-gray-800 uppercase tracking-tight">{p.scope}</span>
-                                                <span className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-400 font-bold uppercase">{p.access}</span>
-                                            </div>
-                                            <p className="text-sm text-gray-500 leading-snug">{p.reason}</p>
-                                        </div>
-                                    </div>
-                                ))
-                            ) : (
-                                <div className="flex flex-col items-center justify-center p-8 bg-green-50 rounded-2xl border border-green-100 text-center">
-                                    <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-3">
-                                        <FaCheck className="text-green-500" />
-                                    </div>
-                                    <p className="text-green-800 font-bold text-sm">Safe to Activate</p>
-                                    <p className="text-green-600 text-xs mt-1">This plugin requests no special system-level permissions.</p>
+                        {/* Header - Fixed */}
+                        <div className="p-8 pb-4 flex-shrink-0">
+                            <div className="flex items-center gap-4 text-blue-600">
+                                <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                    <FaPlug className="text-xl" />
                                 </div>
-                            )}
+                                <h3 className="text-xl font-bold text-gray-900">Authorize Plugin</h3>
+                            </div>
                         </div>
 
-                        <p className="text-xs text-gray-400 mb-8 p-3 bg-blue-50/50 rounded-lg border border-blue-100/50 italic">
-                            By activating this plugin, you are granting it strict access to these system capabilities.
-                        </p>
+                        {/* Scrollable Content */}
+                        <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
+                            <p className="mb-6 text-gray-600 leading-relaxed">
+                                The plugin <strong className="text-gray-900">{pluginToActivate.name}</strong> requests the following permissions to function:
+                            </p>
 
-                        <div className="flex justify-end gap-3 pt-2">
+                            <div className="space-y-3 mb-6">
+                                {pluginToActivate.permissions && pluginToActivate.permissions.length > 0 ? (
+                                    pluginToActivate.permissions.map((p, idx) => (
+                                        <div key={idx} className="flex gap-3 p-4 bg-gray-50 rounded-xl border border-gray-100">
+                                            <div className={`w-2 h-2 rounded-full mt-2 shrink-0 ${p.scope === 'database' ? 'bg-purple-500' :
+                                                p.scope === 'filesystem' ? 'bg-orange-500' : 'bg-blue-500'
+                                                }`} />
+                                            <div>
+                                                <div className="flex items-center gap-2 mb-1">
+                                                    <span className="font-bold text-sm text-gray-800 uppercase tracking-tight">{p.scope}</span>
+                                                    <span className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-400 font-bold uppercase">{p.access}</span>
+                                                </div>
+                                                <p className="text-sm text-gray-500 leading-snug">{p.reason}</p>
+                                            </div>
+                                        </div>
+                                    ))
+                                ) : (
+                                    <div className="flex flex-col items-center justify-center p-8 bg-green-50 rounded-2xl border border-green-100 text-center">
+                                        <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-3">
+                                            <FaCheck className="text-green-500" />
+                                        </div>
+                                        <p className="text-green-800 font-bold text-sm">Safe to Activate</p>
+                                        <p className="text-green-600 text-xs mt-1">This plugin requests no special system-level permissions.</p>
+                                    </div>
+                                )}
+                            </div>
+
+                            <p className="text-xs text-gray-400 mb-2 p-3 bg-blue-50/50 rounded-lg border border-blue-100/50 italic">
+                                By activating this plugin, you are granting it strict access to these system capabilities.
+                            </p>
+                        </div>
+
+                        {/* Footer - Fixed */}
+                        <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-gray-100 mt-2">
                             <button
                                 onClick={() => {
                                     setPermissionModalOpen(false);

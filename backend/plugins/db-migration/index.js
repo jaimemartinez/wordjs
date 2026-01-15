@@ -34,7 +34,8 @@ exports.init = function () {
         label: 'DB Migration',
         icon: 'fa-exchange',
         order: 999,
-        cap: 'manage_options'
+        cap: 'manage_options',
+        section: 'management' // Request placement in Management area
     });
 
     console.log('✅ DB Migration Plugin loaded.');

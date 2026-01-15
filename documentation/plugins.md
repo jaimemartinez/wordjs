@@ -225,3 +225,12 @@ registerWidget('my_weather_widget', {
     render: (options) => `<div>It is sunny!</div>`
 });
 ```
+
+### 6.3 Sending Notifications 🔔
+Plugins can push real-time alerts to the Admin UI.
+See **[Notification System](notifications.md)** for full details.
+
+### 6.4 Sending Emails 📧
+If the Mail Server plugin is active, you can send emails easily.
+See **[Mail Server](mail-server.md)** for full details.
+

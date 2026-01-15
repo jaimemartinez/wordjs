@@ -189,8 +189,8 @@ if (cluster.isPrimary) {
 
     const jsonParser = express.json({ limit: '10mb' }); // Payload Protection
     const proxy = httpProxy.createProxyServer({
-        proxyTimeout: 15000, // Upstream Timeout
-        timeout: 15000      // Socket Timeout
+        proxyTimeout: 3600000, // 1 hour (for SSE/Long Polling)
+        timeout: 3600000      // 1 hour
     });
 
     // Auth Middleware (Supports Header or Query Param for Browser)
@@ -207,7 +207,14 @@ if (cluster.isPrimary) {
         contentSecurityPolicy: false, // Strict CSP breaks Next.js/Turbopack inline scripts in dev mode
     }));
     app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } })); // Log to Winston
-    app.use(compression());
+    app.use(compression({
+        filter: (req, res) => {
+            if (req.headers['accept'] === 'text/event-stream' || res.getHeader('Content-Type') === 'text/event-stream') {
+                return false; // Don't compress SSE
+            }
+            return compression.filter(req, res);
+        }
+    }));
 
     app.use((req, res, next) => {
         req.correlationId = req.headers['x-correlation-id'] || uuidv4();

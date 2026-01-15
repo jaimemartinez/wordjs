@@ -48,6 +48,16 @@
     },
     "permissions": [
         {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Required to read video gallery configurations and legacy data."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Required to manage video galleries and perform data migration."
+        },
+        {
             "scope": "database",
             "access": "write",
             "reason": "Required to manage video gallery content and settings."

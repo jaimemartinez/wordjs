@@ -124,6 +124,13 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
         return permissions.some(p => p.scope === scope && (p.access === access || p.access === 'admin'));
     };
 
+    // SYSTEM BYPASS: Allow trusted system utilities to skip AST analysis
+    // This allows plugins like db-migration to use child_process/process.exit
+    if (hasDeclared('system', 'admin')) {
+        console.log(`🛡️ Security: Plugin '${slug}' granted SYSTEM access (AST scan skipped).`);
+        return true;
+    }
+
     function getFiles(dir) {
         let results = [];
         if (!fs.existsSync(dir)) return results;
@@ -132,10 +139,13 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
             const fullPath = path.join(dir, file);
             const stat = fs.statSync(fullPath);
             if (stat && stat.isDirectory()) {
-                if (!file.includes('node_modules') && !file.startsWith('.')) {
+                // Skip node_modules, hidden files, and FRONTEND directories
+                if (!file.includes('node_modules') && !file.startsWith('.') &&
+                    !['client', 'frontend'].includes(file)) {
                     results = results.concat(getFiles(fullPath));
                 }
-            } else if (file.endsWith('.js') || file.endsWith('.ts') || file.endsWith('.tsx')) {
+            } else if (file.endsWith('.js') || file.endsWith('.ts')) {
+                // Exclude .tsx (frontend components) from backend security scan
                 results.push(fullPath);
             }
         });
@@ -163,8 +173,8 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
             continue;
         }
 
-        walk.simple(ast, {
-            CallExpression(node) {
+        walk.ancestor(ast, {
+            CallExpression(node, ancestors) {
                 let name = '';
                 // 1. Direct calls: eval(), execSync()
                 if (node.callee.type === 'Identifier') {
@@ -177,7 +187,11 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                             const moduleName = arg.value;
                             const sensitiveModules = ['child_process', 'fs', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads'];
                             if (sensitiveModules.includes(moduleName)) {
-                                if (moduleName !== 'fs') {
+                                if (moduleName === 'dns' || moduleName === 'net') {
+                                    if (!hasDeclared('network', 'admin') && !hasDeclared('email', 'admin')) {
+                                        missingPermissions.add(`Network/System access (require('${moduleName}'))`);
+                                    }
+                                } else if (moduleName !== 'fs') {
                                     dangerousCalls.add(`require('${moduleName}')`);
                                 }
                             }
@@ -219,16 +233,32 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                     dangerousCalls.add(name);
                 }
             },
-            MemberExpression(node) {
+            MemberExpression(node, ancestors) {
                 // Detect access to sensitive globals
                 const sensitiveGlobals = ['process', 'global', 'require', 'module', 'arguments', '__dirname', '__filename', 'Buffer'];
                 if (node.object.type === 'Identifier' && sensitiveGlobals.includes(node.object.name)) {
+                    // Check if this is an assignment (e.g. global.x = 1 or module.exports = ...)
+                    // We allow WRITING to them for legitimate sharing/exporting, but BLOCK reading them as objects
+                    const parent = ancestors[ancestors.length - 2];
+                    const grandParent = ancestors[ancestors.length - 3];
+
+                    let isAssignment = false;
+                    if (parent && parent.type === 'AssignmentExpression' && parent.left === node) {
+                        isAssignment = true;
+                    }
+                    // Also check if we are assigning to a property of the global (e.g. global.foo = ...)
+                    if (!isAssignment && parent && parent.type === 'MemberExpression' && parent.object === node) {
+                        if (grandParent && grandParent.type === 'AssignmentExpression' && grandParent.left === parent) {
+                            isAssignment = true;
+                        }
+                    }
+
                     if (node.object.name === 'process') {
                         // Allow process.env (handled by runtime proxy), block everything else
                         if (node.property.name !== 'env') {
                             dangerousCalls.add(`Forbidden 'process' property: ${node.property.name || 'computed'}`);
                         }
-                    } else {
+                    } else if (!isAssignment) {
                         dangerousCalls.add(`Direct '${node.object.name}' access (restricted)`);
                     }
                 }
@@ -563,7 +593,40 @@ async function deactivatePlugin(slug) {
 async function loadActivePlugins() {
     const activePlugins = await getActivePlugins();
     const plugins = scanPlugins();
+    const CrashGuard = require('./crash-guard');
 
+    // 1. CRASH RECOVERY CHECK
+    // Did we crash last time?
+    const culpritSlug = CrashGuard.checkPreviousCrash();
+
+    if (culpritSlug) {
+        console.error(`🚨 CRASH DETECTED: The server crashed while loading plugin '${culpritSlug}'.`);
+        console.error(`🛡️  CrashGuard: Automatically disabling '${culpritSlug}' to prevent boot loop.`);
+
+        // Remove from active plugins list
+        const newActive = activePlugins.filter(s => s !== culpritSlug);
+        await updateOption('active_plugins', newActive);
+
+        // Also notify via persistent admin notice
+        const notices = await getOption('admin_notices', []);
+        notices.push({
+            id: `crash-${culpritSlug}-${Date.now()}`,
+            type: 'error',
+            message: `🚨 <b>Critical Error:</b> The plugin <strong>${culpritSlug}</strong> caused a server crash during startup and has been automatically disabled for your safety. Please check the logs or contact the plugin author.`,
+            dismissible: true,
+            timestamp: Date.now()
+        });
+        await updateOption('admin_notices', notices);
+
+        // Clear the lock so we can proceed
+        CrashGuard.finishLoading(culpritSlug);
+
+        // Update local list for THIS run
+        const index = activePlugins.indexOf(culpritSlug);
+        if (index > -1) activePlugins.splice(index, 1);
+    }
+
+    // 2. Load Plugins
     for (const slug of activePlugins) {
         const plugin = plugins.find(p => p.slug === slug);
         if (!plugin) continue;
@@ -589,6 +652,9 @@ async function loadActivePlugins() {
         }
 
         try {
+            // MARK START
+            CrashGuard.startLoading(slug);
+
             const pluginModule = require(mainFile);
 
             const { runWithContext } = require('./plugin-context');
@@ -596,9 +662,15 @@ async function loadActivePlugins() {
                 await runWithContext(slug, () => pluginModule.init());
             }
 
+            // MARK SUCCESS
+            CrashGuard.finishLoading(slug);
+
             loadedPlugins.set(slug, pluginModule);
             console.log(`   ✓ Plugin loaded: ${plugin.name}`);
         } catch (error) {
+            // If we caught the error (it didn't crash the process), we should still clear the lock
+            CrashGuard.finishLoading(slug);
+
             console.error(`   ✗ Failed to load plugin ${slug}:`, error.message);
         }
     }
