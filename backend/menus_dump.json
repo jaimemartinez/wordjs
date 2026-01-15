@@ -1,0 +1,42 @@
+[
+  {
+    "href": "/admin/plugin/videos",
+    "label": "Video Gallery",
+    "icon": "fa-video",
+    "order": 35,
+    "cap": "manage_videos",
+    "plugin": "video-gallery"
+  },
+  {
+    "href": "/admin/plugin/carousels",
+    "label": "Photo Carousel",
+    "icon": "fa-images",
+    "order": 50,
+    "cap": "manage_carousels",
+    "plugin": "photo-carousel"
+  },
+  {
+    "href": "/admin/plugin/cards",
+    "label": "Card Gallery",
+    "icon": "fa-images",
+    "order": 55,
+    "cap": "manage_cards",
+    "plugin": "card-gallery"
+  },
+  {
+    "href": "/admin/plugin/emails",
+    "label": "Email Center",
+    "icon": "fa-envelope",
+    "order": 90,
+    "cap": "access_admin_panel",
+    "plugin": "mail-server"
+  },
+  {
+    "href": "/admin/plugin/db-migration",
+    "label": "DB Migration",
+    "icon": "fa-exchange",
+    "order": 999,
+    "cap": "manage_options",
+    "plugin": "db-migration"
+  }
+]

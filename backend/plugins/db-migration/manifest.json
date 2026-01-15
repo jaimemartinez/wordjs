@@ -17,5 +17,22 @@
             "slug": "db-migration"
         }
     },
+    "permissions": [
+        {
+            "scope": "filesystem",
+            "access": "write",
+            "reason": "Required to delete legacy database files during cleanup."
+        },
+        {
+            "scope": "database",
+            "access": "admin",
+            "reason": "Required to migrate data between database engines and change drivers."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Required to update database driver configuration in WordJS settings."
+        }
+    ],
     "dependencies": {}
 }

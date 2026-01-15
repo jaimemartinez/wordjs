@@ -14,9 +14,12 @@ The backend follows a layered architecture inspired by WordPress but implemented
     *   `CORS`: Cross-Origin Resource Sharing.
     *   `RateLimit`: DoS protection (API, Auth, Uploads).
     *   `MigrationGuard`: Validates `Host` header against `siteUrl`.
-4.  **Routing:** `backend/src/routes/index.js` dispatches to controllers.
-5.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
-6.  **Response:** JSON response sent back.
+4.  **Security Layers:**
+    *   `AST Scanner`: Static analysis of plugin code before load.
+    *   `Runtime Proxies`: Protective layer around `process.env` and sensitive APIs.
+5.  **Routing:** `backend/src/routes/index.js` dispatches to controllers.
+6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
+7.  **Response:** JSON response sent back.
 
 ### 1.2 Database Abstraction
 WordJS uses `sql.js` (SQLite) for a file-based database, ideal for "Zero Config".
@@ -168,19 +171,118 @@ All routes are prefixed with `/api/v1`.
 | `GET`  | `/export`                 | Admin | Download a database backup            |
 
 ### 6.4 Advanced Management
-| Method   | Endpoint              | Auth  | Description                     |
-| :------- | :-------------------- | :---- | :------------------------------ |
-| `GET`    | `/users`              | Admin | List all registered users       |
-| `PUT`    | `/users/:id`          | Admin | Change user role or profile     |
-| `GET`    | `/roles`              | Admin | List all dynamic roles          |
-| `POST`   | `/roles`              | Admin | Create or update a role         |
-| `DELETE` | `/roles/:slug`        | Admin | Delete a custom role            |
-| `GET`    | `/roles/capabilities` | Admin | List all available capabilities |
-| `GET`    | `/menus`              | JWT   | Get all navigation menus        |
-| `GET`    | `/widgets/sidebars`   | No    | Get sidebar regions and widgets |
-| `GET`    | `/revisions/post/:id` | JWT   | Get history of a post           |
+| Method   | Endpoint              | Auth  | Description                       |
+| :------- | :-------------------- | :---- | :-------------------------------- |
+| `GET`    | `/users`              | Admin | List all registered users         |
+| `PUT`    | `/users/:id`          | Admin | Change user role or profile       |
+| `GET`    | `/roles`              | Admin | List all dynamic roles            |
+| `POST`   | `/roles`              | Admin | Create or update a role           |
+| `DELETE` | `/roles/:slug`        | Admin | Delete a custom role              |
+| `GET`    | `/roles/capabilities` | Admin | List all available capabilities   |
+| `GET`    | `/menus`              | JWT   | Get all navigation menus          |
+| `GET`    | `/widgets/sidebars`   | No    | Get sidebar regions and widgets   |
+| `GET`    | `/revisions/post/:id` | JWT   | Get history of a post             |
+| `GET`    | `/widgets`            | Admin | List registered widgets           |
+| `POST`   | `/widgets`            | Admin | Update widget sidebar assignments |
+
 
 ---
+
+## 8. Cron System ⏰
+
+WordJS includes a robust scheduling system similar to `wp-cron`, located in `backend/src/core/cron.js`.
+
+### 8.1 Scheduling Events
+```javascript
+const { scheduleEvent } = require('../../src/core/cron');
+
+// Schedule a recurring event
+if (!nextScheduled('my_plugin_daily_task')) {
+    scheduleEvent(Date.now(), 'daily', 'my_plugin_daily_task');
+}
+
+// Hook into it
+addAction('my_plugin_daily_task', () => {
+    console.log("Running daily maintenance...");
+});
+```
+
+### 8.2 Available Intervals
+*   `hourly`
+*   `twicedaily`
+*   `daily`
+*   `weekly`
+
+---
+
+## 9. Internationalization (i18n) 🌍
+
+WordJS supports native translation via `backend/src/core/i18n.js`. It uses JSON files located in `backend/languages/`.
+
+### 9.1 Usage
+```javascript
+const { __, _n } = require('../../src/core/i18n');
+
+// Simple string
+const greeting = __('Hello World', 'my-plugin');
+
+// Plurals
+const msg = _n('%d User', '%d Users', count, 'my-plugin').replace('%d', count);
+```
+
+### 9.2 Translation Files
+File format: `domain-locale.json` (e.g., `my-plugin-es_ES.json`).
+```json
+{
+    "Hello World": "Hola Mundo"
+}
+```
+
+---
+
+## 10. Shortcodes 🧩
+
+Shortcodes allow users to inject dynamic content into posts/pages using `[tag]` syntax. Handled by `backend/src/core/shortcodes.js`.
+
+### 10.1 Registering a Shortcode
+```javascript
+const { addShortcode } = require('../../src/core/shortcodes');
+
+addShortcode('youtube', (attrs, content) => {
+    const id = attrs.id || '';
+    return `<iframe src="https://www.youtube.com/embed/${id}"></iframe>`;
+});
+```
+Usage in Editor: `[youtube id="dQw4w9WgXcQ"]`
+
+---
+
+## 11. Import/Export 📦
+
+Full site backup and migration tools located in `backend/src/core/import-export.js`.
+
+### 11.1 Functions
+*   `exportSite(options)`: Generates a complete JSON dump of the site (posts, pages, media, settings, users).
+*   `importSite(data, options)`: Restores site content from a JSON object. Supports strict ID mapping and duplicate skipping.
+*   `exportToWXR()`: Generates a WordPress-compatible XML file.
+
+---
+
+## 12. Widgets System 🧱
+
+The Widgets API (`backend/src/core/widgets.js`) allows plugins to register dynamic content blocks for Sidebars and Footers.
+
+### 12.1 Registering a Widget
+```javascript
+const { registerWidget } = require('../../src/core/widgets');
+
+registerWidget('clock_widget', {
+    name: 'Analog Clock',
+    description: 'Displays the current time',
+    render: (options) => `<div class="clock">...</div>`
+});
+```
+
 
 ## 7. Developing Extensions
 

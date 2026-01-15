@@ -228,22 +228,34 @@ async function initialize() {
     console.log('🚀 Starting WordJS...');
     console.log(`   Environment: ${config.nodeEnv}`);
 
-    // Initialize sql.js
+    // Initialize Database
     console.log('📦 Initializing database...');
-    await initSqlJsDb();
-    initializeDatabase();
+    // The driver manager automatically loads the correct driver from config
+    const { init, initializeDatabase } = require('./config/database');
+    await init();
+    await initializeDatabase();
 
     // Initialize default options
     console.log('⚙️  Setting up default options...');
-    initDefaultOptions(config);
+    await initDefaultOptions(config);
+
+    // Initialize Post Types (Async)
+    const { initPostTypes } = require('./core/post-types');
+    await initPostTypes();
 
     // Sync roles to ensure capabilities are up to date
-    const { syncRoles } = require('./core/roles');
-    syncRoles(config.roles);
+    // Sync roles to ensure capabilities are up to date
+    const { loadRoles, syncRoles } = require('./core/roles');
+    await loadRoles();
+    await syncRoles(config.roles);
+
+    // Initialize Core Admin Menus
+    const { initCoreMenus } = require('./core/adminMenu');
+    initCoreMenus();
 
     // Create default admin user if no users exist
     const User = require('./models/User');
-    const userCount = User.count();
+    const userCount = await User.count();
 
     if (userCount === 0) {
         console.log('👤 Creating default admin user...');
@@ -260,7 +272,7 @@ async function initialize() {
 
     // Create default category if none exist
     const Term = require('./models/Term');
-    const categoryCount = Term.count({ taxonomy: 'category' });
+    const categoryCount = await Term.count({ taxonomy: 'category' });
 
     if (categoryCount === 0) {
         console.log('📁 Creating default category...');
@@ -395,8 +407,39 @@ process.on('SIGINT', () => {
 });
 
 // Start the application
+// Start the application
 initialize().catch((error) => {
-    console.error('Failed to initialize:', error);
+    console.error('❌ Failed to initialize:', error);
+
+    // Auto-Fallback Logic
+    const fs = require('fs');
+    const path = require('path');
+    const backupFile = path.resolve('wordjs-config.backup.json');
+    const configFile = path.resolve('wordjs-config.json');
+
+    if (fs.existsSync(backupFile)) {
+        console.warn('⚠️  Startup Failed! Attempting automatic fallback to previous configuration...');
+        try {
+            // Restore config
+            fs.copyFileSync(backupFile, configFile);
+            console.log('✅ Configuration restored from backup.');
+
+            // Allow infinite loops prevention?
+            // If the backup itself is bad, we are in trouble.
+            // But usually backup is the 'last known good state'.
+            // Remove backup to prevent loops? No, keep it safe.
+            // Maybe rename it to avoid loop if restore fails too?
+            // For now, simple restore is better than crashing loop.
+
+            // Force Restart by touching this file
+            const time = new Date();
+            fs.utimesSync(__filename, time, time);
+            console.log('🔄 Triggering server restart...');
+        } catch (e) {
+            console.error('❌ Fallback failed:', e);
+        }
+    }
+
     process.exit(1);
 });
 

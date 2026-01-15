@@ -17,10 +17,13 @@ class Hooks {
      * @param {number} priority - Priority (lower = earlier)
      */
     addAction(hook, callback, priority = 10) {
+        const { getCurrentPlugin } = require('./plugin-context');
+        const pluginSlug = getCurrentPlugin();
+
         if (!this.actions.has(hook)) {
             this.actions.set(hook, []);
         }
-        this.actions.get(hook).push({ callback, priority });
+        this.actions.get(hook).push({ callback, priority, pluginSlug });
         this.actions.get(hook).sort((a, b) => a.priority - b.priority);
     }
 
@@ -41,8 +44,13 @@ class Hooks {
      */
     async doAction(hook, ...args) {
         if (!this.actions.has(hook)) return;
-        for (const { callback } of this.actions.get(hook)) {
-            await callback(...args);
+        const { runWithContext } = require('./plugin-context');
+        for (const { callback, pluginSlug } of this.actions.get(hook)) {
+            if (pluginSlug) {
+                await runWithContext(pluginSlug, () => callback(...args));
+            } else {
+                await callback(...args);
+            }
         }
     }
 
@@ -69,10 +77,13 @@ class Hooks {
      * Equivalent to add_filter()
      */
     addFilter(hook, callback, priority = 10) {
+        const { getCurrentPlugin } = require('./plugin-context');
+        const pluginSlug = getCurrentPlugin();
+
         if (!this.filters.has(hook)) {
             this.filters.set(hook, []);
         }
-        this.filters.get(hook).push({ callback, priority });
+        this.filters.get(hook).push({ callback, priority, pluginSlug });
         this.filters.get(hook).sort((a, b) => a.priority - b.priority);
     }
 
@@ -93,9 +104,14 @@ class Hooks {
      */
     async applyFilters(hook, value, ...args) {
         if (!this.filters.has(hook)) return value;
+        const { runWithContext } = require('./plugin-context');
         let result = value;
-        for (const { callback } of this.filters.get(hook)) {
-            result = await callback(result, ...args);
+        for (const { callback, pluginSlug } of this.filters.get(hook)) {
+            if (pluginSlug) {
+                result = await runWithContext(pluginSlug, () => callback(result, ...args));
+            } else {
+                result = await callback(result, ...args);
+            }
         }
         return result;
     }

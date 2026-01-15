@@ -82,7 +82,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
  * List all themes
  */
 router.get('/', asyncHandler(async (req, res) => {
-    const themes = getAllThemes();
+    const themes = await getAllThemes();
     res.json(themes);
 }));
 

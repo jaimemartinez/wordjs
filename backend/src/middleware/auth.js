@@ -10,55 +10,11 @@ const User = require('../models/User');
 /**
  * Authenticate request with JWT token (Strict: Headers Only)
  */
-function authenticate(req, res, next) {
-    const authHeader = req.headers.authorization;
-    let token;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-    }
-
-    if (!token) {
-        return res.status(401).json({
-            code: 'rest_not_logged_in',
-            message: 'You are not currently logged in.',
-            data: { status: 401 }
-        });
-    }
-
-    verifyAndAttachUser(token, req, res, next);
-}
-
-/**
- * Authenticate request (Loose: Headers OR Query Param)
- * Use ONLY for endpoints that require direct browser navigation (downloads)
- */
-function authenticateAllowQuery(req, res, next) {
-    const authHeader = req.headers.authorization;
-    let token;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
-    } else if (req.query && req.query.token) {
-        token = req.query.token;
-    }
-
-    if (!token) {
-        return res.status(401).json({
-            code: 'rest_not_logged_in',
-            message: 'You are not currently logged in.',
-            data: { status: 401 }
-        });
-    }
-
-    verifyAndAttachUser(token, req, res, next);
-}
-
 // Helper to avoid duplication
-function verifyAndAttachUser(token, req, res, next) {
+async function verifyAndAttachUser(token, req, res, next) {
     try {
         const decoded = jwt.verify(token, config.jwt.secret);
-        const user = User.findById(decoded.userId);
+        const user = await User.findById(decoded.userId);
 
         if (!user) {
             return res.status(401).json({
@@ -89,9 +45,56 @@ function verifyAndAttachUser(token, req, res, next) {
 }
 
 /**
+ * Authenticate request with JWT token (Strict: Headers Only)
+ */
+async function authenticate(req, res, next) {
+    const authHeader = req.headers.authorization;
+    let token;
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+    }
+
+    if (!token) {
+        return res.status(401).json({
+            code: 'rest_not_logged_in',
+            message: 'You are not currently logged in.',
+            data: { status: 401 }
+        });
+    }
+
+    await verifyAndAttachUser(token, req, res, next);
+}
+
+/**
+ * Authenticate request (Loose: Headers OR Query Param)
+ * Use ONLY for endpoints that require direct browser navigation (downloads)
+ */
+async function authenticateAllowQuery(req, res, next) {
+    const authHeader = req.headers.authorization;
+    let token;
+
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+    } else if (req.query && req.query.token) {
+        token = req.query.token;
+    }
+
+    if (!token) {
+        return res.status(401).json({
+            code: 'rest_not_logged_in',
+            message: 'You are not currently logged in.',
+            data: { status: 401 }
+        });
+    }
+
+    await verifyAndAttachUser(token, req, res, next);
+}
+
+/**
  * Optional authentication (doesn't fail if no token)
  */
-function optionalAuth(req, res, next) {
+async function optionalAuth(req, res, next) {
     const authHeader = req.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -104,7 +107,7 @@ function optionalAuth(req, res, next) {
 
     try {
         const decoded = jwt.verify(token, config.jwt.secret);
-        const user = User.findById(decoded.userId);
+        const user = await User.findById(decoded.userId);
         req.user = user;
         req.userId = user ? user.id : null;
     } catch {

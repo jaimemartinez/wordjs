@@ -3,7 +3,7 @@
  * Equivalent to wp-includes/class-wp-post.php and wp-includes/post.php
  */
 
-const { db } = require('../config/database');
+const { db, dbAsync } = require('../config/database');
 const { doAction, applyFilters } = require('../core/hooks');
 const { doShortcode, stripShortcodes } = require('../core/shortcodes');
 const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime } = require('../core/formatting');
@@ -31,42 +31,43 @@ class Post {
         this.postType = data.post_type;
         this.postMimeType = data.post_mime_type;
         this.commentCount = data.comment_count;
+        // Lazy load for async access patterns - meta might need explicit hydration
     }
 
     /**
      * Get post meta
      * Equivalent to get_post_meta()
      */
-    getMeta(key, single = true) {
-        return Post.getMeta(this.id, key, single);
+    async getMeta(key, single = true) {
+        return await Post.getMeta(this.id, key, single);
     }
 
     /**
      * Get post terms
      */
-    getTerms(taxonomy) {
-        const stmt = db.prepare(`
+    async getTerms(taxonomy) {
+        const stmt = `
       SELECT t.*, tt.taxonomy, tt.description, tt.parent, tt.count
       FROM terms t
       JOIN term_taxonomy tt ON t.term_id = tt.term_id
       JOIN term_relationships tr ON tt.term_taxonomy_id = tr.term_taxonomy_id
       WHERE tr.object_id = ? AND tt.taxonomy = ?
-    `);
-        return stmt.all(this.id, taxonomy);
+    `;
+        return await dbAsync.all(stmt, [this.id, taxonomy]);
     }
 
     /**
      * Get categories
      */
-    getCategories() {
-        return this.getTerms('category');
+    async getCategories() {
+        return await this.getTerms('category');
     }
 
     /**
      * Get tags
      */
-    getTags() {
-        return this.getTerms('post_tag');
+    async getTags() {
+        return await this.getTerms('post_tag');
     }
 
     /**
@@ -83,24 +84,26 @@ class Post {
     /**
      * Get author
      */
-    getAuthor() {
+    async getAuthor() {
         const User = require('./User');
-        return User.findById(this.authorId);
+        return await User.findById(this.authorId);
     }
 
     /**
      * Get featured image
      */
-    getFeaturedImage() {
-        const thumbnailId = this.getMeta('_thumbnail_id');
+    async getFeaturedImage() {
+        const thumbnailId = await this.getMeta('_thumbnail_id');
         if (!thumbnailId) return null;
-        return Post.findById(thumbnailId);
+        return await Post.findById(thumbnailId);
     }
 
     /**
      * Convert to JSON (for API responses)
      */
-    toJSON(includeContent = true) {
+    async toJSON(includeContent = true) {
+        const meta = await Post.getAllMeta(this.id);
+
         const json = {
             id: this.id,
             date: this.postDate,
@@ -119,8 +122,7 @@ class Post {
             commentStatus: this.commentStatus,
             pingStatus: this.pingStatus,
             mimeType: this.postMimeType,
-            mimeType: this.postMimeType,
-            meta: Post.getAllMeta(this.id)
+            meta: meta
         };
 
         if (includeContent) {
@@ -128,7 +130,7 @@ class Post {
         }
 
         // Add featured image
-        const featuredImage = this.getFeaturedImage();
+        const featuredImage = await this.getFeaturedImage();
         if (featuredImage) {
             json.featuredMedia = {
                 id: featuredImage.id,
@@ -178,15 +180,15 @@ class Post {
         // Generate GUID
         const guid = `${config.site.url}/?p=${Date.now()}`;
 
-        const stmt = db.prepare(`
+        // Postgres requires RETURNING id to get the inserted ID
+        const result = await dbAsync.run(`
       INSERT INTO posts (
         author_id, post_date, post_date_gmt, post_content, post_title, post_excerpt,
         post_status, comment_status, ping_status, post_password, post_name,
         post_modified, post_modified_gmt, post_parent, guid, menu_order, post_type, post_mime_type
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-
-        const result = stmt.run(
+      RETURNING id
+    `, [
             authorId || 0,
             now,
             nowGmt,
@@ -205,17 +207,17 @@ class Post {
             menuOrder,
             type,
             mimeType
-        );
+        ]);
 
-        const postId = result.lastInsertRowid;
+        const postId = result.lastID;
 
         // Update GUID with actual post ID
-        db.prepare('UPDATE posts SET guid = ? WHERE id = ?').run(`${config.site.url}/?p=${postId}`, postId);
+        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`${config.site.url}/?p=${postId}`, postId]);
 
         // Fire action hook
         await doAction('wp_insert_post', postId, data);
 
-        return Post.findById(postId);
+        return await Post.findById(postId);
     }
 
     /**
@@ -234,7 +236,7 @@ class Post {
                 params.push(excludeId);
             }
 
-            const existing = db.prepare(query).get(...params);
+            const existing = await dbAsync.get(query, params);
             if (!existing) break;
 
             counter++;
@@ -248,9 +250,8 @@ class Post {
      * Find post by ID
      * Equivalent to get_post()
      */
-    static findById(id) {
-        const stmt = db.prepare('SELECT * FROM posts WHERE id = ?');
-        const row = stmt.get(id);
+    static async findById(id) {
+        const row = await dbAsync.get('SELECT * FROM posts WHERE id = ?', [id]);
         return row ? new Post(row) : null;
     }
 
@@ -258,9 +259,8 @@ class Post {
      * Find post by slug
      * Equivalent to get_page_by_path()
      */
-    static findBySlug(slug, type = 'post') {
-        const stmt = db.prepare('SELECT * FROM posts WHERE post_name = ? AND post_type = ?');
-        const row = stmt.get(slug, type);
+    static async findBySlug(slug, type = 'post') {
+        const row = await dbAsync.get('SELECT * FROM posts WHERE post_name = ? AND post_type = ?', [slug, type]);
         return row ? new Post(row) : null;
     }
 
@@ -268,7 +268,7 @@ class Post {
      * Query posts
      * Equivalent to WP_Query
      */
-    static findAll(options = {}) {
+    static async findAll(options = {}) {
         const {
             type = 'post',
             status = 'publish',
@@ -348,17 +348,18 @@ class Post {
         }
 
         // Order
+        // Safe check for order by column
         const allowedOrderBy = ['id', 'post_date', 'post_title', 'post_modified', 'menu_order', 'comment_count'];
         const safeOrderBy = allowedOrderBy.includes(orderBy) ? `p.${orderBy}` : 'p.post_date';
         const safeOrder = order.toUpperCase() === 'ASC' ? 'ASC' : 'DESC';
         sql += ` ORDER BY ${safeOrderBy} ${safeOrder}`;
 
         // Pagination
+        // Use params for limit/offset
         sql += ' LIMIT ? OFFSET ?';
         params.push(limit, offset);
 
-        const stmt = db.prepare(sql);
-        const rows = stmt.all(...params);
+        const rows = await dbAsync.all(sql, params);
 
         return rows.map(row => new Post(row));
     }
@@ -367,7 +368,7 @@ class Post {
      * Count posts
      * Equivalent to wp_count_posts()
      */
-    static count(options = {}) {
+    static async count(options = {}) {
         const { type = 'post', status, author, search } = options;
 
         let sql = 'SELECT COUNT(*) as count FROM posts';
@@ -399,8 +400,7 @@ class Post {
             sql += ' WHERE ' + conditions.join(' AND ');
         }
 
-        const stmt = db.prepare(sql);
-        const row = stmt.get(...params);
+        const row = await dbAsync.get(sql, params);
         return row.count;
     }
 
@@ -409,7 +409,7 @@ class Post {
      * Equivalent to wp_update_post()
      */
     static async update(id, data) {
-        const post = Post.findById(id);
+        const post = await Post.findById(id);
         if (!post) throw new Error('Post not found');
 
         const updates = [];
@@ -467,14 +467,13 @@ class Post {
 
         if (updates.length > 0) {
             values.push(id);
-            const stmt = db.prepare(`UPDATE posts SET ${updates.join(', ')} WHERE id = ?`);
-            stmt.run(...values);
+            await dbAsync.run(`UPDATE posts SET ${updates.join(', ')} WHERE id = ?`, values);
         }
 
         // Fire action hook
         await doAction('post_updated', id, data);
 
-        return Post.findById(id);
+        return await Post.findById(id);
     }
 
     /**
@@ -482,25 +481,25 @@ class Post {
      * Equivalent to wp_delete_post()
      */
     static async delete(id, forceDelete = false) {
-        const post = Post.findById(id);
+        const post = await Post.findById(id);
         if (!post) return false;
 
         if (forceDelete) {
             // Delete meta
-            db.prepare('DELETE FROM post_meta WHERE post_id = ?').run(id);
+            await dbAsync.run('DELETE FROM post_meta WHERE post_id = ?', [id]);
 
             // Delete term relationships
-            db.prepare('DELETE FROM term_relationships WHERE object_id = ?').run(id);
+            await dbAsync.run('DELETE FROM term_relationships WHERE object_id = ?', [id]);
 
             // Delete post
-            const result = db.prepare('DELETE FROM posts WHERE id = ?').run(id);
+            const result = await dbAsync.run('DELETE FROM posts WHERE id = ?', [id]);
 
             await doAction('deleted_post', id);
 
             return result.changes > 0;
         } else {
             // Move to trash
-            return Post.update(id, { status: 'trash' });
+            return await Post.update(id, { status: 'trash' });
         }
     }
 
@@ -509,14 +508,14 @@ class Post {
      * Equivalent to wp_trash_post()
      */
     static async trash(id) {
-        const post = Post.findById(id);
+        const post = await Post.findById(id);
         if (!post) return false;
 
         // Store original status in meta
-        Post.updateMeta(id, '_wp_trash_meta_status', post.postStatus);
-        Post.updateMeta(id, '_wp_trash_meta_time', Date.now());
+        await Post.updateMeta(id, '_wp_trash_meta_status', post.postStatus);
+        await Post.updateMeta(id, '_wp_trash_meta_time', Date.now());
 
-        return Post.update(id, { status: 'trash' });
+        return await Post.update(id, { status: 'trash' });
     }
 
     /**
@@ -524,31 +523,31 @@ class Post {
      * Equivalent to wp_untrash_post()
      */
     static async untrash(id) {
-        const post = Post.findById(id);
+        const post = await Post.findById(id);
         if (!post || post.postStatus !== 'trash') return false;
 
-        const originalStatus = Post.getMeta(id, '_wp_trash_meta_status') || 'draft';
+        const originalStatus = (await Post.getMeta(id, '_wp_trash_meta_status')) || 'draft';
 
         // Delete trash meta
-        Post.deleteMeta(id, '_wp_trash_meta_status');
-        Post.deleteMeta(id, '_wp_trash_meta_time');
+        await Post.deleteMeta(id, '_wp_trash_meta_status');
+        await Post.deleteMeta(id, '_wp_trash_meta_time');
 
-        return Post.update(id, { status: originalStatus });
+        return await Post.update(id, { status: originalStatus });
     }
 
     /**
      * Update post meta
      * Equivalent to update_post_meta()
      */
-    static updateMeta(postId, key, value) {
+    static async updateMeta(postId, key, value) {
         const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
-        const existing = db.prepare('SELECT meta_id FROM post_meta WHERE post_id = ? AND meta_key = ?').get(postId, key);
+        const existing = await dbAsync.get('SELECT meta_id FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
 
         if (existing) {
-            db.prepare('UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = ?').run(serialized, postId, key);
+            await dbAsync.run('UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = ?', [serialized, postId, key]);
         } else {
-            db.prepare('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)').run(postId, key, serialized);
+            await dbAsync.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [postId, key, serialized]);
         }
     }
 
@@ -556,10 +555,9 @@ class Post {
      * Get post meta
      * Equivalent to get_post_meta()
      */
-    static getMeta(postId, key, single = true) {
+    static async getMeta(postId, key, single = true) {
         if (single) {
-            const stmt = db.prepare('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ? LIMIT 1');
-            const row = stmt.get(postId, key);
+            const row = await dbAsync.get('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ? LIMIT 1', [postId, key]);
             if (!row) return null;
             try {
                 return JSON.parse(row.meta_value);
@@ -567,8 +565,8 @@ class Post {
                 return row.meta_value;
             }
         } else {
-            const stmt = db.prepare('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?');
-            return stmt.all(postId, key).map(row => {
+            const rows = await dbAsync.all('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
+            return rows.map(row => {
                 try {
                     return JSON.parse(row.meta_value);
                 } catch {
@@ -582,17 +580,16 @@ class Post {
      * Delete post meta
      * Equivalent to delete_post_meta()
      */
-    static deleteMeta(postId, key) {
-        const result = db.prepare('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?').run(postId, key);
+    static async deleteMeta(postId, key) {
+        const result = await dbAsync.run('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
         return result.changes > 0;
     }
 
     /**
      * Get all meta for a post
      */
-    static getAllMeta(postId) {
-        const stmt = db.prepare('SELECT meta_key, meta_value FROM post_meta WHERE post_id = ?');
-        const rows = stmt.all(postId);
+    static async getAllMeta(postId) {
+        const rows = await dbAsync.all('SELECT meta_key, meta_value FROM post_meta WHERE post_id = ?', [postId]);
 
         const meta = {};
         for (const row of rows) {
@@ -609,35 +606,53 @@ class Post {
      * Set post terms
      * Equivalent to wp_set_post_terms()
      */
-    static setTerms(postId, termIds, taxonomy, append = false) {
+    static async setTerms(postId, termIds, taxonomy, append = false) {
         if (!append) {
             // Remove existing terms of this taxonomy
-            db.prepare(`
+            await dbAsync.run(`
         DELETE FROM term_relationships 
         WHERE object_id = ? 
         AND term_taxonomy_id IN (
           SELECT term_taxonomy_id FROM term_taxonomy WHERE taxonomy = ?
         )
-      `).run(postId, taxonomy);
+      `, [postId, taxonomy]);
         }
 
         // Add new terms
         for (const termId of termIds) {
-            const tt = db.prepare('SELECT term_taxonomy_id FROM term_taxonomy WHERE term_id = ? AND taxonomy = ?').get(termId, taxonomy);
+            const tt = await dbAsync.get('SELECT term_taxonomy_id FROM term_taxonomy WHERE term_id = ? AND taxonomy = ?', [termId, taxonomy]);
             if (tt) {
-                db.prepare('INSERT OR IGNORE INTO term_relationships (object_id, term_taxonomy_id) VALUES (?, ?)').run(postId, tt.term_taxonomy_id);
+                // INSERT OR IGNORE is SQLite specific. 
+                // Postgres equivalent is INSERT ... ON CONFLICT DO NOTHING
+                // To support both, we might check existence first or use generic syntax if adapter supports it?
+                // Or Adapter handles parsing "INSERT OR IGNORE" to PG equivalent?
+                // Our Postgres Driver heuristic was simple.
+
+                // Let's rely on Driver normalization OR conditional logic.
+                // Or simply: check existence.
+
+                // Better approach: Check if exists to avoid ON CONFLICT complexity without driver support
+                const exists = await dbAsync.get('SELECT 1 FROM term_relationships WHERE object_id = ? AND term_taxonomy_id = ?', [postId, tt.term_taxonomy_id]);
+                if (!exists) {
+                    await dbAsync.run('INSERT INTO term_relationships (object_id, term_taxonomy_id, term_order) VALUES (?, ?, 0)', [postId, tt.term_taxonomy_id]);
+                }
             }
         }
 
         // Update term counts
-        Post.updateTermCounts(taxonomy);
+        await Post.updateTermCounts(taxonomy);
     }
 
     /**
      * Update term counts
      */
-    static updateTermCounts(taxonomy) {
-        db.prepare(`
+    static async updateTermCounts(taxonomy) {
+        // Complex subquery update
+        // SQLite: UPDATE term_taxonomy SET count = (SELECT ...) WHERE taxonomy = ?
+        // Postgres: UPDATE term_taxonomy SET count = (SELECT ...) WHERE taxonomy = $1
+        // This standard SQL should work in both if logic is sound.
+
+        await dbAsync.run(`
       UPDATE term_taxonomy 
       SET count = (
         SELECT COUNT(*) FROM term_relationships tr
@@ -646,7 +661,7 @@ class Post {
         AND p.post_status = 'publish'
       )
       WHERE taxonomy = ?
-    `).run(taxonomy);
+    `, [taxonomy]);
     }
 }
 

@@ -121,15 +121,15 @@ function scanThemes() {
 /**
  * Get current active theme slug
  */
-function getCurrentTheme() {
-  return getOption('template', 'default');
+async function getCurrentTheme() {
+  return await getOption('template', 'default');
 }
 
 /**
  * Get current theme object
  */
-function getActiveTheme() {
-  const currentSlug = getCurrentTheme();
+async function getActiveTheme() {
+  const currentSlug = await getCurrentTheme();
   const themes = scanThemes();
   return themes.find(t => t.slug === currentSlug) || themes[0] || null;
 }
@@ -145,10 +145,10 @@ async function switchTheme(slug) {
     throw new Error(`Theme ${slug} not found`);
   }
 
-  const previousTheme = getCurrentTheme();
+  const previousTheme = await getCurrentTheme();
 
-  updateOption('template', slug);
-  updateOption('stylesheet', slug);
+  await updateOption('template', slug);
+  await updateOption('stylesheet', slug);
 
   await doAction('switch_theme', slug, previousTheme);
 
@@ -158,9 +158,9 @@ async function switchTheme(slug) {
 /**
  * Get all themes with their status
  */
-function getAllThemes() {
+async function getAllThemes() {
   const themes = scanThemes();
-  const current = getCurrentTheme();
+  const current = await getCurrentTheme();
 
   return themes.map(theme => ({
     name: theme.name,
@@ -176,8 +176,8 @@ function getAllThemes() {
 /**
  * Render a template with data
  */
-function renderTemplate(templateName, data = {}) {
-  const theme = getActiveTheme();
+async function renderTemplate(templateName, data = {}) {
+  const theme = await getActiveTheme();
   if (!theme) {
     throw new Error('No active theme');
   }

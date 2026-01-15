@@ -48,6 +48,13 @@
         "href": "/admin/plugin/cards",
         "order": 55
     },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Required to save and manage promo cards."
+        }
+    ],
     "dependencies": {
         "uuid": "^10.0.0"
     }

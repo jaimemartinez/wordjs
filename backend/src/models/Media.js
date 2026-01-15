@@ -3,7 +3,7 @@
  * For handling file uploads and media library
  */
 
-const { db } = require('../config/database');
+const { db, dbAsync } = require('../config/database');
 const Post = require('./Post');
 const config = require('../config/app');
 const path = require('path');
@@ -42,7 +42,7 @@ class Media {
 
         // Update GUID to file URL
         const fileUrl = `${config.site.url}/uploads/${filename}`;
-        db.prepare('UPDATE posts SET guid = ? WHERE id = ?').run(fileUrl, attachment.id);
+        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [fileUrl, attachment.id]);
 
         // Store attachment metadata
         const metadata = {
@@ -53,43 +53,46 @@ class Media {
             sizes: {}
         };
 
-        Post.updateMeta(attachment.id, '_wp_attachment_metadata', metadata);
-        Post.updateMeta(attachment.id, '_wp_attached_file', filename);
+        await Post.updateMeta(attachment.id, '_wp_attachment_metadata', metadata);
+        await Post.updateMeta(attachment.id, '_wp_attached_file', filename);
 
         if (alt) {
-            Post.updateMeta(attachment.id, '_wp_attachment_image_alt', alt);
+            await Post.updateMeta(attachment.id, '_wp_attachment_image_alt', alt);
         }
 
-        return Media.findById(attachment.id);
+        return await Media.findById(attachment.id);
     }
 
     /**
      * Find media by ID
      */
-    static findById(id) {
-        const post = Post.findById(id);
+    static async findById(id) {
+        const post = await Post.findById(id);
         if (!post || post.postType !== 'attachment') return null;
-        return Media.formatAttachment(post);
+        return await Media.formatAttachment(post);
     }
 
     /**
      * Get all media
      */
-    static findAll(options = {}) {
-        const posts = Post.findAll({
+    static async findAll(options = {}) {
+        const posts = await Post.findAll({
             ...options,
             type: 'attachment',
             status: 'inherit'
         });
-        return posts.map(post => Media.formatAttachment(post));
+
+        // Parallel format
+        return await Promise.all(posts.map(post => Media.formatAttachment(post)));
     }
 
     /**
      * Format attachment post to media object
      */
-    static formatAttachment(post) {
-        const metadata = Post.getMeta(post.id, '_wp_attachment_metadata') || {};
-        const alt = Post.getMeta(post.id, '_wp_attachment_image_alt') || '';
+    static async formatAttachment(post) {
+        // Parallel meta fetch if possible, but getMeta is simple
+        const metadata = (await Post.getMeta(post.id, '_wp_attachment_metadata')) || {};
+        const alt = (await Post.getMeta(post.id, '_wp_attachment_image_alt')) || '';
 
         return {
             id: post.id,
@@ -120,7 +123,7 @@ class Media {
      * Update media
      */
     static async update(id, data) {
-        const media = Media.findById(id);
+        const media = await Media.findById(id);
         if (!media) throw new Error('Media not found');
 
         const updates = {};
@@ -134,17 +137,17 @@ class Media {
         }
 
         if (data.alt !== undefined) {
-            Post.updateMeta(id, '_wp_attachment_image_alt', data.alt);
+            await Post.updateMeta(id, '_wp_attachment_image_alt', data.alt);
         }
 
-        return Media.findById(id);
+        return await Media.findById(id);
     }
 
     /**
      * Delete media
      */
     static async delete(id, deleteFile = true) {
-        const media = Media.findById(id);
+        const media = await Media.findById(id);
         if (!media) return false;
 
         // Delete the actual file
@@ -156,25 +159,27 @@ class Media {
         }
 
         // Delete the post
-        return Post.delete(id, true);
+        return await Post.delete(id, true);
     }
 
     /**
      * Get media by post (attached to)
      */
-    static getByPost(postId) {
-        return Post.findAll({
+    static async getByPost(postId) {
+        const posts = await Post.findAll({
             type: 'attachment',
             parent: postId,
             status: 'inherit'
-        }).map(post => Media.formatAttachment(post));
+        });
+
+        return await Promise.all(posts.map(post => Media.formatAttachment(post)));
     }
 
     /**
      * Count media
      */
-    static count(options = {}) {
-        return Post.count({
+    static async count(options = {}) {
+        return await Post.count({
             ...options,
             type: 'attachment'
         });

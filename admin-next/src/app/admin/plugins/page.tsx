@@ -13,7 +13,9 @@ export default function PluginsPage() {
     const { refreshMenus } = useMenu();
 
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+    const [permissionModalOpen, setPermissionModalOpen] = useState(false);
     const [pluginToDelete, setPluginToDelete] = useState<Plugin | null>(null);
+    const [pluginToActivate, setPluginToActivate] = useState<Plugin | null>(null);
     const [password, setPassword] = useState("");
     const [deleteError, setDeleteError] = useState("");
 
@@ -38,15 +40,33 @@ export default function PluginsPage() {
         try {
             if (plugin.active) {
                 await pluginsApi.deactivate(plugin.slug);
+                loadPlugins();
+                refreshMenus();
+                addToast(`Plugin deactivated`, "success");
             } else {
-                await pluginsApi.activate(plugin.slug);
+                // ALWAYS show modal for any activation now
+                setPluginToActivate(plugin);
+                setPermissionModalOpen(true);
+                return;
             }
+        } catch (error: any) {
+            console.error("Failed to toggle plugin:", error);
+            addToast("Failed to change plugin status: " + (error.message || "Unknown error"), "error");
+        }
+    };
+
+    const confirmActivate = async () => {
+        if (!pluginToActivate) return;
+        try {
+            await pluginsApi.activate(pluginToActivate.slug);
+            setPermissionModalOpen(false);
+            setPluginToActivate(null);
             loadPlugins();
             refreshMenus();
-            addToast(`Plugin ${plugin.active ? 'deactivated' : 'activated'}`, "success");
-        } catch (error) {
-            console.error("Failed to toggle plugin:", error);
-            addToast("Failed to toggle plugin status", "error");
+            addToast(`Plugin activated`, "success");
+        } catch (error: any) {
+            console.error("Failed to activate plugin:", error);
+            addToast("Activation failed: " + (error.message || "Unknown error"), "error");
         }
     };
 
@@ -164,6 +184,73 @@ export default function PluginsPage() {
                 </div>
             )}
 
+            {/* Plugin Permissions Modal */}
+            {permissionModalOpen && pluginToActivate && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl p-8 max-w-lg w-full shadow-2xl transform transition-all scale-100 border border-white/20">
+                        <div className="flex items-center gap-4 mb-6 text-blue-600">
+                            <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
+                                <FaPlug className="text-xl" />
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900">Authorize Plugin</h3>
+                        </div>
+
+                        <p className="mb-4 text-gray-600 leading-relaxed">
+                            The plugin <strong className="text-gray-900">{pluginToActivate.name}</strong> requests the following permissions to function:
+                        </p>
+
+                        <div className="space-y-3 mb-8">
+                            {pluginToActivate.permissions && pluginToActivate.permissions.length > 0 ? (
+                                pluginToActivate.permissions.map((p, idx) => (
+                                    <div key={idx} className="flex gap-3 p-4 bg-gray-50 rounded-xl border border-gray-100">
+                                        <div className={`w-2 h-2 rounded-full mt-2 shrink-0 ${p.scope === 'database' ? 'bg-purple-500' :
+                                            p.scope === 'filesystem' ? 'bg-orange-500' : 'bg-blue-500'
+                                            }`} />
+                                        <div>
+                                            <div className="flex items-center gap-2 mb-1">
+                                                <span className="font-bold text-sm text-gray-800 uppercase tracking-tight">{p.scope}</span>
+                                                <span className="text-[10px] bg-white border border-gray-200 px-1.5 py-0.5 rounded text-gray-400 font-bold uppercase">{p.access}</span>
+                                            </div>
+                                            <p className="text-sm text-gray-500 leading-snug">{p.reason}</p>
+                                        </div>
+                                    </div>
+                                ))
+                            ) : (
+                                <div className="flex flex-col items-center justify-center p-8 bg-green-50 rounded-2xl border border-green-100 text-center">
+                                    <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-3">
+                                        <FaCheck className="text-green-500" />
+                                    </div>
+                                    <p className="text-green-800 font-bold text-sm">Safe to Activate</p>
+                                    <p className="text-green-600 text-xs mt-1">This plugin requests no special system-level permissions.</p>
+                                </div>
+                            )}
+                        </div>
+
+                        <p className="text-xs text-gray-400 mb-8 p-3 bg-blue-50/50 rounded-lg border border-blue-100/50 italic">
+                            By activating this plugin, you are granting it strict access to these system capabilities.
+                        </p>
+
+                        <div className="flex justify-end gap-3 pt-2">
+                            <button
+                                onClick={() => {
+                                    setPermissionModalOpen(false);
+                                    setPluginToActivate(null);
+                                }}
+                                className="px-5 py-2.5 text-gray-600 hover:text-gray-900 font-medium hover:bg-gray-100 rounded-xl transition-all"
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                onClick={confirmActivate}
+                                className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5"
+                            >
+                                Confirm and Activate
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Header */}
             <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
                 <div>
@@ -264,9 +351,31 @@ export default function PluginsPage() {
                                 <h3 className="text-xl font-bold text-gray-900 mb-2 line-clamp-1" title={plugin.name}>
                                     {plugin.name}
                                 </h3>
-                                <p className="text-gray-500 text-sm mb-6 h-10 line-clamp-2 leading-relaxed">
+                                <p className="text-gray-500 text-sm mb-4 h-10 line-clamp-2 leading-relaxed">
                                     {plugin.description || "No description provided."}
                                 </p>
+
+                                {/* Permissions section */}
+                                {plugin.permissions && plugin.permissions.length > 0 && (
+                                    <div className="mb-6">
+                                        <div className="flex flex-wrap gap-1.5">
+                                            {plugin.permissions.map((p, idx) => (
+                                                <span
+                                                    key={idx}
+                                                    title={p.reason}
+                                                    className={`
+                                                        text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full border
+                                                        ${p.scope === 'database' ? 'bg-purple-50 text-purple-600 border-purple-100' :
+                                                            p.scope === 'filesystem' ? 'bg-orange-50 text-orange-600 border-orange-100' :
+                                                                'bg-blue-50 text-blue-600 border-blue-100'}
+                                                    `}
+                                                >
+                                                    {p.scope}:{p.access}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
 
                                 <div className="flex items-center justify-between pt-4 border-t border-gray-100">
                                     <span className="text-xs font-bold text-gray-400 uppercase tracking-wider bg-gray-50 px-2 py-1 rounded-md">
