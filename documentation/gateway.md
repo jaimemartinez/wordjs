@@ -1,44 +1,42 @@
 # WordJS Gateway Documentation
 
-The **WordJS Gateway** (`gateway.js`) is the central entry point for the application. It acts as a reverse proxy and service registry, routing requests to the appropriate microservices (Backend, Frontend, etc.) based on their registration.
+The **WordJS Gateway** (`gateway.js`) is an enterprise-grade entry point for the application. It acts as a high-availability reverse proxy, service registry, and health monitor.
 
 ## Key Features
 
-*   **Reverse Proxy:** Uses `http-proxy` to forward requests transparently.
-*   **Service Registry:** Services register themselves dynamically via the `/register` endpoint.
-*   **Security:** Protected by `GATEWAY_SECRET` (auto-generated in `wordjs-config.json`).
-*   **Rate Limiting:** Built-in global rate limiting to prevent abuse.
-*   **Zero Config:** Automatically detects ports from `wordjs-config.json`.
+*   **🚀 Cluster Mode:** High-availability multiprocess architecture using Node.js `cluster`. It spawns workers across all available CPU cores.
+*   **🛡️ Resiliency (Circuit Breaker):** 
+    *   **Health Checks:** Automatically polls registered services every 15s.
+    *   **Auto-Eviction:** Unhealthy services are ejected after 3 consecutive failures.
+    *   **Latency Monitoring:** Detects slow targets (>5s) and marks them as `Degraded`.
+*   **🔌 Intelligent Load Balancing:** Round-robin distribution across multiple instances of the same service.
+*   **🌪️ Log Rotation:** Structured JSON logging via **Winston** with daily file rotation (`logs/gateway-*.log`).
+*   **🔒 Security & Protection:**
+    *   **Helmet:** Secure HTTP headers out of the box.
+    *   **Payload Protection:** 10MB limits on all incoming requests.
+    *   **Timeout Guard:** Hard 15s cutoffs for upstream requests to prevent socket leakage.
+    *   **Private Metrics:** Authenticated `/gateway-status` dashboard.
+*   **📡 Modern Connectivity:** WebSocket proxying support for bidirectional communication.
+*   **🧵 Traceability:** Automatic injection of `X-Correlation-ID` for distributed tracing.
 
 ## Configuration
 
-The gateway attempts to load configuration from `backend/wordjs-config.json`.
+The gateway loads configuration from `backend/wordjs-config.json`.
 
-*   **Port:** Defaults to `3000` (or `gatewayPort` in config).
-*   **Secret:** Uses `gatewaySecret` from config for service authentication.
+*   **Port:** Defaults to `3000` (configurable via `gatewayPort`).
+*   **Secret:** Uses `gatewaySecret` for service authentication (`X-Gateway-Secret`).
 
 ## Service Registration
 
-Internal services (Backend, Frontend) must register themselves on startup.
+Services register themselves dynamically on startup.
 
 **Endpoint:** `POST /register`
-**Headers:** `x-gateway-secret: <YOUR_SECRET>`
-**Body:**
-```json
-{
-  "name": "backend",
-  "url": "http://localhost:4000",
-  "routes": ["/api", "/uploads", "/themes", "/plugins"]
-}
-```
+**Body:** `{ "name": "service-name", "url": "http://...", "routes": ["/prefix"] }`
 
-## Routing Logic
+## Monitoring
 
-1.  Checks if the incoming URL path matches a registered prefix.
-2.  If matched (e.g., `/api` -> Backend), forwards the request preserving the `Host` header.
-3.  If no match, returns 404.
+Access the real-time status dashboard at:
+`http://localhost:3000/gateway-status?secret=<YOUR_SECRET>`
 
-## Production vs. Development
-
-*   **Development:** You might see mismatched Host headers if accessing `localhost:3000` directly while configured for `3001`. The Backend includes a specific exception for this `localhost:3000` mismatch in `NODE_ENV=development`.
-*   **Production:** The Gateway sits behind your domain (e.g., `mysite.com`). Traffic flows `User -> Gateway -> Service`. The `Host` header (`mysite.com`) is preserved, so no URL mismatch errors occur.
+## Architecture
+The Primary process manages the global registry, health checks, and atomic persistence (`gateway-registry.json`), while Worker processes handle the heavy lifting of proxying and WebSocket upgrades.

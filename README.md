@@ -13,6 +13,7 @@
 - **⚙️ Zero Config:** Smart defaults and SQLite storage let you start in seconds, not hours.
 - **📄 SEO Ready:** Best practices out of the box (Semantic HTML, Meta Tags, JSON-LD).
 - **🛡️ Dynamic Roles:** Full Control over user permissions with a database-driven Role Manager.
+- **🚀 High Availability:** Cluster Mode architecture with circuit breaking and auto-healing services.
 
 ---
 
@@ -29,7 +30,7 @@ graph TD
     Backend --> Plugins{Plugins}
 ```
 
-- **[Gateway](gateway.js):** The entry point. Handles routing, security secret protection, and rate limiting.
+- **[Gateway](gateway.js):** Enterprise-grade entry point using **Cluster Mode**. Handles routing, **Circuit Breaking**, **Log Rotation**, and **Advanced Metrics**.
 - **[Backend](backend/):** The core engine. Manages content, users, and the plugin ecosystem.
 - **[Frontend](admin-next/):** The public site and management interface.
 
@@ -72,9 +73,10 @@ Detailed guides are available in the [`documentation/`](documentation/) folder:
 - **Frontend Framework:** Next.js (React)
 - **Styling:** Vanilla CSS + Tailwind
 - **Editor:** Puck
-- **Communication:** REST API + JWT
-- **Server:** Express.js
-- **Database:** sql.js (SQLite)
+- **Communication:** REST API + JWT + WebSockets
+- **Logging:** Structured JSON via Winston
+- **Server:** Express.js + Cluster Mode
+- **Database:** sql.js (SQLite) - *Remote DB support coming soon*
 
 ---
 

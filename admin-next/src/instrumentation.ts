@@ -13,11 +13,7 @@ export async function register() {
             // Try to read config
             let gatewaySecret = null;
             try {
-                // Warning: We are in .next/server/instrumentation.js potentially
-                // or somewhere bundled. __dirname usage is risky in instrumentation.
-                // Best to rely on process.cwd()
                 const configPath = path.resolve(process.cwd(), '../backend/wordjs-config.json');
-
                 if (fs.existsSync(configPath)) {
                     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
                     gatewaySecret = config.gatewaySecret;
@@ -32,31 +28,39 @@ export async function register() {
                 routes: ['/']
             });
 
-            const gatewayReq = http.request({
-                hostname: 'localhost',
-                port: 3000,
-                path: '/register',
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Content-Length': Buffer.byteLength(data),
-                    'x-gateway-secret': process.env.GATEWAY_SECRET || gatewaySecret || 'secure-your-gateway-secret'
-                }
-            }, (res) => {
-                if (res.statusCode === 200) {
-                    // console.log('✅ Frontend registered with Gateway');
-                }
-            });
+            const attempt = () => {
+                const gatewayReq = http.request({
+                    hostname: 'localhost',
+                    port: 3000,
+                    path: '/register',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(data),
+                        'x-gateway-secret': process.env.GATEWAY_SECRET || gatewaySecret || 'secure-your-gateway-secret'
+                    }
+                }, (res) => {
+                    if (res.statusCode === 200) {
+                        // console.log('✅ Frontend registered with Gateway');
+                    } else {
+                        // Retry on non-200 status
+                        setTimeout(attempt, 5000);
+                    }
+                });
 
-            gatewayReq.on('error', (e) => {
-                // Be silent on errors to avoid log spam if gateway is down during build
-            });
+                gatewayReq.on('error', (e) => {
+                    // Retry on connection error
+                    setTimeout(attempt, 5000);
+                });
 
-            gatewayReq.write(data);
-            gatewayReq.end();
+                gatewayReq.write(data);
+                gatewayReq.end();
+            };
+
+            attempt();
         };
 
-        // Fire once on startup
+        // Start registration loop
         registerWithGateway();
     }
 }

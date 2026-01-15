@@ -14,9 +14,11 @@ const config = {
   port: parseInt(process.env.PORT || fileConfig.port, 10) || 4000,
   host: process.env.HOST || fileConfig.host || 'localhost',
   nodeEnv: process.env.NODE_ENV || 'development',
+  gatewaySecret: process.env.GATEWAY_SECRET || fileConfig.gatewaySecret,
 
   // Database
   dbPath: process.env.DB_PATH || './data/wordjs.db',
+  dbDriver: process.env.DB_DRIVER || fileConfig.dbDriver || 'sqlite-legacy',
 
   // JWT Authentication
   jwt: {

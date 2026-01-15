@@ -1,0 +1,21 @@
+{
+    "name": "Database Migration",
+    "slug": "db-migration",
+    "version": "1.0.0",
+    "description": "System Utility to migrate data between database drivers.",
+    "author": "WordJS Core",
+    "adminMenu": {
+        "href": "/admin/plugin/db-migration",
+        "label": "DB Migration",
+        "icon": "fa-database",
+        "order": 900,
+        "cap": "manage_options"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "db-migration"
+        }
+    },
+    "dependencies": {}
+}

@@ -66,14 +66,14 @@ function discoverPlugins() {
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
             // Get frontend component info
-            const component = manifest.frontend?.components?.[0];
+            const componentEntry = manifest.frontend?.components?.[0]?.entry || manifest.frontend?.adminPage?.entry;
             const hooks = manifest.frontend?.hooks;
             let componentPath = null;
             let hooksPath = null;
 
-            if (component) {
-                componentPath = component.entry.replace('./', '').replace('.tsx', '');
-                const fullPath = path.join(PLUGINS_DIR, folder, component.entry.replace('./', ''));
+            if (componentEntry) {
+                componentPath = componentEntry.replace('./', '').replace('.tsx', '');
+                const fullPath = path.join(PLUGINS_DIR, folder, componentEntry.replace('./', ''));
                 if (!fs.existsSync(fullPath)) {
                     console.log(`   ✗ Component not found: ${folder}`);
                 }
@@ -88,12 +88,11 @@ function discoverPlugins() {
                 }
             }
 
-            if (component || hooks) {
+            if (componentPath || hooksPath) {
                 plugins.push({
                     id: manifest.id || folder,
                     folder: folder,
                     componentPath: componentPath,
-                    componentName: component?.name,
                     hooksPath: hooksPath
                 });
             }
