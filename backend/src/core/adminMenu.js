@@ -15,6 +15,7 @@ function registerAdminMenu(pluginSlug, item) {
     if (!adminMenuItems.has(pluginSlug)) {
         adminMenuItems.set(pluginSlug, []);
     }
+    console.log(`DEBUG: Registering menu for ${pluginSlug}: ${item.label}`);
 
     // Check if this exact href is already registered for this plugin
     const existingItems = adminMenuItems.get(pluginSlug);
@@ -56,6 +57,89 @@ function getAdminMenuItems() {
 /**
  * Get all unique capabilities required by registered items
  */
+/**
+ * Initialize Core Admin Menus (Dashboard, Posts, Settings, etc.)
+ */
+function initCoreMenus() {
+    console.log('DEBUG: initCoreMenus() called');
+    const { getPostTypes } = require('./post-types');
+
+    // 1. Dashboard
+    registerAdminMenu('core', {
+        href: '/admin',
+        label: 'Dashboard',
+        icon: 'fa-gauge',
+        order: 0,
+        capability: 'read'
+    });
+
+    // 2. Post Types (Posts, Pages, etc.)
+    const types = getPostTypes({ showInMenu: true });
+    types.forEach(type => {
+        registerAdminMenu('core', {
+            href: `/admin/posts?type=${type.name}`,
+            label: type.label || type.name, // Use Plural label ideally
+            icon: type.menuIcon || 'fa-thumbtack',
+            order: type.menuPosition || 5,
+            capability: type.capability_type ? `edit_${type.capability_type}s` : 'edit_posts'
+        });
+    });
+
+    // 3. Media
+    registerAdminMenu('core', {
+        href: '/admin/media',
+        label: 'Media',
+        icon: 'fa-images',
+        order: 10,
+        capability: 'upload_files'
+    });
+
+    // 4. Comments
+    registerAdminMenu('core', {
+        href: '/admin/comments',
+        label: 'Comments',
+        icon: 'fa-comments',
+        order: 25,
+        capability: 'moderate_comments'
+    });
+
+    // 5. Appearance (Themes, Menus)
+    registerAdminMenu('core', {
+        href: '/admin/appearance',
+        label: 'Appearance',
+        icon: 'fa-paintbrush',
+        order: 60,
+        capability: 'switch_themes'
+    });
+
+    // 6. Plugins
+    registerAdminMenu('core', {
+        href: '/admin/plugins',
+        label: 'Plugins',
+        icon: 'fa-plug',
+        order: 65,
+        capability: 'activate_plugins'
+    });
+
+    // 7. Users
+    registerAdminMenu('core', {
+        href: '/admin/users',
+        label: 'Users',
+        icon: 'fa-users',
+        order: 70,
+        capability: 'list_users'
+    });
+
+    // 8. Settings
+    registerAdminMenu('core', {
+        href: '/admin/settings',
+        label: 'Settings',
+        icon: 'fa-sliders',
+        order: 80,
+        capability: 'manage_options'
+    });
+}
+
 function getAllRegisteredCapabilities() {
     const caps = new Set();
     for (const [slug, menus] of adminMenuItems) {
@@ -70,5 +154,6 @@ module.exports = {
     registerAdminMenu,
     unregisterAdminMenu,
     getAdminMenuItems,
+    initCoreMenus, // Export new function
     getAllRegisteredCapabilities
 };

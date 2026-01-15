@@ -73,9 +73,18 @@ class DatabaseWrapper {
         save();
     }
 
+    // Helper methods to match dbAsync interface (and PostgresDriver)
+
+    get(sql, params = []) {
+        return this.prepare(sql).get(...params);
+    }
+
+    all(sql, params = []) {
+        return this.prepare(sql).all(...params);
+    }
+
     run(sql, params = []) {
-        this.sqlDb.run(sql, params);
-        save();
+        return this.prepare(sql).run(...params);
     }
 
     pragma(pragma) {
@@ -93,7 +102,8 @@ class DatabaseWrapper {
 class StatementWrapper {
     constructor(sqlDb, sql) {
         this.sqlDb = sqlDb;
-        this.sql = sql;
+        // Strip RETURNING clause for SQLite (legacy/wasm) as it might not be supported or is handled manually
+        this.sql = sql.replace(/\s+RETURNING\s+.*$/i, '');
     }
 
     run(...params) {
@@ -105,6 +115,7 @@ class StatementWrapper {
         save(); // Critical: Save after every write
         return {
             lastInsertRowid: lastId?.values?.[0]?.[0] || 0,
+            lastID: lastId?.values?.[0]?.[0] || 0, // Alias for compatibility with refactored models
             changes: changes?.values?.[0]?.[0] || 0
         };
     }

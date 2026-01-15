@@ -42,7 +42,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         id: 'comment_id'
     };
 
-    const comments = Comment.findAll({
+    const comments = await Comment.findAll({
         postId: post ? parseInt(post, 10) : undefined,
         status: commentStatus === 'any' ? undefined : commentStatus,
         parent: parent !== undefined ? parseInt(parent, 10) : undefined,
@@ -53,7 +53,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         order: order.toUpperCase()
     });
 
-    const total = Comment.count({
+    const total = await Comment.count({
         postId: post ? parseInt(post, 10) : undefined,
         status: commentStatus === 'any' ? undefined : commentStatus
     });
@@ -70,7 +70,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  * Get single comment
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
-    const comment = Comment.findById(parseInt(req.params.id, 10));
+    const comment = await Comment.findById(parseInt(req.params.id, 10));
 
     if (!comment) {
         return res.status(404).json({
@@ -117,7 +117,7 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
     }
 
     // Check if registration is required to comment
-    const requireRegistration = getOption('comment_registration', '0') === '1';
+    const requireRegistration = await getOption('comment_registration', '0') === '1';
     if (requireRegistration && !req.user) {
         return res.status(401).json({
             code: 'rest_comment_login_required',
@@ -127,7 +127,7 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
     }
 
     // Check post exists
-    const post = Post.findById(parseInt(postId, 10));
+    const post = await Post.findById(parseInt(postId, 10));
     if (!post) {
         return res.status(404).json({
             code: 'rest_post_invalid_id',
@@ -195,7 +195,7 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
  */
 router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req, res) => {
     const commentId = parseInt(req.params.id, 10);
-    const comment = Comment.findById(commentId);
+    const comment = await Comment.findById(commentId);
 
     if (!comment) {
         return res.status(404).json({
@@ -224,7 +224,7 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req, 
  */
 router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async (req, res) => {
     const commentId = parseInt(req.params.id, 10);
-    const comment = Comment.findById(commentId);
+    const comment = await Comment.findById(commentId);
 
     if (!comment) {
         return res.status(404).json({
@@ -240,7 +240,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
     if (force) {
         res.json({ deleted: true, previous: comment.toJSON() });
     } else {
-        res.json(Comment.findById(commentId).toJSON());
+        res.json((await Comment.findById(commentId)).toJSON());
     }
 }));
 

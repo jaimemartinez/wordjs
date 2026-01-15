@@ -70,10 +70,19 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
         fetchSettings();
     }, []);
 
-    // Combine core + plugin menus and FILTER by capability
+    // Deduplicate: Filter out plugin menus that conflict with core items
+    // We filter out any item that is explicitly marked as 'core' plugin (provided by backend)
+    // or has a URL collision with our hardcoded core items
+    const uniquePluginMenus = pluginMenus.filter((pItem: any) => {
+        if (pItem.plugin === 'core') return false;
+
+        return !coreMenuItems.some(cItem => cItem.href === pItem.href);
+    });
+
+    // Combine core + unique plugin menus and FILTER by capability
     const allMenuItems = [
         ...coreMenuItems.slice(0, 6).filter(item => can(item.cap)),
-        ...pluginMenus.filter(item => can(item.cap)),
+        ...uniquePluginMenus.filter(item => can(item.cap)),
         ...coreMenuItems.slice(6).filter(item => can(item.cap))
     ];
 
@@ -111,7 +120,10 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                     <i className={`fa-solid ${item.icon} transition-transform group-hover:scale-110 ${isCollapsed ? 'text-lg' : 'w-5 text-center text-sm'} ${isActive ? (isCollapsed ? 'text-white' : 'text-blue-500') : 'text-gray-500 group-hover:text-blue-400'}`}></i>
                     {!isCollapsed && (
                         <span className="text-sm tracking-wide truncate transition-all duration-300 opacity-100 translate-x-0">
-                            {item.label}
+                            {typeof item.label === 'string' || typeof item.label === 'number'
+                                ? item.label
+                                : <span className="text-red-500 font-mono text-xs">ERR: {JSON.stringify(item.label).slice(0, 10)}</span>
+                            }
                         </span>
                     )}
                 </SmartLink>
@@ -158,7 +170,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                         )}
                         {!isCollapsed && (
                             <span className="bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent truncate max-w-[180px] transition-all duration-300 opacity-100 translate-x-0">
-                                {siteTitle}
+                                {typeof siteTitle === 'string' ? siteTitle : JSON.stringify(siteTitle)}
                             </span>
                         )}
                     </Link>
@@ -178,7 +190,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Core</span>
                             </div>
                         )}
-                        {allMenuItems.slice(0, 6 + pluginMenus.length).map((item) => renderMenuItem(item))}
+                        {allMenuItems.slice(0, 6 + uniquePluginMenus.length).map((item) => renderMenuItem(item))}
                     </div>
 
                     <div className="space-y-1">
@@ -187,7 +199,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Management</span>
                             </div>
                         )}
-                        {allMenuItems.slice(6 + pluginMenus.length).map((item) => renderMenuItem(item))}
+                        {allMenuItems.slice(6 + uniquePluginMenus.length).map((item) => renderMenuItem(item))}
                     </div>
                 </nav>
 
@@ -206,8 +218,15 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                             </div>
                             {!isCollapsed && (
                                 <div className="flex-1 min-w-0 transition-all duration-300 opacity-100 translate-x-0">
-                                    <p className="truncate font-bold text-gray-100 text-sm">{user?.displayName || user?.username}</p>
-                                    <p className="truncate text-[10px] text-gray-500 uppercase font-black tracking-widest leading-none mt-1">{user?.role}</p>
+                                    <p className="truncate font-bold text-gray-100 text-sm">
+                                        {(() => {
+                                            const name = user?.displayName || user?.username;
+                                            return typeof name === 'string' ? name : 'User';
+                                        })()}
+                                    </p>
+                                    <p className="truncate text-[10px] text-gray-500 uppercase font-black tracking-widest leading-none mt-1">
+                                        {typeof user?.role === 'string' ? user.role : 'Member'}
+                                    </p>
                                 </div>
                             )}
                         </div>

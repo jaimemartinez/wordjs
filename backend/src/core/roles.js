@@ -9,27 +9,48 @@ const config = require('../config/app');
 
 const ROLES_OPTION_NAME = 'wordjs_user_roles';
 
+// Cache roles in memory for synchronous access (required by User.toJSON)
+let _rolesCache = null;
+
 /**
- * Get all available roles
+ * Initialize roles from DB (Async)
+ * Must be called on app startup
+ */
+async function loadRoles() {
+    _rolesCache = await getOption(ROLES_OPTION_NAME);
+    if (!_rolesCache || Object.keys(_rolesCache).length === 0) {
+        _rolesCache = config.roles || {};
+    }
+    console.log(`DEBUG: Roles loaded into cache. Count: ${Object.keys(_rolesCache).length}`);
+    return _rolesCache;
+}
+
+/**
+ * Get all available roles (Synchronous from cache)
  */
 function getRoles() {
-    const roles = getOption(ROLES_OPTION_NAME);
-    if (!roles || Object.keys(roles).length === 0) {
+    // If not loaded yet, fallback to config (safe for startup/tests)
+    if (!_rolesCache) {
+        // console.warn('Warning: getRoles() called before loadRoles(). Returning default config.');
         return config.roles || {};
     }
-    return roles;
+    return _rolesCache;
 }
 
 /**
  * Add or Update a role
  */
-function setRole(slug, roleData) {
-    const roles = getRoles();
-    roles[slug] = {
+async function setRole(slug, roleData) {
+    // Update cache immediately
+    if (!_rolesCache) _rolesCache = {};
+
+    _rolesCache[slug] = {
         name: roleData.name,
         capabilities: roleData.capabilities || []
     };
-    return updateOption(ROLES_OPTION_NAME, roles);
+
+    // Persist to DB
+    return await updateOption(ROLES_OPTION_NAME, _rolesCache);
 }
 
 /**
@@ -43,11 +64,12 @@ function getRole(slug) {
 /**
  * Remove a role
  */
-function removeRole(slug) {
-    const roles = getRoles();
-    if (roles[slug]) {
-        delete roles[slug];
-        return updateOption(ROLES_OPTION_NAME, roles);
+async function removeRole(slug) {
+    if (!_rolesCache) await loadRoles();
+
+    if (_rolesCache[slug]) {
+        delete _rolesCache[slug];
+        return await updateOption(ROLES_OPTION_NAME, _rolesCache);
     }
     return false;
 }
@@ -55,11 +77,11 @@ function removeRole(slug) {
 /**
  * Update capabilities for a specific role
  */
-function updateRoleCapabilities(slug, capabilities) {
+async function updateRoleCapabilities(slug, capabilities) {
     const role = getRole(slug);
     if (role) {
         role.capabilities = capabilities;
-        return setRole(slug, role);
+        return await setRole(slug, role);
     }
     return false;
 }
@@ -71,7 +93,9 @@ function getAllAvailableCapabilities() {
     const roles = getRoles();
     const caps = new Set();
     Object.values(roles).forEach(role => {
-        role.capabilities.forEach(cap => caps.add(cap));
+        if (role.capabilities) {
+            role.capabilities.forEach(cap => caps.add(cap));
+        }
     });
 
     // Add known core capabilities that might not be assigned yet
@@ -101,8 +125,11 @@ function getAllAvailableCapabilities() {
  * Sync roles with configuration on startup
  * Ensures critical capabilities are present
  */
-function syncRoles(configRoles) {
-    const dbRoles = getRoles();
+async function syncRoles(configRoles) {
+    // Ensure cache is loaded first
+    if (!_rolesCache) await loadRoles();
+
+    const dbRoles = _rolesCache; // Work on reference
     let changed = false;
 
     // Check subscriber specifically for the new capability
@@ -128,13 +155,15 @@ function syncRoles(configRoles) {
     }
 
     if (changed) {
-        updateOption(ROLES_OPTION_NAME, dbRoles);
+        _rolesCache = dbRoles; // Update cache
+        await updateOption(ROLES_OPTION_NAME, dbRoles); // Persist
         return true;
     }
     return false;
 }
 
 module.exports = {
+    loadRoles,
     getRoles,
     getRole,
     setRole,

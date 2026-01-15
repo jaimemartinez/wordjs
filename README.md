@@ -7,12 +7,20 @@
 ## ✨ Key Features
 
 - **🚀 Performance-First:** Server Side Rendering (SSR) via Next.js for instant page loads.
-- **🛡️ Secure by Design:** Built-in Gateway architecture, JWT authentication, and strict sanitization.
+- **🛡️ Advanced Security Stack:** 
+    - **AST Static Scanner:** Deep code analysis (Abstract Syntax Tree) to block obfuscated threats and unauthorized API calls before execution.
+    - **Runtime Environment Proxy:** Secure masking of sensitive `.env` secrets from the plugin context.
+    - **Secure Gateway:** Integrated JWT authentication, circuit breaking, and strict sanitization.
 - **🎨 Visual Builder:** Integrated with **Puck** for a drag-and-drop editing experience.
-- **🔌 Autonomous Plugins:** Full-stack extension with **auto-managed npm dependencies** and dynamic frontend hooks.
+- **🔌 Autonomous Plugins:** Full-stack extension with **auto-managed npm dependencies**, dynamic frontend hooks, and **Mandatory Permission Authorization**.
 - **⚙️ Zero Config:** Smart defaults and SQLite storage let you start in seconds, not hours.
+- **🔄 Universal Storage:** Native support for **SQLite (Legacy & Native)** and **PostgreSQL**, with one-click migration.
 - **📄 SEO Ready:** Best practices out of the box (Semantic HTML, Meta Tags, JSON-LD).
 - **🛡️ Dynamic Roles:** Full Control over user permissions with a database-driven Role Manager.
+- **⏰ Built-in Cron:** Robust task scheduling system for maintenance and plugin background jobs.
+- **🌍 Internationalization (i18n):** Native multi-language support for core and plugins.
+- **🧩 Shortcodes:** WordPress-style shortcode system for dynamic content rendering.
+- **📦 Import/Export:** Full site backup and restoration capabilities.
 - **🚀 High Availability:** Cluster Mode architecture with circuit breaking and auto-healing services.
 
 ---
@@ -26,7 +34,7 @@ graph TD
     User((User)) --> Gateway[Gateway:3000]
     Gateway --> Frontend[Next.js Frontend:3001]
     Gateway --> Backend[Node.js Backend:4000]
-    Backend --> DB[(SQLite DB)]
+    Backend --> DB[(SQLite / PG)]
     Backend --> Plugins{Plugins}
 ```
 
@@ -76,23 +84,21 @@ Detailed guides are available in the [`documentation/`](documentation/) folder:
 - **Communication:** REST API + JWT + WebSockets
 - **Logging:** Structured JSON via Winston
 - **Server:** Express.js + Cluster Mode
-- **Database:** sql.js (SQLite) - *Remote DB support coming soon*
+- **Database:** SQLite (Legacy/Native) or PostgreSQL - *Interchangeable via Migration System*
 
 ---
 
-## �️ Upcoming Features (Roadmap)
+## 🔮 Upcoming Features (Roadmap)
 
 We are constantly evolving WordJS. Here's what's planned:
 
-- **📁 Multi-Database Support:** Native integration for **PostgreSQL** and **MySQL** for enterprise-level scaling.
-- **🔄 Automated Migrations:** One-click data migration between different database engines (e.g., SQLite to Postgres).
 - **☁️ Media CDN Integration:** Built-in support for S3-compatible cloud storage (AWS, DigitalOcean, etc.).
 - **🌐 Multi-Site Architecture:** Manage multiple domains and sites from a single WordJS installation.
 - **🧩 Global Hook Registry:** A more visual way to manage and discover Actions and Filters.
 
 ---
 
-## �📜 License
+## 📜 License
 
 This project is licensed under the **MIT License** - see the [LICENSE](LICENSE) file for details.
 

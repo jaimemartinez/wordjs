@@ -8,7 +8,7 @@ const { initEmailDb } = require('../../src/config/email-database');
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '1.3.0',
+    version: '1.3.1',
     description: 'Internal Multi-User Mailbox (Gmail-like) with Autonomous Direct Send.',
     author: 'WordJS'
 };
@@ -22,11 +22,12 @@ let smtpServer = null;
 async function initTransporter() {
     const { getOption } = require('../../src/core/options');
 
-    const host = getOption('mail_server', '');
-    const port = parseInt(getOption('mail_port', '587'), 10);
-    const user = getOption('mail_user', '');
-    const pass = getOption('mail_pass', '');
-    const secure = getOption('mail_secure', '0') === '1';
+    const host = await getOption('mail_server', '');
+    const port = parseInt(await getOption('mail_port', '587'), 10);
+    const user = await getOption('mail_user', '');
+    const pass = await getOption('mail_pass', '');
+    const secureRaw = await getOption('mail_secure', '0');
+    const secure = secureRaw === '1';
 
     if (!host || !user || !pass) {
         transporter = null;
@@ -65,12 +66,13 @@ async function resolveMX(domain) {
 /**
  * Initialize the Inbound SMTP Server
  */
-function initSMTPServer() {
+async function initSMTPServer() {
     const { getOption } = require('../../src/core/options');
     const config = require('../../src/config/app');
     const siteUrl = new URL(config.site.url);
     const siteDomain = siteUrl.hostname;
-    const port = parseInt(getOption('smtp_listen_port', '2525'), 10);
+    const port = parseInt(await getOption('smtp_listen_port', '2525'), 10);
+    const catchAllRaw = await getOption('smtp_catch_all', '0');
 
     if (smtpServer) {
         smtpServer.close();
@@ -94,7 +96,7 @@ function initSMTPServer() {
                             user = User.findByLogin(recName);
                         }
 
-                        if (user || getOption('smtp_catch_all', '0') === '1') {
+                        if (user || catchAllRaw === '1') {
                             await Email.create({
                                 messageId: parsed.messageId,
                                 fromAddress: parsed.from.value[0].address,
@@ -122,7 +124,11 @@ function initSMTPServer() {
     });
 
     smtpServer.on('error', err => {
-        console.error('   ✗ Inbound SMTP Server error:', err.message);
+        if (err.code === 'EADDRINUSE') {
+            console.warn(`   ⚠️  Inbound SMTP Server could not start: Port ${port} is busy.`);
+        } else {
+            console.error('   ✗ Inbound SMTP Server error:', err.message);
+        }
     });
 }
 
@@ -134,8 +140,11 @@ async function sendMail(data) {
     const config = require('../../src/config/app');
 
     // Identity resolution: Use provided identity OR site defaults
-    const fromEmail = data.fromEmail || getOption('mail_from_email', getOption('admin_email', 'noreply@wordjs.com'));
-    const fromName = data.fromName || getOption('mail_from_name', getOption('blogname', 'WordJS'));
+    const defaultEmail = await getOption('admin_email', 'noreply@wordjs.com');
+    const defaultName = await getOption('blogname', 'WordJS');
+
+    const fromEmail = data.fromEmail || await getOption('mail_from_email', defaultEmail);
+    const fromName = data.fromName || await getOption('mail_from_name', defaultName);
     const parentId = data.parentId || 0;
     const threadId = data.threadId || 0;
 
@@ -281,7 +290,7 @@ exports.init = async function () {
     // Initialize
     await initEmailDb();
     await initTransporter();
-    initSMTPServer();
+    await initSMTPServer();
 
     // === API ROUTES ===
     const router = express.Router();
@@ -388,12 +397,12 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/settings (Strict Admin)
-    router.get('/settings', authenticate, isAdmin, (req, res) => {
+    router.get('/settings', authenticate, isAdmin, async (req, res) => {
         res.json({
-            mail_from_email: getOption('mail_from_email', ''),
-            mail_from_name: getOption('mail_from_name', ''),
-            smtp_listen_port: getOption('smtp_listen_port', '2525'),
-            smtp_catch_all: getOption('smtp_catch_all', '0')
+            mail_from_email: await getOption('mail_from_email', ''),
+            mail_from_name: await getOption('mail_from_name', ''),
+            smtp_listen_port: await getOption('smtp_listen_port', '2525'),
+            smtp_catch_all: await getOption('smtp_catch_all', '0')
         });
     });
 
@@ -404,11 +413,11 @@ exports.init = async function () {
             'smtp_listen_port', 'smtp_catch_all'
         ];
 
-        fields.forEach(f => {
-            if (req.body[f] !== undefined) updateOption(f, req.body[f]);
-        });
+        for (const f of fields) {
+            if (req.body[f] !== undefined) await updateOption(f, req.body[f]);
+        }
 
-        initSMTPServer();
+        await initSMTPServer();
         res.json({ success: true, message: 'Server settings updated' });
     });
 
@@ -468,7 +477,7 @@ exports.init = async function () {
         return items;
     });
 
-    console.log('Mail Server plugin v1.3 initialized (Multi-User + Direct Outbound)!');
+    console.log('Mail Server plugin v1.3.1 initialized (Async Config)!');
 };
 
 exports.deactivate = function () {

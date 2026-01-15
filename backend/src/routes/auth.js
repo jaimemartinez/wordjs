@@ -16,7 +16,7 @@ const { getOption } = require('../core/options');
  */
 router.post('/register', asyncHandler(async (req, res) => {
     // Check if registration is allowed
-    const registrationAllowed = getOption('users_can_register', 0);
+    const registrationAllowed = await getOption('users_can_register', 0);
     if (!registrationAllowed || registrationAllowed == '0') {
         return res.status(403).json({
             code: 'rest_cannot_register',
@@ -60,7 +60,7 @@ router.post('/register', asyncHandler(async (req, res) => {
     // Keeping it simple but lengthier for now as requested.
 
     try {
-        const defaultRole = getOption('default_role', 'subscriber');
+        const defaultRole = await getOption('default_role', 'subscriber');
         const user = await User.create({
             username,
             email,

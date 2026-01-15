@@ -27,7 +27,7 @@ router.get('/', authenticate, can('list_users'), asyncHandler(async (req, res) =
     const limit = Math.min(parseInt(per_page, 10) || 10, 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
-    const users = User.findAll({
+    const users = await User.findAll({
         search,
         role,
         limit,
@@ -36,7 +36,7 @@ router.get('/', authenticate, can('list_users'), asyncHandler(async (req, res) =
         order: order.toUpperCase()
     });
 
-    const total = User.count({ search });
+    const total = await User.count({ search });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
@@ -59,7 +59,7 @@ router.get('/me', authenticate, (req, res) => {
  */
 router.get('/:id', authenticate, asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
-    const user = User.findById(userId);
+    const user = await User.findById(userId);
 
     if (!user) {
         return res.status(404).json({
@@ -124,7 +124,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  */
 router.put('/:id', authenticate, asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
-    const user = User.findById(userId);
+    const user = await User.findById(userId);
 
     if (!user) {
         return res.status(404).json({
@@ -162,7 +162,7 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
  */
 router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
-    const user = User.findById(userId);
+    const user = await User.findById(userId);
 
     if (!user) {
         return res.status(404).json({
@@ -181,7 +181,7 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
         });
     }
 
-    User.delete(userId);
+    await User.delete(userId);
     res.json({ deleted: true, previous: user.toJSON() });
 }));
 

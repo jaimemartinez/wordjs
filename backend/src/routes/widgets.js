@@ -33,12 +33,14 @@ router.get('/', asyncHandler(async (req, res) => {
  */
 router.get('/sidebars', asyncHandler(async (req, res) => {
     const sidebars = getSidebars();
-    res.json(sidebars.map(s => ({
+    // We need to resolve widgets for each sidebar async
+    const result = await Promise.all(sidebars.map(async s => ({
         id: s.id,
         name: s.name,
         description: s.description,
-        widgets: getSidebarWidgets(s.id)
+        widgets: await getSidebarWidgets(s.id)
     })));
+    res.json(result);
 }));
 
 /**
@@ -46,7 +48,7 @@ router.get('/sidebars', asyncHandler(async (req, res) => {
  * Render a sidebar's widgets as HTML
  */
 router.get('/sidebars/:id/render', asyncHandler(async (req, res) => {
-    const html = renderSidebar(req.params.id);
+    const html = await renderSidebar(req.params.id);
     res.type('html').send(html);
 }));
 
@@ -61,7 +63,7 @@ router.post('/sidebars/:id', authenticate, isAdmin, asyncHandler(async (req, res
         return res.status(400).json({ error: 'Widget ID required' });
     }
 
-    const instanceKey = addWidgetToSidebar(req.params.id, widgetId, settings);
+    const instanceKey = await addWidgetToSidebar(req.params.id, widgetId, settings);
     res.json({ success: true, instanceKey });
 }));
 
@@ -77,7 +79,7 @@ router.post('/sidebars/:id/reorder', authenticate, isAdmin, asyncHandler(async (
         return res.status(400).json({ error: 'Widgets array required' });
     }
 
-    setSidebarWidgets(req.params.id, widgets);
+    await setSidebarWidgets(req.params.id, widgets);
     res.json({ success: true });
 }));
 
@@ -86,7 +88,7 @@ router.post('/sidebars/:id/reorder', authenticate, isAdmin, asyncHandler(async (
  * Remove widget from sidebar
  */
 router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const result = removeWidgetFromSidebar(req.params.sidebarId, req.params.instanceKey);
+    const result = await removeWidgetFromSidebar(req.params.sidebarId, req.params.instanceKey);
     res.json({ success: result });
 }));
 
@@ -96,7 +98,7 @@ router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncH
  */
 router.put('/:widgetId/instances/:instanceId', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const { settings } = req.body;
-    setWidgetSettings(req.params.widgetId, req.params.instanceId, settings || {});
+    await setWidgetSettings(req.params.widgetId, req.params.instanceId, settings || {});
     res.json({ success: true });
 }));
 

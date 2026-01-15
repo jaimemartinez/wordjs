@@ -27,8 +27,39 @@ gateway-secret.txt
 .DS_Store
 Thumbs.db
 *.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Logs
+logs/
+backend/logs/
+gateway-logs/
+
+# IDE Settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Gateway State
+gateway-registry.json
+
+# SQLite Artifacts
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# Debugging & Temp Scripts
+backend/test-*.js
+backend/debug-*.js
+backend/commands.txt
+check_plugins.js
+force-sync-roles.js
+inspect-roles.js
+test-scanner.js
+test-env.js
 
 # Legacy / Temp
 backend/wordpress-6.9/
 backend/os-tmp/
-backend/commands.txt

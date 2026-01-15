@@ -3,7 +3,7 @@
  * Equivalent to wp-includes/class-wp-term.php and wp-includes/taxonomy.php
  */
 
-const { db } = require('../config/database');
+const { db, dbAsync } = require('../config/database');
 const { sanitizeTitle } = require('../core/formatting');
 
 class Term {
@@ -40,7 +40,7 @@ class Term {
      * Create a new term
      * Equivalent to wp_insert_term()
      */
-    static create(data) {
+    static async create(data) {
         const { name, taxonomy, slug, description = '', parent = 0 } = data;
 
         if (!name || !taxonomy) {
@@ -49,40 +49,40 @@ class Term {
 
         // Generate slug
         let termSlug = slug || sanitizeTitle(name);
-        termSlug = Term.generateUniqueSlug(termSlug);
+        termSlug = await Term.generateUniqueSlug(termSlug);
 
         // Check if term exists
-        const existing = db.prepare(`
+        const existing = await dbAsync.get(`
       SELECT t.term_id FROM terms t
       JOIN term_taxonomy tt ON t.term_id = tt.term_id
       WHERE t.name = ? AND tt.taxonomy = ?
-    `).get(name, taxonomy);
+    `, [name, taxonomy]);
 
         if (existing) {
             throw new Error('Term already exists');
         }
 
         // Insert term
-        const termResult = db.prepare('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0)').run(name, termSlug);
-        const termId = termResult.lastInsertRowid;
+        const termResult = await dbAsync.run('INSERT INTO terms (name, slug, term_group) VALUES (?, ?, 0) RETURNING term_id', [name, termSlug]);
+        const termId = termResult.lastID;
 
         // Insert term taxonomy
-        const ttResult = db.prepare(`
+        await dbAsync.run(`
       INSERT INTO term_taxonomy (term_id, taxonomy, description, parent, count)
       VALUES (?, ?, ?, ?, 0)
-    `).run(termId, taxonomy, description, parent);
+    `, [termId, taxonomy, description, parent]);
 
-        return Term.findById(termId, taxonomy);
+        return await Term.findById(termId, taxonomy);
     }
 
     /**
      * Generate unique slug
      */
-    static generateUniqueSlug(slug) {
+    static async generateUniqueSlug(slug) {
         let uniqueSlug = slug;
         let counter = 1;
 
-        while (db.prepare('SELECT term_id FROM terms WHERE slug = ?').get(uniqueSlug)) {
+        while (await dbAsync.get('SELECT term_id FROM terms WHERE slug = ?', [uniqueSlug])) {
             counter++;
             uniqueSlug = `${slug}-${counter}`;
         }
@@ -94,7 +94,7 @@ class Term {
      * Find term by ID
      * Equivalent to get_term()
      */
-    static findById(termId, taxonomy = null) {
+    static async findById(termId, taxonomy = null) {
         let sql = `
       SELECT t.*, tt.taxonomy, tt.description, tt.parent, tt.count, tt.term_taxonomy_id
       FROM terms t
@@ -108,7 +108,7 @@ class Term {
             params.push(taxonomy);
         }
 
-        const row = db.prepare(sql).get(...params);
+        const row = await dbAsync.get(sql, params);
         return row ? new Term(row) : null;
     }
 
@@ -116,13 +116,13 @@ class Term {
      * Find term by slug
      * Equivalent to get_term_by('slug', ...)
      */
-    static findBySlug(slug, taxonomy) {
-        const row = db.prepare(`
+    static async findBySlug(slug, taxonomy) {
+        const row = await dbAsync.get(`
       SELECT t.*, tt.taxonomy, tt.description, tt.parent, tt.count, tt.term_taxonomy_id
       FROM terms t
       JOIN term_taxonomy tt ON t.term_id = tt.term_id
       WHERE t.slug = ? AND tt.taxonomy = ?
-    `).get(slug, taxonomy);
+    `, [slug, taxonomy]);
         return row ? new Term(row) : null;
     }
 
@@ -130,7 +130,7 @@ class Term {
      * Get all terms
      * Equivalent to get_terms()
      */
-    static findAll(options = {}) {
+    static async findAll(options = {}) {
         const {
             taxonomy,
             parent,
@@ -186,30 +186,30 @@ class Term {
         sql += ' LIMIT ? OFFSET ?';
         params.push(limit, offset);
 
-        const rows = db.prepare(sql).all(...params);
+        const rows = await dbAsync.all(sql, params);
         return rows.map(row => new Term(row));
     }
 
     /**
      * Get categories
      */
-    static getCategories(options = {}) {
-        return Term.findAll({ ...options, taxonomy: 'category' });
+    static async getCategories(options = {}) {
+        return await Term.findAll({ ...options, taxonomy: 'category' });
     }
 
     /**
      * Get tags
      */
-    static getTags(options = {}) {
-        return Term.findAll({ ...options, taxonomy: 'post_tag' });
+    static async getTags(options = {}) {
+        return await Term.findAll({ ...options, taxonomy: 'post_tag' });
     }
 
     /**
      * Update a term
      * Equivalent to wp_update_term()
      */
-    static update(termId, taxonomy, data) {
-        const term = Term.findById(termId, taxonomy);
+    static async update(termId, taxonomy, data) {
+        const term = await Term.findById(termId, taxonomy);
         if (!term) throw new Error('Term not found');
 
         // Update terms table
@@ -222,13 +222,13 @@ class Term {
                 values.push(data.name);
             }
             if (data.slug) {
-                const newSlug = Term.generateUniqueSlug(sanitizeTitle(data.slug));
+                const newSlug = await Term.generateUniqueSlug(sanitizeTitle(data.slug));
                 updates.push('slug = ?');
                 values.push(newSlug);
             }
 
             values.push(termId);
-            db.prepare(`UPDATE terms SET ${updates.join(', ')} WHERE term_id = ?`).run(...values);
+            await dbAsync.run(`UPDATE terms SET ${updates.join(', ')} WHERE term_id = ?`, values);
         }
 
         // Update term_taxonomy table
@@ -246,31 +246,31 @@ class Term {
             }
 
             values.push(term.termTaxonomyId);
-            db.prepare(`UPDATE term_taxonomy SET ${updates.join(', ')} WHERE term_taxonomy_id = ?`).run(...values);
+            await dbAsync.run(`UPDATE term_taxonomy SET ${updates.join(', ')} WHERE term_taxonomy_id = ?`, values);
         }
 
-        return Term.findById(termId, taxonomy);
+        return await Term.findById(termId, taxonomy);
     }
 
     /**
      * Delete a term
      * Equivalent to wp_delete_term()
      */
-    static delete(termId, taxonomy) {
-        const term = Term.findById(termId, taxonomy);
+    static async delete(termId, taxonomy) {
+        const term = await Term.findById(termId, taxonomy);
         if (!term) return false;
 
         // Delete term relationships
-        db.prepare('DELETE FROM term_relationships WHERE term_taxonomy_id = ?').run(term.termTaxonomyId);
+        await dbAsync.run('DELETE FROM term_relationships WHERE term_taxonomy_id = ?', [term.termTaxonomyId]);
 
         // Delete term taxonomy
-        db.prepare('DELETE FROM term_taxonomy WHERE term_taxonomy_id = ?').run(term.termTaxonomyId);
+        await dbAsync.run('DELETE FROM term_taxonomy WHERE term_taxonomy_id = ?', [term.termTaxonomyId]);
 
         // Check if term is used in other taxonomies
-        const otherTaxonomies = db.prepare('SELECT COUNT(*) as count FROM term_taxonomy WHERE term_id = ?').get(termId);
+        const otherTaxonomies = await dbAsync.get('SELECT COUNT(*) as count FROM term_taxonomy WHERE term_id = ?', [termId]);
         if (otherTaxonomies.count === 0) {
             // Delete term if not used elsewhere
-            db.prepare('DELETE FROM terms WHERE term_id = ?').run(termId);
+            await dbAsync.run('DELETE FROM terms WHERE term_id = ?', [termId]);
         }
 
         return true;
@@ -279,7 +279,7 @@ class Term {
     /**
      * Count terms
      */
-    static count(options = {}) {
+    static async count(options = {}) {
         const { taxonomy, hideEmpty = false } = options;
 
         let sql = 'SELECT COUNT(*) as count FROM term_taxonomy';
@@ -299,20 +299,21 @@ class Term {
             sql += ' WHERE ' + conditions.join(' AND ');
         }
 
-        const row = db.prepare(sql).get(...params);
+        const row = await dbAsync.get(sql, params);
         return row.count;
     }
 
     /**
      * Get term hierarchy (for categories)
      */
-    static getHierarchy(taxonomy, parentId = 0) {
-        const terms = Term.findAll({ taxonomy, parent: parentId });
+    static async getHierarchy(taxonomy, parentId = 0) {
+        const terms = await Term.findAll({ taxonomy, parent: parentId });
 
-        return terms.map(term => ({
+        // Recursive async map
+        return await Promise.all(terms.map(async term => ({
             ...term.toJSON(),
-            children: Term.getHierarchy(taxonomy, term.termId)
-        }));
+            children: await Term.getHierarchy(taxonomy, term.termId)
+        })));
     }
 }
 
