@@ -260,6 +260,28 @@ async function initializeSchema(db, isAsync = false) {
     "link_rss TEXT NOT NULL DEFAULT ''"
   ]);
 
+  // Notifications table
+  await createTable('notifications', [
+    `id ${INT_PK}`,
+    "uuid TEXT NOT NULL UNIQUE",
+    "user_id INTEGER NOT NULL DEFAULT 0",
+    "type TEXT NOT NULL",
+    "title TEXT NOT NULL",
+    "message TEXT NOT NULL",
+    "data TEXT",
+    "is_read INTEGER NOT NULL DEFAULT 0",
+    "created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP",
+    "read_at TEXT",
+    "icon TEXT",
+    "color TEXT",
+    "action_url TEXT"
+  ]);
+
+  // Migration: Add missing columns if they don't exist
+  try { await exec("ALTER TABLE notifications ADD COLUMN icon TEXT"); } catch (e) { }
+  try { await exec("ALTER TABLE notifications ADD COLUMN color TEXT"); } catch (e) { }
+  try { await exec("ALTER TABLE notifications ADD COLUMN action_url TEXT"); } catch (e) { }
+
   console.log('✅ Database Schema verified.');
 }
 

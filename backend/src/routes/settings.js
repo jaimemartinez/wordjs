@@ -155,4 +155,32 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req, res) => {
     });
 }));
 
+/**
+ * GET /notices
+ * Get admin notices (admin only)
+ */
+router.get('/notices', authenticate, isAdmin, asyncHandler(async (req, res) => {
+    const notices = await getOption('admin_notices', []);
+    res.json(notices);
+}));
+
+/**
+ * DELETE /notices/:id
+ * Dismiss a notice
+ */
+router.delete('/notices/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
+    const { id } = req.params;
+    let notices = await getOption('admin_notices', []);
+
+    // Filter out the dismissed notice
+    const initialLength = notices.length;
+    notices = notices.filter(n => n.id !== id);
+
+    if (notices.length !== initialLength) {
+        await updateOption('admin_notices', notices);
+    }
+
+    res.json({ success: true, remaining: notices.length });
+}));
+
 module.exports = router;

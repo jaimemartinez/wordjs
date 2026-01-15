@@ -120,7 +120,7 @@ class User {
     }
 
     static async findByEmail(email) {
-        const row = await dbAsync.get('SELECT * FROM users WHERE user_email = ?', [email]);
+        const row = await dbAsync.get('SELECT * FROM users WHERE LOWER(user_email) = LOWER(?)', [email]);
         if (!row) return null;
 
         const user = new User(row);
@@ -185,39 +185,29 @@ class User {
     }
 
     static async findAll(args = {}) {
-        const { role, limit = 10, offset = 0 } = args;
+        const { role, search, limit = 10, offset = 0 } = args;
 
-        let sql = 'SELECT * FROM users';
+        let sql = 'SELECT u.* FROM users u';
         const params = [];
         const where = [];
 
-        // Note: Role is in meta, so intricate filtering requires JOIN.
-        // Simple implementation: Fetch all page, then filter (inefficient) OR Join.
-
         if (role) {
-            sql = `
-                SELECT u.* FROM users u
-                JOIN user_meta um ON u.id = um.user_id
-                WHERE um.meta_key = 'role' AND um.meta_value = ?
-            `;
+            sql += ' JOIN user_meta um ON u.id = um.user_id';
+            where.push("um.meta_key = 'role' AND um.meta_value = ?");
             params.push(role);
         }
 
-        sql += ` LIMIT ${limit} OFFSET ${offset}`;
-
-        // Postgres uses $1, $2, but our Driver wrapper handles ? -> $n normalization
-        // LIMIT/OFFSET params directly injected for now (integer safe) or passed as params?
-        // Better to pass as params.
-
-        // Re-write query builder for safety
-        if (role) {
-            // ... already handled
-        } else {
-            // ...
+        if (search) {
+            where.push('(u.user_login LIKE ? OR u.display_name LIKE ? OR u.user_email LIKE ?)');
+            const s = `%${search}%`;
+            params.push(s, s, s);
         }
 
-        // Let's stick to safe string interpolation for Integers in LIMIT/OFFSET 
-        // to avoid param index hell in manual builder.
+        if (where.length > 0) {
+            sql += ' WHERE ' + where.join(' AND ');
+        }
+
+        sql += ` LIMIT ${parseInt(limit, 10)} OFFSET ${parseInt(offset, 10)}`;
 
         const rows = await dbAsync.all(sql, params);
 
@@ -270,17 +260,23 @@ class User {
     }
 
     toJSON() {
-        const { getRole } = require('../core/roles');
-        const roleObj = getRole(this.role);
+        // Essential for frontend (camelCase)
+        // AND legacy backend compatibility (snake_case)
+        const { getRoles } = require('../core/roles');
+        const roles = getRoles();
+        const roleObj = roles[this.role];
 
         return {
             id: this.id,
-            user_login: this.userLogin,
-            user_email: this.userEmail,
-            display_name: this.displayName,
-            role: this.role,
-            capabilities: roleObj ? roleObj.capabilities : [], // Crucial for frontend
-            // exclude password
+            username: this.userLogin,     // Frontend expectation
+            user_login: this.userLogin,   // Legacy expectation
+            email: this.userEmail,        // Frontend expectation
+            user_email: this.userEmail,   // Legacy expectation
+            displayName: this.displayName, // Frontend expectation
+            display_name: this.displayName, // Legacy expectation
+            role: this.role || 'subscriber',
+            capabilities: roleObj ? roleObj.capabilities : [],
+            meta: this.meta || {}
         };
     }
 }

@@ -54,6 +54,16 @@
     },
     "permissions": [
         {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Required to read carousel configurations."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Required to create and update carousel data."
+        },
+        {
             "scope": "database",
             "access": "write",
             "reason": "Required to save carousel configurations and image metadata."

@@ -4,12 +4,12 @@ const { simpleParser } = require('mailparser');
 const dns = require('dns').promises;
 const Email = require('../../src/models/Email');
 const User = require('../../src/models/User');
-const { initEmailDb } = require('../../src/config/email-database');
+const notificationService = require('../../src/core/notifications');
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '1.3.1',
-    description: 'Internal Multi-User Mailbox (Gmail-like) with Autonomous Direct Send.',
+    version: '1.4.0',
+    description: 'Internal Multi-User Mailbox integrated with core WordJS database.',
     author: 'WordJS'
 };
 
@@ -90,10 +90,16 @@ async function initSMTPServer() {
                     for (const addr of toAddresses) {
                         const [recName, recDomain] = addr.address.split('@');
 
-                        // Check if recipient is a local user by email or by username@siteDomain
-                        let user = User.findByEmail(addr.address);
+                        console.log(`📩 Incoming mail for ${addr.address}. Local user check...`);
+                        let user = await User.findByEmail(addr.address);
                         if (!user && recDomain === siteDomain) {
-                            user = User.findByLogin(recName);
+                            user = await User.findByLogin(recName);
+                        }
+
+                        if (user) {
+                            console.log(`   ✅ Local user found: ${user.userLogin} (ID: ${user.id})`);
+                        } else {
+                            console.log(`   ❌ No local user for ${addr.address}`);
                         }
 
                         if (user || catchAllRaw === '1') {
@@ -107,6 +113,21 @@ async function initSMTPServer() {
                                 bodyHtml: parsed.html,
                                 rawContent: parsed.textAsHtml || parsed.text
                             });
+
+                            // Real-time notification for the user
+                            if (user) {
+                                console.log(`   🔔 Sending real-time notification to user ${user.id}`);
+                                await notificationService.send({
+                                    user_id: user.id,
+                                    type: 'email',
+                                    title: 'New Inbound Email',
+                                    message: `You have a new message from ${parsed.from.text}: "${parsed.subject}"`,
+                                    icon: 'fa-envelope',
+                                    color: 'blue',
+                                    action_url: `/admin/plugin/emails`,
+                                    transports: ['db', 'sse'] // Don't send an email about a new inbound email
+                                });
+                            }
                         }
                     }
                     callback();
@@ -157,11 +178,11 @@ async function sendMail(data) {
 
     // 0. Internal Delivery Check
     // We check both: registered email AND user_login@siteDomain
-    let localUser = User.findByEmail(data.to);
+    let localUser = await User.findByEmail(data.to);
 
     // If not found by email, try finding by username if it's our domain
     if (!localUser && recipientDomain === siteDomain) {
-        localUser = User.findByLogin(recipientName);
+        localUser = await User.findByLogin(recipientName);
     }
 
     if (localUser) {
@@ -197,6 +218,18 @@ async function sendMail(data) {
             rawContent: data.html || data.text,
             parentId,
             threadId
+        });
+
+        // Real-time notification for the local recipient
+        await notificationService.send({
+            user_id: localUser.id,
+            type: 'email',
+            title: 'New Internal Email',
+            message: `You have a new message from ${fromName}: "${data.subject}"`,
+            icon: 'fa-envelope',
+            color: 'indigo',
+            action_url: `/admin/plugin/emails`,
+            transports: ['db', 'sse'] // Don't send an email about a new internal email
         });
 
         return { success: true, internal: true };
@@ -288,7 +321,7 @@ exports.init = async function () {
     const { isAdmin } = require('../../src/middleware/permissions');
 
     // Initialize
-    await initEmailDb();
+    await Email.initSchema();
     await initTransporter();
     await initSMTPServer();
 
@@ -301,15 +334,15 @@ exports.init = async function () {
         const limit = parseInt(req.query.limit || '50', 10);
         const offset = parseInt(req.query.offset || '0', 10);
 
-        const emails = Email.findAllByUser(req.user.userEmail, folder, limit, offset);
-        const total = Email.countByUser(req.user.userEmail, folder);
+        const emails = await Email.findAllByUser(req.user.userEmail, folder, limit, offset);
+        const total = await Email.countByUser(req.user.userEmail, folder);
 
         res.json({ emails, total });
     });
 
     // GET /api/v1/mail-server/emails/:id - Get Details (Ownership required)
     router.get('/emails/:id', authenticate, async (req, res) => {
-        const email = Email.findById(req.params.id);
+        const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
         // Security: Must be either the recipient or the sender
@@ -317,11 +350,11 @@ exports.init = async function () {
             return res.status(403).json({ error: 'Access denied to this message' });
         }
 
-        Email.markAsRead(req.params.id);
+        await Email.markAsRead(req.params.id);
 
         // Fetch full thread if it exists (either as child or parent)
         const threadIdToSearch = email.thread_id || email.id;
-        const thread = Email.findByThreadId(threadIdToSearch);
+        const thread = await Email.findByThreadId(threadIdToSearch);
 
         if (thread && thread.length > 1) {
             return res.json({ ...email, thread });
@@ -332,14 +365,14 @@ exports.init = async function () {
 
     // DELETE /api/v1/mail-server/emails/:id - Delete (Ownership required)
     router.delete('/emails/:id', authenticate, async (req, res) => {
-        const email = Email.findById(req.params.id);
+        const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
         if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail && req.user.role !== 'administrator') {
             return res.status(403).json({ error: 'Cannot delete this message' });
         }
 
-        Email.delete(req.params.id);
+        await Email.delete(req.params.id);
         res.json({ success: true });
     });
 
@@ -355,7 +388,7 @@ exports.init = async function () {
 
         // If replying, fetch parent to identify thread
         if (replyToId) {
-            const parent = Email.findById(replyToId);
+            const parent = await Email.findById(replyToId);
             if (parent) {
                 parentId = parent.id;
                 // If parent already has a thread_id, join it. Else, parent IS the start -> use parent.id
@@ -388,7 +421,7 @@ exports.init = async function () {
         const siteUrl = new URL(config.site.url);
         const siteDomain = siteUrl.hostname;
 
-        const users = User.findAll({ search: query, limit: 5 });
+        const users = await User.findAll({ search: query, limit: 5 });
         res.json(users.map(u => ({
             email: `${u.userLogin.toLowerCase()}@${siteDomain}`,
             realEmail: u.userEmail,
@@ -455,6 +488,29 @@ exports.init = async function () {
 
     // Expose sendMail utility
     global.wordjs_send_mail = sendMail;
+
+    // Register as a Notification Transport
+    notificationService.registerTransport('email', async (notification) => {
+        // Find user email if user_id is provided
+        let targetEmail = null;
+        if (notification.user_id !== 0) {
+            const user = await User.findById(notification.user_id);
+            if (user) targetEmail = user.userEmail;
+        }
+
+        if (targetEmail) {
+            try {
+                await sendMail({
+                    to: targetEmail,
+                    subject: notification.title,
+                    text: notification.message,
+                    html: `<p>${notification.message}</p>`
+                });
+            } catch (e) {
+                console.error('❌ Mail Server Transport Failed:', e.message);
+            }
+        }
+    });
 
     // Filter admin menu items visibility
     const { addFilter } = require('../../src/core/hooks');

@@ -67,3 +67,17 @@ The Admin sidebar dynamically adjusts based on user permissions.
 *   **Role-Based Access Control:** User objects now include a `capabilities` array.
 *   **Dynamic Filtering:** Each sidebar menu item is mapped to a required backend capability (e.g., `edit_posts`, `manage_options`).
 *   **Deduplication:** The `Sidebar` component (`src/components/Sidebar.tsx`) automatically filters out items from `pluginMenus` if they match core menu items (based on `plugin: 'core'` or `href` collisions) to prevent duplicates.
+
+## Mobile & Responsive Behavior
+
+The Admin Panel is fully responsive ("Mobile First").
+
+### Sidebar Strategy
+*   **Desktop:** Supports "Collapsed" (Icon only) vs "Expanded" (Full width) states, persisted in `localStorage`.
+*   **Mobile:** Enforces "Expanded" layout whenever the menu is open.
+    *   The `Sidebar.tsx` component overrides `isCollapsed` styles using `md:` prefixes (e.g., `md:w-24 w-80`) to ensure text labels are always visible on small screens.
+    *   Uses a Backdrop (`z-[5001]`) and High Z-Index Sidebar (`z-[5002]`) to float above the interface.
+
+### Top Bar
+*   **Dynamic Branding:** Fetches site logo and title from the backend Settings API.
+*   **Notification Center:** Integrated directly into the mobile header as an "Inline" variant for easy access.

@@ -6,6 +6,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useMenu } from "@/contexts/MenuContext";
 import { useEffect, useState } from "react";
+import NotificationCenter from "./NotificationCenter";
 
 interface SidebarMenuItem {
     href: string;
@@ -80,9 +81,18 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     });
 
     // Combine core + unique plugin menus and FILTER by capability
-    const allMenuItems = [
+
+    // Split plugins into sections
+    const coreSectionPlugins = uniquePluginMenus.filter((p: any) => p.section !== 'management');
+    const managementSectionPlugins = uniquePluginMenus.filter((p: any) => p.section === 'management');
+
+    const coreSectionItems = [
         ...coreMenuItems.slice(0, 6).filter(item => can(item.cap)),
-        ...uniquePluginMenus.filter(item => can(item.cap)),
+        ...coreSectionPlugins.filter(item => can(item.cap))
+    ];
+
+    const managementSectionItems = [
+        ...managementSectionPlugins.filter(item => can(item.cap)),
         ...coreMenuItems.slice(6).filter(item => can(item.cap))
     ];
 
@@ -110,22 +120,21 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                     onClick={() => onClose()} // Close on navigation (mobile)
                     title={undefined} // Remove title to prevent native tooltip
                     className={`flex items-center gap-3.5 rounded-2xl transition-all duration-200 group relative pointer-events-auto ${isActive
-                        ? (isCollapsed ? "bg-blue-600 text-white shadow-lg shadow-blue-500/20" : "bg-blue-600/10 text-blue-400 font-bold")
+                        ? (isCollapsed ? "md:bg-blue-600 md:text-white md:shadow-lg md:shadow-blue-500/20 bg-blue-600/10 text-blue-400 font-bold" : "bg-blue-600/10 text-blue-400 font-bold")
                         : "text-gray-400 hover:bg-white/5 hover:text-white"
-                        } ${isCollapsed ? "w-14 h-14 justify-center mx-auto" : "px-4 py-3"}`}
+                        } ${isCollapsed ? "md:w-14 md:h-14 md:justify-center md:mx-auto px-4 py-3" : "px-4 py-3"}`}
                 >
-                    {isActive && !isCollapsed && (
-                        <div className="absolute -left-[4px] bottom-3 top-3 w-1.5 bg-blue-500 rounded-r-full shadow-[0_0_15px_rgba(59,130,246,0.5)]"></div>
+                    {isActive && (
+                        <div className={`absolute -left-[4px] bottom-3 top-3 w-1.5 bg-blue-500 rounded-r-full shadow-[0_0_15px_rgba(59,130,246,0.5)] ${isCollapsed ? "md:hidden block" : "block"}`}></div>
                     )}
-                    <i className={`fa-solid ${item.icon} transition-transform group-hover:scale-110 ${isCollapsed ? 'text-lg' : 'w-5 text-center text-sm'} ${isActive ? (isCollapsed ? 'text-white' : 'text-blue-500') : 'text-gray-500 group-hover:text-blue-400'}`}></i>
-                    {!isCollapsed && (
-                        <span className="text-sm tracking-wide truncate transition-all duration-300 opacity-100 translate-x-0">
-                            {typeof item.label === 'string' || typeof item.label === 'number'
-                                ? item.label
-                                : <span className="text-red-500 font-mono text-xs">ERR: {JSON.stringify(item.label).slice(0, 10)}</span>
-                            }
-                        </span>
-                    )}
+                    <i className={`fa-solid ${item.icon} transition-transform group-hover:scale-110 ${isCollapsed ? 'md:text-lg w-5 text-center text-sm' : 'w-5 text-center text-sm'} ${isActive ? (isCollapsed ? 'md:text-white text-blue-500' : 'text-blue-500') : 'text-gray-500 group-hover:text-blue-400'}`}></i>
+
+                    <span className={`text-sm tracking-wide truncate transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "md:hidden block" : "block"}`}>
+                        {typeof item.label === 'string' || typeof item.label === 'number'
+                            ? item.label
+                            : <span className="text-red-500 font-mono text-xs">ERR: {JSON.stringify(item.label).slice(0, 10)}</span>
+                        }
+                    </span>
                 </SmartLink>
             </div>
         );
@@ -136,99 +145,96 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
             {/* Mobile Backdrop */}
             {isOpen && (
                 <div
-                    className="fixed inset-0 bg-black/50 z-30 md:hidden glass"
+                    className="fixed inset-0 bg-black/50 z-[5001] md:hidden glass"
                     onClick={onClose}
                 />
             )}
 
             <aside className={`
-                fixed inset-y-0 left-0 z-40 bg-[#0f172a] text-white h-screen flex flex-col transition-all duration-300 ease-in-out border-r border-white/5 shadow-2xl
+                fixed inset-y-0 left-0 z-[5002] bg-[#0f172a] text-white h-screen flex flex-col transition-all duration-300 ease-in-out border-r border-white/5 shadow-2xl
                 md:relative md:translate-x-0
-                ${isCollapsed ? "w-24" : "w-80"}
+                ${isCollapsed ? "md:w-24 w-80" : "md:w-80 w-80"}
                 ${isOpen ? "translate-x-0" : "-translate-x-full"}
             `}>
                 {/* Logo - Fixed */}
                 <div className={`
-                    flex justify-between items-center flex-shrink-0 transition-all duration-300
-                    ${isCollapsed ? "p-6" : "p-8 pb-10"}
+                    flex flex-shrink-0 transition-all duration-300
+                    ${isCollapsed ? "md:flex-col md:items-center md:gap-6 md:p-6 justify-between items-center p-6 pb-8" : "justify-between items-center p-8 pb-10"}
                 `}>
-                    <Link href="/admin" className="text-2xl font-black flex items-center gap-3 tracking-tight group overflow-hidden">
+                    <Link href="/admin" className="text-2xl font-black flex items-center gap-3 tracking-tight group overflow-hidden flex-1 min-w-0 mr-2">
                         {logoUrl ? (
                             <div className={`
                                 flex-shrink-0 bg-white/5 rounded-xl p-1.5 ring-4 ring-white/5 group-hover:ring-blue-500/20 transition-all
-                                ${isCollapsed ? "h-11 w-11" : "h-12 w-12"}
+                                ${isCollapsed ? "md:h-11 md:w-11 h-12 w-12" : "h-12 w-12"}
                             `}>
                                 <img src={logoUrl} alt={siteTitle} className="h-full w-full object-contain" />
                             </div>
                         ) : (
                             <div className={`
                                 bg-blue-600 rounded-xl shadow-lg shadow-blue-500/30 ring-4 ring-blue-500/10 group-hover:rotate-12 transition-transform
-                                ${isCollapsed ? "p-2.5" : "p-3"}
+                                ${isCollapsed ? "md:p-2.5 p-3" : "p-3"}
                             `}>
-                                <i className={`fa-solid fa-rocket text-white ${isCollapsed ? "text-lg" : "text-xl"}`}></i>
+                                <i className={`fa-solid fa-rocket text-white ${isCollapsed ? "md:text-lg text-xl" : "text-xl"}`}></i>
                             </div>
                         )}
-                        {!isCollapsed && (
-                            <span className="bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent truncate max-w-[180px] transition-all duration-300 opacity-100 translate-x-0">
-                                {typeof siteTitle === 'string' ? siteTitle : JSON.stringify(siteTitle)}
-                            </span>
-                        )}
+                        <span className={`bg-gradient-to-r from-white to-gray-400 bg-clip-text text-transparent truncate max-w-[180px] transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "md:hidden block" : "block"}`}>
+                            {typeof siteTitle === 'string' ? siteTitle : JSON.stringify(siteTitle)}
+                        </span>
                     </Link>
-                    <button onClick={onClose} className="md:hidden text-gray-400 hover:text-white transition-colors">
-                        <i className="fa-solid fa-xmark text-xl"></i>
-                    </button>
+                    <div className={`flex items-center ${isCollapsed ? "md:gap-0 gap-3" : "gap-3"}`}>
+                        <div className="hidden md:block">
+                            <NotificationCenter variant="inline" isCollapsed={isCollapsed} />
+                        </div>
+                        <button onClick={onClose} className="md:hidden text-gray-400 hover:text-white transition-colors">
+                            <i className="fa-solid fa-xmark text-xl"></i>
+                        </button>
+                    </div>
                 </div>
 
                 {/* Navigation - Scrollable */}
                 <nav className={`
                     flex-1 overflow-y-auto min-h-0 space-y-6 custom-scrollbar transition-all duration-300
-                    ${isCollapsed ? "px-4 py-8 scrollbar-hide" : "px-5 py-2"}
+                    ${isCollapsed ? "md:px-4 md:py-8 md:scrollbar-hide px-5 py-2" : "px-5 py-2"}
                 `}>
                     <div className="space-y-1">
-                        {!isCollapsed && (
-                            <div className="px-4 mb-2">
-                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Core</span>
-                            </div>
-                        )}
-                        {allMenuItems.slice(0, 6 + uniquePluginMenus.length).map((item) => renderMenuItem(item))}
+                        <div className={`px-4 mb-2 ${isCollapsed ? "md:hidden block" : "block"}`}>
+                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Core</span>
+                        </div>
+                        {coreSectionItems.map((item) => renderMenuItem(item))}
                     </div>
 
                     <div className="space-y-1">
-                        {!isCollapsed && (
-                            <div className="px-4 mb-2">
-                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Management</span>
-                            </div>
-                        )}
-                        {allMenuItems.slice(6 + uniquePluginMenus.length).map((item) => renderMenuItem(item))}
+                        <div className={`px-4 mb-2 ${isCollapsed ? "md:hidden block" : "block"}`}>
+                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-gray-500/50">Management</span>
+                        </div>
+                        {managementSectionItems.map((item) => renderMenuItem(item))}
                     </div>
                 </nav>
 
                 {/* User info & Logout - Fixed at bottom */}
-                <div className={`mt-auto transition-all duration-300 ${isCollapsed ? "p-4 space-y-4" : "p-6"}`}>
+                <div className={`mt-auto transition-all duration-300 ${isCollapsed ? "md:p-4 md:space-y-4 p-6" : "p-6"}`}>
                     <div className={`
                         bg-white/5 rounded-3xl border border-white/5 group hover:bg-white/10 transition-colors
-                        ${isCollapsed ? "w-14 h-14 flex items-center justify-center mx-auto rounded-2xl" : "p-4 mb-4"}
+                        ${isCollapsed ? "md:w-14 md:h-14 md:flex md:items-center md:justify-center md:mx-auto md:rounded-2xl p-4 mb-4" : "p-4 mb-4"}
                     `}>
                         <div className="flex items-center gap-3">
                             <div className={`
                                 rounded-xl bg-gradient-to-br from-blue-500 to-blue-700 flex items-center justify-center shadow-lg ring-4 ring-blue-500/10 transition-transform group-hover:rotate-6
-                                ${isCollapsed ? "w-9 h-9 rounded-xl" : "w-10 h-10 rounded-2xl"}
+                                ${isCollapsed ? "md:w-9 md:h-9 md:rounded-xl w-10 h-10 rounded-2xl" : "w-10 h-10 rounded-2xl"}
                             `}>
-                                <i className={`fa-solid fa-user text-white ${isCollapsed ? "text-sm" : "text-sm"}`}></i>
+                                <i className={`fa-solid fa-user text-white ${isCollapsed ? "md:text-sm text-sm" : "text-sm"}`}></i>
                             </div>
-                            {!isCollapsed && (
-                                <div className="flex-1 min-w-0 transition-all duration-300 opacity-100 translate-x-0">
-                                    <p className="truncate font-bold text-gray-100 text-sm">
-                                        {(() => {
-                                            const name = user?.displayName || user?.username;
-                                            return typeof name === 'string' ? name : 'User';
-                                        })()}
-                                    </p>
-                                    <p className="truncate text-[10px] text-gray-500 uppercase font-black tracking-widest leading-none mt-1">
-                                        {typeof user?.role === 'string' ? user.role : 'Member'}
-                                    </p>
-                                </div>
-                            )}
+                            <div className={`flex-1 min-w-0 transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "md:hidden block" : "block"}`}>
+                                <p className="truncate font-bold text-gray-100 text-sm">
+                                    {(() => {
+                                        const name = user?.displayName || user?.username;
+                                        return typeof name === 'string' ? name : 'User';
+                                    })()}
+                                </p>
+                                <p className="truncate text-[10px] text-gray-500 uppercase font-black tracking-widest leading-none mt-1">
+                                    {typeof user?.role === 'string' ? user.role : 'Member'}
+                                </p>
+                            </div>
                         </div>
                     </div>
 
@@ -237,11 +243,11 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                         title={isCollapsed ? "Sign Out" : undefined}
                         className={`
                             bg-red-500/5 hover:bg-red-500/10 text-red-400/80 hover:text-red-400 rounded-2xl transition-all flex items-center gap-3 font-bold text-sm border border-red-500/10 group overflow-hidden relative mx-auto
-                            ${isCollapsed ? "w-14 h-14 justify-center" : "py-3.5 px-4 justify-center w-full"}
+                            ${isCollapsed ? "md:w-14 md:h-14 md:justify-center py-3.5 px-4 justify-center w-full" : "py-3.5 px-4 justify-center w-full"}
                         `}
                     >
                         <i className="fa-solid fa-right-from-bracket transition-transform group-hover:translate-x-1"></i>
-                        {!isCollapsed && <span className="transition-all duration-300 opacity-100 translate-x-0">Sign Out</span>}
+                        <span className={`transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "md:hidden block" : "block"}`}>Sign Out</span>
                         <div className="absolute inset-0 bg-red-500/5 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
                     </button>
                 </div>
