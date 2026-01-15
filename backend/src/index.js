@@ -312,35 +312,42 @@ async function initialize() {
                 routes: ['/api', '/uploads', '/themes', '/plugins']
             });
 
-            const req = http.request({
-                hostname: 'localhost',
-                port: 3000,
-                path: '/register',
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Content-Length': data.length,
-                    'x-gateway-secret': process.env.GATEWAY_SECRET || (config.gatewaySecret) || 'secure-your-gateway-secret'
-                }
-            }, (res) => {
-                if (res.statusCode === 200) {
-                    console.log('✅ Registered with Gateway');
-                } else {
-                    console.error('❌ Gateway registration failed:', res.statusCode);
-                }
-            });
+            const attempt = () => {
+                const req = http.request({
+                    hostname: 'localhost',
+                    port: 3000,
+                    path: '/register',
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': data.length,
+                        'x-gateway-secret': process.env.GATEWAY_SECRET || (config.gatewaySecret) || 'secure-your-gateway-secret'
+                    }
+                }, (res) => {
+                    if (res.statusCode === 200) {
+                        console.log('✅ Registered with Gateway');
+                    } else if (res.statusCode === 429) {
+                        console.warn('⚠️ Gateway rate limited registration. Retrying in 10s...');
+                        setTimeout(attempt, 10000);
+                    } else {
+                        console.error('❌ Gateway registration failed:', res.statusCode, '- Retrying in 5s...');
+                        setTimeout(attempt, 5000);
+                    }
+                });
 
-            req.on('error', (e) => {
-                console.error('❌ Could not connect to Gateway (is it running?):', e.message);
-                // Retry logic could go here
-            });
+                req.on('error', (e) => {
+                    console.error('❌ Could not connect to Gateway (is it running?):', e.message, '- Retrying in 5s...');
+                    setTimeout(attempt, 5000);
+                });
 
-            req.write(data);
-            req.end();
+                req.write(data);
+                req.end();
+            };
+
+            attempt();
         };
 
-        // Try registering immediately and maybe retry?
-        // For now, fire once.
+        // Start registration loop
         registerWithGateway();
 
         console.log('');

@@ -1,178 +1,48 @@
 /**
- * WordJS - Database Configuration
- * SQLite database setup using sql.js (pure JavaScript SQLite)
+ * WordJS - Database Manager (ABSTRACTION LAYER)
+ * Dynamically loads the configured driver (Legacy vs Native vs Postgres)
  */
 
-const initSqlJs = require('sql.js');
-const path = require('path');
-const fs = require('fs');
 const config = require('./app');
+const path = require('path');
 
-let dbInstance = null;
-let SQL = null;
+// 1. Load the Configured Driver
+const driverName = config.dbDriver || 'sqlite-legacy';
+let driver = null;
 
-// Ensure data directory exists
-const dbDir = path.dirname(path.resolve(config.dbPath));
-if (!fs.existsSync(dbDir)) {
-  fs.mkdirSync(dbDir, { recursive: true });
+try {
+  console.log(`🔌 DB Manager: Loading driver '${driverName}'...`);
+  driver = require(`../drivers/${driverName}`);
+} catch (e) {
+  console.error(`❌ Failed to load driver '${driverName}':`, e.message);
+  console.warn(`⚠️  Falling back to 'sqlite-legacy'`);
+  driver = require('../drivers/sqlite-legacy');
 }
 
-/**
- * Initialize SQL.js and load/create database
- */
-async function initSqlJsDb() {
-  SQL = await initSqlJs();
+// 2. Abstraction Proxies
+const initSqlJsDb = async () => {
+  return await driver.init();
+};
 
-  const dbPath = path.resolve(config.dbPath);
+const getDb = () => {
+  return driver.get();
+};
 
-  // Load existing database or create new one
-  if (fs.existsSync(dbPath)) {
-    const buffer = fs.readFileSync(dbPath);
-    dbInstance = new SQL.Database(buffer);
-  } else {
-    dbInstance = new SQL.Database();
+const saveDatabase = () => {
+  if (driver.save && typeof driver.save === 'function') {
+    driver.save();
   }
+};
 
-  // Enable foreign keys
-  dbInstance.run('PRAGMA foreign_keys = ON;');
-
-  return dbInstance;
-}
-
-/**
- * Save database to file
- */
-function saveDatabase() {
-  if (!dbInstance) return;
-  const data = dbInstance.export();
-  const buffer = Buffer.from(data);
-  fs.writeFileSync(path.resolve(config.dbPath), buffer);
-}
-
-/**
- * Get database instance
- */
-function getDb() {
-  if (!dbInstance) {
-    throw new Error('Database not initialized. Call initSqlJsDb() first.');
-  }
-  return new DatabaseWrapper(dbInstance);
-}
-
-/**
- * Wrapper class to provide better-sqlite3 compatible interface
- */
-class DatabaseWrapper {
-  constructor(sqlDb) {
-    this.sqlDb = sqlDb;
-  }
-
-  prepare(sql) {
-    return new StatementWrapper(this.sqlDb, sql);
-  }
-
-  exec(sql) {
-    this.sqlDb.run(sql);
-    saveDatabase();
-  }
-
-  run(sql, params = []) {
-    this.sqlDb.run(sql, params);
-    saveDatabase();
-  }
-
-  pragma(pragma) {
-    this.sqlDb.run(`PRAGMA ${pragma};`);
-  }
-
-  close() {
-    if (this.sqlDb) {
-      saveDatabase();
-      this.sqlDb.close();
-    }
+const closeDatabase = () => {
+  if (driver.close && typeof driver.close === 'function') {
+    driver.close();
   }
 }
 
-/**
- * Statement wrapper to mimic better-sqlite3 prepared statements
- */
-class StatementWrapper {
-  constructor(sqlDb, sql) {
-    this.sqlDb = sqlDb;
-    this.sql = sql;
-  }
-
-  run(...params) {
-    this.sqlDb.run(this.sql, params);
-
-    // Return object with lastInsertRowid and changes
-    const lastId = this.sqlDb.exec('SELECT last_insert_rowid() as id')[0];
-    const changes = this.sqlDb.exec('SELECT changes() as changes')[0];
-
-    saveDatabase();
-
-    return {
-      lastInsertRowid: lastId?.values?.[0]?.[0] || 0,
-      changes: changes?.values?.[0]?.[0] || 0
-    };
-  }
-
-  get(...params) {
-    try {
-      const stmt = this.sqlDb.prepare(this.sql);
-      stmt.bind(params);
-
-      if (stmt.step()) {
-        const columns = stmt.getColumnNames();
-        const values = stmt.get();
-        stmt.free();
-
-        const row = {};
-        columns.forEach((col, i) => {
-          row[col] = values[i];
-        });
-        return row;
-      }
-
-      stmt.free();
-      return undefined;
-    } catch (e) {
-      console.error('SQL error:', e.message, 'SQL:', this.sql);
-      return undefined;
-    }
-  }
-
-  all(...params) {
-    try {
-      const results = [];
-      const stmt = this.sqlDb.prepare(this.sql);
-      stmt.bind(params);
-
-      const columns = stmt.getColumnNames();
-
-      while (stmt.step()) {
-        const values = stmt.get();
-        const row = {};
-        columns.forEach((col, i) => {
-          row[col] = values[i];
-        });
-        results.push(row);
-      }
-
-      stmt.free();
-      return results;
-    } catch (e) {
-      console.error('SQL error:', e.message, 'SQL:', this.sql);
-      return [];
-    }
-  }
-}
-
-/**
- * Initialize database with schema
- */
-function initializeDatabase() {
-  const db = getDb();
+// 3. Schema Management (Core Tables)
+function initializeSchema(db) {
+  console.log('🏗️  Verifying Database Schema...');
 
   // Posts table (equivalent to wp_posts)
   db.exec(`
@@ -331,7 +201,11 @@ function initializeDatabase() {
     )
   `);
 
-  console.log('Database initialized successfully');
+  console.log('✅ Database Schema verified.');
+}
+
+function initializeDatabase() {
+  initializeSchema(getDb());
 }
 
 // Create a proxy that returns getDb() when accessed
@@ -346,6 +220,8 @@ module.exports = {
   initSqlJsDb,
   getDb,
   initializeDatabase,
+  initializeSchema,
   saveDatabase,
+  closeDatabase,
   db: dbProxy
 };
