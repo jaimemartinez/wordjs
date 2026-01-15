@@ -69,7 +69,20 @@ class NativeWrapper {
     }
 
     run(sql, params = []) {
-        return this.db.prepare(sql).run(params);
+        const info = this.db.prepare(sql).run(params);
+        return {
+            changes: info.changes,
+            lastInsertRowid: info.lastInsertRowid,
+            lastID: info.lastInsertRowid // Alias for compatibility
+        };
+    }
+
+    get(sql, params = []) {
+        return this.db.prepare(sql).get(params);
+    }
+
+    all(sql, params = []) {
+        return this.db.prepare(sql).all(params);
     }
 
     pragma(str) {

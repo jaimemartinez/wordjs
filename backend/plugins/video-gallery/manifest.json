@@ -46,6 +46,13 @@
         "href": "/admin/plugin/videos",
         "order": 60
     },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Required to manage video gallery content and settings."
+        }
+    ],
     "dependencies": {
         "uuid": "^10.0.0"
     }

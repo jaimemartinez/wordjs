@@ -30,6 +30,9 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
   "dependencies": {
       "uuid": "^10.0.0" 
   },
+  "permissions": [
+      { "scope": "settings", "access": "read", "reason": "To display the site title" }
+  ],
   "frontend": {
       "adminPage": {
           "entry": "client/admin/page.tsx",
@@ -143,7 +146,40 @@ export const registerMyHooks = () => {
 
 ---
 
-## 4. Folder Structure Reference
+## 6. Security & Permissions 🛡️
+
+WordJS is "Secure by Default". This means your plugin cannot perform any "dangerous" actions (like editing settings or writing files) unless it explicitly asks for permission.
+
+### 6.1 The Permissions Manifest
+In `manifest.json`, you must declare every capability your plugin needs:
+
+```json
+"permissions": [
+    { 
+        "scope": "database", 
+        "access": "write", 
+        "reason": "Required to save custom plugin data" 
+    },
+    { 
+        "scope": "settings", 
+        "access": "read", 
+        "reason": "To verify site configuration" 
+    }
+]
+```
+
+### 6.2 The AST Scanner
+When you activate a plugin, WordJS runs a **Static Analysis Scan**. It parses your code and blocks it if it finds:
+*   `eval()` or shell commands (`exec`).
+*   Direct access to `global` or `module`.
+*   Obfuscated property access (e.g., `global["ev"+"al"]`).
+*   Unauthorized `require()` of sensitive Node modules.
+
+For a full list of security rules, see the **[Security Guide](security.md)**.
+
+---
+
+## 7. Folder Structure Reference
 
 | File/Folder             | Purpose                                         |
 | :---------------------- | :---------------------------------------------- |
@@ -161,3 +197,31 @@ export const registerMyHooks = () => {
 2.  **Declare Dependencies:** Don't assume `nodemailer` or `uuid` exists in standard WordJS. **Declare it in manifest.json**.
 3.  **Relative Imports:** In `index.js`, use `../../src/...` to access Core.
 4.  **Unique Slugs:** Ensure your plugin folder name and slug are unique.
+
+---
+
+## 6. Advanced Features
+
+### 6.1 Admin Menus & Deduplication ⚠️
+WordJS's frontend (`Sidebar.tsx`) automatically **deduplicates** menu items.
+*   **Core Items:** Dashboard, Media, Posts, Settings, etc., are hardcoded in the frontend.
+*   **Plugin Items:** Fetched from the backend.
+
+If your plugin registers a menu item with the same path as a core item (e.g., `/admin/media`), the frontend will **hide** your plugin's item to prevent React duplicate key errors.
+Always use unique paths (e.g., `/admin/plugin/my-plugin-media`) unless you intentionally want to rely on the core item.
+
+**Use `plugin: 'core'` filtering:**
+The backend marks standard menus with `plugin: 'core'`. The frontend filters these out from the dynamic list.
+
+### 6.2 Widgets API
+Plugins can register "Widgets" using the backend API. These widgets appear in the `Widgets` admin panel and can be assigned to sidebars.
+
+```javascript
+const { registerWidget } = require('../../src/core/widgets');
+
+registerWidget('my_weather_widget', {
+    name: 'Weather Widget',
+    description: 'Shows local weather',
+    render: (options) => `<div>It is sunny!</div>`
+});
+```

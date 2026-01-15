@@ -69,7 +69,7 @@ router.get('/', asyncHandler(async (req, res) => {
     const settings = {};
 
     for (const key of PUBLIC_SETTINGS) {
-        settings[key] = getOption(key);
+        settings[key] = await getOption(key);
     }
 
     res.json(settings);
@@ -83,7 +83,7 @@ router.get('/all', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const settings = {};
 
     for (const key of ALL_SETTINGS) {
-        settings[key] = getOption(key);
+        settings[key] = await getOption(key);
     }
 
     res.json(settings);
@@ -105,7 +105,7 @@ router.get('/:key', asyncHandler(async (req, res) => {
         });
     }
 
-    const value = getOption(key);
+    const value = await getOption(key);
 
     res.json({
         key,
@@ -123,7 +123,7 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
 
     for (const [key, value] of Object.entries(updates)) {
         if (ALL_SETTINGS.includes(key)) {
-            updateOption(key, value);
+            await updateOption(key, value);
             updated[key] = value;
         }
     }
@@ -147,11 +147,11 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req, res) => {
         });
     }
 
-    updateOption(key, value);
+    await updateOption(key, value);
 
     res.json({
         key,
-        value: getOption(key)
+        value: await getOption(key)
     });
 }));
 

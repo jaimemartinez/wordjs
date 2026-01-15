@@ -17,8 +17,18 @@ const config = {
   gatewaySecret: process.env.GATEWAY_SECRET || fileConfig.gatewaySecret,
 
   // Database
-  dbPath: process.env.DB_PATH || './data/wordjs.db',
-  dbDriver: process.env.DB_DRIVER || fileConfig.dbDriver || 'sqlite-legacy',
+  dbDriver: process.env.DB_DRIVER || fileConfig.dbDriver || 'sqlite-legacy', // sqlite-legacy, sqlite-native, postgres
+  dbPath: process.env.DB_PATH || './data/wordjs.db', // for sqlite
+
+  // Postgres Configuration
+  db: {
+    host: process.env.DB_HOST || (fileConfig.db && fileConfig.db.host) || 'localhost',
+    port: parseInt(process.env.DB_PORT, 10) || (fileConfig.db && fileConfig.db.port) || 5432,
+    user: process.env.DB_USER || (fileConfig.db && fileConfig.db.user) || 'postgres',
+    password: process.env.DB_PASSWORD || (fileConfig.db && fileConfig.db.password) || 'password',
+    name: process.env.DB_NAME || (fileConfig.db && fileConfig.db.name) || 'wordjs',
+    ssl: process.env.DB_SSL === 'true'
+  },
 
   // JWT Authentication
   jwt: {

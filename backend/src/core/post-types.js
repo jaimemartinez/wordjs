@@ -200,9 +200,10 @@ function getPostTypesBy(feature) {
 }
 
 /**
- * Initialize default post types
+ * Initialize default and custom post types
  */
-function initPostTypes() {
+async function initPostTypes() {
+    // Register defaults (sync)
     Object.values(defaultPostTypes).forEach(type => {
         registerPostType(type.name, type);
     });
@@ -223,40 +224,43 @@ function initPostTypes() {
         showInRest: false
     });
 
-    // Load custom post types from options
-    const customTypes = getOption('custom_post_types', {});
-    Object.values(customTypes).forEach(type => {
-        registerPostType(type.name, type);
-    });
+    // Load custom post types from options (Async)
+    const customTypes = await getOption('custom_post_types', {});
+    if (customTypes && typeof customTypes === 'object') {
+        Object.values(customTypes).forEach(type => {
+            registerPostType(type.name, type);
+        });
+    }
 }
 
 /**
  * Save custom post type to persist across restarts
  */
-function saveCustomPostType(name, args) {
-    const customTypes = getOption('custom_post_types', {});
+async function saveCustomPostType(name, args) {
+    const customTypes = await getOption('custom_post_types', {});
     customTypes[name] = { name, ...args };
-    updateOption('custom_post_types', customTypes);
+    await updateOption('custom_post_types', customTypes);
     return registerPostType(name, args);
 }
 
 /**
  * Delete a custom post type
  */
-function deleteCustomPostType(name) {
-    const customTypes = getOption('custom_post_types', {});
+async function deleteCustomPostType(name) {
+    const customTypes = await getOption('custom_post_types', {});
     if (customTypes[name]) {
         delete customTypes[name];
-        updateOption('custom_post_types', customTypes);
+        await updateOption('custom_post_types', customTypes);
         return unregisterPostType(name);
     }
     return false;
 }
 
-// Initialize on load
-initPostTypes();
+// NOTE: We do NOT call initPostTypes() here anymore.
+// It must be called explicitly by the app initializer after DB connection.
 
 module.exports = {
+    initPostTypes,
     registerPostType,
     unregisterPostType,
     getPostType,

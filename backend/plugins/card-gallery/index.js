@@ -22,44 +22,47 @@ exports.init = function () {
     const express = require('express');
 
     // === MIGRATION: Convert old cards to default gallery ===
-    const oldCardsList = getOption('cards_list', null);
-    if (oldCardsList && Array.isArray(oldCardsList) && oldCardsList.length > 0) {
-        console.log('   Migrating old cards to default gallery...');
+    (async () => {
+        const oldCardsList = await getOption('cards_list', null);
+        if (oldCardsList && Array.isArray(oldCardsList) && oldCardsList.length > 0) {
+            console.log('   Migrating old cards to default gallery...');
 
-        // Collect old cards
-        const oldCards = oldCardsList.map(id => {
-            const data = getOption(`card_${id}`, null);
-            return data ? { ...data } : null;
-        }).filter(Boolean);
+            // Collect old cards
+            const oldCards = await Promise.all(oldCardsList.map(async id => {
+                const data = await getOption(`card_${id}`, null);
+                return data ? { ...data } : null;
+            }));
+            const validCards = oldCards.filter(Boolean);
 
-        if (oldCards.length > 0) {
-            // Create default gallery with migrated cards
-            const defaultGalleryId = 'default';
-            const defaultGallery = {
-                name: 'Default Gallery',
-                cards: oldCards,
-                location: '',
-                createdAt: new Date().toISOString()
-            };
+            if (validCards.length > 0) {
+                // Create default gallery with migrated cards
+                const defaultGalleryId = 'default';
+                const defaultGallery = {
+                    name: 'Default Gallery',
+                    cards: validCards,
+                    location: '',
+                    createdAt: new Date().toISOString()
+                };
 
-            updateOption(`card_gallery_${defaultGalleryId}`, defaultGallery);
+                await updateOption(`card_gallery_${defaultGalleryId}`, defaultGallery);
 
-            // Initialize galleries list
-            const galleriesList = getOption('card_galleries_list', []);
-            if (!galleriesList.includes(defaultGalleryId)) {
-                galleriesList.push(defaultGalleryId);
-                updateOption('card_galleries_list', galleriesList);
+                // Initialize galleries list
+                const galleriesList = await getOption('card_galleries_list', []);
+                if (!galleriesList.includes(defaultGalleryId)) {
+                    galleriesList.push(defaultGalleryId);
+                    await updateOption('card_galleries_list', galleriesList);
+                }
+
+                // Clean up old data
+                for (const id of oldCardsList) {
+                    await updateOption(`card_${id}`, null);
+                }
+                await updateOption('cards_list', null);
+
+                console.log(`   ✓ Migrated ${validCards.length} cards to Default Gallery`);
             }
-
-            // Clean up old data
-            oldCardsList.forEach(id => {
-                updateOption(`card_${id}`, null);
-            });
-            updateOption('cards_list', null);
-
-            console.log(`   ✓ Migrated ${oldCards.length} cards to Default Gallery`);
         }
-    }
+    })().catch(err => console.error('Card Gallery migration failed:', err));
 
     // === API ROUTES ===
     const router = express.Router();
@@ -67,24 +70,30 @@ exports.init = function () {
     const { isAdmin } = require('../../src/middleware/permissions');
 
     // GET /api/v1/card-galleries - List all galleries (Public)
-    router.get('/', (req, res) => {
-        const list = getOption('card_galleries_list', []);
-        const galleries = list.map(id => {
-            const data = getOption(`card_gallery_${id}`, null);
+    // GET /api/v1/card-galleries - List all galleries (Public)
+    router.get('/', async (req, res) => {
+        const list = await getOption('card_galleries_list', []);
+
+        // Parallel fetch
+        const galleries = await Promise.all(list.map(async id => {
+            const data = await getOption(`card_gallery_${id}`, null);
             return data ? { id, ...data, cardCount: (data.cards || []).length } : null;
-        }).filter(Boolean);
-        res.json(galleries);
+        }));
+
+        res.json(galleries.filter(Boolean));
     });
 
     // GET /api/v1/card-galleries/:id - Get single gallery with cards
-    router.get('/:id', (req, res) => {
-        const data = getOption(`card_gallery_${req.params.id}`, null);
+    // GET /api/v1/card-galleries/:id - Get single gallery with cards
+    router.get('/:id', async (req, res) => {
+        const data = await getOption(`card_gallery_${req.params.id}`, null);
         if (!data) return res.status(404).json({ error: 'Gallery not found' });
         res.json({ id: req.params.id, ...data });
     });
 
     // POST /api/v1/card-galleries - Create gallery (Admin only)
-    router.post('/', authenticate, isAdmin, (req, res) => {
+    // POST /api/v1/card-galleries - Create gallery (Admin only)
+    router.post('/', authenticate, isAdmin, async (req, res) => {
         const { name, cards = [], location = '' } = req.body;
 
         if (!name) return res.status(400).json({ error: 'Name is required' });
@@ -97,36 +106,38 @@ exports.init = function () {
             createdAt: new Date().toISOString()
         };
 
-        updateOption(`card_gallery_${id}`, gallery);
+        await updateOption(`card_gallery_${id}`, gallery);
 
-        const list = getOption('card_galleries_list', []);
+        const list = await getOption('card_galleries_list', []);
         list.push(id);
-        updateOption('card_galleries_list', list);
+        await updateOption('card_galleries_list', list);
 
         res.json({ success: true, id, ...gallery });
     });
 
     // PUT /api/v1/card-galleries/:id - Update gallery (Admin only)
-    router.put('/:id', authenticate, isAdmin, (req, res) => {
-        const existing = getOption(`card_gallery_${req.params.id}`, null);
+    // PUT /api/v1/card-galleries/:id - Update gallery (Admin only)
+    router.put('/:id', authenticate, isAdmin, async (req, res) => {
+        const existing = await getOption(`card_gallery_${req.params.id}`, null);
         if (!existing) return res.status(404).json({ error: 'Gallery not found' });
 
         const updated = { ...existing, ...req.body, updatedAt: new Date().toISOString() };
         delete updated.id; // Don't store id inside the data
 
-        updateOption(`card_gallery_${req.params.id}`, updated);
+        await updateOption(`card_gallery_${req.params.id}`, updated);
         res.json({ success: true, id: req.params.id, ...updated });
     });
 
     // DELETE /api/v1/card-galleries/:id - Delete gallery (Admin only)
-    router.delete('/:id', authenticate, isAdmin, (req, res) => {
-        updateOption(`card_gallery_${req.params.id}`, null);
+    // DELETE /api/v1/card-galleries/:id - Delete gallery (Admin only)
+    router.delete('/:id', authenticate, isAdmin, async (req, res) => {
+        await updateOption(`card_gallery_${req.params.id}`, null);
 
-        const list = getOption('card_galleries_list', []);
+        const list = await getOption('card_galleries_list', []);
         const index = list.indexOf(req.params.id);
         if (index > -1) {
             list.splice(index, 1);
-            updateOption('card_galleries_list', list);
+            await updateOption('card_galleries_list', list);
         }
         res.json({ success: true });
     });

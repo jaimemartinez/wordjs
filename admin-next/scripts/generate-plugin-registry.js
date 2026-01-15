@@ -93,7 +93,8 @@ function discoverPlugins() {
                     id: manifest.id || folder,
                     folder: folder,
                     componentPath: componentPath,
-                    hooksPath: hooksPath
+                    hooksPath: hooksPath,
+                    permissions: manifest.permissions || []
                 });
             }
 

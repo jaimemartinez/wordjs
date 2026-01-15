@@ -1,11 +1,12 @@
 "use client";
 
-import { Puck, Config, Data, migrate } from "@measured/puck";
+import { Puck, Config, Data, migrate, usePuck } from "@measured/puck";
 import "@measured/puck/puck.css";
 import React, { useState, useEffect, useRef } from "react";
 import ModernSelect from "./ModernSelect";
 import PublicLayout from "@/app/(public)/layout";
 import { puckConfig } from "./puckConfig";
+import { RichTextEditor } from "./puckConfig";
 
 interface PuckEditorProps {
     initialData?: Data;
@@ -20,14 +21,6 @@ interface PuckEditorProps {
     pageId?: number;
 }
 
-/**
- * SSR Preview Component - Renders an iframe with the actual public page
- * This guarantees 100% visual fidelity with the live site
- */
-
-
-import { RichTextEditor } from "./puckConfig";
-
 // Context for Inline Editing
 export const EditorContext = React.createContext<{
     updateComponent: (id: string, newProps: any) => void;
@@ -38,6 +31,9 @@ export const EditorContext = React.createContext<{
 // Inline Text Component - Simple Textarea Swap
 const InlineText = ({ id, content, title, elementId, ...props }: any) => {
     const ctx = React.useContext(EditorContext);
+    // Use Puck's hook to get dispatch function
+    const { dispatch } = usePuck();
+
     const isEditing = ctx?.activeEditorId === id;
 
     // Some components use 'title', some use 'content'. We handle both.
@@ -62,7 +58,33 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
     }
 
     const handleSave = () => {
-        // Update either 'content' or 'title' based on what was provided
+        console.log('[InlineText] Saving via Puck Dispatch:', id);
+
+        // Use Puck's internal dispatch to update data reliably
+        // This ensures history, state, and UI are all synced
+        dispatch({
+            type: "setData",
+            data: (prev: Data) => {
+                const updateList = (list: any[]) => list.map(item => {
+                    if (item.props?.id === id || item._id === id || item.id === id) {
+                        const newProps = content !== undefined ? { content: localContent } : { title: localContent };
+                        return { ...item, props: { ...item.props, ...newProps } };
+                    }
+                    return item;
+                });
+
+                return {
+                    ...prev,
+                    content: updateList(prev.content || []),
+                    zones: Object.keys(prev.zones || {}).reduce((acc: any, key) => ({
+                        ...acc,
+                        [key]: updateList(prev.zones![key])
+                    }), {})
+                };
+            }
+        });
+
+        // Also call legacy updateComponent for good measure (if parent listens to onChange)
         ctx.updateComponent(id, content !== undefined ? { content: localContent } : { title: localContent });
         ctx.setActiveEditorId(null);
     };
@@ -75,14 +97,7 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
                 data-item-id={id}
                 onMouseDownCapture={(e) => {
                     const target = e.target as HTMLElement;
-                    // If clicking the editor area, toolbar or save buttons, let THEM handle it
-                    // but we still want to block Puck from dragging the whole component.
-                    // So we only let it pass if it's one of our interactive elements.
-                    if (target.closest('.rich-text-editor-wrapper, .editor-action-buttons')) {
-                        // Let internal handlers take care of it
-                        return;
-                    }
-                    // Stop EVERYTHING else to prevent Puck from catching events on the component
+                    if (target.closest('.rich-text-editor-wrapper, .editor-action-buttons')) return;
                     e.stopPropagation();
                 }}
                 onPointerDownCapture={(e) => {
@@ -96,13 +111,12 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
                     e.stopPropagation();
                 }}
                 onKeyDown={(e) => {
-                    // Bubble phase is fine for keyboard
                     e.stopPropagation();
                 }}
             >
                 <RichTextEditor
                     value={localContent}
-                    onChange={(val) => setLocalContent(val)}
+                    onChange={(val: string) => setLocalContent(val)}
                     onSave={handleSave}
                     onCancel={() => {
                         setLocalContent(actualContent);
@@ -438,11 +452,15 @@ export default function PuckEditor({
         const editorOverrides = {
             Text: {
                 ...baseConfig.components.Text,
-                render: (props: any) => <InlineText {...props} />
+                render: (props: any) => {
+                    return <InlineText {...props} id={props.id || props.puck?.id} />;
+                }
             },
             Heading: {
                 ...baseConfig.components.Heading,
-                render: (props: any) => <InlineText {...props} />
+                render: (props: any) => {
+                    return <InlineText {...props} id={props.id || props.puck?.id} />;
+                }
             }
         };
 

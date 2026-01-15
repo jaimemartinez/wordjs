@@ -22,8 +22,8 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req, res) => {
     const limit = parseInt(req.query.limit) || 10;
     const offset = parseInt(req.query.offset) || 0;
 
-    const revisions = getRevisions(postId, { limit, offset });
-    const total = countRevisions(postId);
+    const revisions = await getRevisions(postId, { limit, offset });
+    const total = await countRevisions(postId);
 
     res.json({
         revisions,
@@ -37,7 +37,7 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req, res) => {
  * Get a specific revision
  */
 router.get('/:id', authenticate, asyncHandler(async (req, res) => {
-    const revision = getRevision(parseInt(req.params.id, 10));
+    const revision = await getRevision(parseInt(req.params.id, 10));
 
     if (!revision) {
         return res.status(404).json({ error: 'Revision not found' });
@@ -52,7 +52,7 @@ router.get('/:id', authenticate, asyncHandler(async (req, res) => {
  */
 router.post('/:id/restore', authenticate, asyncHandler(async (req, res) => {
     const revisionId = parseInt(req.params.id, 10);
-    const result = restoreRevision(revisionId);
+    const result = await restoreRevision(revisionId);
 
     if (!result) {
         return res.status(404).json({ error: 'Revision not found' });
@@ -67,7 +67,7 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req, res) => {
  */
 router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
     const revisionId = parseInt(req.params.id, 10);
-    const result = deleteRevision(revisionId);
+    const result = await deleteRevision(revisionId);
 
     res.json({ success: result });
 }));
@@ -77,7 +77,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
  * Compare two revisions
  */
 router.get('/compare/:id1/:id2', authenticate, asyncHandler(async (req, res) => {
-    const comparison = compareRevisions(
+    const comparison = await compareRevisions(
         parseInt(req.params.id1, 10),
         parseInt(req.params.id2, 10)
     );

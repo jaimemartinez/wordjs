@@ -3,7 +3,7 @@
  * Equivalent to wp-includes/class-wp-comment.php and wp-includes/comment.php
  */
 
-const { db } = require('../config/database');
+const { db, dbAsync } = require('../config/database');
 const { sanitizeContent, currentTimeGMT, currentTime } = require('../core/formatting');
 const { doAction } = require('../core/hooks');
 
@@ -42,25 +42,25 @@ class Comment {
     /**
      * Get comment author user (if logged in)
      */
-    getAuthorUser() {
+    async getAuthorUser() {
         if (!this.userId) return null;
         const User = require('./User');
-        return User.findById(this.userId);
+        return await User.findById(this.userId);
     }
 
     /**
      * Get parent comment
      */
-    getParent() {
+    async getParent() {
         if (!this.commentParent) return null;
-        return Comment.findById(this.commentParent);
+        return await Comment.findById(this.commentParent);
     }
 
     /**
      * Get replies
      */
-    getReplies() {
-        return Comment.findAll({ parent: this.commentId });
+    async getReplies() {
+        return await Comment.findAll({ parent: this.commentId });
     }
 
     /**
@@ -125,15 +125,13 @@ class Comment {
         const now = currentTime();
         const nowGmt = currentTimeGMT();
 
-        const stmt = db.prepare(`
+        const result = await dbAsync.run(`
       INSERT INTO comments (
         comment_post_id, comment_author, comment_author_email, comment_author_url,
         comment_author_ip, comment_date, comment_date_gmt, comment_content,
         comment_karma, comment_approved, comment_agent, comment_type, comment_parent, user_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
-    `);
-
-        const result = stmt.run(
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?) RETURNING comment_id
+    `, [
             postId,
             author,
             authorEmail,
@@ -147,26 +145,25 @@ class Comment {
             type,
             parent,
             userId
-        );
+        ]);
 
-        const commentId = result.lastInsertRowid;
+        const commentId = result.lastID;
 
         // Update post comment count
-        Comment.updatePostCommentCount(postId);
+        await Comment.updatePostCommentCount(postId);
 
         // Fire action hook
         await doAction('wp_insert_comment', commentId, data);
 
-        return Comment.findById(commentId);
+        return await Comment.findById(commentId);
     }
 
     /**
      * Find comment by ID
      * Equivalent to get_comment()
      */
-    static findById(id) {
-        const stmt = db.prepare('SELECT * FROM comments WHERE comment_id = ?');
-        const row = stmt.get(id);
+    static async findById(id) {
+        const row = await dbAsync.get('SELECT * FROM comments WHERE comment_id = ?', [id]);
         return row ? new Comment(row) : null;
     }
 
@@ -174,7 +171,7 @@ class Comment {
      * Get all comments
      * Equivalent to get_comments()
      */
-    static findAll(options = {}) {
+    static async findAll(options = {}) {
         const {
             postId,
             status,
@@ -235,14 +232,14 @@ class Comment {
         sql += ' LIMIT ? OFFSET ?';
         params.push(limit, offset);
 
-        const rows = db.prepare(sql).all(...params);
+        const rows = await dbAsync.all(sql, params);
         return rows.map(row => new Comment(row));
     }
 
     /**
      * Count comments
      */
-    static count(options = {}) {
+    static async count(options = {}) {
         const { postId, status, type = 'comment' } = options;
 
         let sql = 'SELECT COUNT(*) as count FROM comments';
@@ -268,7 +265,7 @@ class Comment {
             sql += ' WHERE ' + conditions.join(' AND ');
         }
 
-        const row = db.prepare(sql).get(...params);
+        const row = await dbAsync.get(sql, params);
         return row.count;
     }
 
@@ -276,7 +273,7 @@ class Comment {
      * Get comment counts by status
      * Equivalent to wp_count_comments()
      */
-    static getCounts(postId = null) {
+    static async getCounts(postId = null) {
         let baseWhere = postId ? 'WHERE comment_post_id = ?' : '';
         const params = postId ? [postId] : [];
 
@@ -288,12 +285,12 @@ class Comment {
             trash: 0
         };
 
-        const rows = db.prepare(`
+        const rows = await dbAsync.all(`
       SELECT comment_approved, COUNT(*) as count 
       FROM comments 
       ${baseWhere}
       GROUP BY comment_approved
-    `).all(...params);
+    `, params);
 
         for (const row of rows) {
             switch (row.comment_approved) {
@@ -323,7 +320,7 @@ class Comment {
      * Equivalent to wp_update_comment()
      */
     static async update(id, data) {
-        const comment = Comment.findById(id);
+        const comment = await Comment.findById(id);
         if (!comment) throw new Error('Comment not found');
 
         const updates = [];
@@ -356,15 +353,15 @@ class Comment {
 
         if (updates.length > 0) {
             values.push(id);
-            db.prepare(`UPDATE comments SET ${updates.join(', ')} WHERE comment_id = ?`).run(...values);
+            await dbAsync.run(`UPDATE comments SET ${updates.join(', ')} WHERE comment_id = ?`, values);
         }
 
         // Update post comment count if status changed
         if (data.status !== undefined) {
-            Comment.updatePostCommentCount(comment.commentPostId);
+            await Comment.updatePostCommentCount(comment.commentPostId);
         }
 
-        return Comment.findById(id);
+        return await Comment.findById(id);
     }
 
     /**
@@ -372,74 +369,90 @@ class Comment {
      * Equivalent to wp_delete_comment()
      */
     static async delete(id, forceDelete = false) {
-        const comment = Comment.findById(id);
+        const comment = await Comment.findById(id);
         if (!comment) return false;
 
         if (forceDelete) {
             // Delete comment meta
-            db.prepare('DELETE FROM comment_meta WHERE comment_id = ?').run(id);
+            await dbAsync.run('DELETE FROM comment_meta WHERE comment_id = ?', [id]);
 
             // Delete comment
-            db.prepare('DELETE FROM comments WHERE comment_id = ?').run(id);
+            await dbAsync.run('DELETE FROM comments WHERE comment_id = ?', [id]);
 
             // Update post comment count
-            Comment.updatePostCommentCount(comment.commentPostId);
+            await Comment.updatePostCommentCount(comment.commentPostId);
 
             await doAction('deleted_comment', id);
 
             return true;
         } else {
             // Move to trash
-            return Comment.update(id, { status: 'trash' });
+            return await Comment.update(id, { status: 'trash' });
         }
     }
 
     /**
      * Approve a comment
      */
-    static approve(id) {
-        return Comment.update(id, { status: '1' });
+    static async approve(id) {
+        return await Comment.update(id, { status: '1' });
     }
 
     /**
      * Unapprove a comment (set to pending)
      */
-    static unapprove(id) {
-        return Comment.update(id, { status: '0' });
+    static async unapprove(id) {
+        return await Comment.update(id, { status: '0' });
     }
 
     /**
      * Mark as spam
      */
-    static spam(id) {
-        return Comment.update(id, { status: 'spam' });
+    static async spam(id) {
+        return await Comment.update(id, { status: 'spam' });
     }
 
     /**
      * Update post comment count
      */
-    static updatePostCommentCount(postId) {
-        const count = db.prepare(`
+    static async updatePostCommentCount(postId) {
+        const row = await dbAsync.get(`
       SELECT COUNT(*) as count FROM comments 
       WHERE comment_post_id = ? AND comment_approved = '1'
-    `).get(postId);
+    `, [postId]);
 
-        db.prepare('UPDATE posts SET comment_count = ? WHERE id = ?').run(count.count, postId);
+        await dbAsync.run('UPDATE posts SET comment_count = ? WHERE id = ?', [row.count, postId]);
     }
 
     /**
      * Get comment thread (comment with all replies)
      */
-    static getThread(commentId) {
-        const comment = Comment.findById(commentId);
+    static async getThread(commentId) {
+        const comment = await Comment.findById(commentId);
         if (!comment) return null;
+
+        const replies = await Comment.findAll({ parent: commentId });
+
+        // Recursive fetch
+        const repliesWithChildren = await Promise.all(replies.map(async reply => {
+            // Note: inefficient recursion for deep threads, but simple for now
+            // To do: simpler recursion logic or just level 2?
+            // This replicates original logic but async
+            const children = await Comment.findAll({ parent: reply.commentId });
+            return {
+                ...reply.toJSON(),
+                replies: children.map(c => c.toJSON()) // Only one level deep in original code?
+                // Original: replies: Comment.findAll({ parent: commentId }).map(reply => ({
+                //    ...reply.toJSON(),
+                //    replies: Comment.findAll({ parent: reply.commentId }).map(r => r.toJSON())
+                // }))
+                // Yes, only 2 levels.
+            };
+        }));
 
         return {
             ...comment.toJSON(),
-            replies: Comment.findAll({ parent: commentId }).map(reply => ({
-                ...reply.toJSON(),
-                replies: Comment.findAll({ parent: reply.commentId }).map(r => r.toJSON())
-            }))
+            replies: repliesWithChildren
         };
     }
 }

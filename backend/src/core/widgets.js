@@ -88,46 +88,49 @@ function getSidebars() {
 /**
  * Get widgets assigned to a sidebar
  */
-function getSidebarWidgets(sidebarId) {
-    const sidebarsWidgets = getOption('sidebars_widgets', {});
+/**
+ * Get widgets assigned to a sidebar
+ */
+async function getSidebarWidgets(sidebarId) {
+    const sidebarsWidgets = await getOption('sidebars_widgets', {});
     return sidebarsWidgets[sidebarId] || [];
 }
 
 /**
  * Set widgets for a sidebar
  */
-function setSidebarWidgets(sidebarId, widgetIds) {
-    const sidebarsWidgets = getOption('sidebars_widgets', {});
+async function setSidebarWidgets(sidebarId, widgetIds) {
+    const sidebarsWidgets = await getOption('sidebars_widgets', {});
     sidebarsWidgets[sidebarId] = widgetIds;
-    updateOption('sidebars_widgets', sidebarsWidgets);
+    await updateOption('sidebars_widgets', sidebarsWidgets);
 }
 
 /**
  * Get widget instance settings
  */
-function getWidgetSettings(widgetId, instanceId) {
-    const allSettings = getOption(`widget_${widgetId}`, {});
+async function getWidgetSettings(widgetId, instanceId) {
+    const allSettings = await getOption(`widget_${widgetId}`, {});
     return allSettings[instanceId] || {};
 }
 
 /**
  * Set widget instance settings
  */
-function setWidgetSettings(widgetId, instanceId, settings) {
-    const allSettings = getOption(`widget_${widgetId}`, {});
+async function setWidgetSettings(widgetId, instanceId, settings) {
+    const allSettings = await getOption(`widget_${widgetId}`, {});
     allSettings[instanceId] = settings;
-    updateOption(`widget_${widgetId}`, allSettings);
+    await updateOption(`widget_${widgetId}`, allSettings);
 }
 
 /**
  * Render a sidebar
  * Equivalent to dynamic_sidebar()
  */
-function renderSidebar(sidebarId) {
+async function renderSidebar(sidebarId) {
     const sidebar = registeredSidebars.get(sidebarId);
     if (!sidebar) return '';
 
-    const widgetInstances = getSidebarWidgets(sidebarId);
+    const widgetInstances = await getSidebarWidgets(sidebarId);
     let output = '';
 
     for (const instanceKey of widgetInstances) {
@@ -136,7 +139,7 @@ function renderSidebar(sidebarId) {
 
         if (!widget) continue;
 
-        const settings = getWidgetSettings(widgetId, instanceId);
+        const settings = await getWidgetSettings(widgetId, instanceId);
         const title = settings.title || '';
 
         output += sidebar.beforeWidget;
@@ -145,7 +148,7 @@ function renderSidebar(sidebarId) {
             output += sidebar.beforeTitle + title + sidebar.afterTitle;
         }
 
-        output += widget.render(settings);
+        output += await widget.render(settings);
         output += sidebar.afterWidget;
     }
 
@@ -155,14 +158,14 @@ function renderSidebar(sidebarId) {
 /**
  * Add widget to sidebar
  */
-function addWidgetToSidebar(sidebarId, widgetId, settings = {}) {
-    const widgets = getSidebarWidgets(sidebarId);
+async function addWidgetToSidebar(sidebarId, widgetId, settings = {}) {
+    const widgets = await getSidebarWidgets(sidebarId);
     const instanceId = Date.now().toString(36);
     const instanceKey = `${widgetId}-${instanceId}`;
 
     widgets.push(instanceKey);
-    setSidebarWidgets(sidebarId, widgets);
-    setWidgetSettings(widgetId, instanceId, settings);
+    await setSidebarWidgets(sidebarId, widgets);
+    await setWidgetSettings(widgetId, instanceId, settings);
 
     return instanceKey;
 }
@@ -170,13 +173,13 @@ function addWidgetToSidebar(sidebarId, widgetId, settings = {}) {
 /**
  * Remove widget from sidebar
  */
-function removeWidgetFromSidebar(sidebarId, instanceKey) {
-    const widgets = getSidebarWidgets(sidebarId);
+async function removeWidgetFromSidebar(sidebarId, instanceKey) {
+    const widgets = await getSidebarWidgets(sidebarId);
     const index = widgets.indexOf(instanceKey);
 
     if (index > -1) {
         widgets.splice(index, 1);
-        setSidebarWidgets(sidebarId, widgets);
+        await setSidebarWidgets(sidebarId, widgets);
         return true;
     }
 
@@ -187,16 +190,16 @@ function removeWidgetFromSidebar(sidebarId, instanceKey) {
 
 registerWidget('text', 'Text', {
     description: 'Arbitrary text or HTML',
-    render: (settings) => `<div class="textwidget">${settings.content || ''}</div>`,
+    render: async (settings) => `<div class="textwidget">${settings.content || ''}</div>`,
     form: (settings) => `<textarea name="content">${settings.content || ''}</textarea>`
 });
 
 registerWidget('recent_posts', 'Recent Posts', {
     description: 'Your most recent posts',
-    render: (settings) => {
+    render: async (settings) => {
         const Post = require('../models/Post');
         const limit = parseInt(settings.number) || 5;
-        const posts = Post.findAll({ type: 'post', status: 'publish', limit });
+        const posts = await Post.findAll({ type: 'post', status: 'publish', limit });
 
         let html = '<ul class="recent-posts">';
         posts.forEach(p => {
@@ -209,9 +212,9 @@ registerWidget('recent_posts', 'Recent Posts', {
 
 registerWidget('categories', 'Categories', {
     description: 'A list of categories',
-    render: (settings) => {
+    render: async (settings) => {
         const Term = require('../models/Term');
-        const categories = Term.getCategories({ hideEmpty: settings.hideEmpty });
+        const categories = await Term.getCategories({ hideEmpty: settings.hideEmpty });
 
         let html = '<ul class="categories">';
         categories.forEach(c => {
@@ -224,7 +227,7 @@ registerWidget('categories', 'Categories', {
 
 registerWidget('search', 'Search', {
     description: 'A search form',
-    render: () => `
+    render: async () => `
     <form class="search-form" action="/search" method="get">
       <input type="text" name="q" placeholder="Search...">
       <button type="submit">Search</button>
@@ -234,7 +237,7 @@ registerWidget('search', 'Search', {
 
 registerWidget('custom_html', 'Custom HTML', {
     description: 'Add custom HTML code',
-    render: (settings) => settings.html || ''
+    render: async (settings) => settings.html || ''
 });
 
 // Register default sidebars

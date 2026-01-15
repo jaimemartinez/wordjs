@@ -31,18 +31,23 @@ exports.init = function () {
     const { isAdmin } = require('../../src/middleware/permissions');
 
     // GET /api/v1/carousels - List all carousels
-    router.get('/', (req, res) => {
-        const list = getOption('carousels_list', []);
-        const carousels = list.map(id => {
-            const data = getOption(`carousel_${id}`, null);
+    // GET /api/v1/carousels - List all carousels
+    router.get('/', async (req, res) => {
+        const list = await getOption('carousels_list', []);
+
+        // Parallel fetch of all items
+        const carousels = await Promise.all(list.map(async id => {
+            const data = await getOption(`carousel_${id}`, null);
             return data ? { id, ...data } : null;
-        }).filter(Boolean);
-        res.json(carousels);
+        }));
+
+        res.json(carousels.filter(Boolean));
     });
 
     // GET /api/v1/carousels/:id - Get single carousel
-    router.get('/:id', (req, res) => {
-        const data = getOption(`carousel_${req.params.id}`, null);
+    // GET /api/v1/carousels/:id - Get single carousel
+    router.get('/:id', async (req, res) => {
+        const data = await getOption(`carousel_${req.params.id}`, null);
         if (!data) {
             return res.status(404).json({ error: 'Carousel not found' });
         }
@@ -50,8 +55,9 @@ exports.init = function () {
     });
 
     // GET /api/v1/carousels/location/:location - Get carousel by location (e.g. 'hero')
-    router.get('/location/:location', (req, res) => {
-        const list = getOption('carousels_list', []);
+    // GET /api/v1/carousels/location/:location - Get carousel by location (e.g. 'hero')
+    router.get('/location/:location', async (req, res) => {
+        const list = await getOption('carousels_list', []);
 
         // Find carousel with matching location
         // Since we don't have a direct index, we have to iterate
@@ -60,7 +66,7 @@ exports.init = function () {
         let foundId = null;
 
         for (const id of list) {
-            const data = getOption(`carousel_${id}`, null);
+            const data = await getOption(`carousel_${id}`, null);
             if (data && data.location === req.params.location) {
                 found = data;
                 foundId = id;
@@ -75,7 +81,8 @@ exports.init = function () {
     });
 
     // POST /api/v1/carousels - Create carousel (Admin only)
-    router.post('/', authenticate, isAdmin, (req, res) => {
+    // POST /api/v1/carousels - Create carousel (Admin only)
+    router.post('/', authenticate, isAdmin, async (req, res) => {
         const { name, images = [], autoplay = true, interval = 5000, location = '' } = req.body;
 
         if (!name) {
@@ -85,19 +92,20 @@ exports.init = function () {
         const id = uuidv4().split('-')[0]; // Short ID
         const carousel = { name, images, autoplay, interval, location, createdAt: new Date().toISOString() };
 
-        updateOption(`carousel_${id}`, carousel);
+        await updateOption(`carousel_${id}`, carousel);
 
         // Update list
-        const list = getOption('carousels_list', []);
+        const list = await getOption('carousels_list', []);
         list.push(id);
-        updateOption('carousels_list', list);
+        await updateOption('carousels_list', list);
 
         res.json({ success: true, id, ...carousel });
     });
 
     // PUT /api/v1/carousels/:id - Update carousel (Admin only)
-    router.put('/:id', authenticate, isAdmin, (req, res) => {
-        const existing = getOption(`carousel_${req.params.id}`, null);
+    // PUT /api/v1/carousels/:id - Update carousel (Admin only)
+    router.put('/:id', authenticate, isAdmin, async (req, res) => {
+        const existing = await getOption(`carousel_${req.params.id}`, null);
         if (!existing) {
             return res.status(404).json({ error: 'Carousel not found' });
         }
@@ -113,25 +121,26 @@ exports.init = function () {
             updatedAt: new Date().toISOString()
         };
 
-        updateOption(`carousel_${req.params.id}`, updated);
+        await updateOption(`carousel_${req.params.id}`, updated);
         res.json({ success: true, id: req.params.id, ...updated });
     });
 
     // DELETE /api/v1/carousels/:id - Delete carousel (Admin only)
-    router.delete('/:id', authenticate, isAdmin, (req, res) => {
-        const existing = getOption(`carousel_${req.params.id}`, null);
+    // DELETE /api/v1/carousels/:id - Delete carousel (Admin only)
+    router.delete('/:id', authenticate, isAdmin, async (req, res) => {
+        const existing = await getOption(`carousel_${req.params.id}`, null);
         if (!existing) {
             return res.status(404).json({ error: 'Carousel not found' });
         }
 
-        updateOption(`carousel_${req.params.id}`, null);
+        await updateOption(`carousel_${req.params.id}`, null);
 
         // Remove from list
-        const list = getOption('carousels_list', []);
+        const list = await getOption('carousels_list', []);
         const index = list.indexOf(req.params.id);
         if (index > -1) {
             list.splice(index, 1);
-            updateOption('carousels_list', list);
+            await updateOption('carousels_list', list);
         }
 
         res.json({ success: true });

@@ -22,24 +22,25 @@ exports.metadata = {
 };
 
 // === MIGRATION logic ===
-function migrateLegacyData() {
-    const galleryList = getOption('vgallery_galleries_list', null);
+// === MIGRATION logic ===
+async function migrateLegacyData() {
+    const galleryList = await getOption('vgallery_galleries_list', null);
 
     // If galleries list exists, migration already done or new install
     if (galleryList !== null) return;
 
     console.log('Migrating legacy Video Gallery data to Multi-Gallery format...');
 
-    const legacyVideoIds = getOption('videos_list', []);
+    const legacyVideoIds = await getOption('videos_list', []);
     const legacyVideos = [];
 
     // Collect all legacy videos
     for (const id of legacyVideoIds) {
-        const video = getOption(`video_${id}`, null);
+        const video = await getOption(`video_${id}`, null);
         if (video) {
             legacyVideos.push({ id, ...video });
             // Clean up legacy individual option (optional, maybe keep for safety for now)
-            // updateOption(`video_${id}`, null); 
+            // await updateOption(`video_${id}`, null);
         }
     }
 
@@ -52,9 +53,9 @@ function migrateLegacyData() {
         videos: legacyVideos
     };
 
-    updateOption('vgallery_data_default', defaultGallery);
-    updateOption('vgallery_galleries_list', ['default']);
-    // updateOption('videos_list', null); // Mark legacy list as gone
+    await updateOption('vgallery_data_default', defaultGallery);
+    await updateOption('vgallery_galleries_list', ['default']);
+    // await updateOption('videos_list', null); // Mark legacy list as gone
 
     console.log(`Migration complete. Created 'default' gallery with ${legacyVideos.length} videos.`);
 }
@@ -65,16 +66,19 @@ function setupRoutes() {
     const router = express.Router();
 
     // Helper to get gallery
-    const getGallery = (id) => getOption(`vgallery_data_${id}`, null);
-    const saveGallery = (id, data) => updateOption(`vgallery_data_${id}`, data);
+    const getGallery = async (id) => await getOption(`vgallery_data_${id}`, null);
+    const saveGallery = async (id, data) => await updateOption(`vgallery_data_${id}`, data);
 
     // --- GALLERIES ---
 
     // GET /api/v1/videos/galleries - List all galleries
-    router.get('/galleries', (req, res) => {
-        const list = getOption('vgallery_galleries_list', []);
-        const galleries = list.map(id => {
-            const g = getGallery(id);
+    // GET /api/v1/videos/galleries - List all galleries
+    router.get('/galleries', async (req, res) => {
+        const list = await getOption('vgallery_galleries_list', []);
+
+        // Parallel fetch
+        const galleries = await Promise.all(list.map(async id => {
+            const g = await getGallery(id);
             if (!g) return null;
             return {
                 id: g.id,
@@ -82,12 +86,14 @@ function setupRoutes() {
                 description: g.description,
                 videoCount: g.videos ? g.videos.length : 0
             };
-        }).filter(Boolean);
-        res.json(galleries);
+        }));
+
+        res.json(galleries.filter(Boolean));
     });
 
     // POST /api/v1/videos/galleries - Create new gallery
-    router.post('/galleries', authenticate, isAdmin, (req, res) => {
+    // POST /api/v1/videos/galleries - Create new gallery
+    router.post('/galleries', authenticate, isAdmin, async (req, res) => {
         const { name, description } = req.body;
         if (!name) return res.status(400).json({ error: 'Name is required' });
 
@@ -100,42 +106,45 @@ function setupRoutes() {
             videos: []
         };
 
-        const list = getOption('vgallery_galleries_list', []);
+        const list = await getOption('vgallery_galleries_list', []);
         list.push(id);
 
-        saveGallery(id, newGallery);
-        updateOption('vgallery_galleries_list', list);
+        await saveGallery(id, newGallery);
+        await updateOption('vgallery_galleries_list', list);
 
         res.status(201).json(newGallery);
     });
 
     // GET /api/v1/videos/galleries/:id - Get specific gallery details
-    router.get('/galleries/:id', (req, res) => {
-        const gallery = getGallery(req.params.id);
+    // GET /api/v1/videos/galleries/:id - Get specific gallery details
+    router.get('/galleries/:id', async (req, res) => {
+        const gallery = await getGallery(req.params.id);
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
         res.json(gallery);
     });
 
     // PUT /api/v1/videos/galleries/:id - Update gallery metadata
-    router.put('/galleries/:id', authenticate, isAdmin, (req, res) => {
-        const gallery = getGallery(req.params.id);
+    // PUT /api/v1/videos/galleries/:id - Update gallery metadata
+    router.put('/galleries/:id', authenticate, isAdmin, async (req, res) => {
+        const gallery = await getGallery(req.params.id);
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
 
         const updated = { ...gallery, ...req.body, videos: gallery.videos }; // Protect videos from direct overwrite here
-        saveGallery(req.params.id, updated);
+        await saveGallery(req.params.id, updated);
         res.json(updated);
     });
 
     // DELETE /api/v1/videos/galleries/:id - Delete gallery
-    router.delete('/galleries/:id', authenticate, isAdmin, (req, res) => {
+    // DELETE /api/v1/videos/galleries/:id - Delete gallery
+    router.delete('/galleries/:id', authenticate, isAdmin, async (req, res) => {
         const id = req.params.id;
-        const list = getOption('vgallery_galleries_list', []);
+        const list = await getOption('vgallery_galleries_list', []);
 
         if (!list.includes(id)) return res.status(404).json({ error: 'Gallery not found' });
 
         const newList = list.filter(gid => gid !== id);
-        updateOption('vgallery_galleries_list', newList);
-        updateOption(`vgallery_data_${id}`, null);
+        await updateOption('vgallery_galleries_list', newList);
+        await updateOption(`vgallery_data_${id}`, null);
 
         res.json({ success: true });
     });
@@ -143,9 +152,10 @@ function setupRoutes() {
     // --- VIDEOS within Gallery ---
 
     // POST /api/v1/videos/galleries/:id/videos - Add video
-    router.post('/galleries/:id/videos', authenticate, isAdmin, (req, res) => {
+    // POST /api/v1/videos/galleries/:id/videos - Add video
+    router.post('/galleries/:id/videos', authenticate, isAdmin, async (req, res) => {
         const galleryId = req.params.id;
-        const gallery = getGallery(galleryId);
+        const gallery = await getGallery(galleryId);
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
 
         const { title, youtube_url, thumbnail, button_text, description, sort_order } = req.body;
@@ -164,16 +174,17 @@ function setupRoutes() {
         };
 
         gallery.videos.push(newVideo);
-        saveGallery(galleryId, gallery);
+        await saveGallery(galleryId, gallery);
 
         res.status(201).json(newVideo);
     });
 
     // PUT /api/v1/videos/galleries/:id/videos/:videoId - Update video
-    router.put('/galleries/:id/videos/:videoId', authenticate, isAdmin, (req, res) => {
+    // PUT /api/v1/videos/galleries/:id/videos/:videoId - Update video
+    router.put('/galleries/:id/videos/:videoId', authenticate, isAdmin, async (req, res) => {
         const galleryId = req.params.id;
         const videoId = req.params.videoId;
-        const gallery = getGallery(galleryId);
+        const gallery = await getGallery(galleryId);
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
 
         const videoIndex = gallery.videos.findIndex(v => String(v.id) === String(videoId));
@@ -189,32 +200,33 @@ function setupRoutes() {
         }
 
         gallery.videos[videoIndex] = updatedVideo;
-        saveGallery(galleryId, gallery);
+        await saveGallery(galleryId, gallery);
 
         res.json(updatedVideo);
     });
 
     // DELETE /api/v1/videos/galleries/:id/videos/:videoId - Delete video
-    router.delete('/galleries/:id/videos/:videoId', authenticate, isAdmin, (req, res) => {
+    // DELETE /api/v1/videos/galleries/:id/videos/:videoId - Delete video
+    router.delete('/galleries/:id/videos/:videoId', authenticate, isAdmin, async (req, res) => {
         const galleryId = req.params.id;
         const videoId = req.params.videoId;
-        const gallery = getGallery(galleryId);
+        const gallery = await getGallery(galleryId);
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
 
         gallery.videos = gallery.videos.filter(v => String(v.id) !== String(videoId));
-        saveGallery(galleryId, gallery);
+        await saveGallery(galleryId, gallery);
 
         res.json({ success: true });
     });
 
     // PUT /api/v1/videos/galleries/:id/reorder - Reorder videos
-    router.put('/galleries/:id/reorder', authenticate, isAdmin, (req, res) => {
+    router.put('/galleries/:id/reorder', authenticate, isAdmin, async (req, res) => {
         const galleryId = req.params.id;
         const { videoIds } = req.body; // Array of IDs in new order
 
         if (!Array.isArray(videoIds)) return res.status(400).json({ error: 'videoIds must be an array' });
 
-        const gallery = getGallery(galleryId);
+        const gallery = await getGallery(galleryId);
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
 
         // Map existing videos by ID for O(1) lookup
@@ -242,7 +254,7 @@ function setupRoutes() {
         }
 
         gallery.videos = newVideos;
-        saveGallery(galleryId, gallery);
+        await saveGallery(galleryId, gallery);
 
         res.json({ success: true, videos: newVideos });
     });
@@ -251,23 +263,24 @@ function setupRoutes() {
     // --- LEGACY / HELPER ROUTES ---
 
     // GET /api/v1/videos - Default legacy route (Returns default gallery videos)
-    router.get('/', (req, res) => {
+    // GET /api/v1/videos - Default legacy route (Returns default gallery videos)
+    router.get('/', async (req, res) => {
         // If 'gallery' query param is present, try to fetch that one
         const manualId = req.query.gallery;
         if (manualId) {
-            const g = getGallery(manualId);
+            const g = await getGallery(manualId);
             return g ? res.json(g.videos) : res.status(404).json({ error: 'Gallery not found' });
         }
 
         // Fallback to 'default' gallery
-        const g = getGallery('default');
+        const g = await getGallery('default');
         if (g) {
             res.json(g.videos);
         } else {
             // Fallback to first available gallery if default doesn't exist?
-            const list = getOption('vgallery_galleries_list', []);
+            const list = await getOption('vgallery_galleries_list', []);
             if (list.length > 0) {
-                const first = getGallery(list[0]);
+                const first = await getGallery(list[0]);
                 return res.json(first ? first.videos : []);
             }
             res.json([]);
@@ -307,7 +320,7 @@ function setupShortcode() {
 exports.init = function () {
     console.log('🎬 Initializing Video Gallery plugin (v2)...');
 
-    migrateLegacyData();
+    migrateLegacyData().catch(err => console.error('Migration failed:', err));
     setupRoutes();
     setupShortcode();
 

@@ -1,6 +1,6 @@
 # Production Deployment Guide 🚀
 
-WordJS is designed to be easy to deploy. Since it uses a custom Gateway and SQLite, you don't need a complex infrastructure of databases and Nginx to get started.
+WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** database for zero-config startups, but fully supports **PostgreSQL** for high-scale external database needs.
 
 ---
 

@@ -119,6 +119,11 @@ export interface Plugin {
     description: string;
     version: string;
     active: boolean;
+    permissions?: {
+        scope: string;
+        access: string;
+        reason: string;
+    }[];
 }
 
 export interface Theme {

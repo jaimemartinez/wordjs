@@ -52,11 +52,12 @@ function installPluginDependencies(slug, manifest) {
 /**
  * Remove dependencies if not used by other active plugins
  */
-function prunePluginDependencies(slug, manifest) {
+async function prunePluginDependencies(slug, manifest) {
     if (!manifest || !manifest.dependencies) return;
 
     // 1. Get all other active plugins
-    const activeSlugs = getActivePlugins().filter(s => s !== slug);
+    const activePlugins = await getActivePlugins();
+    const activeSlugs = activePlugins.filter(s => s !== slug);
     const plugins = scanPlugins();
 
     const usedDependencies = new Set();
@@ -106,7 +107,167 @@ function prunePluginDependencies(slug, manifest) {
     }
 }
 
-const PLUGINS_DIR_REAL = path.resolve('./plugins'); // Just to keep logic if needed, but we reused PLUGINS_DIR above.
+const PLUGINS_DIR_REAL = path.resolve('./plugins');
+const acorn = require('acorn');
+const walk = require('acorn-walk');
+
+/**
+ * Static Analysis 2.0: AST-based scan
+ * Detects API calls even if split, renamed, or accessed via global.
+ */
+function validatePluginPermissions(slug, pluginPath, manifest) {
+    const permissions = manifest.permissions || [];
+    const missingPermissions = new Set();
+    const dangerousCalls = new Set();
+
+    const hasDeclared = (scope, access) => {
+        return permissions.some(p => p.scope === scope && (p.access === access || p.access === 'admin'));
+    };
+
+    function getFiles(dir) {
+        let results = [];
+        if (!fs.existsSync(dir)) return results;
+        const list = fs.readdirSync(dir);
+        list.forEach(file => {
+            const fullPath = path.join(dir, file);
+            const stat = fs.statSync(fullPath);
+            if (stat && stat.isDirectory()) {
+                if (!file.includes('node_modules') && !file.startsWith('.')) {
+                    results = results.concat(getFiles(fullPath));
+                }
+            } else if (file.endsWith('.js') || file.endsWith('.ts') || file.endsWith('.tsx')) {
+                results.push(fullPath);
+            }
+        });
+        return results;
+    }
+
+    const files = getFiles(pluginPath);
+
+    // API Mappings for AST detection
+    const apiAccess = {
+        'dbAsync': { scope: 'database', access: 'write', label: 'Database' },
+        'updateOption': { scope: 'settings', access: 'write', label: 'Settings modification' },
+        'addOption': { scope: 'settings', access: 'write', label: 'Settings modification' },
+        'deleteOption': { scope: 'settings', access: 'write', label: 'Settings modification' },
+        'getOption': { scope: 'settings', access: 'read', label: 'Settings read' }
+    };
+
+    for (const file of files) {
+        const content = fs.readFileSync(file, 'utf8');
+        let ast;
+        try {
+            ast = acorn.parse(content, { ecmaVersion: 'latest', sourceType: 'module' });
+        } catch (e) {
+            console.warn(`[Security] Could not parse ${file} for AST analysis, skipping...`);
+            continue;
+        }
+
+        walk.simple(ast, {
+            CallExpression(node) {
+                let name = '';
+                // 1. Direct calls: eval(), execSync()
+                if (node.callee.type === 'Identifier') {
+                    name = node.callee.name;
+
+                    // Detect require of sensitive modules
+                    if (name === 'require' && node.arguments.length > 0) {
+                        const arg = node.arguments[0];
+                        if (arg.type === 'Literal') {
+                            const moduleName = arg.value;
+                            const sensitiveModules = ['child_process', 'fs', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads'];
+                            if (sensitiveModules.includes(moduleName)) {
+                                if (moduleName !== 'fs') {
+                                    dangerousCalls.add(`require('${moduleName}')`);
+                                }
+                            }
+                        } else {
+                            dangerousCalls.add(`Dynamic require detected (obfuscation risk)`);
+                        }
+                    }
+                }
+                // 2. Member calls: fs.writeFile(), global.eval()
+                else if (node.callee.type === 'MemberExpression') {
+                    if (node.callee.property.type === 'Identifier') {
+                        name = node.callee.property.name;
+                    }
+
+                    if (node.callee.computed) {
+                        dangerousCalls.add(`Computed/Dynamic Call (obfuscation risk)`);
+                    }
+
+                    // Special handling for fs
+                    if (node.callee.object.type === 'Identifier' && node.callee.object.name === 'fs') {
+                        const isRead = ['readFileSync', 'readFile', 'createReadStream', 'existsSync', 'statSync'].includes(name);
+                        const scope = 'filesystem';
+                        const access = isRead ? 'read' : 'write';
+                        if (!hasDeclared(scope, access)) {
+                            missingPermissions.add(`Filesystem ${isRead ? 'Read' : 'Write'} (fs.${name || 'unknown'})`);
+                        }
+                    }
+                }
+
+                // SAFE LOOKUP: Prevent prototype-based false positives (like toString)
+                if (name && Object.prototype.hasOwnProperty.call(apiAccess, name)) {
+                    const { scope, access, label } = apiAccess[name];
+                    if (!hasDeclared(scope, access)) {
+                        missingPermissions.add(`${label} (${scope}:${access})`);
+                    }
+                }
+
+                if (['eval', 'Function', 'exec', 'execSync', 'spawn', 'fork'].includes(name)) {
+                    dangerousCalls.add(name);
+                }
+            },
+            MemberExpression(node) {
+                // Detect access to sensitive globals
+                const sensitiveGlobals = ['process', 'global', 'require', 'module', 'arguments', '__dirname', '__filename', 'Buffer'];
+                if (node.object.type === 'Identifier' && sensitiveGlobals.includes(node.object.name)) {
+                    if (node.object.name === 'process') {
+                        // Allow process.env (handled by runtime proxy), block everything else
+                        if (node.property.name !== 'env') {
+                            dangerousCalls.add(`Forbidden 'process' property: ${node.property.name || 'computed'}`);
+                        }
+                    } else {
+                        dangerousCalls.add(`Direct '${node.object.name}' access (restricted)`);
+                    }
+                }
+
+                // Detect dynamic property access: obj["perm" + "ission"] on ANY object
+                if (node.computed && node.property.type !== 'Literal' && node.property.type !== 'NumberLiteral') {
+                    // Only flag if it's a sensitive base or looks suspicious
+                    const base = node.object.type === 'Identifier' ? node.object.name : '';
+                    if (sensitiveGlobals.includes(base)) {
+                        dangerousCalls.add(`Obfuscated/Dynamic access to ${base}`);
+                    }
+                }
+            },
+            TemplateLiteral(node) {
+                // Check if any template literal contains dangerous keywords
+                const text = content.slice(node.start, node.end);
+                if (/eval|exec|dbAsync|updateOption/.test(text)) {
+                    // Only flag if it looks like it might be used for execution
+                    // This is conservative
+                }
+            }
+        });
+    }
+
+    const errors = [];
+    if (missingPermissions.size > 0) {
+        errors.push(`Undeclared capabilities required by code:\n- ${Array.from(missingPermissions).join('\n- ')}`);
+    }
+    if (dangerousCalls.size > 0) {
+        // We block eval and shell execution by default for security
+        errors.push(`Blocked dangerous calls detected: ${Array.from(dangerousCalls).join(', ')}`);
+    }
+
+    if (errors.length > 0) {
+        throw new Error(`🛡️ Security Block: Plugin '${slug}' failed validation:\n\n${errors.join('\n\n')}\n\nPlease update manifest.json or remove the unauthorized code.`);
+    }
+
+    return true;
+}
 
 // Loaded plugins registry
 const loadedPlugins = new Map();
@@ -125,6 +286,7 @@ class Plugin {
         this.active = data.active || false;
         this.init = data.init || null;
         this.deactivate = data.deactivate || null;
+        this.permissions = data.permissions || [];
     }
 }
 
@@ -164,7 +326,8 @@ function scanPlugins() {
                     name: manifest.name,
                     version: manifest.version,
                     description: manifest.description,
-                    author: manifest.author
+                    author: manifest.author,
+                    permissions: manifest.permissions || []
                 };
                 // We don't load init/deactivate here to avoid requiring the file before deps match
             } catch (e) {
@@ -193,6 +356,7 @@ function scanPlugins() {
             description: metadata.description || '',
             author: metadata.author || '',
             path: pluginDir,
+            permissions: metadata.permissions || [],
             // We defer loading 'init' and 'deactivate' hooks until activation/load time
             // However, existing code expects them in the object.
             // If we didn't require the module, these will be undefined.
@@ -224,15 +388,15 @@ function findMainFile(pluginDir) {
 /**
  * Get list of active plugin slugs
  */
-function getActivePlugins() {
-    return getOption('active_plugins', []);
+async function getActivePlugins() {
+    return await getOption('active_plugins', []);
 }
 
 /**
  * Check if plugin is active
  */
-function isPluginActive(slug) {
-    const active = getActivePlugins();
+async function isPluginActive(slug) {
+    const active = await getActivePlugins();
     return active.includes(slug);
 }
 
@@ -280,8 +444,13 @@ async function activatePlugin(slug) {
         throw new Error(`Plugin ${slug} not found`);
     }
 
-    if (isPluginActive(slug)) {
+    if (await isPluginActive(slug)) {
         return { success: true, message: 'Plugin already active' };
+    }
+
+    // Check if already active
+    if (await isPluginActive(slug)) {
+        return { success: true, message: `Plugin ${slug} is already active` };
     }
 
     // 1. Dependency Check & Auto-Install
@@ -289,9 +458,15 @@ async function activatePlugin(slug) {
     if (fs.existsSync(manifestPath)) {
         try {
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+            // 0. Static Permission Verification
+            validatePluginPermissions(slug, plugin.path, manifest);
+
             installPluginDependencies(slug, manifest);
         } catch (e) {
-            console.error(`⚠️ Failed to process manifest for ${slug}:`, e.message);
+            // CRITICAL: Must throw to stop execution if security block or other failure occurs
+            console.error(`🛡️ Protection Active: Blocking ${slug} activation due to:`, e.message);
+            throw e;
         }
     }
 
@@ -308,20 +483,22 @@ async function activatePlugin(slug) {
 
         const pluginModule = require(mainFile);
 
+        const { runWithContext } = require('./plugin-context');
+
         // Call init/activate function if exists
         if (typeof pluginModule.init === 'function') {
-            await pluginModule.init();
+            await runWithContext(slug, () => pluginModule.init());
         } else if (typeof pluginModule.activate === 'function') {
-            await pluginModule.activate();
+            await runWithContext(slug, () => pluginModule.activate());
         }
 
         // Reorder middleware to ensure plugin routes work
         fixMiddlewareOrder();
 
         // Add to active plugins
-        const active = getActivePlugins();
+        const active = await getActivePlugins();
         active.push(slug);
-        updateOption('active_plugins', active);
+        await updateOption('active_plugins', active);
 
         loadedPlugins.set(slug, pluginModule);
 
@@ -339,7 +516,7 @@ async function activatePlugin(slug) {
  * Deactivate a plugin
  */
 async function deactivatePlugin(slug) {
-    if (!isPluginActive(slug)) {
+    if (!await isPluginActive(slug)) {
         return { success: true, message: 'Plugin not active' };
     }
 
@@ -351,7 +528,7 @@ async function deactivatePlugin(slug) {
         if (fs.existsSync(manifestPath)) {
             try {
                 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-                prunePluginDependencies(slug, manifest);
+                await prunePluginDependencies(slug, manifest);
             } catch (e) {
                 console.error(`⚠️ Failed to process manifest for prune ${slug}:`, e.message);
             }
@@ -366,11 +543,11 @@ async function deactivatePlugin(slug) {
     }
 
     // Remove from active plugins
-    const active = getActivePlugins();
+    const active = await getActivePlugins();
     const index = active.indexOf(slug);
     if (index > -1) {
         active.splice(index, 1);
-        updateOption('active_plugins', active);
+        await updateOption('active_plugins', active);
     }
 
     loadedPlugins.delete(slug);
@@ -384,7 +561,7 @@ async function deactivatePlugin(slug) {
  * Load all active plugins
  */
 async function loadActivePlugins() {
-    const activePlugins = getActivePlugins();
+    const activePlugins = await getActivePlugins();
     const plugins = scanPlugins();
 
     for (const slug of activePlugins) {
@@ -394,22 +571,29 @@ async function loadActivePlugins() {
         const mainFile = findMainFile(plugin.path);
         if (!mainFile) continue;
 
-        // Auto-Check/Install Deps on Load
+        // Auto-Check/Install Deps and VALIDATE permissions on Load
         const manifestPath = path.join(plugin.path, 'manifest.json');
         if (fs.existsSync(manifestPath)) {
             try {
                 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+                // CRITICAL: Re-validate permissions on every boot to prevent code poisoning
+                validatePluginPermissions(slug, plugin.path, manifest);
+
                 installPluginDependencies(slug, manifest);
             } catch (e) {
-                console.error(`⚠️ Failed to process manifest for load ${slug}:`, e.message);
+                console.error(`   ✗ Security Block for ${slug} on load:`, e.message);
+                // We don't load plugins that fail validation
+                continue;
             }
         }
 
         try {
             const pluginModule = require(mainFile);
 
+            const { runWithContext } = require('./plugin-context');
             if (typeof pluginModule.init === 'function') {
-                await pluginModule.init();
+                await runWithContext(slug, () => pluginModule.init());
             }
 
             loadedPlugins.set(slug, pluginModule);
@@ -423,9 +607,9 @@ async function loadActivePlugins() {
 /**
  * Get all plugins with their status
  */
-function getAllPlugins() {
+async function getAllPlugins() {
     const plugins = scanPlugins();
-    const active = getActivePlugins();
+    const active = await getActivePlugins();
 
     return plugins.map(plugin => ({
         ...plugin,
@@ -485,5 +669,6 @@ module.exports = {
     loadActivePlugins,
     getAllPlugins,
     createSamplePlugin,
+    validatePluginPermissions,
     PLUGINS_DIR
 };

@@ -3,16 +3,18 @@
  * Equivalent to wp-includes/option.php
  */
 
-const { db } = require('../config/database');
+const { dbAsync } = require('../config/database');
+const { verifyPermission } = require('./plugin-context');
 
 /**
  * Get an option value
  * Equivalent to get_option()
  */
-function getOption(name, defaultValue = null) {
+async function getOption(name, defaultValue = null) {
+    // Only verify if we are in a plugin context
+    verifyPermission('settings', 'read');
     try {
-        const stmt = db.prepare('SELECT option_value FROM options WHERE option_name = ?');
-        const row = stmt.get(name);
+        const row = await dbAsync.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
 
         if (!row) return defaultValue;
 
@@ -23,6 +25,7 @@ function getOption(name, defaultValue = null) {
             return row.option_value;
         }
     } catch (e) {
+        console.error(`Error getting option ${name}:`, e.message);
         return defaultValue;
     }
 }
@@ -31,15 +34,17 @@ function getOption(name, defaultValue = null) {
  * Update an option value
  * Equivalent to update_option()
  */
-function updateOption(name, value, autoload = 'yes') {
+async function updateOption(name, value, autoload = 'yes') {
+    verifyPermission('settings', 'write');
     const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
-    const existing = db.prepare('SELECT option_id FROM options WHERE option_name = ?').get(name);
+    // Check strict existence first
+    const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
 
     if (existing) {
-        db.prepare('UPDATE options SET option_value = ?, autoload = ? WHERE option_name = ?').run(serialized, autoload, name);
+        await dbAsync.run('UPDATE options SET option_value = ?, autoload = ? WHERE option_name = ?', [serialized, autoload, name]);
     } else {
-        db.prepare('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)').run(name, serialized, autoload);
+        await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
     }
 
     return true;
@@ -49,12 +54,13 @@ function updateOption(name, value, autoload = 'yes') {
  * Add an option (only if it doesn't exist)
  * Equivalent to add_option()
  */
-function addOption(name, value, autoload = 'yes') {
-    const existing = db.prepare('SELECT option_id FROM options WHERE option_name = ?').get(name);
+async function addOption(name, value, autoload = 'yes') {
+    verifyPermission('settings', 'write');
+    const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
     if (existing) return false;
 
     const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
-    db.prepare('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)').run(name, serialized, autoload);
+    await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
     return true;
 }
 
@@ -62,16 +68,17 @@ function addOption(name, value, autoload = 'yes') {
  * Delete an option
  * Equivalent to delete_option()
  */
-function deleteOption(name) {
-    const result = db.prepare('DELETE FROM options WHERE option_name = ?').run(name);
+async function deleteOption(name) {
+    verifyPermission('settings', 'write');
+    const result = await dbAsync.run('DELETE FROM options WHERE option_name = ?', [name]);
     return result.changes > 0;
 }
 
 /**
  * Get all autoloaded options
  */
-function getAutoloadedOptions() {
-    const rows = db.prepare('SELECT option_name, option_value FROM options WHERE autoload = ?').all('yes');
+async function getAutoloadedOptions() {
+    const rows = await dbAsync.all('SELECT option_name, option_value FROM options WHERE autoload = ?', ['yes']);
 
     const options = {};
     for (const row of rows) {
@@ -86,8 +93,9 @@ function getAutoloadedOptions() {
 
 /**
  * Initialize default options
+ * WARNING: This is called during init, ensure DB is ready.
  */
-function initDefaultOptions(fullConfig) {
+async function initDefaultOptions(fullConfig) {
     const defaults = {
         siteurl: fullConfig.site.url,
         home: fullConfig.site.url,
@@ -131,7 +139,7 @@ function initDefaultOptions(fullConfig) {
     };
 
     for (const [name, value] of Object.entries(defaults)) {
-        addOption(name, value);
+        await addOption(name, value);
     }
 }
 

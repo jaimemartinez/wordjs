@@ -128,7 +128,8 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  * Used by frontend for dynamic plugin loading
  */
 router.get('/registry', asyncHandler(async (req, res) => {
-    const plugins = getAllPlugins();
+    // Await getAllPlugins()
+    const plugins = await getAllPlugins();
     const activePlugins = plugins.filter(p => p.active);
 
     const registry = [];
@@ -178,7 +179,8 @@ router.get('/registry', asyncHandler(async (req, res) => {
  * Public endpoint - returns only active plugin slugs (no auth required)
  */
 router.get('/active', asyncHandler(async (req, res) => {
-    const plugins = getAllPlugins();
+    // Await getAllPlugins()
+    const plugins = await getAllPlugins();
     const activeSlugs = plugins
         .filter(p => p.active)
         .map(p => p.slug);
@@ -190,7 +192,8 @@ router.get('/active', asyncHandler(async (req, res) => {
  * List all plugins (requires admin)
  */
 router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const plugins = getAllPlugins();
+    // Await getAllPlugins()
+    const plugins = await getAllPlugins();
     res.json(plugins);
 }));
 
@@ -199,6 +202,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  * Activate a plugin and regenerate frontend registry
  */
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, res) => {
+    // `activatePlugin` is already async and awaited in previous code, checking for consistency
     const result = await activatePlugin(req.params.slug);
 
     // Trigger frontend registry regeneration
@@ -243,8 +247,8 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => 
         return res.status(403).json({ message: 'Invalid password' });
     }
 
-    // 1. Check if active
-    if (isPluginActive(slug)) {
+    // 1. Check if active (Async)
+    if (await isPluginActive(slug)) {
         return res.status(400).json({ message: 'Cannot delete an active plugin. Deactivate it first.' });
     }
 
@@ -312,21 +316,25 @@ router.post('/sample', authenticate, isAdmin, asyncHandler(async (req, res) => {
  * Get all admin menu items registered by ACTIVE plugins only
  * Uses filters to allow dynamic visibility rules
  */
-router.get('/menus', authenticate, (req, res) => {
+router.get('/menus', authenticate, asyncHandler(async (req, res) => {
     const { getAdminMenuItems } = require('../core/adminMenu');
     const { getActivePlugins } = require('../core/plugins');
     const { applyFiltersSync } = require('../core/hooks');
 
     const allMenus = getAdminMenuItems();
-    const activePlugins = getActivePlugins();
+    console.log(`DEBUG: /menus - allMenus count: ${allMenus.length}`);
+    // Await async getActivePlugins
+    const activePlugins = await getActivePlugins();
 
-    // 1. Filter menus to only include those from active plugins
-    let activeMenus = allMenus.filter(menu => activePlugins.includes(menu.plugin));
+    // 1. Filter menus to only include those from active plugins or core
+    let activeMenus = allMenus.filter(menu => menu.plugin === 'core' || activePlugins.includes(menu.plugin));
 
     // 2. Apply filters to allows plugins to hide/modify items per user
     activeMenus = applyFiltersSync('admin_menu_items', activeMenus, { user: req.user });
 
+    console.log('DEBUG: /plugins/menus response:', JSON.stringify(activeMenus, null, 2));
+
     res.json(activeMenus);
-});
+}));
 
 module.exports = router;

@@ -20,6 +20,18 @@
         "href": "/admin/plugin/emails",
         "order": 90
     },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Required to log emails and manage server state."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Required to manage SMTP and global email configurations."
+        }
+    ],
     "dependencies": {
         "nodemailer": "^7.0.12",
         "smtp-server": "^3.18.0",

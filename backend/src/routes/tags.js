@@ -29,7 +29,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const limit = Math.min(parseInt(per_page, 10) || 100, 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
-    const terms = Term.findAll({
+    const terms = await Term.findAll({
         taxonomy: TAXONOMY,
         hideEmpty: hide_empty === 'true',
         search,
@@ -39,7 +39,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         order: order.toUpperCase()
     });
 
-    const total = Term.count({ taxonomy: TAXONOMY, hideEmpty: hide_empty === 'true' });
+    const total = await Term.count({ taxonomy: TAXONOMY, hideEmpty: hide_empty === 'true' });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
@@ -53,7 +53,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  * Get single tag
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
-    const term = Term.findById(parseInt(req.params.id, 10), TAXONOMY);
+    const term = await Term.findById(parseInt(req.params.id, 10), TAXONOMY);
 
     if (!term) {
         return res.status(404).json({
@@ -82,7 +82,7 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
     }
 
     try {
-        const term = Term.create({
+        const term = await Term.create({
             name,
             taxonomy: TAXONOMY,
             slug,
@@ -108,7 +108,7 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
  */
 router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const termId = parseInt(req.params.id, 10);
-    const term = Term.findById(termId, TAXONOMY);
+    const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {
         return res.status(404).json({
@@ -120,7 +120,7 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
 
     const { name, slug, description } = req.body;
 
-    const updated = Term.update(termId, TAXONOMY, {
+    const updated = await Term.update(termId, TAXONOMY, {
         name,
         slug,
         description
@@ -135,7 +135,7 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
  */
 router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const termId = parseInt(req.params.id, 10);
-    const term = Term.findById(termId, TAXONOMY);
+    const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {
         return res.status(404).json({
@@ -145,7 +145,7 @@ router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async
         });
     }
 
-    Term.delete(termId, TAXONOMY);
+    await Term.delete(termId, TAXONOMY);
     res.json({ deleted: true, previous: term.toJSON() });
 }));
 

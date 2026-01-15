@@ -52,6 +52,13 @@
         "href": "/admin/plugin/carousels",
         "order": 50
     },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Required to save carousel configurations and image metadata."
+        }
+    ],
     "dependencies": {
         "uuid": "^10.0.0"
     }

@@ -64,7 +64,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         }
     }
 
-    const posts = Post.findAll({
+    const posts = await Post.findAll({
         type,
         status: includeStatuses ? null : status,
         includeStatuses,
@@ -76,13 +76,13 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         order: order.toUpperCase()
     });
 
-    const total = Post.count({ type, status: status === 'any' ? null : status });
+    const total = await Post.count({ type, status: status === 'any' ? null : status });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
     res.set('X-WP-TotalPages', totalPages);
 
-    res.json(posts.map(post => post.toJSON()));
+    res.json(await Promise.all(posts.map(post => post.toJSON())));
 }));
 
 /**
@@ -90,7 +90,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  * Get single post by slug
  */
 router.get('/slug/:slug', optionalAuth, asyncHandler(async (req, res) => {
-    const post = Post.findBySlug(req.params.slug);
+    const post = await Post.findBySlug(req.params.slug);
 
     if (!post) {
         return res.status(404).json({
@@ -111,7 +111,7 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req, res) => {
         }
     }
 
-    res.json(post.toJSON());
+    res.json(await post.toJSON());
 }));
 
 /**
@@ -119,7 +119,7 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req, res) => {
  * Get single post
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
-    const post = Post.findById(parseInt(req.params.id, 10));
+    const post = await Post.findById(parseInt(req.params.id, 10));
 
     if (!post) {
         return res.status(404).json({
@@ -140,7 +140,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
         }
     }
 
-    res.json(post.toJSON());
+    res.json(await post.toJSON());
 }));
 
 /**
@@ -192,22 +192,22 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) 
 
     // Set categories
     if (categories && Array.isArray(categories)) {
-        Post.setTerms(post.id, categories, 'category');
+        await Post.setTerms(post.id, categories, 'category');
     }
 
     // Set tags
     if (tags && Array.isArray(tags)) {
-        Post.setTerms(post.id, tags, 'post_tag');
+        await Post.setTerms(post.id, tags, 'post_tag');
     }
 
     // Set meta
     if (meta && typeof meta === 'object') {
         for (const [key, value] of Object.entries(meta)) {
-            Post.updateMeta(post.id, key, value);
+            await Post.updateMeta(post.id, key, value);
         }
     }
 
-    res.status(201).json(Post.findById(post.id).toJSON());
+    res.status(201).json(await (await Post.findById(post.id)).toJSON());
 }));
 
 /**
@@ -216,7 +216,7 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) 
  */
 router.put('/:id', authenticate, asyncHandler(async (req, res) => {
     const postId = parseInt(req.params.id, 10);
-    const post = Post.findById(postId);
+    const post = await Post.findById(postId);
 
     if (!post) {
         return res.status(404).json({
@@ -272,22 +272,22 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
 
     // Update categories
     if (categories && Array.isArray(categories)) {
-        Post.setTerms(postId, categories, 'category');
+        await Post.setTerms(postId, categories, 'category');
     }
 
     // Update tags
     if (tags && Array.isArray(tags)) {
-        Post.setTerms(postId, tags, 'post_tag');
+        await Post.setTerms(postId, tags, 'post_tag');
     }
 
     // Update meta
     if (meta && typeof meta === 'object') {
         for (const [key, value] of Object.entries(meta)) {
-            Post.updateMeta(postId, key, value);
+            await Post.updateMeta(postId, key, value);
         }
     }
 
-    res.json(Post.findById(postId).toJSON());
+    res.json(await (await Post.findById(postId)).toJSON());
 }));
 
 /**
@@ -296,7 +296,7 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
  */
 router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
     const postId = parseInt(req.params.id, 10);
-    const post = Post.findById(postId);
+    const post = await Post.findById(postId);
 
     if (!post) {
         return res.status(404).json({
@@ -323,9 +323,9 @@ router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
     await Post.delete(postId, force);
 
     if (force) {
-        res.json({ deleted: true, previous: post.toJSON() });
+        res.json({ deleted: true, previous: await post.toJSON() });
     } else {
-        res.json(Post.findById(postId).toJSON());
+        res.json(await (await Post.findById(postId)).toJSON());
     }
 }));
 
@@ -335,7 +335,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
  */
 router.post('/:id/meta', authenticate, asyncHandler(async (req, res) => {
     const postId = parseInt(req.params.id, 10);
-    const post = Post.findById(postId);
+    const post = await Post.findById(postId);
 
     if (!post) {
         return res.status(404).json({
@@ -355,7 +355,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req, res) => {
         });
     }
 
-    Post.updateMeta(postId, key, value);
+    await Post.updateMeta(postId, key, value);
 
     res.json({
         key,
@@ -370,7 +370,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req, res) => {
  */
 router.get('/:id/meta', optionalAuth, asyncHandler(async (req, res) => {
     const postId = parseInt(req.params.id, 10);
-    const post = Post.findById(postId);
+    const post = await Post.findById(postId);
 
     if (!post) {
         return res.status(404).json({
@@ -380,7 +380,7 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req, res) => {
         });
     }
 
-    res.json(Post.getAllMeta(postId));
+    res.json(await Post.getAllMeta(postId));
 }));
 
 module.exports = router;

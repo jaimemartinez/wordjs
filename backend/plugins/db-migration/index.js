@@ -5,10 +5,25 @@ exports.init = function () {
     const { getApp } = require('../../src/core/appRegistry');
     const { registerAdminMenu } = require('../../src/core/adminMenu');
     const migration = require('./core/migration');
+    const embedded = require('./core/embedded');
+
+    const { authenticate } = require('../../src/middleware/auth');
+    const { can } = require('../../src/middleware/permissions');
+
+    // Secure all routes in this router
+    router.use(authenticate);
+    router.use(can('manage_options'));
 
     // API Routes
     router.get('/status', migration.getStatus);
     router.post('/migrate', migration.runMigration);
+    router.post('/cleanup', migration.cleanup);
+
+    // Embedded Server Routes
+    router.get('/embedded/status', embedded.getStatus);
+    router.post('/embedded/install', embedded.install);
+    router.post('/embedded/start', embedded.start);
+    router.post('/embedded/stop', embedded.stop);
 
     // Register API
     getApp().use(routerPath, router);

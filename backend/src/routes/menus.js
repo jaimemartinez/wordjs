@@ -15,7 +15,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
  * List all menus
  */
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
-    const menus = Menu.findAll();
+    const menus = await Menu.findAll();
     res.json(menus.map(m => ({
         id: m.id,
         name: m.name,
@@ -29,7 +29,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  * Get menu locations
  */
 router.get('/locations', asyncHandler(async (req, res) => {
-    const locations = Menu.getLocations();
+    const locations = await Menu.getLocations();
     res.json(locations);
 }));
 
@@ -38,7 +38,7 @@ router.get('/locations', asyncHandler(async (req, res) => {
  * Get menu with items
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
-    const menu = Menu.findById(parseInt(req.params.id, 10));
+    const menu = await Menu.findById(parseInt(req.params.id, 10));
 
     if (!menu) {
         return res.status(404).json({
@@ -48,7 +48,10 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
         });
     }
 
-    res.json(menu.toJSON());
+    const items = await menu.getItems();
+    const response = menu.toJSON();
+    response.items = items.map(i => i.toJSON());
+    res.json(response);
 }));
 
 /**
@@ -56,7 +59,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  * Get menu by location
  */
 router.get('/location/:location', optionalAuth, asyncHandler(async (req, res) => {
-    const menu = Menu.findByLocation(req.params.location);
+    const menu = await Menu.findByLocation(req.params.location);
 
     if (!menu) {
         return res.status(404).json({
@@ -66,7 +69,10 @@ router.get('/location/:location', optionalAuth, asyncHandler(async (req, res) =>
         });
     }
 
-    res.json(menu.toJSON());
+    const items = await menu.getItems();
+    const response = menu.toJSON();
+    response.items = items.map(i => i.toJSON());
+    res.json(response);
 }));
 
 /**
@@ -84,7 +90,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
         });
     }
 
-    const menu = Menu.create({ name, slug, description });
+    const menu = await Menu.create({ name, slug, description });
     res.status(201).json(menu.toJSON());
 }));
 
@@ -96,7 +102,7 @@ router.put('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const menuId = parseInt(req.params.id, 10);
     const { name, slug, description } = req.body;
 
-    const menu = Menu.update(menuId, { name, slug, description });
+    const menu = await Menu.update(menuId, { name, slug, description });
     res.json(menu.toJSON());
 }));
 
@@ -106,7 +112,7 @@ router.put('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
  */
 router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const menuId = parseInt(req.params.id, 10);
-    const menu = Menu.findById(menuId);
+    const menu = await Menu.findById(menuId);
 
     if (!menu) {
         return res.status(404).json({
@@ -116,7 +122,7 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
         });
     }
 
-    Menu.delete(menuId);
+    await Menu.delete(menuId);
     res.json({ deleted: true, previous: menu.toJSON() });
 }));
 
@@ -136,7 +142,7 @@ router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req, res
         });
     }
 
-    Menu.setLocation(location, menuId);
+    await Menu.setLocation(location, menuId);
     res.json({ success: true, location, menuId });
 }));
 
@@ -158,7 +164,7 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req, res) =
         });
     }
 
-    const item = MenuItem.create({
+    const item = await MenuItem.create({
         menuId,
         title,
         url: url || '#',
@@ -179,7 +185,7 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req, res) =
  */
 router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
-    const item = MenuItem.update(itemId, req.body);
+    const item = await MenuItem.update(itemId, req.body);
     res.json(item.toJSON());
 }));
 
@@ -189,7 +195,7 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res
  */
 router.delete('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
-    const item = MenuItem.findById(itemId);
+    const item = await MenuItem.findById(itemId);
 
     if (!item) {
         return res.status(404).json({
@@ -199,7 +205,7 @@ router.delete('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, 
         });
     }
 
-    MenuItem.delete(itemId);
+    await MenuItem.delete(itemId);
     res.json({ deleted: true, previous: item.toJSON() });
 }));
 

@@ -84,7 +84,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         id: 'id'
     };
 
-    const media = Media.findAll({
+    const media = await Media.findAll({
         search,
         limit,
         offset,
@@ -92,7 +92,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         order: order.toUpperCase()
     });
 
-    const total = Media.count();
+    const total = await Media.count();
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
@@ -106,7 +106,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  * Get single media
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
-    const media = Media.findById(parseInt(req.params.id, 10));
+    const media = await Media.findById(parseInt(req.params.id, 10));
 
     if (!media) {
         return res.status(404).json({
@@ -198,7 +198,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
  */
 router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req, res) => {
     const mediaId = parseInt(req.params.id, 10);
-    const media = Media.findById(mediaId);
+    const media = await Media.findById(mediaId);
 
     if (!media) {
         return res.status(404).json({
@@ -226,7 +226,7 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req, r
  */
 router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req, res) => {
     const mediaId = parseInt(req.params.id, 10);
-    const media = Media.findById(mediaId);
+    const media = await Media.findById(mediaId);
 
     if (!media) {
         return res.status(404).json({

@@ -44,8 +44,27 @@ const logger = winston.createLogger({
 const REGISTRY_FILE = path.resolve('gateway-registry.json');
 const REGISTRY_TEMP = path.resolve('gateway-registry.json.tmp');
 
+// Load config for both Primary and Workers
+let configSecret = null;
+let configPort = 3000;
+
+try {
+    const configPath = path.resolve('backend/wordjs-config.json');
+    if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        configSecret = config.gatewaySecret;
+        if (config.gatewayPort) configPort = parseInt(config.gatewayPort);
+    }
+} catch (e) {
+    // Silent fail for config load
+}
+
+const FINAL_PORT = process.env.PORT || configPort;
+const GATEWAY_SECRET = process.env.GATEWAY_SECRET || configSecret || 'secure-your-gateway-secret';
+
 if (cluster.isPrimary) {
     const numCPUs = os.cpus().length;
+    logger.info(`[Gateway] Starting on port ${FINAL_PORT}...`);
     logger.info(`[Gateway] Primary ${process.pid} is running. Spawning ${numCPUs} workers...`);
 
     for (let i = 0; i < numCPUs; i++) {
@@ -166,23 +185,7 @@ if (cluster.isPrimary) {
     });
 
 
-    // Try to load secret and port from config file first
-    let configSecret = null;
-    let configPort = 3000;
-
-    try {
-        const configPath = path.resolve('backend/wordjs-config.json');
-        if (fs.existsSync(configPath)) {
-            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            configSecret = config.gatewaySecret;
-            if (config.gatewayPort) configPort = config.gatewayPort;
-        }
-    } catch (e) {
-        console.warn('[Gateway] Could not read wordjs-config.json');
-    }
-
-    const FINAL_PORT = process.env.PORT || configPort;
-    const GATEWAY_SECRET = process.env.GATEWAY_SECRET || configSecret || 'secure-your-gateway-secret';
+    // Registry persistence removed from here as it's now at top level
 
     const jsonParser = express.json({ limit: '10mb' }); // Payload Protection
     const proxy = httpProxy.createProxyServer({
@@ -200,7 +203,9 @@ if (cluster.isPrimary) {
     };
 
     // Middlewares
-    app.use(helmet());
+    app.use(helmet({
+        contentSecurityPolicy: false, // Strict CSP breaks Next.js/Turbopack inline scripts in dev mode
+    }));
     app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } })); // Log to Winston
     app.use(compression());
 
