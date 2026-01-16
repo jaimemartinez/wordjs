@@ -4,8 +4,10 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { usersApi, User } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
+import { useI18n } from "@/contexts/I18nContext";
 
 export default function UsersPage() {
+    const { t } = useI18n();
     const searchParams = useSearchParams();
     const type = searchParams.get("type"); // subscribers
     const [users, setUsers] = useState<User[]>([]);
@@ -33,13 +35,13 @@ export default function UsersPage() {
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm("Are you sure you want to delete this user?")) return;
+        if (!confirm(t('users.delete.confirm'))) return;
         try {
             await usersApi.delete(id);
             setUsers(users.filter(u => u.id !== id));
         } catch (error) {
             console.error("Failed to delete user:", error);
-            alert("Failed to delete user");
+            alert(t('users.delete.failed'));
         }
     };
 
@@ -47,27 +49,27 @@ export default function UsersPage() {
         <div className="p-6 h-full overflow-auto">
             <div className="flex justify-between items-center mb-6">
                 <h1 className="text-2xl font-bold text-gray-800 capitalize">
-                    {type === "subscribers" ? "Subscribers" : "Team Members"}
+                    {type === "subscribers" ? t('users.subscribers') : t('users.team.members')}
                 </h1>
                 <Link
                     href="/admin/users/new"
                     className="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
                 >
-                    <i className="fa-solid fa-plus"></i> New User
+                    <i className="fa-solid fa-plus"></i> {t('users.new')}
                 </Link>
             </div>
 
             <div className="bg-white rounded-lg shadow overflow-hidden">
                 {loading ? (
-                    <div className="p-8 text-center text-gray-500">Loading...</div>
+                    <div className="p-8 text-center text-gray-500">{t('loading')}</div>
                 ) : (
                     <table className="w-full">
                         <thead className="bg-gray-50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">User</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Email</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Role</th>
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('users.title')}</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('users.email')}</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('users.role')}</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('actions')}</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
@@ -96,7 +98,7 @@ export default function UsersPage() {
                                         <Link
                                             href={`/admin/users/${user.id}`}
                                             className="text-blue-600 hover:text-blue-800 mr-4"
-                                            title="Edit"
+                                            title={t('users.edit')}
                                         >
                                             <i className="fa-solid fa-pen"></i>
                                         </Link>

@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { postsApi, Post } from "@/lib/api";
-
+import { useI18n } from "@/contexts/I18nContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
 
 export default function PostsPage() {
+    const { t } = useI18n();
     const [posts, setPosts] = useState<Post[]>([]);
     const [loading, setLoading] = useState(true);
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -40,7 +41,7 @@ export default function PostsPage() {
             setPosts((prevPosts) => prevPosts.filter((p) => p.id !== postToDelete));
         } catch (error) {
             console.error("Failed to delete post:", error);
-            alert("Failed to delete post.");
+            alert(t('posts.delete.failed'));
         }
     };
 
@@ -50,44 +51,44 @@ export default function PostsPage() {
                 isOpen={deleteModalOpen}
                 onClose={() => setDeleteModalOpen(false)}
                 onConfirm={handleDelete}
-                title="Delete Post"
-                message="Are you sure you want to delete this post? This action cannot be undone."
-                confirmText="Delete"
+                title={t('posts.delete.title')}
+                message={t('posts.delete.message')}
+                confirmText={t('posts.delete.confirm')}
                 isDanger={true}
             />
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold text-gray-800">Posts</h1>
+                <h1 className="text-2xl font-bold text-gray-800">{t('posts.title')}</h1>
                 <Link
                     href="/admin/posts/new"
                     className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
                 >
-                    <i className="fa-solid fa-plus"></i> New Post
+                    <i className="fa-solid fa-plus"></i> {t('posts.new')}
                 </Link>
             </div>
 
             <div className="bg-white rounded-lg shadow overflow-hidden">
                 {loading ? (
-                    <div className="p-8 text-center text-gray-500">Loading...</div>
+                    <div className="p-8 text-center text-gray-500">{t('loading')}</div>
                 ) : posts.length === 0 ? (
-                    <div className="p-8 text-center text-gray-500">No posts found</div>
+                    <div className="p-8 text-center text-gray-500">{t('posts.not.found')}</div>
                 ) : (
                     <table className="w-full">
                         <thead className="bg-gray-50">
                             <tr>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                                    Title
+                                    {t('posts.title.field')}
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                                    Author
+                                    {t('posts.author')}
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                                    Status
+                                    {t('posts.status')}
                                 </th>
                                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                                    Date
+                                    {t('posts.date')}
                                 </th>
                                 <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                                    Actions
+                                    {t('actions')}
                                 </th>
                             </tr>
                         </thead>
@@ -112,7 +113,10 @@ export default function PostsPage() {
                                                 : "bg-yellow-100 text-yellow-800"
                                                 }`}
                                         >
-                                            {post.status}
+                                            {post.status === "publish" ? t('posts.published') : 
+                                             post.status === "draft" ? t('posts.draft') : 
+                                             post.status === "pending" ? t('posts.pending') : 
+                                             post.status}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-gray-500">
