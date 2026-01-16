@@ -4,9 +4,11 @@ import { useEffect, useState } from "react";
 import { pluginsApi, Plugin } from "@/lib/api";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
 import { FaPlug, FaUpload, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaBoxOpen } from "react-icons/fa";
 
 export default function PluginsPage() {
+    const { t } = useI18n();
     const [plugins, setPlugins] = useState<Plugin[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
@@ -42,7 +44,7 @@ export default function PluginsPage() {
                 await pluginsApi.deactivate(plugin.slug);
                 loadPlugins();
                 refreshMenus();
-                addToast(`Plugin deactivated`, "success");
+                addToast(t('plugins.deactivated'), "success");
             } else {
                 // ALWAYS show modal for any activation now
                 setPluginToActivate(plugin);
@@ -63,7 +65,7 @@ export default function PluginsPage() {
             setPluginToActivate(null);
             loadPlugins();
             refreshMenus();
-            addToast(`Plugin activated`, "success");
+            addToast(t('plugins.activated'), "success");
         } catch (error: any) {
             console.error("Failed to activate plugin:", error);
             // Persistent toast (duration: 0) so user can read the security error
@@ -76,7 +78,7 @@ export default function PluginsPage() {
         if (!file) return;
 
         if (!file.name.endsWith('.zip')) {
-            addToast("Please select a .zip file", "error");
+            addToast(t('plugins.upload.select.zip'), "error");
             return;
         }
 
@@ -86,12 +88,12 @@ export default function PluginsPage() {
 
         try {
             await pluginsApi.upload(formData);
-            addToast("Plugin uploaded successfully!", "success");
+            addToast(t('plugins.upload.success'), "success");
             loadPlugins();
             refreshMenus();
         } catch (error: any) {
             console.error("Upload failed:", error);
-            addToast("Failed to upload plugin: " + (error.message || "Unknown error"), "error");
+            addToast(t('plugins.upload.failed') + ": " + (error.message || "Unknown error"), "error");
         } finally {
             setUploading(false);
             e.target.value = "";
@@ -115,10 +117,10 @@ export default function PluginsPage() {
             setPassword("");
             loadPlugins();
             refreshMenus();
-            addToast("Plugin deleted successfully", "success");
+            addToast(t('common.success'), "success");
         } catch (error: any) {
             console.error("Failed to delete plugin:", error);
-            setDeleteError(error.message || "Failed to delete plugin");
+            setDeleteError(error.message || t('plugins.delete.failed'));
         }
     };
 
@@ -139,24 +141,23 @@ export default function PluginsPage() {
                             <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
                                 <FaExclamationTriangle className="text-xl" />
                             </div>
-                            <h3 className="text-xl font-bold text-gray-900">Delete Plugin?</h3>
+                            <h3 className="text-xl font-bold text-gray-900">{t('plugins.delete.title')}</h3>
                         </div>
 
                         <p className="mb-6 text-gray-600 leading-relaxed">
-                            Are you sure you want to delete <strong className="text-gray-900">{pluginToDelete?.name}</strong>?
-                            This action cannot be undone and will remove all plugin files.
+                            {t('plugins.delete.message')} <strong className="text-gray-900">{pluginToDelete?.name}</strong>?
                         </p>
 
                         <div className="mb-6 space-y-2">
                             <label className="block text-sm font-bold text-gray-700 uppercase tracking-wider">
-                                Confirm Password
+                                {t('users.password')}
                             </label>
                             <input
                                 type="password"
                                 className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-4 focus:ring-red-100 focus:border-red-500 outline-none transition-all"
                                 value={password}
                                 onChange={(e) => setPassword(e.target.value)}
-                                placeholder="Enter your admin password"
+                                placeholder={t('users.password')}
                                 autoFocus
                             />
                             {deleteError && (
@@ -171,14 +172,14 @@ export default function PluginsPage() {
                                 onClick={() => setDeleteModalOpen(false)}
                                 className="px-5 py-2.5 text-gray-600 hover:text-gray-900 font-medium hover:bg-gray-100 rounded-xl transition-all"
                             >
-                                Cancel
+                                {t('cancel')}
                             </button>
                             <button
                                 onClick={confirmDelete}
                                 disabled={!password}
                                 className="px-5 py-2.5 bg-red-600 text-white rounded-xl font-bold hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-red-500/30 transition-all transform hover:-translate-y-0.5"
                             >
-                                Delete Forever
+                                {t('plugins.delete.confirm')}
                             </button>
                         </div>
                     </div>
@@ -196,14 +197,14 @@ export default function PluginsPage() {
                                 <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0">
                                     <FaPlug className="text-xl" />
                                 </div>
-                                <h3 className="text-xl font-bold text-gray-900">Authorize Plugin</h3>
+                                <h3 className="text-xl font-bold text-gray-900">{t('plugins.permissions')}</h3>
                             </div>
                         </div>
 
                         {/* Scrollable Content */}
                         <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
                             <p className="mb-6 text-gray-600 leading-relaxed">
-                                The plugin <strong className="text-gray-900">{pluginToActivate.name}</strong> requests the following permissions to function:
+                                {t('plugins.requests.permissions')} <strong className="text-gray-900">{pluginToActivate.name}</strong>:
                             </p>
 
                             <div className="space-y-3 mb-6">
@@ -227,8 +228,8 @@ export default function PluginsPage() {
                                         <div className="w-12 h-12 bg-white rounded-full flex items-center justify-center shadow-sm mb-3">
                                             <FaCheck className="text-green-500" />
                                         </div>
-                                        <p className="text-green-800 font-bold text-sm">Safe to Activate</p>
-                                        <p className="text-green-600 text-xs mt-1">This plugin requests no special system-level permissions.</p>
+                                        <p className="text-green-800 font-bold text-sm">{t('plugins.safe.to.activate')}</p>
+                                        <p className="text-green-600 text-xs mt-1">{t('plugins.no.permissions')}</p>
                                     </div>
                                 )}
                             </div>
@@ -247,13 +248,13 @@ export default function PluginsPage() {
                                 }}
                                 className="px-5 py-2.5 text-gray-600 hover:text-gray-900 font-medium hover:bg-gray-100 rounded-xl transition-all"
                             >
-                                Cancel
+                                {t('cancel')}
                             </button>
                             <button
                                 onClick={confirmActivate}
                                 className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 shadow-lg hover:shadow-blue-500/30 transition-all transform hover:-translate-y-0.5"
                             >
-                                Confirm and Activate
+                                {t('plugins.confirm.activate')}
                             </button>
                         </div>
                     </div>
@@ -265,9 +266,9 @@ export default function PluginsPage() {
                 <div>
                     <h1 className="text-4xl font-black text-gray-900 tracking-tight font-oswald mb-2 flex items-center gap-3">
                         <FaPlug className="text-blue-600" />
-                        Plugins
+                        {t('plugins.title')}
                     </h1>
-                    <p className="text-lg text-gray-500 font-medium">Extend your site's functionality</p>
+                    <p className="text-lg text-gray-500 font-medium">{t('plugins.extend.functionality')}</p>
                 </div>
 
                 <div>
@@ -282,12 +283,12 @@ export default function PluginsPage() {
                         {uploading ? (
                             <>
                                 <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                <span>Installing...</span>
+                                <span>{t('plugins.installing')}</span>
                             </>
                         ) : (
                             <>
                                 <FaUpload className="group-hover:scale-110 transition-transform" />
-                                <span>Upload Plugin</span>
+                                <span>{t('plugins.upload')}</span>
                             </>
                         )}
                         <input
@@ -306,14 +307,14 @@ export default function PluginsPage() {
                 {loading ? (
                     <div className="glass-panel rounded-3xl p-12 text-center text-gray-400">
                         <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
-                        <p className="font-medium">Loading your plugins...</p>
+                        <p className="font-medium">{t('plugins.loading')}</p>
                     </div>
                 ) : plugins.length === 0 ? (
                     <div className="glass-panel rounded-3xl p-16 text-center">
                         <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6 text-gray-300">
                             <FaBoxOpen className="text-5xl" />
                         </div>
-                        <h3 className="text-2xl font-bold text-gray-800 mb-2">No plugins installed</h3>
+                        <h3 className="text-2xl font-bold text-gray-800 mb-2">{t('plugins.no.plugins.found')}</h3>
                         <p className="text-gray-500 max-w-md mx-auto">
                             Get started by uploading your first plugin using the button above.
                         </p>
@@ -402,11 +403,11 @@ export default function PluginsPage() {
                                     >
                                         {plugin.active ? (
                                             <>
-                                                <FaPowerOff /> Deactivate
+                                                <FaPowerOff /> {t('plugins.deactivate')}
                                             </>
                                         ) : (
                                             <>
-                                                <FaCheck /> Activate
+                                                <FaCheck /> {t('plugins.activate')}
                                             </>
                                         )}
                                     </button>

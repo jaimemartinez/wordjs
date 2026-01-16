@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { postsApi, usersApi, commentsApi, Comment } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 interface Stats {
     posts: number;
@@ -13,6 +14,7 @@ interface Stats {
 
 export default function DashboardPage() {
     const { user, can } = useAuth();
+    const { t } = useI18n();
     const [stats, setStats] = useState<Stats>({ posts: 0, pages: 0, comments: 0, users: 0 });
     const [recentComments, setRecentComments] = useState<Comment[]>([]);
     const [loading, setLoading] = useState(true);
@@ -48,18 +50,18 @@ export default function DashboardPage() {
     };
 
     const statCards = [
-        { label: "Posts", value: stats.posts, icon: "fa-pen-to-square", color: "bg-blue-600 shadow-blue-200" },
-        { label: "Pages", value: stats.pages, icon: "fa-file-lines", color: "bg-indigo-600 shadow-indigo-200" },
-        { label: "Comments", value: stats.comments, icon: "fa-comments", color: "bg-amber-500 shadow-amber-200" },
-        { label: "Users", value: stats.users, icon: "fa-users", color: "bg-emerald-600 shadow-emerald-200" },
+        { label: t('nav.posts'), value: stats.posts, icon: "fa-pen-to-square", color: "bg-blue-600 shadow-blue-200" },
+        { label: t('nav.pages'), value: stats.pages, icon: "fa-file-lines", color: "bg-indigo-600 shadow-indigo-200" },
+        { label: t('nav.comments'), value: stats.comments, icon: "fa-comments", color: "bg-amber-500 shadow-amber-200" },
+        { label: t('nav.users'), value: stats.users, icon: "fa-users", color: "bg-emerald-600 shadow-emerald-200" },
     ];
 
     return (
         <div className="p-6 h-full overflow-auto bg-gray-50/50">
             <div className="flex justify-between items-center mb-8">
-                <h1 className="text-3xl font-bold text-gray-900 tracking-tight">Dashboard Overview</h1>
+                <h1 className="text-3xl font-bold text-gray-900 tracking-tight">{t('dashboard.overview')}</h1>
                 <div className="text-sm text-gray-500 bg-white px-3 py-1 rounded-full shadow-sm border border-gray-100 italic">
-                    Welcome back, {user?.displayName || user?.username || 'User'}
+                    {t('dashboard.welcome.back')}, {user?.displayName || user?.username || 'User'}
                 </div>
             </div>
 
@@ -88,33 +90,33 @@ export default function DashboardPage() {
                     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
                         <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
                             <i className="fa-solid fa-bolt text-yellow-500"></i>
-                            Quick Actions
+                            {t('dashboard.quick.actions')}
                         </h2>
                         <div className="flex flex-wrap gap-4">
                             <a
                                 href="/admin/posts/new"
                                 className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl transition-all flex items-center gap-2 shadow-sm font-medium"
                             >
-                                <i className="fa-solid fa-plus text-xs"></i> New Post
+                                <i className="fa-solid fa-plus text-xs"></i> {t('dashboard.new.post')}
                             </a>
                             <a
                                 href="/admin/pages/new"
                                 className="bg-white border-2 border-gray-100 hover:border-blue-600 hover:text-blue-600 text-gray-600 px-6 py-2.5 rounded-xl transition-all flex items-center gap-2 font-medium"
                             >
-                                <i className="fa-solid fa-file-plus text-xs"></i> New Page
+                                <i className="fa-solid fa-file-plus text-xs"></i> {t('dashboard.new.page')}
                             </a>
                             <a
                                 href="/admin/media"
                                 className="bg-white border-2 border-gray-100 hover:border-purple-600 hover:text-purple-600 text-gray-600 px-6 py-2.5 rounded-xl transition-all flex items-center gap-2 font-medium"
                             >
-                                <i className="fa-solid fa-cloud-arrow-up text-xs"></i> Add Media
+                                <i className="fa-solid fa-cloud-arrow-up text-xs"></i> {t('dashboard.add.media')}
                             </a>
                         </div>
                     </div>
 
                     {/* Recent Content Table (Placeholder for now) */}
                     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6">
-                        <h2 className="text-xl font-bold text-gray-900 mb-6">Recent Posts</h2>
+                        <h2 className="text-xl font-bold text-gray-900 mb-6">{t('dashboard.recent.posts')}</h2>
                         <div className="text-center py-12 text-gray-400">
                             <p className="italic">Post activity visualization coming soon...</p>
                         </div>
@@ -125,7 +127,7 @@ export default function DashboardPage() {
                 <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 flex flex-col h-full">
                     <h2 className="text-xl font-bold text-gray-900 mb-6 flex items-center gap-2">
                         <i className="fa-solid fa-comment-dots text-amber-500"></i>
-                        Recent Comments
+                        {t('dashboard.recent.comments')}
                     </h2>
 
                     {loading ? (

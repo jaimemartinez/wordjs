@@ -2,19 +2,21 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { mediaApi, MediaItem } from "@/lib/api";
+import { useI18n } from "@/contexts/I18nContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
 import Image from "next/image";
 import { useToast } from "@/contexts/ToastContext";
 
 // Image Preview Modal
 function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+    const { t } = useI18n();
     const { addToast } = useToast();
 
     if (!item) return null;
 
     const copyUrl = () => {
         navigator.clipboard.writeText(item.guid);
-        addToast("URL copied to clipboard!", "success");
+        addToast(t('media.url.copied'), "success");
     };
 
     return (
@@ -44,11 +46,11 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
                     </h3>
                     <div className="text-sm text-gray-500 mb-6 space-y-2">
                         <div className="flex justify-between border-b pb-2">
-                            <span>Type</span>
+                            <span>{t('media.type')}</span>
                             <span className="font-medium text-gray-700">{item.mimeType}</span>
                         </div>
                         <div className="flex justify-between border-b pb-2">
-                            <span>Uploaded</span>
+                            <span>{t('media.uploaded')}</span>
                             <span className="font-medium text-gray-700">{new Date(item.date).toLocaleDateString()}</span>
                         </div>
                     </div>
@@ -58,7 +60,7 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
                             onClick={copyUrl}
                             className="w-full py-2 px-4 bg-gray-100 hover:bg-brand-cyan hover:text-white text-gray-700 rounded-lg transition-colors font-medium flex items-center justify-center gap-2"
                         >
-                            <i className="fa-solid fa-link"></i> Copy URL
+                            <i className="fa-solid fa-link"></i> {t('media.copy.url')}
                         </button>
                         <a
                             href={item.guid}
@@ -66,7 +68,7 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
                             rel="noopener noreferrer"
                             className="w-full py-2 px-4 bg-brand-blue hover:bg-blue-700 text-white rounded-lg transition-colors font-medium flex items-center justify-center gap-2 text-center block"
                         >
-                            <i className="fa-solid fa-external-link-alt"></i> Open
+                            <i className="fa-solid fa-external-link-alt"></i> {t('media.open')}
                         </a>
                     </div>
                 </div>
@@ -76,6 +78,7 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
 }
 
 export default function MediaPage() {
+    const { t } = useI18n();
     const { addToast } = useToast();
     const [media, setMedia] = useState<MediaItem[]>([]);
     const [filteredMedia, setFilteredMedia] = useState<MediaItem[]>([]);
@@ -128,10 +131,10 @@ export default function MediaPage() {
                 setUploadProgress(Math.round(progress));
             });
             await loadMedia();
-            addToast("File uploaded successfully", "success");
+            addToast(t('media.upload.success'), "success");
         } catch (error) {
             console.error("Failed to upload file:", error);
-            addToast("Failed to upload file", "error");
+            addToast(t('media.upload.failed'), "error");
         } finally {
             setUploading(false);
             setUploadProgress(0);
@@ -175,10 +178,10 @@ export default function MediaPage() {
             setMedia((prevMedia) => prevMedia.filter((item) => item.id !== mediaToDelete));
             if (previewItem?.id === mediaToDelete) setPreviewItem(null);
             setDeleteModalOpen(false);
-            addToast("File deleted", "success");
+            addToast(t('common.success'), "success");
         } catch (error) {
             console.error("Failed to delete file:", error);
-            addToast("Failed to delete file", "error");
+            addToast(t('common.error'), "error");
         }
     };
 
@@ -193,9 +196,9 @@ export default function MediaPage() {
                 isOpen={deleteModalOpen}
                 onClose={() => setDeleteModalOpen(false)}
                 onConfirm={handleDelete}
-                title="Delete File"
-                message="Are you sure you want to delete this file? This action cannot be undone."
-                confirmText="Delete"
+                title={t('media.delete.title')}
+                message={t('media.delete.message')}
+                confirmText={t('media.delete.confirm')}
                 isDanger={true}
             />
 
@@ -207,8 +210,8 @@ export default function MediaPage() {
             {isDragging && (
                 <div className="absolute inset-0 z-50 bg-brand-blue/90 flex flex-col items-center justify-center text-white backdrop-blur-sm animate-in fade-in">
                     <i className="fa-solid fa-cloud-arrow-up text-8xl mb-6 animate-bounce"></i>
-                    <h2 className="text-4xl font-oswald font-bold">Sueltat tu archivo aquí</h2>
-                    <p className="mt-2 text-lg text-blue-100">para subirlo a la librería</p>
+                    <h2 className="text-4xl font-oswald font-bold">{t('media.drop.file')}</h2>
+                    <p className="mt-2 text-lg text-blue-100">{t('media.drop.description')}</p>
                 </div>
             )}
 
@@ -219,8 +222,8 @@ export default function MediaPage() {
                         <i className="fa-solid fa-photo-film text-lg"></i>
                     </div>
                     <div>
-                        <h1 className="text-xl font-bold text-gray-900 font-oswald">Galería Multimedia</h1>
-                        <p className="text-xs text-gray-500">{media.length} archivos</p>
+                        <h1 className="text-xl font-bold text-gray-900 font-oswald">{t('media.title')}</h1>
+                        <p className="text-xs text-gray-500">{media.length} {t('media.files.count')}</p>
                     </div>
                 </div>
 
@@ -230,7 +233,7 @@ export default function MediaPage() {
                         <i className="fa-solid fa-search absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"></i>
                         <input
                             type="text"
-                            placeholder="Buscar..."
+                            placeholder={t('media.search.placeholder')}
                             value={searchQuery}
                             onChange={(e) => setSearchQuery(e.target.value)}
                             className="w-full pl-9 pr-4 py-2 bg-gray-50 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-brand-cyan/50 focus:border-brand-cyan transition-all"
@@ -256,7 +259,7 @@ export default function MediaPage() {
                     {/* Upload Button */}
                     <label className={`bg-gradient-to-r from-brand-blue to-brand-cyan hover:brightness-110 text-white px-5 py-2.5 rounded-xl transition-all shadow-lg shadow-brand-blue/20 flex items-center gap-2 cursor-pointer transform hover:-translate-y-0.5 active:scale-95 ${uploading ? 'opacity-70 pointer-events-none' : ''}`}>
                         <i className={`fa-solid ${uploading ? 'fa-spinner fa-spin' : 'fa-cloud-upload'}`}></i>
-                        <span className="font-medium font-oswald tracking-wide">{uploading ? 'Subiendo...' : 'Subir'}</span>
+                        <span className="font-medium font-oswald tracking-wide">{uploading ? t('media.uploading') : t('media.upload')}</span>
                         <input type="file" onChange={handleInputChange} className="hidden" multiple accept="image/*,video/*,application/pdf" />
                     </label>
                 </div>
@@ -287,8 +290,8 @@ export default function MediaPage() {
                         <div className="w-24 h-24 bg-gray-100 rounded-full flex items-center justify-center mb-4">
                             <i className="fa-regular fa-image text-4xl text-gray-300"></i>
                         </div>
-                        <p className="text-lg font-medium">No se encontraron archivos</p>
-                        <p className="text-sm">Sube algo nuevo o cambia tu búsqueda</p>
+                        <p className="text-lg font-medium">{t('media.no.files.found')}</p>
+                        <p className="text-sm">{t('media.upload.new')}</p>
                     </div>
                 ) : viewMode === 'grid' ? (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-6 pb-20">

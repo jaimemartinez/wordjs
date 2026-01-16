@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { settingsApi, MediaItem, postsApi, Post, rolesApi, Role } from "@/lib/api";
+import { useI18n } from "@/contexts/I18nContext";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import ModernSelect from "@/components/ModernSelect";
 
 export default function SettingsPage() {
+    const { t } = useI18n();
     const [settings, setSettings] = useState({
         blogname: "",
         blogdescription: "",
@@ -81,7 +83,7 @@ export default function SettingsPage() {
             setTimeout(() => setSaved(false), 3000);
         } catch (error) {
             console.error("Failed to save settings:", error);
-            alert("Failed to save settings");
+            alert(t('settings.save.failed'));
         } finally {
             setSaving(false);
         }
@@ -101,8 +103,8 @@ export default function SettingsPage() {
             <div className="max-w-4xl mx-auto">
                 <div className="flex justify-between items-center mb-10">
                     <div>
-                        <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">Settings</h1>
-                        <p className="text-gray-500 mt-1">Configure your site's core settings and preferences.</p>
+                        <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">{t('settings.title')}</h1>
+                        <p className="text-gray-500 mt-1">{t('settings.general')}</p>
                     </div>
                 </div>
 
@@ -110,8 +112,8 @@ export default function SettingsPage() {
                     {/* General Settings Section */}
                     <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
-                            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                                <i className="fa-solid fa-gear text-blue-500"></i> General Information
+                                <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                                <i className="fa-solid fa-gear text-blue-500"></i> {t('settings.general')}
                             </h2>
                         </div>
                         <div className="p-8 space-y-8">
@@ -141,15 +143,15 @@ export default function SettingsPage() {
                                     )}
                                 </div>
                                 <div className="flex-1">
-                                    <h3 className="text-sm font-bold text-gray-900 mb-2">Site Logo</h3>
-                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">This logo will be displayed in the header of your site and admin panel. Recommended size: 512x512px.</p>
+                                    <h3 className="text-sm font-bold text-gray-900 mb-2">{t('settings.site.logo')}</h3>
+                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">{t('settings.site.logo')}</p>
                                     <button
                                         type="button"
                                         onClick={() => setActivePicker("logo")}
                                         className="bg-white hover:bg-gray-50 text-gray-700 font-bold px-5 py-2.5 rounded-xl border-2 border-gray-100 transition-all flex items-center gap-2 text-sm shadow-sm"
                                     >
                                         <i className="fa-solid fa-cloud-arrow-up text-blue-500"></i>
-                                        {settings.site_logo ? "Update Logo" : "Upload Logo"}
+                                        {settings.site_logo ? t('settings.select.logo') : t('settings.select.logo')}
                                     </button>
                                 </div>
                             </div>
@@ -180,15 +182,15 @@ export default function SettingsPage() {
                                     )}
                                 </div>
                                 <div className="flex-1">
-                                    <h3 className="text-sm font-bold text-gray-900 mb-2">Site Icon (Favicon)</h3>
-                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">The Site Icon is what you see in browser tabs, bookmark bars, and within the WordJS mobile apps. Recommended size: 512x512px.</p>
+                                    <h3 className="text-sm font-bold text-gray-900 mb-2">{t('settings.site.icon')}</h3>
+                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">{t('settings.site.icon')}</p>
                                     <button
                                         type="button"
                                         onClick={() => setActivePicker("icon")}
                                         className="bg-white hover:bg-gray-50 text-gray-700 font-bold px-5 py-2.5 rounded-xl border-2 border-gray-100 transition-all flex items-center gap-2 text-sm shadow-sm"
                                     >
                                         <i className="fa-solid fa-wand-magic-sparkles text-purple-500"></i>
-                                        {settings.site_icon ? "Update Icon" : "Upload Icon"}
+                                        {settings.site_icon ? t('settings.select.icon') : t('settings.select.icon')}
                                     </button>
                                 </div>
                             </div>

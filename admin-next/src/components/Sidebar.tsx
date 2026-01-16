@@ -5,6 +5,7 @@ import SmartLink from "./SmartLink";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useAuth } from "@/contexts/AuthContext";
 import { useMenu } from "@/contexts/MenuContext";
+import { useI18n } from "@/contexts/I18nContext";
 import { useEffect, useState } from "react";
 import NotificationCenter from "./NotificationCenter";
 
@@ -15,23 +16,24 @@ interface SidebarMenuItem {
     cap?: string;
 }
 
-// Core menu items with required capabilities
+// Core menu items - labels will be translated in component
 const coreMenuItems: SidebarMenuItem[] = [
-    { href: "/admin", label: "Dashboard", icon: "fa-chart-pie", cap: "read" },
-    { href: "/admin/posts", label: "Posts", icon: "fa-pen-to-square", cap: "edit_posts" },
-    { href: "/admin/pages", label: "Pages", icon: "fa-file-lines", cap: "edit_pages" },
-    { href: "/admin/media", label: "Media", icon: "fa-images", cap: "upload_files" },
-    { href: "/admin/menus", label: "Menus", icon: "fa-bars", cap: "edit_theme_options" },
-    { href: "/admin/footer", label: "Footer", icon: "fa-shoe-prints", cap: "edit_theme_options" },
-    { href: "/admin/widgets", label: "Widgets", icon: "fa-shapes", cap: "edit_theme_options" },
-    { href: "/admin/comments", label: "Comments", icon: "fa-comments", cap: "moderate_comments" },
-    { href: "/admin/users", label: "Team", icon: "fa-users", cap: "list_users" },
-    { href: "/admin/users?type=subscribers", label: "Subscribers", icon: "fa-user-group", cap: "list_users" },
-    { href: "/admin/users/roles", label: "Roles", icon: "fa-shield-halved", cap: "manage_options" },
-    { href: "/admin/categories", label: "Categories", icon: "fa-folder", cap: "manage_categories" },
-    { href: "/admin/plugins", label: "Plugins", icon: "fa-plug", cap: "activate_plugins" },
-    { href: "/admin/themes", label: "Themes", icon: "fa-palette", cap: "switch_themes" },
-    { href: "/admin/settings", label: "Settings", icon: "fa-gear", cap: "manage_options" },
+    { href: "/admin", label: "nav.dashboard", icon: "fa-chart-pie", cap: "read" },
+    { href: "/admin/posts", label: "nav.posts", icon: "fa-pen-to-square", cap: "edit_posts" },
+    { href: "/admin/pages", label: "nav.pages", icon: "fa-file-lines", cap: "edit_pages" },
+    { href: "/admin/media", label: "nav.media", icon: "fa-images", cap: "upload_files" },
+    { href: "/admin/menus", label: "nav.menus", icon: "fa-bars", cap: "edit_theme_options" },
+    { href: "/admin/footer", label: "nav.footer", icon: "fa-shoe-prints", cap: "edit_theme_options" },
+    { href: "/admin/widgets", label: "nav.widgets", icon: "fa-shapes", cap: "edit_theme_options" },
+    { href: "/admin/comments", label: "nav.comments", icon: "fa-comments", cap: "moderate_comments" },
+    { href: "/admin/users", label: "nav.users", icon: "fa-users", cap: "list_users" },
+    { href: "/admin/users?type=subscribers", label: "nav.subscribers", icon: "fa-user-group", cap: "list_users" },
+    { href: "/admin/users/roles", label: "nav.roles", icon: "fa-shield-halved", cap: "manage_options" },
+    { href: "/admin/categories", label: "nav.categories", icon: "fa-folder", cap: "manage_categories" },
+    { href: "/admin/plugins", label: "nav.plugins", icon: "fa-plug", cap: "activate_plugins" },
+    { href: "/admin/themes", label: "nav.themes", icon: "fa-palette", cap: "switch_themes" },
+    { href: "/admin/fonts", label: "nav.fonts", icon: "fa-font", cap: "manage_options" },
+    { href: "/admin/settings", label: "nav.settings", icon: "fa-gear", cap: "manage_options" },
 ];
 
 interface SidebarProps {
@@ -45,6 +47,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     const searchParams = useSearchParams();
     const { logout, user } = useAuth();
     const { pluginMenus } = useMenu(); // Use global context
+    const { t, language, setLanguage } = useI18n();
     const [logoUrl, setLogoUrl] = useState<string | null>(null);
     const [siteTitle, setSiteTitle] = useState("WordJS");
     const [hoveredItem, setHoveredItem] = useState<{ label: string; top: number } | null>(null);
@@ -110,7 +113,10 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                 onMouseEnter={(e) => {
                     if (isCollapsed) {
                         const rect = e.currentTarget.getBoundingClientRect();
-                        setHoveredItem({ label: item.label, top: rect.top + (rect.height / 2) });
+                        const labelText = typeof item.label === 'string' && item.label.startsWith('nav.')
+                            ? t(item.label)
+                            : String(item.label);
+                        setHoveredItem({ label: labelText, top: rect.top + (rect.height / 2) });
                     }
                 }}
                 onMouseLeave={() => setHoveredItem(null)}
@@ -130,7 +136,9 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                     <i className={`fa-solid ${item.icon} transition-transform group-hover:scale-110 ${isCollapsed ? 'md:text-lg w-5 text-center text-sm' : 'w-5 text-center text-sm'} ${isActive ? (isCollapsed ? 'md:text-white text-blue-500' : 'text-blue-500') : 'text-gray-500 group-hover:text-blue-400'}`}></i>
 
                     <span className={`text-sm tracking-wide truncate transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "md:hidden block" : "block"}`}>
-                        {typeof item.label === 'string' || typeof item.label === 'number'
+                        {typeof item.label === 'string' && item.label.startsWith('nav.')
+                            ? t(item.label)
+                            : typeof item.label === 'string' || typeof item.label === 'number'
                             ? item.label
                             : <span className="text-red-500 font-mono text-xs">ERR: {JSON.stringify(item.label).slice(0, 10)}</span>
                         }
@@ -238,16 +246,29 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                         </div>
                     </div>
 
+                    {/* Language Selector */}
+                    <div className={`mb-3 ${isCollapsed ? "md:hidden block" : "block"}`}>
+                        <select
+                            value={language}
+                            onChange={(e) => setLanguage(e.target.value as Language)}
+                            className="w-full px-3 py-2 bg-white/5 hover:bg-white/10 text-white text-sm rounded-xl border border-white/10 focus:outline-none focus:ring-2 focus:ring-blue-500/50 transition"
+                        >
+                            <option value="es">🇪🇸 Español</option>
+                            <option value="en">🇺🇸 English</option>
+                            <option value="pt">🇧🇷 Português</option>
+                        </select>
+                    </div>
+
                     <button
                         onClick={logout}
-                        title={isCollapsed ? "Sign Out" : undefined}
+                        title={isCollapsed ? t('nav.sign.out') : undefined}
                         className={`
                             bg-red-500/5 hover:bg-red-500/10 text-red-400/80 hover:text-red-400 rounded-2xl transition-all flex items-center gap-3 font-bold text-sm border border-red-500/10 group overflow-hidden relative mx-auto
                             ${isCollapsed ? "md:w-14 md:h-14 md:justify-center py-3.5 px-4 justify-center w-full" : "py-3.5 px-4 justify-center w-full"}
                         `}
                     >
                         <i className="fa-solid fa-right-from-bracket transition-transform group-hover:translate-x-1"></i>
-                        <span className={`transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "md:hidden block" : "block"}`}>Sign Out</span>
+                        <span className={`transition-all duration-300 opacity-100 translate-x-0 ${isCollapsed ? "md:hidden block" : "block"}`}>{t('nav.sign.out')}</span>
                         <div className="absolute inset-0 bg-red-500/5 translate-y-full group-hover:translate-y-0 transition-transform duration-300"></div>
                     </button>
                 </div>

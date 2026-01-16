@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { postsApi, Post } from "@/lib/api";
-
+import { useI18n } from "@/contexts/I18nContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
 
 export default function PagesPage() {
+    const { t } = useI18n();
     const [pages, setPages] = useState<Post[]>([]);
     const [loading, setLoading] = useState(true);
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
@@ -49,34 +50,34 @@ export default function PagesPage() {
                 isOpen={deleteModalOpen}
                 onClose={() => setDeleteModalOpen(false)}
                 onConfirm={handleDelete}
-                title="Delete Page"
-                message="Are you sure you want to delete this page? This action cannot be undone."
-                confirmText="Delete"
+                title={t('pages.delete.title')}
+                message={t('pages.delete.message')}
+                confirmText={t('pages.delete.confirm')}
                 isDanger={true}
             />
             <div className="flex justify-between items-center mb-6">
-                <h1 className="text-2xl font-bold text-gray-800">Pages</h1>
+                <h1 className="text-2xl font-bold text-gray-800">{t('pages.title')}</h1>
                 <Link
                     href="/admin/pages/new"
                     className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors flex items-center gap-2"
                 >
-                    <i className="fa-solid fa-plus"></i> New Page
+                    <i className="fa-solid fa-plus"></i> {t('pages.new')}
                 </Link>
             </div>
 
             <div className="bg-white rounded-lg shadow overflow-hidden">
                 {loading ? (
-                    <div className="p-8 text-center text-gray-500">Loading...</div>
+                    <div className="p-8 text-center text-gray-500">{t('loading')}</div>
                 ) : pages.length === 0 ? (
-                    <div className="p-8 text-center text-gray-500">No pages found</div>
+                    <div className="p-8 text-center text-gray-500">{t('pages.not.found')}</div>
                 ) : (
                     <table className="w-full">
                         <thead className="bg-gray-50">
                             <tr>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Title</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Status</th>
-                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
-                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('posts.title.field')}</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('posts.status')}</th>
+                                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">{t('posts.date')}</th>
+                                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">{t('actions')}</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-200">
@@ -89,7 +90,10 @@ export default function PagesPage() {
                                     </td>
                                     <td className="px-6 py-4">
                                         <span className={`px-2 py-1 text-xs rounded-full ${page.status === "publish" ? "bg-green-100 text-green-800" : "bg-yellow-100 text-yellow-800"}`}>
-                                            {page.status}
+                                            {page.status === "publish" ? t('posts.published') : 
+                                             page.status === "draft" ? t('posts.draft') : 
+                                             page.status === "pending" ? t('posts.pending') : 
+                                             page.status}
                                         </span>
                                     </td>
                                     <td className="px-6 py-4 text-gray-500">{new Date(page.date).toLocaleDateString()}</td>

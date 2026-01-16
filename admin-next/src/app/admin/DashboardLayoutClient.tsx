@@ -118,6 +118,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
 
 import { MenuProvider } from "@/contexts/MenuContext";
 import { ToastProvider } from "@/contexts/ToastContext";
+import { I18nProvider } from "@/contexts/I18nContext";
 
 export default function DashboardLayoutClient({
     children,
@@ -125,14 +126,16 @@ export default function DashboardLayoutClient({
     children: React.ReactNode;
 }) {
     return (
-        <AuthProvider>
-            <UnsavedChangesProvider>
-                <ToastProvider>
-                    <MenuProvider>
-                        <DashboardLayoutContent>{children}</DashboardLayoutContent>
-                    </MenuProvider>
-                </ToastProvider>
-            </UnsavedChangesProvider>
-        </AuthProvider>
+        <I18nProvider>
+            <AuthProvider>
+                <UnsavedChangesProvider>
+                    <ToastProvider>
+                        <MenuProvider>
+                            <DashboardLayoutContent>{children}</DashboardLayoutContent>
+                        </MenuProvider>
+                    </ToastProvider>
+                </UnsavedChangesProvider>
+            </AuthProvider>
+        </I18nProvider>
     );
 }
