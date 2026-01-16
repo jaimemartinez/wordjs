@@ -61,6 +61,8 @@ class PostgresDriver extends DatabaseDriverInterface {
 
     async get(sql, params = []) {
         try {
+            // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
+            // This allows plugins to always write SQLite-style SQL
             const normalizedSql = this.normalizeSql(sql);
             const res = await this.pool.query(normalizedSql, params);
             return res.rows[0];
@@ -72,6 +74,7 @@ class PostgresDriver extends DatabaseDriverInterface {
 
     async all(sql, params = []) {
         try {
+            // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             const normalizedSql = this.normalizeSql(sql);
             const res = await this.pool.query(normalizedSql, params);
             return res.rows;
@@ -83,6 +86,7 @@ class PostgresDriver extends DatabaseDriverInterface {
 
     async run(sql, params = []) {
         try {
+            // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             let normalizedSql = this.normalizeSql(sql);
 
             // AUTO-INJECT 'RETURNING id' for INSERTs if missing
