@@ -3,28 +3,26 @@
  * Interacts with the central database.
  */
 
-const { db, dbAsync } = require('../config/database');
+const { db, dbAsync, createPluginTable } = require('../config/database');
 
 class Email {
     static async initSchema() {
-        await dbAsync.exec(`
-            CREATE TABLE IF NOT EXISTS received_emails (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                message_id TEXT,
-                from_address TEXT,
-                from_name TEXT,
-                to_address TEXT,
-                subject TEXT,
-                body_text TEXT,
-                body_html TEXT,
-                date_received TEXT DEFAULT CURRENT_TIMESTAMP,
-                is_read INTEGER DEFAULT 0,
-                is_sent INTEGER DEFAULT 0,
-                raw_content TEXT,
-                parent_id INTEGER DEFAULT 0,
-                thread_id INTEGER DEFAULT 0
-            )
-        `);
+        await createPluginTable('received_emails', [
+            'id INT_PK',
+            'message_id TEXT',
+            'from_address TEXT',
+            'from_name TEXT',
+            'to_address TEXT',
+            'subject TEXT',
+            'body_text TEXT',
+            'body_html TEXT',
+            'date_received DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'is_read INT DEFAULT 0',
+            'is_sent INT DEFAULT 0',
+            'raw_content TEXT',
+            'parent_id INT DEFAULT 0',
+            'thread_id INT DEFAULT 0'
+        ]);
     }
 
     static async create(data) {
