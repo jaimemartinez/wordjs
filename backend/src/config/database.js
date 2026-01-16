@@ -305,7 +305,19 @@ const dbProxy = new Proxy({}, {
   }
 });
 
-// Async Proxy
+/**
+ * GLOBAL DATABASE SYNTAX UNIFICATION
+ * 
+ * PRINCIPIO: Los plugins escriben SIEMPRE sintaxis SQLite estándar para TODAS las operaciones.
+ * El core normaliza automáticamente para PostgreSQL cuando es necesario.
+ * 
+ * Sintaxis unificada para plugins:
+ * - Placeholders: ? (nunca $1, $2)
+ * - Tipos en CREATE TABLE: INT_PK, DATETIME, TEXT, REAL, INT
+ * - SQL estándar: SELECT, INSERT, UPDATE, DELETE, JOIN, LIMIT, OFFSET (funciona igual)
+ * 
+ * Esto aplica a TODAS las operaciones: get(), all(), run(), exec()
+ */
 const dbAsyncProxy = new Proxy({}, {
   get(target, prop) {
     // Only verify on top-level access, not every property
@@ -313,19 +325,110 @@ const dbAsyncProxy = new Proxy({}, {
 
     const db = getDbAsync();
     if (!db) throw new Error('Async Database not initialized');
-    // If prop is a function on the driver, bind it
+    
+    // If prop is a function on the driver, wrap it with automatic normalization
     if (typeof db[prop] === 'function') {
-      return (...args) => {
+      return async (...args) => {
         // Double check for write operations
         if (['run', 'exec', 'save'].includes(prop)) {
           verifyPermission('database', 'write');
         }
-        return db[prop].bind(db)(...args);
+        
+        // Automatically normalize SQL queries (first argument is SQL string)
+        // This ensures ALL database operations use the same syntax globally
+        if (args.length > 0 && typeof args[0] === 'string') {
+          const sql = args[0];
+          const params = args.slice(1);
+          
+          // For PostgreSQL: normalize placeholders ? -> $1, $2, etc.
+          // For SQLite: pass SQL as-is (already uses ? placeholders)
+          // The Postgres driver also normalizes internally, ensuring double safety
+          let normalizedSql = sql;
+          if (driverName === 'postgres') {
+            let paramIndex = 1;
+            normalizedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
+          }
+          
+          // Execute with normalized SQL
+          // Standard SQL (SELECT, INSERT, UPDATE, DELETE, JOIN, LIMIT, OFFSET)
+          // works the same in both SQLite and PostgreSQL.
+          // The only difference is placeholders, which we normalize automatically.
+          return await db[prop].bind(db)(normalizedSql, ...params);
+        }
+        
+        // Non-SQL operations (like close, connect, etc.) - pass through
+        return await db[prop].bind(db)(...args);
       }
     }
     return db[prop];
   }
 });
+
+/**
+ * Plugin Schema Helper - Create tables with automatic driver compatibility
+ * Plugins should use this instead of raw CREATE TABLE statements
+ * 
+ * @param {string} tableName - Name of the table to create
+ * @param {Array<string>} columns - Array of column definitions using SQLite syntax
+ * @returns {Promise<void>}
+ * 
+ * @example
+ * await createPluginTable('my_table', [
+ *   'id INT_PK',
+ *   'name TEXT NOT NULL',
+ *   'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
+ * ]);
+ */
+async function createPluginTable(tableName, columns) {
+  const isPostgres = driverName === 'postgres';
+  
+  // Type mappings for compatibility
+  const typeMap = {
+    'INT_PK': isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT',
+    'INT': 'INTEGER',
+    'TEXT': 'TEXT',
+    'REAL': 'REAL',
+    'DATETIME': isPostgres ? 'TIMESTAMP' : 'DATETIME',
+    'TIMESTAMP': isPostgres ? 'TIMESTAMP' : 'DATETIME',
+  };
+  
+  // Replace type aliases with driver-specific syntax
+  const mappedColumns = columns.map(col => {
+    let mapped = col;
+    // Replace INT_PK
+    mapped = mapped.replace(/\bINT_PK\b/g, typeMap.INT_PK);
+    // Replace other types (more careful replacement to avoid partial matches)
+    for (const [alias, replacement] of Object.entries(typeMap)) {
+      if (alias !== 'INT_PK') {
+        // Use word boundaries to avoid replacing parts of words
+        const regex = new RegExp(`\\b${alias}\\b`, 'g');
+        mapped = mapped.replace(regex, replacement);
+      }
+    }
+    return mapped;
+  });
+  
+  const sql = `CREATE TABLE IF NOT EXISTS ${tableName} (\n  ${mappedColumns.join(',\n  ')}\n)`;
+  
+  if (driverAsync) {
+    await driverAsync.exec(sql);
+  } else {
+    const db = getDb();
+    db.exec(sql);
+  }
+}
+
+/**
+ * Get database type information for plugins
+ * Useful for conditional logic if needed
+ */
+function getDbType() {
+  return {
+    isPostgres: driverName === 'postgres',
+    isSQLite: driverName !== 'postgres',
+    driver: driverName
+  };
+}
 
 module.exports = {
   init,
@@ -335,6 +438,8 @@ module.exports = {
   initializeSchema,
   saveDatabase,
   closeDatabase,
+  createPluginTable,
+  getDbType,
   db: dbProxy,
   dbAsync: dbAsyncProxy
 };
