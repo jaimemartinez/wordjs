@@ -16,6 +16,10 @@ const config = require('./config/app');
 // SECURITY: Initialize IO Guard before anything else
 require('./core/io-guard');
 
+// SECURITY: Install runtime module interception for fs/child_process
+const { installSecureRequire } = require('./core/secure-require');
+installSecureRequire();
+
 const { initSqlJsDb, initializeDatabase, db, saveDatabase } = require('./config/database');
 
 // Import middleware
