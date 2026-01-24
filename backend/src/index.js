@@ -268,86 +268,90 @@ async function initialize() {
     console.log('🚀 Starting WordJS...');
     console.log(`   Environment: ${config.nodeEnv}`);
 
-    // Initialize Database
-    console.log('📦 Initializing database...');
-    // The driver manager automatically loads the correct driver from config
-    const { init, initializeDatabase } = require('./config/database');
-    await init();
-    await initializeDatabase();
+    // Check Installation Status
+    const { isInstalled } = require('./core/configManager');
 
-    // Initialize default options
-    console.log('⚙️  Setting up default options...');
-    await initDefaultOptions(config);
+    if (isInstalled()) {
+        // Initialize Database
+        console.log('📦 Initializing database...');
+        // The driver manager automatically loads the correct driver from config
+        const { init, initializeDatabase } = require('./config/database');
+        await init();
+        await initializeDatabase();
 
-    // Initialize Post Types (Async)
-    const { initPostTypes } = require('./core/post-types');
-    await initPostTypes();
+        // Initialize default options
+        console.log('⚙️  Setting up default options...');
+        await initDefaultOptions(config);
 
-    // Sync roles to ensure capabilities are up to date
-    // Sync roles to ensure capabilities are up to date
-    const { loadRoles, syncRoles } = require('./core/roles');
-    await loadRoles();
-    await syncRoles(config.roles);
+        // Initialize Post Types (Async)
+        const { initPostTypes } = require('./core/post-types');
+        await initPostTypes();
 
-    // Initialize Core Admin Menus
-    const { initCoreMenus } = require('./core/adminMenu');
-    initCoreMenus();
+        // Sync roles to ensure capabilities are up to date
+        const { loadRoles, syncRoles } = require('./core/roles');
+        await loadRoles();
+        await syncRoles(config.roles);
 
-    // Create default admin user if no users exist
-    const User = require('./models/User');
-    const userCount = await User.count();
+        // Initialize Core Admin Menus
+        const { initCoreMenus } = require('./core/adminMenu');
+        initCoreMenus();
 
-    if (userCount === 0) {
-        console.log('👤 Creating default admin user...');
-        await User.create({
-            username: 'admin',
-            email: 'admin@example.com',
-            password: 'admin123',
-            displayName: 'Administrator',
-            role: 'administrator'
-        });
-        console.log('   Default admin created: admin / admin123');
-        console.log('   ⚠️  Please change the default password!');
+        // Create default admin user if no users exist
+        const User = require('./models/User');
+        const userCount = await User.count();
+
+        if (userCount === 0) {
+            console.log('👤 Creating default admin user...');
+            await User.create({
+                username: 'admin',
+                email: 'admin@example.com',
+                password: 'admin123',
+                displayName: 'Administrator',
+                role: 'administrator'
+            });
+            console.log('   Default admin created: admin / admin123');
+            console.log('   ⚠️  Please change the default password!');
+        }
+
+        // Create default category if none exist
+        const Term = require('./models/Term');
+        const categoryCount = await Term.count({ taxonomy: 'category' });
+
+        if (categoryCount === 0) {
+            console.log('📁 Creating default category...');
+            Term.create({
+                name: 'Uncategorized',
+                taxonomy: 'category',
+                slug: 'uncategorized',
+                description: 'Default category'
+            });
+        }
+
+        // Create default theme if none exist
+        const { createDefaultTheme } = require('./core/themes');
+        createDefaultTheme();
+
+        // Load active plugins
+        console.log('🔌 Loading plugins...');
+        const { loadActivePlugins } = require('./core/plugins');
+        await loadActivePlugins();
+
+        // Start cron system
+        const { startCron, initDefaultCronEvents } = require('./core/cron');
+        initDefaultCronEvents();
+        startCron();
+
+        // Initialize Robust Theme Engine
+        console.log('🎨 Initializing Theme Engine...');
+        const themeEngine = require('./core/theme-engine');
+        await themeEngine.init();
+
+        // Fire init action
+        await doAction('init');
+    } else {
+        console.log('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
+        console.log('   Waiting for interactive installation via Frontend...');
     }
-
-    // Create default category if none exist
-    const Term = require('./models/Term');
-    const categoryCount = await Term.count({ taxonomy: 'category' });
-
-    if (categoryCount === 0) {
-        console.log('📁 Creating default category...');
-        Term.create({
-            name: 'Uncategorized',
-            taxonomy: 'category',
-            slug: 'uncategorized',
-            description: 'Default category'
-        });
-    }
-
-    // Create default theme if none exist
-    const { createDefaultTheme } = require('./core/themes');
-    createDefaultTheme();
-
-    // Create sample plugin
-    const { createSamplePlugin, loadActivePlugins } = require('./core/plugins');
-    // createSamplePlugin(); // Disabled - don't auto-create sample plugin
-
-    // Load active plugins
-    console.log('🔌 Loading plugins...');
-    await loadActivePlugins();
-
-    // Start cron system
-    const { startCron, initDefaultCronEvents } = require('./core/cron');
-    initDefaultCronEvents();
-    startCron();
-
-    // Initialize Robust Theme Engine
-    console.log('🎨 Initializing Theme Engine...');
-    const themeEngine = require('./core/theme-engine');
-    await themeEngine.init();
-
-    // Fire init action
-    await doAction('init');
 
     // Register 404 and error handlers AFTER plugins (so plugin routes work)
     app.use(notFound);

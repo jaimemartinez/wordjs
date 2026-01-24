@@ -88,20 +88,39 @@ router.post('/install', async (req, res) => {
     // Secrets are persisted solely in wordjs-config.json via saveConfig().
 
     if (saveConfig(newConfig)) {
-        // Here we would also trigger the DB initialization and Admin user creation logic
-        // which currently happens in index.js initialize().
-        // We might need to make that creating logic reusable/callable here.
-
-        // For now, let's assume the user will restart or we trigger re-init?
-        // Actually, better to run the setup logic here.
-
         try {
+            // Initialize DB connection dynamically (since index.js skipped it)
+            console.log('📦 Setup: Initializing database...');
+            const { init, initializeDatabase } = require('../config/database');
+            await init();
+            await initializeDatabase();
+
             // Update options in DB
             const { updateOption } = require('../core/options');
             updateOption('blogname', siteName);
             updateOption('blogdescription', siteDescription);
             updateOption('siteurl', siteUrl);
             updateOption('home', frontendUrl);
+
+            // Initialize Roles & Capabilities (CRITICAL)
+            const { loadRoles, syncRoles } = require('../core/roles');
+            // We need to load config again or use newConfig to get roles if defined there
+            // Usually roles are predefined in core/roles.js if passed empty
+            await loadRoles();
+            await syncRoles({});
+
+            // Create Default Category
+            const Term = require('../models/Term');
+            await Term.create({
+                name: 'Uncategorized',
+                taxonomy: 'category',
+                slug: 'uncategorized',
+                description: 'Default category'
+            });
+
+            // Create Default Theme
+            const { createDefaultTheme } = require('../core/themes');
+            createDefaultTheme();
 
             // Create admin user
             const User = require('../models/User');

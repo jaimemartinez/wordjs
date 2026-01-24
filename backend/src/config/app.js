@@ -37,24 +37,27 @@ const crypto = require('crypto');
 let configChanged = false;
 
 // Generate secure keys if they are default or missing
-if (!fileConfig.jwtSecret || fileConfig.jwtSecret === 'wordjs-default-secret-change-me') {
-    fileConfig.jwtSecret = crypto.randomBytes(32).toString('hex');
-    configChanged = true;
-    console.log('🔐 Generated secure JWT secret.');
-}
+// Generate secure keys ONLY if config exists but is insecure
+if (fs.existsSync(configPath)) {
+    if (!fileConfig.jwtSecret || fileConfig.jwtSecret === 'wordjs-default-secret-change-me') {
+        fileConfig.jwtSecret = crypto.randomBytes(32).toString('hex');
+        configChanged = true;
+        console.log('🔐 Generated secure JWT secret for existing config.');
+    }
 
-if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
-    fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
-    configChanged = true;
-    console.log('🔐 Generated secure Database password.');
-}
+    if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
+        fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
+        configChanged = true;
+        console.log('🔐 Generated secure Database password for existing config.');
+    }
 
-if (configChanged) {
-    try {
-        fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
-        console.log('💾 wordjs-config.json updated with secure credentials.');
-    } catch (err) {
-        console.error('❌ Failed to persist secure credentials:', err.message);
+    if (configChanged) {
+        try {
+            fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
+            console.log('💾 wordjs-config.json updated with secure credentials.');
+        } catch (err) {
+            console.error('❌ Failed to persist secure credentials:', err.message);
+        }
     }
 }
 
