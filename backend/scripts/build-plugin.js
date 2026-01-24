@@ -162,12 +162,8 @@ async function buildPlugin(slug) {
                     'process.env.NODE_ENV': '"production"'
                 },
 
-                // Alias @ imports to relative paths
-                alias: {
-                    '@/components': path.resolve(__dirname, '../admin-next/src/components'),
-                    '@/lib': path.resolve(__dirname, '../admin-next/src/lib'),
-                    '@/hooks': path.resolve(__dirname, '../admin-next/src/hooks'),
-                },
+                // NO ALIAS - All @/* imports are external (provided by host)
+                // This prevents bundling core dependencies into plugins
 
                 // Loader for different file types
                 loader: {
