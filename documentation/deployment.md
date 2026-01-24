@@ -33,7 +33,15 @@ npm run build
 cd ..
 ```
 
-### 3. Configure the Site
+### 3. Build Plugin Frontends (NEW)
+WordJS uses a hybrid system. In production, plugins load frontend code from pre-compiled bundles. You must compile them once before starting.
+```bash
+cd backend
+node scripts/build-plugin.js --all
+cd ..
+```
+
+### 4. Configure the Site
 You have two options for production:
 
 **A. Using the Interactive Installer (Default)**
@@ -103,6 +111,7 @@ To update the CMS:
 git pull
 npm install
 cd admin-next && npm install && npm run build
+cd ../backend && npm install && node scripts/build-plugin.js --all
 pm2 restart all
 ```
 
