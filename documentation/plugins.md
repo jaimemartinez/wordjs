@@ -46,6 +46,45 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 > **🔥 Auto-Dependency Management:** 
 > WordJS reads the `dependencies` object. When you activate the plugin, the system **automatically installs** missing packages (`npm install`). When you deactivate it, if no other plugin needs them, it **garbage collects** them (`npm uninstall`). Zero manual work.
 
+> [!IMPORTANT]
+> **Hard Lock Protection:** If your plugin requires a version of a package that conflicts with another active plugin (e.g., `lodash@^3.0.0` vs `lodash@^4.0.0`), activation will be **blocked** with a clear error message. You must either deactivate the conflicting plugin or update your dependency.
+
+### Bundled Plugins (Advanced)
+
+If you want to avoid dependency conflicts entirely, you can **bundle** your plugin's dependencies. A bundled plugin includes its own `node_modules/` or a compiled bundle file, so it doesn't share dependencies with other plugins.
+
+**Methods to create a bundled plugin:**
+
+| Method                  | How                                                       |
+| ----------------------- | --------------------------------------------------------- |
+| **Explicit Flag**       | Add `"bundled": true` to `manifest.json`                  |
+| **Own `node_modules/`** | Run `npm install` inside your plugin folder               |
+| **Bundle File**         | Use `esbuild`/`webpack` to create `dist/plugin.bundle.js` |
+
+**Example: Creating a bundled plugin with esbuild:**
+```bash
+cd plugins/my-plugin
+npm install         # Install deps locally
+npx esbuild index.js --bundle --platform=node --outfile=dist/plugin.bundle.js
+```
+
+**Example: manifest.json for bundled plugin:**
+```json
+{
+  "name": "My Bundled Plugin",
+  "slug": "my-bundled",
+  "version": "1.0.0",
+  "bundled": true,
+  "main": "dist/plugin.bundle.js"
+}
+```
+
+> [!TIP]
+> **When to use bundled plugins:**
+> - Your plugin requires a very specific version of a popular library
+> - You're distributing a plugin commercially and want zero installation conflicts
+> - Your plugin has many dependencies and you want faster activation
+
 ### Step 2: Backend Entry Point (`index.js`)
 Create `index.js`. You can now require your dependencies safely!
 
