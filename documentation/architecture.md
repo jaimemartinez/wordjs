@@ -359,7 +359,7 @@ graph LR
         Themes[🎨 Themes]
     end
 
-    subgraph "Users"
+    subgraph "User Management"
         Users[👥 Users]
         Roles[🔐 Roles]
         Capabilities[✅ Capabilities]
