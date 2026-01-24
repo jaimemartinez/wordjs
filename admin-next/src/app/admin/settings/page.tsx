@@ -5,6 +5,9 @@ import { settingsApi, MediaItem, postsApi, Post, rolesApi, Role } from "@/lib/ap
 import { useI18n } from "@/contexts/I18nContext";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import ModernSelect from "@/components/ModernSelect";
+import { useModal } from "@/contexts/ModalContext";
+import { PageHeader, Button } from "@/components/ui";
+
 
 export default function SettingsPage() {
     const { t } = useI18n();
@@ -72,6 +75,8 @@ export default function SettingsPage() {
         }
     };
 
+    const { alert } = useModal();
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
@@ -83,7 +88,7 @@ export default function SettingsPage() {
             setTimeout(() => setSaved(false), 3000);
         } catch (error) {
             console.error("Failed to save settings:", error);
-            alert(t('settings.save.failed'));
+            await alert(t('settings.save.failed'));
         } finally {
             setSaving(false);
         }
@@ -99,20 +104,18 @@ export default function SettingsPage() {
     };
 
     return (
-        <div className="p-8 h-full overflow-auto bg-gray-50/50">
+        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50">
             <div className="max-w-4xl mx-auto">
-                <div className="flex justify-between items-center mb-10">
-                    <div>
-                        <h1 className="text-3xl font-extrabold text-gray-900 tracking-tight">{t('settings.title')}</h1>
-                        <p className="text-gray-500 mt-1">{t('settings.general')}</p>
-                    </div>
-                </div>
+                <PageHeader
+                    title={t('settings.title')}
+                    subtitle={t('settings.general')}
+                />
 
                 <form onSubmit={handleSubmit} className="space-y-8">
                     {/* General Settings Section */}
-                    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
-                                <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                                 <i className="fa-solid fa-gear text-blue-500"></i> {t('settings.general')}
                             </h2>
                         </div>
@@ -249,7 +252,7 @@ export default function SettingsPage() {
                     </div>
 
                     {/* Content Settings Section */}
-                    <div className="bg-white rounded-3xl shadow-sm border border-gray-100 overflow-hidden">
+                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
                             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
                                 <i className="fa-solid fa-book-open text-purple-500"></i> Reading & Discussion
@@ -360,6 +363,8 @@ export default function SettingsPage() {
                             </div>
                         </div>
                     </div>
+
+
 
                     <div className="flex items-center justify-end gap-4 pt-4 pb-12">
                         {saved && (

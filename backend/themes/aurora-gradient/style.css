@@ -1,0 +1,387 @@
+/* =========================================
+   THEME: AURORA GRADIENT
+   Concept: Flowing mesh gradients, vibrant colors, modern typography.
+   Trend: 2024/2025 - Gradient Mesh / Northern Lights
+   ========================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&display=swap');
+
+:root {
+  /* --- COLOR PALETTE: Aurora Borealis --- */
+  --wjs-color-primary: #8b5cf6;
+  /* Violet */
+  --wjs-color-primary-dark: #7c3aed;
+  --wjs-color-secondary: #06b6d4;
+  /* Cyan */
+  --wjs-color-accent: #ec4899;
+  /* Pink */
+
+  /* --- COLOR SEMANTICS --- */
+  --wjs-bg-canvas: #0f0f1a;
+  /* Deep Space */
+  --wjs-bg-surface: rgba(255, 255, 255, 0.05);
+
+  --wjs-color-text-main: #f8fafc;
+  /* Crisp White */
+  --wjs-color-text-muted: #94a3b8;
+
+  --wjs-border-subtle: rgba(255, 255, 255, 0.1);
+
+  /* --- NAVIGATION CONFIG --- */
+  --wjs-nav-font-family: 'Space Grotesk', sans-serif;
+  --wjs-nav-font-size: 0.95rem;
+  --wjs-nav-font-weight: 500;
+  --wjs-nav-text-transform: none;
+  --wjs-nav-letter-spacing: -0.02em;
+
+  --wjs-nav-color: rgba(255, 255, 255, 0.7);
+  --wjs-nav-color-hover: #ffffff;
+  --wjs-nav-transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --wjs-logo-color: #ffffff;
+
+  /* --- FOOTER CONFIG --- */
+  --wjs-footer-bg: rgba(15, 15, 26, 0.9);
+  --wjs-footer-text-heading: #ffffff;
+  --wjs-footer-text-body: #94a3b8;
+  --wjs-footer-text-hover: #8b5cf6;
+  --wjs-footer-icon-bg: rgba(139, 92, 246, 0.2);
+  --wjs-footer-icon-color: #8b5cf6;
+
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Space Grotesk', sans-serif;
+}
+
+/* =========================================
+   VISUAL OVERRIDES
+   ========================================= */
+
+body {
+  background:
+    radial-gradient(ellipse 80% 50% at 20% -20%, rgba(120, 119, 198, 0.3), transparent),
+    radial-gradient(ellipse 60% 50% at 80% -10%, rgba(236, 72, 153, 0.2), transparent),
+    radial-gradient(ellipse 50% 80% at 50% 100%, rgba(6, 182, 212, 0.15), transparent),
+    #0f0f1a !important;
+  background-attachment: fixed !important;
+  color: var(--wjs-color-text-main) !important;
+  font-family: var(--wjs-font-family-base) !important;
+  min-height: 100vh;
+  /* FIX: Push content down for taller centered header */
+  padding-top: 200px !important;
+}
+
+/* Animated Gradient Background (Subtle Movement) */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background:
+    radial-gradient(circle at 30% 20%, rgba(139, 92, 246, 0.15) 0%, transparent 50%),
+    radial-gradient(circle at 70% 80%, rgba(6, 182, 212, 0.1) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: -1;
+  animation: auroraShift 20s ease-in-out infinite alternate;
+}
+
+@keyframes auroraShift {
+  0% {
+    opacity: 0.5;
+    transform: scale(1) translateY(0);
+  }
+
+  100% {
+    opacity: 1;
+    transform: scale(1.1) translateY(-20px);
+  }
+}
+
+/* Header: Floating Centered Capsule */
+header {
+  background: rgba(15, 15, 26, 0.7) !important;
+  backdrop-filter: blur(20px) saturate(180%) !important;
+  border-bottom: none !important;
+  margin: 20px auto !important;
+  max-width: 800px !important;
+  border-radius: 50px !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+header[class*='fixed'] {
+  background: rgba(15, 15, 26, 0.9) !important;
+  margin-top: 10px !important;
+}
+
+/* --- AURORA LAYOUT: Centered Vertical Stack --- */
+.wjs-header-container {
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 1rem !important;
+  padding: 1.5rem 2rem !important;
+}
+
+/* Logo: Centered, Large, Gradient */
+.wjs-header-logo {
+  order: 1 !important;
+  font-size: 2rem !important;
+  font-weight: 700 !important;
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #ec4899) !important;
+  -webkit-background-clip: text !important;
+  -webkit-text-fill-color: transparent !important;
+  background-clip: text !important;
+  text-align: center;
+}
+
+/* Nav: Centered Below Logo */
+.wjs-header-nav {
+  order: 2 !important;
+  justify-content: center !important;
+  gap: 0.5rem !important;
+}
+
+/* Hide Actions for cleaner look */
+.wjs-header-actions {
+  display: none !important;
+}
+
+/* Nav Links: Pill Style */
+.wjs-header-nav a {
+  font-family: var(--wjs-nav-font-family) !important;
+  font-size: var(--wjs-nav-font-size) !important;
+  font-weight: var(--wjs-nav-font-weight) !important;
+  color: var(--wjs-nav-color) !important;
+  transition: var(--wjs-nav-transition) !important;
+  padding: 8px 20px;
+  border-radius: 50px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.wjs-header-nav a:hover {
+  color: #ffffff !important;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(6, 182, 212, 0.3));
+  box-shadow: 0 0 25px rgba(139, 92, 246, 0.4);
+  transform: translateY(-2px);
+}
+
+/* Cards: Glassmorphism with Gradient Border */
+.wp-block-card,
+article {
+  background: rgba(255, 255, 255, 0.03) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 16px !important;
+  position: relative;
+  overflow: hidden;
+}
+
+.wp-block-card::before,
+article::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: linear-gradient(90deg, #8b5cf6, #06b6d4, #ec4899);
+}
+
+/* Footer: Dark with subtle gradient */
+footer {
+  background: linear-gradient(180deg, rgba(15, 15, 26, 0.95), #0f0f1a) !important;
+  border-top: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+footer h3,
+footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
+  font-weight: 700 !important;
+}
+
+footer a {
+  color: var(--wjs-footer-text-body) !important;
+  transition: color 0.3s, text-shadow 0.3s;
+}
+
+footer a:hover {
+  color: var(--wjs-footer-text-hover) !important;
+  text-shadow: 0 0 10px rgba(139, 92, 246, 0.5);
+}
+
+footer .w-10 {
+  background: var(--wjs-footer-icon-bg) !important;
+  color: var(--wjs-footer-icon-color) !important;
+  border-radius: 12px !important;
+}
+
+footer .w-10:hover {
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
+  transform: translateY(-2px);
+}
+
+/* =========================================
+   AURORA GRADIENT: NEW COMPONENT OVERRIDES
+   Mesh gradient / Space aesthetic
+   ========================================= */
+
+/* Accordion: Glass Aurora */
+.wp-block-accordion {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 16px !important;
+  backdrop-filter: blur(10px);
+}
+
+.wp-block-accordion .accordion-item button {
+  background: transparent !important;
+  color: var(--wjs-color-text-main) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.wp-block-accordion .accordion-item button i {
+  color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-accordion .accordion-item>div {
+  background: rgba(139, 92, 246, 0.05) !important;
+  color: var(--wjs-color-text-muted) !important;
+}
+
+/* Tabs: Glowing Tabs */
+.wp-block-tabs>div:first-child {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
+}
+
+.wp-block-tabs button {
+  color: var(--wjs-color-text-muted) !important;
+  border-radius: 8px !important;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  color: #ffffff !important;
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(236, 72, 153, 0.3)) !important;
+}
+
+.wp-block-tabs>div:last-child {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border-radius: 12px !important;
+}
+
+/* Video: Gradient Border */
+.wp-block-video-embed {
+  border-radius: 16px !important;
+  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
+  position: relative;
+}
+
+.wp-block-video-embed::before {
+  content: '';
+  position: absolute;
+  inset: -2px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #ec4899);
+  z-index: -1;
+}
+
+/* Audio: Aurora Player */
+.wp-block-audio-player {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 16px !important;
+  backdrop-filter: blur(10px);
+}
+
+/* Pricing: Floating Aurora Cards */
+.wp-block-pricing>div {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 20px !important;
+  backdrop-filter: blur(10px);
+}
+
+.wp-block-pricing>div:hover {
+  border-color: rgba(139, 92, 246, 0.5) !important;
+  box-shadow: 0 20px 50px rgba(139, 92, 246, 0.2);
+}
+
+.wp-block-pricing>div[style*="scale(1.05)"] {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.8), rgba(236, 72, 153, 0.8)) !important;
+  border: none !important;
+  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.4);
+}
+
+/* Testimonial: Aurora Quote */
+.wp-block-testimonial {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 20px !important;
+  backdrop-filter: blur(10px);
+}
+
+.wp-block-testimonial>div:first-child {
+  background: linear-gradient(135deg, #8b5cf6, #ec4899);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* CTA Banner: Mesh Gradient */
+.wp-block-cta-banner {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(6, 182, 212, 0.9), rgba(236, 72, 153, 0.9)) !important;
+  border-radius: 32px !important;
+  box-shadow: 0 30px 80px rgba(139, 92, 246, 0.4);
+}
+
+.wp-block-cta-banner a {
+  background: #ffffff !important;
+  color: #8b5cf6 !important;
+  border-radius: 50px !important;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+}
+
+/* Posts Grid: Glass Cards */
+.wp-block-posts-grid article {
+  background: rgba(255, 255, 255, 0.03) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 16px !important;
+  backdrop-filter: blur(8px);
+}
+
+.wp-block-posts-grid article:hover {
+  border-color: rgba(139, 92, 246, 0.5) !important;
+  transform: translateY(-4px);
+}
+
+/* Category Posts: Gradient Accents */
+.wp-block-category-posts h3 {
+  background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.wp-block-category-posts li {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Search: Aurora Input */
+.wp-block-search input {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  border-radius: 50px !important;
+  color: #ffffff !important;
+}
+
+.wp-block-search input:focus {
+  border-color: rgba(139, 92, 246, 0.5) !important;
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
+}
+
+.wp-block-search button {
+  background: linear-gradient(135deg, #8b5cf6, #ec4899) !important;
+  color: #ffffff !important;
+  border-radius: 50px !important;
+  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
+}

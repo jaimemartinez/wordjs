@@ -9,6 +9,7 @@ import Header from "@/components/public/Header";
 import Footer from "@/components/public/Footer";
 import { Data } from "@measured/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
+import { useModal } from "@/contexts/ModalContext";
 
 export default function PostEditorPage() {
     const router = useRouter();
@@ -121,6 +122,8 @@ export default function PostEditorPage() {
         }
     };
 
+    const { alert } = useModal();
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
@@ -131,7 +134,7 @@ export default function PostEditorPage() {
             const finalSlug = root?.props?.slug || root?.slug || slug;
 
             if (!finalTitle) {
-                alert("Title is required before saving.");
+                await alert("Title is required before saving.");
                 setSaving(false);
                 return;
             }
@@ -143,7 +146,12 @@ export default function PostEditorPage() {
                 status,
                 commentStatus,
                 meta: {
-                    _puck_data: puckData // Save the JSON structure for re-editing
+                    _puck_data: puckData, // Save the JSON structure for re-editing
+                    // SEO fields
+                    seo_title: root?.props?.seo_title || '',
+                    seo_description: root?.props?.seo_description || '',
+                    og_image: root?.props?.og_image || '',
+                    noindex: root?.props?.noindex === 'true'
                 }
             };
 
@@ -156,7 +164,7 @@ export default function PostEditorPage() {
             setIsDirty(false); // Reset dirty state after successful save
         } catch (error: any) {
             console.error("Failed to save post:", error);
-            alert(`Failed to save post: ${error.message || "Unknown error"}`);
+            await alert(`Failed to save post: ${error.message || "Unknown error"}`);
         } finally {
             setSaving(false);
         }

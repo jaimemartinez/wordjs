@@ -11,6 +11,7 @@ const storage = new AsyncLocalStorage();
 // Internal cache for manifests to avoid repeated JS parsing
 const manifestCache = new Map();
 const PLUGINS_DIR = path.join(__dirname, '../../plugins');
+const THEMES_DIR = path.join(__dirname, '../../themes');
 
 /**
  * Run a function within a specific plugin context
@@ -37,7 +38,15 @@ function hasPermission(scope, access = 'read') {
     let manifest = manifestCache.get(pluginSlug);
 
     if (!manifest) {
-        const manifestPath = path.join(PLUGINS_DIR, pluginSlug, 'manifest.json');
+        let manifestPath;
+
+        if (pluginSlug.startsWith('theme:')) {
+            const realSlug = pluginSlug.replace('theme:', '');
+            manifestPath = path.join(THEMES_DIR, realSlug, 'manifest.json');
+        } else {
+            manifestPath = path.join(PLUGINS_DIR, pluginSlug, 'manifest.json');
+        }
+
         if (fs.existsSync(manifestPath)) {
             try {
                 manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -46,6 +55,18 @@ function hasPermission(scope, access = 'read') {
                 console.error(`[Security] Failed to parse manifest for ${pluginSlug}:`, e.message);
                 return false;
             }
+        } else if (pluginSlug.startsWith('theme:')) {
+            // Default "Safe Mode" Theme Permissions
+            // Themes generally only need to READ content and display options.
+            // Writing settings should be done via the API/Admin Panel, not by backend logic implicitly.
+            manifest = {
+                permissions: [
+                    { scope: 'settings', access: 'read' },
+                    { scope: 'content', access: 'read' }
+                ]
+            };
+            manifestCache.set(pluginSlug, manifest);
+            console.log(`[Security] No manifest for theme '${pluginSlug}', applying RESTRICTED default permissions (Read-Only).`);
         }
     }
 
@@ -83,13 +104,39 @@ function verifyPermission(scope, access = 'read') {
  * Protect sensitive environment variables from plugins
  */
 function getProtectedEnv() {
-    const sensitiveKeys = ['JWT_SECRET', 'DATABASE_PASSWORD', 'SMTP_PASSWORD', 'SECRET_KEY', 'API_KEY', 'POSTGRES_PASSWORD'];
+    // SECURITY: Block access to ANY secret-like environment variables
+    const sensitiveKeys = [
+        'JWT_SECRET',
+        'GATEWAY_SECRET',
+        'DATABASE_PASSWORD',
+        'DB_PASSWORD',
+        'SMTP_PASSWORD',
+        'SECRET_KEY',
+        'API_KEY',
+        'POSTGRES_PASSWORD',
+        'PRIVATE_KEY',
+        'ACCESS_TOKEN',
+        'REFRESH_TOKEN',
+        'AUTH_SECRET',
+        'ENCRYPTION_KEY',
+        'SIGNING_KEY'
+    ];
+
+    // Also block any key containing these patterns
+    const sensitivePatterns = ['_SECRET', '_PASSWORD', '_KEY', '_TOKEN', 'PRIVATE_', 'AUTH_'];
+
+    const isSensitive = (key) => {
+        const keyStr = key.toString().toUpperCase();
+        if (sensitiveKeys.includes(keyStr)) return true;
+        return sensitivePatterns.some(pattern => keyStr.includes(pattern));
+    };
+
     const originalEnv = { ...process.env }; // Snapshot for basic security
 
     return new Proxy(process.env, {
         get(target, prop) {
             const pluginSlug = getCurrentPlugin();
-            if (pluginSlug && sensitiveKeys.includes(prop.toString())) {
+            if (pluginSlug && isSensitive(prop)) {
                 console.warn(`[Security] Plugin '${pluginSlug}' tried to access sensitive ENV: ${prop.toString()}`);
                 return undefined; // Return undefined instead of masked string to mimic non-existence
             }
@@ -97,7 +144,7 @@ function getProtectedEnv() {
         },
         set(target, prop, value) {
             const pluginSlug = getCurrentPlugin();
-            if (pluginSlug && sensitiveKeys.includes(prop.toString())) {
+            if (pluginSlug && isSensitive(prop)) {
                 console.warn(`[Security] Plugin '${pluginSlug}' attempted to modify sensitive ENV: ${prop.toString()}`);
                 return false;
             }
@@ -108,14 +155,14 @@ function getProtectedEnv() {
         ownKeys(target) {
             const pluginSlug = getCurrentPlugin();
             if (pluginSlug) {
-                return Reflect.ownKeys(target).filter(key => !sensitiveKeys.includes(key.toString()));
+                return Reflect.ownKeys(target).filter(key => !isSensitive(key));
             }
             return Reflect.ownKeys(target);
         },
         // Ensure hidden keys are reported as non-configurable/non-enumerable if accessed directly
         getOwnPropertyDescriptor(target, prop) {
             const pluginSlug = getCurrentPlugin();
-            if (pluginSlug && sensitiveKeys.includes(prop.toString())) {
+            if (pluginSlug && isSensitive(prop)) {
                 return undefined;
             }
             return Reflect.getOwnPropertyDescriptor(target, prop);

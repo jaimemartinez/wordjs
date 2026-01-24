@@ -17,7 +17,7 @@ export default function PublicSidebar({ id, onEmpty }: { id: string, onEmpty?: (
             .finally(() => setLoading(false));
     }, [id, onEmpty]);
 
-    if (loading) return <div className="animate-pulse bg-gray-100 h-64 rounded-xl"></div>;
+    if (loading) return <div className="animate-pulse bg-[var(--wjs-bg-surface-hover,gray)] h-64 rounded-xl"></div>;
     if (!html) return null;
 
     return (

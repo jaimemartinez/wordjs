@@ -1,225 +1,283 @@
-/* Vida Para Todos Theme - Style Override */
+/* =========================================
+   THEME: VIDA PARA TODOS
+   Fully Configurable via CSS Variables.
+   ========================================= */
 
-/* 1. Reset/Base Variables */
 :root {
-    --vpt-primary: #306E88;
-    /* Azul oscuro corporativo */
-    --vpt-secondary: #00A9CE;
-    /* Cian del gradiente */
-    --vpt-text: #FFFFFF;
-    --vpt-dark: #333333;
+  /* --- COLOR PALETTE --- */
+  --wjs-color-primary: #2563eb;
+  /* Brand Color */
+
+  /* --- NAVIGATION CONFIG --- */
+  --wjs-nav-font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --wjs-nav-font-size: 0.875rem;
+  /* text-sm */
+  --wjs-nav-font-weight: 500;
+  /* font-medium */
+  --wjs-nav-text-transform: none;
+  /* uppercase vs none */
+  --wjs-nav-letter-spacing: normal;
+
+  --wjs-nav-color: #6b7280;
+  /* gray-500 */
+  --wjs-nav-color-hover: #111827;
+  /* gray-900 */
+
+  /* --- FOOTER CONFIG --- */
+  --wjs-footer-bg: #111827;
+  /* gray-900 */
+  --wjs-footer-text-heading: #ffffff;
+  --wjs-footer-text-body: #9ca3af;
+  /* gray-400 */
+  --wjs-footer-text-hover: #ffffff;
+  --wjs-footer-icon-bg: #1f2937;
+  --wjs-footer-icon-color: #ffffff;
+
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+
+  /* --- LOGO CONFIG --- */
+  --wjs-logo-color: #111827;
+  /* gray-900 */
+
+  /* --- ANIMATIONS --- */
+  --wjs-nav-transition: color 200ms cubic-bezier(0.4, 0, 0.2, 1);
 }
+
+/* =========================================
+   GLOBAL RESET & UTILITIES
+   ========================================= */
 
 body {
-    background-color: #ffffff !important;
-    font-family: 'Roboto', 'Segoe UI', Helvetica, sans-serif !important;
+  background-color: var(--wjs-bg-canvas);
+  color: var(--wjs-color-text-main);
+  font-family: var(--wjs-font-family-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
-/* 2. Header Customization */
-header {
-    background-color: #ffffff !important;
-    padding: 1rem 0 !important;
-    /* Ajuste para quitar padding lateral excesivo si es full width */
-    box-shadow: none !important;
-    width: 100% !important;
+/* Container: Rely on Tailwind 'container' class in JSX. */
+
+/* =========================================
+   HEADER STYLES
+   ========================================= */
+
+/* Header: Customization handled by React state + Tailwind classes */
+
+/* Sticky State Handled by React Component classes (bg-white / bg-transparent)
+   DO NOT Override here based on 'fixed' class because it is always present. */
+
+
+/* Logo Text (if visible) */
+.wjs-header-logo {
+  color: var(--wjs-logo-color) !important;
+  text-decoration: none !important;
 }
 
-/* Ocultar elementos por defecto de WordJS que no coinciden */
-/* Botón Admin Panel */
-header .bg-gray-900 {
-    display: none !important;
+/* Nav Link: Configurable via Variables */
+.wjs-header-nav a {
+  font-family: var(--wjs-nav-font-family) !important;
+  font-size: var(--wjs-nav-font-size) !important;
+  font-weight: var(--wjs-nav-font-weight) !important;
+  color: var(--wjs-nav-color) !important;
+  text-transform: var(--wjs-nav-text-transform) !important;
+  letter-spacing: var(--wjs-nav-letter-spacing) !important;
+
+  /* Transitions */
+  transition: var(--wjs-nav-transition);
+  transition-property: color, background-color, border-color, fill, stroke;
+
+  text-decoration: none !important;
 }
 
-/* Logo sustituto (usamos el texto WordJS como logo por ahora o imagen si existe) */
-/* Logo Styles */
-header a.text-2xl {
-    /* Restaurado a original */
-    font-weight: 700 !important;
-    text-transform: uppercase;
+.wjs-header-nav a:hover {
+  color: var(--wjs-nav-color-hover) !important;
 }
 
-/* Navegación */
-header nav {
-    gap: 3rem !important;
+
+/* =========================================
+   FOOTER STYLES
+   ========================================= */
+
+/* Footer: Colors only. Layout is handled by Tailwind in JSX. */
+footer {
+  background-color: var(--wjs-footer-bg) !important;
+  border-top: none !important;
 }
 
-header nav a {
-    color: #406D85 !important;
-    font-weight: 700 !important;
-    font-size: 0.95rem !important;
-    text-transform: uppercase !important;
-    letter-spacing: 0.5px;
+footer h3,
+footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
 }
 
-header nav a:hover {
-    color: var(--vpt-secondary) !important;
+footer a {
+  color: var(--wjs-footer-text-body) !important;
+  text-decoration: none !important;
+  transition: color 0.2s ease;
 }
 
-/* Botón Hamburguesa - Ahora manejado por React en Header.tsx */
-/* El botón real está en el componente Header, no se necesita pseudo-elemento */
-
-/* 3. Hero Section Exact Replica */
-/* Seleccionamos la primera sección dentro del main */
-main>div>section.text-center {
-    position: relative;
-    /* Imagen de fondo + Overlay Gradiente exacto */
-    background:
-        linear-gradient(90deg,
-            rgba(48, 110, 136, 0.95) 0%,
-            rgba(0, 169, 206, 0.75) 100%),
-        url('/themes/vidaParaTodos/hero-bg.jpg');
-    background-size: cover;
-    background-position: center bottom;
-
-    height: 500px;
-    /* Altura fija según diseño */
-    border-radius: 30px !important;
-    margin: 1rem 0 2rem 0 !important;
-    padding: 0 !important;
-
-    /* Flex para alinear contenido */
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    align-items: flex-start;
-    /* Alinear todo a la izquierda */
-    text-align: left !important;
-    padding-left: 5rem !important;
-    /* Margen izquierdo considerable */
-    overflow: hidden;
+footer a:hover {
+  color: var(--wjs-footer-text-hover) !important;
 }
 
-main>div>section.text-center>* {
-    z-index: 2;
-    position: relative;
+/* Social Icons */
+footer .w-10 {
+  background-color: var(--wjs-footer-icon-bg) !important;
+  color: var(--wjs-footer-icon-color) !important;
 }
 
-/* Título principal: CONFERENCIAS */
-main>div>section.text-center h1 {
-    font-family: 'Oswald', sans-serif !important;
-    /* Fuente condensada si posible */
-    font-size: 5rem !important;
-    line-height: 0.9 !important;
-    color: white !important;
-    margin-bottom: 0 !important;
-    font-weight: 700 !important;
-    text-transform: uppercase;
+footer .w-10:hover {
+  background-color: var(--wjs-color-primary) !important;
 }
 
-/* Welcome to WordJS -> CONFERENCIAS (Hack de contenido con CSS para demo rapida si no cambiamos HTML) */
-/* Nota: Lo ideal es cambiar el contenido en admin, pero visualmente: */
-main>div>section.text-center h1 {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+/* =========================================
+   VIDA PARA TODOS: NEW COMPONENT OVERRIDES
+   Clean, modern, accessible aesthetic
+   ========================================= */
+
+/* Accordion: Clean Panels */
+.wp-block-accordion {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 12px !important;
 }
 
-main>div>section.text-center h1::before {
-    content: "CONFERENCIAS";
-    display: block;
-    font-weight: 700;
+.wp-block-accordion .accordion-item button {
+  background: transparent !important;
+  color: #111827 !important;
+  border-bottom: 1px solid #f3f4f6 !important;
 }
 
-main>div>section.text-center h1::after {
-    content: "BUCARAMANGA";
-    display: block;
-    font-weight: 300;
-    /* Letra delgada */
+.wp-block-accordion .accordion-item button i {
+  color: var(--wjs-color-primary) !important;
 }
 
-/* Ocultar texto original "Welcome to WordJS" */
-main>div>section.text-center h1 {
-    font-size: 0 !important;
-    /* Oculta texto original */
+.wp-block-accordion .accordion-item>div {
+  background: #f9fafb !important;
+  color: #6b7280 !important;
 }
 
-main>div>section.text-center h1::before,
-main>div>section.text-center h1::after {
-    font-size: 4.5rem !important;
-    /* Restaura tamaño para pseudo-elementos */
-    line-height: 1.1;
+/* Tabs: Modern Underline */
+.wp-block-tabs>div:first-child {
+  border-bottom: 2px solid #e5e7eb !important;
 }
 
-/* Párrafo descriptivo */
-main>div>section.text-center p {
-    color: #E0F7FA !important;
-    font-size: 1.25rem !important;
-    font-weight: 300 !important;
-    max-width: 600px !important;
-    margin: 1.5rem 0 2.5rem 0 !important;
-    line-height: 1.6 !important;
+.wp-block-tabs button {
+  color: #6b7280 !important;
 }
 
-/* Botones */
-main>div>section.text-center .flex {
-    justify-content: flex-start !important;
-    padding-top: 0 !important;
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  color: var(--wjs-color-primary) !important;
 }
 
-/* Botón principal (Get Started -> INSCRIBETE AQUÍ) */
-main>div>section.text-center a[href="/about"] {
-    background-color: white !important;
-    color: #2F6D86 !important;
-    /* Azul oscuro texto */
-    font-weight: 800 !important;
-    text-transform: uppercase;
-    padding: 0.8rem 2.5rem !important;
-    border-radius: 50px !important;
-    /* Pill shape */
-    font-size: 1.1rem !important;
-    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2) !important;
+.wp-block-tabs>div:last-child {
+  background: #ffffff !important;
+  border-radius: 8px !important;
 }
 
-/* Ocultar botón secundario */
-main>div>section.text-center a[href*="github"] {
-    display: none !important;
+/* Video: Rounded Frame */
+.wp-block-video-embed {
+  border-radius: 12px !important;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
 }
 
-/* Puntos del slider (simulados) */
-main>div>section.text-center::after {
-    content: '';
-    position: absolute;
-    bottom: 30px;
-    right: 40px;
-    width: 60px;
-    height: 12px;
-    background: radial-gradient(circle at 10px 6px, white 5px, transparent 6px),
-        radial-gradient(circle at 30px 6px, rgba(255, 255, 255, 0.4) 5px, transparent 6px),
-        radial-gradient(circle at 50px 6px, rgba(255, 255, 255, 0.4) 5px, transparent 6px);
+/* Audio: Card Player */
+.wp-block-audio-player {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
 }
 
-/* 4. Global Styles Cleanup */
-main.container {
-    max-width: 1400px !important;
+/* Pricing: Clean Cards */
+.wp-block-pricing>div {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 16px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
 }
 
-/* Ocultar título "Latest Posts" original para reemplazar diseño si fuera necesario, 
-   o estilizarlo limpio */
-.border-b h2 {
-    color: #2F6D86 !important;
-    border-bottom: 2px solid #2F6D86 !important;
-    display: inline-block;
-    padding-bottom: 5px;
+.wp-block-pricing>div:hover {
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
 }
 
-/* Ocultar titulo automatico de la pagina estatica */
-.prose.prose-lg>h1:first-child {
-    display: none !important;
+.wp-block-pricing>div[style*="scale(1.05)"] {
+  background: var(--wjs-color-primary) !important;
+  color: #ffffff !important;
+  box-shadow: 0 20px 50px rgba(37, 99, 235, 0.3);
 }
 
-/* 5. Section Spacing Optimization */
-/* Reducir márgenes y padding de los bloques del editor */
-main .my-8 {
-    margin-top: 1rem !important;
-    margin-bottom: 1rem !important;
+/* Testimonial: Simple Quote Card */
+.wp-block-testimonial {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 16px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
 }
 
-main .p-6 {
-    padding: 0.75rem 1.5rem !important;
+.wp-block-testimonial>div:first-child {
+  color: var(--wjs-color-primary) !important;
 }
 
-/* Ajuste fino para el contenedor de cards si tiene padding extra */
-.promo-cards-container {
-    margin-top: -1rem;
-    /* Acercarlo más al título */
+/* CTA Banner: Primary Gradient */
+.wp-block-cta-banner {
+  background: linear-gradient(135deg, #2563eb, #3b82f6) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 20px 50px rgba(37, 99, 235, 0.25);
+}
+
+.wp-block-cta-banner a {
+  background: #ffffff !important;
+  color: var(--wjs-color-primary) !important;
+  border-radius: 10px !important;
+}
+
+/* Posts Grid: Clean Article Cards */
+.wp-block-posts-grid article {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 12px !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+.wp-block-posts-grid article:hover {
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.08);
+  transform: translateY(-2px);
+}
+
+/* Category Posts: Simple List */
+.wp-block-category-posts h3 {
+  color: #111827 !important;
+  font-weight: 600 !important;
+}
+
+.wp-block-category-posts li {
+  border-color: #f3f4f6 !important;
+}
+
+.wp-block-category-posts li a {
+  color: #374151 !important;
+}
+
+.wp-block-category-posts li a:hover {
+  color: var(--wjs-color-primary) !important;
+}
+
+/* Search: Modern Input */
+.wp-block-search input {
+  background: #ffffff !important;
+  border: 1px solid #e5e7eb !important;
+  border-radius: 10px !important;
+}
+
+.wp-block-search input:focus {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.1);
+}
+
+.wp-block-search button {
+  background: var(--wjs-color-primary) !important;
+  color: #ffffff !important;
+  border-radius: 10px !important;
 }

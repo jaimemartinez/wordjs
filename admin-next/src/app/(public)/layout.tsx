@@ -16,7 +16,7 @@ export default function PublicLayout({
 
     return (
         <ActivePluginsProvider>
-            <div className="min-h-screen flex flex-col bg-slate-50">
+            <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)' }}>
                 <ThemeLoader />
                 <Header />
                 <main className="flex-1 pt-24 pb-10 container mx-auto px-4">

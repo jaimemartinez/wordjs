@@ -45,3 +45,9 @@ dist/
 # WordJS Temporary
 _backups/
 tmp/
+
+# Client-Specific Plugins (not for public repo)
+backend/plugins/conference-manager/
+
+# Client-Specific Themes (not for public repo)
+backend/themes/vidaParaTodos/

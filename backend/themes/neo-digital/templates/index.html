@@ -1,0 +1,27 @@
+{{> header}}
+
+<div class="container" style="padding: 4rem 0;">
+    <div style="text-align: center; margin-bottom: 5rem;">
+        <h1 style="font-size: clamp(3rem, 10vw, 8rem); font-weight: 900; line-height: 0.9;">NEO<br><span
+                style="color: var(--accent-cyan);">DIGITAL</span></h1>
+        <p style="color: var(--text-muted); font-size: 1.25rem; max-width: 600px; margin: 2rem auto;">Descubre la nueva
+            era de la publicación digital con interfaces que parecen sacadas del futuro.</p>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 2rem;">
+        {{#each posts}}
+        <article class="post-card">
+            <div
+                style="font-size: 0.8rem; font-weight: 600; color: var(--accent-magenta); margin-bottom: 1rem; text-transform: uppercase;">
+                {{category_name}}</div>
+            <h3><a href="/{{post_name}}" style="color: white; text-decoration: none;">{{post_title}}</a></h3>
+            <p style="color: var(--text-muted); font-size: 0.95rem; margin-bottom: 1.5rem;">{{post_excerpt}}</p>
+            <a href="/{{post_name}}"
+                style="color: var(--accent-cyan); text-decoration: none; font-size: 0.9rem; font-weight: 600;">LEER MÁS
+                <i class="fa-solid fa-arrow-right" style="font-size: 0.7rem; margin-left: 0.5rem;"></i></a>
+        </article>
+        {{/each}}
+    </div>
+</div>
+
+{{> footer}}

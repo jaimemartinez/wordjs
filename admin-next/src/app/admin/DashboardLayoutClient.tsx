@@ -76,8 +76,8 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
             <button
                 onClick={() => setIsCollapsed(!isCollapsed)}
                 className={`
-                    hidden md:flex absolute top-10 z-[5003] w-8 h-8 bg-white border border-gray-200 rounded-full items-center justify-center text-gray-500 hover:text-blue-500 hover:border-blue-200 shadow-lg transition-all duration-300
-                    ${isCollapsed ? 'left-[80px]' : 'left-[304px]'}
+                    hidden md:flex absolute top-10 z-[5003] w-8 h-8 bg-white border border-gray-200 rounded-full items-center justify-center text-gray-500 hover:text-blue-500 hover:border-blue-200 shadow-lg transition-all duration-500 [transition-timing-function:cubic-bezier(0.4,0,0.2,1)]
+                    ${isCollapsed ? 'left-[96px]' : 'left-[304px]'}
                 `}
                 title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
             >
@@ -112,7 +112,7 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
 
                 {/* Floating Notification Center */}
             </div>
-        </div>
+        </div >
     );
 }
 

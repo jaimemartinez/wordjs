@@ -9,6 +9,18 @@ const User = require('../models/User');
 const { authenticate, generateToken } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
+const config = require('../config/app');
+
+// Cookie configuration for secure HttpOnly tokens
+// Detect if site uses HTTPS from config
+const siteUsesHttps = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
+const COOKIE_OPTIONS = {
+    httpOnly: true,
+    secure: siteUsesHttps, // Send over HTTPS if site uses it
+    sameSite: 'lax', // Protect against CSRF while allowing normal navigation
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+    path: '/'
+};
 
 /**
  * POST /auth/register
@@ -54,6 +66,16 @@ router.post('/register', asyncHandler(async (req, res) => {
         });
     }
 
+    // SECURITY: Bcrypt truncates passwords longer than 72 bytes
+    // This could cause password collisions if not validated
+    if (password.length > 72) {
+        return res.status(400).json({
+            code: 'rest_invalid_param',
+            message: 'Password must not exceed 72 characters.',
+            data: { status: 400 }
+        });
+    }
+
     // Optional: Add complexity check (Number or Special Char)
     // const complexityRegex = /(?=.*\d)|(?=.*[!@#$%^&*])/;
     // if (!complexityRegex.test(password)) { ... }
@@ -71,9 +93,13 @@ router.post('/register', asyncHandler(async (req, res) => {
 
         const token = generateToken(user);
 
+        // Set HttpOnly cookie
+        console.log('🍪 Setting Cookie:', { token: token.substring(0, 10) + '...', options: COOKIE_OPTIONS });
+        res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+
         res.status(201).json({
-            user: user.toJSON(),
-            token
+            user: user.toJSON()
+            // Token is now in HttpOnly cookie, not in response body
         });
     } catch (error) {
         if (error.message.includes('already exists')) {
@@ -106,9 +132,12 @@ router.post('/login', asyncHandler(async (req, res) => {
         const user = await User.authenticate(username, password);
         const token = generateToken(user);
 
+        // Set HttpOnly cookie
+        res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+
         res.json({
-            user: user.toJSON(),
-            token
+            user: user.toJSON()
+            // Token is now in HttpOnly cookie, not in response body
         });
     } catch (error) {
         return res.status(401).json({
@@ -144,10 +173,22 @@ router.post('/validate', authenticate, (req, res) => {
  */
 router.post('/refresh', authenticate, (req, res) => {
     const token = generateToken(req.user);
+
+    // Update HttpOnly cookie
+    res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+
     res.json({
-        token,
         user: req.user.toJSON()
     });
+});
+
+/**
+ * POST /auth/logout
+ * Clear auth cookie
+ */
+router.post('/logout', (req, res) => {
+    res.clearCookie('wordjs_token', { path: '/' });
+    res.json({ success: true, message: 'Logged out successfully' });
 });
 
 module.exports = router;

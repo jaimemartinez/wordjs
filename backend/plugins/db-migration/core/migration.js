@@ -13,15 +13,35 @@ const TABLES = [
 ];
 
 let globalStatus = { step: 'idle', progress: 0, currentTable: '', totalTables: TABLES.length, warnings: [] };
+let targetEncoding = 'UTF8';
+
+/**
+ * Sanitize string for the target database encoding.
+ * If target is WIN1252, it removes characters that cannot be translated from UTF8.
+ */
+const sanitizeForEncoding = (str) => {
+    if (!str || typeof str !== 'string') return str;
+    if (targetEncoding === 'UTF8' || targetEncoding === 'UTF-8') return str;
+
+    // Very basic replacement for most common untranslatable chars if target is restricted
+    // This is a "best effort" to let the migration complete.
+    return str.replace(/[^\x00-\xFF]/g, (match) => {
+        // Map some common ones or just generic placeholder
+        const map = { '❱': '>', '❰': '<', '—': '-', '“': '"', '”': '"', '‘': "'", '’': "'" };
+        return map[match] || '?';
+    });
+};
 
 exports.getStatus = (req, res) => {
     // Check for legacy files to allow cleanup
     const legacyFiles = [];
-    const currentDriver = config.dbDriver || 'sqlite-legacy';
+    const dbType = dbManager.getDbType();
+    const currentDriver = dbType.driver;
 
     // Only allow cleanup if we are NOT using the file execution
     if (currentDriver !== 'sqlite-legacy' && fs.existsSync(path.resolve('./data/wordjs.db'))) legacyFiles.push('wordjs.db');
     if (currentDriver !== 'sqlite-native' && fs.existsSync(path.resolve('./data/wordjs-native.db'))) legacyFiles.push('wordjs-native.db');
+    if (currentDriver !== 'postgres' && fs.existsSync(path.resolve('./data/postgres-embed'))) legacyFiles.push('postgres-embed');
 
     res.json({
         currentDriver,
@@ -34,18 +54,23 @@ exports.getStatus = (req, res) => {
 exports.cleanup = (req, res) => {
     const { file } = req.body;
     // Security: Only allow specific filenames to prevent arbitrary deletion
-    const ALLOWED = ['wordjs.db', 'wordjs-native.db'];
+    const ALLOWED = ['wordjs.db', 'wordjs-native.db', 'postgres-embed'];
 
     if (!ALLOWED.includes(file)) return res.status(403).json({ error: 'Invalid file' });
 
     const target = path.resolve('./data', file);
     if (fs.existsSync(target)) {
         try {
-            fs.unlinkSync(target);
+            const stat = fs.statSync(target);
+            if (stat.isDirectory()) {
+                fs.rmSync(target, { recursive: true, force: true });
+            } else {
+                fs.unlinkSync(target);
 
-            // Also clean WAL/SHM if they exist
-            if (fs.existsSync(target + '-wal')) fs.unlinkSync(target + '-wal');
-            if (fs.existsSync(target + '-shm')) fs.unlinkSync(target + '-shm');
+                // Also clean WAL/SHM if they exist
+                if (fs.existsSync(target + '-wal')) fs.unlinkSync(target + '-wal');
+                if (fs.existsSync(target + '-shm')) fs.unlinkSync(target + '-shm');
+            }
 
             res.json({ success: true, message: 'File deleted' });
         } catch (e) {
@@ -145,6 +170,20 @@ exports.runMigration = async (req, res) => {
                 dbConfig: { host: dbHost, user: dbUser, password: dbPassword, name: dbName, port: dbPort }
             });
             await targetDriverModule.connect();
+
+            // 3.1 Verify Encoding (Special check for Windows users with WIN1252 defaults)
+            try {
+                const encRes = await targetDriverModule.all("SELECT pg_encoding_to_char(encoding) as enc FROM pg_database WHERE datname = current_database()");
+                targetEncoding = encRes[0]?.enc || 'UTF8';
+                console.log(`   Target Encoding: ${targetEncoding}`);
+                if (targetEncoding !== 'UTF8' && targetEncoding !== 'UTF-8') {
+                    const warn = `Target database encoding is ${targetEncoding}. WordJS will automatically sanitize special characters to ensure migration success.`;
+                    console.warn(`⚠️ ${warn}`);
+                    globalStatus.warnings.push(warn);
+                }
+            } catch (encErr) {
+                console.warn('⚠️ Could not verify database encoding:', encErr.message);
+            }
         } else {
             // Legacy driver takes path
             // Write to .tmp first
@@ -216,7 +255,14 @@ exports.runMigration = async (req, res) => {
                         const keys = Object.keys(row);
                         const placeholders = keys.map((_, i) => `$${i + 1}`).join(',');
                         const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`;
-                        await targetDriverModule.run(sql, Object.values(row));
+
+                        // Sanitize values for target encoding
+                        const values = Object.values(row).map(val => {
+                            if (typeof val === 'string') return sanitizeForEncoding(val);
+                            return val;
+                        });
+
+                        await targetDriverModule.run(sql, values);
                     }
                 } else {
                     // SQLite Bulk

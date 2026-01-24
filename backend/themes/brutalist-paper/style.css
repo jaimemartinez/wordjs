@@ -1,0 +1,376 @@
+/* =========================================
+   THEME: BRUTALIST PAPER
+   Concept: Raw, bold, high contrast, print-inspired.
+   Standardized V2.
+   ========================================= */
+
+:root {
+    /* --- COLOR PALETTE: Cream & Ink --- */
+    --wjs-color-primary: #000000;
+    /* Ink Black */
+    --wjs-color-primary-dark: #333333;
+    /* Soft Black */
+
+    /* --- COLOR SEMANTICS --- */
+    --wjs-bg-canvas: #f4f1ea;
+    /* Recycled Paper */
+    --wjs-bg-surface: #ffffff;
+    /* Crisp White Paper */
+
+    --wjs-color-text-main: #000000;
+    /* Ink */
+    --wjs-color-text-muted: #444444;
+    /* Faded Ink */
+
+    --wjs-border-subtle: #000000;
+    /* Always Black Borders */
+
+    /* --- NAVIGATION CONFIG --- */
+    --wjs-nav-font-family: 'Times New Roman', Times, serif;
+    /* Newspaper Headline style */
+    --wjs-nav-font-size: 1.1rem;
+    --wjs-nav-font-weight: 900;
+    --wjs-nav-text-transform: uppercase;
+    --wjs-nav-letter-spacing: 0.05em;
+
+    --wjs-nav-color: #000000;
+    --wjs-nav-color-hover: #ff3333;
+    /* Alert Red Hover */
+    --wjs-nav-transition: all 0s;
+    /* Brutalist = No Transition */
+
+    --wjs-logo-color: #000000;
+
+    /* --- FOOTER CONFIG (Poster Style) --- */
+    --wjs-footer-bg: #000000;
+    /* Inverse */
+    --wjs-footer-text-heading: #ffffff;
+    --wjs-footer-text-body: #f4f1ea;
+    --wjs-footer-text-hover: #ff3333;
+    /* Red */
+    --wjs-footer-icon-bg: #333333;
+    --wjs-footer-icon-color: #ffffff;
+
+    /* --- TYPOGRAPHY --- */
+    --wjs-font-family-base: 'Helvetica', 'Arial', sans-serif;
+}
+
+/* =========================================
+   VISUAL OVERRIDES (No Layout Hacks)
+   ========================================= */
+
+body {
+    background-color: var(--wjs-bg-canvas) !important;
+    background-image: radial-gradient(#d0cec7 1px, transparent 0);
+    background-size: 20px 20px;
+    /* Dot grid */
+    color: var(--wjs-color-text-main) !important;
+    font-family: var(--wjs-font-family-base) !important;
+
+    /* FIX: Push content down because Header is Taller (Vertical Layout) */
+    padding-top: 280px !important;
+}
+
+/* Header: White Box with Black Border */
+/* Header: White Box with Black Border */
+header {
+    background-color: #ffffff !important;
+    border-bottom: 3px solid #000000 !important;
+    box-shadow: 6px 6px 0px 0px #000000;
+    margin-bottom: 20px;
+}
+
+/* --- BRUTALIST ALIGNMENT (SHARPEN EVERYTHING) --- */
+/* Force all elements to have sharp corners to match the theme */
+* {
+    border-radius: 0px !important;
+}
+
+/* Specifically target common rounded elements to be sure */
+[class*='rounded'],
+.rounded-xl,
+.rounded-2xl,
+.rounded-full,
+img,
+button,
+a {
+    border-radius: 0px !important;
+}
+
+/* --- BRUTALIST LAYOUT SHIFTS --- */
+
+/* 1. Header Container: Stack Logo and Nav (Masthead) */
+.wjs-header-container {
+    flex-direction: column !important;
+    gap: 1.5rem !important;
+    padding: 1rem 0 !important;
+}
+
+/* 2. Logo: Center and Gigantic */
+.wjs-header-logo {
+    order: 1 !important;
+    width: 100%;
+    justify-content: center;
+    font-size: 2.5rem !important;
+    border-bottom: 2px solid #000;
+    padding-bottom: 1rem;
+    margin-bottom: 0.5rem;
+    color: var(--wjs-logo-color) !important;
+    font-family: 'Times New Roman', serif !important;
+    font-weight: 900 !important;
+    text-decoration: underline !important;
+    text-decoration-thickness: 3px !important;
+}
+
+/* 3. Nav: Centered below logo */
+.wjs-header-nav {
+    order: 2 !important;
+    width: 100%;
+    justify-content: center !important;
+    margin: 0 !important;
+}
+
+/* 4. Hide Actions (Search/Auth) to clean up Masthead, or put at bottom */
+.wjs-header-actions {
+    display: none !important;
+    /* Brutalist simplification */
+}
+
+header[class*='fixed'] {
+    background-color: #ffffff !important;
+    border-bottom: 3px solid #000000 !important;
+    box-shadow: 6px 6px 0px 0px #000000 !important;
+    backdrop-filter: none !important;
+}
+
+/* Nav Links: Bold & Underlined on Hover */
+.wjs-header-nav a {
+    font-family: var(--wjs-nav-font-family) !important;
+    font-size: var(--wjs-nav-font-size) !important;
+    font-weight: var(--wjs-nav-font-weight) !important;
+    color: var(--wjs-nav-color) !important;
+    text-transform: var(--wjs-nav-text-transform) !important;
+    letter-spacing: var(--wjs-nav-letter-spacing) !important;
+    transition: var(--wjs-nav-transition) !important;
+    text-decoration: none !important;
+    border: 1px solid transparent;
+    padding: 4px 8px;
+}
+
+.wjs-header-nav a:hover {
+    background-color: #000000;
+    color: #ffffff !important;
+    box-shadow: 4px 4px 0px #ff3333;
+    /* Red Shadow */
+}
+
+/* Footer: Bold Block */
+footer {
+    background-color: var(--wjs-footer-bg) !important;
+    border-top: 8px solid #ff3333 !important;
+    /* Thick Red Line */
+    color: #ffffff !important;
+    text-align: center !important;
+}
+
+/* Force centering everything in footer */
+footer .container,
+footer .grid {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 2rem !important;
+}
+
+footer h3,
+footer h4 {
+    color: var(--wjs-footer-text-heading) !important;
+    font-family: 'Times New Roman', serif !important;
+    text-transform: uppercase;
+    font-size: 2rem !important;
+}
+
+footer a {
+    color: var(--wjs-footer-text-body) !important;
+    font-family: 'Courier New', monospace;
+    text-decoration: underline !important;
+    text-decoration-thickness: 1px;
+}
+
+footer a:hover {
+    color: var(--wjs-footer-text-hover) !important;
+    background-color: #ffffff;
+    color: #000000 !important;
+    text-decoration: none !important;
+}
+
+/* Icons */
+footer .w-10 {
+    background-color: #ffffff !important;
+    border: 2px solid #000000;
+    color: #000000 !important;
+    border-radius: 0 !important;
+    box-shadow: 4px 4px 0px #000000;
+}
+
+footer .w-10:hover {
+    transform: translate(2px, 2px);
+    box-shadow: 2px 2px 0px #000000;
+}
+
+/* =========================================
+   BRUTALIST PAPER: NEW COMPONENT OVERRIDES
+   Neo-brutalist / Newspaper aesthetic
+   ========================================= */
+
+/* Accordion: Stacked Papers */
+.wp-block-accordion {
+    border: 3px solid #000000 !important;
+    border-radius: 0 !important;
+    box-shadow: 6px 6px 0px #000000;
+}
+
+.wp-block-accordion .accordion-item button {
+    background: #ffffff !important;
+    color: #000000 !important;
+    border-bottom: 2px solid #000000 !important;
+    font-weight: 900 !important;
+    text-transform: uppercase;
+}
+
+.wp-block-accordion .accordion-item>div {
+    background: #f5f5f0 !important;
+    color: #333333 !important;
+}
+
+/* Tabs: Index Card Tabs */
+.wp-block-tabs>div:first-child {
+    border-bottom: 3px solid #000000 !important;
+}
+
+.wp-block-tabs button {
+    color: #000000 !important;
+    border: 2px solid transparent !important;
+    font-weight: 700 !important;
+    text-transform: uppercase;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+    background: #000000 !important;
+    color: #ffffff !important;
+}
+
+.wp-block-tabs>div:last-child {
+    background: #ffffff !important;
+    border: 3px solid #000000 !important;
+    border-top: none !important;
+}
+
+/* Video: Framed Picture */
+.wp-block-video-embed {
+    border: 4px solid #000000 !important;
+    box-shadow: 8px 8px 0px #000000;
+}
+
+/* Audio: Record Player */
+.wp-block-audio-player {
+    background: #ffffff !important;
+    border: 3px solid #000000 !important;
+    box-shadow: 6px 6px 0px #000000;
+}
+
+/* Pricing: Bold Posters */
+.wp-block-pricing>div {
+    background: #ffffff !important;
+    border: 3px solid #000000 !important;
+    box-shadow: 6px 6px 0px #000000;
+}
+
+.wp-block-pricing>div:hover {
+    transform: translate(-2px, -2px);
+    box-shadow: 8px 8px 0px #000000;
+}
+
+.wp-block-pricing>div[style*="scale(1.05)"] {
+    background: #ff3333 !important;
+    color: #ffffff !important;
+    border: 3px solid #000000 !important;
+    box-shadow: 10px 10px 0px #000000;
+}
+
+/* Testimonial: Quote Card */
+.wp-block-testimonial {
+    background: #fff9e6 !important;
+    border: 3px solid #000000 !important;
+    box-shadow: 6px 6px 0px #000000;
+    position: relative;
+}
+
+.wp-block-testimonial>div:first-child {
+    color: #ff3333 !important;
+    font-weight: 900;
+}
+
+/* CTA Banner: Bold Poster */
+.wp-block-cta-banner {
+    background: #ff3333 !important;
+    border: 4px solid #000000 !important;
+    box-shadow: 10px 10px 0px #000000;
+}
+
+.wp-block-cta-banner h2 {
+    text-transform: uppercase;
+    letter-spacing: -2px;
+}
+
+.wp-block-cta-banner a {
+    background: #000000 !important;
+    color: #ffffff !important;
+    border: 2px solid #ffffff !important;
+    box-shadow: 4px 4px 0px #ffffff;
+}
+
+/* Posts Grid: Newspaper Columns */
+.wp-block-posts-grid article {
+    background: #ffffff !important;
+    border: 2px solid #000000 !important;
+    box-shadow: 4px 4px 0px #000000;
+}
+
+.wp-block-posts-grid article>div:first-child {
+    background: #000000 !important;
+}
+
+/* Category Posts: Headlines */
+.wp-block-category-posts h3 {
+    font-weight: 900 !important;
+    text-transform: uppercase;
+    border-bottom: 3px solid #000000;
+    padding-bottom: 10px;
+}
+
+.wp-block-category-posts li {
+    border-color: #000000 !important;
+}
+
+.wp-block-category-posts li a {
+    font-weight: 700 !important;
+}
+
+/* Search: Typewriter Input */
+.wp-block-search input {
+    background: #ffffff !important;
+    border: 3px solid #000000 !important;
+    box-shadow: 4px 4px 0px #000000;
+    font-weight: 600;
+}
+
+.wp-block-search button {
+    background: #000000 !important;
+    color: #ffffff !important;
+    border: none;
+    box-shadow: 4px 4px 0px #ff3333;
+    text-transform: uppercase;
+    font-weight: 900;
+}

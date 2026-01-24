@@ -1,0 +1,399 @@
+/* =========================================
+   THEME: NEON PULSE
+   Concept: Dark mode, neon glow effects, tech startup aesthetic.
+   Trend: 2024/2025 - Neon Revival / Tech Noir
+   ========================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700&display=swap');
+
+:root {
+  /* --- COLOR PALETTE: Neon Nights --- */
+  --wjs-color-primary: #f43f5e;
+  /* Neon Rose */
+  --wjs-color-primary-dark: #e11d48;
+  --wjs-color-secondary: #a855f7;
+  /* Neon Purple */
+  --wjs-color-accent: #22d3ee;
+  /* Electric Cyan */
+
+  /* --- COLOR SEMANTICS --- */
+  --wjs-bg-canvas: #09090b;
+  /* Near Black */
+  --wjs-bg-surface: #18181b;
+  /* Zinc-900 */
+
+  --wjs-color-text-main: #fafafa;
+  /* Zinc-50 */
+  --wjs-color-text-muted: #a1a1aa;
+  /* Zinc-400 */
+
+  --wjs-border-subtle: #27272a;
+  /* Zinc-800 */
+
+  /* --- NAVIGATION CONFIG --- */
+  --wjs-nav-font-family: 'Outfit', sans-serif;
+  --wjs-nav-font-size: 0.9rem;
+  --wjs-nav-font-weight: 500;
+  --wjs-nav-text-transform: none;
+  --wjs-nav-letter-spacing: 0;
+
+  --wjs-nav-color: #a1a1aa;
+  --wjs-nav-color-hover: #f43f5e;
+  --wjs-nav-transition: all 0.2s ease;
+
+  --wjs-logo-color: #fafafa;
+
+  /* --- FOOTER CONFIG --- */
+  --wjs-footer-bg: #09090b;
+  --wjs-footer-text-heading: #fafafa;
+  --wjs-footer-text-body: #71717a;
+  --wjs-footer-text-hover: #f43f5e;
+  --wjs-footer-icon-bg: #27272a;
+  --wjs-footer-icon-color: #f43f5e;
+
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Outfit', sans-serif;
+}
+
+/* =========================================
+   VISUAL OVERRIDES
+   ========================================= */
+
+body {
+  background-color: var(--wjs-bg-canvas) !important;
+  /* Subtle grid pattern */
+  background-image:
+    linear-gradient(rgba(244, 63, 94, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(244, 63, 94, 0.03) 1px, transparent 1px) !important;
+  background-size: 60px 60px !important;
+  color: var(--wjs-color-text-main) !important;
+  font-family: var(--wjs-font-family-base) !important;
+}
+
+/* Header: Dark with Neon Accent Line */
+header {
+  background-color: rgba(9, 9, 11, 0.95) !important;
+  backdrop-filter: blur(10px) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+  position: relative;
+}
+
+/* Neon Line Under Header */
+header::after {
+  content: '';
+  position: absolute;
+  bottom: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 200px;
+  height: 2px;
+  background: linear-gradient(90deg, transparent, var(--wjs-color-primary), transparent);
+  box-shadow: 0 0 10px var(--wjs-color-primary), 0 0 20px var(--wjs-color-primary);
+}
+
+header[class*='fixed'] {
+  background-color: rgba(9, 9, 11, 0.98) !important;
+}
+
+/* --- NEON PULSE LAYOUT: Split Header --- */
+.wjs-header-container {
+  display: flex !important;
+  justify-content: space-between !important;
+  align-items: center !important;
+}
+
+/* Logo: Inside Glowing Box on LEFT */
+.wjs-header-logo {
+  order: 1 !important;
+  color: var(--wjs-logo-color) !important;
+  font-weight: 700 !important;
+  font-size: 1.25rem !important;
+  padding: 8px 20px;
+  background: rgba(244, 63, 94, 0.1);
+  border: 1px solid rgba(244, 63, 94, 0.3);
+  border-radius: 8px;
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.2);
+}
+
+/* Nav Links: Grouped on RIGHT inside a container */
+.wjs-header-nav {
+  order: 3 !important;
+  background: rgba(39, 39, 42, 0.5);
+  border: 1px solid var(--wjs-border-subtle);
+  border-radius: 8px;
+  padding: 4px !important;
+  gap: 2px !important;
+}
+
+/* Actions: Hidden or minimal */
+.wjs-header-actions {
+  order: 2 !important;
+  margin-left: auto !important;
+  margin-right: 20px !important;
+}
+
+/* Nav Links: Compact Pills */
+.wjs-header-nav a {
+  font-family: var(--wjs-nav-font-family) !important;
+  font-size: 0.85rem !important;
+  font-weight: var(--wjs-nav-font-weight) !important;
+  color: var(--wjs-nav-color) !important;
+  transition: var(--wjs-nav-transition) !important;
+  padding: 8px 14px;
+  border-radius: 6px;
+  position: relative;
+}
+
+.wjs-header-nav a:hover {
+  color: #fff !important;
+  background: var(--wjs-color-primary);
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.5);
+}
+
+/* Remove the underline animation, use fill instead */
+.wjs-header-nav a::before {
+  display: none !important;
+}
+
+/* Cards: Dark with Glow Border on Hover */
+.wp-block-card,
+article {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease;
+}
+
+.wp-block-card:hover,
+article:hover {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 30px rgba(244, 63, 94, 0.15), 0 0 60px rgba(244, 63, 94, 0.05);
+}
+
+/* Buttons: Neon Glow */
+button,
+.wp-block-button a {
+  background: var(--wjs-color-primary) !important;
+  color: #fff !important;
+  border: none !important;
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.4);
+  transition: box-shadow 0.3s ease, transform 0.2s ease;
+}
+
+button:hover,
+.wp-block-button a:hover {
+  box-shadow: 0 0 25px rgba(244, 63, 94, 0.6), 0 0 50px rgba(244, 63, 94, 0.3);
+  transform: translateY(-2px);
+}
+
+/* Footer: Dark with Top Glow Line */
+footer {
+  background-color: var(--wjs-footer-bg) !important;
+  border-top: 1px solid var(--wjs-border-subtle) !important;
+  position: relative;
+}
+
+footer::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, var(--wjs-color-secondary), var(--wjs-color-primary), var(--wjs-color-secondary), transparent);
+}
+
+footer h3,
+footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
+  font-weight: 600 !important;
+}
+
+footer a {
+  color: var(--wjs-footer-text-body) !important;
+  transition: color 0.2s, text-shadow 0.2s;
+}
+
+footer a:hover {
+  color: var(--wjs-footer-text-hover) !important;
+  text-shadow: 0 0 8px rgba(244, 63, 94, 0.5);
+}
+
+footer .w-10 {
+  background: var(--wjs-footer-icon-bg) !important;
+  color: var(--wjs-footer-icon-color) !important;
+  border: 1px solid var(--wjs-border-subtle);
+  transition: box-shadow 0.3s, transform 0.2s;
+}
+
+footer .w-10:hover {
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.4);
+  transform: scale(1.1);
+}
+
+/* =========================================
+   NEON PULSE: NEW COMPONENT OVERRIDES
+   Tech Noir / Neon glow aesthetic
+   ========================================= */
+
+/* Accordion: Dark Panels with Glow */
+.wp-block-accordion {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-accordion .accordion-item button {
+  background: transparent !important;
+  color: var(--wjs-color-text-main) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+}
+
+.wp-block-accordion .accordion-item button:hover {
+  color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-accordion .accordion-item button i {
+  color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-accordion .accordion-item>div {
+  background: rgba(244, 63, 94, 0.05) !important;
+  color: var(--wjs-color-text-muted) !important;
+}
+
+/* Tabs: Neon Indicator */
+.wp-block-tabs>div:first-child {
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+}
+
+.wp-block-tabs button {
+  color: var(--wjs-color-text-muted) !important;
+  border-radius: 6px !important;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  color: #ffffff !important;
+  background: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.4);
+}
+
+.wp-block-tabs>div:last-child {
+  background: var(--wjs-bg-surface) !important;
+  border-radius: 8px !important;
+}
+
+/* Video: Glowing Frame */
+.wp-block-video-embed {
+  border-radius: 12px !important;
+  border: 1px solid var(--wjs-border-subtle);
+  box-shadow: 0 0 30px rgba(244, 63, 94, 0.2);
+}
+
+/* Audio: Neon Player */
+.wp-block-audio-player {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-audio-player div:first-child>div:first-child {
+  background: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.4);
+}
+
+/* Pricing: Neon Tiers */
+.wp-block-pricing>div {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-pricing>div:hover {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 30px rgba(244, 63, 94, 0.15);
+}
+
+.wp-block-pricing>div[style*="scale(1.05)"] {
+  background: linear-gradient(180deg, rgba(244, 63, 94, 0.2), var(--wjs-bg-surface)) !important;
+  border: 2px solid var(--wjs-color-primary) !important;
+  box-shadow: 0 0 50px rgba(244, 63, 94, 0.3);
+}
+
+/* Testimonial: Dark Quote */
+.wp-block-testimonial {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-testimonial>div:first-child {
+  color: var(--wjs-color-primary) !important;
+  text-shadow: 0 0 20px rgba(244, 63, 94, 0.5);
+}
+
+/* CTA Banner: Neon Gradient */
+.wp-block-cta-banner {
+  background: linear-gradient(135deg, var(--wjs-color-primary), var(--wjs-color-secondary)) !important;
+  border-radius: 16px !important;
+  box-shadow: 0 0 50px rgba(244, 63, 94, 0.3);
+}
+
+.wp-block-cta-banner a {
+  background: #ffffff !important;
+  color: var(--wjs-color-primary) !important;
+  border-radius: 8px !important;
+  box-shadow: 0 0 20px rgba(255, 255, 255, 0.3);
+}
+
+/* Posts Grid: Dark Cards */
+.wp-block-posts-grid article {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-posts-grid article:hover {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 25px rgba(244, 63, 94, 0.15);
+}
+
+/* Category Posts: Neon Accent */
+.wp-block-category-posts h3 {
+  color: var(--wjs-color-primary) !important;
+  text-shadow: 0 0 15px rgba(244, 63, 94, 0.3);
+}
+
+.wp-block-category-posts li {
+  border-color: var(--wjs-border-subtle) !important;
+}
+
+.wp-block-category-posts li a:hover {
+  color: var(--wjs-color-primary) !important;
+  text-shadow: 0 0 10px rgba(244, 63, 94, 0.4);
+}
+
+/* Search: Neon Input */
+.wp-block-search input {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 8px !important;
+  color: var(--wjs-color-text-main) !important;
+}
+
+.wp-block-search input:focus {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 15px rgba(244, 63, 94, 0.3);
+}
+
+.wp-block-search button {
+  background: var(--wjs-color-primary) !important;
+  color: #ffffff !important;
+  border-radius: 8px !important;
+  box-shadow: 0 0 20px rgba(244, 63, 94, 0.4);
+}
+
+.wp-block-search button:hover {
+  box-shadow: 0 0 30px rgba(244, 63, 94, 0.6);
+}

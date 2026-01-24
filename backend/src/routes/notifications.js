@@ -68,4 +68,16 @@ router.post('/read-all', authenticate, async (req, res) => {
     }
 });
 
+/**
+ * Delete a notification
+ */
+router.delete('/:uuid', authenticate, async (req, res) => {
+    try {
+        await notificationService.deleteNotification(req.params.uuid);
+        res.json({ success: true });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 module.exports = router;

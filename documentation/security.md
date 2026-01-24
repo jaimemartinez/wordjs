@@ -18,9 +18,10 @@ Before a plugin is activated, its entire source code is parsed into an **Abstrac
 ### 1.2 Runtime Context Proxies
 WordJS uses `AsyncLocalStorage` to track the execution context of every request.
 
-*   **Environment Protection:** Global `process.env` is replaced with a **Security Proxy**. 
-    *   When a plugin tries to read sensitive keys (e.g., `JWT_SECRET`, `DB_PASSWORD`), the proxy returns `******** (Protected)`.
-    *   Full access is only granted to the core application.
+*   **Environment Protection:** Global `process.env` is replaced with a **strict Read-Only Proxy**. 
+    *   Plugins CANNOT read sensitive keys from the environment.
+    *   Secrets (DB passwords, JWT keys) are loaded directly from `wordjs-config.json` by the core and never exposed to `process.env`.
+    *   Plugins attempting to access secrets will receive `undefined`.
 *   **API Sandboxing:** Core functions like `dbAsync` or `updateOption` verify the current plugin's permissions before executing. If a plugin lacks the required "capability" in its manifest, the call is blocked at runtime.
 
 ### 1.3 Mandatory Permission Authorization
@@ -90,3 +91,88 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
     { "scope": "notifications", "access": "send", "reason": "Alerting admin on new votes" }
 ]
 ```
+
+---
+
+## 6. Production Security Checklist ✅
+
+Before deploying WordJS to production, ensure the following:
+
+### JWT Secret (CRITICAL)
+
+The installer automatically generates cryptographically secure secrets in `wordjs-config.json`.
+You can verify them by checking the file:
+
+```json
+"jwtSecret": "a4f... (long random string)"
+"gatewaySecret": "b9c... (long random string)"
+```
+
+### Configuration (No Env Vars)
+
+WordJS does **not** use `.env` files. All security settings are in `wordjs-config.json`.
+
+| Setting         | Required | Description                          |
+| --------------- | -------- | ------------------------------------ |
+| `jwtSecret`     | ✅ Yes    | Token signing key (64+ random bytes) |
+| `nodeEnv`       | ✅ Yes    | Set to `production`                  |
+| `gatewaySecret` | ✅ Yes    | Gateway authentication               |
+| `db.password`   | If PG    | Database password                    |
+
+### XSS Protection
+
+All user-generated content is sanitized using **DOMPurify** before rendering:
+
+```typescript
+import { sanitizeHTML } from '@/lib/sanitize';
+
+// Safe rendering
+<div dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }} />
+```
+
+### Path Traversal Prevention
+
+All plugin and theme slugs are validated before filesystem operations:
+
+```javascript
+function validateSlug(slug) {
+    // Only alphanumeric, dashes, underscores
+    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) return false;
+    
+    // Ensure path stays within allowed directory
+    const safePath = path.resolve(PLUGINS_DIR, slug);
+    return safePath.startsWith(path.resolve(PLUGINS_DIR));
+}
+```
+
+### Command Injection Prevention
+
+All shell commands use `execFile` instead of `exec`:
+
+```javascript
+// ❌ Vulnerable
+exec(`node "${scriptPath}"`);
+
+// ✅ Safe
+execFile('node', [scriptPath]);
+```
+
+### Additional Recommendations
+
+1. **HTTPS**: Always use SSL/TLS in production (via Nginx or Caddy)
+2. **Rate Limiting**: The Gateway includes rate limiting by default
+3. **Firewall**: Only expose port 3000 (or 80/443)
+4. **Backups**: Configure automatic database backups
+5. **Updates**: Keep Node.js and dependencies updated
+
+---
+
+## 7. Security Headers
+
+WordJS uses **Helmet.js** for security headers:
+
+- `X-Content-Type-Options: nosniff`
+- `X-Frame-Options: DENY`
+- `X-XSS-Protection: 1; mode=block`
+- `Strict-Transport-Security` (when behind HTTPS)
+

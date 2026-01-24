@@ -118,28 +118,28 @@ export default function Header({ disableSticky = false }: HeaderProps) {
 
     return (
         <>
-            <header ref={headerRef} className={`${disableSticky ? 'absolute' : 'fixed'} top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? "bg-white/90 backdrop-blur-md shadow-sm py-4" : (disableSticky ? "bg-white/90 backdrop-blur-md shadow-sm py-4" : "bg-transparent py-6")
+            <header ref={headerRef} className={`${disableSticky ? 'absolute' : 'fixed'} top-0 left-0 right-0 z-50 transition-all duration-300 ${isScrolled ? "bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4" : (disableSticky ? "bg-[var(--wjs-bg-surface-glass,white)] backdrop-blur-md shadow-sm py-4" : "bg-transparent py-6")
                 }`}>
-                <div className="container mx-auto px-4 flex justify-between items-center">
-                    <Link href="/" className="flex items-center gap-2">
+                <div className="wjs-header-container container mx-auto px-4 flex justify-between items-center">
+                    <Link href="/" className="wjs-header-logo flex items-center gap-2">
                         {logoUrl ? (
                             <img src={logoUrl} alt={siteTitle} className="h-10 w-auto object-contain" />
                         ) : siteTitle ? (
-                            <span className="text-2xl font-bold text-gray-800">
+                            <span className="text-2xl font-bold text-[var(--wjs-color-text-main,gray)]">
                                 {siteTitle}
                             </span>
                         ) : null}
                     </Link>
 
                     {/* Desktop Navigation */}
-                    <nav className="hidden md:flex items-center gap-8">
+                    <nav className="wjs-header-nav hidden md:flex items-center gap-8">
                         {menuItems.length > 0 ? (
                             menuItems.map((item) => (
                                 <Link
                                     key={item.id}
                                     href={item.url}
                                     onClick={(e) => handleNavClick(e, item.url)}
-                                    className="text-gray-600 hover:text-blue-600 font-medium transition-colors"
+                                    className="text-[var(--wjs-color-text-main,gray)] hover:text-[var(--wjs-color-primary,blue)] font-medium transition-colors"
                                 >
                                     {item.title}
                                 </Link>
@@ -147,7 +147,7 @@ export default function Header({ disableSticky = false }: HeaderProps) {
                         ) : null}
                     </nav>
 
-                    <div className="flex items-center gap-4">
+                    <div className="wjs-header-actions flex items-center gap-4">
                         {/* Mobile Menu Button */}
                         <button
                             className="md:hidden w-11 h-11 rounded-full bg-[#2F6D86] text-white flex items-center justify-center shadow-lg hover:bg-[#266073] transition-colors"
@@ -177,7 +177,7 @@ export default function Header({ disableSticky = false }: HeaderProps) {
 
             {/* Mobile Menu Panel */}
             <div
-                className={`fixed top-0 right-0 z-50 h-full w-72 bg-white shadow-2xl transform transition-transform duration-300 ease-out md:hidden ${mobileMenuOpen ? "translate-x-0" : "translate-x-full"
+                className={`fixed top-0 right-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden ${mobileMenuOpen ? "translate-x-0" : "translate-x-full"
                     }`}
             >
                 <div className="p-6">

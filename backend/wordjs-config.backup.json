@@ -1,15 +1,16 @@
 {
-  "siteUrl": "http://localhost:3001",
-  "frontendUrl": "http://localhost:3001",
+  "jwtSecret": "7b737b1dd7b91df2922f36bc5611933e38665529e3cbc518f058202eae99abc3db7e29baf6e573e3c4ce1cb",
+  "siteUrl": "https://192.168.1.38:3000",
+  "frontendUrl": "http://192.168.1.38:3001",
   "port": "4000",
   "host": "localhost",
-  "updatedAt": "2026-01-15T15:41:36.524Z",
+  "updatedAt": "2026-01-19T20:09:02.876Z",
   "gatewaySecret": "8280f373eda00c98d53be3cbb36b14125733120da863cff29e8924bbcdc0fd0e",
-  "dbDriver": "sqlite-native",
+  "dbDriver": "postgres",
   "dbPath": "./data/wordjs-native.db",
   "dbHost": "localhost",
   "dbUser": "postgres",
-  "dbPassword": "password",
+  "dbPassword": "13bd4885b906dba4698605081d2cab02",
   "dbName": "wordjs",
   "dbPort": "5433",
   "db": {
@@ -18,5 +19,12 @@
     "user": "postgres",
     "name": "wordjs",
     "password": "password"
+  },
+  "gatewayPort": 3000,
+  "ssl": {
+    "enabled": true
+  },
+  "gatewaySsl": {
+    "enabled": true
   }
 }

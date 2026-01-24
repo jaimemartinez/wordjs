@@ -29,7 +29,7 @@ const PUBLIC_SETTINGS = [
     'comments_enabled',
     'site_icon',
     'users_can_register',
-    'admin_email',
+    // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
     'comment_registration'
 ];
@@ -37,6 +37,7 @@ const PUBLIC_SETTINGS = [
 // All settings that can be modified
 const ALL_SETTINGS = [
     ...PUBLIC_SETTINGS,
+    'admin_email', // SECURITY: Admin-only access
     'default_category',
     'default_post_format',
     'show_on_front',

@@ -242,61 +242,39 @@ const OverlayBlocker = () => {
     return null;
 };
 
-// Isolated Properties Panel component to prevent re-renders of the entire editor during drag
+// Floating Properties Panel with Premium Design
 const FloatingPropertiesPanel = () => {
-    // Local state for panel position and minimization
-    // We store x/y in state only to persist it across re-renders (like minimize toggles)
     const [panelState, setPanelState] = useState({ x: 0, y: 0, minimized: true });
-
-    // Refs for direct DOM manipulation to avoid re-rendering React during drag
     const panelRef = useRef<HTMLDivElement>(null);
     const dragRef = useRef<{ startX: number, startY: number, initialX: number, initialY: number } | null>(null);
 
     const handlePanelDragStart = (e: React.MouseEvent) => {
-        // Prevent drag triggers on buttons
         if ((e.target as HTMLElement).closest('button')) return;
-
         e.preventDefault();
-
-        // Capture initial state
         dragRef.current = {
             startX: e.clientX,
             startY: e.clientY,
             initialX: panelState.x,
             initialY: panelState.y
         };
-
         const handleMouseMove = (moveEvent: MouseEvent) => {
             if (!dragRef.current || !panelRef.current) return;
-
-            // Calculate new position
-            const deltaX = moveEvent.clientX - dragRef.current.startX;
-            const deltaY = moveEvent.clientY - dragRef.current.startY;
-            const newX = dragRef.current.initialX + deltaX;
-            const newY = dragRef.current.initialY + deltaY;
-
-            // Direct DOM update (GPU accelerated, no React render)
+            const newX = dragRef.current.initialX + (moveEvent.clientX - dragRef.current.startX);
+            const newY = dragRef.current.initialY + (moveEvent.clientY - dragRef.current.startY);
             panelRef.current.style.transform = `translate(${newX}px, ${newY}px)`;
-
-            // Store current pos in ref for mouseup
             (dragRef.current as any).currentX = newX;
             (dragRef.current as any).currentY = newY;
         };
-
         const handleMouseUp = () => {
-            if (dragRef.current && panelRef.current) {
-                // Sync final position to React state
-                const finalX = (dragRef.current as any).currentX ?? dragRef.current.initialX;
-                const finalY = (dragRef.current as any).currentY ?? dragRef.current.initialY;
-
+            if (dragRef.current) {
+                const finalX = (dragRef.current as any).currentX ?? panelState.x;
+                const finalY = (dragRef.current as any).currentY ?? panelState.y;
                 setPanelState(prev => ({ ...prev, x: finalX, y: finalY }));
             }
-
             dragRef.current = null;
             window.removeEventListener('mousemove', handleMouseMove);
             window.removeEventListener('mouseup', handleMouseUp);
         };
-
         window.addEventListener('mousemove', handleMouseMove);
         window.addEventListener('mouseup', handleMouseUp);
     };
@@ -304,41 +282,42 @@ const FloatingPropertiesPanel = () => {
     return (
         <div
             ref={panelRef}
-            className={`absolute right-4 top-4 w-[320px] flex flex-col bg-white/95 backdrop-blur shadow-2xl rounded-2xl border border-gray-200 overflow-hidden z-30 transition-all duration-200 ${panelState.minimized ? 'h-14' : 'max-h-[80vh]'}`}
-            style={{
-                // Use state for initial render, but DOM updates will override this style attribute directly
-                transform: `translate(${panelState.x}px, ${panelState.y}px)`
-            }}
+            className={`absolute right-6 top-20 w-[340px] flex flex-col bg-white/90 backdrop-blur-xl shadow-2xl shadow-blue-900/10 rounded-[32px] border border-white/50 overflow-hidden z-[4000] transition-all duration-300 ring-1 ring-black/5 ${panelState.minimized ? 'h-[72px]' : 'max-h-[80vh]'}`}
+            style={{ transform: `translate(${panelState.x}px, ${panelState.y}px)` }}
         >
             <div
-                className="p-4 border-b border-gray-100 cursor-move bg-gray-50/50 flex flex-col justify-center h-14 shrink-0 select-none"
+                className="p-5 cursor-move flex flex-col justify-center h-[72px] shrink-0 select-none group"
                 onMouseDown={handlePanelDragStart}
             >
                 <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-semibold uppercase text-gray-500 tracking-wider flex items-center gap-2">
-                        <i className="fa-solid fa-grip-vertical text-gray-300"></i>
-                        Properties
-                    </h3>
-                    <div className="flex items-center gap-1">
-                        <button
-                            onClick={() => setPanelState(s => ({ ...s, minimized: !s.minimized }))}
-                            className="w-6 h-6 rounded hover:bg-gray-200 flex items-center justify-center text-gray-500 transition-colors"
-                        >
-                            <i className={`fa-solid fa-${panelState.minimized ? 'expand' : 'minus'} text-xs`}></i>
-                        </button>
+                    <div className="flex items-center gap-3">
+                        <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center shadow-inner">
+                            <i className="fa-solid fa-sliders text-sm"></i>
+                        </div>
+                        <div>
+                            <h3 className="text-sm font-black text-gray-800 italic tracking-tight">Properties</h3>
+                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Editor Controls</p>
+                        </div>
                     </div>
+                    <button
+                        onClick={() => setPanelState(s => ({ ...s, minimized: !s.minimized }))}
+                        className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-blue-600 transition-all shadow-sm border border-transparent hover:border-gray-200"
+                    >
+                        <i className={`fa-solid fa-${panelState.minimized ? 'chevron-down' : 'chevron-up'} text-xs`}></i>
+                    </button>
                 </div>
             </div>
 
             {!panelState.minimized && (
-                <div className="p-4 overflow-y-auto flex-1">
-                    <Puck.Fields />
+                <div className="p-5 pt-0 overflow-y-auto flex-1 custom-scrollbar">
+                    <div className="space-y-4">
+                        <Puck.Fields />
+                    </div>
                 </div>
             )}
         </div>
     );
 };
-
 
 
 export default function PuckEditor({
@@ -665,181 +644,195 @@ export default function PuckEditor({
                 <style dangerouslySetInnerHTML={{
                     __html: `
                     /* Hide only Puck-specific overlays when text editing is active */
-                    [data-puck-overlay-portal],
-                    [data-puck-overlay] {
-                        pointer-events: none !important;
-                        opacity: 0 !important;
-                    }
-                    
-                    /* Hide Puck draggable overlays specifically */
-                    [class*="DraggableComponent-overlay"],
-                    [class*="DraggableComponent-actionsOverlay"] {
-                        display: none !important;
-                        visibility: hidden !important;
-                        pointer-events: none !important;
-                    }
+                    [data-puck-overlay-portal], [data-puck-overlay] { pointer-events: none !important; opacity: 0 !important; }
+                    [class*="DraggableComponent-overlay"], [class*="DraggableComponent-actionsOverlay"] { display: none !important; visibility: hidden !important; pointer-events: none !important; }
                 `}} />
             )}
-            <div className="puck-container absolute inset-0 bg-white">
+            <div className="puck-container absolute inset-0 bg-gray-50">
                 <Puck
                     config={editorConfig}
                     data={data}
                     onPublish={(data) => onChange(data)}
-                    onChange={(newData) => {
-                        onChange(newData);
-                    }}
+                    onChange={(newData) => { onChange(newData); }}
                     overrides={overrides}
                     iframe={{ enabled: true }}
                 >
-                    {/* Main Layout Container */}
                     <div className="flex flex-col h-screen w-full overflow-hidden">
 
-                        {/* 1. Fixed Header (h-14 = 56px) */}
-                        <div className="h-14 flex items-center justify-between border-b border-gray-200 bg-white px-4 shrink-0 z-20 relative">
-                            <div className="flex items-center gap-4">
-                                <span className="font-semibold text-gray-900">WordJS Editor</span>
+                        {/* PREMIUM HEADER (h-20) */}
+                        <div className="h-20 flex items-center justify-between bg-white/80 backdrop-blur-md px-6 md:px-8 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-6">
 
-                                <div className="h-6 w-px bg-gray-200 mx-2"></div>
+                            {/* Left: Branding & Visibility */}
+                            <div className="flex items-center gap-6">
+                                <div className="flex items-center gap-3 text-gray-900">
+                                    <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
+                                        <i className="fa-solid fa-pen-nib text-lg"></i>
+                                    </div>
+                                    <div className="hidden md:block">
+                                        <h1 className="font-black italic text-xl tracking-tighter leading-none">Editor</h1>
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Visual Builder</span>
+                                    </div>
+                                </div>
+
+                                <div className="h-8 w-px bg-gray-100 hidden md:block"></div>
 
                                 {/* Visibility Controls */}
-                                <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
+                                <div className="flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100">
                                     <button
                                         onClick={() => setShowSidebar(!showSidebar)}
-                                        className={`p-1.5 rounded-md transition-all ${showSidebar ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showSidebar ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
                                         title={showSidebar ? "Hide Sidebar" : "Show Sidebar"}
                                     >
-                                        <i className={`fa-solid fa-table-columns text-xs`}></i>
+                                        <i className={`fa-solid fa-table-columns`}></i>
                                     </button>
                                     <button
                                         onClick={() => setShowProperties(!showProperties)}
-                                        className={`p-1.5 rounded-md transition-all ${showProperties ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
+                                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showProperties ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
                                         title={showProperties ? "Hide Properties" : "Show Properties"}
                                     >
-                                        <i className={`fa-solid fa-indent text-xs`}></i>
+                                        <i className={`fa-solid fa-sliders`}></i>
                                     </button>
                                 </div>
-
-                                <div className="h-6 w-px bg-gray-200 mx-2"></div>
-
-                                {/* Viewport Controls */}
-                                <div className="flex items-center bg-gray-100 rounded-lg p-1 gap-1">
-                                    <button
-                                        onClick={() => setViewport('desktop')}
-                                        className={`p-1.5 rounded-md transition-all ${viewport === 'desktop' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                                        title="Desktop"
-                                    >
-                                        <i className="fa-solid fa-desktop text-xs"></i>
-                                    </button>
-                                    <button
-                                        onClick={() => setViewport('tablet')}
-                                        className={`p-1.5 rounded-md transition-all ${viewport === 'tablet' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                                        title="Tablet"
-                                    >
-                                        <i className="fa-solid fa-tablet-screen-button text-xs"></i>
-                                    </button>
-                                    <button
-                                        onClick={() => setViewport('mobile')}
-                                        className={`p-1.5 rounded-md transition-all ${viewport === 'mobile' ? 'bg-white shadow text-blue-600' : 'text-gray-500 hover:text-gray-700'}`}
-                                        title="Mobile"
-                                    >
-                                        <i className="fa-solid fa-mobile-screen-button text-xs"></i>
-                                    </button>
-                                </div>
-
-                                <div className="h-6 w-px bg-gray-200 mx-2"></div>
-
                             </div>
 
-                            {/* Right Actions */}
-                            <div className="flex items-center gap-3">
+                            {/* Center: Viewport Controls */}
+                            <div className="hidden lg:flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100 absolute left-1/2 -translate-x-1/2">
+                                {[
+                                    { mode: 'desktop', icon: 'desktop' },
+                                    { mode: 'tablet', icon: 'tablet-screen-button' },
+                                    { mode: 'mobile', icon: 'mobile-screen-button' }
+                                ].map((v) => (
+                                    <button
+                                        key={v.mode}
+                                        onClick={() => setViewport(v.mode)}
+                                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${viewport === v.mode ? 'bg-white shadow-md text-blue-600 scale-105' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
+                                    >
+                                        <i className={`fa-solid fa-${v.icon}`}></i>
+                                    </button>
+                                ))}
+                            </div>
+
+                            {/* Right: Actions */}
+                            <div className="flex items-center gap-4">
                                 {onStatusChange && (
-                                    <ModernSelect
-                                        value={status}
-                                        onChange={(e) => onStatusChange(e.target.value)}
-                                        options={[
-                                            { value: "draft", label: "Draft" },
-                                            { value: "publish", label: "Publish" },
-                                            { value: "pending", label: "Pending" },
-                                        ]}
-                                        className="!py-1.5 !px-3 !bg-white !border-gray-200 !rounded-md !text-sm font-normal min-w-[100px]"
-                                    />
+                                    <div className="hidden md:block">
+                                        <ModernSelect
+                                            value={status}
+                                            onChange={(e) => onStatusChange(e.target.value)}
+                                            options={[
+                                                { value: "draft", label: "Draft" },
+                                                { value: "publish", label: "Publish" },
+                                                { value: "pending", label: "Pending" },
+                                            ]}
+                                            className="!py-2.5 !px-4 !bg-gray-50 !border-gray-100 !rounded-xl !text-xs !font-bold !uppercase !tracking-wider min-w-[120px]"
+                                        />
+                                    </div>
                                 )}
-                                {onCancel && (
-                                    <button
-                                        type="button"
-                                        onClick={onCancel}
-                                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 transition-colors"
-                                    >
-                                        Cancel
-                                    </button>
-                                )}
-                                {onSave && (
-                                    <button
-                                        type="button"
-                                        onClick={onSave}
-                                        disabled={saving || !hasChanges}
-                                        className={`px-3 py-1.5 rounded-md text-sm transition-colors flex items-center gap-1.5 ${hasChanges
-                                            ? 'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white'
-                                            : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                                            }`}
-                                        title={hasChanges ? 'Save changes' : 'No changes to save'}
-                                    >
-                                        <i className="fa-solid fa-floppy-disk text-xs"></i>
-                                        {saving ? "Saving..." : hasChanges ? "Save" : "Saved"}
-                                    </button>
-                                )}
+
+                                <div className="flex items-center gap-2">
+                                    {onCancel && (
+                                        <button
+                                            type="button"
+                                            onClick={onCancel}
+                                            className="px-6 py-3 rounded-xl text-gray-500 font-bold hover:bg-gray-50 hover:text-red-500 transition-colors text-xs uppercase tracking-widest"
+                                        >
+                                            Cancel
+                                        </button>
+                                    )}
+                                    {onSave && (
+                                        <button
+                                            type="button"
+                                            onClick={onSave}
+                                            disabled={saving || !hasChanges}
+                                            className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${hasChanges
+                                                ? 'bg-gray-900 hover:bg-blue-600 text-white shadow-gray-200 hover:shadow-blue-500/30 hover:-translate-y-0.5'
+                                                : 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
+                                                }`}
+                                        >
+                                            {saving ? (
+                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
+                                            ) : (
+                                                <i className="fa-solid fa-floppy-disk"></i>
+                                            )}
+                                            {saving ? "Saving..." : "Save Changes"}
+                                        </button>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
                         {/* 2. Content Area (Below Header) */}
-                        <div className="relative flex-1 w-full bg-slate-100 overflow-hidden flex flex-col min-h-0 md:flex-row">
+                        <div className="relative flex-1 w-full bg-gray-50/50 overflow-hidden flex flex-col min-h-0 md:flex-row">
 
-                            {/* EDITOR SIDEBAR (Left) - Takes space on Desktop */}
+                            {/* EDITOR SIDEBAR (Left) */}
                             <div
                                 ref={sidebarRef}
                                 className={`
-                                flex flex-col border-r border-gray-200 bg-white z-10 shadow-sm transition-all duration-300 ease-in-out
-                                ${showSidebar ? 'w-[340px] opacity-100' : 'w-0 opacity-0 overflow-hidden border-none'}
+                                flex flex-col bg-white z-30 shadow-[4px_0_24px_-4px_rgba(0,0,0,0.05)] transition-all duration-300 ease-in-out relative
+                                ${showSidebar ? 'w-[360px] opacity-100' : 'w-0 opacity-0 overflow-hidden'}
                             `}>
-                                {/* Components Area - Flex 1 to fill available space */}
-                                <div className="flex-1 overflow-y-auto overflow-x-hidden modern-scrollbar min-h-0 relative">
-                                    <div className="p-4 w-[340px]"> {/* Fixed width inner container to prevent squashing during transition */}
-                                        <h3 className="text-xs font-semibold uppercase text-gray-400 mb-4 tracking-wider sticky top-0 bg-white z-10 py-2 -mt-2">Components</h3>
-                                        <Puck.Components />
+
+                                {/* Gradient Border Line */}
+                                <div className="absolute top-0 bottom-0 right-0 w-px bg-gradient-to-b from-gray-100 via-gray-200 to-gray-100"></div>
+
+                                {/* Components Area */}
+                                <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar min-h-0 relative">
+                                    <div className="p-6 w-[360px]">
+                                        <div className="sticky top-0 bg-white z-10 py-3 -mt-2 mb-4 border-b border-gray-50">
+                                            <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest flex items-center gap-2">
+                                                <i className="fa-solid fa-shapes text-blue-500"></i>
+                                                Components
+                                            </h3>
+                                        </div>
+                                        <div className="puck-components-wrapper">
+                                            <Puck.Components />
+                                        </div>
                                     </div>
                                 </div>
 
                                 {/* Resizer Handle */}
                                 <div
-                                    className="h-1.5 bg-gray-100 hover:bg-blue-400 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20 group"
+                                    className="h-2 hover:bg-blue-50 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20 group relative"
                                     onMouseDown={startResizing}
                                 >
-                                    <div className="w-8 h-1 rounded-full bg-gray-300 group-hover:bg-white transition-colors"></div>
+                                    <div className="absolute inset-x-0 h-px bg-gray-100 top-1/2 -translate-y-1/2 group-hover:bg-blue-200 transition-colors"></div>
+                                    <div className="w-12 h-1.5 rounded-full bg-gray-300 group-hover:bg-blue-400 transition-all z-10 shadow-sm"></div>
                                 </div>
 
-                                {/* Outline Area - Resizable Height */}
+                                {/* Outline Area */}
                                 <div
                                     style={{ height: outlineHeight }}
-                                    className="overflow-y-auto overflow-x-hidden modern-scrollbar bg-gray-50 flex-shrink-0 relative border-t border-gray-200"
+                                    className="overflow-y-auto overflow-x-hidden custom-scrollbar bg-gray-50/30 flex-shrink-0 relative"
                                 >
-                                    <div className="p-4 w-[340px]">
-                                        <h3 className="text-xs font-semibold uppercase text-gray-400 mb-4 tracking-wider sticky top-0 bg-gray-50 z-10 py-2 -mt-2">Outline</h3>
+                                    <div className="p-6 w-[360px]">
+                                        <div className="sticky top-0 bg-gray-50/95 backdrop-blur-sm z-10 py-3 -mt-2 mb-4 border-b border-gray-100">
+                                            <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest flex items-center gap-2">
+                                                <i className="fa-solid fa-list-tree text-indigo-500"></i>
+                                                Structure
+                                            </h3>
+                                        </div>
                                         <Puck.Outline />
                                     </div>
                                 </div>
                             </div>
 
-                            {/* MAIN PREVIEW AREA - Flex-1 takes remaining space */}
-                            <div className="flex-1 relative overflow-hidden bg-slate-100 h-full min-h-0 flex flex-col items-center py-8 px-8 overflow-y-auto">
+                            {/* MAIN PREVIEW AREA */}
+                            <div className="flex-1 relative overflow-hidden bg-gray-100/50 h-full min-h-0 flex flex-col items-center p-4 md:py-10 md:px-12">
+                                {/* Dotted Background Pattern */}
+                                <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
+
                                 <div
-                                    className="flex-1 h-full transition-all duration-300 shadow-xl bg-white border border-gray-300 rounded-xl overflow-hidden"
+                                    className="flex-1 h-full transition-all duration-500 shadow-2xl bg-white border-[8px] border-gray-900 rounded-[3rem] overflow-hidden relative z-10"
                                     style={{ width: getViewportWidth() }}
                                 >
+                                    {/* Notch decoration */}
+                                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50 pointer-events-none"></div>
+
                                     <Puck.Preview />
                                 </div>
                             </div>
 
-                            {/* Floating Properties Panel */}
+                            {/* Floating Properties Panel handled by state, rendered here for z-index context if needed */}
                             {showProperties && <FloatingPropertiesPanel />}
                         </div>
                     </div>

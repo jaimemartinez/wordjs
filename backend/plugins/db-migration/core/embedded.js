@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
+const config = require('../../../src/config/app');
 
 let embeddedProcess = null;
 let isInstalling = false;
@@ -10,6 +11,24 @@ const BASE_DIR = path.resolve(__dirname, '../../../data/postgres-embed');
 const DATA_DIR = path.join(BASE_DIR, 'data');
 const PORT = 5433; // Avoid default 5432
 const VERSION = '14.5.0';
+
+/**
+ * Robust directory deletion with retries (for Windows EPERM/EBUSY)
+ */
+async function nukeDirectoryWithRetry(dir, retries = 5, delay = 1000) {
+    if (!fs.existsSync(dir)) return;
+
+    for (let i = 0; i < retries; i++) {
+        try {
+            fs.rmSync(dir, { recursive: true, force: true });
+            return;
+        } catch (e) {
+            if (i === retries - 1) throw e;
+            console.log(`   ⏳ Directory locked [${e.code}], retrying in ${delay}ms... (${i + 1}/${retries})`);
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+    }
+}
 
 exports.getStatus = (req, res) => {
     res.json({
@@ -39,7 +58,7 @@ exports.install = async (req, res) => {
         // Factory Reset on explicit install
         if (fs.existsSync(DATA_DIR)) {
             console.log('🧹 Cleaning old data directory...');
-            fs.rmSync(DATA_DIR, { recursive: true, force: true });
+            await nukeDirectoryWithRetry(DATA_DIR);
         }
 
         const pg = new EmbeddedPostgres({
@@ -47,7 +66,7 @@ exports.install = async (req, res) => {
             port: PORT,
             version: VERSION,
             user: 'postgres',
-            password: 'password',
+            password: config.db.password,
             authMethod: 'trust'
         });
 
@@ -80,7 +99,7 @@ async function startServer() {
                 databaseDir: DATA_DIR,
                 port: PORT,
                 user: 'postgres',
-                password: 'password',
+                password: config.db.password,
                 authMethod: 'trust'
             });
             await pg.start();
@@ -93,8 +112,17 @@ async function startServer() {
 
         // Auto-Setup & Self-Heal Logic
         try {
-            let client = new Client({ host: 'localhost', port: PORT, user: 'postgres', password: 'password', database: 'postgres' });
-            await client.connect();
+            let client = new Client({ host: 'localhost', port: PORT, user: 'postgres', password: config.db.password, database: 'postgres' });
+            try {
+                await client.connect();
+            } catch (err) {
+                // Fallback to old password for sync if necessary
+                client = new Client({ host: 'localhost', port: PORT, user: 'postgres', password: 'password', database: 'postgres' });
+                await client.connect();
+            }
+
+            // Sync internal password
+            await client.query(`ALTER USER postgres WITH PASSWORD '${config.db.password}'`);
 
             const resEnc = await client.query("SHOW SERVER_ENCODING");
             const encoding = resEnc.rows[0].server_encoding;
@@ -108,8 +136,12 @@ async function startServer() {
                 await pg.stop();
                 embeddedProcess = null;
 
+                // Wait for Windows to release file handles
+                console.log('   ⏳ Waiting for OS to release file handles...');
+                await new Promise(resolve => setTimeout(resolve, 1500));
+
                 // Nuke
-                if (fs.existsSync(DATA_DIR)) fs.rmSync(DATA_DIR, { recursive: true, force: true });
+                await nukeDirectoryWithRetry(DATA_DIR);
 
                 // Re-Init
                 const pgInit = new EmbeddedPostgres({
@@ -129,7 +161,7 @@ async function startServer() {
             }
 
             // Create DB (Guaranteed to be UTF8 compliant now)
-            client = new Client({ host: 'localhost', port: PORT, user: 'postgres', password: 'password', database: 'postgres' });
+            client = new Client({ host: 'localhost', port: PORT, user: 'postgres', password: config.db.password, database: 'postgres' });
             await client.connect();
             const resDb = await client.query("SELECT 1 FROM pg_database WHERE datname='wordjs'");
             if (resDb.rowCount === 0) {

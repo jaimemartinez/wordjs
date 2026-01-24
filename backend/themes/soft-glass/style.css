@@ -1,0 +1,314 @@
+/* =========================================
+   THEME: SOFT GLASS (Glassmorphism)
+   Concept: Airy, pastel, frosted glass, rounded.
+   Standardized V2.
+   ========================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;500;700&display=swap');
+
+:root {
+  /* --- COLOR PALETTE: Pastel Dreams --- */
+  --wjs-color-primary: #8b5cf6;
+  /* Soft Purple */
+  --wjs-color-primary-dark: #7c3aed;
+  /* Deep Purple */
+
+  /* --- COLOR SEMANTICS --- */
+  --wjs-bg-canvas: #fdf2f8;
+  /* Pinkish White Base */
+  --wjs-bg-surface: rgba(255, 255, 255, 0.7);
+  /* Glassy Surface */
+
+  --wjs-color-text-main: #4c1d95;
+  /* Dark Purple Text */
+  --wjs-color-text-muted: #8b5cf6;
+  /* Soft Purple Text */
+
+  --wjs-border-subtle: rgba(255, 255, 255, 0.5);
+
+  /* --- NAVIGATION CONFIG --- */
+  --wjs-nav-font-family: 'Quicksand', sans-serif;
+  --wjs-nav-font-size: 1rem;
+  --wjs-nav-font-weight: 700;
+  --wjs-nav-text-transform: none;
+  /* Lowercase/Normal friendly */
+  --wjs-nav-letter-spacing: 0px;
+
+  --wjs-nav-color: #5b21b6;
+  --wjs-nav-color-hover: #db2777;
+  /* Pink Hover */
+  --wjs-nav-transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+
+  --wjs-logo-color: #db2777;
+  /* Pink Logo */
+
+  /* --- FOOTER CONFIG --- */
+  --wjs-footer-bg: rgba(255, 255, 255, 0.8);
+  --wjs-footer-text-heading: #5b21b6;
+  --wjs-footer-text-body: #6d28d9;
+  --wjs-footer-text-hover: #db2777;
+  --wjs-footer-icon-bg: #fff;
+  --wjs-footer-icon-color: #db2777;
+
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Quicksand', sans-serif;
+}
+
+/* =========================================
+   VISUAL OVERRIDES
+   ========================================= */
+
+body {
+  background: linear-gradient(135deg, #fdf2f8 0%, #f0f9ff 100%) fixed !important;
+  color: var(--wjs-color-text-main) !important;
+  font-family: var(--wjs-font-family-base) !important;
+}
+
+/* GLOBAL: Soft Roundness */
+* {
+  border-radius: 16px;
+  /* Everything rounded */
+}
+
+/* Header: Floating Glass Bar */
+header {
+  background-color: var(--wjs-bg-surface) !important;
+  backdrop-filter: blur(12px) !important;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.8) !important;
+  margin: 20px;
+  /* Floating look */
+  border-radius: 24px !important;
+  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.1);
+  width: auto !important;
+  /* Not full width */
+}
+
+header[class*='fixed'] {
+  margin: 10px 20px !important;
+  background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+/* Logo */
+.wjs-header-logo {
+  color: var(--wjs-logo-color) !important;
+  font-weight: 700 !important;
+  font-size: 1.5rem !important;
+  letter-spacing: -0.05em;
+}
+
+/* Nav Links: Pills */
+.wjs-header-nav a {
+  font-family: var(--wjs-nav-font-family) !important;
+  font-size: var(--wjs-nav-font-size) !important;
+  font-weight: var(--wjs-nav-font-weight) !important;
+  color: var(--wjs-nav-color) !important;
+  padding: 8px 16px;
+  border-radius: 20px !important;
+  transition: var(--wjs-nav-transition) !important;
+}
+
+.wjs-header-nav a:hover {
+  background-color: #fff;
+  color: var(--wjs-nav-color-hover) !important;
+  box-shadow: 0 4px 12px rgba(219, 39, 119, 0.2);
+  transform: translateY(-2px);
+}
+
+/* Cards / Content Blocks (Glass) */
+.wp-block-card,
+article {
+  background: rgba(255, 255, 255, 0.6) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.8) !important;
+  box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.05);
+  border-radius: 24px !important;
+}
+
+/* Footer: Floating Glass */
+footer {
+  background-color: var(--wjs-footer-bg) !important;
+  backdrop-filter: blur(10px) !important;
+  margin: 20px !important;
+  border-radius: 24px !important;
+  box-shadow: 0 -8px 32px rgba(31, 38, 135, 0.05);
+}
+
+footer h3,
+footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
+}
+
+footer a {
+  color: var(--wjs-footer-text-body) !important;
+  text-decoration: none !important;
+}
+
+footer a:hover {
+  color: var(--wjs-footer-text-hover) !important;
+  text-decoration: underline !important;
+}
+
+/* =========================================
+   SOFT GLASS: NEW COMPONENT OVERRIDES
+   Glassmorphism / Pastel aesthetic
+   ========================================= */
+
+/* Accordion: Glass Panels */
+.wp-block-accordion {
+  background: rgba(255, 255, 255, 0.5) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.8) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.1);
+}
+
+.wp-block-accordion .accordion-item button {
+  background: transparent !important;
+  color: var(--wjs-color-primary) !important;
+  border-bottom: 1px solid rgba(139, 92, 246, 0.2) !important;
+}
+
+.wp-block-accordion .accordion-item>div {
+  background: rgba(255, 255, 255, 0.3) !important;
+  color: var(--wjs-color-text-main) !important;
+}
+
+/* Tabs: Pill Tabs */
+.wp-block-tabs>div:first-child {
+  border-bottom: none !important;
+  background: rgba(255, 255, 255, 0.5);
+  border-radius: 20px;
+  padding: 4px;
+}
+
+.wp-block-tabs button {
+  color: var(--wjs-color-primary) !important;
+  border-radius: 16px !important;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  background: #ffffff !important;
+  color: var(--wjs-logo-color) !important;
+  box-shadow: 0 4px 12px rgba(219, 39, 119, 0.15);
+}
+
+.wp-block-tabs>div:last-child {
+  background: rgba(255, 255, 255, 0.6) !important;
+  backdrop-filter: blur(8px);
+  border-radius: 20px !important;
+}
+
+/* Video: Glass Frame */
+.wp-block-video-embed {
+  border-radius: 24px !important;
+  box-shadow: 0 20px 40px rgba(139, 92, 246, 0.2);
+}
+
+/* Audio: Glass Player */
+.wp-block-audio-player {
+  background: rgba(255, 255, 255, 0.6) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.8) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 8px 24px rgba(31, 38, 135, 0.1);
+}
+
+/* Pricing: Floating Glass Cards */
+.wp-block-pricing>div {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.8) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 10px 40px rgba(31, 38, 135, 0.1);
+}
+
+.wp-block-pricing>div:hover {
+  transform: translateY(-8px);
+  box-shadow: 0 20px 50px rgba(139, 92, 246, 0.2);
+}
+
+.wp-block-pricing>div[style*="scale(1.05)"] {
+  background: linear-gradient(135deg, #8b5cf6, #db2777) !important;
+  color: #ffffff !important;
+  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.4);
+}
+
+/* Testimonial: Soft Glass Quote */
+.wp-block-testimonial {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.9) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.08);
+}
+
+.wp-block-testimonial>div:first-child {
+  color: var(--wjs-logo-color) !important;
+}
+
+/* CTA Banner: Gradient Glass */
+.wp-block-cta-banner {
+  background: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(219, 39, 119, 0.9)) !important;
+  backdrop-filter: blur(10px);
+  border-radius: 32px !important;
+  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
+}
+
+.wp-block-cta-banner a {
+  background: #ffffff !important;
+  color: var(--wjs-color-primary) !important;
+  border-radius: 20px !important;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+}
+
+/* Posts Grid: Glass Cards */
+.wp-block-posts-grid article {
+  background: rgba(255, 255, 255, 0.7) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.8) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 8px 24px rgba(31, 38, 135, 0.08);
+}
+
+.wp-block-posts-grid article:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 16px 40px rgba(139, 92, 246, 0.15);
+}
+
+/* Category Posts: Pill List */
+.wp-block-category-posts h3 {
+  color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-category-posts li {
+  border-color: rgba(139, 92, 246, 0.2) !important;
+}
+
+.wp-block-category-posts li a {
+  color: var(--wjs-color-text-main) !important;
+}
+
+.wp-block-category-posts li a:hover {
+  color: var(--wjs-logo-color) !important;
+}
+
+/* Search: Pill Input */
+.wp-block-search input {
+  background: rgba(255, 255, 255, 0.8) !important;
+  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.9) !important;
+  border-radius: 24px !important;
+  box-shadow: 0 4px 16px rgba(31, 38, 135, 0.08);
+}
+
+.wp-block-search input:focus {
+  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.2);
+}
+
+.wp-block-search button {
+  background: linear-gradient(135deg, #8b5cf6, #db2777) !important;
+  color: #ffffff !important;
+  border-radius: 20px !important;
+  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
+}

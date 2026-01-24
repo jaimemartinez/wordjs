@@ -84,6 +84,7 @@ Create the folder structure `client/admin/` and add `page.tsx`:
 ```tsx
 "use client";
 import { useEffect, useState } from "react";
+import { PageHeader, Card } from "@/components/ui";
 
 export default function HelloWorldAdmin() {
     const [msg, setMsg] = useState("Loading...");
@@ -101,11 +102,18 @@ export default function HelloWorldAdmin() {
     }, []);
 
     return (
-        <div className="p-8">
-            <h1 className="text-2xl font-bold mb-4">Hello World Plugin</h1>
-            <div className="bg-blue-50 p-6 rounded-xl border border-blue-200">
-                <p className="text-blue-700 font-medium">{msg}</p>
-            </div>
+        <div className="p-8 md:p-12 h-full bg-gray-50/50 overflow-auto">
+            <PageHeader 
+                title="Hello World" 
+                subtitle="My first WordJS plugin"
+                icon="fa-smile"
+            />
+            
+            <Card title="Server Response" variant="glass">
+                <div className="bg-blue-50 p-6 rounded-2xl border border-blue-100">
+                    <p className="text-blue-700 font-bold text-lg">{msg}</p>
+                </div>
+            </Card>
         </div>
     );
 }
@@ -146,7 +154,34 @@ export const registerMyHooks = () => {
 
 ---
 
-## 6. Security & Permissions 🛡️
+---
+
+## 4. UI Guidelines & Best Practices 🎨
+
+WordJS enforces a **Premium Glassmorphism** design system. To ensure your plugin looks native, follow these rules:
+
+### use `PageHeader`
+Always use the standardized header component.
+```tsx
+<PageHeader title="My Plugin" icon="fa-bolt" />
+```
+
+### use `Card` with `rounded-[40px]`
+Avoid raw `div` containers for main content. Use the `Card` component, which handles the complex border-radius (`rounded-[40px]`), shadows, and spacing for you.
+```tsx
+<Card variant="neo">
+  <MyForm />
+</Card>
+```
+
+### Clean Layouts
+*   Use `bg-gray-50/50` for page backgrounds.
+*   Use `p-8 md:p-12` for page padding.
+*   Avoid standard HTML inputs; use the `Input` and `ModernSelect` components.
+
+---
+
+## 5. Security & Permissions 🛡️
 
 WordJS is "Secure by Default". This means your plugin cannot perform any "dangerous" actions (like editing settings or writing files) unless it explicitly asks for permission.
 
@@ -179,7 +214,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ---
 
-## 7. Folder Structure Reference
+## 6. Folder Structure Reference
 
 | File/Folder             | Purpose                                         |
 | :---------------------- | :---------------------------------------------- |
@@ -191,7 +226,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ---
 
-## 5. Developer Rules of Gold 🏆
+## 7. Developer Rules of Gold 🏆
 
 1.  **Auth First:** Never fetch data from the server without headers.
 2.  **Declare Dependencies:** Don't assume `nodemailer` or `uuid` exists in standard WordJS. **Declare it in manifest.json**.
@@ -200,7 +235,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ---
 
-## 6. Advanced Features
+## 8. Advanced Features
 
 ### 6.1 Admin Menus & Deduplication ⚠️
 WordJS's frontend (`Sidebar.tsx`) automatically **deduplicates** menu items.

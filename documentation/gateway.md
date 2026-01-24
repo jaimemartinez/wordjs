@@ -23,8 +23,9 @@ The **WordJS Gateway** (`gateway.js`) is an enterprise-grade entry point for the
 
 The gateway loads configuration from `backend/wordjs-config.json`.
 
-*   **Port:** Defaults to `3000` (configurable via `gatewayPort`).
-*   **Secret:** Uses `gatewaySecret` for service authentication (`X-Gateway-Secret`).
+*   **Port:** Defaults to `3000` (configurable via `gatewayPort` in config).
+*   **Secret:** Uses `gatewaySecret` from `wordjs-config.json` for service authentication.
+*   **Env Vars:** The Gateway does **not** read `.env` files. Configuration must be in the JSON file.
 
 ## Service Registration
 

@@ -1,0 +1,561 @@
+/**
+ * WordJS Core Design System
+ * Standardized variables and block Reset. Inspired by WordPress Global Styles.
+ */
+
+:root {
+    /* --- COLOR PALETTE (Functional) --- */
+    --wjs-primary: #2563eb;
+    --wjs-primary-contrast: #ffffff;
+    --wjs-secondary: #475569;
+    --wjs-secondary-contrast: #ffffff;
+    --wjs-accent: #3b82f6;
+
+    --wjs-background: #ffffff;
+    --wjs-foreground: #0f172a;
+    --wjs-muted: #64748b;
+
+
+
+    /* -------------------------------------
+       1. PRIMITIVES (Raw Values)
+       Do not use these directly in components.
+       ------------------------------------- */
+
+    /* Neutral Scale */
+    --wjs-gray-50: #f9fafb;
+    --wjs-gray-100: #f3f4f6;
+    --wjs-gray-200: #e5e7eb;
+    --wjs-gray-300: #d1d5db;
+    --wjs-gray-400: #9ca3af;
+    --wjs-gray-500: #6b7280;
+    --wjs-gray-600: #4b5563;
+    --wjs-gray-700: #374151;
+    --wjs-gray-800: #1f2937;
+    --wjs-gray-900: #111827;
+    --wjs-gray-950: #030712;
+
+    /* Spacing Primitives */
+    --wjs-size-1: 0.25rem;
+    --wjs-size-2: 0.5rem;
+    --wjs-size-3: 0.75rem;
+    --wjs-size-4: 1rem;
+    --wjs-size-5: 1.25rem;
+    --wjs-size-6: 1.5rem;
+    --wjs-size-8: 2rem;
+    --wjs-size-10: 2.5rem;
+    --wjs-size-12: 3rem;
+    --wjs-size-16: 4rem;
+    --wjs-size-20: 5rem;
+    --wjs-size-24: 6rem;
+    --wjs-size-32: 8rem;
+
+    /* -------------------------------------
+       2. SEMANTICS (Contextual Usage)
+       Themes should override THESE values.
+       ------------------------------------- */
+
+    /* Brand Colors */
+    --wjs-color-primary: #3b82f6;
+    --wjs-color-primary-hover: #2563eb;
+    --wjs-color-primary-text: #ffffff;
+
+    --wjs-color-secondary: #64748b;
+    --wjs-color-secondary-text: #ffffff;
+
+    /* Surface & Backgrounds */
+    --wjs-bg-canvas: #ffffff;
+    /* The extreme back layer */
+    --wjs-bg-surface: #ffffff;
+    /* Cards, Modals */
+    --wjs-bg-surface-hover: #f9fafb;
+
+    /* Text & Borders */
+    --wjs-text-main: var(--wjs-gray-900);
+    --wjs-text-muted: var(--wjs-gray-500);
+    --wjs-border-subtle: var(--wjs-gray-200);
+    --wjs-border-strong: var(--wjs-gray-400);
+
+    /* Radii */
+    --wjs-radius-sm: 0.25rem;
+    --wjs-radius-base: 0.5rem;
+    --wjs-radius-lg: 1rem;
+    --wjs-radius-full: 9999px;
+
+    /* Shadows */
+    --wjs-shadow-xs: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+    --wjs-shadow-sm: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    --wjs-shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -1px rgb(0 0 0 / 0.06);
+    --wjs-shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -2px rgb(0 0 0 / 0.05);
+
+    /* -------------------------------------
+       3. TYPOGRAPHY SYSTEM
+       ------------------------------------- */
+
+    --wjs-font-body: system-ui, -apple-system, sans-serif;
+    --wjs-font-heading: system-ui, -apple-system, sans-serif;
+
+    /* Scale */
+    --wjs-text-xs: 0.75rem;
+    --wjs-text-sm: 0.875rem;
+    --wjs-text-base: 1rem;
+    --wjs-text-lg: 1.125rem;
+    --wjs-text-xl: 1.25rem;
+    --wjs-text-2xl: 1.5rem;
+    --wjs-text-3xl: 1.875rem;
+    --wjs-text-4xl: 2.25rem;
+    --wjs-text-5xl: 3rem;
+
+    /* Weights */
+    --wjs-font-light: 300;
+    --wjs-font-normal: 400;
+    --wjs-font-medium: 500;
+    --wjs-font-bold: 700;
+    --wjs-font-black: 900;
+
+    /* -------------------------------------
+       4. COMPONENT TOKENS (The API)
+       Components bind to THESE, never to primitives.
+       ------------------------------------- */
+
+    /* Cards */
+    --puck-card-bg: var(--wjs-bg-surface);
+    --puck-card-color: var(--wjs-text-main);
+    --puck-card-border: var(--wjs-border-subtle);
+    --puck-card-radius: var(--wjs-radius-lg);
+    --puck-card-padding: var(--wjs-size-8);
+    --puck-card-shadow: var(--wjs-shadow-md);
+
+    /* Buttons */
+    --puck-btn-font: var(--wjs-font-medium);
+    --puck-btn-radius: var(--wjs-radius-base);
+    --puck-btn-px: var(--wjs-size-5);
+    --puck-btn-py: var(--wjs-size-2);
+}
+
+/* Reset Utility */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    line-height: 1.5;
+    font-family: var(--wjs-font-body);
+    background: var(--wjs-bg-canvas);
+    color: var(--wjs-text-main);
+}
+
+/* =========================================
+   CONTAINMENT: Prevent children from overflowing parents
+   ========================================= */
+
+/* All Puck blocks must contain their children */
+[class*="wp-block-"],
+[class*="puck-"],
+.puck-content>div,
+.puck-content section,
+.puck-content article {
+    position: relative;
+    overflow: hidden;
+    max-width: 100%;
+}
+
+/* Images must respect container boundaries */
+img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+}
+
+/* Iframes (videos) must respect containers */
+iframe {
+    max-width: 100%;
+}
+
+/* Grid and Flex children containment */
+[class*="wp-block-grid"]>*,
+[class*="wp-block-flex"]>*,
+[class*="columns-grid"]>* {
+    min-width: 0;
+    /* Prevent grid/flex blowout */
+    overflow: hidden;
+}
+
+/* Columns specific containment */
+[class*="columns-grid"] {
+    overflow: hidden;
+}
+
+[class*="columns-grid"]>div {
+    overflow: hidden;
+    min-width: 0;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+    font-family: var(--wjs-font-heading);
+    margin-bottom: var(--wjs-size-4);
+    line-height: 1.2;
+}
+
+p {
+    margin-bottom: var(--wjs-size-4);
+}
+
+.wp-block-heading {
+    color: var(--wjs-foreground);
+    font-weight: var(--wjs-h2-weight);
+    margin-bottom: var(--wjs-space-sm);
+}
+
+h1.wp-block-heading {
+    font-size: var(--wjs-h1-size);
+    font-weight: var(--wjs-h1-weight);
+}
+
+h2.wp-block-heading {
+    font-size: var(--wjs-h2-size);
+}
+
+h3.wp-block-heading {
+    font-size: var(--wjs-h3-size);
+}
+
+.wp-block-text {
+    font-size: var(--wjs-font-size-base);
+    line-height: var(--wjs-line-height-base);
+    color: var(--wjs-foreground);
+}
+
+.wp-block-card {
+    padding: var(--wjs-space-md);
+    background-color: var(--puck-card-bg);
+    border: 1px solid var(--puck-card-border);
+    border-radius: var(--puck-card-radius);
+    color: var(--puck-card-color);
+    box-shadow: var(--wjs-shadow-md);
+}
+
+.wp-block-button a {
+    font-family: var(--wjs-font-family);
+    border-radius: var(--puck-button-radius);
+    transition: filter 0.2s ease;
+}
+
+.wp-block-button a:hover {
+    filter: brightness(1.1);
+}
+
+/* -------------------------------------
+   5. STRUCTURAL UTILITIES (Global Layout)
+   Any theme using these classes will conform to the system keys.
+   ------------------------------------- */
+
+.wjs-page-wrap {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    background-color: var(--wjs-bg-canvas);
+    color: var(--wjs-text-main);
+}
+
+.wjs-container {
+    width: 100%;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: var(--wjs-size-4);
+    padding-right: var(--wjs-size-4);
+    max-width: var(--wjs-container-lg);
+}
+
+/* Header & Footer Resets */
+.wjs-header {
+    background-color: var(--wjs-bg-surface);
+    border-bottom: 1px solid var(--wjs-border-subtle);
+    padding: var(--wjs-size-4) 0;
+}
+
+.wjs-footer {
+    background-color: var(--wjs-bg-surface);
+    border-top: 1px solid var(--wjs-border-subtle);
+    padding: var(--wjs-size-8) 0;
+    margin-top: auto;
+}
+
+/* =========================================
+   6. NEW PUCK COMPONENT TOKENS
+   Themes can override these to customize components
+   ========================================= */
+
+:root {
+    /* Section / Container */
+    --puck-section-padding: 60px 20px;
+    --puck-section-bg: transparent;
+    --puck-section-max-width: 1280px;
+
+    /* Grid */
+    --puck-grid-gap: 24px;
+
+    /* FlexRow */
+    --puck-flex-gap: 16px;
+
+    /* Accordion */
+    --puck-accordion-bg: var(--wjs-bg-surface);
+    --puck-accordion-border: var(--wjs-border-subtle);
+    --puck-accordion-radius: var(--wjs-radius-base);
+    --puck-accordion-header-bg: var(--wjs-bg-surface);
+    --puck-accordion-header-color: var(--wjs-text-main);
+    --puck-accordion-content-bg: var(--wjs-bg-canvas);
+    --puck-accordion-content-color: var(--wjs-text-muted);
+
+    /* Tabs */
+    --puck-tabs-border: var(--wjs-border-subtle);
+    --puck-tabs-active-color: var(--wjs-color-primary);
+    --puck-tabs-inactive-color: var(--wjs-text-muted);
+    --puck-tabs-content-bg: var(--wjs-bg-surface);
+
+    /* Video Embed */
+    --puck-video-radius: var(--wjs-radius-lg);
+
+    /* Audio Player */
+    --puck-audio-bg: var(--wjs-bg-surface);
+    --puck-audio-border: var(--wjs-border-subtle);
+    --puck-audio-radius: var(--wjs-radius-lg);
+    --puck-audio-icon-bg: var(--wjs-color-primary);
+    --puck-audio-icon-color: #ffffff;
+
+    /* Pricing Table */
+    --puck-pricing-bg: var(--wjs-bg-surface);
+    --puck-pricing-border: var(--wjs-border-subtle);
+    --puck-pricing-radius: var(--wjs-radius-lg);
+    --puck-pricing-highlight-bg: var(--wjs-color-primary);
+    --puck-pricing-highlight-color: #ffffff;
+    --puck-pricing-shadow: var(--wjs-shadow-lg);
+
+    /* Testimonial */
+    --puck-testimonial-bg: var(--wjs-bg-surface);
+    --puck-testimonial-border: var(--wjs-border-subtle);
+    --puck-testimonial-radius: var(--wjs-radius-lg);
+    --puck-testimonial-quote-color: var(--wjs-color-primary);
+    --puck-testimonial-text-color: var(--wjs-text-main);
+
+    /* CTA Banner */
+    --puck-cta-radius: var(--wjs-radius-lg);
+    --puck-cta-primary-bg: var(--wjs-color-primary);
+    --puck-cta-dark-bg: #1a1a2e;
+    --puck-cta-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    --puck-cta-text-color: #ffffff;
+    --puck-cta-btn-bg: #ffffff;
+    --puck-cta-btn-radius: var(--wjs-radius-lg);
+
+    /* Posts Grid */
+    --puck-posts-gap: 24px;
+    --puck-posts-card-bg: var(--wjs-bg-surface);
+    --puck-posts-card-border: var(--wjs-border-subtle);
+    --puck-posts-card-radius: var(--wjs-radius-base);
+
+    /* Search Bar */
+    --puck-search-input-bg: var(--wjs-bg-surface);
+    --puck-search-input-border: var(--wjs-border-subtle);
+    --puck-search-input-radius: var(--wjs-radius-base);
+    --puck-search-btn-bg: var(--wjs-color-primary);
+    --puck-search-btn-color: #ffffff;
+    --puck-search-btn-radius: var(--wjs-radius-base);
+}
+
+/* =========================================
+   7. NEW PUCK COMPONENT BASE STYLES
+   ========================================= */
+
+/* Section */
+.wp-block-section {
+    width: 100%;
+    padding: var(--puck-section-padding);
+    background: var(--puck-section-bg);
+}
+
+/* Grid */
+.wp-block-grid {
+    display: grid;
+    gap: var(--puck-grid-gap);
+}
+
+/* FlexRow */
+.wp-block-flex-row {
+    display: flex;
+    gap: var(--puck-flex-gap);
+    flex-wrap: wrap;
+}
+
+/* Accordion */
+.wp-block-accordion {
+    border-radius: var(--puck-accordion-radius);
+    border: 1px solid var(--puck-accordion-border);
+    overflow: hidden;
+}
+
+.wp-block-accordion .accordion-item button {
+    background: var(--puck-accordion-header-bg);
+    color: var(--puck-accordion-header-color);
+}
+
+.wp-block-accordion .accordion-item>div {
+    background: var(--puck-accordion-content-bg);
+    color: var(--puck-accordion-content-color);
+}
+
+/* Tabs */
+.wp-block-tabs>div:first-child {
+    border-bottom: 2px solid var(--puck-tabs-border);
+}
+
+.wp-block-tabs button {
+    color: var(--puck-tabs-inactive-color);
+}
+
+.wp-block-tabs button[data-active="true"],
+.wp-block-tabs button:focus {
+    color: var(--puck-tabs-active-color);
+    border-bottom-color: var(--puck-tabs-active-color);
+}
+
+.wp-block-tabs>div:last-child {
+    background: var(--puck-tabs-content-bg);
+}
+
+/* Video Embed */
+.wp-block-video-embed {
+    border-radius: var(--puck-video-radius);
+    overflow: hidden;
+}
+
+/* Audio Player */
+.wp-block-audio-player {
+    background: var(--puck-audio-bg);
+    border: 1px solid var(--puck-audio-border);
+    border-radius: var(--puck-audio-radius);
+}
+
+.wp-block-audio-player .audio-icon {
+    background: var(--puck-audio-icon-bg);
+    color: var(--puck-audio-icon-color);
+}
+
+/* Pricing Table */
+.wp-block-pricing>div {
+    background: var(--puck-pricing-bg);
+    border: 1px solid var(--puck-pricing-border);
+    border-radius: var(--puck-pricing-radius);
+}
+
+.wp-block-pricing>div[data-highlighted="true"] {
+    background: var(--puck-pricing-highlight-bg);
+    color: var(--puck-pricing-highlight-color);
+    box-shadow: var(--puck-pricing-shadow);
+}
+
+/* Testimonial */
+.wp-block-testimonial {
+    background: var(--puck-testimonial-bg);
+    border: 1px solid var(--puck-testimonial-border);
+    border-radius: var(--puck-testimonial-radius);
+}
+
+.wp-block-testimonial .quote-mark {
+    color: var(--puck-testimonial-quote-color);
+}
+
+/* CTA Banner */
+.wp-block-cta-banner {
+    border-radius: var(--puck-cta-radius);
+    color: var(--puck-cta-text-color);
+}
+
+.wp-block-cta-banner a {
+    background: var(--puck-cta-btn-bg);
+    border-radius: var(--puck-cta-btn-radius);
+}
+
+/* Posts Grid */
+.wp-block-posts-grid {
+    gap: var(--puck-posts-gap);
+}
+
+.wp-block-posts-grid article {
+    background: var(--puck-posts-card-bg);
+    border: 1px solid var(--puck-posts-card-border);
+    border-radius: var(--puck-posts-card-radius);
+}
+
+/* Category Posts */
+.wp-block-category-posts ul {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+}
+
+.wp-block-category-posts li {
+    padding: var(--wjs-size-4) 0;
+    border-bottom: 1px solid var(--wjs-border-subtle);
+}
+
+/* Search Bar */
+.wp-block-search {
+    display: flex;
+    gap: var(--wjs-size-2);
+}
+
+.wp-block-search input {
+    background: var(--puck-search-input-bg);
+    border: 1px solid var(--puck-search-input-border);
+    border-radius: var(--puck-search-input-radius);
+    padding: var(--wjs-size-3) var(--wjs-size-4);
+    color: var(--wjs-text-main);
+}
+
+.wp-block-search input:focus {
+    outline: none;
+    border-color: var(--wjs-color-primary);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+}
+
+.wp-block-search button {
+    background: var(--puck-search-btn-bg);
+    color: var(--puck-search-btn-color);
+    border: none;
+    border-radius: var(--puck-search-btn-radius);
+    padding: var(--wjs-size-3) var(--wjs-size-5);
+    cursor: pointer;
+    font-weight: var(--wjs-font-medium);
+    transition: filter 0.2s ease;
+}
+
+.wp-block-search button:hover {
+    filter: brightness(1.1);
+}
+
+/* Responsive Grid */
+@media (max-width: 768px) {
+    .wp-block-grid {
+        grid-template-columns: 1fr !important;
+    }
+
+    .wp-block-pricing {
+        grid-template-columns: 1fr !important;
+    }
+
+    .wp-block-pricing>div[data-highlighted="true"] {
+        transform: none !important;
+    }
+
+    .wp-block-posts-grid {
+        grid-template-columns: 1fr !important;
+    }
+}

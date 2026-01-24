@@ -10,6 +10,7 @@ import { Data } from "@measured/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import Header from "@/components/public/Header";
 import Footer from "@/components/public/Footer";
+import { useModal } from "@/contexts/ModalContext";
 
 export default function PageEditorPage() {
     const router = useRouter();
@@ -116,6 +117,8 @@ export default function PageEditorPage() {
         }
     };
 
+    const { alert } = useModal();
+
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
@@ -126,7 +129,7 @@ export default function PageEditorPage() {
             const finalSlug = root?.props?.slug || root?.slug || slug;
 
             if (!finalTitle) {
-                alert("Title is required before saving.");
+                await alert("Title is required before saving.");
                 setSaving(false);
                 return;
             }
@@ -151,7 +154,7 @@ export default function PageEditorPage() {
             setIsDirty(false); // Reset dirty state after successful save
         } catch (error: any) {
             console.error("Failed to save page:", error);
-            alert(`Failed to save page: ${error.message || "Unknown error"}`);
+            await alert(`Failed to save page: ${error.message || "Unknown error"}`);
         } finally {
             setSaving(false);
         }
@@ -198,11 +201,23 @@ export default function PageEditorPage() {
                     data.content.forEach((item: any) => {
                         const props = item.props;
                         if (item.type === 'Heading') {
-                            html += `<${props.level} class="font-bold my-4">${props.title}</${props.level}>`;
+                            html += `<${props.level} class="wp-block-heading font-bold my-4">${props.title}</${props.level}>`;
                         } else if (item.type === 'Text') {
-                            html += `<div class="prose">${props.content}</div>`;
+                            html += `<div class="wp-block-text prose">${props.content}</div>`;
                         } else if (item.type === 'Image') {
-                            html += `<img src="${props.src}" alt="${props.alt}" class="max-w-full my-4 rounded"/>`;
+                            html += `<img src="${props.src}" alt="${props.alt}" class="wp-block-image max-w-full my-4 rounded shadow-sm"/>`;
+                        } else if (item.type === 'Button') {
+                            const alignClass = props.align === 'center' ? 'text-center' : props.align === 'right' ? 'text-right' : 'text-left';
+                            html += `<div class="wp-block-button my-6 ${alignClass}"><a href="${props.href}" class="wp-button button-${props.variant}">${props.label}</a></div>`;
+                        } else if (item.type === 'Card') {
+                            html += `
+                                <div class="wp-block-card card-theme-${props.theme} p-8 rounded-3xl border my-6">
+                                    ${props.icon ? `<i class="fa-solid ${props.icon} text-2xl mb-4"></i>` : ''}
+                                    <h3 class="text-xl font-bold mb-2">${props.title}</h3>
+                                    <p class="opacity-80">${props.description}</p>
+                                </div>`;
+                        } else if (item.type === 'Divider') {
+                            html += `<hr class="wp-block-divider divider-${props.type} my-10 border-gray-100" />`;
                         }
                     });
                     setContent(html);

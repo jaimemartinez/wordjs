@@ -50,7 +50,8 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'comment_date',
-        order: order.toUpperCase()
+        // SECURITY: Whitelist order direction
+        order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
     });
 
     const total = await Comment.count({

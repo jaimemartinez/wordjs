@@ -49,7 +49,7 @@ try {
 const init = async () => {
 
   // Auto-Start Embedded Core DB if configured
-  if (driverName === 'postgres' && (config.db.port == 5433 || process.env.DB_PORT == '5433')) {
+  if (driverName === 'postgres' && config.db.port == 5433) {
     try {
       const embedded = require('../core/embedded-db');
       await embedded.startServer();
@@ -277,10 +277,8 @@ async function initializeSchema(db, isAsync = false) {
     "action_url TEXT"
   ]);
 
-  // Migration: Add missing columns if they don't exist
-  try { await exec("ALTER TABLE notifications ADD COLUMN icon TEXT"); } catch (e) { }
-  try { await exec("ALTER TABLE notifications ADD COLUMN color TEXT"); } catch (e) { }
-  try { await exec("ALTER TABLE notifications ADD COLUMN action_url TEXT"); } catch (e) { }
+  // Postgres doesn't need these manual ALTERS if table is created fresh
+  // and for SQLite we already have them in the createTable call above.
 
   console.log('✅ Database Schema verified.');
 }
@@ -325,7 +323,7 @@ const dbAsyncProxy = new Proxy({}, {
 
     const db = getDbAsync();
     if (!db) throw new Error('Async Database not initialized');
-    
+
     // If prop is a function on the driver, wrap it with automatic normalization
     if (typeof db[prop] === 'function') {
       return async (...args) => {
@@ -333,13 +331,13 @@ const dbAsyncProxy = new Proxy({}, {
         if (['run', 'exec', 'save'].includes(prop)) {
           verifyPermission('database', 'write');
         }
-        
+
         // Automatically normalize SQL queries (first argument is SQL string)
         // This ensures ALL database operations use the same syntax globally
         if (args.length > 0 && typeof args[0] === 'string') {
           const sql = args[0];
           const params = args.slice(1);
-          
+
           // For PostgreSQL: normalize placeholders ? -> $1, $2, etc.
           // For SQLite: pass SQL as-is (already uses ? placeholders)
           // The Postgres driver also normalizes internally, ensuring double safety
@@ -348,14 +346,14 @@ const dbAsyncProxy = new Proxy({}, {
             let paramIndex = 1;
             normalizedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
           }
-          
+
           // Execute with normalized SQL
           // Standard SQL (SELECT, INSERT, UPDATE, DELETE, JOIN, LIMIT, OFFSET)
           // works the same in both SQLite and PostgreSQL.
           // The only difference is placeholders, which we normalize automatically.
           return await db[prop].bind(db)(normalizedSql, ...params);
         }
-        
+
         // Non-SQL operations (like close, connect, etc.) - pass through
         return await db[prop].bind(db)(...args);
       }
@@ -381,7 +379,7 @@ const dbAsyncProxy = new Proxy({}, {
  */
 async function createPluginTable(tableName, columns) {
   const isPostgres = driverName === 'postgres';
-  
+
   // Type mappings for compatibility
   const typeMap = {
     'INT_PK': isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT',
@@ -391,7 +389,7 @@ async function createPluginTable(tableName, columns) {
     'DATETIME': isPostgres ? 'TIMESTAMP' : 'DATETIME',
     'TIMESTAMP': isPostgres ? 'TIMESTAMP' : 'DATETIME',
   };
-  
+
   // Replace type aliases with driver-specific syntax
   const mappedColumns = columns.map(col => {
     let mapped = col;
@@ -407,9 +405,9 @@ async function createPluginTable(tableName, columns) {
     }
     return mapped;
   });
-  
+
   const sql = `CREATE TABLE IF NOT EXISTS ${tableName} (\n  ${mappedColumns.join(',\n  ')}\n)`;
-  
+
   if (driverAsync) {
     await driverAsync.exec(sql);
   } else {

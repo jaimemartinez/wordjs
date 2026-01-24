@@ -142,9 +142,43 @@ function exportToFile(filepath, options = {}) {
 }
 
 /**
+ * SECURITY: Validate import data to prevent prototype pollution and injection
+ */
+function validateImportData(data) {
+    const dangerousKeys = ['__proto__', 'constructor', 'prototype'];
+
+    function checkObject(obj, path = '') {
+        if (obj === null || typeof obj !== 'object') return;
+
+        for (const key of Object.keys(obj)) {
+            // Block dangerous prototype pollution keys
+            if (dangerousKeys.includes(key)) {
+                throw new Error(`Security: Dangerous key '${key}' found at ${path}`);
+            }
+
+            // Block overly long keys or values (potential DoS)
+            if (key.length > 100) {
+                throw new Error(`Security: Key too long at ${path}`);
+            }
+
+            // Recursively check nested objects
+            if (typeof obj[key] === 'object' && obj[key] !== null) {
+                checkObject(obj[key], `${path}.${key}`);
+            }
+        }
+    }
+
+    checkObject(data, 'root');
+    return true;
+}
+
+/**
  * Import site content
  */
 async function importSite(data, options = {}) {
+    // SECURITY: Validate import data structure
+    validateImportData(data);
+
     const {
         updateExisting = false,
         importUsers = false

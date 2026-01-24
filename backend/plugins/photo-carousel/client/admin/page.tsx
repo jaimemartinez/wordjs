@@ -2,8 +2,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import ConfirmationModal from "../../../../../admin-next/src/components/ConfirmationModal";
+// Removed ConfirmationModal import
 import MediaPickerModal from "../../../../../admin-next/src/components/MediaPickerModal";
+import { useModal } from "@/contexts/ModalContext";
+import { PageHeader } from "../../../../../admin-next/src/components/ui/PageHeader";
+import { Card } from "../../../../../admin-next/src/components/ui/Card";
 
 // Local type definitions - plugin is self-contained
 interface CarouselImage {
@@ -53,11 +56,11 @@ export default function CarouselsPage() {
     const [carousels, setCarousels] = useState<Carousel[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
+    const { alert, confirm } = useModal();
 
     // Modal states
     const [isEditing, setIsEditing] = useState(false);
     const [editingCarousel, setEditingCarousel] = useState<Carousel | null>(null);
-    const [deletingId, setDeletingId] = useState<string | null>(null);
     const [isMediaPickerOpen, setIsMediaPickerOpen] = useState(false);
 
     // Form state
@@ -116,7 +119,7 @@ export default function CarouselsPage() {
 
     const handleSave = async () => {
         if (!formName.trim()) {
-            alert("Please enter a name for the carousel");
+            await alert("Please enter a name for the carousel");
             return;
         }
 
@@ -142,20 +145,19 @@ export default function CarouselsPage() {
             setIsEditing(false);
             loadCarousels();
         } catch (err: any) {
-            alert("Failed to save: " + (err.message || "Unknown error"));
+            await alert("Failed to save: " + (err.message || "Unknown error"));
         } finally {
             setSaving(false);
         }
     };
 
-    const handleDelete = async () => {
-        if (!deletingId) return;
+    const handleDelete = async (id: string) => {
+        if (!await confirm("Are you sure you want to delete this carousel? This action cannot be undone.", "Delete Carousel", true)) return;
         try {
-            await carouselsApi.delete(deletingId);
-            setDeletingId(null);
+            await carouselsApi.delete(id);
             loadCarousels();
         } catch (err: any) {
-            alert("Failed to delete: " + (err.message || "Unknown error"));
+            await alert("Failed to delete: " + (err.message || "Unknown error"));
         }
     };
 
@@ -174,9 +176,9 @@ export default function CarouselsPage() {
         setFormImages(formImages.filter((_, i) => i !== index));
     };
 
-    const copyShortcode = (id: string) => {
+    const copyShortcode = async (id: string) => {
         navigator.clipboard.writeText(`[carousel id="${id}"]`);
-        alert("Shortcode copied!");
+        await alert("Shortcode copied!");
     };
 
     if (loading) {
@@ -188,12 +190,12 @@ export default function CarouselsPage() {
     }
 
     return (
-        <div className="p-6 h-full overflow-auto">
-            <div className="flex justify-between items-center mb-8">
-                <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                    <i className="fa-regular fa-images text-blue-600"></i> Carousels
-                </h1>
-            </div>
+        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+            <PageHeader
+                title="Carruseles"
+                subtitle="Administra tus presentaciones de imágenes"
+                icon="fa-images"
+            />
 
             {error && (
                 <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg mb-6">
@@ -204,9 +206,10 @@ export default function CarouselsPage() {
 
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                 {/* Add New Card */}
+                {/* Add New Card */}
                 <div
                     onClick={openCreateModal}
-                    className="bg-gray-50/50 border-2 border-dashed border-gray-300 rounded-2xl p-6 flex flex-col items-center justify-center text-gray-400 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer min-h-[320px] group"
+                    className="bg-gray-50/50 border-2 border-dashed border-gray-300 rounded-[40px] p-6 flex flex-col items-center justify-center text-gray-400 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer min-h-[320px] group"
                 >
                     <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center mb-4 text-2xl group-hover:scale-110 transition-transform">
                         <i className="fa-solid fa-plus"></i>
@@ -216,9 +219,10 @@ export default function CarouselsPage() {
                 </div>
 
                 {carousels.map((carousel) => (
-                    <div
+                    <Card
                         key={carousel.id}
-                        className="bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-xl transition-all duration-300 group overflow-hidden flex flex-col"
+                        padding="none"
+                        className="group flex flex-col min-h-[320px]"
                     >
                         {/* Preview */}
                         <div className="aspect-video bg-gray-900 relative overflow-hidden">
@@ -256,7 +260,7 @@ export default function CarouselsPage() {
                                     <i className="fa-solid fa-pencil"></i>
                                 </button>
                                 <button
-                                    onClick={() => setDeletingId(carousel.id)}
+                                    onClick={() => handleDelete(carousel.id)}
                                     className="w-10 h-10 bg-white text-red-500 rounded-full shadow-lg hover:bg-red-50 hover:scale-110 transition-all flex items-center justify-center"
                                     title="Delete"
                                 >
@@ -288,258 +292,260 @@ export default function CarouselsPage() {
                                 </div>
                             </div>
                         </div>
-                    </div>
+                    </Card>
                 ))}
             </div>
 
             {/* Edit/Create Modal */}
-            {isEditing && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-white/20">
-                        {/* Header */}
-                        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white">
-                            <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
-                                <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg">
-                                    <i className={`fa-solid ${editingCarousel ? 'fa-pen-to-square' : 'fa-plus'}`}></i>
-                                </span>
-                                {editingCarousel ? 'Edit Carousel' : 'New Carousel'}
-                            </h2>
-                            <button
-                                onClick={() => setIsEditing(false)}
-                                className="w-8 h-8 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600 flex items-center justify-center transition-colors"
-                            >
-                                <i className="fa-solid fa-xmark"></i>
-                            </button>
-                        </div>
-
-                        <div className="p-8 overflow-y-auto space-y-8 custom-scrollbar">
-                            {/* Name */}
-                            <div>
-                                <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Name</label>
-                                <input
-                                    type="text"
-                                    value={formName}
-                                    onChange={(e) => setFormName(e.target.value)}
-                                    className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium text-gray-800 placeholder:text-gray-400"
-                                    placeholder="e.g. Homepage Hero"
-                                />
+            {
+                isEditing && (
+                    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
+                        <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-white/20">
+                            {/* Header */}
+                            <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white">
+                                <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">
+                                    <span className="w-10 h-10 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center text-lg">
+                                        <i className={`fa-solid ${editingCarousel ? 'fa-pen-to-square' : 'fa-plus'}`}></i>
+                                    </span>
+                                    {editingCarousel ? 'Edit Carousel' : 'New Carousel'}
+                                </h2>
+                                <button
+                                    onClick={() => setIsEditing(false)}
+                                    className="w-8 h-8 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-600 flex items-center justify-center transition-colors"
+                                >
+                                    <i className="fa-solid fa-xmark"></i>
+                                </button>
                             </div>
 
-                            {/* Images */}
-                            <div>
-                                <div className="flex justify-between items-center mb-3">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">Images ({formImages.length})</label>
-                                    <span className="text-xs text-gray-400">Drag to reorder</span>
+                            <div className="p-8 overflow-y-auto space-y-8 custom-scrollbar">
+                                {/* Name */}
+                                <div>
+                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Name</label>
+                                    <input
+                                        type="text"
+                                        value={formName}
+                                        onChange={(e) => setFormName(e.target.value)}
+                                        className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all outline-none font-medium text-gray-800 placeholder:text-gray-400"
+                                        placeholder="e.g. Homepage Hero"
+                                    />
                                 </div>
 
-                                <div className="grid grid-cols-4 gap-4 mb-4">
-                                    {formImages.map((img, index) => (
-                                        <div
-                                            key={index}
-                                            draggable
-                                            onDragStart={() => setDraggedIndex(index)}
-                                            onDragOver={(e) => {
-                                                e.preventDefault(); // Necessary to allow dropping
-                                            }}
-                                            onDrop={(e) => {
-                                                e.preventDefault();
-                                                if (draggedIndex === null || draggedIndex === index) return;
+                                {/* Images */}
+                                <div>
+                                    <div className="flex justify-between items-center mb-3">
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide">Images ({formImages.length})</label>
+                                        <span className="text-xs text-gray-400">Drag to reorder</span>
+                                    </div>
 
-                                                const newImages = [...formImages];
-                                                const [movedItem] = newImages.splice(draggedIndex, 1);
-                                                newImages.splice(index, 0, movedItem);
+                                    <div className="grid grid-cols-4 gap-4 mb-4">
+                                        {formImages.map((img, index) => (
+                                            <div
+                                                key={index}
+                                                draggable
+                                                onDragStart={() => setDraggedIndex(index)}
+                                                onDragOver={(e) => {
+                                                    e.preventDefault(); // Necessary to allow dropping
+                                                }}
+                                                onDrop={(e) => {
+                                                    e.preventDefault();
+                                                    if (draggedIndex === null || draggedIndex === index) return;
 
-                                                setFormImages(newImages);
-                                                setDraggedIndex(null);
-                                            }}
-                                            className={`relative aspect-square rounded-2xl overflow-hidden border-2 cursor-grab active:cursor-grabbing group transition-all ${editingImageIndex === index ? 'border-blue-500 ring-4 ring-blue-500/10' : 'border-gray-100 hover:border-blue-300'} ${draggedIndex === index ? 'opacity-50' : ''}`}
-                                            onClick={() => setEditingImageIndex(index)}
-                                        >
-                                            <img src={img.url} alt="" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
+                                                    const newImages = [...formImages];
+                                                    const [movedItem] = newImages.splice(draggedIndex, 1);
+                                                    newImages.splice(index, 0, movedItem);
 
-                                            <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
-                                                <i className="fa-solid fa-pen text-white opacity-0 group-hover:opacity-100 drop-shadow-md transform scale-50 group-hover:scale-100 transition-all duration-300"></i>
-                                            </div>
-
-                                            <button
-                                                onClick={(e) => { e.stopPropagation(); removeImage(index); }}
-                                                className="absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-110 z-10 flex items-center justify-center text-xs"
-                                                title="Remove image"
+                                                    setFormImages(newImages);
+                                                    setDraggedIndex(null);
+                                                }}
+                                                className={`relative aspect-square rounded-2xl overflow-hidden border-2 cursor-grab active:cursor-grabbing group transition-all ${editingImageIndex === index ? 'border-blue-500 ring-4 ring-blue-500/10' : 'border-gray-100 hover:border-blue-300'} ${draggedIndex === index ? 'opacity-50' : ''}`}
+                                                onClick={() => setEditingImageIndex(index)}
                                             >
-                                                <i className="fa-solid fa-xmark"></i>
-                                            </button>
+                                                <img src={img.url} alt="" className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110" />
 
-                                            <div className="absolute bottom-1 right-1 bg-black/50 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono opacity-60">
-                                                #{index + 1}
-                                            </div>
-                                        </div>
-                                    ))}
-                                    <button
-                                        onClick={() => setIsMediaPickerOpen(true)}
-                                        className="aspect-square rounded-2xl border-2 border-dashed border-gray-300 hover:border-blue-500 hover:bg-blue-50/30 flex flex-col items-center justify-center gap-2 text-gray-400 hover:text-blue-600 transition-all group"
-                                    >
-                                        <div className="w-10 h-10 rounded-full bg-gray-100 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
-                                            <i className="fa-solid fa-plus text-lg"></i>
-                                        </div>
-                                        <span className="text-xs font-bold uppercase tracking-wide">Add Image</span>
-                                    </button>
-                                </div>
+                                                <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                                                    <i className="fa-solid fa-pen text-white opacity-0 group-hover:opacity-100 drop-shadow-md transform scale-50 group-hover:scale-100 transition-all duration-300"></i>
+                                                </div>
 
-                                {/* Image Details Editor */}
-                                {editingImageIndex !== null && formImages[editingImageIndex] && (
-                                    <div className="bg-gray-50/80 p-5 rounded-2xl border border-gray-200 animate-in fade-in slide-in-from-top-2 relative">
-                                        <div className="absolute -top-3 left-6 w-6 h-6 bg-gray-50 border-t border-l border-gray-200 transform rotate-45"></div>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); removeImage(index); }}
+                                                    className="absolute top-1 right-1 w-6 h-6 bg-red-500 text-white rounded-full opacity-0 group-hover:opacity-100 transition-all shadow-lg hover:scale-110 z-10 flex items-center justify-center text-xs"
+                                                    title="Remove image"
+                                                >
+                                                    <i className="fa-solid fa-xmark"></i>
+                                                </button>
 
-                                        <div className="flex justify-between items-center mb-4 relative z-10">
-                                            <div className="flex items-center gap-2">
-                                                <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">
-                                                    {editingImageIndex + 1}
-                                                </span>
-                                                <h4 className="font-bold text-gray-800 text-sm">Image Details</h4>
+                                                <div className="absolute bottom-1 right-1 bg-black/50 backdrop-blur-sm text-white text-[10px] px-1.5 py-0.5 rounded font-mono opacity-60">
+                                                    #{index + 1}
+                                                </div>
                                             </div>
-                                            <button onClick={() => setEditingImageIndex(null)} className="text-gray-400 hover:text-gray-600 text-sm font-medium hover:underline">
-                                                Done
-                                            </button>
-                                        </div>
+                                        ))}
+                                        <button
+                                            onClick={() => setIsMediaPickerOpen(true)}
+                                            className="aspect-square rounded-2xl border-2 border-dashed border-gray-300 hover:border-blue-500 hover:bg-blue-50/30 flex flex-col items-center justify-center gap-2 text-gray-400 hover:text-blue-600 transition-all group"
+                                        >
+                                            <div className="w-10 h-10 rounded-full bg-gray-100 group-hover:bg-blue-100 flex items-center justify-center transition-colors">
+                                                <i className="fa-solid fa-plus text-lg"></i>
+                                            </div>
+                                            <span className="text-xs font-bold uppercase tracking-wide">Add Image</span>
+                                        </button>
+                                    </div>
 
-                                        <div className="space-y-4 relative z-10">
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Big Title</label>
-                                                <input
-                                                    type="text"
-                                                    value={formImages[editingImageIndex].title || ''}
-                                                    onChange={(e) => updateImageDetails(editingImageIndex, 'title', e.target.value)}
-                                                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                                    placeholder="e.g. CONFERENCIAS"
-                                                />
+                                    {/* Image Details Editor */}
+                                    {editingImageIndex !== null && formImages[editingImageIndex] && (
+                                        <div className="bg-gray-50/80 p-5 rounded-2xl border border-gray-200 animate-in fade-in slide-in-from-top-2 relative">
+                                            <div className="absolute -top-3 left-6 w-6 h-6 bg-gray-50 border-t border-l border-gray-200 transform rotate-45"></div>
+
+                                            <div className="flex justify-between items-center mb-4 relative z-10">
+                                                <div className="flex items-center gap-2">
+                                                    <span className="w-6 h-6 rounded-full bg-blue-100 text-blue-700 flex items-center justify-center text-xs font-bold">
+                                                        {editingImageIndex + 1}
+                                                    </span>
+                                                    <h4 className="font-bold text-gray-800 text-sm">Image Details</h4>
+                                                </div>
+                                                <button onClick={() => setEditingImageIndex(null)} className="text-gray-400 hover:text-gray-600 text-sm font-medium hover:underline">
+                                                    Done
+                                                </button>
                                             </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Subtitle</label>
-                                                <input
-                                                    type="text"
-                                                    value={formImages[editingImageIndex].description || ''}
-                                                    onChange={(e) => updateImageDetails(editingImageIndex, 'description', e.target.value)}
-                                                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                                    placeholder="e.g. BUCARAMANGA"
-                                                />
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Paragraph Text</label>
-                                                <textarea
-                                                    value={formImages[editingImageIndex].text || ''}
-                                                    onChange={(e) => updateImageDetails(editingImageIndex, 'text', e.target.value)}
-                                                    className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm h-20 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none resize-none"
-                                                    placeholder="Detailed description or message..."
-                                                />
-                                            </div>
-                                            <div className="grid grid-cols-2 gap-4">
+
+                                            <div className="space-y-4 relative z-10">
                                                 <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Button Text</label>
+                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Big Title</label>
                                                     <input
                                                         type="text"
-                                                        value={formImages[editingImageIndex].buttonText || ''}
-                                                        onChange={(e) => updateImageDetails(editingImageIndex, 'buttonText', e.target.value)}
+                                                        value={formImages[editingImageIndex].title || ''}
+                                                        onChange={(e) => updateImageDetails(editingImageIndex, 'title', e.target.value)}
                                                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                                        placeholder="Button Label"
+                                                        placeholder="e.g. CONFERENCIAS"
                                                     />
                                                 </div>
                                                 <div>
-                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Button Link</label>
+                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Subtitle</label>
                                                     <input
                                                         type="text"
-                                                        value={formImages[editingImageIndex].buttonLink || ''}
-                                                        onChange={(e) => updateImageDetails(editingImageIndex, 'buttonLink', e.target.value)}
+                                                        value={formImages[editingImageIndex].description || ''}
+                                                        onChange={(e) => updateImageDetails(editingImageIndex, 'description', e.target.value)}
                                                         className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
-                                                        placeholder="/url-path"
+                                                        placeholder="e.g. BUCARAMANGA"
                                                     />
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Paragraph Text</label>
+                                                    <textarea
+                                                        value={formImages[editingImageIndex].text || ''}
+                                                        onChange={(e) => updateImageDetails(editingImageIndex, 'text', e.target.value)}
+                                                        className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm h-20 focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none resize-none"
+                                                        placeholder="Detailed description or message..."
+                                                    />
+                                                </div>
+                                                <div className="grid grid-cols-2 gap-4">
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Button Text</label>
+                                                        <input
+                                                            type="text"
+                                                            value={formImages[editingImageIndex].buttonText || ''}
+                                                            onChange={(e) => updateImageDetails(editingImageIndex, 'buttonText', e.target.value)}
+                                                            className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                                                            placeholder="Button Label"
+                                                        />
+                                                    </div>
+                                                    <div>
+                                                        <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Button Link</label>
+                                                        <input
+                                                            type="text"
+                                                            value={formImages[editingImageIndex].buttonLink || ''}
+                                                            onChange={(e) => updateImageDetails(editingImageIndex, 'buttonLink', e.target.value)}
+                                                            className="w-full px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none"
+                                                            placeholder="/url-path"
+                                                        />
+                                                    </div>
                                                 </div>
                                             </div>
                                         </div>
-                                    </div>
-                                )}
-                            </div>
-
-                            {/* Settings */}
-                            <div className="grid grid-cols-2 gap-6 bg-gray-50 rounded-2xl p-6 border border-gray-100">
-                                <div className="col-span-2">
-                                    <h4 className="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
-                                        <i className="fa-solid fa-sliders text-blue-500"></i> Settings
-                                    </h4>
+                                    )}
                                 </div>
-                                <div className="col-span-2 md:col-span-1">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Location</label>
-                                    <div className="relative">
-                                        <select
-                                            value={formLocation}
-                                            onChange={(e) => setFormLocation(e.target.value)}
-                                            className="w-full appearance-none px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium text-gray-700"
-                                        >
-                                            <option value="">None (Shortcode usage)</option>
-                                            <option value="hero">Hero (Homepage)</option>
-                                        </select>
-                                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
-                                            <i className="fa-solid fa-chevron-down text-xs"></i>
+
+                                {/* Settings */}
+                                <div className="grid grid-cols-2 gap-6 bg-gray-50 rounded-2xl p-6 border border-gray-100">
+                                    <div className="col-span-2">
+                                        <h4 className="text-sm font-bold text-gray-800 mb-4 flex items-center gap-2">
+                                            <i className="fa-solid fa-sliders text-blue-500"></i> Settings
+                                        </h4>
+                                    </div>
+                                    <div className="col-span-2 md:col-span-1">
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Location</label>
+                                        <div className="relative">
+                                            <select
+                                                value={formLocation}
+                                                onChange={(e) => setFormLocation(e.target.value)}
+                                                className="w-full appearance-none px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium text-gray-700"
+                                            >
+                                                <option value="">None (Shortcode usage)</option>
+                                                <option value="hero">Hero (Homepage)</option>
+                                            </select>
+                                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+                                                <i className="fa-solid fa-chevron-down text-xs"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="col-span-2 md:col-span-1">
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Autoplay</label>
+                                        <div className="relative">
+                                            <select
+                                                value={formAutoplay ? "true" : "false"}
+                                                onChange={(e) => setFormAutoplay(e.target.value === "true")}
+                                                className="w-full appearance-none px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium text-gray-700"
+                                            >
+                                                <option value="true">Enabled</option>
+                                                <option value="false">Disabled</option>
+                                            </select>
+                                            <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
+                                                <i className="fa-solid fa-chevron-down text-xs"></i>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="col-span-2 md:col-span-2">
+                                        <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Interval</label>
+                                        <div className="flex gap-4 items-center">
+                                            <input
+                                                type="range"
+                                                min="1000"
+                                                max="10000"
+                                                step="500"
+                                                value={formInterval}
+                                                onChange={(e) => setFormInterval(parseInt(e.target.value))}
+                                                className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                            />
+                                            <span className="font-mono text-sm bg-white px-3 py-1 rounded-lg border border-gray-200 w-20 text-center">
+                                                {formInterval}ms
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
-                                <div className="col-span-2 md:col-span-1">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Autoplay</label>
-                                    <div className="relative">
-                                        <select
-                                            value={formAutoplay ? "true" : "false"}
-                                            onChange={(e) => setFormAutoplay(e.target.value === "true")}
-                                            className="w-full appearance-none px-4 py-3 bg-white border border-gray-200 rounded-xl focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 outline-none font-medium text-gray-700"
-                                        >
-                                            <option value="true">Enabled</option>
-                                            <option value="false">Disabled</option>
-                                        </select>
-                                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-4 text-gray-500">
-                                            <i className="fa-solid fa-chevron-down text-xs"></i>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div className="col-span-2 md:col-span-2">
-                                    <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Interval</label>
-                                    <div className="flex gap-4 items-center">
-                                        <input
-                                            type="range"
-                                            min="1000"
-                                            max="10000"
-                                            step="500"
-                                            value={formInterval}
-                                            onChange={(e) => setFormInterval(parseInt(e.target.value))}
-                                            className="flex-1 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
-                                        />
-                                        <span className="font-mono text-sm bg-white px-3 py-1 rounded-lg border border-gray-200 w-20 text-center">
-                                            {formInterval}ms
-                                        </span>
-                                    </div>
-                                </div>
                             </div>
-                        </div>
 
-                        <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50">
-                            <button
-                                onClick={() => setIsEditing(false)}
-                                className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handleSave}
-                                disabled={saving}
-                                className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold hover:shadow-lg hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-70 disabled:shadow-none flex items-center gap-2"
-                            >
-                                {saving ? (
-                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</>
-                                ) : (
-                                    <><i className="fa-solid fa-floppy-disk"></i> Save Carousel</>
-                                )}
-                            </button>
+                            <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50">
+                                <button
+                                    onClick={() => setIsEditing(false)}
+                                    className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleSave}
+                                    disabled={saving}
+                                    className="px-8 py-3 bg-gradient-to-r from-blue-600 to-blue-500 text-white rounded-xl font-bold hover:shadow-lg hover:from-blue-700 hover:to-blue-600 transition-all disabled:opacity-70 disabled:shadow-none flex items-center gap-2"
+                                >
+                                    {saving ? (
+                                        <><i className="fa-solid fa-circle-notch fa-spin"></i> Saving...</>
+                                    ) : (
+                                        <><i className="fa-solid fa-floppy-disk"></i> Save Carousel</>
+                                    )}
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )
+            }
 
             {/* Media Picker */}
             <MediaPickerModal
@@ -548,16 +554,7 @@ export default function CarouselsPage() {
                 onSelect={handleSelectImage}
             />
 
-            {/* Delete Confirmation */}
-            <ConfirmationModal
-                isOpen={!!deletingId}
-                onClose={() => setDeletingId(null)}
-                onConfirm={handleDelete}
-                title="Delete Carousel"
-                message="Are you sure you want to delete this carousel? This action cannot be undone."
-                confirmText="Delete"
-                isDanger={true}
-            />
-        </div>
+
+        </div >
     );
 }

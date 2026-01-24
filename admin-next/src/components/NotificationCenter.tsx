@@ -23,7 +23,7 @@ interface NotificationCenterProps {
 }
 
 export default function NotificationCenter({ variant = 'floating', isCollapsed = false }: NotificationCenterProps) {
-    const { token, user } = useAuth();
+    const { user } = useAuth();
     const { addToast } = useToast();
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [isOpen, setIsOpen] = useState(false);
@@ -47,11 +47,11 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
 
     // Fetch initial notifications
     const fetchNotifications = async (silent = false) => {
-        if (!token) return;
+        if (!user) return;
         if (!silent) setIsRefreshing(true);
         try {
             const res = await fetch(`${API_URL}/notifications`, {
-                headers: { Authorization: `Bearer ${token}` },
+                credentials: 'include',
             });
             if (res.ok) {
                 const data = await res.json();
@@ -67,15 +67,16 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
 
     useEffect(() => {
         fetchNotifications(true);
-    }, [token]);
+    }, [user]);
 
     // Real-time stream
     useEffect(() => {
-        if (!token || !user) return;
+        if (!user) return;
 
         const connectStream = () => {
-            const url = `${API_URL}/notifications/stream?token=${token}`;
-            const es = new EventSource(url);
+            // SSE doesn't support credentials, but cookies are sent automatically for same-origin
+            const url = `${API_URL}/notifications/stream`;
+            const es = new EventSource(url, { withCredentials: true });
             eventSourceRef.current = es;
 
             es.onmessage = (event) => {
@@ -110,13 +111,13 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                 eventSourceRef.current.close();
             }
         };
-    }, [token, user]);
+    }, [user]);
 
     const markAsRead = async (uuid: string) => {
         try {
             const res = await fetch(`${API_URL}/notifications/${uuid}/read`, {
                 method: "POST",
-                headers: { Authorization: `Bearer ${token}` },
+                credentials: 'include',
             });
             if (res.ok) {
                 setNotifications(prev =>
@@ -133,7 +134,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
         try {
             const res = await fetch(`${API_URL}/notifications/read-all`, {
                 method: "POST",
-                headers: { Authorization: `Bearer ${token}` },
+                credentials: 'include',
             });
             if (res.ok) {
                 setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
@@ -142,6 +143,24 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             }
         } catch (error) {
             console.error("Mark all read error:", error);
+        }
+    };
+
+    const deleteNotification = async (e: React.MouseEvent, uuid: string) => {
+        e.preventDefault();
+        e.stopPropagation();
+        try {
+            const res = await fetch(`${API_URL}/notifications/${uuid}`, {
+                method: "DELETE",
+                credentials: 'include',
+            });
+            if (res.ok) {
+                setNotifications(prev => prev.filter(n => n.uuid !== uuid));
+                const wasUnread = notifications.find(n => n.uuid === uuid)?.is_read === 0;
+                if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
+            }
+        } catch (error) {
+            console.error("Delete notification error:", error);
         }
     };
 
@@ -303,10 +322,19 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                                         {n.message}
                                                     </p>
                                                 </div>
+
+                                                {/* Delete Button (Visible on Hover) */}
+                                                <button
+                                                    onClick={(e) => deleteNotification(e, n.uuid)}
+                                                    className="absolute -right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-rose-50 text-rose-500 opacity-0 group-hover:opacity-100 group-hover:right-4 transition-all duration-300 flex items-center justify-center hover:bg-rose-500 hover:text-white shadow-lg shadow-rose-200"
+                                                    title="Delete notification"
+                                                >
+                                                    <i className="fa-solid fa-trash-can text-sm"></i>
+                                                </button>
                                             </div>
                                             {!n.is_read && (
-                                                <div className="absolute right-6 top-1/2 -translate-y-1/2">
-                                                    <div className="w-3 h-3 bg-blue-600 rounded-full shadow-[0_0_15px_rgba(59,130,246,0.8)]"></div>
+                                                <div className="absolute right-6 top-6 group-hover:opacity-0 transition-opacity">
+                                                    <div className="w-2.5 h-2.5 bg-blue-600 rounded-full shadow-[0_0_15px_rgba(59,130,246,0.8)]"></div>
                                                 </div>
                                             )}
                                         </div>

@@ -1,119 +1,111 @@
-/**
- * WordJS - Application Configuration
- * Equivalent to wp-includes/default-constants.php
- */
+const fs = require('fs');
+const path = require('path');
 
-require('dotenv').config();
-const { getConfig } = require('../core/configManager');
+// Determine path to wordjs-config.json
+const rootDir = path.resolve(__dirname, '../../');
+const configPath = path.join(rootDir, 'wordjs-config.json');
 
-// Load file-based config (if exists)
-const fileConfig = getConfig() || {};
+// Default backup configuration
+const defaultConfig = {
+    port: 4000,
+    host: 'localhost',
+    gatewayPort: 3000,
+    siteUrl: 'http://localhost:3000',
+    frontendUrl: 'http://localhost:3001',
+    dbDriver: 'sqlite-native',
+    dbPath: './data/wordjs.db',
+    jwtSecret: 'wordjs-default-secret-change-me',
+    ssl: { enabled: false }
+};
+
+let fileConfig = {};
+
+try {
+    if (fs.existsSync(configPath)) {
+        const rawData = fs.readFileSync(configPath, 'utf8');
+        fileConfig = JSON.parse(rawData);
+        console.log('📄 Config loaded from wordjs-config.json');
+    } else {
+        console.warn('⚠️  wordjs-config.json not found, using defaults.');
+    }
+} catch (e) {
+    console.error('❌ Failed to load wordjs-config.json:', e.message);
+}
+
+// 1.5 Secure Auto-Generation
+const crypto = require('crypto');
+let configChanged = false;
+
+// Generate secure keys if they are default or missing
+if (!fileConfig.jwtSecret || fileConfig.jwtSecret === 'wordjs-default-secret-change-me') {
+    fileConfig.jwtSecret = crypto.randomBytes(32).toString('hex');
+    configChanged = true;
+    console.log('🔐 Generated secure JWT secret.');
+}
+
+if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
+    fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
+    configChanged = true;
+    console.log('🔐 Generated secure Database password.');
+}
+
+if (configChanged) {
+    try {
+        fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
+        console.log('💾 wordjs-config.json updated with secure credentials.');
+    } catch (err) {
+        console.error('❌ Failed to persist secure credentials:', err.message);
+    }
+}
 
 const config = {
-  // Server settings
-  port: parseInt(process.env.PORT || fileConfig.port, 10) || 4000,
-  host: process.env.HOST || fileConfig.host || 'localhost',
-  nodeEnv: process.env.NODE_ENV || 'development',
-  gatewaySecret: process.env.GATEWAY_SECRET || fileConfig.gatewaySecret,
+    ...defaultConfig,
+    ...fileConfig,
 
-  // Database
-  dbDriver: process.env.DB_DRIVER || fileConfig.dbDriver || 'sqlite-legacy', // sqlite-legacy, sqlite-native, postgres
-  dbPath: process.env.DB_PATH || './data/wordjs.db', // for sqlite
-
-  // Postgres Configuration
-  db: {
-    host: process.env.DB_HOST || (fileConfig.db && fileConfig.db.host) || 'localhost',
-    port: parseInt(process.env.DB_PORT, 10) || (fileConfig.db && fileConfig.db.port) || 5432,
-    user: process.env.DB_USER || (fileConfig.db && fileConfig.db.user) || 'postgres',
-    password: process.env.DB_PASSWORD || (fileConfig.db && fileConfig.db.password) || 'password',
-    name: process.env.DB_NAME || (fileConfig.db && fileConfig.db.name) || 'wordjs',
-    ssl: process.env.DB_SSL === 'true'
-  },
-
-  // JWT Authentication
-  jwt: {
-    secret: process.env.JWT_SECRET || 'wordjs-default-secret',
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d'
-  },
-
-  // Site settings
-  site: {
-    url: process.env.SITE_URL || fileConfig.siteUrl || `http://${process.env.HOST || fileConfig.host || 'localhost'}:${process.env.PORT || fileConfig.port || 3000}`,
-    frontendUrl: process.env.FRONTEND_URL || fileConfig.frontendUrl || `http://${process.env.HOST || fileConfig.host || 'localhost'}:3001`,
-    name: process.env.SITE_NAME || 'WordJS',
-    description: process.env.SITE_DESCRIPTION || 'A WordPress-like CMS'
-  },
-
-  // Uploads
-  uploads: {
-    dir: process.env.UPLOAD_DIR || './uploads',
-    maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 10 * 1024 * 1024 // 10MB
-  },
-
-  // API settings
-  api: {
-    prefix: '/api/v1',
-    version: '1.0.0'
-  },
-
-  // User roles (equivalent to WordPress roles)
-  roles: {
-    administrator: {
-      name: 'Administrator',
-      capabilities: ['*', 'access_admin_panel'] // All capabilities + explicit dash access
+    // Normalized SSL check
+    ssl: {
+        enabled: fileConfig.ssl?.enabled || fileConfig.siteUrl?.startsWith('https:') || false
     },
-    editor: {
-      name: 'Editor',
-      capabilities: [
-        'access_admin_panel',
-        'edit_posts', 'edit_others_posts', 'publish_posts', 'delete_posts',
-        'edit_pages', 'edit_others_pages', 'publish_pages', 'delete_pages',
-        'manage_categories', 'moderate_comments', 'upload_files', 'edit_comments'
-      ]
+
+    // Database Connection Object (Normalized)
+    db: {
+        host: fileConfig.dbHost || (fileConfig.db && fileConfig.db.host) || 'localhost',
+        port: fileConfig.dbPort || (fileConfig.db && fileConfig.db.port) || 5432,
+        user: fileConfig.dbUser || (fileConfig.db && fileConfig.db.user) || 'postgres',
+        password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
+        name: fileConfig.dbName || (fileConfig.db && fileConfig.db.name) || 'wordjs',
+        ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false
     },
-    author: {
-      name: 'Author',
-      capabilities: [
-        'access_admin_panel',
-        'edit_posts', 'publish_posts', 'delete_posts', 'upload_files'
-      ]
+
+    // Uploads Configuration
+    uploads: {
+        dir: fileConfig.uploadDir || './uploads',
+        maxFileSize: fileConfig.maxFileSize || 10 * 1024 * 1024 // 10MB
     },
-    contributor: {
-      name: 'Contributor',
-      capabilities: ['access_admin_panel', 'edit_posts', 'delete_posts']
+
+    // API Configuration
+    api: {
+        prefix: '/api/v1'
     },
-    subscriber: {
-      name: 'Subscriber',
-      capabilities: ['read', 'access_admin_panel']
+
+    // Site Configuration structure expected by core/options.js
+    site: {
+        url: fileConfig.siteUrl || 'http://localhost:3000',
+        name: fileConfig.siteName || 'WordJS',
+        description: fileConfig.siteDescription || 'A WordPress-like CMS'
+    },
+
+    // Roles placeholder (if managed via config)
+    roles: {},
+
+    // Environment
+    nodeEnv: fileConfig.nodeEnv || 'development',
+
+    // Security options
+    jwt: {
+        secret: fileConfig.jwtSecret || 'wordjs-default-secret',
+        expiresIn: '2h'
     }
-  },
-
-  // Post types (equivalent to register_post_type)
-  postTypes: {
-    post: {
-      name: 'Posts',
-      singular: 'Post',
-      showInRest: true,
-      supportsRevisions: true
-    },
-    page: {
-      name: 'Pages',
-      singular: 'Page',
-      showInRest: true,
-      hierarchical: true
-    },
-    attachment: {
-      name: 'Media',
-      singular: 'Media',
-      showInRest: true
-    }
-  },
-
-  // Post statuses
-  postStatuses: ['publish', 'draft', 'pending', 'private', 'trash', 'auto-draft', 'inherit'],
-
-  // Comment statuses
-  commentStatuses: ['approved', 'pending', 'spam', 'trash']
 };
 
 module.exports = config;

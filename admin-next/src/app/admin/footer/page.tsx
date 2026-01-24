@@ -1,10 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { settingsApi, menusApi } from "@/lib/api";
+import { settingsApi, menusApi, themesApi } from "@/lib/api";
 import Link from "next/link";
 import { useToast } from "@/contexts/ToastContext";
 import ModernSelect from "@/components/ModernSelect";
+import Footer from "@/components/public/Footer";
 
 interface SocialLink {
     platform: string;
@@ -45,10 +46,31 @@ export default function FooterSettingsPage() {
     const [previewMenu, setPreviewMenu] = useState<any[]>([]);
 
     const [saving, setSaving] = useState(false);
+    const [themeCss, setThemeCss] = useState("");
 
     useEffect(() => {
         loadSettings();
+        loadThemeCss();
     }, []);
+
+    const loadThemeCss = async () => {
+        try {
+            const themes = await themesApi.list();
+            const active = themes.find(t => t.active) || themes.find(t => t.slug === 'default');
+            if (active) {
+                const res = await fetch(`/themes/${active.slug}/style.css`);
+                let css = await res.text();
+                // Scope the CSS variables and base styles to our preview container
+                // 1. Replace :root with the ID
+                // 2. Replace body selector with the ID to capture background colors etc
+                css = css.replace(/:root/g, '#preview-theme-scope')
+                    .replace(/body/g, '#preview-theme-scope');
+                setThemeCss(css);
+            }
+        } catch (e) {
+            console.error("Failed to load theme css", e);
+        }
+    };
 
     const loadSettings = async () => {
         try {
@@ -132,230 +154,219 @@ export default function FooterSettingsPage() {
     };
 
     return (
-        <div className="h-full overflow-hidden flex flex-col md:flex-row bg-gray-50">
-            {/* LEFT: EDITOR */}
-            <div className="w-full md:w-1/2 lg:w-[45%] h-full flex flex-col border-r border-gray-200 bg-white">
-                <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white sticky top-0 z-10">
-                    <h1 className="text-2xl font-bold font-oswald text-gray-800 flex items-center gap-3">
-                        <span className="bg-brand-blue/10 text-brand-blue w-10 h-10 rounded-lg flex items-center justify-center text-xl">
-                            <i className="fa-solid fa-shoe-prints"></i>
-                        </span>
-                        Editar Footer
-                    </h1>
-                    <button
-                        onClick={(e) => handleSubmit(e as any)}
-                        disabled={saving}
-                        className="bg-brand-blue hover:bg-brand-cyan text-white px-6 py-2 rounded-xl shadow-lg shadow-brand-blue/20 transition-all font-medium flex items-center gap-2 disabled:opacity-70"
-                    >
-                        {saving ? <i className="fa-solid fa-spinner fa-spin"></i> : <i className="fa-solid fa-floppy-disk"></i>}
-                        {saving ? "Guardando..." : "Guardar"}
-                    </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-6 space-y-8 custom-scrollbar">
-
-                    {/* About Text */}
-                    <div className="space-y-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="w-8 h-8 rounded-full bg-blue-50 text-brand-blue flex items-center justify-center font-bold font-oswald">1</span>
-                            <h3 className="font-bold text-gray-800">Descripción del Sitio</h3>
+        <div className="flex flex-col h-full w-full overflow-hidden bg-white">
+            {/* PREMIUM HEADER (h-20) */}
+            <div className="h-20 flex items-center justify-between bg-white/80 backdrop-blur-md px-6 md:px-8 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-6">
+                {/* Left: Branding */}
+                <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-3 text-gray-900">
+                        <div className="w-10 h-10 bg-gradient-to-br from-purple-600 to-pink-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-purple-500/20">
+                            <i className="fa-solid fa-shoe-prints text-lg"></i>
                         </div>
-                        <div className="pl-10">
-                            <p className="text-sm text-gray-500 mb-2">Aparece en la primera columna del footer.</p>
-                            <textarea
-                                rows={4}
-                                value={settings.footer_text}
-                                onChange={(e) => setSettings({ ...settings, footer_text: e.target.value })}
-                                placeholder="Escribe una breve descripción de tu sitio..."
-                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-cyan/50 focus:border-brand-cyan transition-all text-sm"
-                            />
+                        <div className="hidden md:block">
+                            <h1 className="font-black italic text-xl tracking-tighter leading-none">Footer</h1>
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Global Settings</span>
                         </div>
                     </div>
+                    <div className="h-8 w-px bg-gray-100 hidden md:block"></div>
+                </div>
 
-                    {/* Social Links */}
-                    <div className="space-y-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="w-8 h-8 rounded-full bg-blue-50 text-brand-blue flex items-center justify-center font-bold font-oswald">2</span>
-                            <h3 className="font-bold text-gray-800">Redes Sociales</h3>
+                {/* Right: Actions */}
+                <div className="flex items-center gap-4">
+                    <button
+                        type="button"
+                        onClick={(e) => handleSubmit(e as any)}
+                        disabled={saving}
+                        className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${saving
+                            ? 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
+                            : 'bg-gray-900 hover:bg-purple-600 text-white shadow-gray-200 hover:shadow-purple-500/30 hover:-translate-y-0.5'
+                            }`}
+                    >
+                        {saving ? (
+                            <i className="fa-solid fa-circle-notch fa-spin"></i>
+                        ) : (
+                            <i className="fa-solid fa-floppy-disk"></i>
+                        )}
+                        {saving ? "Guardando..." : "Guardar Cambios"}
+                    </button>
+                </div>
+            </div>
+
+            {/* 2. Content Area */}
+            <div className="relative flex-1 w-full bg-gray-50/50 overflow-hidden flex flex-col min-h-0 md:flex-row">
+
+                {/* SETTINGS SIDEBAR (Left) */}
+                <div className="flex flex-col w-[400px] bg-white z-30 shadow-[4px_0_24px_-4px_rgba(0,0,0,0.05)] border-r border-gray-100 relative">
+                    {/* Gradient Border Line */}
+                    <div className="absolute top-0 bottom-0 right-0 w-px bg-gradient-to-b from-gray-100 via-gray-200 to-gray-100"></div>
+
+                    <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar p-6 space-y-8">
+
+                        {/* Section 1: About */}
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
+                                <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs shadow-sm">1</div>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Descripción del Sitio</h3>
+                            </div>
+                            <div className="pl-9 space-y-2">
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">Texto del Footer</label>
+                                <textarea
+                                    rows={4}
+                                    value={settings.footer_text}
+                                    onChange={(e) => setSettings({ ...settings, footer_text: e.target.value })}
+                                    placeholder="Escribe una breve descripción..."
+                                    className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-600 font-medium text-sm resize-none placeholder:text-gray-300"
+                                />
+                            </div>
                         </div>
-                        <div className="pl-10 space-y-4">
-                            {/* List */}
-                            {socialLinks.length > 0 && (
+
+                        {/* Section 2: Socials */}
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
+                                <div className="w-6 h-6 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs shadow-sm">2</div>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Redes Sociales</h3>
+                            </div>
+
+                            <div className="pl-9 space-y-4">
+                                {/* List */}
                                 <div className="space-y-2">
                                     {socialLinks.map((link, idx) => (
-                                        <div key={idx} className="flex items-center gap-3 bg-white p-2 rounded-xl border border-gray-200 shadow-sm group">
-                                            <div className="w-10 h-10 rounded-lg bg-gray-50 flex items-center justify-center text-gray-600 group-hover:bg-brand-blue/10 group-hover:text-brand-blue transition-colors">
+                                        <div key={idx} className="flex items-center gap-3 bg-white p-2.5 rounded-xl border-2 border-gray-50 shadow-sm group hover:border-purple-100 transition-colors">
+                                            <div className="w-8 h-8 rounded-lg bg-gray-50 flex items-center justify-center text-gray-400 group-hover:bg-purple-50 group-hover:text-purple-600 transition-colors">
                                                 <i className={link.icon}></i>
                                             </div>
                                             <div className="flex-1 min-w-0">
-                                                <p className="text-sm font-bold text-gray-800 capitalize">{link.platform}</p>
-                                                <p className="text-xs text-gray-400 truncate">{link.url}</p>
+                                                <p className="text-[10px] font-black uppercase text-gray-700 tracking-wide">{link.platform}</p>
+                                                <p className="text-[10px] text-gray-400 truncate">{link.url}</p>
                                             </div>
                                             <button
                                                 onClick={() => removeSocialLink(idx)}
-                                                className="w-8 h-8 text-gray-400 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex items-center justify-center"
+                                                className="w-8 h-8 text-gray-300 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors flex items-center justify-center"
                                             >
-                                                <i className="fa-solid fa-trash-can"></i>
+                                                <i className="fa-solid fa-trash-can text-xs"></i>
                                             </button>
                                         </div>
                                     ))}
+                                    {socialLinks.length === 0 && (
+                                        <div className="text-center py-4 bg-gray-50 rounded-xl border border-dashed border-gray-200">
+                                            <p className="text-[10px] text-gray-400 font-bold uppercase">Sin redes conectadas</p>
+                                        </div>
+                                    )}
                                 </div>
-                            )}
 
-                            {/* Add New */}
-                            <div className="bg-gray-50 p-4 rounded-xl border border-gray-200">
-                                <h4 className="text-xs font-bold text-gray-400 uppercase mb-3">Añadir nueva red</h4>
-                                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                                {/* Add New */}
+                                <div className="bg-gray-50/50 p-4 rounded-2xl border border-gray-100 space-y-3">
+                                    <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Añadir nueva red</h4>
                                     <ModernSelect
-                                        containerClassName="relative"
                                         value={newPlatform}
                                         onChange={(e) => setNewPlatform(e.target.value)}
                                         options={PLATFORMS.map(p => ({ value: p.id, label: p.name }))}
-                                        className="!py-2 !px-3" // Small adjustment for the builder row
+                                        className="!py-2.5 !px-3 !text-xs !bg-white !border-gray-200 !rounded-xl"
                                     />
-                                    <div className="md:col-span-2 flex gap-2">
+                                    <div className="flex gap-2">
                                         <input
                                             type="url"
                                             value={newUrl}
                                             onChange={(e) => setNewUrl(e.target.value)}
-                                            placeholder="https://"
-                                            className="flex-1 bg-white border border-gray-200 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-brand-cyan/20 focus:outline-none"
+                                            placeholder="https://..."
+                                            className="flex-1 border border-gray-200 rounded-xl px-3 py-2 text-xs bg-white focus:outline-none focus:border-purple-500 transition-colors"
                                         />
                                         <button
                                             type="button"
                                             onClick={addSocialLink}
                                             disabled={!newUrl}
-                                            className="bg-gray-900 text-white px-3 py-2 rounded-lg hover:bg-black transition-colors disabled:opacity-50"
+                                            className="bg-gray-900 text-white w-9 h-9 rounded-xl hover:bg-purple-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-gray-200 flex items-center justify-center"
                                         >
-                                            <i className="fa-solid fa-plus"></i>
+                                            <i className="fa-solid fa-plus text-xs"></i>
                                         </button>
                                     </div>
                                 </div>
                             </div>
                         </div>
-                    </div>
 
-                    {/* Copyright */}
-                    <div className="space-y-4">
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="w-8 h-8 rounded-full bg-blue-50 text-brand-blue flex items-center justify-center font-bold font-oswald">3</span>
-                            <h3 className="font-bold text-gray-800">Copyright</h3>
-                        </div>
-                        <div className="pl-10">
-                            <input
-                                type="text"
-                                value={settings.footer_copyright}
-                                onChange={(e) => setSettings({ ...settings, footer_copyright: e.target.value })}
-                                placeholder="© 2026 Mi Sitio Web. Todos los derechos reservados."
-                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:ring-2 focus:ring-brand-cyan/50 focus:border-brand-cyan transition-all text-sm"
-                            />
-                        </div>
-                    </div>
-
-                    {/* Menu Actions */}
-                    <div className="space-y-4 pb-10">
-                        <div className="flex items-center gap-2 mb-2">
-                            <span className="w-8 h-8 rounded-full bg-blue-50 text-brand-blue flex items-center justify-center font-bold font-oswald">4</span>
-                            <h3 className="font-bold text-gray-800">Menú del Footer</h3>
-                        </div>
-                        <div className="pl-10">
-                            <div className="bg-orange-50 border border-orange-100 p-4 rounded-xl flex items-center justify-between">
-                                <div>
-                                    <h4 className="font-bold text-orange-900 text-sm">Gestionar Enlaces</h4>
-                                    <p className="text-xs text-orange-700 mt-1">
-                                        Los enlaces "Quick Links" se administran desde la sección de Menús.
-                                    </p>
-                                </div>
-                                <Link href="/admin/menus" className="bg-white text-orange-600 border border-orange-200 px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wide hover:bg-orange-50 transition-colors">
-                                    Ir a Menús
-                                </Link>
+                        {/* Section 3: Copyright */}
+                        <div className="space-y-3">
+                            <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
+                                <div className="w-6 h-6 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center font-bold text-xs shadow-sm">3</div>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Copyright</h3>
+                            </div>
+                            <div className="pl-9 space-y-2">
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">Texto Legal</label>
+                                <input
+                                    type="text"
+                                    value={settings.footer_copyright}
+                                    onChange={(e) => setSettings({ ...settings, footer_copyright: e.target.value })}
+                                    placeholder="© 2026..."
+                                    className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/50 focus:bg-white focus:border-orange-500 transition-all outline-none text-gray-600 font-medium text-sm placeholder:text-gray-300"
+                                />
                             </div>
                         </div>
+
+                        {/* Section 4: Menu */}
+                        <div className="space-y-3 pb-10">
+                            <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
+                                <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs shadow-sm">4</div>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Navegación</h3>
+                            </div>
+                            <div className="pl-9">
+                                <div className="bg-white border-2 border-gray-50 p-4 rounded-2xl shadow-sm flex items-center justify-between group hover:border-emerald-100 transition-all">
+                                    <div>
+                                        <h4 className="font-black text-gray-700 text-xs uppercase tracking-wide">Quick Links</h4>
+                                        <p className="text-[10px] text-gray-400 mt-1">
+                                            Gestionados en Menús
+                                        </p>
+                                    </div>
+                                    <Link href="/admin/menus" className="bg-gray-50 text-gray-600 border border-gray-200 px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200 transition-all">
+                                        Editar
+                                    </Link>
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
-
-                </div>
-            </div>
-
-            {/* RIGHT: PREVIEW */}
-            <div className="hidden md:flex flex-1 bg-gray-200/50 flex-col overflow-hidden relative">
-                <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1 rounded-full text-xs font-bold text-gray-500 uppercase tracking-widest shadow-sm pointer-events-none z-10">
-                    Live Preview
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-8 flex items-end justify-center">
-                    <div className="w-full max-w-4xl bg-white shadow-2xl rounded-2xl overflow-hidden border border-gray-200 transform scale-90 origin-bottom">
-                        {/* Mock Page Content Above Footer */}
-                        <div className="h-32 bg-gray-50 border-b border-gray-100 p-8">
-                            <div className="h-4 w-32 bg-gray-200 rounded mb-4"></div>
-                            <div className="space-y-2">
-                                <div className="h-2 w-full bg-gray-100 rounded"></div>
-                                <div className="h-2 w-3/4 bg-gray-100 rounded"></div>
-                            </div>
+                {/* DEVICE PREVIEW AREA (Right) */}
+                <div className="flex-1 relative overflow-hidden bg-gray-100/50 h-full min-h-0 flex flex-col items-center p-4 md:py-10 md:px-12">
+                    {/* Dotted Background Pattern */}
+                    <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
+
+                    <div className="relative w-full max-w-5xl h-full flex flex-col">
+                        <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1.5 rounded-xl text-[10px] font-black text-gray-400 uppercase tracking-widest shadow-sm pointer-events-none z-20 border border-gray-100">
+                            <i className="fa-solid fa-eye mr-2 text-blue-500"></i>Live Preview
                         </div>
 
-                        {/* THE FOOTER PREVIEW */}
-                        <footer className="bg-gray-900 text-white py-12">
-                            <div className="px-8">
-                                <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
-                                    {/* Brand Column */}
-                                    <div className="col-span-1 md:col-span-2">
-                                        <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
-                                            {settings.site_logo && <img src={settings.site_logo} alt="Logo" className="h-6 w-auto" />}
-                                            {settings.blogname}
-                                        </h3>
-                                        <div className="text-gray-400 text-sm max-w-sm whitespace-pre-line leading-relaxed">
-                                            {settings.footer_text || "Tus visitantes verán aquí la descripción de tu sitio."}
-                                        </div>
-                                    </div>
+                        {/* Device Container */}
+                        <div className="flex-1 shadow-2xl bg-white border-[8px] border-gray-900 rounded-[3rem] overflow-hidden relative z-10 w-full flex flex-col">
 
-                                    {/* Links Column (Real Preview) */}
-                                    <div>
-                                        <h4 className="font-bold mb-4 text-sm uppercase tracking-wide text-gray-500">Quick Links</h4>
-                                        {previewMenu && previewMenu.length > 0 ? (
-                                            <ul className="space-y-2 text-gray-400 text-sm">
-                                                {previewMenu.map((item: any) => (
-                                                    <li key={item.id} className="hover:text-white transition-colors cursor-pointer block truncate">
-                                                        {item.title}
-                                                    </li>
-                                                ))}
-                                            </ul>
-                                        ) : (
-                                            <ul className="space-y-2 text-gray-400 text-sm">
-                                                <li className="hover:text-white transition-colors cursor-pointer">Inicio</li>
-                                                <li className="hover:text-white transition-colors cursor-pointer">Blog</li>
-                                                <li className="hover:text-white transition-colors cursor-pointer">Contacto</li>
-                                                <li className="opacity-50 text-xs italic mt-2">(Ejemplo de menú)</li>
-                                                <li className="text-yellow-600 text-xs mt-2 bg-yellow-50 p-1 rounded">
-                                                    <i className="fa-solid fa-triangle-exclamation mr-1"></i>
-                                                    No has asignado un menú al footer.
-                                                </li>
-                                            </ul>
-                                        )}
-                                    </div>
+                            {/* Notch */}
+                            <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50 pointer-events-none"></div>
 
-                                    {/* Socials Column */}
-                                    <div>
-                                        <h4 className="font-bold mb-4 text-sm uppercase tracking-wide text-gray-500">Conectar</h4>
-                                        <div className="flex gap-3 flex-wrap">
-                                            {socialLinks.length === 0 ? (
-                                                <p className="text-xs text-gray-600 italic">No hay redes</p>
-                                            ) : (
-                                                socialLinks.map((link, idx) => (
-                                                    <div key={idx} className="w-8 h-8 rounded-full bg-gray-800 flex items-center justify-center hover:bg-brand-blue transition-colors text-sm">
-                                                        <i className={link.icon}></i>
-                                                    </div>
-                                                ))
-                                            )}
-                                        </div>
+                            {/* Scrollable Content */}
+                            <div className="flex-1 overflow-y-auto custom-scrollbar bg-gray-50 flex flex-col" id="preview-theme-scope">
+                                {/* Inject Scoped Theme CSS */}
+                                <style>{themeCss}</style>
+
+                                {/* Mock Page Content */}
+                                <div className="flex-1 p-8 md:p-12 flex flex-col items-center justify-center text-center opacity-50 grayscale hover:grayscale-0 transition-all duration-700">
+                                    <div className="w-24 h-24 bg-gray-200 rounded-2xl mb-6"></div>
+                                    <div className="h-4 w-64 bg-gray-200 rounded mb-3"></div>
+                                    <div className="h-3 w-40 bg-gray-200 rounded"></div>
+                                    <div className="mt-12 grid grid-cols-3 gap-6 w-full max-w-2xl">
+                                        <div className="h-32 bg-white rounded-2xl shadow-sm"></div>
+                                        <div className="h-32 bg-white rounded-2xl shadow-sm"></div>
+                                        <div className="h-32 bg-white rounded-2xl shadow-sm"></div>
                                     </div>
                                 </div>
 
-                                {/* Copyright */}
-                                <div className="border-t border-gray-800 pt-8 text-center text-gray-500 text-xs">
-                                    {settings.footer_copyright || "© 2026 Todos los derechos reservados."}
-                                </div>
+                                {/* THE FOOTER Component */}
+                                <Footer
+                                    previewSettings={settings}
+                                    previewMenu={previewMenu}
+                                    previewSocials={socialLinks}
+                                />
                             </div>
-                        </footer>
+                        </div>
                     </div>
                 </div>
             </div>

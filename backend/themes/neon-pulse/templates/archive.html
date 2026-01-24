@@ -1,0 +1,10 @@
+{{> header}}
+      <h2 style="margin-bottom: 40px; color: var(--text-muted)">Archive: {{term.name}}</h2>
+      {{#each posts}}
+      <article>
+        <div class="post-meta">{{formatDate date}}</div>
+        <h2><a href="/{{slug}}">{{title}}</a></h2>
+        <div class="excerpt">{{{excerpt}}}</div>
+      </article>
+      {{/each}}
+{{> footer}}

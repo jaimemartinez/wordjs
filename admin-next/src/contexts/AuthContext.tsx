@@ -14,7 +14,6 @@ interface User {
 
 interface AuthContextType {
     user: User | null;
-    token: string | null;
     login: (username: string, password: string) => Promise<boolean>;
     logout: () => void;
     isLoading: boolean;
@@ -27,35 +26,29 @@ const API_URL = '/api/v1';
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
-    const [token, setToken] = useState<string | null>(null);
     const [isLoading, setIsLoading] = useState(true);
     const router = useRouter();
 
     useEffect(() => {
-        // Check for saved token
-        const savedToken = localStorage.getItem("wordjs_token");
-        if (savedToken) {
-            setToken(savedToken);
-            fetchUser(savedToken);
-        } else {
-            setIsLoading(false);
-        }
+        // Check for existing session via HttpOnly cookie
+        // The cookie is sent automatically with credentials: include
+        fetchUser();
     }, []);
 
-    const fetchUser = async (authToken: string) => {
+    const fetchUser = async () => {
         try {
             const res = await fetch(`${API_URL}/auth/me`, {
-                headers: { Authorization: `Bearer ${authToken}` },
+                credentials: "include", // Send HttpOnly cookie
             });
             if (res.ok) {
                 const userData = await res.json();
-                setUser(userData); // Backend returns user directly, not wrapped
+                setUser(userData);
             } else {
-                localStorage.removeItem("wordjs_token");
-                setToken(null);
+                setUser(null);
             }
         } catch (error) {
             console.error("Auth error:", error);
+            setUser(null);
         } finally {
             setIsLoading(false);
         }
@@ -67,12 +60,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ username, password }),
+                credentials: "include", // Receive and store HttpOnly cookie
             });
 
             if (res.ok) {
                 const data = await res.json();
-                localStorage.setItem("wordjs_token", data.token);
-                setToken(data.token);
                 setUser(data.user);
                 return true;
             }
@@ -83,9 +75,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const logout = () => {
+    const logout = async () => {
+        try {
+            // Call logout endpoint to clear HttpOnly cookie on server
+            await fetch(`${API_URL}/auth/logout`, {
+                method: "POST",
+                credentials: "include",
+            });
+        } catch (error) {
+            console.error("Logout error:", error);
+        }
+        // Clean up legacy tokens
         localStorage.removeItem("wordjs_token");
-        setToken(null);
         setUser(null);
         router.push("/login");
     };
@@ -97,7 +98,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
 
     return (
-        <AuthContext.Provider value={{ user, token, login, logout, isLoading, can }}>
+        <AuthContext.Provider value={{ user, login, logout, isLoading, can }}>
             {children}
         </AuthContext.Provider>
     );
@@ -110,3 +111,4 @@ export function useAuth() {
     }
     return context;
 }
+

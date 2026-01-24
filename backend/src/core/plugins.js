@@ -38,7 +38,7 @@ function installPluginDependencies(slug, manifest) {
         console.log(`📦 Plugin '${slug}' requires: ${toInstall.join(', ')}`);
         console.log(`   ⏳ Installing dependencies... (server may restart)`);
         try {
-            execSync(`npm install ${toInstall.join(' ')} --save`, {
+            execSync(`npm install ${toInstall.join(' ')} --save --ignore-scripts`, {
                 stdio: 'inherit',
                 cwd: ROOT_DIR
             });
@@ -99,8 +99,8 @@ async function prunePluginDependencies(slug, manifest) {
     if (toRemove.length > 0) {
         console.log(`♻️ Garbage Collector: Removing unused dependencies for ${slug}: ${toRemove.join(', ')}`);
         try {
-            // execSync(`npm uninstall ${toRemove.join(' ')} --save`, { stdio: 'inherit', cwd: ROOT_DIR }); // Disabled for safety until explicit confirm
-            console.log(`   (Simulated verify): npm uninstall ${toRemove.join(' ')}`);
+            execSync(`npm uninstall ${toRemove.join(' ')} --save`, { stdio: 'inherit', cwd: ROOT_DIR });
+            console.log(`   ✅ Dependencies removed successfully.`);
         } catch (e) {
             console.error(`   ⚠️ Failed to prune dependencies:`, e.message);
         }
@@ -498,6 +498,18 @@ async function activatePlugin(slug) {
             console.error(`🛡️ Protection Active: Blocking ${slug} activation due to:`, e.message);
             throw e;
         }
+    }
+
+    // 2. Run Plugin Tests (if present)
+    const { verifyPluginTests } = require('./plugin-test-runner');
+    try {
+        const testResult = await verifyPluginTests(slug);
+        if (!testResult.skipped) {
+            console.log(`   🧪 Tests verified: ${testResult.passed}/${testResult.tests} passed`);
+        }
+    } catch (testError) {
+        console.error(`🧪 Test Failure: Plugin '${slug}' blocked due to failing tests.`);
+        throw testError;
     }
 
     // Load and initialize plugin

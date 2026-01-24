@@ -13,12 +13,18 @@ const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, PLU
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { exec } = require('child_process');
+const { execFile } = require('child_process');
 
 // Configure multer for zip uploads
 const upload = multer({
     dest: 'os-tmp/', // Use system temp dir or local tmp
-    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+    limits: {
+        fileSize: 10 * 1024 * 1024, // 10MB limit
+        // SECURITY: Prevent CVE-2025-47935/47944 DoS
+        files: 1,           // Only 1 plugin zip per request
+        fields: 10,         // Minimal fields needed
+        parts: 15           // Limited total parts
+    },
     fileFilter: (req, file, cb) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
@@ -48,15 +54,31 @@ function regenerateRegistry() {
             continue;
         }
 
-        exec(`node "${scriptPath}"`, (error, stdout, stderr) => {
+        // SECURITY: Use execFile instead of exec to prevent command injection
+        execFile('node', [scriptPath], (error, stdout, stderr) => {
             if (error) {
                 console.error(`❌ Failed to run ${script}:`, error.message);
                 return;
             }
-            console.log(`🔄 ${script}:`);
-            console.log(stdout);
+            if (process.env.NODE_ENV !== 'production') {
+                console.log(`🔄 ${script}:`);
+                console.log(stdout);
+            }
         });
     }
+}
+
+/**
+ * SECURITY: Validate plugin slug to prevent path traversal
+ */
+function validateSlug(slug) {
+    // Only allow alphanumeric, dashes, and underscores
+    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
+        return false;
+    }
+    // Ensure the resolved path is still within PLUGINS_DIR
+    const safePath = path.resolve(PLUGINS_DIR, slug);
+    return safePath.startsWith(path.resolve(PLUGINS_DIR));
 }
 /**
  * POST /plugins/upload
@@ -202,7 +224,11 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  * Activate a plugin and regenerate frontend registry
  */
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    // `activatePlugin` is already async and awaited in previous code, checking for consistency
+    // SECURITY: Validate slug to prevent path traversal
+    if (!validateSlug(req.params.slug)) {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+
     const result = await activatePlugin(req.params.slug);
 
     // Trigger frontend registry regeneration
@@ -216,6 +242,11 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
  * Deactivate a plugin and regenerate frontend registry
  */
 router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req, res) => {
+    // SECURITY: Validate slug
+    if (!validateSlug(req.params.slug)) {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+
     const result = await deactivatePlugin(req.params.slug);
 
     // Trigger frontend registry regeneration

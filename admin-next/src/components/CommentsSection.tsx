@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { commentsApi, Comment } from "@/lib/api";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 export default function CommentsSection({ postId }: { postId: number }) {
     const [comments, setComments] = useState<Comment[]>([]);
@@ -93,7 +94,7 @@ export default function CommentsSection({ postId }: { postId: number }) {
                                             {new Date(comment.date).toLocaleDateString()}
                                         </span>
                                     </div>
-                                    <div className="prose prose-sm text-gray-700 max-w-none" dangerouslySetInnerHTML={{ __html: comment.content }} />
+                                    <div className="prose prose-sm text-gray-700 max-w-none" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
                                 </div>
                             </div>
                         </div>
