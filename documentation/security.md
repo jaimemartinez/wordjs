@@ -22,6 +22,12 @@ WordJS uses `AsyncLocalStorage` to track the execution context of every request.
     *   Plugins CANNOT read sensitive keys from the environment.
     *   Secrets (DB passwords, JWT keys) are loaded directly from `wordjs-config.json` by the core and never exposed to `process.env`.
     *   Plugins attempting to access secrets will receive `undefined`.
+
+*   **Module Interception (Enterprise-Level):** WordJS intercepts `require()` calls at runtime:
+    *   **`fs` Proxy:** All filesystem operations require `filesystem:read` or `filesystem:write` permissions. Plugins can freely access their own directory.
+    *   **`child_process` Proxy:** Shell execution is **ALWAYS blocked** for plugins unless they have `system:admin` (dangerous, rarely granted).
+    *   **Obfuscation-Immune:** Because enforcement happens at runtime (not static analysis), even obfuscated code like `fs["read" + "FileSync"]()` is blocked.
+
 *   **API Sandboxing:** Core functions like `dbAsync` or `updateOption` verify the current plugin's permissions before executing. If a plugin lacks the required "capability" in its manifest, the call is blocked at runtime.
 
 ### 1.3 Mandatory Permission Authorization
