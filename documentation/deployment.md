@@ -36,10 +36,11 @@ cd ..
 ### 3. Configure the Site
 You have two options for production:
 
-**A. Using the Wizard (Easiest)**
-1. Start the app (see next step).
-2. Visit your server's IP/Domain on port 3000.
-3. Follow the UI installer.
+**A. Using the Interactive Installer (Default)**
+1. Start the app (see "Run in Production").
+2. The server will detect that `wordjs-config.json` is missing and start in **Setup Mode**.
+3. Visit your server's IP/Domain (e.g., `http://localhost:3000`).
+4. You will be redirected to the installation screen to set up your admin account and site details.
 
 **B. Using Configuration File (Recommended)**
 All configuration is handled via `wordjs-config.json` in the `backend` directory.
