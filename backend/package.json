@@ -53,6 +53,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.5.0",
+    "esbuild": "^0.27.2",
     "tailwindcss": "^4.1.18"
   },
   "engines": {
