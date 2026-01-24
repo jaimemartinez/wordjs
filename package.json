@@ -5,11 +5,13 @@
     "description": "Dynamic Service Gateway for WordJS",
     "main": "gateway.js",
     "scripts": {
-        "start": "node gateway.js",
-        "dev": "node --watch gateway.js",
-        "dev:all": "concurrently -k -p \"[{name}]\" -n \"GATEWAY,BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold,bgGreen.bold\" \"npm start\" \"npm run start:backend\" \"npm run start:frontend\"",
-        "start:backend": "cd backend && npm start",
-        "start:frontend": "cd admin-next && npm run dev -- -p 3001",
+        "start": "concurrently -k -p \"[{name}]\" -n \"GATEWAY,BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold,bgGreen.bold\" \"node gateway.js\" \"npm run prod:backend\" \"npm run prod:frontend\"",
+        "prod:gateway": "node gateway.js",
+        "prod:backend": "cd backend && npm start",
+        "prod:frontend": "cd admin-next && next start -p 3001",
+        "dev": "concurrently -k -p \"[{name}]\" -n \"GATEWAY,BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold,bgGreen.bold\" \"node --watch gateway.js\" \"npm run prod:backend\" \"cd admin-next && npm run dev -- -p 3001\"",
+        "dev:gateway": "node --watch gateway.js",
+        "dev:frontend": "cd admin-next && npm run dev -- -p 3001",
         "bundle-release": "node scripts/make-release.js"
     },
     "dependencies": {
