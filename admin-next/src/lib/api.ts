@@ -1,9 +1,33 @@
 const getBaseUrl = () => {
     if (typeof window !== 'undefined') {
+        // Client-side: Always use relative URL so it works behind Gateway on any port/protocol
         return '/api/v1';
     }
-    // For SSR, use the internal backend URL if available, otherwise fallback to localhost
-    return process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000/api/v1";
+    // Server-side (SSR):
+    try {
+        // Dynamically require fs/path to avoid bundling issues on client
+        // This block only runs on server
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const path = require('path');
+
+        // Locate wordjs-config.json (assuming we are in admin-next root or similar)
+        // process.cwd() in Next.js usually points to the project root (admin-next)
+        // The config is in ../backend/wordjs-config.json
+        const configPath = path.resolve(process.cwd(), '../backend/wordjs-config.json');
+
+        if (fs.existsSync(configPath)) {
+            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+            if (config.gatewayPort) {
+                return `http://localhost:${config.gatewayPort}/api/v1`;
+            }
+        }
+    } catch (e) {
+        // ignore
+    }
+
+    return "http://localhost:3000/api/v1";
 };
 
 const API_URL = getBaseUrl();
@@ -18,7 +42,8 @@ interface ApiOptions {
 }
 
 export async function api<T>(endpoint: string, options: ApiOptions = {}): Promise<T> {
-    const token = typeof window !== "undefined" ? localStorage.getItem("wordjs_token") : null;
+    // Note: Token is now sent via HttpOnly cookie automatically
+    // We no longer read from localStorage for security
 
     const isFormData = options.body instanceof FormData;
     const headers: Record<string, string> = {
@@ -26,15 +51,12 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
         ...options.headers,
     };
 
-    if (token) {
-        headers.Authorization = `Bearer ${token}`;
-    }
-
     const res = await fetch(`${API_URL}${endpoint}`, {
         method: options.method || "GET",
         headers,
         body: options.body ? (isFormData ? (options.body as FormData) : JSON.stringify(options.body)) : undefined,
         cache: "no-store",
+        credentials: "include", // SECURITY: Send HttpOnly cookies with requests
     });
 
     if (!res.ok) {
@@ -229,9 +251,9 @@ export const pluginsApi = {
     }),
     download: (slug: string) => {
         // Direct window location change for file download
-        // We use the same base URL logic as the API
+        // Cookies are sent automatically if SameSite is Lax/None
         const baseUrl = getBaseUrl();
-        window.location.href = `${baseUrl}/plugins/${slug}/download?token=${localStorage.getItem('wordjs_token')}`;
+        window.location.href = `${baseUrl}/plugins/${slug}/download`;
     },
     upload: (formData: FormData) => api<{ success: boolean; message: string }>("/plugins/upload", {
         method: "POST",
@@ -261,10 +283,7 @@ export const themesApi = {
 
             const xhr = new XMLHttpRequest();
             xhr.open("POST", `${API_URL}/themes/upload`);
-
-            if (token) {
-                xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-            }
+            xhr.withCredentials = true; // Use HttpOnly cookies
 
             if (onProgress) {
                 xhr.upload.onprogress = (event) => {
@@ -291,6 +310,11 @@ export const themesApi = {
             xhr.send(formData);
         });
     },
+    delete: (slug: string) => apiDelete(`/themes/${slug}`),
+    download: (slug: string) => {
+        const baseUrl = getBaseUrl();
+        window.location.href = `${baseUrl}/themes/${slug}/download`;
+    },
 };
 
 export const settingsApi = {
@@ -310,6 +334,7 @@ export interface MediaItem {
     id: number;
     title: string;
     guid: string;
+    sourceUrl: string;
     mimeType: string;
     date: string;
 }
@@ -324,13 +349,8 @@ export const mediaApi = {
     uploadWithProgress: (formData: FormData, onProgress: (progress: number) => void): Promise<MediaItem> => {
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
-            const token = typeof window !== "undefined" ? localStorage.getItem("wordjs_token") : null;
-
             xhr.open("POST", `${API_URL}/media`);
-
-            if (token) {
-                xhr.setRequestHeader("Authorization", `Bearer ${token}`);
-            }
+            xhr.withCredentials = true; // Use HttpOnly cookies
 
             xhr.upload.onprogress = (event) => {
                 if (event.lengthComputable) {

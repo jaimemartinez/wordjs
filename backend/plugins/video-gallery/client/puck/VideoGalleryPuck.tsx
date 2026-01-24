@@ -294,8 +294,8 @@ export default function VideoGalleryPuck({ galleryId = "default", title = "Video
             // Support legacy ID or 'default'
             const targetId = galleryId || 'default';
 
-            // Try fetching specific gallery
-            const res = await fetch(`http://localhost:3000/api/v1/videos/galleries/${targetId}`);
+            // Use relative URL - works with any protocol/port via gateway
+            const res = await fetch(`/api/v1/videos/galleries/${targetId}`);
 
             if (res.ok) {
                 const gallery = await res.json();

@@ -1,5 +1,10 @@
+// @ts-nocheck
 "use client";
 import React, { useEffect, useState } from "react";
+import { api, apiPost } from "@/lib/api";
+import { PageHeader } from "../../../../../admin-next/src/components/ui/PageHeader";
+
+import { useModal } from "@/contexts/ModalContext";
 
 export default function DbMigrationPage() {
     const [status, setStatus] = useState<any>(null);
@@ -19,6 +24,8 @@ export default function DbMigrationPage() {
         dbName: 'wordjs'
     });
 
+    const { confirm } = useModal();
+
     // Modal State
     const [modal, setModal] = useState<{
         isOpen: boolean;
@@ -31,15 +38,16 @@ export default function DbMigrationPage() {
     }, []);
 
     const fetchStatus = async () => {
-        const token = localStorage.getItem("wordjs_token");
         try {
-            const res = await fetch('/api/v1/db-migration/status', {
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
-            const data = await res.json();
+            const data = await api<any>('/db-migration/status');
             setStatus(data);
-        } catch (e) {
+        } catch (e: any) {
             console.error(e);
+            if (e.message.includes('401')) {
+                window.location.href = "/login";
+                return;
+            }
+            setError("Error connecting to server: " + e.message);
         }
     };
 
@@ -52,26 +60,13 @@ export default function DbMigrationPage() {
     };
 
     const runCleanup = async (file: string) => {
-        if (!confirm(`Are you sure you want to delete ${file}? This cannot be undone.`)) return;
+        if (!await confirm(`Are you sure you want to delete ${file}? This cannot be undone.`, "Delete File", true)) return;
 
         try {
-            const token = localStorage.getItem("wordjs_token");
-            const res = await fetch('/api/v1/db-migration/cleanup', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({ file })
-            });
-            const data = await res.json();
-            if (res.ok) {
-                setResult(`Cleaned up ${file}`);
-                fetchStatus(); // Refresh list
-                setTimeout(() => setResult(null), 3000);
-            } else {
-                throw new Error(data.error);
-            }
+            await apiPost('/db-migration/cleanup', { file });
+            setResult(`Cleaned up ${file}`);
+            fetchStatus(); // Refresh list
+            setTimeout(() => setResult(null), 3000);
         } catch (e: any) {
             setError(e.message);
         }
@@ -86,15 +81,10 @@ export default function DbMigrationPage() {
         setError(null);
         setResult(null);
         setMigrationProgress(null);
-        const token = localStorage.getItem("wordjs_token");
-
         // Start Polling for Progress
         const progressPoll = setInterval(async () => {
             try {
-                const res = await fetch('/api/v1/db-migration/status', {
-                    headers: { 'Authorization': `Bearer ${token}` }
-                });
-                const data = await res.json();
+                const data = await api<any>('/db-migration/status');
                 if (data.status) setMigrationProgress(data.status);
             } catch (e) { }
         }, 500);
@@ -105,20 +95,9 @@ export default function DbMigrationPage() {
         }
 
         try {
-            const res = await fetch('/api/v1/db-migration/migrate', {
-                method: 'POST',
-                headers: {
-                    'Authorization': `Bearer ${token}`,
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(payload)
-            });
+            const data = await apiPost<any>('/db-migration/migrate', payload);
 
             clearInterval(progressPoll);
-            const data = await res.json();
-
-            if (!res.ok) throw new Error(data.error || 'Migration failed');
-
             setResult(data.message);
             setRestarting(true);
 
@@ -206,22 +185,16 @@ export default function DbMigrationPage() {
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-100/50 rounded-full blur-[100px] opacity-60 -z-10 translate-x-1/3 -translate-y-1/3 pointer-events-none"></div>
             <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-100/50 rounded-full blur-[100px] opacity-60 -z-10 -translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
 
-            <header className="mb-12 animate-in slide-in-from-top-4 fade-in duration-500">
-                <div className="flex items-center gap-5 mb-3">
-                    <div className="w-14 h-14 bg-gradient-to-br from-indigo-600 to-violet-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-200/50 transform rotate-3 hover:rotate-0 transition-transform duration-300">
-                        <i className="fa-solid fa-database text-white text-2xl"></i>
-                    </div>
-                    <div>
-                        <h1 className="text-4xl font-black text-gray-900 tracking-tight">Database Migration</h1>
-                        <p className="text-lg text-gray-500 font-medium mt-1">Manage storage engines and data portability.</p>
-                    </div>
-                </div>
-            </header>
+            <PageHeader
+                title="Database Migration"
+                subtitle="Manage storage engines and data portability"
+                icon="fa-database"
+            />
 
             <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
                 {/* Left Column: Status (4 cols) */}
                 <div className="lg:col-span-4 space-y-6 animate-in slide-in-from-left-4 fade-in duration-700 delay-100">
-                    <div className="bg-white/80 backdrop-blur-xl p-8 rounded-3xl border border-white/60 shadow-xl overflow-hidden relative group hover:shadow-2xl transition-all duration-500">
+                    <div className="bg-white/80 backdrop-blur-xl p-8 rounded-[40px] border border-white/60 shadow-xl overflow-hidden relative group hover:shadow-2xl transition-all duration-500">
                         <div className="absolute top-0 right-0 p-8 opacity-[0.03] group-hover:opacity-[0.08] transition-opacity duration-500 transform scale-150 rotate-12 pointer-events-none">
                             <i className="fa-solid fa-server text-9xl text-indigo-900"></i>
                         </div>
@@ -253,7 +226,7 @@ export default function DbMigrationPage() {
                     </div>
 
                     {/* Stats / Info */}
-                    <div className="bg-gradient-to-br from-gray-900 to-gray-800 text-white p-6 rounded-3xl shadow-xl flex items-center justify-between group overflow-hidden relative">
+                    <div className="bg-gradient-to-br from-gray-900 to-gray-800 text-white p-6 rounded-[40px] shadow-xl flex items-center justify-between group overflow-hidden relative">
                         <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/5 to-transparent translate-x-[-200%] group-hover:translate-x-[200%] transition-transform duration-1000"></div>
                         <div className="relative z-10">
                             <div className="text-gray-400 text-xs font-bold uppercase mb-1 tracking-wider">System Status</div>
@@ -266,6 +239,32 @@ export default function DbMigrationPage() {
                             <i className="fa-solid fa-wave-square"></i>
                         </div>
                     </div>
+
+                    {/* Legacy Data Cleanup */}
+                    {status.legacyFiles && status.legacyFiles.length > 0 && (
+                        <div className="bg-red-50 p-6 rounded-[40px] border border-red-100 animate-in slide-in-from-left-8 fade-in duration-700 delay-300">
+                            <h3 className="text-red-900 font-bold mb-3 flex items-center gap-2">
+                                <i className="fa-solid fa-trash-can"></i> Legacy / Unused Files
+                            </h3>
+                            <p className="text-xs text-red-700/80 mb-4 leading-relaxed">
+                                These database files are from previous drivers and are currently not in use. You can safely remove them to free up disk space.
+                            </p>
+                            <ul className="space-y-3">
+                                {status.legacyFiles.map((file: string) => (
+                                    <li key={file} className="flex items-center justify-between bg-white p-3 rounded-xl border border-red-100 shadow-sm">
+                                        <span className="font-mono text-xs font-bold text-gray-600">{file}</span>
+                                        <button
+                                            onClick={() => runCleanup(file)}
+                                            className="w-8 h-8 flex items-center justify-center bg-red-100 text-red-600 rounded-lg hover:bg-red-600 hover:text-white transition-all"
+                                            title="Delete File"
+                                        >
+                                            <i className="fa-solid fa-xmark"></i>
+                                        </button>
+                                    </li>
+                                ))}
+                            </ul>
+                        </div>
+                    )}
                 </div>
 
                 {/* Right Column: Migrations (8 cols) */}
@@ -280,7 +279,7 @@ export default function DbMigrationPage() {
 
                         <div className="grid gap-5">
                             {/* Option: Native SQLite */}
-                            {(status.currentDriver === 'sqlite-legacy' || status.currentDriver === 'postgres') && (
+                            {status.currentDriver !== 'sqlite-native' && status.availableDrivers?.includes('sqlite-native') && (
                                 <div className="group bg-white p-6 md:p-8 rounded-2xl border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-blue-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
@@ -309,8 +308,8 @@ export default function DbMigrationPage() {
                             )}
 
                             {/* Option: Postgres */}
-                            {status.currentDriver !== 'postgres' && (
-                                <div className="group bg-white p-6 md:p-8 rounded-2xl border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
+                            {status.currentDriver !== 'postgres' && status.availableDrivers?.includes('postgres') && (
+                                <div className="group bg-white p-6 md:p-8 rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
                                     <div className="absolute inset-0 bg-gradient-to-r from-indigo-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
                                     <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
@@ -338,8 +337,8 @@ export default function DbMigrationPage() {
                             )}
 
                             {/* Option: Legacy */}
-                            {(status.currentDriver === 'sqlite-native' || status.currentDriver === 'postgres') && (
-                                <div className="group bg-white/40 p-6 md:p-8 rounded-2xl border-2 border-dashed border-gray-200 hover:border-gray-300 hover:bg-white transition-all duration-300">
+                            {status.currentDriver !== 'sqlite-legacy' && status.availableDrivers?.includes('sqlite-legacy') && (
+                                <div className="group bg-white/40 p-6 md:p-8 rounded-[40px] border-2 border-dashed border-gray-200 hover:border-gray-300 hover:bg-white transition-all duration-300">
                                     <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                                         <div className="flex items-start gap-6">
                                             <div className="w-16 h-16 bg-gray-100 text-gray-400 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl group-hover:text-gray-600 transition-colors">
@@ -389,7 +388,7 @@ export default function DbMigrationPage() {
             {modal.isOpen && (
                 <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
                     <div className="absolute inset-0 bg-gray-900/60 backdrop-blur-sm animate-in fade-in" onClick={() => setModal({ ...modal, isOpen: false })}></div>
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full overflow-hidden relative z-10 animate-in zoom-in-95 duration-300">
+                    <div className="bg-white rounded-[40px] shadow-2xl max-w-lg w-full overflow-hidden relative z-10 animate-in zoom-in-95 duration-300">
                         {modal.type === 'confirm' ? (
                             <div className="p-8">
                                 <div className="w-16 h-16 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center mb-6 mx-auto">
@@ -515,12 +514,11 @@ export default function DbMigrationPage() {
 function EmbeddedControls({ onReady }: { onReady: (creds: any) => void }) {
     const [status, setStatus] = useState<any>(null);
     const [loading, setLoading] = useState(false);
-    const token = localStorage.getItem("wordjs_token");
 
     const fetchStatus = async () => {
         try {
-            const res = await fetch('/api/v1/db-migration/embedded/status', { headers: { 'Authorization': `Bearer ${token}` } });
-            setStatus(await res.json());
+            const data = await api<any>('/db-migration/embedded/status');
+            setStatus(data);
         } catch (e) { }
     };
 
@@ -529,10 +527,7 @@ function EmbeddedControls({ onReady }: { onReady: (creds: any) => void }) {
     const action = async (act: 'install' | 'start' | 'stop') => {
         setLoading(true);
         try {
-            await fetch(`/api/v1/db-migration/embedded/${act}`, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${token}` }
-            });
+            await apiPost(`/db-migration/embedded/${act}`, {});
             await fetchStatus();
 
             // If just started, auto-fill

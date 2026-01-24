@@ -8,6 +8,7 @@ import { useActivePlugins } from "@/lib/useActivePlugins";
 import { Render, Config } from "@measured/puck";
 import "@measured/puck/puck.css";
 import { pageConfig } from "@/components/puckConfig";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 export default function HomePage() {
     const [posts, setPosts] = useState<Post[]>([]);
@@ -75,7 +76,7 @@ export default function HomePage() {
 
         // If no shortcodes found, return simple HTML
         if (!processedContent.includes(markerPrefix)) {
-            return <div dangerouslySetInnerHTML={{ __html: htmlContent }} />;
+            return <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(htmlContent) }} />;
         }
 
         // Split by markers and render
@@ -104,7 +105,7 @@ export default function HomePage() {
                 {parts.map((part, index) => (
                     <Fragment key={index}>
                         {typeof part === 'string' ? (
-                            <div dangerouslySetInnerHTML={{ __html: part }} />
+                            <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(part) }} />
                         ) : (
                             <PluginLoader slug={part.slug} />
                         )}

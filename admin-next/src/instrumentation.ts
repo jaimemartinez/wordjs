@@ -8,7 +8,7 @@ export async function register() {
         const registerWithGateway = () => {
             // Hostname and port assumption
             const hostname = 'localhost';
-            const port = process.env.PORT || '3001';
+            let port = '3001';
 
             // Try to read config
             let gatewaySecret = null;
@@ -17,6 +17,16 @@ export async function register() {
                 if (fs.existsSync(configPath)) {
                     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
                     gatewaySecret = config.gatewaySecret;
+
+                    if (config.frontendUrl) {
+                        try {
+                            const url = new URL(config.frontendUrl);
+                            // Only use the port if explicitly set in the URL
+                            if (url.port) {
+                                port = url.port;
+                            }
+                        } catch (e) { }
+                    }
                 }
             } catch (e) {
                 // ignore
@@ -37,7 +47,7 @@ export async function register() {
                     headers: {
                         'Content-Type': 'application/json',
                         'Content-Length': Buffer.byteLength(data),
-                        'x-gateway-secret': process.env.GATEWAY_SECRET || gatewaySecret || 'secure-your-gateway-secret'
+                        'x-gateway-secret': gatewaySecret || 'secure-your-gateway-secret'
                     }
                 }, (res) => {
                     if (res.statusCode === 200) {

@@ -132,9 +132,20 @@ class Post {
         // Add featured image
         const featuredImage = await this.getFeaturedImage();
         if (featuredImage) {
+            // Dynamic URL for featured image
+            // We need to fetch the file path meta to construct it safely
+            // Circular dependency risk if we require Media here, so we do it manually or assume standard path
+            const attachedFile = await Post.getMeta(featuredImage.id, '_wp_attached_file');
+            let dynamicUrl = featuredImage.guid;
+
+            if (attachedFile) {
+                const safePath = attachedFile.replace(/\\/g, '/');
+                dynamicUrl = `${config.site.url}/uploads/${safePath}`;
+            }
+
             json.featuredMedia = {
                 id: featuredImage.id,
-                url: featuredImage.guid,
+                url: dynamicUrl,
                 title: featuredImage.postTitle
             };
         }
@@ -255,13 +266,40 @@ class Post {
         return row ? new Post(row) : null;
     }
 
-    /**
-     * Find post by slug
-     * Equivalent to get_page_by_path()
-     */
     static async findBySlug(slug, type = 'post') {
         const row = await dbAsync.get('SELECT * FROM posts WHERE post_name = ? AND post_type = ?', [slug, type]);
         return row ? new Post(row) : null;
+    }
+
+    /**
+     * Find one post by criteria
+     */
+    static async findOne(criteria) {
+        const posts = await Post.findAll({ ...criteria, limit: 1 });
+        return posts.length > 0 ? posts[0] : null;
+    }
+
+    /**
+     * Find posts by term ID
+     */
+    static async findByTerm(termId, limit = 10) {
+        const sql = `
+            SELECT p.* FROM posts p
+            JOIN term_relationships tr ON p.id = tr.object_id
+            JOIN term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
+            WHERE tt.term_id = ? AND p.post_status = 'publish'
+            ORDER BY p.post_date DESC
+            LIMIT ?
+        `;
+        const rows = await dbAsync.all(sql, [termId, limit]);
+        return rows.map(row => new Post(row));
+    }
+
+    /**
+     * Get recent posts
+     */
+    static async getRecent(limit = 10, type = 'post') {
+        return await Post.findAll({ limit, type, status: 'publish' });
     }
 
     /**
@@ -580,6 +618,22 @@ class Post {
      * Delete post meta
      * Equivalent to delete_post_meta()
      */
+    /**
+     * Get all post meta
+     */
+    static async getAllMeta(postId) {
+        const rows = await dbAsync.all('SELECT meta_key, meta_value FROM post_meta WHERE post_id = ?', [postId]);
+        const meta = {};
+        rows.forEach(row => {
+            try {
+                meta[row.meta_key] = JSON.parse(row.meta_value);
+            } catch {
+                meta[row.meta_key] = row.meta_value;
+            }
+        });
+        return meta;
+    }
+
     static async deleteMeta(postId, key) {
         const result = await dbAsync.run('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
         return result.changes > 0;

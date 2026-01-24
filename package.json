@@ -6,11 +6,14 @@
     "main": "gateway.js",
     "scripts": {
         "start": "node gateway.js",
-        "dev": "concurrently -k -p \"[{name}]\" -n \"GATEWAY,BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold,bgGreen.bold\" \"npm start\" \"npm run start:backend\" \"npm run start:frontend\"",
+        "dev": "node --watch gateway.js",
+        "dev:all": "concurrently -k -p \"[{name}]\" -n \"GATEWAY,BACKEND,FRONTEND\" -c \"bgBlue.bold,bgMagenta.bold,bgGreen.bold\" \"npm start\" \"npm run start:backend\" \"npm run start:frontend\"",
         "start:backend": "cd backend && npm start",
         "start:frontend": "cd admin-next && npm run dev -- -p 3001"
     },
     "dependencies": {
+        "@types/react": "^19.2.8",
+        "@types/react-dom": "^19.2.3",
         "axios": "^1.13.2",
         "better-sqlite3": "^12.6.0",
         "cluster": "^0.7.7",
@@ -22,6 +25,9 @@
         "helmet": "^8.1.0",
         "http-proxy": "^1.18.1",
         "morgan": "^1.10.1",
+        "react": "^19.2.3",
+        "react-dom": "^19.2.3",
+        "selfsigned": "^5.5.0",
         "uuid": "^13.0.0",
         "winston": "^3.19.0",
         "winston-daily-rotate-file": "^5.0.0"

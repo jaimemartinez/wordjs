@@ -8,6 +8,7 @@ import { Render, Config } from "@measured/puck";
 import "@measured/puck/puck.css";
 import { puckConfig, postConfig, pageConfig } from "@/components/puckConfig";
 import NotFoundState from "@/components/NotFoundState";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 // Initialize any carousels in the content
 function initCarousels() {
@@ -135,7 +136,7 @@ export default function CategoryPostPage() {
                         <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
                         <div
                             className="prose prose-lg max-w-none mx-auto"
-                            dangerouslySetInnerHTML={{ __html: post.content }}
+                            dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                         />
                     </div>
                 ) : (
@@ -157,7 +158,7 @@ export default function CategoryPostPage() {
                         </div>
                         <div
                             className="prose prose-lg prose-blue mx-auto bg-white p-8 rounded-2xl shadow-sm border border-gray-100"
-                            dangerouslySetInnerHTML={{ __html: post.content }}
+                            dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                         />
                     </article>
                 )

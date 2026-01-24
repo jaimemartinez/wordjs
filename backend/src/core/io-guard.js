@@ -47,6 +47,36 @@ function isPathSafe(targetPath, isWrite = false) {
     if (!pluginSlug) return true; // Core code is trusted
 
     const resolved = path.resolve(targetPath);
+    const filename = path.basename(resolved).toLowerCase();
+
+    // SECURITY: Explicitly blocked files (contain secrets)
+    const BLOCKED_FILES = [
+        '.env',
+        '.env.local',
+        '.env.production',
+        '.env.development',
+        'wordjs-config.json',
+        'wordjs-config.backup.json',
+        'package-lock.json', // Can reveal dependency tree for attacks
+        'id_rsa',
+        'id_ed25519',
+        '.htpasswd',
+        'shadow',
+        'passwd'
+    ];
+
+    // Block files by name
+    if (BLOCKED_FILES.includes(filename)) {
+        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access sensitive file: ${resolved}`);
+        return false;
+    }
+
+    // Block any file with secret-like patterns in name
+    const sensitivePatterns = ['secret', 'credential', 'private', 'key.pem', 'cert.pem'];
+    if (sensitivePatterns.some(pattern => filename.includes(pattern))) {
+        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access sensitive pattern file: ${resolved}`);
+        return false;
+    }
 
     // Common Safe Zones for Reading
     const SAFE_READ_DIRS = [
@@ -55,7 +85,9 @@ function isPathSafe(targetPath, isWrite = false) {
         path.join(ROOT_DIR, 'themes'),
         path.join(ROOT_DIR, 'logs'),
         path.join(ROOT_DIR, 'os-tmp'),
-        path.join(ROOT_DIR, 'plugins')
+        path.join(ROOT_DIR, 'plugins'),
+        path.join(ROOT_DIR, 'node_modules'), // Allow plugins to require dependencies
+        path.join(ROOT_DIR, 'src') // Allow plugins to require core modules (careful)
     ];
 
     // Safe Zones for Writing (Stricter)

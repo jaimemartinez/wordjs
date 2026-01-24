@@ -1,0 +1,440 @@
+@import url('https://fonts.googleapis.com/css2?family=Courier+Prime:wght@400;700&display=swap');
+
+:root {
+    /* --- COLOR PALETTE (Matrix Style) --- */
+    --wjs-color-primary: #00ff41;
+    /* Terminal Green */
+    --wjs-color-primary-dark: #008F11;
+    /* Dark Green */
+
+    /* --- COLOR SEMANTICS --- */
+    --wjs-bg-canvas: #000000;
+    /* Pure Black */
+    --wjs-bg-surface: #0a0a0a;
+    /* Slightly off-black */
+
+    --wjs-color-text-main: #00ff41;
+    /* Green Text */
+    --wjs-color-text-muted: #008F11;
+    /* Dim Green */
+
+    --wjs-border-subtle: #003300;
+    /* Dark Green Border */
+
+    /* --- NAVIGATION CONFIG --- */
+    --wjs-nav-font-family: 'Courier Prime', 'Courier New', monospace;
+    --wjs-nav-font-size: 0.95rem;
+    --wjs-nav-font-weight: 700;
+    --wjs-nav-text-transform: uppercase;
+    --wjs-nav-letter-spacing: 0.1em;
+
+    --wjs-nav-color: #008F11;
+    /* Dim Green */
+    --wjs-nav-color-hover: #00ff41;
+    /* Bright Green */
+    --wjs-nav-transition: text-shadow 0.2s ease, color 0.1s step-end;
+
+    --wjs-logo-color: #00ff41;
+    /* Green Logo */
+
+    /* --- FOOTER CONFIG (Systems Console) --- */
+    --wjs-footer-bg: #000000;
+    --wjs-footer-text-heading: #00ff41;
+    --wjs-footer-text-body: #008F11;
+    --wjs-footer-text-hover: #00ff41;
+    --wjs-footer-icon-bg: #001100;
+    --wjs-footer-icon-color: #00ff41;
+
+    /* --- TYPOGRAPHY --- */
+    --wjs-font-family-base: 'Courier Prime', 'Courier New', monospace;
+}
+
+/* =========================================
+   VISUAL OVERRIDES (No Layout Hacks)
+   ========================================= */
+
+body {
+    background-color: var(--wjs-bg-canvas) !important;
+    color: var(--wjs-color-text-main) !important;
+    font-family: var(--wjs-font-family-base) !important;
+    letter-spacing: -0.05em;
+}
+
+/* Theme-Specific Enhancements (Non-standard effects) */
+.glow-blob {
+    position: fixed;
+    width: 600px;
+    height: 600px;
+    background: radial-gradient(circle, var(--wjs-primary) 0%, transparent 70%);
+    filter: blur(120px);
+    opacity: 0.15;
+    pointer-events: none;
+    z-index: -1;
+    animation: blob-float 20s infinite alternate;
+}
+
+.glow-blob-2 {
+    position: fixed;
+    right: -200px;
+    top: 20%;
+    width: 500px;
+    height: 500px;
+    background: radial-gradient(circle, var(--wjs-secondary) 0%, transparent 70%);
+    filter: blur(120px);
+    opacity: 0.1;
+    pointer-events: none;
+    z-index: -1;
+    animation: blob-float 15s infinite alternate-reverse;
+}
+
+@keyframes blob-float {
+    0% {
+        transform: translate(0, 0) scale(1);
+    }
+
+    100% {
+        transform: translate(50px, 100px) scale(1.1);
+    }
+}
+
+/* Block Refinements for Brutalist Terminal */
+.wp-block-card {
+    transition: none;
+    /* Instant feedback */
+}
+
+.wp-block-card:hover {
+    transform: translate(-4px, -4px);
+    box-shadow: 12px 12px 0px var(--wjs-color-primary);
+    background-color: #001100;
+}
+
+.wp-block-button a {
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    border: 2px solid var(--wjs-color-primary);
+    transition: none;
+}
+
+.wp-block-button a:hover {
+    background-color: var(--wjs-color-primary);
+    color: black;
+    box-shadow: 4px 4px 0px var(--wjs-color-secondary);
+}
+
+h1.wp-block-heading {
+    text-transform: uppercase;
+    border-bottom: 2px solid var(--wjs-color-primary);
+    padding-bottom: 0.5rem;
+    color: var(--wjs-color-primary);
+    background: none;
+    -webkit-text-fill-color: initial;
+}
+
+/* Header: Solid Black Bar with Green Border */
+header {
+    background-color: #000000 !important;
+    border-bottom: 2px solid var(--wjs-color-primary) !important;
+    box-shadow: 0 0 10px rgba(0, 255, 65, 0.2);
+}
+
+header[class*='fixed'] {
+    background-color: #000000 !important;
+    border-bottom: 2px solid var(--wjs-color-primary) !important;
+    backdrop-filter: none !important;
+}
+
+/* --- CYBERPUNK LAYOUT SHIFTS --- */
+
+/* 1. Header Container: Use Flexbox to reorder elements */
+.wjs-header-container {
+    display: flex !important;
+    justify-content: space-between !important;
+}
+
+/* 2. Logo: Move to the FAR RIGHT */
+.wjs-header-logo {
+    order: 3 !important;
+    color: var(--wjs-logo-color) !important;
+    text-shadow: 2px 0 var(--wjs-color-primary-dark), -2px 0 var(--wjs-color-primary);
+    font-weight: 900 !important;
+    padding-left: 20px;
+    border-left: 1px solid var(--wjs-color-primary);
+}
+
+/* 3. Navigation: Move to the FAR LEFT */
+.wjs-header-nav {
+    order: 1 !important;
+    margin-right: auto !important;
+    /* Push everything else right */
+}
+
+/* 4. Actions (Search/Auth): Keep in Middle or End */
+.wjs-header-actions {
+    order: 2 !important;
+    border-right: 1px solid var(--wjs-color-primary);
+    padding-right: 20px;
+}
+
+/* Nav Links: Terminal Block on Hover */
+.wjs-header-nav a {
+    position: relative;
+    padding-left: 1rem;
+    padding-right: 1rem;
+    font-family: var(--wjs-nav-font-family) !important;
+    font-size: var(--wjs-nav-font-size) !important;
+    font-weight: var(--wjs-nav-font-weight) !important;
+    color: var(--wjs-nav-color) !important;
+    text-transform: var(--wjs-nav-text-transform) !important;
+    letter-spacing: var(--wjs-nav-letter-spacing) !important;
+    transition: var(--wjs-nav-transition) !important;
+    text-decoration: none !important;
+}
+
+.wjs-header-nav a:hover {
+    color: #000000 !important;
+    background-color: var(--wjs-color-primary);
+    box-shadow: 0 0 10px var(--wjs-color-primary);
+}
+
+/* Footer: Terminal Scanline Look */
+footer {
+    background-color: var(--wjs-footer-bg) !important;
+    border-top: 2px dashed var(--wjs-color-primary) !important;
+    /* Dashed line */
+    background-image: linear-gradient(rgba(0, 255, 65, 0.03) 1px, transparent 1px);
+    background-size: 100% 4px;
+    text-align: left !important;
+}
+
+/* Force Footer Grid into a Single 'Console' Column */
+footer .grid {
+    display: flex !important;
+    flex-direction: column !important;
+    gap: 20px !important;
+    border: 1px solid var(--wjs-color-primary);
+    padding: 20px;
+    position: relative;
+}
+
+footer .grid::before {
+    content: ">> CONSOLE OUTPUT RECIEVED:";
+    display: block;
+    color: var(--wjs-color-primary);
+    margin-bottom: 10px;
+    font-weight: bold;
+}
+
+footer h3,
+footer h4 {
+    color: var(--wjs-footer-text-heading) !important;
+    text-transform: uppercase;
+    border-left: 4px solid var(--wjs-color-primary);
+    padding-left: 10px;
+}
+
+footer a {
+    color: var(--wjs-footer-text-body) !important;
+    text-decoration: none !important;
+}
+
+footer a::before {
+    content: '> ';
+    opacity: 0;
+    transition: opacity 0.2s;
+}
+
+footer a:hover::before {
+    opacity: 1;
+}
+
+footer a:hover {
+    color: var(--wjs-footer-text-hover) !important;
+    text-shadow: 0 0 8px var(--wjs-color-primary);
+}
+
+/* Icons */
+footer .w-10 {
+    background-color: transparent !important;
+    border: 1px solid var(--wjs-color-primary);
+    color: var(--wjs-color-primary) !important;
+    border-radius: 0 !important;
+    /* Square */
+}
+
+footer .w-10:hover {
+    background-color: var(--wjs-color-primary) !important;
+    color: #000000 !important;
+}
+
+/* =========================================
+   NEO DIGITAL: NEW COMPONENT OVERRIDES
+   Cyberpunk terminal aesthetic
+   ========================================= */
+
+/* Accordion: Terminal Panel */
+.wp-block-accordion {
+    border: 1px solid var(--wjs-color-primary) !important;
+    border-radius: 0 !important;
+    background: rgba(0, 255, 65, 0.02);
+}
+
+.wp-block-accordion .accordion-item button {
+    background: transparent !important;
+    color: var(--wjs-color-primary) !important;
+    border-bottom: 1px dashed rgba(0, 255, 65, 0.3) !important;
+    font-family: 'Courier New', monospace !important;
+}
+
+.wp-block-accordion .accordion-item button::before {
+    content: "> " !important;
+}
+
+.wp-block-accordion .accordion-item>div {
+    background: rgba(0, 255, 65, 0.05) !important;
+    color: var(--wjs-color-text-muted) !important;
+    font-family: 'Courier New', monospace !important;
+}
+
+/* Tabs: Console Tabs */
+.wp-block-tabs>div:first-child {
+    border-bottom: 2px solid var(--wjs-color-primary) !important;
+}
+
+.wp-block-tabs button {
+    color: var(--wjs-color-text-muted) !important;
+    border-radius: 0 !important;
+    font-family: 'Courier New', monospace !important;
+    text-transform: uppercase;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+    color: var(--wjs-color-primary) !important;
+    background: rgba(0, 255, 65, 0.1);
+    text-shadow: 0 0 8px var(--wjs-color-primary);
+}
+
+.wp-block-tabs>div:last-child {
+    background: rgba(0, 255, 65, 0.02) !important;
+    border: 1px solid rgba(0, 255, 65, 0.2);
+    border-radius: 0 !important;
+}
+
+/* Video: Scanline Overlay */
+.wp-block-video-embed {
+    border-radius: 0 !important;
+    border: 2px solid var(--wjs-color-primary);
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+}
+
+/* Audio: Terminal Player */
+.wp-block-audio-player {
+    background: transparent !important;
+    border: 1px solid var(--wjs-color-primary) !important;
+    border-radius: 0 !important;
+}
+
+.wp-block-audio-player div:first-child>div:first-child {
+    background: transparent !important;
+    border: 1px solid var(--wjs-color-primary) !important;
+    border-radius: 0 !important;
+}
+
+/* Pricing: Hacker Tiers */
+.wp-block-pricing>div {
+    background: rgba(0, 0, 0, 0.8) !important;
+    border: 1px solid rgba(0, 255, 65, 0.3) !important;
+    border-radius: 0 !important;
+}
+
+.wp-block-pricing>div:hover {
+    border-color: var(--wjs-color-primary) !important;
+    box-shadow: 0 0 30px rgba(0, 255, 65, 0.2);
+}
+
+.wp-block-pricing>div[style*="scale(1.05)"] {
+    background: rgba(0, 255, 65, 0.1) !important;
+    border: 2px solid var(--wjs-color-primary) !important;
+    box-shadow: 0 0 40px rgba(0, 255, 65, 0.4);
+}
+
+/* Testimonial: Quote Terminal */
+.wp-block-testimonial {
+    background: rgba(0, 0, 0, 0.8) !important;
+    border: 1px solid rgba(0, 255, 65, 0.3) !important;
+    border-radius: 0 !important;
+}
+
+.wp-block-testimonial>div:first-child {
+    color: var(--wjs-color-primary) !important;
+    text-shadow: 0 0 10px var(--wjs-color-primary);
+}
+
+/* CTA Banner: Alert Mode */
+.wp-block-cta-banner {
+    border-radius: 0 !important;
+    border: 2px solid var(--wjs-color-primary) !important;
+    background: linear-gradient(180deg, rgba(0, 255, 65, 0.1), rgba(0, 0, 0, 0.9)) !important;
+    box-shadow: inset 0 0 60px rgba(0, 255, 65, 0.1);
+}
+
+.wp-block-cta-banner a {
+    background: var(--wjs-color-primary) !important;
+    color: #000 !important;
+    border-radius: 0 !important;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+}
+
+/* Posts Grid: Data Cards */
+.wp-block-posts-grid article {
+    background: rgba(0, 0, 0, 0.8) !important;
+    border: 1px solid rgba(0, 255, 65, 0.2) !important;
+    border-radius: 0 !important;
+}
+
+.wp-block-posts-grid article:hover {
+    border-color: var(--wjs-color-primary) !important;
+    box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+}
+
+/* Category Posts: File Listing */
+.wp-block-category-posts h3 {
+    color: var(--wjs-color-primary) !important;
+    font-family: 'Courier New', monospace !important;
+}
+
+.wp-block-category-posts h3::before {
+    content: "$ ls -la ";
+}
+
+.wp-block-category-posts li {
+    border-color: rgba(0, 255, 65, 0.2) !important;
+}
+
+.wp-block-category-posts li a::before {
+    content: "-rw-r--r-- 1 user  ";
+    color: var(--wjs-color-text-muted);
+    font-size: 0.75rem;
+}
+
+/* Search: Terminal Input */
+.wp-block-search input {
+    background: transparent !important;
+    border: 1px solid var(--wjs-color-primary) !important;
+    border-radius: 0 !important;
+    color: var(--wjs-color-primary) !important;
+    font-family: 'Courier New', monospace !important;
+}
+
+.wp-block-search input::placeholder {
+    color: rgba(0, 255, 65, 0.5);
+}
+
+.wp-block-search button {
+    background: var(--wjs-color-primary) !important;
+    color: #000 !important;
+    border-radius: 0 !important;
+    text-transform: uppercase;
+}

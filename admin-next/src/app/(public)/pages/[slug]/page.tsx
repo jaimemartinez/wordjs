@@ -8,6 +8,7 @@ import { Render, Config } from "@measured/puck";
 import "@measured/puck/puck.css";
 import { puckConfig } from "@/components/puckConfig";
 import Header from "@/components/public/Header";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 // Initialize any carousels in the content
 function initCarousels() {
@@ -130,7 +131,7 @@ export default function SinglePage() {
 
                     <div
                         className="prose prose-lg prose-blue mx-auto bg-white p-8 md:p-12 rounded-2xl shadow-sm border border-gray-100"
-                        dangerouslySetInnerHTML={{ __html: page.content }}
+                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(page.content) }}
                     />
                 </article>
             )}

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{title}} - {{settings.siteName}}</title>
+    <link rel="stylesheet" href="/themes/neo-digital/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    {{wordjs_head}}
+</head>
+
+<body>
+    <div class="glow-blob"></div>
+    <div class="glow-blob-2"></div>
+
+    <header class="wjs-header">
+        <div class="wjs-container" style="display: flex; justify-content: space-between; align-items: center;">
+            <div class="logo">
+                <a href="/"
+                    style="color: var(--wjs-color-primary); text-decoration: none; font-weight: 900; font-family: var(--wjs-font-heading); text-transform: uppercase; letter-spacing: 0.1em;">
+                    >_ {{settings.siteName}}
+                </a>
+            </div>
+            <nav>
+                <ul style="display: flex; list-style: none; gap: var(--wjs-size-6); margin: 0; padding: 0;">
+                    <li><a href="/"
+                            style="color: var(--wjs-text-main); text-decoration: none; text-transform: uppercase; font-size: var(--wjs-text-sm);">/ROOT</a>
+                    </li>
+                    <li><a href="/test-visual"
+                            style="color: var(--wjs-text-main); text-decoration: none; text-transform: uppercase; font-size: var(--wjs-text-sm);">/VISUAL_TEST</a>
+                    </li>
+                </ul>
+            </nav>
+        </div>
+    </header>
+
+    <main>

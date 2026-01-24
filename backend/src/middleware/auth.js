@@ -45,14 +45,21 @@ async function verifyAndAttachUser(token, req, res, next) {
 }
 
 /**
- * Authenticate request with JWT token (Strict: Headers Only)
+ * Authenticate request with JWT token (Strict: Headers Only, with Cookie fallback)
  */
 async function authenticate(req, res, next) {
     const authHeader = req.headers.authorization;
     let token;
 
-    if (authHeader && authHeader.startsWith('Bearer ')) {
+    // Priority 1: Authorization header (for API clients)
+    // Check for 'null' or 'undefined' string which can happen if frontend sends localStorage.getItem('token') without check
+    if (authHeader && authHeader.startsWith('Bearer ') && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined') {
         token = authHeader.substring(7);
+    }
+
+    // Priority 2: HttpOnly cookie (for browser clients)
+    if (!token && req.cookies && req.cookies.wordjs_token) {
+        token = req.cookies.wordjs_token;
     }
 
     if (!token) {
@@ -78,6 +85,8 @@ async function authenticateAllowQuery(req, res, next) {
         token = authHeader.substring(7);
     } else if (req.query && req.query.token) {
         token = req.query.token;
+    } else if (req.cookies && req.cookies.wordjs_token) {
+        token = req.cookies.wordjs_token;
     }
 
     if (!token) {
@@ -96,21 +105,26 @@ async function authenticateAllowQuery(req, res, next) {
  */
 async function optionalAuth(req, res, next) {
     const authHeader = req.headers.authorization;
+    let token;
 
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+        token = authHeader.substring(7);
+    } else if (req.cookies && req.cookies.wordjs_token) {
+        token = req.cookies.wordjs_token;
+    }
+
+    if (!token) {
         req.user = null;
         req.userId = null;
         return next();
     }
-
-    const token = authHeader.substring(7);
 
     try {
         const decoded = jwt.verify(token, config.jwt.secret);
         const user = await User.findById(decoded.userId);
         req.user = user;
         req.userId = user ? user.id : null;
-    } catch {
+    } catch (e) {
         req.user = null;
         req.userId = null;
     }
@@ -139,10 +153,78 @@ function verifyToken(token) {
     return jwt.verify(token, config.jwt.secret);
 }
 
+/**
+ * CSRF Protection for state-changing requests
+ * Validates Origin/Referer headers against allowed origins
+ */
+function csrfProtection(req, res, next) {
+    // Only check state-changing methods
+    if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
+        return next();
+    }
+
+    // Skip CSRF check for setup endpoints (before origin is configured)
+    if (req.path.startsWith('/api/v1/setup')) {
+        return next();
+    }
+
+    const origin = req.get('Origin');
+    const referer = req.get('Referer');
+    const host = req.get('Host');
+
+    // If no Origin header, check Referer (some browsers)
+    let requestOrigin = origin;
+    if (!requestOrigin && referer) {
+        try {
+            requestOrigin = new URL(referer).origin;
+        } catch {
+            requestOrigin = null;
+        }
+    }
+
+    // Allow requests from same host
+    if (requestOrigin) {
+        try {
+            const originHost = new URL(requestOrigin).host;
+            if (originHost === host) {
+                return next();
+            }
+        } catch {
+            // Invalid origin URL
+        }
+    }
+
+    // Allow if no Origin/Referer (server-to-server, API clients)
+    // These must have valid JWT anyway
+    if (!origin && !referer) {
+        return next();
+    }
+
+    // Allow configured CORS origins
+    const allowedOrigins = [
+        config.site?.url,
+        config.site?.frontendUrl,
+        `http://${host}`,
+        `https://${host}`
+    ].filter(Boolean);
+
+    if (requestOrigin && allowedOrigins.some(o => o && requestOrigin.startsWith(o.replace(/\/$/, '')))) {
+        return next();
+    }
+
+    console.warn(`[CSRF] Blocked request from ${requestOrigin || 'unknown'} to ${req.path}`);
+    return res.status(403).json({
+        code: 'rest_csrf_invalid',
+        message: 'Cross-site request blocked.',
+        data: { status: 403 }
+    });
+}
+
 module.exports = {
     authenticate,
     authenticateAllowQuery,
     optionalAuth,
     generateToken,
-    verifyToken
+    verifyToken,
+    csrfProtection
 };

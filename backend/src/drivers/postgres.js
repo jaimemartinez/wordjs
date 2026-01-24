@@ -34,7 +34,10 @@ class PostgresDriver extends DatabaseDriverInterface {
                 user: dbConfig.user,
                 password: dbConfig.password,
                 database: dbConfig.name,
-                ssl: dbConfig.ssl ? { rejectUnauthorized: false } : false
+                ssl: dbConfig.ssl ? { rejectUnauthorized: false } : false,
+                // Force UTF-8 encoding to prevent errors on Windows servers with WIN1252 defaults
+                connectionString: undefined, // ensure pool uses individual params
+                client_encoding: 'UTF8'
             });
 
             // Verify connection

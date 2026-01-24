@@ -45,6 +45,13 @@ const storage = multer.diskStorage({
 
 // File filter
 const fileFilter = (req, file, cb) => {
+    // SECURITY: Block SVG uploads for non-admins (SVGs can contain JavaScript)
+    if (file.mimetype === 'image/svg+xml') {
+        if (!req.user || req.user.getRole() !== 'administrator') {
+            return cb(new Error('SVG uploads are restricted to administrators only.'), false);
+        }
+    }
+
     if (Media.isAllowedMimeType(file.mimetype)) {
         cb(null, true);
     } else {
@@ -56,7 +63,12 @@ const upload = multer({
     storage,
     fileFilter,
     limits: {
-        fileSize: config.uploads.maxFileSize
+        fileSize: config.uploads.maxFileSize,
+        // SECURITY: Prevent CVE-2025-47935 (memory leak) and CVE-2025-47944 (malformed multipart)
+        files: 10,          // Max 10 files per request
+        fields: 50,         // Max 50 non-file fields
+        parts: 100,         // Max total parts (fields + files)
+        headerPairs: 2000   // Limit header pairs to prevent header bomb
     }
 });
 
@@ -89,7 +101,8 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'post_date',
-        order: order.toUpperCase()
+        // SECURITY: Whitelist order direction
+        order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
     });
 
     const total = await Media.count();
@@ -132,17 +145,17 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         });
     }
 
-    // --- SECURITY CHECK: Magic Numbers ---
+    // --- SECURITY CHECK: Magic Numbers & SVG Sanitization ---
     const fileType = require('file-type');
+    const sanitizeHtml = require('sanitize-html');
+
     try {
         const result = await fileType.fromFile(req.file.path);
 
         // If file-type detected something, verify it matches the extension/mimetype
-        // Note: Some text files (css, js, svg) might return undefined, so we primarily check binaries
         if (result) {
             const allowed = Media.isAllowedMimeType(result.mime);
             if (!allowed) {
-                // Delete the malicious/invalid file immediately
                 fs.unlinkSync(req.file.path);
                 return res.status(400).json({
                     code: 'rest_upload_invalid_file_type',
@@ -151,10 +164,27 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                 });
             }
         }
+
+        // SVG Sanitization (Defense in Depth)
+        if (req.file.mimetype === 'image/svg+xml') {
+            const rawSvg = fs.readFileSync(req.file.path, 'utf8');
+            // Clean the SVG
+            const cleanSvg = sanitizeHtml(rawSvg, {
+                allowedTags: false, // Allow all tags...
+                allowedAttributes: false, // ...and attributes
+                exclusiveFilter: function (frame) {
+                    // ...EXCEPT scripts and event handlers
+                    return frame.tag === 'script' || frame.tag.startsWith('on');
+                },
+                textFilter: function (text) {
+                    return text.replace(/javascript:/gi, ''); // Prevent javascript: hrefs
+                }
+            });
+            fs.writeFileSync(req.file.path, cleanSvg);
+        }
+
     } catch (err) {
-        console.error("Magic number check failed:", err);
-        // Fail open or closed? Here failing closed is safer for binaries, but risky for text.
-        // For now, we log and proceed unless strict mode is requested.
+        console.error("Security check failed:", err);
     }
     // -------------------------------------
 

@@ -2,6 +2,10 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
+import { useModal } from "@/contexts/ModalContext";
+import { PageHeader } from "../../../../../admin-next/src/components/ui/PageHeader";
+import { Card } from "../../../../../admin-next/src/components/ui/Card";
 
 interface Video {
     id?: number | string; // Updated to support string/legacy IDs
@@ -20,7 +24,7 @@ interface Gallery {
     videoCount: number;
 }
 
-const API_BASE = "http://localhost:3000/api/v1";
+
 
 export default function VideosAdminPage() {
     // --- STATE ---
@@ -44,19 +48,14 @@ export default function VideosAdminPage() {
         loadGalleries();
     }, []);
 
-    const getToken = () => localStorage.getItem("wordjs_token");
+    const { alert, confirm } = useModal();
 
     // --- GALLERY ACTIONS ---
     const loadGalleries = async () => {
         setLoading(true);
         try {
-            const res = await fetch(`${API_BASE}/videos/galleries`, {
-                headers: { Authorization: `Bearer ${getToken()}` },
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setGalleries(data);
-            }
+            const data = await api<Gallery[]>("/videos/galleries");
+            setGalleries(data);
         } catch (err) {
             console.error("Failed to load galleries:", err);
         } finally {
@@ -67,37 +66,23 @@ export default function VideosAdminPage() {
     const handleCreateGallery = async () => {
         if (!newGalleryName) return;
         try {
-            const res = await fetch(`${API_BASE}/videos/galleries`, {
-                method: "POST",
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${getToken()}`,
-                },
-                body: JSON.stringify({ name: newGalleryName, description: newGalleryDesc })
-            });
-            if (res.ok) {
-                await loadGalleries();
-                setIsCreatingGallery(false);
-                setNewGalleryName("");
-                setNewGalleryDesc("");
-            }
+            await apiPost("/videos/galleries", { name: newGalleryName, description: newGalleryDesc });
+            await loadGalleries();
+            setIsCreatingGallery(false);
+            setNewGalleryName("");
+            setNewGalleryDesc("");
         } catch (err) {
-            alert("Failed to create gallery");
+            await alert("Failed to create gallery");
         }
     };
 
     const deleteGallery = async (id: string) => {
-        if (!confirm("Delete this gallery? All videos in it will be lost.")) return;
+        if (!await confirm("Delete this gallery? All videos in it will be lost.", "Delete Gallery", true)) return;
         try {
-            const res = await fetch(`${API_BASE}/videos/galleries/${id}`, {
-                method: "DELETE",
-                headers: { Authorization: `Bearer ${getToken()}` },
-            });
-            if (res.ok) {
-                loadGalleries();
-            }
+            await apiDelete(`/videos/galleries/${id}`);
+            loadGalleries();
         } catch (err) {
-            alert("Failed to delete gallery");
+            await alert("Failed to delete gallery");
         }
     };
 
@@ -106,18 +91,8 @@ export default function VideosAdminPage() {
         setView('detail');
         setLoading(true);
         try {
-            // Need to fetch full detail to get videos? 
-            // The list endpoint returns metadata. The individual endpoint returns full gallery with videos?
-            // Actually, my new API structure: GET /galleries/:id returns { ...videos: [] }
-            // Or GET /videos?gallery=id (legacy wrapper). 
-            // Let's use the explicit gallery endpoint:
-            const res = await fetch(`${API_BASE}/videos/galleries/${gallery.id}`, {
-                headers: { Authorization: `Bearer ${getToken()}` },
-            });
-            if (res.ok) {
-                const data = await res.json();
-                setVideos(data.videos || []);
-            }
+            const data = await api<any>(`/videos/galleries/${gallery.id}`);
+            setVideos(data.videos || []);
         } catch (err) {
             console.error("Error loading gallery videos:", err);
         } finally {
@@ -131,57 +106,35 @@ export default function VideosAdminPage() {
         setSaving(true);
 
         try {
-            const method = editingVideo.id ? "PUT" : "POST";
-            const url = editingVideo.id
-                ? `${API_BASE}/videos/galleries/${selectedGallery.id}/videos/${editingVideo.id}`
-                : `${API_BASE}/videos/galleries/${selectedGallery.id}/videos`;
+            const endpoint = editingVideo.id
+                ? `/videos/galleries/${selectedGallery.id}/videos/${editingVideo.id}`
+                : `/videos/galleries/${selectedGallery.id}/videos`;
 
-            const res = await fetch(url, {
-                method,
-                headers: {
-                    "Content-Type": "application/json",
-                    Authorization: `Bearer ${getToken()}`,
-                },
-                body: JSON.stringify(editingVideo),
-            });
-
-            if (res.ok) {
-                // Reload current gallery
-                const updatedRes = await fetch(`${API_BASE}/videos/galleries/${selectedGallery.id}`, {
-                    headers: { Authorization: `Bearer ${getToken()}` },
-                });
-                const updatedData = await updatedRes.json();
-                setVideos(updatedData.videos || []);
-                setEditingVideo(null);
+            if (editingVideo.id) {
+                await apiPut(endpoint, editingVideo);
             } else {
-                alert("Failed to save video");
+                await apiPost(endpoint, editingVideo);
             }
+
+            // Reload current gallery
+            const updatedData = await api<any>(`/videos/galleries/${selectedGallery.id}`);
+            setVideos(updatedData.videos || []);
+            setEditingVideo(null);
         } catch (err) {
             console.error("Save error:", err);
-            alert("Failed to save video");
+            await alert("Failed to save video");
         } finally {
             setSaving(false);
         }
     };
 
     const handleDeleteVideo = async (videoId: number | string) => {
-        if (!selectedGallery || !confirm("¿Eliminar este video?")) return;
+        if (!selectedGallery || !await confirm("¿Eliminar este video?", "Eliminar Video", true)) return;
 
         try {
-            const res = await fetch(`${API_BASE}/videos/galleries/${selectedGallery.id}/videos/${videoId}`, {
-                method: "DELETE",
-                headers: {
-                    Authorization: `Bearer ${getToken()}`,
-                },
-            });
-
-            if (res.ok) {
-                const updatedRes = await fetch(`${API_BASE}/videos/galleries/${selectedGallery.id}`, {
-                    headers: { Authorization: `Bearer ${getToken()}` },
-                });
-                const updatedData = await updatedRes.json();
-                setVideos(updatedData.videos || []);
-            }
+            await apiDelete(`/videos/galleries/${selectedGallery.id}/videos/${videoId}`);
+            const updatedData = await api<any>(`/videos/galleries/${selectedGallery.id}`);
+            setVideos(updatedData.videos || []);
         } catch (err) {
             console.error("Delete error:", err);
         }
@@ -213,12 +166,12 @@ export default function VideosAdminPage() {
 
     if (view === 'list') {
         return (
-            <div className="p-6 h-full overflow-auto">
-                <div className="flex justify-between items-center mb-8">
-                    <h1 className="text-2xl font-bold text-gray-800 flex items-center gap-2">
-                        <i className="fa-solid fa-film text-blue-600"></i> Galerías de Video
-                    </h1>
-                </div>
+            <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+                <PageHeader
+                    title="Galerías de Video"
+                    subtitle="Administra tus colecciones de videos"
+                    icon="fa-film"
+                />
 
                 {/* Create Modal */}
                 {isCreatingGallery && (
@@ -250,9 +203,10 @@ export default function VideosAdminPage() {
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
                         {/* Add New Card */}
+                        {/* Add New Card */}
                         <div
                             onClick={() => setIsCreatingGallery(true)}
-                            className="bg-gray-50/50 border-2 border-dashed border-gray-300 rounded-xl p-6 flex flex-col items-center justify-center text-gray-400 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer min-h-[200px]"
+                            className="bg-gray-50/50 border-2 border-dashed border-gray-300 rounded-[40px] p-6 flex flex-col items-center justify-center text-gray-400 hover:text-blue-600 hover:border-blue-400 hover:bg-blue-50/30 transition-all cursor-pointer min-h-[200px]"
                         >
                             <div className="w-16 h-16 rounded-full bg-white shadow-sm flex items-center justify-center mb-4 text-2xl group-hover:scale-110 transition-transform">
                                 <i className="fa-solid fa-plus"></i>
@@ -261,10 +215,12 @@ export default function VideosAdminPage() {
                         </div>
 
                         {galleries.map(g => (
-                            <div
+                            <Card
                                 key={g.id}
                                 onClick={() => openGallery(g)}
-                                className="bg-white border hover:border-blue-400 border-gray-200 rounded-xl p-6 shadow-sm hover:shadow-md transition-all cursor-pointer group relative flex flex-col justify-between"
+                                padding="md"
+                                hoverable
+                                className="group relative flex flex-col justify-between"
                             >
                                 <div>
                                     <div className="flex items-center gap-3 mb-3">
@@ -291,7 +247,7 @@ export default function VideosAdminPage() {
                                     <span className="text-gray-400 text-xs font-mono">ID: {g.id}</span>
                                     <span className="text-blue-600 font-medium group-hover:translate-x-1 transition-transform">Gestionar &rarr;</span>
                                 </div>
-                            </div>
+                            </Card>
                         ))}
                     </div>
                 )}
@@ -301,27 +257,25 @@ export default function VideosAdminPage() {
 
     // --- DETAIL VIEW ---
     return (
-        <div className="p-6 h-full overflow-auto">
-            <div className="flex items-center gap-4 mb-6">
-                <button
-                    onClick={() => { setView('list'); setSelectedGallery(null); }}
-                    className="w-10 h-10 rounded-full bg-gray-100 hover:bg-gray-200 flex items-center justify-center text-gray-600 transition-colors"
-                >
-                    <i className="fa-solid fa-arrow-left"></i>
-                </button>
-                <div>
-                    <h1 className="text-2xl font-bold text-gray-800">{selectedGallery?.name}</h1>
-                    <p className="text-sm text-gray-500">Gestionando videos de esta galería</p>
-                </div>
-                <div className="ml-auto">
+
+        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+            <PageHeader
+                title={selectedGallery?.name || "Galería Detail"}
+                subtitle="Gestionando videos de esta galería"
+                icon="fa-photo-film"
+                backButton={{
+                    onClick: () => { setView('list'); setSelectedGallery(null); },
+                    label: "Volver a Galerías"
+                }}
+                actions={
                     <button
                         onClick={() => setEditingVideo(newVideo())}
                         className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors shadow-lg shadow-blue-600/20"
                     >
                         + Agregar Video
                     </button>
-                </div>
-            </div>
+                }
+            />
 
             {/* Video List Grid matches previous style */}
             {videos.length === 0 ? (
@@ -356,79 +310,78 @@ export default function VideosAdminPage() {
 
                                 // API Persist
                                 try {
-                                    await fetch(`${API_BASE}/videos/galleries/${selectedGallery?.id}/reorder`, {
-                                        method: 'PUT',
-                                        headers: {
-                                            "Content-Type": "application/json",
-                                            Authorization: `Bearer ${getToken()}`,
-                                        },
-                                        body: JSON.stringify({ videoIds: newVideos.map(v => v.id) })
+                                    await apiPut(`/videos/galleries/${selectedGallery?.id}/reorder`, {
+                                        videoIds: newVideos.map(v => v.id)
                                     });
                                 } catch (err) {
                                     console.error("Failed to reorder:", err);
-                                    alert("Failed to save new order");
+                                    await alert("Failed to save new order");
                                 }
                             }}
-                            className={`bg-white border border-gray-100 rounded-2xl overflow-hidden shadow-sm hover:shadow-xl transition-all duration-300 group ${draggedIndex === index ? 'opacity-50 border-blue-400 dashed' : ''} cursor-grab active:cursor-grabbing`}
                         >
-                            <div className="relative aspect-[16/9] overflow-hidden bg-gray-900">
-                                {video.thumbnail ? (
-                                    <img
-                                        src={video.thumbnail}
-                                        alt={video.title}
-                                        className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                                    />
-                                ) : (
-                                    <div className="w-full h-full flex items-center justify-center text-gray-700 bg-gray-100">
-                                        <i className="fa-solid fa-video text-4xl opacity-50"></i>
+                            <Card
+                                padding="none"
+                                className={`group overflow-hidden ${draggedIndex === index ? 'opacity-50 border-blue-400 dashed' : ''} cursor-grab active:cursor-grabbing`}
+                            >
+                                <div className="relative aspect-[16/9] overflow-hidden bg-gray-900">
+                                    {video.thumbnail ? (
+                                        <img
+                                            src={video.thumbnail}
+                                            alt={video.title}
+                                            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
+                                        />
+                                    ) : (
+                                        <div className="w-full h-full flex items-center justify-center text-gray-700 bg-gray-100">
+                                            <i className="fa-solid fa-video text-4xl opacity-50"></i>
+                                        </div>
+                                    )}
+
+                                    <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60"></div>
+
+                                    {/* Order Badge */}
+                                    <div className="absolute top-3 left-3 bg-black/50 backdrop-blur-md text-white text-xs px-2 py-1 rounded-full border border-white/20">
+                                        #{index + 1}
                                     </div>
-                                )}
 
-                                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-60"></div>
-
-                                {/* Order Badge */}
-                                <div className="absolute top-3 left-3 bg-black/50 backdrop-blur-md text-white text-xs px-2 py-1 rounded-full border border-white/20">
-                                    #{index + 1}
+                                    {/* Hover Actions */}
+                                    <div className="absolute inset-0 flex items-center justify-center gap-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 backdrop-blur-[2px] bg-black/30">
+                                        <button
+                                            onClick={() => setEditingVideo(video)}
+                                            className="w-12 h-12 bg-white text-blue-600 rounded-full shadow-lg hover:bg-blue-50 hover:scale-110 transition-all flex items-center justify-center"
+                                            title="Editar"
+                                        >
+                                            <i className="fa-solid fa-pencil text-lg"></i>
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeleteVideo(video.id!)}
+                                            className="w-12 h-12 bg-white text-red-500 rounded-full shadow-lg hover:bg-red-50 hover:scale-110 transition-all flex items-center justify-center"
+                                            title="Eliminar"
+                                        >
+                                            <i className="fa-solid fa-trash-can text-lg"></i>
+                                        </button>
+                                    </div>
                                 </div>
 
-                                {/* Hover Actions */}
-                                <div className="absolute inset-0 flex items-center justify-center gap-4 opacity-0 group-hover:opacity-100 transition-opacity duration-300 backdrop-blur-[2px] bg-black/30">
-                                    <button
-                                        onClick={() => setEditingVideo(video)}
-                                        className="w-12 h-12 bg-white text-blue-600 rounded-full shadow-lg hover:bg-blue-50 hover:scale-110 transition-all flex items-center justify-center"
-                                        title="Editar"
-                                    >
-                                        <i className="fa-solid fa-pencil text-lg"></i>
-                                    </button>
-                                    <button
-                                        onClick={() => handleDeleteVideo(video.id!)}
-                                        className="w-12 h-12 bg-white text-red-500 rounded-full shadow-lg hover:bg-red-50 hover:scale-110 transition-all flex items-center justify-center"
-                                        title="Eliminar"
-                                    >
-                                        <i className="fa-solid fa-trash-can text-lg"></i>
-                                    </button>
-                                </div>
-                            </div>
+                                <div className="p-5">
+                                    <h3 className="font-bold text-gray-900 line-clamp-2 mb-2 leading-tight h-10" title={video.title}>
+                                        {video.title}
+                                    </h3>
 
-                            <div className="p-5">
-                                <h3 className="font-bold text-gray-900 line-clamp-2 mb-2 leading-tight h-10" title={video.title}>
-                                    {video.title}
-                                </h3>
-
-                                <div className="flex items-center justify-between mt-4">
-                                    <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded">
-                                        {video.button_text || 'BOTÓN'}
-                                    </span>
-                                    <a
-                                        href={video.youtube_url}
-                                        target="_blank"
-                                        rel="noopener noreferrer"
-                                        className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 uppercase tracking-wider"
-                                    >
-                                        YouTube <i className="fa-solid fa-arrow-up-right-from-square"></i>
-                                    </a>
+                                    <div className="flex items-center justify-between mt-4">
+                                        <span className="text-xs font-medium text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                                            {video.button_text || 'BOTÓN'}
+                                        </span>
+                                        <a
+                                            href={video.youtube_url}
+                                            target="_blank"
+                                            rel="noopener noreferrer"
+                                            className="text-xs font-bold text-blue-600 hover:text-blue-800 flex items-center gap-1 uppercase tracking-wider"
+                                        >
+                                            YouTube <i className="fa-solid fa-arrow-up-right-from-square"></i>
+                                        </a>
+                                    </div>
                                 </div>
-                            </div>
+                            </Card>
                         </div>
                     ))}
                 </div>
@@ -438,7 +391,7 @@ export default function VideosAdminPage() {
             {/* Edit Video Modal (Modernized) */}
             {editingVideo && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-white/20">
+                    <div className="bg-white rounded-[40px] shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col animate-in zoom-in-95 duration-200 border border-white/20">
                         {/* Header */}
                         <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-white">
                             <h2 className="text-xl font-bold text-gray-800 flex items-center gap-3">

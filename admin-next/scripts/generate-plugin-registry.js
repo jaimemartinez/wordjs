@@ -149,8 +149,9 @@ async function generateRegistry() {
             import("../../../backend/plugins/${p.folder}/${p.hooksPath}").then(m => {
                 // Auto-register any export starting with 'register'
                 Object.keys(m).forEach(key => {
-                    if (key.startsWith('register') && typeof m[key] === 'function') {
-                        try { m[key](); } catch(e) { console.error('Error in hook ${p.id}:', e); }
+                    const exportFn = (m as any)[key];
+                    if (key.startsWith('register') && typeof exportFn === 'function') {
+                        try { exportFn(); } catch(e) { console.error('Error in hook ${p.id}:', e); }
                     }
                 });
             });`)

@@ -1,0 +1,335 @@
+/* =========================================
+   THEME: MIDNIGHT LUXURY
+   Concept: Premium dark, gold accents, serif elegance.
+   Standardized V2.
+   ========================================= */
+
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;700;900&family=Lato:wght@400;700&display=swap');
+
+:root {
+  /* --- COLOR PALETTE: Black & Gold --- */
+  --wjs-color-primary: #d4af37;
+  /* Luxurious Gold */
+  --wjs-color-primary-dark: #c5a028;
+  /* Deep Gold */
+
+  /* --- COLOR SEMANTICS --- */
+  --wjs-bg-canvas: #0a0a0a;
+  /* Deep Black */
+  --wjs-bg-surface: #141414;
+  /* Card Background */
+
+  --wjs-color-text-main: #f5f5f5;
+  /* Off-white */
+  --wjs-color-text-muted: #a3a3a3;
+  /* Gray */
+
+  --wjs-border-subtle: #262626;
+  /* Dark Border */
+
+  /* --- NAVIGATION CONFIG --- */
+  --wjs-nav-font-family: 'Lato', sans-serif;
+  --wjs-nav-font-size: 0.9rem;
+  --wjs-nav-font-weight: 400;
+  --wjs-nav-text-transform: uppercase;
+  --wjs-nav-letter-spacing: 0.2em;
+  /* Very wide */
+
+  --wjs-nav-color: #a3a3a3;
+  /* Gray Links */
+  --wjs-nav-color-hover: #d4af37;
+  /* Gold on Hover */
+  --wjs-nav-transition: all 0.3s ease;
+
+  --wjs-logo-color: #d4af37;
+  /* Gold Logo */
+
+  /* --- FOOTER CONFIG --- */
+  --wjs-footer-bg: #050505;
+  /* Even darker */
+  --wjs-footer-text-heading: #d4af37;
+  --wjs-footer-text-body: #a3a3a3;
+  --wjs-footer-text-hover: #f5f5f5;
+  --wjs-footer-icon-bg: #262626;
+  --wjs-footer-icon-color: #d4af37;
+
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Lato', sans-serif;
+  --wjs-font-family-heading: 'Playfair Display', serif;
+}
+
+/* =========================================
+   VISUAL OVERRIDES
+   ========================================= */
+
+body {
+  background-color: var(--wjs-bg-canvas) !important;
+  color: var(--wjs-color-text-main) !important;
+  font-family: var(--wjs-font-family-base) !important;
+  line-height: 1.7;
+}
+
+/* Header: Dark with Gold accent border */
+header {
+  background-color: var(--wjs-bg-canvas) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+}
+
+header[class*='fixed'] {
+  background-color: rgba(10, 10, 10, 0.95) !important;
+  backdrop-filter: blur(10px) !important;
+}
+
+/* Logo: Gold, Elegant Serif */
+.wjs-header-logo {
+  color: var(--wjs-logo-color) !important;
+  font-family: 'Playfair Display', serif !important;
+  font-weight: 700 !important;
+  font-size: 1.75rem !important;
+  letter-spacing: 0.02em;
+}
+
+/* Nav Links: Spaced, Uppercase, Subtle */
+.wjs-header-nav a {
+  font-family: var(--wjs-nav-font-family) !important;
+  font-size: var(--wjs-nav-font-size) !important;
+  font-weight: var(--wjs-nav-font-weight) !important;
+  color: var(--wjs-nav-color) !important;
+  text-transform: var(--wjs-nav-text-transform) !important;
+  letter-spacing: var(--wjs-nav-letter-spacing) !important;
+  transition: var(--wjs-nav-transition) !important;
+  text-decoration: none !important;
+}
+
+.wjs-header-nav a:hover {
+  color: var(--wjs-nav-color-hover) !important;
+}
+
+/* Headings: Elegant Serif */
+h1,
+h2,
+h3 {
+  font-family: 'Playfair Display', serif !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.02em;
+  color: var(--wjs-color-text-main) !important;
+}
+
+/* Cards: Dark Surface with Gold Border on Hover */
+.wp-block-card,
+article {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  transition: border-color 0.3s ease;
+}
+
+.wp-block-card:hover,
+article:hover {
+  border-color: var(--wjs-color-primary) !important;
+}
+
+/* Footer: Dark with Gold Headings */
+footer {
+  background-color: var(--wjs-footer-bg) !important;
+  color: var(--wjs-footer-text-body) !important;
+  border-top: 1px solid var(--wjs-border-subtle) !important;
+}
+
+footer h3,
+footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
+  font-family: 'Playfair Display', serif !important;
+  font-weight: 700 !important;
+}
+
+footer a {
+  color: var(--wjs-footer-text-body) !important;
+  text-decoration: none !important;
+  transition: color 0.3s ease;
+}
+
+footer a:hover {
+  color: var(--wjs-footer-text-hover) !important;
+}
+
+/* Icons: Gold on Dark */
+footer .w-10 {
+  background-color: var(--wjs-footer-icon-bg) !important;
+  color: var(--wjs-footer-icon-color) !important;
+  border: 1px solid var(--wjs-border-subtle);
+}
+
+footer .w-10:hover {
+  background-color: var(--wjs-color-primary) !important;
+  color: #000 !important;
+}
+
+/* =========================================
+   MIDNIGHT LUXURY: NEW COMPONENT OVERRIDES
+   Dark premium / Gold accent aesthetic
+   ========================================= */
+
+/* Accordion: Dark Panels */
+.wp-block-accordion {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 8px !important;
+}
+
+.wp-block-accordion .accordion-item button {
+  background: transparent !important;
+  color: var(--wjs-color-text-main) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+}
+
+.wp-block-accordion .accordion-item button i {
+  color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-accordion .accordion-item>div {
+  background: rgba(212, 175, 55, 0.05) !important;
+  color: var(--wjs-color-text-muted) !important;
+}
+
+/* Tabs: Gold Indicator */
+.wp-block-tabs>div:first-child {
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+}
+
+.wp-block-tabs button {
+  color: var(--wjs-color-text-muted) !important;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  color: var(--wjs-color-primary) !important;
+  border-bottom-color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-tabs>div:last-child {
+  background: var(--wjs-bg-surface) !important;
+  border-radius: 8px !important;
+}
+
+/* Video: Elegant Frame */
+.wp-block-video-embed {
+  border-radius: 8px !important;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  border: 1px solid var(--wjs-border-subtle);
+}
+
+/* Audio: Dark Player */
+.wp-block-audio-player {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 8px !important;
+}
+
+.wp-block-audio-player div:first-child>div:first-child {
+  background: var(--wjs-color-primary) !important;
+  color: #000 !important;
+}
+
+/* Pricing: Luxury Tiers */
+.wp-block-pricing>div {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-pricing>div:hover {
+  border-color: rgba(212, 175, 55, 0.3) !important;
+}
+
+.wp-block-pricing>div h3 {
+  font-family: 'Playfair Display', serif !important;
+}
+
+.wp-block-pricing>div[style*="scale(1.05)"] {
+  background: linear-gradient(180deg, #1a1510, var(--wjs-bg-surface)) !important;
+  border: 2px solid var(--wjs-color-primary) !important;
+  box-shadow: 0 0 60px rgba(212, 175, 55, 0.2);
+}
+
+/* Testimonial: Elegant Quote */
+.wp-block-testimonial {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-testimonial>div:first-child {
+  color: var(--wjs-color-primary) !important;
+  font-family: 'Playfair Display', serif !important;
+}
+
+.wp-block-testimonial p {
+  font-family: 'Playfair Display', serif !important;
+  font-style: italic;
+}
+
+/* CTA Banner: Gold Premium */
+.wp-block-cta-banner {
+  background: linear-gradient(180deg, rgba(212, 175, 55, 0.15), var(--wjs-bg-surface)) !important;
+  border: 1px solid var(--wjs-color-primary) !important;
+  border-radius: 16px !important;
+}
+
+.wp-block-cta-banner h2 {
+  font-family: 'Playfair Display', serif !important;
+}
+
+.wp-block-cta-banner a {
+  background: var(--wjs-color-primary) !important;
+  color: #000 !important;
+  border-radius: 8px !important;
+}
+
+/* Posts Grid: Dark Cards */
+.wp-block-posts-grid article {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 12px !important;
+}
+
+.wp-block-posts-grid article:hover {
+  border-color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-posts-grid article h3 {
+  font-family: 'Playfair Display', serif !important;
+}
+
+/* Category Posts: Gold Accent */
+.wp-block-category-posts h3 {
+  color: var(--wjs-color-primary) !important;
+  font-family: 'Playfair Display', serif !important;
+}
+
+.wp-block-category-posts li {
+  border-color: var(--wjs-border-subtle) !important;
+}
+
+.wp-block-category-posts li a:hover {
+  color: var(--wjs-color-primary) !important;
+}
+
+/* Search: Dark Input */
+.wp-block-search input {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: 8px !important;
+  color: var(--wjs-color-text-main) !important;
+}
+
+.wp-block-search input:focus {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.1);
+}
+
+.wp-block-search button {
+  background: var(--wjs-color-primary) !important;
+  color: #000 !important;
+  border-radius: 8px !important;
+}

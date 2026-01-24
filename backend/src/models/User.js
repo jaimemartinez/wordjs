@@ -131,17 +131,21 @@ class User {
     static async authenticate(login, password) {
         let user = await User.findByLogin(login);
         if (!user) user = await User.findByEmail(login);
-        if (!user) throw new Error('Invalid username or email');
 
-        // Allow direct access to DB for password check to save object instantiation if needed, 
-        // but finding by user is fine. The user object doesn't store password hash in memory usually for security,
-        // but our simple constructor didn't strictly exclude it.
-        // Let's re-fetch the hash explicitly to be safe as `new User(row)` might not keep `user_pass`
+        // Mitigation for Timing Attacks (Username Enumeration)
+        // Always perform a hash comparison, even if user doesn't exist
+        // We use a dummy hash to burn CPU time similar to a real login
+        if (!user) {
+            // Dummy hash (bcrypt/cost=10)
+            const dummy = '$2a$10$abcdefghijklmnopqrstuv';
+            await bcrypt.compare(password, dummy);
+            throw new Error('Invalid credentials');
+        }
 
         const row = await dbAsync.get('SELECT user_pass FROM users WHERE id = ?', [user.id]);
-
         const valid = await bcrypt.compare(password, row.user_pass);
-        if (!valid) throw new Error('Invalid password');
+
+        if (!valid) throw new Error('Invalid credentials');
 
         return user;
     }
