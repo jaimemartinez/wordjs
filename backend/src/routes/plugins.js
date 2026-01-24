@@ -368,4 +368,8 @@ router.get('/menus', authenticate, asyncHandler(async (req, res) => {
     res.json(activeMenus);
 }));
 
+// Mount bundle routes for pre-compiled plugin frontends
+const bundleRoutes = require('./plugin-bundles');
+router.use('/', bundleRoutes);
+
 module.exports = router;
