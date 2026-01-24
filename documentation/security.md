@@ -23,14 +23,22 @@ WordJS uses `AsyncLocalStorage` to track the execution context of every request.
     *   Secrets (DB passwords, JWT keys) are loaded directly from `wordjs-config.json` by the core and never exposed to `process.env`.
     *   Plugins attempting to access secrets will receive `undefined`.
 
-*   **Module Interception (Enterprise-Level):** WordJS intercepts `require()` calls at runtime:
+*   **Module Interception (Enterprise-Level):** WordJS intercepts `require()` calls at runtime using a secure module wrapper:
     *   **`fs` Proxy:** All filesystem operations require `filesystem:read` or `filesystem:write` permissions. Plugins can freely access their own directory.
-    *   **`child_process` Proxy:** Shell execution is **ALWAYS blocked** for plugins unless they have `system:admin` (dangerous, rarely granted).
-    *   **Obfuscation-Immune:** Because enforcement happens at runtime (not static analysis), even obfuscated code like `fs["read" + "FileSync"]()` is blocked.
+    *   **`child_process` Proxy:** Shell execution is **ALWAYS blocked** for plugins. Any attempt to use `exec`, `spawn`, or `fork` is intercepted at the module level.
+    *   **Obfuscation-Immune:** Because enforcement happens at runtime (not just static analysis), even obfuscated code like `fs["read" + "FileSync"]()` is blocked.
 
 *   **API Sandboxing:** Core functions like `dbAsync` or `updateOption` verify the current plugin's permissions before executing. If a plugin lacks the required "capability" in its manifest, the call is blocked at runtime.
 
-### 1.3 Mandatory Permission Authorization
+### 1.3 CrashGuard v2.0 (Anti-Boot Loop)
+WordJS includes a sophisticated system to prevent a single buggy or malicious plugin from taking down the entire server.
+
+*   **The 3-Strike Rule:** To avoid "false positives" (like a power outage during plugin load), CrashGuard uses a strike system.
+    1.  **Strike 1 & 2:** If the server crashes during plugin initialization, CrashGuard logs a warning and retries on next boot.
+    2.  **Strike 3:** If the plugin consistently crashes the server 3 times, it is **automatically disabled**, and a critical alert is sent to the admin panel.
+*   **Runtime Blame System:** If an asynchronous error (like an unhandled promise rejection or a `setTimeout` crash) occurs outside of a request, CrashGuard analyzes the stack trace. If the error originated from a plugin, that plugin is identified ("blamed") and disabled on the next restart to prevent a crash loop.
+
+### 1.4 Mandatory Permission Authorization
 Plugins must explicitly declare their requirements in `manifest.json`.
 
 *   **Transparency:** Administrators are presented with a clear "Authorization Modal" before activation.
