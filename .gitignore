@@ -7,6 +7,11 @@ yarn.lock
 .env
 .env.local
 .env.*.local
+backend/wordjs-config.json
+
+# Data & Storage
+backend/data/
+ssl-auto.*
 
 # Logs
 logs/

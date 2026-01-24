@@ -1,0 +1,13 @@
+{
+    "siteUrl": "http://localhost:3000",
+    "frontendUrl": "http://localhost:3001",
+    "port": 4000,
+    "gatewayPort": 3000,
+    "dbDriver": "sqlite-native",
+    "dbPath": "./data/wordjs-native.db",
+    "gatewaySecret": "CHANGE_ME_IN_PROD",
+    "jwtSecret": "CHANGE_ME_IN_PROD",
+    "ssl": {
+        "enabled": false
+    }
+}
