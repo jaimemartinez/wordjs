@@ -11,6 +11,8 @@ backend/wordjs-config.json
 
 # Data & Storage
 backend/data/
+backend/uploads/
+backend/tmp-*/
 ssl-auto.*
 
 # Logs
