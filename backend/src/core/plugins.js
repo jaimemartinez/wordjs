@@ -9,14 +9,207 @@ const path = require('path');
 const { addAction, doAction, addFilter } = require('./hooks');
 const { getOption, updateOption } = require('./options');
 
+const semver = require('semver');
+
 const PLUGINS_DIR = path.resolve('./plugins');
 const ROOT_DIR = path.resolve('.');
 
 /**
- * Install dependencies defined in manifest.json
+ * Check if a plugin is bundled (has its own dependencies packaged)
+ * A plugin is considered bundled if:
+ * 1. manifest.json has "bundled": true
+ * 2. Plugin has its own node_modules/ directory
+ * 3. Plugin has a dist/*.bundle.js file
  */
-function installPluginDependencies(slug, manifest) {
+function isBundledPlugin(pluginPath, manifest = {}) {
+    // 1. Explicit flag in manifest
+    if (manifest.bundled === true) {
+        return true;
+    }
+
+    // 2. Has own node_modules
+    const nodeModulesPath = path.join(pluginPath, 'node_modules');
+    if (fs.existsSync(nodeModulesPath) && fs.statSync(nodeModulesPath).isDirectory()) {
+        // Check it's not empty
+        try {
+            const contents = fs.readdirSync(nodeModulesPath);
+            if (contents.length > 0) {
+                return true;
+            }
+        } catch { }
+    }
+
+    // 3. Has bundle file in dist/
+    const distPath = path.join(pluginPath, 'dist');
+    if (fs.existsSync(distPath) && fs.statSync(distPath).isDirectory()) {
+        try {
+            const files = fs.readdirSync(distPath);
+            if (files.some(f => f.endsWith('.bundle.js'))) {
+                return true;
+            }
+        } catch { }
+    }
+
+    return false;
+}
+
+/**
+ * Check for dependency conflicts between a plugin and active plugins
+ * Uses SemVer to determine if version ranges are compatible
+ * 
+ * @param {string} slug - Plugin slug being activated
+ * @param {object} manifest - Plugin manifest with dependencies
+ * @returns {{ compatible: boolean, conflicts: Array<{dep: string, newRange: string, existingRange: string, conflictPlugin: string}> }}
+ */
+async function checkDependencyConflicts(slug, manifest) {
+    if (!manifest || !manifest.dependencies) {
+        return { compatible: true, conflicts: [] };
+    }
+
+    const conflicts = [];
+    const activePlugins = await getActivePlugins();
+    const plugins = scanPlugins();
+
+    // Build map of all dependencies from active plugins
+    const activeDependencies = new Map(); // dep -> { range, pluginSlug }
+
+    for (const activeSlug of activePlugins) {
+        if (activeSlug === slug) continue; // Skip self
+
+        const plugin = plugins.find(p => p.slug === activeSlug);
+        if (!plugin) continue;
+
+        const manifestPath = path.join(plugin.path, 'manifest.json');
+        if (!fs.existsSync(manifestPath)) continue;
+
+        try {
+            const activeManifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+
+            // Skip bundled plugins - they don't contribute to shared dependencies
+            if (isBundledPlugin(plugin.path, activeManifest)) continue;
+
+            if (activeManifest.dependencies) {
+                for (const [dep, range] of Object.entries(activeManifest.dependencies)) {
+                    activeDependencies.set(dep, { range, pluginSlug: activeSlug });
+                }
+            }
+        } catch { }
+    }
+
+    // Check each new dependency against existing ones
+    for (const [dep, newRange] of Object.entries(manifest.dependencies)) {
+        if (!activeDependencies.has(dep)) continue;
+
+        const existing = activeDependencies.get(dep);
+        const existingRange = existing.range;
+
+        // Check if ranges intersect (have at least one common version)
+        // We do this by checking if there's a version that satisfies both
+        const rangesIntersect = semverRangesIntersect(newRange, existingRange);
+
+        if (!rangesIntersect) {
+            conflicts.push({
+                dep,
+                newRange,
+                existingRange,
+                conflictPlugin: existing.pluginSlug
+            });
+        }
+    }
+
+    return {
+        compatible: conflicts.length === 0,
+        conflicts
+    };
+}
+
+/**
+ * Check if two SemVer ranges have any intersection
+ * Uses a simple heuristic: coerce to concrete version and check
+ */
+function semverRangesIntersect(range1, range2) {
+    try {
+        // Try to find a version that satisfies both ranges
+        // We test common major versions to find intersection
+        const testVersions = [];
+
+        // Extract potential major versions from ranges
+        const majors = new Set();
+        const extractMajor = (range) => {
+            const match = range.match(/(\d+)/);
+            if (match) majors.add(parseInt(match[1]));
+        };
+        extractMajor(range1);
+        extractMajor(range2);
+
+        // Generate test versions for each major (0-30 to cover most cases)
+        for (let major = 0; major <= 30; major++) {
+            for (let minor = 0; minor <= 20; minor += 5) {
+                testVersions.push(`${major}.${minor}.0`);
+            }
+        }
+
+        // Check if any test version satisfies both ranges
+        for (const version of testVersions) {
+            if (semver.satisfies(version, range1) && semver.satisfies(version, range2)) {
+                return true;
+            }
+        }
+
+        // More precise: use semver.intersects if available (semver 7.x)
+        if (typeof semver.intersects === 'function') {
+            return semver.intersects(range1, range2);
+        }
+
+        return false;
+    } catch {
+        // If parsing fails, assume compatible (fail open for edge cases)
+        console.warn(`⚠️ Could not parse semver ranges: ${range1}, ${range2}`);
+        return true;
+    }
+}
+
+/**
+ * Format dependency conflict error message
+ */
+function formatDependencyConflictError(slug, conflicts) {
+    const conflictDetails = conflicts.map(c => {
+        return `  ┌─────────────────────────────────────────────────────────────────┐
+  │  Dependencia: ${c.dep.padEnd(49)}│
+  │  ${slug} requiere: ${c.newRange.padEnd(44)}│
+  │  ${c.conflictPlugin} (activo) usa: ${c.existingRange.padEnd(36)}│
+  │  Versiones incompatibles: No hay versión que satisfaga ambos    │
+  └─────────────────────────────────────────────────────────────────┘`;
+    }).join('\n\n');
+
+    const pluginNames = [...new Set(conflicts.map(c => c.conflictPlugin))];
+    const solutions = pluginNames.map((p, i) => `  ${i + 1}. Desactivar "${p}" antes de activar "${slug}"`).join('\n');
+
+    return `❌ No se puede activar "${slug}"
+
+Conflicto de dependencias detectado:
+${conflictDetails}
+
+Soluciones posibles:
+${solutions}
+  ${pluginNames.length + 1}. Contactar al desarrollador de "${slug}" para actualizar dependencias
+  ${pluginNames.length + 2}. Solicitar una versión "bundled" del plugin con dependencias incluidas`;
+}
+
+/**
+ * Install dependencies defined in manifest.json
+ * @param {string} slug - Plugin slug
+ * @param {object} manifest - Plugin manifest
+ * @param {string} pluginPath - Path to the plugin directory
+ */
+function installPluginDependencies(slug, manifest, pluginPath = null) {
     if (!manifest || !manifest.dependencies) return;
+
+    // Skip bundled plugins - they have their own dependencies
+    if (pluginPath && isBundledPlugin(pluginPath, manifest)) {
+        console.log(`📦 Plugin '${slug}' is bundled - skipping shared dependency installation.`);
+        return;
+    }
 
     let rootPkg = {};
     try {
@@ -492,7 +685,24 @@ async function activatePlugin(slug) {
             // 0. Static Permission Verification
             validatePluginPermissions(slug, plugin.path, manifest);
 
-            installPluginDependencies(slug, manifest);
+            // 1a. Check if this is a bundled plugin
+            const isBundled = isBundledPlugin(plugin.path, manifest);
+
+            if (isBundled) {
+                console.log(`📦 Plugin '${slug}' detected as bundled - no shared dependencies.`);
+            } else {
+                // 1b. HARD LOCK: Check for dependency conflicts with active plugins
+                const conflictResult = await checkDependencyConflicts(slug, manifest);
+
+                if (!conflictResult.compatible) {
+                    const errorMessage = formatDependencyConflictError(slug, conflictResult.conflicts);
+                    console.error(errorMessage);
+                    throw new Error(errorMessage);
+                }
+
+                // 1c. Install dependencies (only if not bundled and no conflicts)
+                installPluginDependencies(slug, manifest, plugin.path);
+            }
         } catch (e) {
             // CRITICAL: Must throw to stop execution if security block or other failure occurs
             console.error(`🛡️ Protection Active: Blocking ${slug} activation due to:`, e.message);
@@ -655,7 +865,7 @@ async function loadActivePlugins() {
                 // CRITICAL: Re-validate permissions on every boot to prevent code poisoning
                 validatePluginPermissions(slug, plugin.path, manifest);
 
-                installPluginDependencies(slug, manifest);
+                installPluginDependencies(slug, manifest, plugin.path);
             } catch (e) {
                 console.error(`   ✗ Security Block for ${slug} on load:`, e.message);
                 // We don't load plugins that fail validation
@@ -754,5 +964,8 @@ module.exports = {
     getAllPlugins,
     createSamplePlugin,
     validatePluginPermissions,
+    // Hard Lock + Bundling utilities
+    isBundledPlugin,
+    checkDependencyConflicts,
     PLUGINS_DIR
 };

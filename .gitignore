@@ -14,6 +14,9 @@ backend/data/
 backend/uploads/
 backend/tmp-*/
 ssl-auto.*
+*.db
+*.sqlite
+*.sqlite3
 
 # Logs
 logs/
