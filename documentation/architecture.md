@@ -486,9 +486,36 @@ wordjs/
 
 ## 🔗 Quick Reference
 
-| Layer    | Technology        | Port | Purpose                 |
-| -------- | ----------------- | ---- | ----------------------- |
-| Gateway  | Node.js Cluster   | 3000 | Routing, Load Balancing |
-| Frontend | Next.js           | 3001 | SSR, Visual Editor      |
-| Backend  | Express.js        | 4000 | REST API, Plugins       |
-| Database | SQLite/PostgreSQL | -    | Data Storage            |
+| Layer       | Technology        | Port     | Purpose                                     |
+| ----------- | ----------------- | -------- | ------------------------------------------- |
+| **Gateway** | Node.js Cluster   | **3000** | **Identity & Routing (Single Entry Point)** |
+| Frontend    | Next.js           | 3001     | SSR, Visual Editor                          |
+| Backend     | Express.js        | 4000     | REST API, Plugins                           |
+| Database    | SQLite/PostgreSQL | -        | Data Storage                                |
+
+---
+
+## ⚡ Hybrid Plugin Architecture
+
+WordJS uses a dual-mode loading system for plugins to optimize for both developer experience and production speed.
+
+### Development Mode (`NODE_ENV=development`)
+- **Frontend:** Uses **Next.js Dynamic Imports**.
+- **Performance:** Supports Hot Module Replacement (HMR).
+- **Latency:** Slightly higher initial load due to on-the-fly compilation.
+
+### Production Mode (`NODE_ENV=production`)
+- **Frontend:** Loads **Pre-compiled Bundles** via the Plugin API.
+- **Performance:** Near-zero activation time. No `next build` required.
+- **Sandboxing:** Bundles are evaluated in a blob URL context with React singleton injection.
+
+---
+
+## 🌐 Port Mapping Logic
+
+To avoid CORS and simplify production deployments, all traffic should go through the Gateway on port **3000**.
+
+- `http://localhost:3000/` → Handled by **Frontend** (3001)
+- `http://localhost:3000/api/*` → Handled by **Backend** (4000)
+- `http://localhost:3000/admin` → Handled by **Frontend** (3001)
+- `http://localhost:3000/plugins/*` → Handled by **Backend** (4000)

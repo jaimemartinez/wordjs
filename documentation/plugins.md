@@ -174,22 +174,61 @@ export const registerMyHooks = () => {
 };
 ```
 
-> **React Dynamic Loading:** WordJS generates a dynamic registry. Your hooks file is lazy-loaded only when the plugin is active.
+---
+
+## 3. Frontend Loading Architecture (Hybrid System) ⚡
+
+WordJS uses a hybrid loading system to balance developer productivity and production performance.
+
+### 3.1 Development Mode (`npm run dev`)
+In development, the system uses **Next.js Dynamic Imports** pointing directly to your `client/` source files.
+- **Benefit:** Hot Module Replacement (HMR) works perfectly. When you save a `.tsx` file, the UI updates instantly.
+- **How:** The `generate-plugin-registry.js` script maps slugs to local source paths.
+
+### 3.2 Production Mode (`npm start`)
+In production, WordJS avoids the heavy `next build` process when activating plugins. Instead, it uses **Pre-compiled Bundles**.
+- **Benefit:** Activating a plugin is instant. No server downtime or high CPU usage.
+- **How:** The frontend loads a minified `.js` bundle from the backend API and evaluates it at runtime.
 
 ---
 
-## 3. How to Install and Activate
+## 4. The Pre-compilation Workflow 📦
+
+Before distributing or deploying your plugin, you MUST compile the frontend.
+
+### Step 1: Run the Builder
+From the `backend` directory, run:
+```bash
+node scripts/build-plugin.js hello-world
+```
+
+### Step 2: Verification
+This script uses **esbuild** to create a `dist/` folder in your plugin with:
+- `admin.bundle.js`: Your admin UI.
+- `hooks.bundle.js`: Your frontend hooks.
+- `manifest.build.json`: Build metadata.
+
+### 🛑 Critical: The React Singleton
+WordJS is highly sophisticated about how it handles React. 
+- **The Core Problem:** If your plugin bundles its own copy of React, Hooks will fail (Singleton violation).
+- **The WordJS Solution:** The build script automatically marks `react`, `react-dom`, and all `@/*` (core components) as **externals**.
+- **Runtime Injection:** WordJS injects its own unified React instance into the plugin bundle at runtime. **Never try to bundle React yourself.**
+
+---
+
+## 5. How to Install and Activate
 
 ### The Distribution Workflow (Standard)
-1.  Compress your plugin folder into a **.zip** file.
-2.  Go to **Plugins** -> **Add New / Upload**.
-3.  Upload your `.zip`.
-4.  Click **Activate**. The system will pause briefly to **install dependencies**.
+1.  **Build:** Run `node scripts/build-plugin.js my-plugin`.
+2.  **Zip:** Compress your plugin folder (including the new `dist/` folder).
+3.  **Upload:** Go to **Plugins** -> **Add New** in the Admin panel.
+4.  **Activate:** Plugin works instantly using the pre-compiled bundle.
 
 ### The Local Development Workflow (Fast)
 1.  Create your folder directly in `backend/plugins/`.
 2.  Refresh the **Plugins** list.
-3.  Click **Activate**. Watch the server logs to see the dependency magic happening.
+3.  Click **Activate**.
+4.  Run `npm run dev` in `admin-next` to enable Hot Reload for your plugin source.
 
 ---
 
