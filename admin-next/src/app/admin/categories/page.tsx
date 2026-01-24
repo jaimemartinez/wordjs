@@ -2,8 +2,13 @@
 
 import { useEffect, useState } from "react";
 import { categoriesApi, Category } from "@/lib/api";
+import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
+import { PageHeader, Button, EmptyState, Card } from "@/components/ui";
 
 export default function CategoriesPage() {
+    const { t } = useI18n();
+    const { confirm } = useModal();
     const [categories, setCategories] = useState<Category[]>([]);
     const [loading, setLoading] = useState(true);
     const [newCategory, setNewCategory] = useState("");
@@ -36,7 +41,7 @@ export default function CategoriesPage() {
     };
 
     const handleDelete = async (id: number) => {
-        if (!confirm("Delete this category?")) return;
+        if (!await confirm(t('categories.delete.message') || "Delete this category?", t('categories.delete.title') || "Delete Category", true)) return;
         try {
             await categoriesApi.delete(id);
             loadCategories();
@@ -46,60 +51,107 @@ export default function CategoriesPage() {
     };
 
     return (
-        <div className="p-6 h-full overflow-auto">
-            <h1 className="text-2xl font-bold text-gray-800 mb-6">Categories</h1>
+        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
+            <PageHeader
+                title={t('categories.title') || "Categories"}
+                subtitle={`${categories.length} ${t('categories.count') || 'categories'}`}
+            />
 
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
                 {/* Add new category */}
-                <div className="bg-white rounded-lg shadow p-6">
-                    <h2 className="text-lg font-semibold text-gray-800 mb-4">Add New Category</h2>
-                    <form onSubmit={handleCreate} className="space-y-4">
-                        <input
-                            type="text"
-                            value={newCategory}
-                            onChange={(e) => setNewCategory(e.target.value)}
-                            placeholder="Category name"
-                            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-gray-900"
-                        />
-                        <button
-                            type="submit"
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 rounded-lg transition-colors"
-                        >
-                            Add Category
-                        </button>
+                <Card variant="default" padding="lg" className="h-fit">
+                    <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6 flex items-center gap-2">
+                        <i className="fa-solid fa-plus-circle text-blue-500"></i>
+                        {t('categories.add') || "Add New Category"}
+                    </h2>
+                    <form onSubmit={handleCreate} className="space-y-6">
+                        <div className="relative group">
+                            <i className="fa-solid fa-tag absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
+                            <input
+                                type="text"
+                                value={newCategory}
+                                onChange={(e) => setNewCategory(e.target.value)}
+                                placeholder={t('categories.name.placeholder') || "Category name"}
+                                className="w-full pl-12 pr-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium"
+                            />
+                        </div>
+                        <Button type="submit" icon="fa-plus" className="w-full">
+                            {t('categories.add') || "Add Category"}
+                        </Button>
                     </form>
-                </div>
+                </Card>
 
                 {/* Categories list */}
-                <div className="lg:col-span-2 bg-white rounded-lg shadow overflow-hidden">
-                    {loading ? (
-                        <div className="p-8 text-center text-gray-500">Loading...</div>
-                    ) : (
-                        <table className="w-full">
-                            <thead className="bg-gray-50">
-                                <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Name</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Slug</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Count</th>
-                                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-gray-200">
-                                {categories.map((cat) => (
-                                    <tr key={cat.id} className="hover:bg-gray-50">
-                                        <td className="px-6 py-4 font-medium text-gray-800">{cat.name}</td>
-                                        <td className="px-6 py-4 text-gray-500">{cat.slug}</td>
-                                        <td className="px-6 py-4 text-gray-500">{cat.count}</td>
-                                        <td className="px-6 py-4 text-right">
-                                            <button onClick={() => handleDelete(cat.id)} className="text-red-600 hover:text-red-800">
-                                                <i className="fa-solid fa-trash"></i>
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    )}
+                <div className="lg:col-span-2">
+                    <Card variant="default" padding="none">
+                        {loading ? (
+                            <div className="p-20 text-center">
+                                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                                <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{t('loading')}</p>
+                            </div>
+                        ) : categories.length === 0 ? (
+                            <EmptyState
+                                icon="fa-folder-open"
+                                title={t('categories.not.found') || "No categories yet"}
+                                description={t('categories.add.first') || "Create your first category to organize content."}
+                            />
+                        ) : (
+                            <div className="overflow-x-auto">
+                                <table className="w-full">
+                                    <thead>
+                                        <tr className="border-b border-gray-100/50 bg-gray-50/30">
+                                            <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                                                {t('categories.name') || "Name"}
+                                            </th>
+                                            <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                                                {t('categories.slug') || "Slug"}
+                                            </th>
+                                            <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                                                {t('categories.count') || "Count"}
+                                            </th>
+                                            <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">
+                                                {t('actions')}
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y divide-gray-50">
+                                        {categories.map((cat) => (
+                                            <tr key={cat.id} className="group hover:bg-blue-50/5 transition-colors">
+                                                <td className="px-8 py-6">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-50 to-indigo-50 flex items-center justify-center text-blue-600 group-hover:scale-110 transition-transform">
+                                                            <i className="fa-solid fa-folder"></i>
+                                                        </div>
+                                                        <span className="text-lg font-bold text-gray-700 italic tracking-tight">
+                                                            {cat.name}
+                                                        </span>
+                                                    </div>
+                                                </td>
+                                                <td className="px-8 py-6">
+                                                    <span className="text-sm font-mono text-gray-400 bg-gray-50 px-3 py-1 rounded-lg">
+                                                        {cat.slug}
+                                                    </span>
+                                                </td>
+                                                <td className="px-8 py-6">
+                                                    <span className="text-sm font-bold text-gray-500 bg-gray-50 px-3 py-1 rounded-full">
+                                                        {cat.count}
+                                                    </span>
+                                                </td>
+                                                <td className="px-8 py-6 text-right">
+                                                    <button
+                                                        onClick={() => handleDelete(cat.id)}
+                                                        className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 opacity-0 group-hover:opacity-100"
+                                                    >
+                                                        <i className="fa-solid fa-trash text-xs"></i>
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        )}
+                    </Card>
                 </div>
             </div>
         </div>

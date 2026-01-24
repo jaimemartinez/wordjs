@@ -14,7 +14,8 @@ router.get('/status', (req, res) => {
     let detectedUrl = '';
 
     if (installed && currentConfig && currentConfig.siteUrl) {
-        const protocol = req.protocol;
+        // Fix: Trust upstream Gateway protocol
+        const protocol = req.get('x-forwarded-proto') || req.protocol;
         // Fix: Use X-Forwarded-Host if available (from Next.js proxy)
         const host = req.get('x-forwarded-host') || req.get('host');
         detectedUrl = `${protocol}://${host}`;
@@ -51,7 +52,8 @@ router.post('/install', async (req, res) => {
         adminPassword
     } = req.body;
 
-    const protocol = req.protocol;
+    // Fix: Trust upstream Gateway protocol
+    const protocol = req.get('x-forwarded-proto') || req.protocol;
     const host = req.get('host');
     const siteUrl = `${protocol}://${host}`;
 
@@ -65,13 +67,25 @@ router.post('/install', async (req, res) => {
     const frontendUrl = req.body.frontendUrl || siteUrl.replace(':3000', ':3001');
 
     // Save config
+    const crypto = require('crypto');
+    const fs = require('fs');
+    const path = require('path');
+
+    // SECURITY: Auto-generate cryptographically secure secrets
+    const jwtSecret = crypto.randomBytes(64).toString('hex');
+    const gatewaySecret = crypto.randomBytes(32).toString('hex');
+
     const newConfig = {
         siteUrl,
         frontendUrl,
-        port: process.env.PORT || 3000,
-        host: process.env.HOST || 'localhost',
-        gatewaySecret: require('crypto').randomBytes(32).toString('hex')
+        port: 4000,
+        host: 'localhost',
+        gatewaySecret: gatewaySecret,
+        jwtSecret: jwtSecret // Store in config for reference
     };
+
+    // Note: We no longer write to .env as per "Never Use Env Vars" policy.
+    // Secrets are persisted solely in wordjs-config.json via saveConfig().
 
     if (saveConfig(newConfig)) {
         // Here we would also trigger the DB initialization and Admin user creation logic
@@ -117,7 +131,23 @@ router.post('/install', async (req, res) => {
                 });
             }
 
-            res.json({ success: true });
+            // Run CMS core tests to verify system integrity
+            const { runCoreTests } = require('../core/plugin-test-runner');
+            const testResults = await runCoreTests();
+
+            if (!testResults.success) {
+                console.warn(`⚠️ CMS core tests had failures (${testResults.failed}/${testResults.tests})`);
+                // We don't block installation, just warn
+            }
+
+            res.json({
+                success: true,
+                tests: {
+                    total: testResults.tests,
+                    passed: testResults.passed,
+                    failed: testResults.failed
+                }
+            });
         } catch (e) {
             console.error(e);
             res.status(500).json({ error: 'Setup failed during DB ops' });
@@ -150,7 +180,8 @@ router.post('/migrate', async (req, res) => {
             return res.status(403).json({ error: 'Permission denied. Only administrators can migrate the site.' });
         }
 
-        const protocol = req.protocol;
+        // Fix: Trust upstream Gateway protocol
+        const protocol = req.get('x-forwarded-proto') || req.protocol;
         // Host from proxy
         const host = req.get('x-forwarded-host') || req.get('host');
         const newSiteUrl = `${protocol}://${host}`;

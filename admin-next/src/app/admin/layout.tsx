@@ -6,7 +6,7 @@ import { headers } from 'next/headers';
 export async function generateMetadata(): Promise<Metadata> {
     try {
         // Zero-config default: Connect directly to the backend on port 3000 for SSR
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.NEXT_PUBLIC_BACKEND_URL || "http://localhost:3000/api/v1";
+        const apiUrl = process.env.INTERNAL_API_URL || "http://localhost:3000/api/v1";
 
         const res = await fetch(`${apiUrl}/settings`, {
             cache: 'no-store'

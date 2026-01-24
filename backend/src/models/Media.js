@@ -40,9 +40,9 @@ class Media {
             mimeType
         });
 
-        // Update GUID to file URL
-        const fileUrl = `${config.site.url}/uploads/${filename}`;
-        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [fileUrl, attachment.id]);
+        // Update GUID to relative path (portable across domains)
+        const relativePath = `/uploads/${filename}`;
+        await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [relativePath, attachment.id]);
 
         // Store attachment metadata
         const metadata = {
@@ -92,7 +92,27 @@ class Media {
     static async formatAttachment(post) {
         // Parallel meta fetch if possible, but getMeta is simple
         const metadata = (await Post.getMeta(post.id, '_wp_attachment_metadata')) || {};
+        const attachedFile = (await Post.getMeta(post.id, '_wp_attached_file')) || '';
         const alt = (await Post.getMeta(post.id, '_wp_attachment_image_alt')) || '';
+
+        // DYNAMIC URL RESOLUTION:
+        // The 'guid' field stores a relative path (e.g., /uploads/image.jpg)
+        // We construct the full URL dynamically using current site config.
+        // This makes the system fully portable across domains.
+        let relativePath = post.guid || '';
+
+        // Handle legacy absolute URLs by extracting relative path
+        if (relativePath.startsWith('http://') || relativePath.startsWith('https://')) {
+            const urlMatch = relativePath.match(/\/uploads\/.+$/);
+            relativePath = urlMatch ? urlMatch[0] : `/uploads/${attachedFile}`;
+        } else if (attachedFile && !relativePath.startsWith('/uploads')) {
+            // Fallback: construct from attached file
+            const safePath = attachedFile.replace(/\\/g, '/');
+            relativePath = `/uploads/${safePath}`;
+        }
+
+        // Build absolute URL for API response
+        const absoluteUrl = `${config.site.url}${relativePath}`;
 
         return {
             id: post.id,
@@ -107,12 +127,13 @@ class Media {
             alt,
             author: post.authorId,
             mimeType: post.postMimeType,
-            guid: post.guid,
-            sourceUrl: post.guid,
+            guid: absoluteUrl,      // RSS requires absolute URLs (globally unique)
+            sourceUrl: relativePath, // Use relative path (e.g. /uploads/file.jpg) for internal app flexibility
+            relativePath,           // Explicit relative path
             mediaDetails: {
                 width: metadata.width || 0,
                 height: metadata.height || 0,
-                file: metadata.file || '',
+                file: attachedFile || metadata.file || '',
                 filesize: metadata.filesize || 0,
                 sizes: metadata.sizes || {}
             }

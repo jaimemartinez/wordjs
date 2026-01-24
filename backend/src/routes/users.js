@@ -27,13 +27,18 @@ router.get('/', authenticate, can('list_users'), asyncHandler(async (req, res) =
     const limit = Math.min(parseInt(per_page, 10) || 10, 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
+    // SECURITY: Whitelist allowed orderBy columns to prevent SQL injection
+    const allowedOrderBy = ['id', 'user_login', 'display_name', 'user_email', 'user_registered'];
+    const safeOrderBy = allowedOrderBy.includes(orderby) ? orderby : 'id';
+    const safeOrder = ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'ASC';
+
     const users = await User.findAll({
         search,
         role,
         limit,
         offset,
-        orderBy: orderby,
-        order: order.toUpperCase()
+        orderBy: safeOrderBy,
+        order: safeOrder
     });
 
     const total = await User.count({ search });

@@ -24,7 +24,8 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { widgetsApi, Widget, Sidebar } from "@/lib/api";
-import ConfirmationModal from "@/components/ConfirmationModal";
+import { useModal } from "@/contexts/ModalContext";
+import { PageHeader, EmptyState } from "@/components/ui";
 
 // --- Components ---
 
@@ -44,13 +45,13 @@ function DraggableWidget({ widget }: { widget: Widget }) {
             style={style}
             {...listeners}
             {...attributes}
-            className="p-3 bg-white border rounded shadow-sm mb-2 cursor-grab hover:bg-gray-50 flex justify-between items-center"
+            className="p-4 bg-white border-2 border-gray-50 rounded-2xl shadow-sm mb-3 cursor-grab hover:bg-blue-50/30 hover:border-blue-100 flex justify-between items-center transition-all group"
         >
             <div>
-                <span className="font-semibold block">{widget.name}</span>
-                <span className="text-xs text-gray-500">{widget.description}</span>
+                <span className="font-bold text-gray-900 block">{widget.name}</span>
+                <span className="text-xs text-gray-400 font-medium">{widget.description}</span>
             </div>
-            <i className="fa-solid fa-grip-vertical text-gray-400"></i>
+            <i className="fa-solid fa-grip-vertical text-gray-300 group-hover:text-blue-400 transition-colors"></i>
         </div>
     );
 }
@@ -83,8 +84,8 @@ function SidebarItem({
     const displayId = widgetId.charAt(0).toUpperCase() + widgetId.slice(1);
 
     return (
-        <div ref={setNodeRef} style={style} className="mb-2 bg-white border rounded shadow-sm">
-            <div className="p-3 flex justify-between items-center bg-gray-50 border-b">
+        <div ref={setNodeRef} style={style} className="mb-3 bg-white border-2 border-gray-50 rounded-2xl shadow-sm overflow-hidden hover:border-blue-100 transition-all">
+            <div className="p-4 flex justify-between items-center bg-gray-50/30 border-b border-gray-100">
                 <div className="flex items-center gap-2">
                     <button className="cursor-grab text-gray-400 hover:text-gray-600" {...listeners} {...attributes}>
                         <i className="fa-solid fa-grip-vertical"></i>
@@ -133,9 +134,9 @@ function SidebarContainer({ sidebar, onRemove }: { sidebar: Sidebar, onRemove: (
     });
 
     return (
-        <div ref={setNodeRef} className="bg-gray-100 p-4 rounded-lg min-h-[100px]">
-            <h3 className="font-bold text-lg mb-1">{sidebar.name}</h3>
-            <p className="text-xs text-gray-500 mb-4">{sidebar.description}</p>
+        <div ref={setNodeRef} className="bg-white border-2 border-gray-50 rounded-[40px] p-6 shadow-xl shadow-gray-100/50 min-h-[100px]">
+            <h3 className="font-black text-xl text-gray-900 italic tracking-tight mb-1">{sidebar.name}</h3>
+            <p className="text-xs text-gray-400 font-medium mb-6">{sidebar.description}</p>
 
             <SortableContext
                 items={sidebar.widgets}
@@ -144,7 +145,8 @@ function SidebarContainer({ sidebar, onRemove }: { sidebar: Sidebar, onRemove: (
             >
                 <div className="min-h-[50px]">
                     {sidebar.widgets.length === 0 && (
-                        <div className="text-center text-gray-400 py-4 border-2 border-dashed border-gray-300 rounded">
+                        <div className="text-center text-gray-400 py-8 border-2 border-dashed border-gray-200 rounded-2xl text-sm font-medium">
+                            <i className="fa-solid fa-arrows-up-down-left-right text-2xl mb-2 block text-gray-300"></i>
                             Drag widgets here
                         </div>
                     )}
@@ -173,7 +175,8 @@ export default function WidgetsPage() {
     const [sidebars, setSidebars] = useState<Sidebar[]>([]);
     const [activeId, setActiveId] = useState<string | null>(null);
     const [loading, setLoading] = useState(true);
-    const [deletingItem, setDeletingItem] = useState<{ sidebarId: string, instanceKey: string } | null>(null);
+
+    const { alert, confirm } = useModal();
 
     const sensors = useSensors(
         useSensor(MouseSensor, {
@@ -260,39 +263,43 @@ export default function WidgetsPage() {
     };
 
     const handleRemove = async (sidebarId: string, instanceKey: string) => {
-        try {
-            await widgetsApi.removeFromSidebar(sidebarId, instanceKey);
-            // Optimistic update
-            setSidebars(prev => prev.map(s => {
-                if (s.id === sidebarId) {
-                    return { ...s, widgets: s.widgets.filter(w => w !== instanceKey) };
-                }
-                return s;
-            }));
-        } catch (e) {
-            console.error("Remove failed", e);
-            loadData(); // Revert on error
+        if (await confirm("Are you sure you want to remove this widget? This action cannot be undone.", "Remove Widget", true)) {
+            try {
+                await widgetsApi.removeFromSidebar(sidebarId, instanceKey);
+                // Optimistic update
+                setSidebars(prev => prev.map(s => {
+                    if (s.id === sidebarId) {
+                        return { ...s, widgets: s.widgets.filter(w => w !== instanceKey) };
+                    }
+                    return s;
+                }));
+            } catch (e) {
+                console.error("Remove failed", e);
+                loadData(); // Revert on error
+            }
         }
     };
 
     if (loading && sidebars.length === 0) return <div className="p-8">Loading Widgets...</div>;
 
     return (
-        <div className="p-6 h-full overflow-auto">
+        <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 animate-in fade-in duration-500">
             <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
                 onDragStart={handleDragStart}
                 onDragEnd={handleDragEnd}
             >
-                <div className="flex justify-between items-center mb-6">
-                    <h1 className="text-2xl font-bold text-gray-800">Widgets</h1>
-                </div>
+                <PageHeader
+                    title="Widgets"
+                    subtitle="Drag and drop widgets to customize your sidebars"
+                />
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     {/* Available Widgets Column */}
-                    <div className="bg-white p-4 rounded-lg shadow h-fit">
-                        <h2 className="font-bold text-gray-700 mb-4 border-b pb-2">Available Widgets</h2>
+                    <div className="bg-white rounded-[40px] p-6 border-2 border-gray-50 shadow-xl shadow-gray-100/50 h-fit">
+                        <h2 className="font-black text-xl text-gray-900 italic tracking-tight mb-2">Available Widgets</h2>
+                        <p className="text-xs text-gray-400 font-medium border-b border-gray-100 pb-4 mb-4">Drag to add</p>
                         <div className="space-y-2">
                             {/* We treat this list as separate Draggables, NOT a SortableContext because we clone them */}
                             {widgets.map(w => (
@@ -307,7 +314,7 @@ export default function WidgetsPage() {
                             <SidebarContainer
                                 key={sidebar.id}
                                 sidebar={sidebar}
-                                onRemove={(sid, key) => setDeletingItem({ sidebarId: sid, instanceKey: key })}
+                                onRemove={(sid, key) => handleRemove(sid, key)}
                             />
                         ))}
                     </div>
@@ -315,25 +322,12 @@ export default function WidgetsPage() {
 
                 <DragOverlay>
                     {activeId ? (
-                        <div className="p-3 bg-white border border-blue-500 rounded shadow-lg opacity-80 w-[200px]">
-                            Plugin/Item Dragging...
+                        <div className="p-4 bg-white border-2 border-blue-500 rounded-2xl shadow-xl shadow-blue-200 opacity-90 w-[200px]">
+                            <i className="fa-solid fa-grip-vertical text-blue-400 mr-2"></i>
+                            Dragging...
                         </div>
                     ) : null}
                 </DragOverlay>
-
-                <ConfirmationModal
-                    isOpen={!!deletingItem}
-                    onClose={() => setDeletingItem(null)}
-                    onConfirm={() => {
-                        if (deletingItem) {
-                            handleRemove(deletingItem.sidebarId, deletingItem.instanceKey);
-                        }
-                    }}
-                    title="Remove Widget"
-                    message="Are you sure you want to remove this widget? This action cannot be undone."
-                    confirmText="Remove"
-                    isDanger={true}
-                />
             </DndContext>
         </div>
     );

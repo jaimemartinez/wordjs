@@ -1,0 +1,7 @@
+{
+    "name": "Hello World",
+    "version": "1.0.0",
+    "description": "A sample plugin demonstrating the plugin test framework",
+    "author": "WordJS",
+    "permissions": []
+}

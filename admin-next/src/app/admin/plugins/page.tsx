@@ -6,6 +6,7 @@ import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { FaPlug, FaUpload, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaBoxOpen } from "react-icons/fa";
+import { PageHeader, Button, EmptyState } from "@/components/ui";
 
 export default function PluginsPage() {
     const { t } = useI18n();
@@ -262,63 +263,43 @@ export default function PluginsPage() {
             )}
 
             {/* Header */}
-            <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6 mb-10">
-                <div>
-                    <h1 className="text-4xl font-black text-gray-900 tracking-tight font-oswald mb-2 flex items-center gap-3">
-                        <FaPlug className="text-blue-600" />
-                        {t('plugins.title')}
-                    </h1>
-                    <p className="text-lg text-gray-500 font-medium">{t('plugins.extend.functionality')}</p>
-                </div>
-
-                <div>
-                    <label
-                        className={`
-                            group cursor-pointer px-6 py-3 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 text-white 
-                            hover:from-blue-700 hover:to-indigo-700 transition-all duration-300 
-                            flex items-center gap-3 shadow-lg hover:shadow-blue-500/30 transform hover:-translate-y-0.5 font-bold
-                            ${uploading ? 'opacity-70 cursor-wait' : ''}
-                        `}
-                    >
-                        {uploading ? (
-                            <>
-                                <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                                <span>{t('plugins.installing')}</span>
-                            </>
-                        ) : (
-                            <>
-                                <FaUpload className="group-hover:scale-110 transition-transform" />
-                                <span>{t('plugins.upload')}</span>
-                            </>
-                        )}
-                        <input
-                            type="file"
-                            accept=".zip"
-                            className="hidden"
-                            onChange={handleUpload}
-                            disabled={uploading}
-                        />
-                    </label>
-                </div>
+            <div className="relative z-10">
+                <PageHeader
+                    title={t('plugins.title')}
+                    subtitle={t('plugins.extend.functionality')}
+                    icon="fa-plug"
+                    actions={
+                        <label
+                            className={`cursor-pointer ${uploading ? 'opacity-70 cursor-wait' : ''}`}
+                        >
+                            <Button icon={uploading ? "fa-spinner fa-spin" : "fa-upload"} loading={uploading}>
+                                {uploading ? t('plugins.installing') : t('plugins.upload')}
+                            </Button>
+                            <input
+                                type="file"
+                                accept=".zip"
+                                className="hidden"
+                                onChange={handleUpload}
+                                disabled={uploading}
+                            />
+                        </label>
+                    }
+                />
             </div>
 
             {/* Plugin Grid */}
             <div className="relative z-10">
                 {loading ? (
-                    <div className="glass-panel rounded-3xl p-12 text-center text-gray-400">
+                    <div className="glass-panel rounded-[40px] p-12 text-center text-gray-400">
                         <div className="w-16 h-16 border-4 border-blue-100 border-t-blue-500 rounded-full animate-spin mx-auto mb-4"></div>
                         <p className="font-medium">{t('plugins.loading')}</p>
                     </div>
                 ) : plugins.length === 0 ? (
-                    <div className="glass-panel rounded-3xl p-16 text-center">
-                        <div className="w-24 h-24 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-6 text-gray-300">
-                            <FaBoxOpen className="text-5xl" />
-                        </div>
-                        <h3 className="text-2xl font-bold text-gray-800 mb-2">{t('plugins.no.plugins.found')}</h3>
-                        <p className="text-gray-500 max-w-md mx-auto">
-                            Get started by uploading your first plugin using the button above.
-                        </p>
-                    </div>
+                    <EmptyState
+                        icon="fa-box-open"
+                        title={t('plugins.no.plugins.found')}
+                        description="Get started by uploading your first plugin using the button above."
+                    />
                 ) : (
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                         {plugins.map((plugin) => (

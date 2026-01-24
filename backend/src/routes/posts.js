@@ -73,7 +73,8 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         limit,
         offset,
         orderBy: orderByMap[orderby] || 'post_date',
-        order: order.toUpperCase()
+        // SECURITY: Whitelist order direction to prevent injection
+        order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
     });
 
     const total = await Post.count({ type, status: status === 'any' ? null : status });

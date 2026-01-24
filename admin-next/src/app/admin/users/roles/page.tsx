@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { rolesApi, Role } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
+import { useModal } from "@/contexts/ModalContext";
 
 export default function RolesPage() {
     const { user, isLoading: authLoading } = useAuth();
@@ -13,6 +14,8 @@ export default function RolesPage() {
     const [isLoading, setIsLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [success, setSuccess] = useState<string | null>(null);
+
+    const { confirm } = useModal();
 
     // Editing state
     const [editingSlug, setEditingSlug] = useState<string | null>(null);
@@ -90,7 +93,7 @@ export default function RolesPage() {
     };
 
     const handleDelete = async (slug: string) => {
-        if (!confirm(`Are you sure you want to delete the role "${slug}"?`)) return;
+        if (!await confirm(`Are you sure you want to delete the role "${slug}"?`, "Delete Role", true)) return;
 
         try {
             await rolesApi.delete(slug);
@@ -146,8 +149,8 @@ export default function RolesPage() {
                             key={slug}
                             onClick={() => handleEdit(slug, role)}
                             className={`p-4 rounded-2xl border transition-all cursor-pointer group ${editingSlug === slug
-                                    ? "bg-white border-blue-500 shadow-xl shadow-blue-500/10 ring-1 ring-blue-500"
-                                    : "bg-white border-gray-100 hover:border-blue-200 hover:shadow-lg"
+                                ? "bg-white border-blue-500 shadow-xl shadow-blue-500/10 ring-1 ring-blue-500"
+                                : "bg-white border-gray-100 hover:border-blue-200 hover:shadow-lg"
                                 }`}
                         >
                             <div className="flex justify-between items-start">
@@ -177,7 +180,7 @@ export default function RolesPage() {
                 {/* Editor */}
                 <div className="lg:col-span-2">
                     {editingSlug !== null ? (
-                        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl p-8 sticky top-8">
+                        <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 sticky top-8">
                             <form onSubmit={handleSave}>
                                 <div className="flex justify-between items-center mb-8">
                                     <h2 className="text-xl font-bold text-gray-900">
@@ -240,8 +243,8 @@ export default function RolesPage() {
                                                 <label
                                                     key={cap}
                                                     className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer group ${editCaps.includes(cap)
-                                                            ? "bg-blue-50 border-blue-200 text-blue-700"
-                                                            : "bg-gray-50 border-gray-100 text-gray-500 hover:bg-white hover:border-gray-200"
+                                                        ? "bg-blue-50 border-blue-200 text-blue-700"
+                                                        : "bg-gray-50 border-gray-100 text-gray-500 hover:bg-white hover:border-gray-200"
                                                         }`}
                                                 >
                                                     <div className={`w-5 h-5 rounded flex items-center justify-center transition-all ${editCaps.includes(cap) ? "bg-blue-600 text-white" : "bg-white border border-gray-300"
@@ -265,7 +268,7 @@ export default function RolesPage() {
                             </form>
                         </div>
                     ) : (
-                        <div className="h-full min-h-[400px] bg-gray-50 border-2 border-dashed border-gray-200 rounded-3xl flex flex-col items-center justify-center p-12 text-center text-gray-400">
+                        <div className="h-full min-h-[400px] bg-gray-50 border-2 border-dashed border-gray-200 rounded-[40px] flex flex-col items-center justify-center p-12 text-center text-gray-400">
                             <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-4">
                                 <i className="fa-solid fa-shield-halved text-2xl text-gray-200"></i>
                             </div>

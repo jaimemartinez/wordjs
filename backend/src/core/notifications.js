@@ -149,6 +149,14 @@ class NotificationService {
     }
 
     /**
+     * Delete a notification
+     */
+    async deleteNotification(uuid) {
+        await dbAsync.run('DELETE FROM notifications WHERE uuid = ?', [uuid]);
+        return true;
+    }
+
+    /**
      * Get notifications for a user
      */
     async getNotifications(userId, limit = 50) {

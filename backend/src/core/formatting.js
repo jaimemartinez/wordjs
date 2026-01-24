@@ -36,13 +36,49 @@ function sanitizeContent(content, allowedTags = null) {
             'figure', 'figcaption'
         ],
         allowedAttributes: {
-            'a': ['href', 'title', 'target', 'rel'],
-            'img': ['src', 'alt', 'title', 'width', 'height'],
+            'a': ['href', 'title', 'target', 'rel', 'class', 'id', 'style'],
+            'img': ['src', 'alt', 'title', 'width', 'height', 'class', 'id', 'style'],
             'div': ['class', 'id', 'style'],
-            'section': ['class', 'id', 'style'],
-            '*': ['class', 'id', 'style']
+            'span': ['class', 'id', 'style'],
+            'p': ['class', 'id', 'style'],
+            'table': ['class', 'id', 'style'],
+            'td': ['class', 'id', 'style', 'colspan', 'rowspan'],
+            'th': ['class', 'id', 'style', 'colspan', 'rowspan'],
+            '*': ['class', 'id'] // Remove blanket 'style' permission
         },
-        allowedSchemes: ['http', 'https', 'mailto']
+        allowedStyles: {
+            '*': {
+                // Typography
+                'color': [/^#(0x)?[0-9a-f]+$/i, /^rgb\(/, /^[a-z]+$/i],
+                'text-align': [/^left$/, /^right$/, /^center$/, /^justify$/],
+                'font-size': [/^\d+(?:px|em|rem|%)$/],
+                'font-weight': [/^\d+$/, /^bold$/, /^normal$/],
+                'font-family': [/^.+$/], // Allow font families but basic check
+                'text-decoration': [/^underline$/, /^line-through$/, /^none$/],
+
+                // Layout & Box Model
+                'width': [/^\d+(?:px|em|%|vw)$/],
+                'height': [/^\d+(?:px|em|%|vh)$/],
+                'padding': [/^\d+(?:px|em|%)$/, /^0$/],
+                'padding-left': [/^\d+(?:px|em|%)$/],
+                'padding-right': [/^\d+(?:px|em|%)$/],
+                'padding-top': [/^\d+(?:px|em|%)$/],
+                'padding-bottom': [/^\d+(?:px|em|%)$/],
+                'margin': [/^\d+(?:px|em|%|auto)$/, /^0$/],
+                'margin-left': [/^\d+(?:px|em|%|auto)$/],
+                'margin-right': [/^\d+(?:px|em|%|auto)$/],
+                'margin-top': [/^\d+(?:px|em|%)$/],
+                'margin-bottom': [/^\d+(?:px|em|%)$/],
+
+                // Visuals
+                'background-color': [/^#(0x)?[0-9a-f]+$/i, /^rgb\(/, /^[a-z]+$/i],
+                'border': [/^.+$/],
+                'border-radius': [/^\d+(?:px|em|%)$/],
+
+                // Disallow: position, z-index, background-image (unless strictly validated), etc.
+            }
+        },
+        allowedSchemes: ['http', 'https', 'mailto', 'tel']
     };
 
     return sanitizeHtml(content, allowedTags || defaultAllowed);

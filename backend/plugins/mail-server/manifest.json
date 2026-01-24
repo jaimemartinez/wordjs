@@ -50,6 +50,16 @@
             "scope": "notifications",
             "access": "send",
             "reason": "Required to alert users about new inbound emails in real-time."
+        },
+        {
+            "scope": "filesystem",
+            "access": "write",
+            "reason": "Required to save email attachments to disk."
+        },
+        {
+            "scope": "filesystem",
+            "access": "read",
+            "reason": "Required to read and attach files to outgoing emails."
         }
     ],
     "dependencies": {

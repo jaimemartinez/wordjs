@@ -25,6 +25,8 @@ const exportRoutes = require('./export');
 const setupRoutes = require('./setup');
 const rolesRoutes = require('./roles');
 const notificationsRoutes = require('./notifications');
+const certsRoutes = require('./certs');
+const seoRoutes = require('./seo');
 
 // API Info endpoint
 router.get('/', (req, res) => {
@@ -73,6 +75,9 @@ router.use('/types', postTypesRoutes);
 router.use('/setup', setupRoutes);
 router.use('/roles', rolesRoutes);
 router.use('/notifications', notificationsRoutes);
+router.use('/fonts', require('./fonts'));
+router.use('/system/certs', certsRoutes);
+router.use('/seo', seoRoutes);
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)

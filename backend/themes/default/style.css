@@ -1,27 +1,35 @@
-@import "tailwindcss";
-@plugin "@tailwindcss/typography";
-
+/* Default Theme Styles */
 :root {
-    --background: #ffffff;
-    --foreground: #171717;
-}
-
-@theme inline {
-    --color-background: var(--background);
-    --color-foreground: var(--foreground);
-    --font-sans: var(--font-geist-sans);
-    --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
-    :root {
-        --background: #0a0a0a;
-        --foreground: #ededed;
-    }
+  --primary: #2563eb;
+  --primary-dark: #1e40af;
+  --text: #1f2937;
+  --text-muted: #6b7280;
+  --bg: #f9fafb;
+  --border: #e5e7eb;
 }
 
 body {
-    background: var(--background);
-    color: var(--foreground);
-    font-family: Arial, Helvetica, sans-serif;
+  font-family: 'Inter', -apple-system, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  line-height: 1.6;
+  margin: 0;
+  padding: 0;
 }
+
+.container { max-width: 900px; margin: 0 auto; padding: 0 20px; }
+header { background: white; border-bottom: 1px solid var(--border); padding: 40px 0; }
+header h1 { margin: 0; font-weight: 800; font-size: 2.5rem; letter-spacing: -0.025em; }
+header p { color: var(--text-muted); margin-top: 10px; font-size: 1.1rem; }
+
+main { padding: 60px 0; min-height: 60vh; }
+footer { border-top: 1px solid var(--border); color: var(--text-muted); padding: 40px 0; text-align: center; background: white; margin-top: 60px; }
+
+article { margin-bottom: 60px; background: white; padding: 40px; border-radius: 24px; border: 1px solid var(--border); box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); }
+article h2 { margin-top: 0; font-weight: 800; font-size: 1.8rem; }
+article h2 a { color: inherit; text-decoration: none; transition: color 0.2s; }
+article h2 a:hover { color: var(--primary); }
+
+.post-meta { color: var(--text-muted); font-size: 0.85rem; margin-bottom: 20px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; }
+.content { font-size: 1.125rem; }
+.excerpt { font-size: 1.1rem; color: #4b5563; }

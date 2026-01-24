@@ -6,11 +6,13 @@ import { Config, DropZone, PuckComponent } from "@measured/puck";
 import { useState, useEffect } from "react";
 import MediaPickerModal from "./MediaPickerModal";
 import ModernSelect from "./ModernSelect";
-import { categoriesApi, Category } from "@/lib/api";
+import { categoriesApi, Category, apiGet } from "@/lib/api";
 
 
 // Plugin Puck Components
+// Plugin Puck Components
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
+import { CSSPropertiesControl } from "./puck/CSSControls";
 
 // Custom Category Field component
 const CategoryField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
@@ -89,9 +91,9 @@ const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                         <span className="text-gray-500">{openAccordion === index ? '▲' : '▼'}</span>
                     </button>
                     {openAccordion === index && (
-                        <div className="p-4 space-y-3 bg-white">
+                        <div className="p-4 space-y-3 bg-[var(--wjs-bg-surface,white)]">
                             <div>
-                                <label className="block text-xs text-gray-600 mb-1">Color de fondo</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Color de fondo</label>
                                 <div className="flex gap-2">
                                     <input
                                         type="color"
@@ -109,7 +111,7 @@ const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-xs text-gray-600 mb-1">Padding</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Padding</label>
                                 <input
                                     type="text"
                                     value={styles[index]?.padding || '16px'}
@@ -119,7 +121,7 @@ const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 />
                             </div>
                             <div>
-                                <label className="block text-xs text-gray-600 mb-1">Borde (ancho)</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Borde (ancho)</label>
                                 <input
                                     type="text"
                                     value={styles[index]?.borderWidth || '0px'}
@@ -129,7 +131,7 @@ const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 />
                             </div>
                             <div>
-                                <label className="block text-xs text-gray-600 mb-1">Color de borde</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Color de borde</label>
                                 <div className="flex gap-2">
                                     <input
                                         type="color"
@@ -146,7 +148,7 @@ const ColumnStyleAccordion = ({ value, onChange, columnCount }: {
                                 </div>
                             </div>
                             <div>
-                                <label className="block text-xs text-gray-600 mb-1">Radio de borde</label>
+                                <label className="block text-xs text-[var(--wjs-color-text-dim,gray)] mb-1">Radio de borde</label>
                                 <input
                                     type="text"
                                     value={styles[index]?.borderRadius || '0px'}
@@ -350,6 +352,18 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
     const editorRef = React.useRef<HTMLDivElement>(null);
     const savedSelectionRef = React.useRef<Range | null>(null);
     const [editorBg, setEditorBg] = React.useState(transparent ? 'transparent' : '#ffffff');
+    const [availableFonts, setAvailableFonts] = React.useState<any[]>([]);
+
+    useEffect(() => {
+        // Fetch fonts for the selector
+        apiGet<any[]>('/fonts')
+            .then(data => {
+                if (Array.isArray(data)) {
+                    setAvailableFonts(data);
+                }
+            })
+            .catch(err => console.error("Failed to load fonts for Editor", err));
+    }, []);
 
     const cycleEditorBg = () => {
         const bgs = ['#ffffff', '#1f2937', '#000000', '#f3f4f6'];
@@ -533,6 +547,27 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 
                 <div className="w-px h-6 bg-gray-200 mx-1"></div>
 
+                {/* Font Family Selector */}
+                <div className="flex bg-white rounded-lg border border-gray-100 p-0.5 shadow-sm">
+                    <select
+                        className="h-8 max-w-[100px] text-xs border-none bg-transparent focus:ring-0 cursor-pointer text-gray-700 font-medium"
+                        onChange={(e) => execCmd('fontName', e.target.value)}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        title="Fuente"
+                        defaultValue="inherit"
+                    >
+                        <option value="inherit">Default</option>
+                        <option value="Arial">Arial</option>
+                        <option value="Times New Roman">Times</option>
+                        {/* Dynamic fonts injected via state (deduped) */}
+                        {Array.from(new Set(availableFonts.map((f: any) => f.family))).sort().map((family: any) => (
+                            <option key={family} value={family}>{family}</option>
+                        ))}
+                    </select>
+                </div>
+
+                <div className="w-px h-6 bg-gray-200 mx-1"></div>
+
                 <div className="flex bg-white rounded-lg border border-gray-100 p-0.5 shadow-sm items-center gap-0.5">
                     <ToolbarButton icon="fa-minus" onClick={() => changeFontSize(-2)} title="Reducir" />
                     <div className="flex items-center px-1 min-w-[32px] justify-center">
@@ -678,32 +713,70 @@ const baseConfig = {
                     ],
                 },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
             },
             defaultProps: {
                 title: "Heading",
                 level: "h2",
                 elementId: "",
+                css: {}
             },
-            render: ({ title, level, elementId }: any) => {
+            render: ({ title, level, elementId, css }: any) => {
                 const Tag = level as any;
-                const sizeClass = level === 'h1' ? 'text-4xl' : level === 'h2' ? 'text-2xl' : 'text-xl';
-                return <Tag id={elementId || undefined} className={`font-bold ${sizeClass} my-6 text-gray-900 border-b border-gray-100 pb-2`}>{title}</Tag>;
+                return (
+                    <Tag
+                        id={elementId || undefined}
+                        className={`wp-block-heading heading-${level}`}
+                        style={{
+                            color: `var(--puck-heading-color, var(--wjs-color-text-heading, #000))`,
+                            fontFamily: 'var(--wjs-font-family, inherit)',
+                            paddingBottom: level === 'h1' ? '0' : '0.5rem',
+                            marginTop: '1.5rem',
+                            marginBottom: '1rem',
+                            fontWeight: `var(--wjs-${level}-weight, 700)`,
+                            fontSize: `var(--wjs-${level}-size)`,
+                            ...css
+                        }}
+                    >
+                        {title}
+                    </Tag>
+                );
             },
         },
         Text: {
             category: "content",
             fields: {
-                content: { type: "textarea", label: "Content" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
             },
             defaultProps: {
                 content: "Escribe aquí...",
                 elementId: "",
+                css: {}
             },
-            render: ({ content, elementId }: any) => (
+            render: ({ content, elementId, css }: any) => (
                 <div
                     id={elementId || undefined}
-                    className="prose max-w-none"
+                    className="wp-block-text prose max-w-none"
+                    style={{
+                        color: 'var(--wjs-color-text-main, var(--wjs-foreground, #374151))',
+                        lineHeight: 'var(--wjs-line-height-base, 1.6)',
+                        fontSize: 'var(--wjs-font-size-base, 1rem)',
+                        fontFamily: 'var(--wjs-font-family, inherit)',
+                        ...css
+                    }}
                     dangerouslySetInnerHTML={{ __html: content }}
                 />
             ),
@@ -742,25 +815,43 @@ const baseConfig = {
                         );
                     }
                 },
-                alt: { type: "text" },
-                borderRadius: {
-                    type: "number",
-                    label: "Border Radius (px)"
-                },
-                elementId: { type: "text", label: "ID / Ancla (opcional)" }
+                elementId: { type: "text", label: "ID / Ancla (opcional)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            resolveData: async ({ props }: any) => {
+                const css = { ...props.css };
+                // Migration: borderRadius -> css.borderRadius
+                if (props.borderRadius) {
+                    css.borderRadius = `${props.borderRadius}px`;
+                }
+                return {
+                    props: {
+                        ...props,
+                        css,
+                        // Clear legacy prop to avoid confusion (optional, but cleaner)
+                        borderRadius: undefined
+                    }
+                };
             },
             defaultProps: {
                 src: "https://via.placeholder.com/600x400",
                 alt: "Image",
                 borderRadius: 0,
-                elementId: ""
+                elementId: "",
+                css: {}
             },
-            render: ({ src, alt, borderRadius, elementId }: any) => (
+            render: ({ src, alt, borderRadius, elementId, css }: any) => (
                 <img
                     id={elementId || undefined}
                     src={src}
                     alt={alt}
-                    style={{ borderRadius: borderRadius ? `${borderRadius}px` : undefined }}
+                    style={{ borderRadius: borderRadius ? `${borderRadius}px` : undefined, ...css }}
                     className="max-w-full h-auto shadow-sm"
                 />
             )
@@ -780,10 +871,6 @@ const baseConfig = {
                         );
                     }
                 },
-                gap: { type: "number", label: "Espacio entre columnas (px)" },
-                minHeight: { type: "text", label: "Altura mínima" },
-                backgroundColor: { type: "text", label: "Color de fondo contenedor" },
-                borderRadius: { type: "number", label: "Radio de borde contenedor (px)" },
                 columnStyles: {
                     type: "custom",
                     label: "Estilos de columnas",
@@ -803,6 +890,13 @@ const baseConfig = {
                 "col-1": { type: "slot" },
                 "col-2": { type: "slot" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
             },
             // Use resolveData to sync columnStyles array with distribution column count
             resolveData: async ({ props }: any) => {
@@ -826,29 +920,38 @@ const baseConfig = {
                 // Remove extra styles
                 columnStyles = columnStyles.slice(0, columnCount);
 
+                // Migration: Legacy container props -> css
+                const css = { ...props.css };
+                if (props.gap !== undefined) css.gap = `${props.gap}px`;
+                if (props.minHeight) css.minHeight = props.minHeight;
+                if (props.backgroundColor) css.backgroundColor = props.backgroundColor;
+                if (props.borderRadius) css.borderRadius = `${props.borderRadius}px`;
+
                 return {
                     props: {
                         ...props,
-                        columnStyles
+                        columnStyles,
+                        css,
+                        // Clear legacy props
+                        gap: undefined,
+                        minHeight: undefined,
+                        backgroundColor: undefined,
+                        borderRadius: undefined
                     }
                 };
             },
             defaultProps: {
                 distribution: { columnCount: 2, widths: [50, 50] },
-                gap: 24,
-                minHeight: "auto",
-                backgroundColor: "transparent",
-                borderRadius: 0,
-                columnStyles: [
-                    { backgroundColor: 'transparent', padding: '16px', borderWidth: '0px', borderColor: '#e5e7eb', borderRadius: '0px' },
-                    { backgroundColor: 'transparent', padding: '16px', borderWidth: '0px', borderColor: '#e5e7eb', borderRadius: '0px' }
-                ],
-                "col-0": [],
-                "col-1": [],
                 "col-2": [],
-                elementId: ""
+                elementId: "",
+                css: {
+                    gap: '24px',
+                    minHeight: 'auto',
+                    backgroundColor: 'transparent',
+                    borderRadius: '0px'
+                }
             },
-            render: ({ distribution, gap, minHeight, backgroundColor, borderRadius, columnStyles, elementId, "col-0": Col0, "col-1": Col1, "col-2": Col2 }: any) => {
+            render: ({ distribution, columnStyles, elementId, css, "col-0": Col0, "col-1": Col1, "col-2": Col2 }: any) => {
                 // ... same logic
                 const Slots = [Col0, Col1, Col2];
                 // Convert percentages to grid template columns
@@ -877,12 +980,10 @@ const baseConfig = {
                             style={{
                                 display: "grid",
                                 gridTemplateColumns: gridTemplateColumns,
-                                gap: `${gap}px`,
-                                minHeight: minHeight,
+                                alignItems: "stretch",
                                 width: '100%',
-                                backgroundColor: backgroundColor || 'transparent',
-                                borderRadius: borderRadius ? `${borderRadius}px` : undefined,
-                                margin: 0
+                                margin: 0,
+                                ...css // Apply migrated CSS
                             }}
                         >
                             {Array.from({ length: columnCount }).map((_, i) => {
@@ -891,14 +992,17 @@ const baseConfig = {
                                 return (
                                     <div
                                         key={i}
-                                        className="flex flex-col min-h-[100px]"
+                                        className="flex flex-col"
                                         style={{
+                                            height: "100%",
+                                            minHeight: "100px",
                                             padding: colStyle.padding || '16px',
                                             backgroundColor: colStyle.backgroundColor || 'transparent',
                                             borderWidth: colStyle.borderWidth || '0px',
-                                            borderColor: colStyle.borderColor || '#e5e7eb',
+                                            borderColor: colStyle.borderColor || 'var(--wjs-border-subtle, #e5e7eb)',
                                             borderStyle: colStyle.borderWidth && colStyle.borderWidth !== '0px' ? 'solid' : 'none',
-                                            borderRadius: colStyle.borderRadius || '0px'
+                                            borderRadius: colStyle.borderRadius || '0px',
+                                            overflow: "hidden"
                                         }}
                                     >
                                         <Slot />
@@ -908,6 +1012,112 @@ const baseConfig = {
                         </div>
                     </>
                 );
+            },
+        },
+        Card: {
+            category: "content",
+            fields: {
+                title: { type: "text" },
+                description: { type: "textarea" },
+                icon: { type: "text", label: "FontAwesome Icon (e.g. fa-star)" },
+                theme: {
+                    type: "select",
+                    options: [
+                        { label: "Light", value: "light" },
+                        { label: "Dark", value: "dark" },
+                        { label: "Accent", value: "accent" }
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                title: "Card Title",
+                description: "This is a card description. You can use it to highlight features or services.",
+                icon: "fa-rocket",
+                theme: "light",
+                css: {}
+            },
+            render: ({ title, description, icon, theme, css }: any) => {
+                return (
+                    <div
+                        className={`wp-block-card card-theme-${theme} transition-all duration-300`}
+                        style={{
+                            backgroundColor: `var(--puck-card-${theme}-bg, var(--puck-card-bg, var(--wjs-bg-surface, #ffffff)))`,
+                            color: `var(--puck-card-${theme}-color, var(--puck-card-color, var(--wjs-color-text-main, #1a1a1a)))`,
+                            borderColor: `var(--puck-card-${theme}-border, var(--puck-card-border, var(--wjs-border-subtle, #e5e7eb)))`,
+                            borderRadius: `var(--puck-card-radius, var(--wjs-border-radius, 0px))`,
+                            padding: `var(--puck-card-padding, var(--wjs-space-md, 2rem))`,
+                            borderWidth: '1px',
+                            borderStyle: 'solid',
+                            ...css
+                        }}
+                    >
+                        {icon && (
+                            <div
+                                className="wp-block-card-icon flex items-center justify-center"
+                                style={{
+                                    width: '3.5rem',
+                                    height: '3.5rem',
+                                    borderRadius: `var(--puck-card-icon-radius, var(--wjs-border-radius, 0px))`,
+                                    marginBottom: '1.5rem',
+                                    fontSize: '1.5rem',
+                                    backgroundColor: `var(--puck-card-${theme}-icon-bg, var(--wjs-bg-surface-hover, rgba(0,0,0,0.05)))`,
+                                    color: `var(--puck-card-${theme}-icon-color, var(--wjs-color-primary, #3b82f6))`
+                                }}
+                            >
+                                <i className={`fa-solid ${icon}`}></i>
+                            </div>
+                        )}
+                        <h3
+                            className="wp-block-card-title mb-4 uppercase tracking-tight"
+                            style={{ fontSize: 'var(--wjs-h3-size, 1.5rem)', fontWeight: 'var(--wjs-h3-weight, 900)', lineHeight: '1.2' }}
+                        >
+                            {title}
+                        </h3>
+                        <p
+                            className="wp-block-card-description text-base leading-relaxed opacity-80"
+                            style={{ fontSize: 'var(--wjs-font-size-base, 1rem)' }}
+                        >
+                            {description}
+                        </p>
+                    </div>
+                );
+            }
+        },
+        Divider: {
+            category: "layout",
+            fields: {
+                type: {
+                    type: "select",
+                    options: [
+                        { label: "Solid", value: "solid" },
+                        { label: "Dashed", value: "dashed" },
+                        { label: "Gradient", value: "gradient" }
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                type: "solid",
+                css: { marginTop: '40px', marginBottom: '40px' }
+            },
+            render: ({ type, css }: any) => {
+                if (type === 'gradient') {
+                    return <div className="h-px w-full bg-gradient-to-r from-transparent via-gray-200 to-transparent" style={css} />;
+                }
+                return <hr className={`w-full ${type === 'dashed' ? 'border-dashed' : 'border-solid'} border-gray-100`} style={css} />;
             }
         },
         Button: {
@@ -930,21 +1140,23 @@ const baseConfig = {
                         { label: "Center", value: "center" },
                         { label: "Right", value: "right" }
                     ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
                 }
             },
             defaultProps: {
                 label: "Click Me",
                 href: "#",
                 variant: "primary",
-                align: "left"
+                align: "left",
+                css: {}
             },
-            render: ({ label, href, variant, align }: any) => {
-                const baseClass = "inline-block px-6 py-2 rounded-lg font-medium transition-colors duration-200";
-                const variants = {
-                    primary: "bg-blue-600 text-white hover:bg-blue-700",
-                    secondary: "bg-gray-600 text-white hover:bg-gray-700",
-                    outline: "border-2 border-blue-600 text-blue-600 hover:bg-blue-50"
-                };
+            render: ({ label, href, variant, align, css }: any) => {
                 const alignments = {
                     left: "text-left",
                     center: "text-center",
@@ -952,11 +1164,24 @@ const baseConfig = {
                 };
 
                 return (
-                    <div className={`my-4 ${alignments[align as keyof typeof alignments]}`}>
+                    <div className={`wp-block-button my-4 ${alignments[align as keyof typeof alignments]}`}>
                         <a
                             href={href}
-                            className={`${baseClass} ${variants[variant as keyof typeof variants]}`}
-                            onClick={(e) => e.preventDefault()} // Prevent navigation in editor
+                            className={`button-variant-${variant} transition-all duration-200`}
+                            onClick={(e) => e.preventDefault()}
+                            style={{
+                                display: 'inline-block',
+                                textDecoration: 'none',
+                                fontWeight: 'var(--wjs-h3-weight, 600)',
+                                borderRadius: 'var(--puck-btn-radius, var(--wjs-border-radius, 0px))',
+                                padding: 'var(--wjs-space-sm, 0.8rem) var(--wjs-space-md, 2rem)',
+                                backgroundColor: `var(--puck-btn-${variant}-bg, var(--wjs-color-primary, #2563eb))`,
+                                color: `var(--puck-btn-${variant}-color, var(--wjs-color-primary-text, #ffffff))`,
+                                border: variant === 'outline'
+                                    ? `2px solid var(--puck-btn-outline-border, var(--wjs-color-primary, #2563eb))`
+                                    : 'none',
+                                ...css
+                            }}
                         >
                             {label}
                         </a>
@@ -967,18 +1192,828 @@ const baseConfig = {
         Spacer: {
             category: "layout",
             fields: {
-                height: {
-                    type: "number",
-                    label: "Height (px)"
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            resolveData: async ({ props }: any) => {
+                const css = { ...props.css };
+                // Migration: height -> css.height
+                if (props.height) {
+                    css.height = `${props.height}px`;
+                }
+                return { props: { ...props, css, height: undefined } };
+            },
+            defaultProps: {
+                css: { height: '24px' }
+            },
+            render: ({ css }: any) => (
+                <div style={css} />
+            )
+        },
+
+        // ==========================================
+        // NEW COMPONENTS - Layout
+        // ==========================================
+
+        Section: {
+            category: "layout",
+            fields: {
+                children: { type: "slot" },
+                maxWidth: {
+                    type: "select",
+                    label: "Max Width",
+                    options: [
+                        { label: "Full", value: "100%" },
+                        { label: "Large (1280px)", value: "1280px" },
+                        { label: "Medium (1024px)", value: "1024px" },
+                        { label: "Small (768px)", value: "768px" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
                 }
             },
             defaultProps: {
-                height: 24
+                maxWidth: "1280px",
+                css: {
+                    padding: "60px 20px",
+                    backgroundColor: "transparent"
+                }
             },
-            render: ({ height }: any) => (
-                <div style={{ height: `${height}px` }} />
+            render: ({ children: Children, maxWidth, css }: any) => (
+                <section
+                    className="wp-block-section"
+                    style={{
+                        width: "100%",
+                        ...css
+                    }}
+                >
+                    <div style={{ maxWidth, margin: "0 auto" }}>
+                        <Children />
+                    </div>
+                </section>
             )
         },
+
+        Grid: {
+            category: "layout",
+            fields: {
+                children: { type: "slot" },
+                columns: {
+                    type: "select",
+                    label: "Columns",
+                    options: [
+                        { label: "2 Columns", value: "2" },
+                        { label: "3 Columns", value: "3" },
+                        { label: "4 Columns", value: "4" },
+                        { label: "5 Columns", value: "5" },
+                        { label: "6 Columns", value: "6" },
+                    ]
+                },
+                gap: { type: "text", label: "Gap (e.g. 20px)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                columns: "3",
+                gap: "24px",
+                css: {}
+            },
+            render: ({ children: Children, columns, gap, css }: any) => (
+                <div
+                    className="wp-block-grid"
+                    style={{
+                        display: "grid",
+                        gridTemplateColumns: `repeat(${columns}, 1fr)`,
+                        gap,
+                        ...css
+                    }}
+                >
+                    <Children />
+                </div>
+            )
+        },
+
+        FlexRow: {
+            category: "layout",
+            fields: {
+                children: { type: "slot" },
+                justify: {
+                    type: "select",
+                    label: "Justify Content",
+                    options: [
+                        { label: "Start", value: "flex-start" },
+                        { label: "Center", value: "center" },
+                        { label: "End", value: "flex-end" },
+                        { label: "Space Between", value: "space-between" },
+                        { label: "Space Around", value: "space-around" },
+                    ]
+                },
+                align: {
+                    type: "select",
+                    label: "Align Items",
+                    options: [
+                        { label: "Start", value: "flex-start" },
+                        { label: "Center", value: "center" },
+                        { label: "End", value: "flex-end" },
+                        { label: "Stretch", value: "stretch" },
+                    ]
+                },
+                gap: { type: "text", label: "Gap (e.g. 16px)" },
+                wrap: {
+                    type: "radio",
+                    label: "Wrap",
+                    options: [
+                        { label: "Yes", value: "wrap" },
+                        { label: "No", value: "nowrap" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                justify: "flex-start",
+                align: "center",
+                gap: "16px",
+                wrap: "wrap",
+                css: {}
+            },
+            render: ({ children: Children, justify, align, gap, wrap, css }: any) => (
+                <div
+                    className="wp-block-flex-row"
+                    style={{
+                        display: "flex",
+                        flexDirection: "row",
+                        justifyContent: justify,
+                        alignItems: align,
+                        gap,
+                        flexWrap: wrap,
+                        ...css
+                    }}
+                >
+                    <Children />
+                </div>
+            )
+        },
+
+        Accordion: {
+            category: "layout",
+            fields: {
+                items: {
+                    type: "array",
+                    label: "Accordion Items",
+                    arrayFields: {
+                        title: { type: "text" },
+                        content: { type: "textarea" }
+                    }
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                items: [
+                    { title: "Section 1", content: "Content for section 1" },
+                    { title: "Section 2", content: "Content for section 2" },
+                ],
+                css: {}
+            },
+            render: ({ items, css }: any) => {
+                const [openIndex, setOpenIndex] = React.useState<number | null>(0);
+                return (
+                    <div className="wp-block-accordion" style={{ borderRadius: "8px", overflow: "hidden", border: "1px solid var(--wjs-border-subtle, #e5e7eb)", ...css }}>
+                        {items?.map((item: any, index: number) => (
+                            <div key={index} className="accordion-item" style={{ borderBottom: index < items.length - 1 ? "1px solid var(--wjs-border-subtle, #e5e7eb)" : "none" }}>
+                                <button
+                                    onClick={() => setOpenIndex(openIndex === index ? null : index)}
+                                    style={{
+                                        width: "100%",
+                                        padding: "16px 20px",
+                                        display: "flex",
+                                        justifyContent: "space-between",
+                                        alignItems: "center",
+                                        background: "var(--wjs-bg-surface, #fff)",
+                                        border: "none",
+                                        cursor: "pointer",
+                                        fontWeight: 600,
+                                        fontSize: "1rem",
+                                        color: "var(--wjs-color-text-main, #1a1a1a)",
+                                        textAlign: "left"
+                                    }}
+                                >
+                                    {item.title}
+                                    <i className={`fa-solid fa-chevron-down transition-transform ${openIndex === index ? "rotate-180" : ""}`} style={{ transition: "transform 0.2s" }}></i>
+                                </button>
+                                {openIndex === index && (
+                                    <div style={{ padding: "16px 20px", background: "var(--wjs-bg-canvas, #f9fafb)", color: "var(--wjs-color-text-muted, #6b7280)" }}>
+                                        {item.content}
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
+                );
+            }
+        },
+
+        Tabs: {
+            category: "layout",
+            fields: {
+                tabs: {
+                    type: "array",
+                    label: "Tabs",
+                    arrayFields: {
+                        label: { type: "text" },
+                        content: { type: "textarea" }
+                    }
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                tabs: [
+                    { label: "Tab 1", content: "Content for Tab 1" },
+                    { label: "Tab 2", content: "Content for Tab 2" },
+                    { label: "Tab 3", content: "Content for Tab 3" },
+                ],
+                css: {}
+            },
+            render: ({ tabs, css }: any) => {
+                const [activeTab, setActiveTab] = React.useState(0);
+                return (
+                    <div className="wp-block-tabs" style={css}>
+                        <div style={{ display: "flex", borderBottom: "2px solid var(--wjs-border-subtle, #e5e7eb)", marginBottom: "20px" }}>
+                            {tabs?.map((tab: any, index: number) => (
+                                <button
+                                    key={index}
+                                    onClick={() => setActiveTab(index)}
+                                    style={{
+                                        padding: "12px 24px",
+                                        border: "none",
+                                        background: "transparent",
+                                        cursor: "pointer",
+                                        fontWeight: activeTab === index ? 600 : 400,
+                                        color: activeTab === index ? "var(--wjs-color-primary, #2563eb)" : "var(--wjs-color-text-muted, #6b7280)",
+                                        borderBottom: activeTab === index ? "2px solid var(--wjs-color-primary, #2563eb)" : "2px solid transparent",
+                                        marginBottom: "-2px",
+                                        transition: "all 0.2s"
+                                    }}
+                                >
+                                    {tab.label}
+                                </button>
+                            ))}
+                        </div>
+                        <div style={{ padding: "20px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "8px" }}>
+                            {tabs?.[activeTab]?.content}
+                        </div>
+                    </div>
+                );
+            }
+        },
+
+        // ==========================================
+        // NEW COMPONENTS - Media
+        // ==========================================
+
+        VideoEmbed: {
+            category: "content",
+            fields: {
+                url: { type: "text", label: "Video URL (YouTube, Vimeo, or direct)" },
+                aspectRatio: {
+                    type: "select",
+                    label: "Aspect Ratio",
+                    options: [
+                        { label: "16:9", value: "56.25%" },
+                        { label: "4:3", value: "75%" },
+                        { label: "1:1", value: "100%" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                url: "https://www.youtube.com/embed/dQw4w9WgXcQ",
+                aspectRatio: "56.25%",
+                css: { borderRadius: "12px", overflow: "hidden" }
+            },
+            render: ({ url, aspectRatio, css }: any) => {
+                // Convert regular YouTube URLs to embed format
+                let embedUrl = url;
+                let isYouTube = false;
+
+                if (url?.includes("youtube.com/watch")) {
+                    const videoId = url.split("v=")[1]?.split("&")[0];
+                    embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
+                    isYouTube = true;
+                } else if (url?.includes("youtu.be/")) {
+                    const videoId = url.split("youtu.be/")[1]?.split("?")[0];
+                    embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
+                    isYouTube = true;
+                } else if (url?.includes("youtube.com/embed/")) {
+                    // Already embed URL, just add params if not present
+                    embedUrl = url.includes("?") ? url : `${url}?rel=0&modestbranding=1`;
+                    isYouTube = true;
+                } else if (url?.includes("vimeo.com/") && !url?.includes("player.vimeo.com")) {
+                    const videoId = url.split("vimeo.com/")[1]?.split("?")[0];
+                    embedUrl = `https://player.vimeo.com/video/${videoId}`;
+                }
+
+                // Show placeholder if no URL
+                if (!url) {
+                    return (
+                        <div className="wp-block-video-embed" style={{
+                            position: "relative",
+                            paddingBottom: aspectRatio,
+                            height: 0,
+                            background: "var(--wjs-bg-surface, #f3f4f6)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            ...css
+                        }}>
+                            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", color: "var(--wjs-color-text-muted, #9ca3af)" }}>
+                                <i className="fa-solid fa-video" style={{ fontSize: "2rem", marginBottom: "8px" }}></i>
+                                <p style={{ margin: 0 }}>Enter a video URL</p>
+                            </div>
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className="wp-block-video-embed" style={{ position: "relative", paddingBottom: aspectRatio, height: 0, ...css }}>
+                        <iframe
+                            src={embedUrl}
+                            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+                            allowFullScreen
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                            referrerPolicy="strict-origin-when-cross-origin"
+                            loading="lazy"
+                        />
+                    </div>
+                );
+            }
+        },
+
+        AudioPlayer: {
+            category: "content",
+            fields: {
+                src: { type: "text", label: "Audio URL" },
+                title: { type: "text", label: "Track Title" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                src: "",
+                title: "Audio Track",
+                css: {}
+            },
+            render: ({ src, title, css }: any) => (
+                <div className="wp-block-audio-player" style={{ padding: "20px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "12px", border: "1px solid var(--wjs-border-subtle, #e5e7eb)", ...css }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+                        <div style={{ width: "48px", height: "48px", borderRadius: "8px", background: "var(--wjs-color-primary, #2563eb)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+                            <i className="fa-solid fa-music"></i>
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontWeight: 600, marginBottom: "8px", color: "var(--wjs-color-text-main, #1a1a1a)" }}>{title}</div>
+                            <audio controls style={{ width: "100%" }} src={src}>
+                                Your browser does not support the audio element.
+                            </audio>
+                        </div>
+                    </div>
+                </div>
+            )
+        },
+
+        // ==========================================
+        // NEW COMPONENTS - Marketing
+        // ==========================================
+
+        PricingTable: {
+            category: "content",
+            fields: {
+                plans: {
+                    type: "array",
+                    label: "Plans",
+                    arrayFields: {
+                        name: { type: "text" },
+                        price: { type: "text" },
+                        period: { type: "text" },
+                        features: { type: "textarea" },
+                        highlighted: { type: "radio", options: [{ label: "Yes", value: "true" }, { label: "No", value: "false" }] },
+                        buttonText: { type: "text" },
+                        buttonLink: { type: "text" }
+                    }
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                plans: [
+                    { name: "Basic", price: "$9", period: "/month", features: "Feature 1\nFeature 2\nFeature 3", highlighted: "false", buttonText: "Get Started", buttonLink: "#" },
+                    { name: "Pro", price: "$29", period: "/month", features: "Everything in Basic\nFeature 4\nFeature 5\nPriority Support", highlighted: "true", buttonText: "Get Started", buttonLink: "#" },
+                    { name: "Enterprise", price: "$99", period: "/month", features: "Everything in Pro\nCustom Features\nDedicated Support\nSLA", highlighted: "false", buttonText: "Contact Us", buttonLink: "#" },
+                ],
+                css: {}
+            },
+            render: ({ plans, css }: any) => (
+                <div className="wp-block-pricing" style={{ display: "grid", gridTemplateColumns: `repeat(${plans?.length || 3}, 1fr)`, gap: "24px", ...css }}>
+                    {plans?.map((plan: any, index: number) => (
+                        <div
+                            key={index}
+                            style={{
+                                padding: "32px",
+                                borderRadius: "16px",
+                                border: plan.highlighted === "true" ? "2px solid var(--wjs-color-primary, #2563eb)" : "1px solid var(--wjs-border-subtle, #e5e7eb)",
+                                background: plan.highlighted === "true" ? "var(--wjs-color-primary, #2563eb)" : "var(--wjs-bg-surface, #fff)",
+                                color: plan.highlighted === "true" ? "#fff" : "var(--wjs-color-text-main, #1a1a1a)",
+                                transform: plan.highlighted === "true" ? "scale(1.05)" : "none",
+                                boxShadow: plan.highlighted === "true" ? "0 20px 40px rgba(0,0,0,0.15)" : "none",
+                                textAlign: "center"
+                            }}
+                        >
+                            <h3 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: "8px" }}>{plan.name}</h3>
+                            <div style={{ fontSize: "3rem", fontWeight: 800, marginBottom: "4px" }}>{plan.price}<span style={{ fontSize: "1rem", fontWeight: 400, opacity: 0.7 }}>{plan.period}</span></div>
+                            <ul style={{ listStyle: "none", padding: 0, margin: "24px 0", textAlign: "left" }}>
+                                {plan.features?.split("\n").map((feature: string, i: number) => (
+                                    <li key={i} style={{ padding: "8px 0", display: "flex", alignItems: "center", gap: "8px" }}>
+                                        <i className="fa-solid fa-check" style={{ color: plan.highlighted === "true" ? "#fff" : "var(--wjs-color-primary, #2563eb)" }}></i>
+                                        {feature}
+                                    </li>
+                                ))}
+                            </ul>
+                            <a href={plan.buttonLink} style={{
+                                display: "block",
+                                padding: "12px 24px",
+                                borderRadius: "8px",
+                                background: plan.highlighted === "true" ? "#fff" : "var(--wjs-color-primary, #2563eb)",
+                                color: plan.highlighted === "true" ? "var(--wjs-color-primary, #2563eb)" : "#fff",
+                                textDecoration: "none",
+                                fontWeight: 600
+                            }}>{plan.buttonText}</a>
+                        </div>
+                    ))}
+                </div>
+            )
+        },
+
+        Testimonial: {
+            category: "content",
+            fields: {
+                quote: { type: "textarea", label: "Quote" },
+                author: { type: "text", label: "Author Name" },
+                role: { type: "text", label: "Role / Company" },
+                avatar: { type: "text", label: "Avatar URL" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                quote: "This product has completely transformed how we work. I can't imagine going back to the old way.",
+                author: "Jane Doe",
+                role: "CEO, Acme Inc.",
+                avatar: "https://i.pravatar.cc/100",
+                css: {}
+            },
+            render: ({ quote, author, role, avatar, css }: any) => (
+                <div className="wp-block-testimonial" style={{ padding: "32px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "16px", border: "1px solid var(--wjs-border-subtle, #e5e7eb)", ...css }}>
+                    <div style={{ fontSize: "3rem", color: "var(--wjs-color-primary, #2563eb)", marginBottom: "16px", lineHeight: 1 }}>"</div>
+                    <p style={{ fontSize: "1.25rem", fontStyle: "italic", color: "var(--wjs-color-text-main, #1a1a1a)", marginBottom: "24px", lineHeight: 1.6 }}>{quote}</p>
+                    <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+                        {avatar && <img src={avatar} alt={author} style={{ width: "56px", height: "56px", borderRadius: "50%", objectFit: "cover" }} />}
+                        <div>
+                            <div style={{ fontWeight: 600, color: "var(--wjs-color-text-main, #1a1a1a)" }}>{author}</div>
+                            <div style={{ fontSize: "0.875rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>{role}</div>
+                        </div>
+                    </div>
+                </div>
+            )
+        },
+
+        CTABanner: {
+            category: "content",
+            fields: {
+                title: { type: "text", label: "Title" },
+                subtitle: { type: "text", label: "Subtitle" },
+                buttonText: { type: "text", label: "Button Text" },
+                buttonLink: { type: "text", label: "Button Link" },
+                variant: {
+                    type: "select",
+                    label: "Style",
+                    options: [
+                        { label: "Primary", value: "primary" },
+                        { label: "Dark", value: "dark" },
+                        { label: "Gradient", value: "gradient" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                title: "Ready to get started?",
+                subtitle: "Join thousands of satisfied customers today.",
+                buttonText: "Get Started Free",
+                buttonLink: "#",
+                variant: "gradient",
+                css: {}
+            },
+            render: ({ title, subtitle, buttonText, buttonLink, variant, css }: any) => {
+                const backgrounds: any = {
+                    primary: "var(--wjs-color-primary, #2563eb)",
+                    dark: "#1a1a2e",
+                    gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
+                };
+                return (
+                    <div className="wp-block-cta-banner" style={{
+                        padding: "60px 40px",
+                        borderRadius: "24px",
+                        background: backgrounds[variant] || backgrounds.gradient,
+                        color: "#fff",
+                        textAlign: "center",
+                        ...css
+                    }}>
+                        <h2 style={{ fontSize: "2.5rem", fontWeight: 800, marginBottom: "12px" }}>{title}</h2>
+                        <p style={{ fontSize: "1.25rem", opacity: 0.9, marginBottom: "32px" }}>{subtitle}</p>
+                        <a href={buttonLink} style={{
+                            display: "inline-block",
+                            padding: "16px 32px",
+                            background: "#fff",
+                            color: variant === "dark" ? "#1a1a2e" : "var(--wjs-color-primary, #2563eb)",
+                            borderRadius: "12px",
+                            textDecoration: "none",
+                            fontWeight: 700,
+                            fontSize: "1.1rem",
+                            boxShadow: "0 4px 14px rgba(0,0,0,0.2)"
+                        }}>{buttonText}</a>
+                    </div>
+                );
+            }
+        },
+
+        // ==========================================
+        // NEW COMPONENTS - Dynamic Content
+        // ==========================================
+
+        PostsGrid: {
+            category: "content",
+            fields: {
+                count: { type: "number", label: "Number of Posts", min: 1, max: 12 },
+                columns: {
+                    type: "select",
+                    label: "Columns",
+                    options: [
+                        { label: "2", value: "2" },
+                        { label: "3", value: "3" },
+                        { label: "4", value: "4" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                count: 6,
+                columns: "3",
+                css: {}
+            },
+            render: ({ count, columns, css }: any) => {
+                // Placeholder for dynamic content - in production, this would fetch real posts
+                const placeholderPosts = Array.from({ length: count }, (_, i) => ({
+                    title: `Post Title ${i + 1}`,
+                    excerpt: "This is a brief excerpt from the post content...",
+                    date: "Jan 15, 2024"
+                }));
+
+                return (
+                    <div className="wp-block-posts-grid" style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, 1fr)`, gap: "24px", ...css }}>
+                        {placeholderPosts.map((post, index) => (
+                            <article key={index} style={{
+                                padding: "24px",
+                                background: "var(--wjs-bg-surface, #fff)",
+                                borderRadius: "12px",
+                                border: "1px solid var(--wjs-border-subtle, #e5e7eb)"
+                            }}>
+                                <div style={{ height: "160px", background: "linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%)", borderRadius: "8px", marginBottom: "16px" }}></div>
+                                <div style={{ fontSize: "0.75rem", color: "var(--wjs-color-text-muted, #6b7280)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>{post.date}</div>
+                                <h3 style={{ fontSize: "1.125rem", fontWeight: 600, marginBottom: "8px", color: "var(--wjs-color-text-main, #1a1a1a)" }}>{post.title}</h3>
+                                <p style={{ fontSize: "0.875rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>{post.excerpt}</p>
+                            </article>
+                        ))}
+                    </div>
+                );
+            }
+        },
+
+        CategoryPosts: {
+            category: "content",
+            fields: {
+                categorySlug: { type: "text", label: "Category Slug" },
+                count: { type: "number", label: "Number of Posts", min: 1, max: 10 },
+                layout: {
+                    type: "select",
+                    label: "Layout",
+                    options: [
+                        { label: "List", value: "list" },
+                        { label: "Grid", value: "grid" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                categorySlug: "news",
+                count: 5,
+                layout: "list",
+                css: {}
+            },
+            render: ({ categorySlug, count, layout, css }: any) => {
+                const placeholderPosts = Array.from({ length: count }, (_, i) => ({
+                    title: `${categorySlug} Post ${i + 1}`,
+                    excerpt: "Brief description of the post content...",
+                }));
+
+                if (layout === "grid") {
+                    return (
+                        <div className="wp-block-category-posts" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "20px", ...css }}>
+                            {placeholderPosts.map((post, index) => (
+                                <div key={index} style={{ padding: "20px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "8px", border: "1px solid var(--wjs-border-subtle, #e5e7eb)" }}>
+                                    <h4 style={{ fontWeight: 600, marginBottom: "8px" }}>{post.title}</h4>
+                                    <p style={{ fontSize: "0.875rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>{post.excerpt}</p>
+                                </div>
+                            ))}
+                        </div>
+                    );
+                }
+
+                return (
+                    <div className="wp-block-category-posts" style={css}>
+                        <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "20px", textTransform: "capitalize", color: "var(--wjs-color-text-main, #1a1a1a)" }}>
+                            <i className="fa-solid fa-folder mr-2"></i> {categorySlug}
+                        </h3>
+                        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+                            {placeholderPosts.map((post, index) => (
+                                <li key={index} style={{ padding: "16px 0", borderBottom: "1px solid var(--wjs-border-subtle, #e5e7eb)" }}>
+                                    <a href="#" style={{ fontWeight: 500, color: "var(--wjs-color-text-main, #1a1a1a)", textDecoration: "none" }}>{post.title}</a>
+                                </li>
+                            ))}
+                        </ul>
+                    </div>
+                );
+            }
+        },
+
+        SearchBar: {
+            category: "content",
+            fields: {
+                placeholder: { type: "text", label: "Placeholder Text" },
+                buttonText: { type: "text", label: "Button Text (leave empty for icon only)" },
+                searchPage: { type: "text", label: "Search Results Page URL" },
+                align: {
+                    type: "select",
+                    label: "Alignment",
+                    options: [
+                        { label: "Left", value: "flex-start" },
+                        { label: "Center", value: "center" },
+                        { label: "Right", value: "flex-end" },
+                    ]
+                },
+                width: {
+                    type: "select",
+                    label: "Width",
+                    options: [
+                        { label: "Small (300px)", value: "300px" },
+                        { label: "Medium (500px)", value: "500px" },
+                        { label: "Large (700px)", value: "700px" },
+                        { label: "Full Width", value: "100%" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                placeholder: "Search...",
+                buttonText: "Search",
+                searchPage: "/search",
+                align: "flex-start",
+                width: "500px",
+                css: {}
+            },
+            render: ({ placeholder, buttonText, searchPage, align, width, css }: any) => {
+                const [query, setQuery] = React.useState("");
+
+                const handleSubmit = (e: React.FormEvent) => {
+                    e.preventDefault();
+                    if (query.trim()) {
+                        // In production, redirect to search page
+                        const searchUrl = `${searchPage || '/search'}?q=${encodeURIComponent(query.trim())}`;
+                        window.location.href = searchUrl;
+                    }
+                };
+
+                return (
+                    <div style={{ display: "flex", justifyContent: align || "flex-start", width: "100%" }}>
+                        <form className="wp-block-search" style={{ display: "flex", gap: "8px", maxWidth: width || "500px", width: "100%", ...css }} onSubmit={handleSubmit}>
+                            <input
+                                type="search"
+                                placeholder={placeholder}
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                style={{
+                                    flex: 1,
+                                    padding: "12px 16px",
+                                    border: "1px solid var(--wjs-border-subtle, #e5e7eb)",
+                                    borderRadius: "8px",
+                                    fontSize: "1rem",
+                                    background: "var(--wjs-bg-surface, #fff)",
+                                    color: "var(--wjs-color-text-main, #1a1a1a)"
+                                }}
+                            />
+                            <button type="submit" style={{
+                                padding: "12px 20px",
+                                background: "var(--wjs-color-primary, #2563eb)",
+                                color: "#fff",
+                                border: "none",
+                                borderRadius: "8px",
+                                cursor: "pointer",
+                                fontWeight: 600,
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "8px"
+                            }}>
+                                <i className="fa-solid fa-search"></i>
+                                {buttonText && <span>{buttonText}</span>}
+                            </button>
+                        </form>
+                    </div>
+                );
+            }
+        },
+
         ...puckPluginComponents,
     }
 };
@@ -1001,6 +2036,27 @@ export const postConfig: any = {
                     { label: "Yes", value: "open" },
                     { label: "No", value: "closed" }
                 ]
+            },
+            // SEO Fields
+            seo_title: {
+                type: "text",
+                label: "🔍 SEO Title (60 chars max)"
+            },
+            seo_description: {
+                type: "textarea",
+                label: "🔍 Meta Description (160 chars max)"
+            },
+            og_image: {
+                type: "text",
+                label: "🔍 Social Image URL"
+            },
+            noindex: {
+                type: "radio",
+                label: "🔍 Hide from Search Engines",
+                options: [
+                    { label: "No (Indexable)", value: "false" },
+                    { label: "Yes (Hidden)", value: "true" }
+                ]
             }
         },
         render: ({ children, title }: any) => {
@@ -1008,12 +2064,12 @@ export const postConfig: any = {
                 <article className="max-w-4xl mx-auto py-12 px-4">
                     <div className="mb-12 text-center">
                         {title && (
-                            <h1 className="text-4xl md:text-5xl font-bold text-gray-900 leading-tight mb-6">
+                            <h1 className="text-4xl md:text-5xl font-bold text-[var(--wjs-color-text-heading,black)] leading-tight mb-6">
                                 {title}
                             </h1>
                         )}
                     </div>
-                    <div className="bg-white p-8 md:p-12 rounded-2xl shadow-sm border border-gray-100">
+                    <div className="bg-[var(--wjs-bg-surface,white)] p-8 md:p-12 rounded-2xl shadow-sm border border-[var(--wjs-border-subtle,transparent)]">
                         <div className="puck-children">
                             {children}
                         </div>

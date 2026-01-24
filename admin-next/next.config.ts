@@ -6,7 +6,19 @@ const nextConfig: NextConfig = {
     root: require('path').resolve(__dirname, '..'),
   },
   async rewrites() {
-    const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL || 'http://localhost:3000';
+    let backendUrl = 'http://localhost:3000';
+    try {
+      const fs = require('fs');
+      const path = require('path');
+      const configPath = path.resolve(__dirname, '../backend/wordjs-config.json');
+      if (fs.existsSync(configPath)) {
+        const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (config.gatewayPort) {
+          backendUrl = `http://localhost:${config.gatewayPort}`;
+        }
+      }
+    } catch (e) { }
+
     return [
       {
         source: '/api/:path*',

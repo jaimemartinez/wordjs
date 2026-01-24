@@ -3,13 +3,27 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { settingsApi, menusApi } from "@/lib/api";
+import { sanitizeHTML } from "@/lib/sanitize";
 
-export default function Footer() {
-    const [settings, setSettings] = useState<any>({});
-    const [footerMenu, setFooterMenu] = useState<any[]>([]);
-    const [socialLinks, setSocialLinks] = useState<any[]>([]);
+interface FooterProps {
+    previewSettings?: any;
+    previewMenu?: any[];
+    previewSocials?: any[];
+}
+
+export default function Footer({ previewSettings, previewMenu, previewSocials }: FooterProps = {}) {
+    const [settings, setSettings] = useState<any>(previewSettings || {});
+    const [footerMenu, setFooterMenu] = useState<any[]>(previewMenu || []);
+    const [socialLinks, setSocialLinks] = useState<any[]>(previewSocials || []);
 
     useEffect(() => {
+        if (previewSettings) {
+            setSettings(previewSettings);
+            if (previewSocials) setSocialLinks(previewSocials);
+            if (previewMenu) setFooterMenu(previewMenu);
+            return;
+        }
+
         const loadFooterData = async () => {
             console.log("Loading Footer Data...");
             try {
@@ -53,13 +67,10 @@ export default function Footer() {
         };
 
         loadFooterData();
-    }, []);
-
-    // Conditional check removed for debugging
-
+    }, [previewSettings, previewMenu, previewSocials]);
 
     return (
-        <footer className="bg-gray-900 text-white py-12 mt-20">
+        <footer className="bg-[var(--wjs-bg-footer,rgb(17,24,39))] text-[var(--wjs-color-text-footer-main,white)] py-12 mt-auto border-t border-[var(--wjs-border-subtle,transparent)]">
             <div className="container mx-auto px-4">
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
                     {/* Column 1: About / Brand */}
@@ -73,8 +84,8 @@ export default function Footer() {
 
                         {settings.footer_text && (
                             <div
-                                className="text-gray-400 max-w-sm whitespace-pre-line prose prose-invert prose-sm"
-                                dangerouslySetInnerHTML={{ __html: settings.footer_text }}
+                                className="text-[var(--wjs-color-text-footer-dim,gray)] max-w-sm whitespace-pre-line prose prose-invert prose-sm"
+                                dangerouslySetInnerHTML={{ __html: sanitizeHTML(settings.footer_text) }}
                             />
                         )}
                     </div>
@@ -84,10 +95,10 @@ export default function Footer() {
                         {footerMenu.length > 0 && (
                             <>
                                 <h4 className="font-bold mb-4">Quick Links</h4>
-                                <ul className="space-y-2 text-gray-400">
+                                <ul className="space-y-2 text-[var(--wjs-color-text-footer-dim,gray)]">
                                     {footerMenu.map((item) => (
                                         <li key={item.id}>
-                                            <Link href={item.url} className="hover:text-white transition-colors">
+                                            <Link href={item.url || '#'} className="hover:text-[var(--wjs-color-primary,white)] transition-colors">
                                                 {item.title}
                                             </Link>
                                         </li>
@@ -109,7 +120,7 @@ export default function Footer() {
                                             href={link.url}
                                             target="_blank"
                                             rel="noopener noreferrer"
-                                            className="w-10 h-10 rounded-full bg-gray-800 flex items-center justify-center hover:bg-blue-600 transition-colors tooltip-trigger"
+                                            className="w-10 h-10 rounded-full bg-[var(--wjs-bg-surface-hover,rgb(31,41,55))] flex items-center justify-center hover:bg-[var(--wjs-color-primary,blue)] text-[var(--wjs-color-text-footer-main,white)] transition-colors tooltip-trigger"
                                             title={link.platform}
                                         >
                                             <i className={link.icon}></i>
@@ -124,8 +135,8 @@ export default function Footer() {
                 {/* Copyright Line */}
                 {settings.footer_copyright && (
                     <div
-                        className="border-t border-gray-800 pt-8 text-center text-gray-500 text-sm [&>a]:text-blue-400 [&>a:hover]:underline"
-                        dangerouslySetInnerHTML={{ __html: settings.footer_copyright }}
+                        className="border-t border-[var(--wjs-border-subtle,rgb(31,41,55))] pt-8 text-center text-[var(--wjs-color-text-footer-dim,gray)] text-sm [&>a]:text-[var(--wjs-color-primary,blue)] [&>a:hover]:underline"
+                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(settings.footer_copyright) }}
                     />
                 )}
             </div>

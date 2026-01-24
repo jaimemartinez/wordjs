@@ -170,20 +170,18 @@ All routes are prefixed with `/api/v1`.
 | `POST` | `/setup/install`          | No    | Run the installation wizard           |
 | `GET`  | `/export`                 | Admin | Download a database backup            |
 
-### 6.4 Advanced Management
-| Method   | Endpoint              | Auth  | Description                       |
-| :------- | :-------------------- | :---- | :-------------------------------- |
-| `GET`    | `/users`              | Admin | List all registered users         |
-| `PUT`    | `/users/:id`          | Admin | Change user role or profile       |
-| `GET`    | `/roles`              | Admin | List all dynamic roles            |
-| `POST`   | `/roles`              | Admin | Create or update a role           |
-| `DELETE` | `/roles/:slug`        | Admin | Delete a custom role              |
-| `GET`    | `/roles/capabilities` | Admin | List all available capabilities   |
-| `GET`    | `/menus`              | JWT   | Get all navigation menus          |
-| `GET`    | `/widgets/sidebars`   | No    | Get sidebar regions and widgets   |
-| `GET`    | `/revisions/post/:id` | JWT   | Get history of a post             |
-| `GET`    | `/widgets`            | Admin | List registered widgets           |
-| `POST`   | `/widgets`            | Admin | Update widget sidebar assignments |
+### 6.5 Certificate Management (SSL) 🔒
+Base path: `/api/v1/system/certs`
+
+| Method | Endpoint          | Auth  | Description                                 |
+| :----- | :---------------- | :---- | :------------------------------------------ |
+| `GET`  | `/config`         | Admin | Get current SSL status and certificate info |
+| `POST` | `/config`         | Admin | Update SSL toggle or Gateway port           |
+| `POST` | `/auto-provision` | Admin | Request Let's Encrypt HTTP-01 certificate   |
+| `POST` | `/dns-start`      | Admin | Start DNS-01 challenge (returns TXT record) |
+| `POST` | `/dns-check`      | Admin | Verify DNS TXT record propagation           |
+| `POST` | `/dns-finish`     | Admin | Complete DNS-01 challenge and save cert     |
+| `POST` | `/upload-custom`  | Admin | Upload custom `.pem` files                  |
 
 
 ---

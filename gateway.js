@@ -54,22 +54,83 @@ try {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         configSecret = config.gatewaySecret;
         if (config.gatewayPort) configPort = parseInt(config.gatewayPort);
+
+        // SSL Configuration
+        // SSL Configuration
+        if (config.ssl) {
+            if (config.ssl === true || (config.ssl.enabled !== false)) {
+                if (config.ssl.key && config.ssl.cert) {
+                    global.sslOptions = {
+                        key: config.ssl.key,
+                        cert: config.ssl.cert
+                    };
+                } else {
+                    // Auto-Generate Self-Signed if explicitly enabled but no files provided
+                    config.sslAuto = true;
+                }
+            }
+        }
     }
 } catch (e) {
     // Silent fail for config load
 }
 
-const FINAL_PORT = process.env.PORT || configPort;
-const GATEWAY_SECRET = process.env.GATEWAY_SECRET || configSecret || 'secure-your-gateway-secret';
+const FINAL_PORT = configPort;
+
+// SECURITY: Require proper secret in production
+const rawSecret = configSecret;
+if (!rawSecret && process.env.NODE_ENV === 'production') {
+    logger.error('⛔ CRITICAL: gatewaySecret must be set in wordjs-config.json for production!');
+    process.exit(1);
+}
+const GATEWAY_SECRET = rawSecret || 'secure-your-gateway-secret'; // Dev fallback only
+
+// --- SSL AUTO-GENERATION (Primary Process Only) ---
+const SSL_AUTO_KEY = path.resolve('ssl-auto.key');
+const SSL_AUTO_CERT = path.resolve('ssl-auto.crt');
+
+async function ensureSSLCerts(config) {
+    if (config && (config.ssl === true || (config.ssl && !config.ssl.key))) {
+        if (fs.existsSync(SSL_AUTO_KEY) && fs.existsSync(SSL_AUTO_CERT)) {
+            return; // Exists
+        }
+        try {
+            // Use 5.5.0 which returns Promise
+            const selfsigned = require('selfsigned');
+            logger.info('[Gateway] Generating self-signed SSL certificate...');
+            // Note: in 5.5.0 generate is async
+            const pems = await selfsigned.generate([{ name: 'commonName', value: 'localhost' }], { days: 365 });
+            fs.writeFileSync(SSL_AUTO_KEY, pems.private);
+            fs.writeFileSync(SSL_AUTO_CERT, pems.cert);
+            logger.info('[Gateway] Self-signed SSL certificate generated.');
+        } catch (err) {
+            logger.error('[Gateway] Failed to generate SSL certs: ' + err.message);
+        }
+    }
+}
 
 if (cluster.isPrimary) {
     const numCPUs = os.cpus().length;
     logger.info(`[Gateway] Starting on port ${FINAL_PORT}...`);
-    logger.info(`[Gateway] Primary ${process.pid} is running. Spawning ${numCPUs} workers...`);
 
-    for (let i = 0; i < numCPUs; i++) {
-        cluster.fork();
-    }
+    // Ensure SSL before forking
+    let loadedConfig = {};
+    try {
+        if (fs.existsSync(path.resolve('backend/wordjs-config.json'))) {
+            loadedConfig = JSON.parse(fs.readFileSync(path.resolve('backend/wordjs-config.json'), 'utf8'));
+        }
+    } catch (e) { }
+
+    // We need to wait for SSL gen, so we wrap in async immediately
+    (async () => {
+        await ensureSSLCerts(loadedConfig);
+
+        logger.info(`[Gateway] Primary ${process.pid} is running. Spawning ${numCPUs} workers...`);
+
+        for (let i = 0; i < numCPUs; i++) {
+            cluster.fork();
+        }
+    })();
 
     cluster.on('exit', (worker, code, signal) => {
         logger.error(`[Gateway] Worker ${worker.process.pid} died. Respawning...`);
@@ -138,15 +199,26 @@ if (cluster.isPrimary) {
 
                     // Track latency (simplistic P99/Avg could go here)
                     if (!group.metrics) group.metrics = new Map();
-                    group.metrics.set(url, { status: 'Healthy', latency });
+                    group.metrics.set(url, { status: 'Healthy', latency, failCount: 0 });
                 } catch (e) {
-                    console.warn(`[Gateway] Service ${group.name} at ${url} is UNHEALTHY.`);
-                    group.targets.delete(url);
-                    changed = true;
+                    if (!group.metrics) group.metrics = new Map();
+                    const m = group.metrics.get(url) || { failCount: 0 };
+                    m.status = 'Failing';
+                    m.failCount = (m.failCount || 0) + 1;
+                    m.lastError = e.message;
+                    group.metrics.set(url, m);
+
+                    console.warn(`[Gateway] Service ${group.name} at ${url} is UNHEALTHY (${m.failCount}/3).`);
+
+                    if (m.failCount >= 3) {
+                        logger.error(`[Gateway] Service ${group.name} at ${url} EXPIRED after 3 failures. Removing.`);
+                        group.targets.delete(url);
+                        changed = true;
+                    }
                 }
             }
         }
-        if (changed) {
+        if (changed || true) { // Always broadcast metrics updates to workers
             saveRegistry();
             broadcastRegistry();
         }
@@ -157,16 +229,40 @@ if (cluster.isPrimary) {
         try {
             if (message.type === 'REGISTER_SERVICE') {
                 const { service } = message;
+
+                // FIRST: Remove this service URL from ALL routes (clean old registrations)
+                registry.forEach((group, route) => {
+                    if (group.targets.has(service.url)) {
+                        group.targets.delete(service.url);
+                        // If no targets left, remove the route entirely
+                        if (group.targets.size === 0) {
+                            registry.delete(route);
+                        }
+                    }
+                });
+
+                // THEN: Add to the new routes
                 service.routes.forEach(route => {
                     if (!registry.has(route)) registry.set(route, { name: service.name, targets: new Set(), index: 0, metrics: new Map() });
                     registry.get(route).targets.add(service.url);
                 });
+
                 saveRegistry();
                 broadcastRegistry();
-                logger.info(`[Gateway] [Primary] Service ${service.name} registered: ${service.url}`);
+                logger.info(`[Gateway] [Primary] Service ${service.name} registered: ${service.url} for routes: ${service.routes.join(', ')}`);
             }
         } catch (e) {
             logger.error(`[Gateway] [Primary] Message Error: ${e.message}`);
+        }
+    });
+
+    // Handle Restart Request
+    cluster.on('message', (worker, message) => {
+        if (message.type === 'RESTART_GATEWAY') {
+            logger.info('[Gateway] 🔄 Restarting all workers to reload configuration/SSL...');
+            for (const id in cluster.workers) {
+                cluster.workers[id].kill();
+            }
         }
     });
 
@@ -190,7 +286,8 @@ if (cluster.isPrimary) {
     const jsonParser = express.json({ limit: '10mb' }); // Payload Protection
     const proxy = httpProxy.createProxyServer({
         proxyTimeout: 3600000, // 1 hour (for SSE/Long Polling)
-        timeout: 3600000      // 1 hour
+        timeout: 3600000,      // 1 hour
+        xfwd: true             // Add X-Forwarded-x headers
     });
 
     // Auth Middleware (Supports Header or Query Param for Browser)
@@ -265,6 +362,12 @@ if (cluster.isPrimary) {
         }
     });
 
+    // 3. Restart (Relay to Primary) - Used for SSL Reloads
+    app.post('/restart', requireAuth, (req, res) => {
+        process.send({ type: 'RESTART_GATEWAY' });
+        res.json({ success: true, message: 'Gateway restart initiated...' });
+    });
+
     const getTarget = (url) => {
         const entries = Array.from(workerRegistry.entries()).sort((a, b) => b[0].length - a[0].length);
         for (const [prefix, group] of entries) {
@@ -293,14 +396,80 @@ if (cluster.isPrimary) {
         }
     });
 
-    const server = app.listen(FINAL_PORT, () => {
-        logger.info(`[Gateway] Worker ${process.pid} listening on port ${FINAL_PORT}`);
-    });
 
-    server.on('upgrade', (req, socket, head) => {
-        const target = getTarget(req.url);
-        if (target) proxy.ws(req, socket, head, { target });
-    });
+
+
+    // Auto-Generate SSL logic removed from Worker. Handled by Primary.
+    if (fs.existsSync(SSL_AUTO_KEY) && fs.existsSync(SSL_AUTO_CERT)) {
+        // If config enables it but no paths, use auto
+        if (fs.existsSync('backend/wordjs-config.json')) {
+            try {
+                const c = JSON.parse(fs.readFileSync('backend/wordjs-config.json', 'utf8'));
+                // Check if SSL is explicitly disabled
+                if (c.ssl && c.ssl.enabled === false) {
+                    // Do not enable SSL
+                } else if (c.ssl === true || (c.ssl && !c.ssl.key)) {
+                    global.sslOptions = { key: SSL_AUTO_KEY, cert: SSL_AUTO_CERT };
+                }
+            } catch (e) { }
+        }
+    }
+
+    let server;
+    const startServer = () => {
+        if (global.sslOptions) {
+            try {
+                const https = require('https');
+
+                // Check if we have explicit paths or content
+                let keyContent, certContent;
+
+                if (global.sslOptions.keyContent && global.sslOptions.certContent) {
+                    keyContent = global.sslOptions.keyContent;
+                    certContent = global.sslOptions.certContent;
+                } else {
+                    const keyPath = path.resolve(global.sslOptions.key);
+                    const certPath = path.resolve(global.sslOptions.cert);
+                    if (fs.existsSync(keyPath) && fs.existsSync(certPath)) {
+                        keyContent = fs.readFileSync(keyPath);
+                        certContent = fs.readFileSync(certPath);
+                    }
+                }
+
+                if (keyContent && certContent) {
+                    const httpsOptions = { key: keyContent, cert: certContent };
+                    server = https.createServer(httpsOptions, app).listen(FINAL_PORT, () => {
+                        logger.info(`[Gateway] Worker ${process.pid} listening on port ${FINAL_PORT} (HTTPS)`);
+                    });
+                } else {
+                    logger.error(`[Gateway] SSL files missing. Falling back to HTTP.`);
+                    server = app.listen(FINAL_PORT, () => {
+                        logger.info(`[Gateway] Worker ${process.pid} listening on port ${FINAL_PORT} (HTTP - SSL FALLBACK)`);
+                    });
+                }
+            } catch (e) {
+                logger.error(`[Gateway] SSL Init Error: ${e.message}. Falling back to HTTP.`);
+                server = app.listen(FINAL_PORT, () => {
+                    logger.info(`[Gateway] Worker ${process.pid} listening on port ${FINAL_PORT} (HTTP - SSL ERROR)`);
+                });
+            }
+        } else {
+            server = app.listen(FINAL_PORT, () => {
+                logger.info(`[Gateway] Worker ${process.pid} listening on port ${FINAL_PORT} (HTTP)`);
+            });
+        }
+
+        if (server) {
+            server.on('upgrade', (req, socket, head) => {
+                const target = getTarget(req.url);
+                if (target) proxy.ws(req, socket, head, { target });
+            });
+
+            server.on('error', (err) => logger.error(`[Gateway] Server Error: ${err.message}`));
+        }
+    };
+
+    startServer();
 
     proxy.on('error', (err, req, res) => {
         logger.error(`[Gateway] [Worker ${process.pid}] Proxy Error: ${err.message}`);

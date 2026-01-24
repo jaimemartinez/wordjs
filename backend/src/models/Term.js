@@ -191,6 +191,14 @@ class Term {
     }
 
     /**
+     * Find one term by criteria
+     */
+    static async findOne(criteria) {
+        const terms = await Term.findAll({ ...criteria, limit: 1 });
+        return terms.length > 0 ? terms[0] : null;
+    }
+
+    /**
      * Get categories
      */
     static async getCategories(options = {}) {
