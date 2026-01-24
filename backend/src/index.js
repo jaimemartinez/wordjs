@@ -20,6 +20,10 @@ require('./core/io-guard');
 const { installSecureRequire } = require('./core/secure-require');
 installSecureRequire();
 
+// SECURITY: Install CrashGuard runtime blame handlers for async error tracking
+const CrashGuard = require('./core/crash-guard');
+CrashGuard.installRuntimeBlameHandlers();
+
 const { initSqlJsDb, initializeDatabase, db, saveDatabase } = require('./config/database');
 
 // Import middleware

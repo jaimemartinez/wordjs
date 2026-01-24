@@ -817,12 +817,13 @@ async function loadActivePlugins() {
     const plugins = scanPlugins();
     const CrashGuard = require('./crash-guard');
 
-    // 1. CRASH RECOVERY CHECK
+    // 1. CRASH RECOVERY CHECK (with 3-Strike Rule)
     // Did we crash last time?
-    const culpritSlug = CrashGuard.checkPreviousCrash();
+    const crashInfo = CrashGuard.checkPreviousCrash();
 
-    if (culpritSlug) {
-        console.error(`🚨 CRASH DETECTED: The server crashed while loading plugin '${culpritSlug}'.`);
+    if (crashInfo && crashInfo.shouldDisable) {
+        const culpritSlug = crashInfo.slug;
+        console.error(`🚨 CRASH DETECTED: Plugin '${culpritSlug}' has ${crashInfo.strikes} strikes.`);
         console.error(`🛡️  CrashGuard: Automatically disabling '${culpritSlug}' to prevent boot loop.`);
 
         // Remove from active plugins list
@@ -834,18 +835,18 @@ async function loadActivePlugins() {
         notices.push({
             id: `crash-${culpritSlug}-${Date.now()}`,
             type: 'error',
-            message: `🚨 <b>Critical Error:</b> The plugin <strong>${culpritSlug}</strong> caused a server crash during startup and has been automatically disabled for your safety. Please check the logs or contact the plugin author.`,
+            message: `🚨 <b>Critical Error:</b> The plugin <strong>${culpritSlug}</strong> caused ${crashInfo.strikes} consecutive crashes during startup and has been automatically disabled for your safety. Please check the logs or contact the plugin author.`,
             dismissible: true,
             timestamp: Date.now()
         });
         await updateOption('admin_notices', notices);
 
-        // Clear the lock so we can proceed
-        CrashGuard.finishLoading(culpritSlug);
-
         // Update local list for THIS run
         const index = activePlugins.indexOf(culpritSlug);
         if (index > -1) activePlugins.splice(index, 1);
+    } else if (crashInfo && !crashInfo.shouldDisable) {
+        // Crash detected but not at 3 strikes yet, just log and continue
+        console.warn(`⚠️ [CrashGuard] Previous crash during '${crashInfo.slug}' load (Strike ${crashInfo.strikes}/${CrashGuard.MAX_STRIKES}). Retrying...`);
     }
 
     // 2. Load Plugins
