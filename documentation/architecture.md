@@ -15,8 +15,8 @@ graph TB
 
     subgraph "Gateway Layer"
         Gateway[🚀 Gateway :3000]
-        LB[Load Balancer]
-        Circuit[Circuit Breaker]
+        note[Features: Load Balancing & Circuit Breaking]
+        Gateway -.-> note
     end
 
     subgraph "Frontend Layer"
@@ -46,10 +46,8 @@ graph TB
 
     Browser --> Gateway
     Mobile --> Gateway
-    Gateway --> LB
-    LB --> Circuit
-    Circuit --> NextJS
-    Circuit --> Express
+    Gateway --> NextJS
+    Gateway --> Express
     NextJS --> Puck
     NextJS --> Themes
     Express --> Hooks
