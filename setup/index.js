@@ -14,13 +14,12 @@ class WordJSSetup {
         this.backendDir = path.join(this.rootDir, 'backend');
         this.gatewayDir = path.join(this.rootDir, 'gateway');
         this.frontDir = path.join(this.rootDir, 'frontend');
-        this.certsDir = path.join(this.rootDir, 'certs');
+        this.certsDir = path.join(this.gatewayDir, 'certs'); // Centralized in Gateway
     }
 
     async init() {
-        await fs.ensureDir(this.certsDir);
         await fs.ensureDir(this.gatewayDir);
-        await fs.ensureDir(path.join(this.gatewayDir, 'certs'));
+        await fs.ensureDir(this.certsDir);
         if (await fs.pathExists(this.frontDir)) {
             await fs.ensureDir(path.join(this.frontDir, 'certs'));
         }
@@ -170,10 +169,16 @@ class WordJSSetup {
             }
         };
 
-        await distributeCert('gateway-internal', gatewayCertsDir);
+        await distributeCert('gateway-internal', this.certsDir); // Keeps everything in gateway
         await distributeCert('backend', backendCertsDir);
         if (await fs.pathExists(this.frontDir)) {
             await distributeCert('frontend', frontCertsDir);
+        }
+
+        // 4. CLEANUP ROOT CERTS (If they exist)
+        const oldRootCerts = path.join(this.rootDir, 'certs');
+        if (await fs.pathExists(oldRootCerts)) {
+            await fs.remove(oldRootCerts);
         }
 
         process.stdout.write('🚀 Distribution Complete.\n');
