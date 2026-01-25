@@ -363,9 +363,16 @@ async function initialize() {
         await loadActivePlugins();
 
         // Start cron system
-        const { startCron, initDefaultCronEvents } = require('./core/cron');
-        initDefaultCronEvents();
+        const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
+        await initDefaultCronEvents();
         startCron();
+
+        // Expose Cron API to Plugins via global.wordjs
+        global.wordjs = global.wordjs || {};
+        global.wordjs.scheduleEvent = scheduleEvent;
+        global.wordjs.scheduleSingleEvent = scheduleSingleEvent;
+        global.wordjs.unscheduleEvent = unscheduleEvent;
+        global.wordjs.nextScheduled = nextScheduled;
 
         // Initialize Robust Theme Engine
         console.log('🎨 Initializing Theme Engine...');
