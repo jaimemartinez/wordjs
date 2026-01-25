@@ -198,10 +198,38 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /posts
- * Create post
+ * @swagger
+ * /posts:
+ *   post:
+ *     summary: Create a new post
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [title]
+ *             properties:
+ *               title:
+ *                 type: string
+ *               content:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: [publish, draft, pending]
+ *     responses:
+ *       201:
+ *         description: Post created
+ *       400:
+ *         description: Missing title
+ *       403:
+ *         description: Forbidden
  */
 router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) => {
+    // ...
     const {
         title,
         content,
@@ -265,8 +293,38 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) 
 }));
 
 /**
- * PUT /posts/:id
- * Update post
+ * @swagger
+ * /posts/{id}:
+ *   put:
+ *     summary: Update an existing post
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               title:
+ *                 type: string
+ *               content:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Post updated
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Post not found
  */
 router.put('/:id', authenticate, asyncHandler(async (req, res) => {
     const postId = parseInt(req.params.id, 10);
@@ -345,8 +403,31 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /posts/:id
- * Delete post
+ * @swagger
+ * /posts/{id}:
+ *   delete:
+ *     summary: Delete a post
+ *     tags: [Posts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: force
+ *         schema:
+ *           type: boolean
+ *         description: Whether to bypass trash and force deletion
+ *     responses:
+ *       200:
+ *         description: Post deleted
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Post not found
  */
 router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
     const postId = parseInt(req.params.id, 10);
@@ -382,6 +463,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
         res.json(await (await Post.findById(postId)).toJSON());
     }
 }));
+
 
 /**
  * POST /posts/:id/meta
