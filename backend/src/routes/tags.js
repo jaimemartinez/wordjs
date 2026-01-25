@@ -13,8 +13,30 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const TAXONOMY = 'post_tag';
 
 /**
- * GET /tags
- * List tags
+ * @swagger
+ * tags:
+ *   name: Tags
+ *   description: Tag management
+ */
+
+/**
+ * @swagger
+ * /tags:
+ *   get:
+ *     summary: List tags
+ *     tags: [Tags]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of tags
  */
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const {
@@ -49,8 +71,22 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /tags/:id
- * Get single tag
+ * @swagger
+ * /tags/{id}:
+ *   get:
+ *     summary: Get a tag
+ *     tags: [Tags]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Tag details
+ *       404:
+ *         description: Tag not found
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
     const term = await Term.findById(parseInt(req.params.id, 10), TAXONOMY);
@@ -67,8 +103,32 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /tags
- * Create tag
+ * @swagger
+ * /tags:
+ *   post:
+ *     summary: Create a tag
+ *     tags: [Tags]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:
+ *                 type: string
+ *               slug:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Tag created
+ *       400:
+ *         description: Validation error
  */
 router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const { name, slug, description } = req.body;
@@ -103,8 +163,36 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
 }));
 
 /**
- * PUT /tags/:id
- * Update tag
+ * @swagger
+ * /tags/{id}:
+ *   put:
+ *     summary: Update a tag
+ *     tags: [Tags]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               slug:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Tag updated
+ *       404:
+ *         description: Tag not found
  */
 router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const termId = parseInt(req.params.id, 10);
@@ -130,8 +218,24 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
 }));
 
 /**
- * DELETE /tags/:id
- * Delete tag
+ * @swagger
+ * /tags/{id}:
+ *   delete:
+ *     summary: Delete a tag
+ *     tags: [Tags]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Tag deleted
+ *       404:
+ *         description: Tag not found
  */
 router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const termId = parseInt(req.params.id, 10);

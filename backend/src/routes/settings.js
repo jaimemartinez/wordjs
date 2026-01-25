@@ -10,6 +10,13 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
+/**
+ * @swagger
+ * tags:
+ *   name: Settings
+ *   description: Site configuration
+ */
+
 // Public settings that can be viewed without authentication
 const PUBLIC_SETTINGS = [
     'blogname',
@@ -63,8 +70,14 @@ const ALL_SETTINGS = [
 ];
 
 /**
- * GET /settings
- * Get all public settings
+ * @swagger
+ * /settings:
+ *   get:
+ *     summary: Get public site settings
+ *     tags: [Settings]
+ *     responses:
+ *       200:
+ *         description: Key-value map of public settings
  */
 router.get('/', asyncHandler(async (req, res) => {
     const settings = {};
@@ -77,8 +90,18 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /settings/all
- * Get all settings (admin only)
+ * @swagger
+ * /settings/all:
+ *   get:
+ *     summary: Get all settings (Admin)
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Key-value map of all settings
+ *       403:
+ *         description: Forbidden
  */
 router.get('/all', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const settings = {};
@@ -91,8 +114,22 @@ router.get('/all', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /settings/:key
- * Get single setting
+ * @swagger
+ * /settings/{key}:
+ *   get:
+ *     summary: Get a single setting
+ *     tags: [Settings]
+ *     parameters:
+ *       - in: path
+ *         name: key
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Setting value
+ *       403:
+ *         description: Forbidden (if private)
  */
 router.get('/:key', asyncHandler(async (req, res) => {
     const { key } = req.params;
@@ -115,8 +152,24 @@ router.get('/:key', asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /settings
- * Update multiple settings (admin only)
+ * @swagger
+ * /settings:
+ *   put:
+ *     summary: Update multiple settings
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             example:
+ *               blogname: "My Awesome Site"
+ *               posts_per_page: 10
+ *     responses:
+ *       200:
+ *         description: Settings updated
  */
 router.put('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const updates = req.body;
@@ -133,8 +186,30 @@ router.put('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /settings/:key
- * Update single setting (admin only)
+ * @swagger
+ * /settings/{key}:
+ *   put:
+ *     summary: Update a single setting
+ *     tags: [Settings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: key
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               value:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Setting updated
  */
 router.put('/:key', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const { key } = req.params;

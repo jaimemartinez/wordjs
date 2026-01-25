@@ -21,6 +21,13 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
+/**
+ * @swagger
+ * tags:
+ *   name: Themes
+ *   description: Theme management (Install, Switch, Delete)
+ */
+
 // Configure multer for zip uploads
 const upload = multer({
     dest: 'os-tmp/',
@@ -54,8 +61,27 @@ function validateSlug(slug) {
 }
 
 /**
- * POST /themes/upload
- * Upload and install a theme
+ * @swagger
+ * /themes/upload:
+ *   post:
+ *     summary: Upload and install a theme (ZIP)
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               theme:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Theme installed
+ *       400:
+ *         description: Invalid file or zip slip
  */
 router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req, res) => {
     if (!req.file) {
@@ -104,8 +130,14 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
 }));
 
 /**
- * GET /themes
- * List all themes
+ * @swagger
+ * /themes:
+ *   get:
+ *     summary: List all installed themes
+ *     tags: [Themes]
+ *     responses:
+ *       200:
+ *         description: List of themes
  */
 router.get('/', asyncHandler(async (req, res) => {
     const themes = await getAllThemes();
@@ -113,8 +145,22 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /themes/:slug/activate
- * Switch to a theme
+ * @swagger
+ * /themes/{slug}/activate:
+ *   post:
+ *     summary: Switch active theme
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Theme activated
  */
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // SECURITY: Validate slug
@@ -126,8 +172,16 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
 }));
 
 /**
- * POST /themes/default
- * Create default theme
+ * @swagger
+ * /themes/default:
+ *   post:
+ *     summary: Restore default theme
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Default theme restored
  */
 router.post('/default', authenticate, isAdmin, asyncHandler(async (req, res) => {
     createDefaultTheme();
@@ -135,8 +189,22 @@ router.post('/default', authenticate, isAdmin, asyncHandler(async (req, res) => 
 }));
 
 /**
- * DELETE /themes/:slug
- * Delete a theme
+ * @swagger
+ * /themes/{slug}:
+ *   delete:
+ *     summary: Delete a theme
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Theme deleted
  */
 router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // SECURITY: Validate slug
@@ -148,8 +216,27 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => 
 }));
 
 /**
- * GET /themes/:slug/download
- * Download a theme as ZIP
+ * @swagger
+ * /themes/{slug}/download:
+ *   get:
+ *     summary: Download theme as ZIP
+ *     tags: [Themes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Theme ZIP file
+ *         content:
+ *           application/zip:
+ *             schema:
+ *               type: string
+ *               format: binary
  */
 router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // SECURITY: Validate slug
