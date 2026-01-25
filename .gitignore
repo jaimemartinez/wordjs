@@ -24,14 +24,15 @@ backend/tmp-*/
 *.sqlite-journal
 *.sqlite-wal
 
-# Security
-/certs/
-backend/certs/
-frontend/certs/
+# Security & Certificates
 **/certs/
 *.key
 *.crt
 ssl-auto.*
+/certs/
+backend/certs/
+frontend/certs/
+gateway/certs/
 /gateway-registry.json
 gateway/gateway-config.json
 gateway/ssl/

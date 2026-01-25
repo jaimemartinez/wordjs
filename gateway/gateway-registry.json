@@ -1,31 +1,45 @@
 {
   "/": {
     "name": "frontend",
-    "targets": []
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
   },
   "/admin": {
     "name": "frontend",
-    "targets": []
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
   },
   "/login": {
     "name": "frontend",
-    "targets": []
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
   },
   "/install": {
     "name": "frontend",
-    "targets": []
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
   },
   "/migration": {
     "name": "frontend",
-    "targets": []
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
   },
   "/portal": {
     "name": "frontend",
-    "targets": []
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
   },
   "/_next": {
     "name": "frontend",
-    "targets": []
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
   },
   "/api": {
     "name": "backend",

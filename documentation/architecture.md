@@ -519,3 +519,24 @@ To avoid CORS and simplify production deployments, all traffic should go through
 - `http://localhost:3000/api/*` → Handled by **Backend** (4000)
 - `http://localhost:3000/admin` → Handled by **Frontend** (3001)
 - `http://localhost:3000/plugins/*` → Handled by **Backend** (4000)
+
+---
+
+## 🔒 Internal Security (mTLS)
+
+WordJS services communicate securely using a private mTLS cluster.
+
+```mermaid
+graph LR
+    subgraph "Internal Network"
+        GatewayAPI[Gateway API :3100]
+        Backend[Backend]
+        Frontend[Frontend]
+    end
+
+    Backend -- "mTLS (backend.crt)" --> GatewayAPI
+    Frontend -- "mTLS (frontend.crt)" --> GatewayAPI
+    GatewayAPI -- "Trusts CA" --> Backend
+```
+
+The **Gateway** (port 3100) serves as the control plane. The **Backend** uses this interface to push certificates and configuration updates, ensuring that sensitive keys are never exposed on public ports.
