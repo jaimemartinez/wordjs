@@ -91,23 +91,7 @@ router.get('/pages', (req, res, next) => {
 // Documentation
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpecs = require('../config/swagger');
-
-const swaggerTheme = `
-  .swagger-ui .topbar { background-color: #306E88; }
-  .swagger-ui .info .title small.version-stamp { background-color: #00A9CE; }
-  .swagger-ui .btn.authorize { color: #306E88; border-color: #306E88; }
-  .swagger-ui .btn.authorize svg { fill: #306E88; }
-  .swagger-ui .opblock.opblock-post { background: rgba(73, 204, 144, 0.1); border-color: #49cc90; }
-  .swagger-ui .opblock.opblock-post .opblock-summary-method { background: #49cc90; }
-  .swagger-ui .opblock.opblock-delete { background: rgba(249, 62, 62, 0.1); border-color: #f93e3e; }
-  .swagger-ui .opblock.opblock-delete .opblock-summary-method { background: #f93e3e; }
-  
-  /* Brand Adjustments */
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
-  .swagger-ui .info .title { font-family: "Oswald", sans-serif; color: #306E88; }
-  .swagger-ui .info a { color: #00A9CE; }
-  .swagger-ui .scheme-container { box-shadow: none; border-bottom: 1px solid #eee; }
-`;
+const swaggerTheme = require('../config/swagger-theme');
 
 router.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
     customCss: swaggerTheme,
@@ -115,4 +99,3 @@ router.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
 }));
 
 module.exports = router;
-
