@@ -123,7 +123,13 @@ async function runTest() {
         // C. Re-Initialize (Connect to Temp DB)
         // Note: We do NOT need to run plugin init here because importSite should recreate the schema!
         console.log(`   🔌 Connecting to Temp DB: ${tempDbPath}`);
-        await db.init();
+
+        // Force switch to SQLite for the Sandbox Restore (proving portability)
+        // We must set the path on the singleton BEFORE init connects it
+        driverAsync.dbPath = tempDbPath;
+
+        // Pass override to database manager
+        await db.init({ driver: 'sqlite-native' });
         await db.initializeDatabase(); // Create empty schema
 
         // D. Run Import
