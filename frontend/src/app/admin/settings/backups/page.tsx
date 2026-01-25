@@ -4,13 +4,18 @@ import { useEffect, useState } from "react";
 import { PageHeader, Card, Button } from "@/components/ui";
 import { backupsApi, BackupFile } from "@/lib/api";
 import { format } from "date-fns";
+import { useModal } from "@/contexts/ModalContext";
+import { useToast } from "@/contexts/ToastContext";
 
 export default function BackupsPage() {
     const [backups, setBackups] = useState<BackupFile[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
-    const [restoring, setRestoring] = useState<string | null>(null);
+    // removing local restoring state as useModal handles it
     const [error, setError] = useState<string | null>(null);
+
+    const { confirm } = useModal();
+    const { addToast } = useToast();
 
     const fetchBackups = async () => {
         try {
@@ -19,6 +24,7 @@ export default function BackupsPage() {
             setError(null);
         } catch (err: any) {
             setError(err.message);
+            addToast("Failed to load backups", "error");
         } finally {
             setLoading(false);
         }
@@ -32,35 +38,54 @@ export default function BackupsPage() {
         setCreating(true);
         try {
             await backupsApi.create();
+            addToast("Backup created successfully", "success");
             await fetchBackups();
         } catch (err: any) {
             setError(err.message);
+            addToast(err.message || "Failed to create backup", "error");
         } finally {
             setCreating(false);
         }
     };
 
     const handleDelete = async (filename: string) => {
-        if (!confirm("Are you sure you want to delete this backup?")) return;
+        const confirmed = await confirm(
+            "Are you sure you want to delete this backup? This action cannot be undone.",
+            "Delete Backup",
+            true // isDanger
+        );
+
+        if (!confirmed) return;
+
         try {
             await backupsApi.delete(filename);
             setBackups(backups.filter(b => b.filename !== filename));
+            addToast("Backup deleted successfully", "success");
         } catch (err: any) {
-            alert(err.message);
+            addToast(err.message || "Failed to delete backup", "error");
         }
     };
 
-    const handleRestore = async () => {
-        if (!restoring) return;
+    const handleRestore = async (filename: string) => {
+        const confirmed = await confirm(
+            `You are about to restore ${filename}. This will overwrite all current data and files. Are you sure?`,
+            "Confirm System Restore",
+            true // isDanger
+        );
+
+        if (!confirmed) return;
+
         try {
-            setLoading(true);
-            await backupsApi.restore(restoring);
-            alert("System restored successfully!");
-            setRestoring(null);
-            // Optionally reload or redirect
-            window.location.reload();
+            setLoading(true); // Show full page loading (or overlay)
+            await backupsApi.restore(filename);
+            addToast("System restored successfully!", "success");
+
+            // Reload after a short delay to allow toast to be seen, or immediately
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000);
         } catch (err: any) {
-            alert("Restore failed: " + err.message);
+            addToast("Restore failed: " + err.message, "error");
             setLoading(false);
         }
     };
@@ -158,7 +183,7 @@ export default function BackupsPage() {
                                                     <i className="fa-solid fa-download"></i>
                                                 </button>
                                                 <button
-                                                    onClick={() => setRestoring(backup.filename)}
+                                                    onClick={() => handleRestore(backup.filename)}
                                                     className="p-2 hover:bg-orange-50 text-orange-500 rounded-lg transition-colors"
                                                     title="Restore"
                                                 >
@@ -180,43 +205,6 @@ export default function BackupsPage() {
                     </table>
                 </div>
             </Card>
-
-            {/* Restore Modal */}
-            {restoring && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm animate-in fade-in">
-                    <div className="bg-white rounded-[30px] p-8 max-w-md w-full shadow-2xl space-y-6">
-                        <div className="w-16 h-16 bg-orange-100 text-orange-600 rounded-2xl flex items-center justify-center mx-auto">
-                            <i className="fa-solid fa-triangle-exclamation text-3xl"></i>
-                        </div>
-                        <div className="text-center">
-                            <h3 className="text-xl font-bold text-gray-900">Confirm System Restore</h3>
-                            <p className="text-gray-500 mt-2">
-                                You are about to restore <strong>{restoring}</strong>.
-                                <br />
-                                <span className="text-red-500 font-bold block mt-2">
-                                    This will overwrite all current data and files.
-                                </span>
-                            </p>
-                        </div>
-                        <div className="flex gap-3">
-                            <Button
-                                variant="ghost"
-                                className="flex-1"
-                                onClick={() => setRestoring(null)}
-                            >
-                                Cancel
-                            </Button>
-                            <Button
-                                className="flex-1 bg-orange-500 hover:bg-orange-600 text-white border-none"
-                                onClick={handleRestore}
-                            >
-                                <i className="fa-solid fa-radiation mr-2"></i>
-                                Yes, Restore
-                            </Button>
-                        </div>
-                    </div>
-                </div>
-            )}
         </div>
     );
 }
