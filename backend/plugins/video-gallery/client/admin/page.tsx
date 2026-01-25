@@ -4,8 +4,8 @@
 import { useState, useEffect } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader } from "../../../../../admin-next/src/components/ui/PageHeader";
-import { Card } from "../../../../../admin-next/src/components/ui/Card";
+import { PageHeader } from "../../../../../frontend/src/components/ui/PageHeader";
+import { Card } from "../../../../../frontend/src/components/ui/Card";
 
 interface Video {
     id?: number | string; // Updated to support string/legacy IDs

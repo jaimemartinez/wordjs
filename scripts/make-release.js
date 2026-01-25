@@ -64,10 +64,10 @@ async function run() {
         fs.mkdirSync(TEMP_DIST, { recursive: true });
 
         // 2. Build Frontend
-        console.log('\n⚛️ Building Frontend (admin-next)...');
+        console.log('\n⚛️ Building Frontend (frontend)...');
         console.log('   (This may take a few minutes)');
         execSync('npm run build', {
-            cwd: path.join(ROOT_DIR, 'admin-next'),
+            cwd: path.join(ROOT_DIR, 'frontend'),
             stdio: 'inherit'
         });
 
