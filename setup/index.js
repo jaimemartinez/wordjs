@@ -14,12 +14,14 @@ class WordJSSetup {
         this.backendDir = path.join(this.rootDir, 'backend');
         this.gatewayDir = path.join(this.rootDir, 'gateway');
         this.frontDir = path.join(this.rootDir, 'frontend');
-        this.certsDir = path.join(this.gatewayDir, 'certs'); // Centralized in Gateway
     }
 
     async init() {
         await fs.ensureDir(this.gatewayDir);
-        await fs.ensureDir(this.certsDir);
+        // Use a temporary folder for generation so we don't wipe it during distribution
+        this.genCertsDir = path.join(this.rootDir, '.certs_tmp');
+        await fs.ensureDir(this.genCertsDir);
+
         if (await fs.pathExists(this.frontDir)) {
             await fs.ensureDir(path.join(this.frontDir, 'certs'));
         }
@@ -49,8 +51,8 @@ class WordJSSetup {
         const caKeyPem = pki.privateKeyToPem(caKeys.privateKey);
         const caCertPem = pki.certificateToPem(caCert);
 
-        await fs.writeFile(path.join(this.certsDir, 'cluster-ca.key'), caKeyPem);
-        await fs.writeFile(path.join(this.certsDir, 'cluster-ca.crt'), caCertPem);
+        await fs.writeFile(path.join(this.genCertsDir, 'cluster-ca.key'), caKeyPem);
+        await fs.writeFile(path.join(this.genCertsDir, 'cluster-ca.crt'), caCertPem);
 
         // 2. Generate Service Identities
         const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(host);
@@ -106,8 +108,8 @@ class WordJSSetup {
         const keyPem = pki.privateKeyToPem(keys.privateKey);
         const certPem = pki.certificateToPem(cert);
 
-        await fs.writeFile(path.join(this.certsDir, `${name}.key`), keyPem);
-        await fs.writeFile(path.join(this.certsDir, `${name}.crt`), certPem);
+        await fs.writeFile(path.join(this.genCertsDir, `${name}.key`), keyPem);
+        await fs.writeFile(path.join(this.genCertsDir, `${name}.crt`), certPem);
     }
 
     /**
@@ -119,16 +121,28 @@ class WordJSSetup {
         const backendConfigPath = path.join(this.backendDir, 'wordjs-config.json');
         const gatewayConfigPath = path.join(this.gatewayDir, 'gateway-config.json');
 
-        // 1. SAVE BACKEND CONFIG (Master)
+        // 1. MERGE BACKEND CONFIG (Master)
+        let existingBackend = {};
+        if (await fs.pathExists(backendConfigPath)) {
+            existingBackend = await fs.readJson(backendConfigPath);
+        }
+
         const fullConfig = {
+            ...existingBackend,
             ...config,
             mtls: { ca: './certs/cluster-ca.crt', key: './certs/backend.key', cert: './certs/backend.crt' },
             updatedAt: new Date().toISOString()
         };
         await fs.writeJson(backendConfigPath, fullConfig, { spaces: 2 });
 
-        // 2. SAVE GATEWAY CONFIG (Decoupled)
+        // 2. MERGE GATEWAY CONFIG (Decoupled)
+        let existingGateway = {};
+        if (await fs.pathExists(gatewayConfigPath)) {
+            existingGateway = await fs.readJson(gatewayConfigPath);
+        }
+
         const gatewayConfig = {
+            ...existingGateway,
             gatewaySecret: fullConfig.gatewaySecret,
             gatewayPort: fullConfig.gatewayPort,
             gatewayInternalPort: fullConfig.gatewayInternalPort,
@@ -162,20 +176,21 @@ class WordJSSetup {
         const distributeCert = async (serviceName, targetDir) => {
             const files = ['cluster-ca.crt', `${serviceName}.crt`, `${serviceName}.key`];
             for (const file of files) {
-                const src = path.join(this.certsDir, file);
+                const src = path.join(this.genCertsDir, file);
                 if (await fs.pathExists(src)) {
                     await fs.copy(src, path.join(targetDir, file));
                 }
             }
         };
 
-        await distributeCert('gateway-internal', this.certsDir); // Keeps everything in gateway
+        await distributeCert('gateway-internal', gatewayCertsDir);
         await distributeCert('backend', backendCertsDir);
         if (await fs.pathExists(this.frontDir)) {
             await distributeCert('frontend', frontCertsDir);
         }
 
-        // 4. CLEANUP ROOT CERTS (If they exist)
+        // 4. CLEANUP
+        await fs.remove(this.genCertsDir);
         const oldRootCerts = path.join(this.rootDir, 'certs');
         if (await fs.pathExists(oldRootCerts)) {
             await fs.remove(oldRootCerts);

@@ -32,7 +32,9 @@ function getStrikes(slug) {
             const strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
             return strikes[slug] || 0;
         }
-    } catch (e) { }
+    } catch (e) {
+        console.error('[CrashGuard] Failed to parse strike file:', e.message);
+    }
     return 0;
 }
 
@@ -46,7 +48,9 @@ function addStrike(slug) {
         if (fs.existsSync(STRIKE_FILE)) {
             strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
         }
-    } catch (e) { }
+    } catch (e) {
+        console.error('[CrashGuard] Failed to parse strike file for writing:', e.message);
+    }
 
     strikes[slug] = (strikes[slug] || 0) + 1;
 
@@ -71,7 +75,9 @@ function clearStrikes(slug) {
                 fs.writeFileSync(STRIKE_FILE, JSON.stringify(strikes, null, 2), 'utf8');
             }
         }
-    } catch (e) { }
+    } catch (e) {
+        console.error('[CrashGuard] Failed to clear strikes:', e.message);
+    }
 }
 
 // ============================================
@@ -259,7 +265,9 @@ function clear() {
         if (fs.existsSync(RUNTIME_BLAME_FILE)) {
             fs.unlinkSync(RUNTIME_BLAME_FILE);
         }
-    } catch (e) { }
+    } catch (e) {
+        console.error('[CrashGuard] Failed to clear locks:', e.message);
+    }
 }
 
 module.exports = {

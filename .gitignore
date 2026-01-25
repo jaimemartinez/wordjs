@@ -1,87 +1,72 @@
 # Dependencies
-node_modules/
+**/node_modules/
+package-lock.json
 pnpm-lock.yaml
 yarn.lock
 
 # Environment
 .env
 .env.local
-.env.*.local
+.env.*
+**/.env
+**/.env.local
+**/.env.*
+
+# WordJS Security & Config (SENSITIVE)
+wordjs-config.json
 backend/wordjs-config.json
-
-# Data & Storage
-backend/data/
-backend/uploads/
-backend/tmp-*/
-*.db
-*.db3
-*.s3db
-*.sqlite
-*.sqlite3
-*.sl3
-*.db-journal
-*.db-wal
-*.sqlite-journal
-*.sqlite-wal
-
-# Security & Certificates
+gateway/gateway-config.json
+gateway-registry.json
 **/certs/
 *.key
 *.crt
-ssl-auto.*
-/certs/
-backend/certs/
-frontend/certs/
-gateway/certs/
-/gateway-registry.json
-gateway/gateway-config.json
-gateway/ssl/
+*.pem
+ssl/
 backend/ssl/
+gateway/ssl/
 
-# Logs
-logs/
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-
-# System
-.DS_Store
-Thumbs.db
-
-# IDE
-.vscode/
-.idea/
-
-# WordJS Backend Debug & Temp
-backend/debug_*.js
-backend/debug_*.txt
-backend/commands.txt
-backend/menus_dump.json
-backend/*.backup.json
+# WordJS Data (DO NOT COMMIT)
+data/
+backend/data/
+backend/uploads/
 backend/os-tmp/
-backend/force-sync-roles.js
-backend/inspect-user.js
-backend/verify-roles.js
-backend/Propuesta.pdf
-backend/check-db-content.js
+**/tmp/
+*.db
+*.sqlite
+*.sqlite3
+*-wal
+*-shm
+*-journal
 
-# Next.js
+# Logs & Debug
+logs/
+**/logs/
+*.log
+**/debug_*.txt
+**/debug_*.js
+backend/commands.txt
+backend/Propuesta.pdf
+
+# Next.js & Build Artifacts
 .next/
 out/
 build/
 dist/
+**/build/
+**/dist/
+tsconfig.tsbuildinfo
 
-# WordJS Temporary
-_backups/
-tmp/
-
-# Client-Specific Plugins (not for public repo)
-backend/plugins/conference-manager/
-
-# Client-Specific Themes (not for public repo)
-backend/themes/vidaParaTodos/
-
-# Packaged releases
+# WordJS Releases
 /release/
 /release-bundles/
+
+# System Files
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Client-Specific Content (Restricted)
+backend/plugins/conference-manager/
+backend/themes/vidaParaTodos/
+

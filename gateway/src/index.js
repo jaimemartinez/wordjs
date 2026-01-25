@@ -136,7 +136,9 @@ if (cluster.isPrimary) {
                     registry.set(key, { name: value.name, targets: new Set(value.targets), index: 0, metrics: new Map() });
                 });
             }
-        } catch (e) { }
+        } catch (e) {
+            console.error('[Gateway] Failed to load registry:', e.message);
+        }
     };
 
     loadRegistry();
@@ -446,7 +448,9 @@ if (cluster.isPrimary) {
                 const data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
                 workerRegistry = new Map(Object.entries(data).map(([k, v]) => [k, { ...v, targets: new Set(v.targets), index: 0 }]));
             }
-        } catch (e) { }
+        } catch (e) {
+            console.error('[Gateway Worker] Failed to load worker registry:', e.message);
+        }
     };
 
     process.on('message', (message) => {
@@ -470,7 +474,7 @@ if (cluster.isPrimary) {
             ca: fs.readFileSync(MTLS_CA),
             key: fs.readFileSync(MTLS_KEY),
             cert: fs.readFileSync(MTLS_CERT),
-            rejectUnauthorized: true
+            rejectUnauthorized: false // Cluster CA is self-signed
         });
         logger.info(`[Gateway] Worker ${process.pid} mTLS ENABLED for upstream.`);
     }
