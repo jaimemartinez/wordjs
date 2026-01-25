@@ -5,9 +5,9 @@
   "scripts": {
     "predev": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js",
     "prebuild": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js",
-    "dev": "next dev",
+    "dev": "node scripts/start-frontend.js dev",
     "build": "next build",
-    "start": "next start",
+    "start": "node scripts/start-frontend.js prod",
     "lint": "next lint",
     "postinstall": "node scripts/patch-puck-actions.js",
     "generate-plugins": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js"

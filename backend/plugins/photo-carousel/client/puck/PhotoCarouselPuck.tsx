@@ -2,6 +2,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
+import { apiGet } from "@/lib/api";
 import HeroCarousel from "../components/HeroCarousel";
 
 interface PhotoCarouselPuckProps {
@@ -17,9 +18,7 @@ const CarouselPicker = ({ value, onChange }: { value: string; onChange: (value: 
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        // Use relative URL now that Next.js rewrites are configured
-        fetch("/api/v1/carousels")
-            .then(res => res.json())
+        apiGet<any[]>("/carousels")
             .then(data => {
                 console.log("CarouselPicker loaded items:", data);
                 if (Array.isArray(data)) {
@@ -59,7 +58,7 @@ export const puckComponentDef = {
         carouselId: {
             type: "custom" as const,
             label: "Select Carousel",
-            render: ({ value, onChange }) => <CarouselPicker value={value} onChange={onChange} />
+            render: (props: any) => <CarouselPicker value={props.value} onChange={props.onChange} />
         },
         autoSlide: {
             type: "radio" as const,
@@ -93,14 +92,13 @@ export default function PhotoCarouselPuck({ carouselId, autoSlide = true, interv
     const [carousels, setCarousels] = useState<any[]>([]);
 
     useEffect(() => {
-        // Load all carousels to let user choose if no ID provided, or to find the selected one
-        fetch("/api/v1/carousels")
-            .then(res => res.json())
+        // Use apiGet which handles auth and protocol correctly
+        apiGet<any[]>("/carousels")
             .then(data => {
                 if (Array.isArray(data)) {
                     setCarousels(data);
                     if (carouselId) {
-                        const found = data.find((c: any) => c.id === carouselId || c.id === Number(carouselId));
+                        const found = data.find((c: any) => c.id === carouselId || c.id === String(carouselId));
                         if (found) setCarousel(found);
                     } else if (data.length > 0) {
                         setCarousel(data[0]); // Default to first

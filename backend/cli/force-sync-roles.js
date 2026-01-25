@@ -1,5 +1,5 @@
-const { initSqlJsDb, getDb, saveDatabase } = require('./src/config/database');
-const config = require('./src/config/app');
+const { initSqlJsDb, getDb, saveDatabase } = require('../src/config/database');
+const config = require('../src/config/app');
 
 async function run() {
     try {

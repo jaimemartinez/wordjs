@@ -2,7 +2,7 @@ const Database = require('better-sqlite3');
 const path = require('path');
 
 try {
-    const db = new Database(path.resolve('./backend/data/wordjs-native.db'));
+    const db = new Database(path.resolve('../data/wordjs-native.db'));
     const row = db.prepare("SELECT option_value FROM options WHERE option_name = 'active_plugins'").get();
 
     if (row) {

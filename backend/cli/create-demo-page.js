@@ -1,4 +1,4 @@
-const { init, dbAsync } = require('./src/config/database');
+const { init, dbAsync } = require('../src/config/database');
 
 async function createDemoPage() {
     await init();

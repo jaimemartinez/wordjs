@@ -1,0 +1,74 @@
+{
+  "/": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
+  },
+  "/admin": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
+  },
+  "/login": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
+  },
+  "/install": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
+  },
+  "/migration": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
+  },
+  "/portal": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
+  },
+  "/_next": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001"
+    ]
+  },
+  "/api": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ]
+  },
+  "/uploads": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ]
+  },
+  "/themes": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ]
+  },
+  "/plugins": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ]
+  },
+  "/.well-known": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ]
+  }
+}

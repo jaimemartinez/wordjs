@@ -881,15 +881,17 @@ async function loadActivePlugins() {
             const pluginModule = require(mainFile);
 
             const { runWithContext } = require('./plugin-context');
+            loadedPlugins.set(slug, pluginModule);
+            console.log(`   ✓ Plugin loaded: ${plugin.name} (${slug})`);
+
             if (typeof pluginModule.init === 'function') {
+                console.log(`   ⚙️  Calling init() for ${slug}...`);
                 await runWithContext(slug, () => pluginModule.init());
+                console.log(`   ✅  init() completed for ${slug}`);
             }
 
             // MARK SUCCESS
             CrashGuard.finishLoading(slug);
-
-            loadedPlugins.set(slug, pluginModule);
-            console.log(`   ✓ Plugin loaded: ${plugin.name}`);
         } catch (error) {
             // If we caught the error (it didn't crash the process), we should still clear the lock
             CrashGuard.finishLoading(slug);

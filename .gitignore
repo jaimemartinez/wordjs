@@ -13,10 +13,19 @@ backend/wordjs-config.json
 backend/data/
 backend/uploads/
 backend/tmp-*/
-ssl-auto.*
 *.db
 *.sqlite
 *.sqlite3
+
+# Security
+/certs/
+backend/certs/
+admin-next/certs/
+ssl-auto.*
+/gateway-registry.json
+gateway/gateway-config.json
+gateway/ssl/
+backend/ssl/
 
 # Logs
 logs/
