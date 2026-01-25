@@ -7,7 +7,10 @@
  * - Gateway
  * - Backend (Source + Plugin Bundles)
  * - Frontend (Source + .next Build)
- * - Documentation
+ * Includes:
+ * - Gateway
+ * - Backend (Source + Plugin Bundles)
+ * - Frontend (Source + .next Build)
  */
 
 const { execSync } = require('child_process');
@@ -22,6 +25,7 @@ const TEMP_DIST = path.join(RELEASE_DIR, 'wordjs-package');
 // Files and folders to exclude from the release
 const IGNORE_PATTERNS = [
     'node_modules',
+    'documentation',
     '.git',
     '.github',
     '.gitignore',
