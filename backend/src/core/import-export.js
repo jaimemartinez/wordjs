@@ -14,7 +14,10 @@ const { getOption, updateOption, addOption } = require('./options');
 /**
  * Export all site content
  */
-function exportSite(options = {}) {
+/**
+ * Export all site content (Async)
+ */
+async function exportSite(options = {}) {
     const {
         includeMedia = true,
         includePosts = true,
@@ -38,8 +41,8 @@ function exportSite(options = {}) {
 
     // Export posts
     if (includePosts) {
-        const posts = Post.findAll({ type: 'post', status: 'any', limit: 10000 });
-        exportData.content.posts = posts.map(p => ({
+        const posts = await Post.findAll({ type: 'post', status: 'any', limit: 10000 });
+        exportData.content.posts = await Promise.all(posts.map(async p => ({
             id: p.id,
             title: p.postTitle,
             slug: p.postName,
@@ -49,16 +52,16 @@ function exportSite(options = {}) {
             date: p.postDate,
             modified: p.postModified,
             authorId: p.authorId,
-            categories: Post.getTerms(p.id, 'category').map(t => t.name),
-            tags: Post.getTerms(p.id, 'post_tag').map(t => t.name),
-            meta: Post.getAllMeta(p.id)
-        }));
+            categories: (await Post.getTerms(p.id, 'category')).map(t => t.name),
+            tags: (await Post.getTerms(p.id, 'post_tag')).map(t => t.name),
+            meta: await Post.getAllMeta(p.id)
+        })));
     }
 
     // Export pages
     if (includePages) {
-        const pages = Post.findAll({ type: 'page', status: 'any', limit: 10000 });
-        exportData.content.pages = pages.map(p => ({
+        const pages = await Post.findAll({ type: 'page', status: 'any', limit: 10000 });
+        exportData.content.pages = await Promise.all(pages.map(async p => ({
             id: p.id,
             title: p.postTitle,
             slug: p.postName,
@@ -67,12 +70,12 @@ function exportSite(options = {}) {
             date: p.postDate,
             parentId: p.postParent,
             menuOrder: p.menuOrder,
-            meta: Post.getAllMeta(p.id)
-        }));
+            meta: await Post.getAllMeta(p.id)
+        })));
     }
 
     // Export categories
-    const categories = Term.getCategories();
+    const categories = await Term.getCategories();
     exportData.content.categories = categories.map(c => ({
         id: c.termId,
         name: c.name,
@@ -82,7 +85,7 @@ function exportSite(options = {}) {
     }));
 
     // Export tags
-    const tags = Term.getTags();
+    const tags = await Term.getTags();
     exportData.content.tags = tags.map(t => ({
         id: t.termId,
         name: t.name,
@@ -92,19 +95,19 @@ function exportSite(options = {}) {
 
     // Export menus
     if (includeMenus) {
-        const menus = Menu.findAll();
-        exportData.content.menus = menus.map(m => ({
+        const menus = await Menu.findAll();
+        exportData.content.menus = await Promise.all(menus.map(async m => ({
             id: m.id,
             name: m.name,
             slug: m.slug,
-            items: m.getItemsTree()
-        }));
-        exportData.content.menuLocations = Menu.getLocations();
+            items: await m.getItemsTree()
+        })));
+        exportData.content.menuLocations = await Menu.getLocations();
     }
 
     // Export users (only basic info, not passwords)
     if (includeUsers) {
-        const users = User.findAll({ limit: 10000 });
+        const users = await User.findAll({ limit: 10000 });
         exportData.content.users = users.map(u => ({
             id: u.id,
             username: u.userLogin,
@@ -114,7 +117,8 @@ function exportSite(options = {}) {
         }));
     }
 
-    // Export settings
+    // Export settings (Option access is sync in memory usually, but good to check if db needed)
+    // Options are loaded into memory on startup usually, but let's assume getOption is sync as per require.
     if (includeSettings) {
         exportData.settings = {
             blogname: getOption('blogname'),
@@ -133,10 +137,10 @@ function exportSite(options = {}) {
 }
 
 /**
- * Export to JSON file
+ * Export to JSON file (Async)
  */
-function exportToFile(filepath, options = {}) {
-    const data = exportSite(options);
+async function exportToFile(filepath, options = {}) {
+    const data = await exportSite(options);
     fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
     return filepath;
 }
@@ -173,7 +177,7 @@ function validateImportData(data) {
 }
 
 /**
- * Import site content
+ * Import site content (Async)
  */
 async function importSite(data, options = {}) {
     // SECURITY: Validate import data structure
@@ -206,12 +210,12 @@ async function importSite(data, options = {}) {
     if (data.content?.categories) {
         for (const cat of data.content.categories) {
             try {
-                const existing = Term.findBySlug(cat.slug, 'category');
+                const existing = await Term.findBySlug(cat.slug, 'category');
                 if (existing) {
                     idMap.categories[cat.id] = existing.termId;
                     results.categories.skipped++;
                 } else {
-                    const newCat = Term.create({
+                    const newCat = await Term.create({
                         name: cat.name,
                         slug: cat.slug,
                         taxonomy: 'category',
@@ -230,12 +234,12 @@ async function importSite(data, options = {}) {
     if (data.content?.tags) {
         for (const tag of data.content.tags) {
             try {
-                const existing = Term.findBySlug(tag.slug, 'post_tag');
+                const existing = await Term.findBySlug(tag.slug, 'post_tag');
                 if (existing) {
                     idMap.tags[tag.id] = existing.termId;
                     results.tags.skipped++;
                 } else {
-                    const newTag = Term.create({
+                    const newTag = await Term.create({
                         name: tag.name,
                         slug: tag.slug,
                         taxonomy: 'post_tag',
@@ -254,12 +258,12 @@ async function importSite(data, options = {}) {
     if (data.content?.posts) {
         for (const post of data.content.posts) {
             try {
-                const existing = Post.findBySlug(post.slug);
+                const existing = await Post.findBySlug(post.slug);
                 if (existing && !updateExisting) {
                     idMap.posts[post.id] = existing.id;
                     results.posts.skipped++;
                 } else if (existing && updateExisting) {
-                    Post.update(existing.id, {
+                    await Post.update(existing.id, {
                         title: post.title,
                         content: post.content,
                         excerpt: post.excerpt,
@@ -290,12 +294,12 @@ async function importSite(data, options = {}) {
     if (data.content?.pages) {
         for (const page of data.content.pages) {
             try {
-                const existing = Post.findBySlug(page.slug);
+                const existing = await Post.findBySlug(page.slug);
                 if (existing && !updateExisting) {
                     idMap.pages[page.id] = existing.id;
                     results.pages.skipped++;
                 } else if (existing && updateExisting) {
-                    Post.update(existing.id, {
+                    await Post.update(existing.id, {
                         title: page.title,
                         content: page.content,
                         status: page.status
@@ -333,19 +337,20 @@ async function importSite(data, options = {}) {
 }
 
 /**
- * Import from JSON file
+ * Import from JSON file (Async)
  */
 async function importFromFile(filepath, options = {}) {
     const content = fs.readFileSync(filepath, 'utf8');
     const data = JSON.parse(content);
-    return importSite(data, options);
+    return await importSite(data, options);
 }
 
+
 /**
- * Generate WordPress-compatible WXR export
+ * Generate WordPress-compatible WXR export (Async)
  */
-function exportToWXR() {
-    const data = exportSite();
+async function exportToWXR() {
+    const data = await exportSite();
 
     let wxr = `<?xml version="1.0" encoding="UTF-8"?>
 <rss version="2.0"
