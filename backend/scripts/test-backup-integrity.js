@@ -115,16 +115,72 @@ async function runTest() {
             console.log('   ✅ Data content seems valid.');
         }
 
+        // 7. Verify Logical Restore (The Real Test)
+        console.log('\n7️⃣  Verifying Logical Restore (Dry Run into Temp DB)...');
+
+        // A. Close connection to Live DB
+        console.log('   🔌 Closing Live DB connection...');
+        await db.closeDatabase();
+
+        // B. Switch Driver to Temp DB
+        const tempDbPath = path.join(TEMP_RESTORE_DIR, 'test-restore.db');
+        const driverAsync = require('../src/drivers/sqlite-native-async');
+        // Hack: Override the dbPath of the singleton driver
+        driverAsync.dbPath = tempDbPath;
+
+        // C. Re-Initialize (Connect to Temp DB)
+        console.log(`   🔌 Connecting to Temp DB: ${tempDbPath}`);
+        await db.init();
+        await db.initializeDatabase(); // Create empty schema
+
+        // D. Run Import
+        console.log('   ♻️  Running importSite()...');
+        const { importSite } = require('../src/core/import-export');
+        // We mute console.log temporarily to avoid noise from importSite
+        const originalLog = console.log;
+        // console.log = () => {}; 
+        let importResults;
+        try {
+            importResults = await importSite(content, { importUsers: true, updateExisting: true });
+        } finally {
+            // console.log = originalLog;
+        }
+        console.log('   ✅ Import completed.');
+        if (importResults && importResults.errors && importResults.errors.length > 0) {
+            console.error('   ⚠️  Import Errors:', importResults.errors);
+        }
+        console.log('   📊 Import Results Summary:', JSON.stringify(importResults.users, null, 2));
+
+        // E. Verify Counts in Temp DB
+        const Post = require('../src/models/Post');
+        const User = require('../src/models/User');
+
+        const postCount = await Post.count();
+        const userCount = await User.count();
+
+        console.log(`   📊 Restore Verification:`);
+        console.log(`      - Expected Posts: ${content.content.posts?.length || 0} | Found: ${postCount}`);
+        console.log(`      - Expected Users: ${content.content.users?.length || 0} | Found: ${userCount}`);
+
+        if (postCount !== (content.content.posts?.length || 0)) {
+            throw new Error('Post count mismatch after restore!');
+        }
+
         console.log('\n✨ TEST RESULT: SUCCESS! The backup is complete and restorable.');
 
     } catch (e) {
         console.error('\n❌ TEST RESULT: FAILED');
         console.error(e);
     } finally {
-        // 7. Cleanup
-        console.log('\n7️⃣  Cleaning up...');
+        // 8. Cleanup
+        console.log('\n8️⃣  Cleaning up...');
         try {
-            if (db) db.closeDatabase();
+            if (db) db.closeDatabase(); // Close Temp DB
+
+            // Restore original driver path (just in case this process lived longer)
+            // const driverAsync = require('../src/drivers/sqlite-native-async');
+            // driverAsync.dbPath = path.resolve(require('../src/config/app').dbPath || './data/wordjs-native.db');
+
             if (backupPath && fs.existsSync(backupPath)) {
                 fs.unlinkSync(backupPath);
                 console.log('   🗑️  Deleted test backup zip.');
