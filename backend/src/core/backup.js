@@ -27,7 +27,7 @@ async function createBackup() {
     console.log('📦 Starting backup process...');
 
     // 1. Generate Logical DB Export
-    const siteData = exportSite({
+    const siteData = await exportSite({
         includeMedia: true,
         includePosts: true,
         includePages: true,
