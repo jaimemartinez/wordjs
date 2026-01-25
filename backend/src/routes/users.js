@@ -134,8 +134,35 @@ router.get('/:id', authenticate, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /users
- * Create user (admin only)
+ * @swagger
+ * /users:
+ *   post:
+ *     summary: Create a new user
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, email, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *                 enum: [administrator, editor, author, contributor, subscriber]
+ *     responses:
+ *       201:
+ *         description: User created
+ *       403:
+ *         description: Forbidden
  */
 router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const { username, email, password, displayName, role = 'subscriber' } = req.body;
@@ -171,8 +198,40 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /users/:id
- * Update user
+ * @swagger
+ * /users/{id}:
+ *   put:
+ *     summary: Update a user
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               displayName:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *               role:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: User updated
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: User not found
  */
 router.put('/:id', authenticate, asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
@@ -209,8 +268,28 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /users/:id
- * Delete user (admin only)
+ * @swagger
+ * /users/{id}:
+ *   delete:
+ *     summary: Delete a user
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: User deleted
+ *       400:
+ *         description: Cannot delete self
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: User not found
  */
 router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const userId = parseInt(req.params.id, 10);
@@ -235,6 +314,43 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
 
     await User.delete(userId);
     res.json({ deleted: true, previous: user.toJSON() });
+}));
+
+/**
+ * @swagger
+ * /users/me:
+ *   put:
+ *     summary: Update current user profile
+ *     tags: [Users]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               email:
+ *                 type: string
+ *               displayName:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Profile updated
+ */
+router.put('/me', authenticate, asyncHandler(async (req, res) => {
+    const { email, displayName, password, url } = req.body;
+
+    const updated = await User.update(req.user.id, {
+        email,
+        displayName,
+        password,
+        url
+    });
+
+    res.json(updated.toJSON());
 }));
 
 /**

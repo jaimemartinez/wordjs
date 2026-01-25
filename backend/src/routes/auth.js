@@ -23,11 +23,43 @@ const COOKIE_OPTIONS = {
 };
 
 /**
- * POST /auth/register
- * Register a new user
+ * @swagger
+ * tags:
+ *   name: Auth
+ *   description: User authentication and token management
+ */
+
+/**
+ * @swagger
+ * /auth/register:
+ *   post:
+ *     summary: Register a new user
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, email, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *               email:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *                 minLength: 8
+ *               displayName:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *       400:
+ *         description: Validation error or user exists
  */
 router.post('/register', asyncHandler(async (req, res) => {
-    // Check if registration is allowed
+    // ... (rest of the function)
     const registrationAllowed = await getOption('users_can_register', 0);
     if (!registrationAllowed || registrationAllowed == '0') {
         return res.status(403).json({
@@ -66,8 +98,6 @@ router.post('/register', asyncHandler(async (req, res) => {
         });
     }
 
-    // SECURITY: Bcrypt truncates passwords longer than 72 bytes
-    // This could cause password collisions if not validated
     if (password.length > 72) {
         return res.status(400).json({
             code: 'rest_invalid_param',
@@ -75,11 +105,6 @@ router.post('/register', asyncHandler(async (req, res) => {
             data: { status: 400 }
         });
     }
-
-    // Optional: Add complexity check (Number or Special Char)
-    // const complexityRegex = /(?=.*\d)|(?=.*[!@#$%^&*])/;
-    // if (!complexityRegex.test(password)) { ... }
-    // Keeping it simple but lengthier for now as requested.
 
     try {
         const defaultRole = await getOption('default_role', 'subscriber');
@@ -92,15 +117,9 @@ router.post('/register', asyncHandler(async (req, res) => {
         });
 
         const token = generateToken(user);
-
-        // Set HttpOnly cookie
-        console.log('🍪 Setting Cookie:', { token: token.substring(0, 10) + '...', options: COOKIE_OPTIONS });
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
 
-        res.status(201).json({
-            user: user.toJSON()
-            // Token is now in HttpOnly cookie, not in response body
-        });
+        res.status(201).json({ user: user.toJSON() });
     } catch (error) {
         if (error.message.includes('already exists')) {
             return res.status(400).json({
@@ -114,8 +133,35 @@ router.post('/register', asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /auth/login
- * Login user
+ * @swagger
+ * /auth/login:
+ *   post:
+ *     summary: Login user
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [username, password]
+ *             properties:
+ *               username:
+ *                 type: string
+ *               password:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Login successful
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 user:
+ *                   $ref: '#/components/schemas/User'
+ *       401:
+ *         description: Invalid credentials
  */
 router.post('/login', asyncHandler(async (req, res) => {
     const { username, password } = req.body;
@@ -131,14 +177,9 @@ router.post('/login', asyncHandler(async (req, res) => {
     try {
         const user = await User.authenticate(username, password);
         const token = generateToken(user);
-
-        // Set HttpOnly cookie
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
 
-        res.json({
-            user: user.toJSON()
-            // Token is now in HttpOnly cookie, not in response body
-        });
+        res.json({ user: user.toJSON() });
     } catch (error) {
         return res.status(401).json({
             code: 'rest_invalid_credentials',

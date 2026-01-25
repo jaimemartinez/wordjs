@@ -11,6 +11,26 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const Media = require('../models/Media');
 const config = require('../config/app');
+
+/**
+ * @swagger
+ * components:
+ *   schemas:
+ *     Media:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: integer
+ *         title:
+ *           type: string
+ *         mimeType:
+ *           type: string
+ *         sourceUrl:
+ *           type: string
+ *         date:
+ *           type: string
+ *           format: date-time
+ */
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -73,8 +93,29 @@ const upload = multer({
 });
 
 /**
- * GET /media
- * List media
+ * @swagger
+ * /media:
+ *   get:
+ *     summary: Retrieve media library
+ *     tags: [Media]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of media files
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Media'
  */
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const {
@@ -133,8 +174,31 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /media
- * Upload media
+ * @swagger
+ * /media:
+ *   post:
+ *     summary: Upload a new media file
+ *     tags: [Media]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               file:
+ *                 type: string
+ *                 format: binary
+ *               title:
+ *                 type: string
+ *               caption:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Media uploaded
+ *       400:
+ *         description: Invalid file
  */
 router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req, res) => {
     if (!req.file) {
