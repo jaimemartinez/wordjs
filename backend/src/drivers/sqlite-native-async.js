@@ -75,6 +75,50 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         });
     }
 
+    async getTables() {
+        return new Promise((resolve, reject) => {
+            try {
+                const stmt = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
+                const rows = stmt.all();
+                resolve(rows.map(r => r.name));
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
+
+    async getTableSchema(tableName) {
+        return new Promise((resolve, reject) => {
+            try {
+                // Use PRAGMA to get column info similar to needed for createPluginTable
+                const stmt = this.db.prepare(`PRAGMA table_info("${tableName}")`);
+                const columns = stmt.all();
+
+                // Reconstruct definitions compatible with createPluginTable inputs
+                // Format: "name TYPE constraints"
+                const defs = columns.map(col => {
+                    let def = `${col.name} ${col.type}`;
+                    if (col.notnull) def += ' NOT NULL';
+                    if (col.dflt_value) def += ` DEFAULT ${col.dflt_value}`;
+                    if (col.pk) def += ' PRIMARY KEY';
+                    // Note: This is an approximation. Full DDL is better if available.
+                    return def;
+                });
+
+                // Better approach for SQLite: Get actual CREATE statement!
+                const sqlStmt = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name = ?");
+                const sqlRow = sqlStmt.get(tableName);
+
+                resolve({
+                    sql: sqlRow ? sqlRow.sql : null, // Use raw SQL if available (Best for SQLite)
+                    columns: defs // Fallback or metadata
+                });
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
+
     async close() {
         if (this.db) {
             this.db.close();

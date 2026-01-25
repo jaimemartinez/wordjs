@@ -136,6 +136,45 @@ async function exportSite(options = {}) {
         };
     }
 
+    // Export Custom Tables (Universal Schema Discovery)
+    const { getDbAsync, getDbType } = require('./../config/database');
+    const db = getDbAsync();
+
+    // Core tables to exclude from manual custom dump
+    const CORE_TABLES = [
+        'posts', 'post_meta',
+        'users', 'user_meta',
+        'comments', 'comment_meta',
+        'terms', 'term_taxonomy', 'term_relationships',
+        'options', 'links', 'notifications',
+        'sqlite_sequence', 'migrations' // exclusions
+    ];
+
+    if (db && db.getTables) {
+        try {
+            const allTables = await db.getTables();
+            exportData.content.custom_tables = [];
+
+            for (const table of allTables) {
+                if (CORE_TABLES.includes(table)) continue;
+
+                // 1. Get Schema
+                const schema = await db.getTableSchema(table);
+
+                // 2. Get Data
+                const rows = await db.all(`SELECT * FROM ${table}`);
+
+                exportData.content.custom_tables.push({
+                    name: table,
+                    schema: schema,
+                    rows: rows
+                });
+            }
+        } catch (e) {
+            console.warn('⚠️ Failed to export custom tables:', e.message);
+        }
+    }
+
     return exportData;
 }
 
@@ -198,6 +237,7 @@ async function importSite(data, options = {}) {
         tags: { created: 0, skipped: 0 },
         menus: { created: 0, skipped: 0 },
         users: { created: 0, skipped: 0, updated: 0 },
+        custom_tables: { created: 0, rows: 0 },
         errors: []
     };
 
@@ -381,6 +421,45 @@ async function importSite(data, options = {}) {
                 }
             } catch (e) {
                 results.errors.push(`Page ${page.title}: ${e.message}`);
+            }
+        }
+    }
+
+    // Import Custom Tables
+    if (data.content?.custom_tables) {
+        const { getDbAsync, createPluginTable } = require('./../config/database');
+        const db = getDbAsync();
+
+        for (const table of data.content.custom_tables) {
+            try {
+                // 1. Reconstruct Schema (Create Table)
+                if (table.schema && table.schema.columns) {
+                    await createPluginTable(table.name, table.schema.columns);
+                    results.custom_tables.created++;
+                }
+
+                // 2. Insert Data
+                if (table.rows && table.rows.length > 0) {
+                    for (const row of table.rows) {
+                        const cols = Object.keys(row);
+                        const vals = Object.values(row);
+                        const placeholders = cols.map(() => '?').join(',');
+                        const sql = `INSERT INTO ${table.name} (${cols.join(',')}) VALUES (${placeholders})`;
+
+                        // Try insert (ignore duplicate key errors if simple backup)
+                        try {
+                            await db.run(sql, vals);
+                            results.custom_tables.rows++;
+                        } catch (err) {
+                            // Ignore constraint violations (duplicates)
+                            if (!err.message.includes('UNIQUE constraint') && !err.message.includes('duplicate key')) {
+                                throw err;
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                results.errors.push(`Custom Table ${table.name}: ${e.message}`);
             }
         }
     }

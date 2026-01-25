@@ -64,7 +64,8 @@ async function runTest() {
             { path: 'wordjs-content.json', required: true, desc: 'Database Dump' },
             { path: 'plugins', required: true, desc: 'Plugins Directory' },
             { path: 'themes', required: true, desc: 'Themes Directory' },
-            { path: 'node_modules', required: false, mustNotExist: true, desc: 'node_modules (Should be EXCLUDED)' }
+            { path: 'node_modules', required: false, mustNotExist: true, desc: 'node_modules (Should be EXCLUDED)' },
+            { path: 'wordjs-native.db', required: false, mustNotExist: true, desc: 'Physical DB (Should be EXCLUDED in Universal Mode)' }
         ];
 
         let filesOk = true;
@@ -104,16 +105,7 @@ async function runTest() {
         console.log(`   ✅ JSON Parsed successfully.`);
         console.log(`   📊 Metadata Summary:`);
         console.log(`      - Site Name: ${content.site.name}`);
-        console.log(`      - Generator: ${content.generator}`);
-        console.log(`      - Posts: ${content.content.posts?.length || 0}`);
-        console.log(`      - Pages: ${content.content.pages?.length || 0}`);
-        console.log(`      - Users: ${content.content.users?.length || 0}`);
-
-        if (!content.content.posts && !content.content.pages) {
-            console.warn('   ⚠️  Warning: No posts or pages found in dump. Is the DB empty?');
-        } else {
-            console.log('   ✅ Data content seems valid.');
-        }
+        console.log(`      - Custom Tables: ${content.content.custom_tables?.length || 0}`);
 
         // 7. Verify Logical Restore (The Real Test)
         console.log('\n7️⃣  Verifying Logical Restore (Dry Run into Temp DB)...');
@@ -129,6 +121,7 @@ async function runTest() {
         driverAsync.dbPath = tempDbPath;
 
         // C. Re-Initialize (Connect to Temp DB)
+        // Note: We do NOT need to run plugin init here because importSite should recreate the schema!
         console.log(`   🔌 Connecting to Temp DB: ${tempDbPath}`);
         await db.init();
         await db.initializeDatabase(); // Create empty schema
@@ -136,20 +129,19 @@ async function runTest() {
         // D. Run Import
         console.log('   ♻️  Running importSite()...');
         const { importSite } = require('../src/core/import-export');
-        // We mute console.log temporarily to avoid noise from importSite
-        const originalLog = console.log;
-        // console.log = () => {}; 
+
         let importResults;
         try {
             importResults = await importSite(content, { importUsers: true, updateExisting: true });
-        } finally {
-            // console.log = originalLog;
+        } catch (err) {
+            console.error('   ❌ Import Fatal Error:', err);
         }
+
         console.log('   ✅ Import completed.');
         if (importResults && importResults.errors && importResults.errors.length > 0) {
             console.error('   ⚠️  Import Errors:', importResults.errors);
         }
-        console.log('   📊 Import Results Summary:', JSON.stringify(importResults.users, null, 2));
+        console.log('   📊 Import Results Summary:', JSON.stringify(importResults ? { users: importResults.users, custom: importResults.custom_tables } : {}, null, 2));
 
         // E. Verify Counts in Temp DB
         const Post = require('../src/models/Post');
@@ -166,10 +158,10 @@ async function runTest() {
             throw new Error('Post count mismatch after restore!');
         }
 
-        // F. Verify Custom Schema Persistence (Physical Restore Proof)
-        console.log('   🔍 Verifying Custom Schema Persistence...');
+        // F. Verify Custom Schema Persistence (Universal Logical Restore Proof)
+        console.log('   🔍 Verifying Custom Schema Persistence (Logical Restore)...');
         try {
-            const dbAsync = require('../src/drivers/sqlite-native-async'); // Re-require to get the current db instance
+            const dbAsync = require('../src/drivers/sqlite-native-async');
             const customRow = await dbAsync.get('SELECT * FROM test_custom_schema LIMIT 1');
             if (customRow && customRow.custom_value === 'persistence-check-123') {
                 console.log('   ✅ Custom Schema Key Found: persistence-check-123');
@@ -178,8 +170,8 @@ async function runTest() {
             }
         } catch (e) {
             console.error('   ❌ Custom Schema Check Failed:', e.message);
-            console.error('      This implies the physical DB file was NOT restored or overwritten/wiped by import logic.');
-            // throw new Error('Schema persistence failed'); // strictly failing
+            console.error('      This implies the Logical Dump failed to recreate the table or insert data.');
+            throw new Error('Universal Schema persistence failed');
         }
 
         console.log('\n✨ TEST RESULT: SUCCESS! The backup is complete and restorable.');
