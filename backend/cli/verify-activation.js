@@ -4,9 +4,9 @@ const fs = require('fs');
 // Path fix: Ensure PLUGINS_DIR resolve() works correctly inside the core
 process.chdir(path.resolve(__dirname, 'backend'));
 
-const { loadActivePlugins, isPluginActive } = require('./backend/src/core/plugins');
-const { init: initDb, initializeDatabase } = require('./backend/src/config/database');
-const { setApp } = require('./backend/src/core/appRegistry');
+const { loadActivePlugins, isPluginActive } = require('../src/core/plugins');
+const { init: initDb, initializeDatabase } = require('../src/config/database');
+const { setApp } = require('../src/core/appRegistry');
 const express = require('express');
 
 async function verifyActivation() {

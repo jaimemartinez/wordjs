@@ -7,59 +7,86 @@ export async function register() {
 
         const registerWithGateway = () => {
             // Hostname and port assumption
-            const hostname = 'localhost';
+            const hostname = '127.0.0.1';
             let port = '3001';
 
             // Try to read config
             let gatewaySecret = null;
+            let gatewayHost = 'localhost';
+            let gatewayInternalPort = 3100;
+            let gatewayPort = 3000;
+
             try {
-                const configPath = path.resolve(process.cwd(), '../backend/wordjs-config.json');
+                // Priority: Local (Distributed) -> Backend (Monolith)
+                let configPath = path.resolve(process.cwd(), 'wordjs-config.json');
+                if (!fs.existsSync(configPath)) {
+                    configPath = path.resolve(process.cwd(), '../backend/wordjs-config.json');
+                }
+
                 if (fs.existsSync(configPath)) {
                     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
                     gatewaySecret = config.gatewaySecret;
+                    if (config.gatewayHost) gatewayHost = config.gatewayHost;
+                    if (config.gatewayInternalPort) gatewayInternalPort = config.gatewayInternalPort;
+                    if (config.gatewayPort) gatewayPort = config.gatewayPort;
 
                     if (config.frontendUrl) {
                         try {
                             const url = new URL(config.frontendUrl);
-                            // Only use the port if explicitly set in the URL
-                            if (url.port) {
-                                port = url.port;
-                            }
+                            if (url.port) port = url.port;
                         } catch (e) { }
                     }
                 }
-            } catch (e) {
-                // ignore
+            } catch (e) { }
+
+            // mTLS Certs Load
+            let clientOpts: any = {};
+            const certDir = fs.existsSync(path.resolve(process.cwd(), 'certs')) ? path.resolve(process.cwd(), 'certs') : path.resolve(process.cwd(), '../backend/certs');
+
+            const caPath = path.join(certDir, 'cluster-ca.crt');
+            const keyPath = path.join(certDir, 'frontend.key');
+            const crtPath = path.join(certDir, 'frontend.crt');
+
+            if (fs.existsSync(caPath) && fs.existsSync(keyPath) && fs.existsSync(crtPath)) {
+                clientOpts = {
+                    ca: fs.readFileSync(caPath),
+                    key: fs.readFileSync(keyPath),
+                    cert: fs.readFileSync(crtPath),
+                    rejectUnauthorized: false // Dev override, though mTLS certs are self-signed by cluster CA
+                };
             }
 
             const data = JSON.stringify({
                 name: 'frontend',
-                url: `http://${hostname}:${port}`,
-                routes: ['/']
+                url: `https://${hostname}:${port}`, // Now using HTTPS custom server
+                routes: ['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']
             });
 
             const attempt = () => {
-                const gatewayReq = http.request({
-                    hostname: 'localhost',
-                    port: 3000,
+                const useMtls = Object.keys(clientOpts).length > 0;
+                const targetPort = useMtls ? gatewayInternalPort : gatewayPort;
+                const targetProtocol = useMtls ? require('https') : http;
+
+                const gatewayReq = targetProtocol.request({
+                    hostname: gatewayHost,
+                    port: targetPort,
                     path: '/register',
                     method: 'POST',
+                    ...clientOpts,
                     headers: {
                         'Content-Type': 'application/json',
                         'Content-Length': Buffer.byteLength(data),
                         'x-gateway-secret': gatewaySecret || 'secure-your-gateway-secret'
                     }
-                }, (res) => {
+                }, (res: any) => {
                     if (res.statusCode === 200) {
-                        // console.log('✅ Frontend registered with Gateway');
+                        // console.log('✅ Frontend registered with Gateway via ' + (useMtls ? 'mTLS' : 'HTTP'));
                     } else {
-                        // Retry on non-200 status
                         setTimeout(attempt, 5000);
                     }
                 });
 
-                gatewayReq.on('error', (e) => {
-                    // Retry on connection error
+                gatewayReq.on('error', (e: any) => {
                     setTimeout(attempt, 5000);
                 });
 

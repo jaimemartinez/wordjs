@@ -10,11 +10,17 @@ const nextConfig: NextConfig = {
     try {
       const fs = require('fs');
       const path = require('path');
-      const configPath = path.resolve(__dirname, '../backend/wordjs-config.json');
+
+      // Distributed First
+      let configPath = path.resolve(__dirname, 'wordjs-config.json');
+      if (!fs.existsSync(configPath)) {
+        configPath = path.resolve(__dirname, '../backend/wordjs-config.json');
+      }
+
       if (fs.existsSync(configPath)) {
         const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         if (config.gatewayPort) {
-          backendUrl = `http://localhost:${config.gatewayPort}`;
+          backendUrl = `https://localhost:${config.gatewayPort}`;
         }
       }
     } catch (e) { }

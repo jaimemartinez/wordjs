@@ -4,30 +4,34 @@ const getBaseUrl = () => {
         return '/api/v1';
     }
     // Server-side (SSR):
+    let backendPort = 4000;
     try {
         // Dynamically require fs/path to avoid bundling issues on client
+        // Dynamically import fs/path to avoid bundling issues on client
         // This block only runs on server
         // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const fs = require('fs');
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
         const path = require('path');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
 
-        // Locate wordjs-config.json (assuming we are in admin-next root or similar)
-        // process.cwd() in Next.js usually points to the project root (admin-next)
-        // The config is in ../backend/wordjs-config.json
-        const configPath = path.resolve(process.cwd(), '../backend/wordjs-config.json');
+        // Priority: Local (Distributed) -> Backend (Monolith)
+        let configPath = path.resolve(process.cwd(), 'wordjs-config.json');
+        if (!fs.existsSync(configPath)) {
+            configPath = path.resolve(process.cwd(), '../backend/wordjs-config.json');
+        }
 
         if (fs.existsSync(configPath)) {
-            const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-            if (config.gatewayPort) {
-                return `http://localhost:${config.gatewayPort}/api/v1`;
+            const fileContent = fs.readFileSync(configPath, 'utf-8');
+            const config = JSON.parse(fileContent);
+            if (config.port) {
+                backendPort = config.port;
             }
         }
     } catch (e) {
-        // ignore
+        // console.warn('Could not load wordjs-config.json, using default port 4000');
     }
 
-    return "http://localhost:3000/api/v1";
+    return `http://localhost:${backendPort}/api/v1`;
 };
 
 const API_URL = getBaseUrl();

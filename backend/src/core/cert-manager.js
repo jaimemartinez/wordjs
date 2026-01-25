@@ -98,6 +98,67 @@ class CertManager {
      * Start DNS-01 Challenge Flow
      * Returns the TXT record details for user to add to their DNS
      */
+    /**
+     * Auto Provision HTTP-01
+     */
+    async provisionAutoHTTP(domain, email, useStaging = false) {
+        try {
+            console.log(`[CertManager] Starting HTTP-01 provisioning for ${domain}...`);
+            await this.initClient(email, useStaging);
+
+            // 1. Create Order
+            const orderData = await this.createOrder(domain, 'http-01');
+            console.log('[CertManager] Order created. Challenge token:', orderData.challenge.token);
+
+            // 2. Write Challenge File
+            await this.writeChallengeFile(orderData.challenge.token, orderData.keyAuthorization);
+            console.log('[CertManager] Challenge file written.');
+
+            // 3. Verify & Complete
+            // Note: Verify locally trigger the check? No, verifyChallenge tells ACME to check.
+            await this.client.verifyChallenge(
+                { url: orderData.authzUrl, identifier: { type: 'dns', value: domain } },
+                orderData.challenge
+            );
+            await this.client.completeChallenge(orderData.challenge);
+            console.log('[CertManager] Challenge completed. Waiting for validation...');
+
+            await this.client.waitForValidStatus(orderData.challenge);
+            console.log('[CertManager] Challenge validated.');
+
+            // 4. Finalize
+            const [key, csr] = await acme.forge.createCsr({
+                commonName: domain,
+            });
+
+            const finalized = await this.client.finalizeOrder(
+                { url: orderData.orderUrl },
+                csr
+            );
+
+            const cert = await this.client.getCertificate(finalized);
+            console.log('[CertManager] Certificate downloaded.');
+
+            // 5. Save locally (backup/reference)
+            const domainDir = path.join(LIVE_DIR, domain);
+            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true });
+
+            fs.writeFileSync(path.join(domainDir, 'privkey.pem'), key);
+            fs.writeFileSync(path.join(domainDir, 'fullchain.pem'), cert);
+
+            // 6. Push to Gateway
+            // Ensure key is string
+            await this.pushCertToGateway(key.toString(), cert.toString());
+            console.log('[CertManager] Certificate pushed to Gateway.');
+
+            return { success: true, message: 'Certificate provisioned and installed.' };
+
+        } catch (e) {
+            console.error('[CertManager] Auto HTTP Provision Error:', e);
+            throw new Error(`Provisioning failed: ${e.message}`);
+        }
+    }
+
     async startDNSChallenge(domain, email, useStaging = false) {
         try {
             // Initialize client if needed
@@ -186,24 +247,86 @@ class CertManager {
      * Update SSL config paths
      * Note: We do NOT force enable SSL here. The user must toggle it manually in the UI.
      */
-    updateSSLConfig(keyPath, certPath) {
-        let config = {};
-        if (fs.existsSync(CONFIG_PATH)) {
-            config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+    /**
+     * Push Certificate to Gateway
+     */
+    async pushCertToGateway(keyContent, certContent) {
+        try {
+            // Read backend config for mTLS
+            let backendConfig = {};
+            if (fs.existsSync(CONFIG_PATH)) {
+                backendConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+            }
+
+            const MTLS_KEY = (backendConfig.mtls && backendConfig.mtls.key) ? path.resolve(__dirname, '../../' + backendConfig.mtls.key) : null;
+            const MTLS_CERT = (backendConfig.mtls && backendConfig.mtls.cert) ? path.resolve(__dirname, '../../' + backendConfig.mtls.cert) : null;
+            const MTLS_CA = (backendConfig.mtls && backendConfig.mtls.ca) ? path.resolve(__dirname, '../../' + backendConfig.mtls.ca) : null;
+
+            if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
+
+            const https = require('https');
+            const agent = new https.Agent({
+                key: fs.readFileSync(MTLS_KEY),
+                cert: fs.readFileSync(MTLS_CERT),
+                ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
+                rejectUnauthorized: false
+            });
+
+            const gatewayUrl = `https://127.0.0.1:3100/cert-upload`;
+
+            const postData = JSON.stringify({ key: keyContent, cert: certContent });
+
+            return new Promise((resolve, reject) => {
+                const req = https.request(gatewayUrl, {
+                    method: 'POST',
+                    agent: agent,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(postData)
+                    }
+                }, (res) => {
+                    let data = '';
+                    res.on('data', chunk => data += chunk);
+                    res.on('end', () => {
+                        if (res.statusCode === 200) {
+                            resolve(JSON.parse(data));
+                        } else {
+                            try {
+                                const err = JSON.parse(data);
+                                reject(new Error(err.error || `Gateway returned ${res.statusCode}`));
+                            } catch (e) {
+                                reject(new Error(`Gateway returned ${res.statusCode}`));
+                            }
+                        }
+                    });
+                });
+
+                req.on('error', (e) => reject(e));
+                req.write(postData);
+                req.end();
+            });
+        } catch (e) {
+            console.error('[CertManager] Push Error:', e);
+            throw e;
         }
-        if (!config.ssl) config.ssl = {};
+    }
 
-        // We just update the paths. 
-        // We preserve existing enabled state, or default to false if not set.
-        if (typeof config.ssl.enabled === 'undefined') {
-            config.ssl.enabled = false;
+    /**
+     * Update SSL config (Refactored to Push)
+     * Keeps the signature but now keyPath/certPath might be used to read content if they are paths
+     * OR we should refactor upstream callers to pass content.
+     * For now, we read the files at paths and push them.
+     */
+    async updateSSLConfig(keyPath, certPath) {
+        try {
+            const keyContent = fs.readFileSync(keyPath, 'utf8');
+            const certContent = fs.readFileSync(certPath, 'utf8');
+            await this.pushCertToGateway(keyContent, certContent);
+            console.log('[CertManager] Certificate pushed to Gateway.');
+        } catch (e) {
+            console.error('[CertManager] Failed to push cert to gateway:', e);
+            throw e;
         }
-
-        config.ssl.key = keyPath;
-        config.ssl.cert = certPath;
-
-        fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 4));
-        console.log('[CertManager] SSL paths updated (SSL state preserved):', { keyPath, certPath });
     }
 
     /**
@@ -310,125 +433,185 @@ class CertManager {
     /**
      * Get Current Gateway Config & Cert Info
      */
-    getConfig() {
-        // Default
-        const result = {
+    /**
+     * Get Current Gateway Config & Cert Info via Internal API
+     */
+    async getConfig() {
+        const defaultResult = {
             gatewayPort: 3000,
             sslEnabled: false,
             certInfo: null,
-            siteUrl: null
+            siteUrl: null,
+            source: 'fallback'
         };
 
-        if (fs.existsSync(CONFIG_PATH)) {
-            const config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-            result.gatewayPort = config.gatewayPort || 3000;
-            result.sslEnabled = config.ssl?.enabled || false;
-            result.siteUrl = config.siteUrl || null;
-
-            // Try to find and parse certificate
-            let certPath = null;
-
-            // 1. Check explicit cert path in config
-            if (config.ssl && config.ssl.cert && fs.existsSync(config.ssl.cert)) {
-                certPath = config.ssl.cert;
-            }
-            // 2. Check auto-generated cert
-            else {
-                const autoGenCert = path.resolve(__dirname, '../../../ssl-auto.crt');
-                if (fs.existsSync(autoGenCert)) {
-                    certPath = autoGenCert;
-                }
+        try {
+            // Read backend config to find cert paths for mTLS
+            let backendConfig = {};
+            if (fs.existsSync(CONFIG_PATH)) {
+                backendConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
             }
 
-            if (certPath) {
-                try {
-                    const { X509Certificate } = require('crypto');
-                    const certBuffer = fs.readFileSync(certPath);
-                    const x509 = new X509Certificate(certBuffer);
+            const MTLS_KEY = (backendConfig.mtls && backendConfig.mtls.key) ? path.resolve(__dirname, '../../' + backendConfig.mtls.key) : null;
+            const MTLS_CERT = (backendConfig.mtls && backendConfig.mtls.cert) ? path.resolve(__dirname, '../../' + backendConfig.mtls.cert) : null;
+            const MTLS_CA = (backendConfig.mtls && backendConfig.mtls.ca) ? path.resolve(__dirname, '../../' + backendConfig.mtls.ca) : null;
 
-                    // Parse subject to extract CN
-                    const subjectParts = x509.subject.split('\n');
-                    const cnLine = subjectParts.find(s => s.startsWith('CN='));
-                    const commonName = cnLine ? cnLine.replace('CN=', '') : 'Unknown';
+            if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
 
-                    // Parse issuer
-                    const issuerParts = x509.issuer.split('\n');
-                    const issuerCN = issuerParts.find(s => s.startsWith('CN='));
-                    const issuerName = issuerCN ? issuerCN.replace('CN=', '') : 'Unknown';
+            const https = require('https');
+            const agent = new https.Agent({
+                key: fs.readFileSync(MTLS_KEY),
+                cert: fs.readFileSync(MTLS_CERT),
+                ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
+                rejectUnauthorized: false
+                // We use rejectUnauthorized: false primarily because 'localhost' might not match the CN if cert is IP based, 
+                // but checking CA should be strict ideally. For internal loopback, we trust the port + mTLS auth.
+            });
 
-                    // Determine type
-                    const isSelfSigned = x509.subject === x509.issuer;
-                    const isLetsEncrypt = x509.issuer.includes("Let's Encrypt") || x509.issuer.includes('R3') || x509.issuer.includes('R10');
+            const gatewayUrl = `https://127.0.0.1:3100/info`; // Default internal port
+            // Note: If GatewayInternalPort is dynamic, we should read it from wordjs-config if available or assume standard.
 
-                    result.certInfo = {
-                        commonName,
-                        issuer: issuerName,
-                        validFrom: x509.validFrom,
-                        validTo: x509.validTo,
-                        fingerprint: x509.fingerprint256 || x509.fingerprint,
-                        serialNumber: x509.serialNumber,
-                        type: isLetsEncrypt ? 'letsencrypt' : (isSelfSigned ? 'self-signed' : 'custom'),
-                        path: certPath
-                    };
-                } catch (e) {
-                    console.error('Failed to parse cert:', e);
-                    result.certInfo = { error: 'Invalid Certificate File', type: 'error' };
-                }
-            } else if (result.sslEnabled) {
-                result.certInfo = { type: 'none', message: 'SSL enabled but no certificate found' };
-            }
+            // Should read gatewayInternalPort from backend config if we want to be safe?
+            // backendConfig doesn't usually track gateway's internal port unless we added it.
+            // Let's assume 3100 as per common setup.
+
+            const axios = require('axios'); // Ensure axios is available or use native https
+            // We'll use native https request to avoid implicit dependency if axios is separate, 
+            // but axios is in package.json (checked previously).
+
+            // Using a simple promise wrapper for https.get to minimize deps if needed, but axios is cleaner.
+            // Let's use axios if we are sure it's there. package.json showed it.
+            // But wait, CertManager shouldn't carry heavy deps if not needed.
+            // Let's use native https to be safe and robust.
+
+            return new Promise((resolve, reject) => {
+                const req = https.request(gatewayUrl, {
+                    method: 'GET',
+                    agent: agent,
+                    timeout: 2000
+                }, (res) => {
+                    let data = '';
+                    res.on('data', chunk => data += chunk);
+                    res.on('end', () => {
+                        if (res.statusCode === 200) {
+                            try {
+                                resolve(JSON.parse(data));
+                            } catch (e) {
+                                resolve({ ...defaultResult, error: 'Invalid JSON from Gateway' });
+                            }
+                        } else {
+                            resolve({ ...defaultResult, error: `Gateway returned ${res.statusCode}` });
+                        }
+                    });
+                });
+
+                req.on('error', (e) => {
+                    console.error('[CertManager] Gateway connection failed:', e.message);
+                    resolve({ ...defaultResult, error: 'Gateway Unreachable' });
+                });
+
+                req.end();
+            });
+
+        } catch (e) {
+            console.error('[CertManager] getConfig Error:', e);
+            return { ...defaultResult, error: e.message };
         }
-
-        return result;
     }
 
     /**
-     * Update Gateway Config
+     * Ensure Gateway has a certificate (Self-Signed fallback)
      */
-    updateGatewayConfig(port, sslEnabled) {
-        let config = {};
-        if (fs.existsSync(CONFIG_PATH)) {
-            config = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
-        }
+    async ensureGatewayCert() {
+        try {
+            const config = await this.getConfig();
+            const hasCert = config.certInfo && config.certInfo.type !== 'none' && config.certInfo.type !== 'error';
 
-        // Update Port
-        const newPort = port ? parseInt(port) : (config.gatewayPort || 3000);
-        config.gatewayPort = newPort;
+            if (!hasCert) {
+                console.log('[CertManager] No certificate found on Gateway. Generating self-signed...');
 
-        // Update SSL
-        if (!config.ssl) config.ssl = {};
-        config.ssl.enabled = !!sslEnabled;
+                const selfsigned = require('selfsigned');
+                const attrs = [{ name: 'commonName', value: 'localhost' }];
 
-        // CRITICAL: Update siteUrl to match the protocol
-        // When SSL is enabled/disabled, the siteUrl must reflect the correct protocol
-        if (config.siteUrl) {
-            const protocol = sslEnabled ? 'https' : 'http';
-            try {
-                const url = new URL(config.siteUrl);
-                url.protocol = protocol + ':';
-                // Only remove port if it's the standard port for THIS protocol
-                // HTTP standard: 80, HTTPS standard: 443
-                const isStandardPort = (protocol === 'http' && newPort === 80) ||
-                    (protocol === 'https' && newPort === 443);
-                if (isStandardPort) {
-                    url.port = ''; // Remove port for standard ports
-                } else {
-                    url.port = String(newPort);
-                }
-                config.siteUrl = url.toString().replace(/\/$/, ''); // Remove trailing slash
-                console.log(`[CertManager] Updated siteUrl to: ${config.siteUrl}`);
-            } catch (e) {
-                console.error('[CertManager] Failed to parse siteUrl:', e.message);
-                // Fallback: just replace protocol
-                const oldUrl = config.siteUrl;
-                config.siteUrl = oldUrl
-                    .replace(/^https?:/, protocol + ':')
-                    .replace(/\/$/, '');
+                // CRITICAL: selfsigned.generate returns a Promise (async)
+                const pems = await selfsigned.generate(attrs, { days: 365 });
+
+                console.log('[CertManager] Self-signed certificate generated.');
+
+                await this.pushCertToGateway(pems.private, pems.cert);
+                console.log('[CertManager] Self-signed certificate pushed to Gateway.');
+                return { success: true, message: 'Self-signed certificate generated' };
             }
+            return { success: true, message: 'Certificate already exists' };
+        } catch (e) {
+            console.error('[CertManager] Ensure Cert Error:', e);
+            return { success: false, error: e.message };
         }
+    }
 
-        fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 4));
-        return { success: true, siteUrl: config.siteUrl };
+    /**
+     * Update Gateway Config (Push Only - No Local Storage)
+     */
+    async updateGatewayConfig(port, sslEnabled) {
+        try {
+            // Read mTLS config from local file (only for authentication, not for storing gateway config)
+            let backendConfig = {};
+            if (fs.existsSync(CONFIG_PATH)) {
+                backendConfig = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+            }
+
+            const MTLS_KEY = (backendConfig.mtls && backendConfig.mtls.key) ? path.resolve(__dirname, '../../' + backendConfig.mtls.key) : null;
+            const MTLS_CERT = (backendConfig.mtls && backendConfig.mtls.cert) ? path.resolve(__dirname, '../../' + backendConfig.mtls.cert) : null;
+            const MTLS_CA = (backendConfig.mtls && backendConfig.mtls.ca) ? path.resolve(__dirname, '../../' + backendConfig.mtls.ca) : null;
+
+            if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
+
+            const https = require('https');
+            const agent = new https.Agent({
+                key: fs.readFileSync(MTLS_KEY),
+                cert: fs.readFileSync(MTLS_CERT),
+                ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
+                rejectUnauthorized: false
+            });
+
+            const gatewayUrl = `https://127.0.0.1:3100/config-update`;
+            const postData = JSON.stringify({
+                port: port ? parseInt(port) : undefined,
+                sslEnabled: typeof sslEnabled !== 'undefined' ? !!sslEnabled : undefined
+                // Gateway will calculate siteUrl itself based on these values
+            });
+
+            return new Promise((resolve, reject) => {
+                const req = https.request(gatewayUrl, {
+                    method: 'POST',
+                    agent: agent,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(postData)
+                    }
+                }, (res) => {
+                    let data = '';
+                    res.on('data', chunk => data += chunk);
+                    res.on('end', () => {
+                        if (res.statusCode === 200) {
+                            const result = JSON.parse(data);
+                            console.log('[CertManager] Gateway configuration pushed successfully.');
+                            resolve(result);
+                        } else {
+                            reject(new Error(`Gateway returned ${res.statusCode}`));
+                        }
+                    });
+                });
+
+                req.on('error', (e) => reject(e));
+                req.write(postData);
+                req.end();
+            });
+
+        } catch (e) {
+            console.error('[CertManager] Config Push Error:', e);
+            throw e;
+        }
     }
 }
 

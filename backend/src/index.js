@@ -6,6 +6,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
+const fs = require('fs');
 
 // Load environment variables
 require('dotenv').config();
@@ -263,6 +264,9 @@ app.get('/api', (req, res) => {
     });
 });
 
+// Internal Routes (Gateway Hooks)
+app.use('/api/internal', require('./routes/internal'));
+
 // Public Frontend - Independent rendering system
 const frontendRoutes = require('./routes/frontend');
 app.use(frontendRoutes);
@@ -366,11 +370,37 @@ async function initialize() {
     app.use(errorHandler);
 
     // Start server
-    app.listen(config.port, config.host, () => {
+    const caPath = path.resolve(config.mtls.ca);
+    const keyPath = path.resolve(config.mtls.key);
+    const certPath = path.resolve(config.mtls.cert);
+
+    const serverProtocol = (fs.existsSync(certPath) && fs.existsSync(keyPath) && fs.existsSync(caPath)) ? 'https' : 'http';
+    let server;
+
+    if (serverProtocol === 'https') {
+        const https = require('https');
+        const httpsOptions = {
+            key: fs.readFileSync(keyPath),
+            cert: fs.readFileSync(certPath),
+            ca: fs.readFileSync(caPath),
+            requestCert: true,
+            rejectUnauthorized: true // ENFORCE mTLS: Only allow certs signed by our CA
+        };
+        server = https.createServer(httpsOptions, app);
+    } else {
+        const http = require('http');
+        server = http.createServer(app);
+    }
+
+    server.listen(config.port, config.host, () => {
         console.log('');
-        console.log('✅ WordJS Backend is running!');
-        console.log(`   🌐 URL: http://${config.host}:${config.port}`);
-        console.log(`   📡 API: http://${config.host}:${config.port}${config.api.prefix}`);
+        console.log(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
+        if (serverProtocol === 'https') {
+            console.log('   🛡️  Security: mTLS (Identity Enforcement) is ACTIVE');
+            console.log(`   🪪  Identity: backend`);
+        }
+        console.log(`   🌐 URL: ${serverProtocol}://${config.host}:${config.port}`);
+        console.log(`   📡 API: ${serverProtocol}://${config.host}:${config.port}${config.api.prefix}`);
 
         // Register with Gateway
         // Register with Gateway with Auto-Discovery (Zero Config)
@@ -378,17 +408,28 @@ async function initialize() {
             const http = require('http');
             const https = require('https');
 
+            // Use Internal Management Port for mTLS registration
+            const gatewayInternalPort = config.gatewayInternalPort || 3100;
             const gatewayPort = config.gatewayPort || 3000;
+
+            // Certs for calling Gateway (Client mTLS)
+            let clientOpts = {};
+
+            if (fs.existsSync(keyPath) && fs.existsSync(certPath) && fs.existsSync(caPath)) {
+                console.log('   🛂 mTLS: Using client certificates for Gateway registration...');
+                clientOpts = {
+                    key: fs.readFileSync(keyPath),
+                    cert: fs.readFileSync(certPath),
+                    ca: fs.readFileSync(caPath),
+                    rejectUnauthorized: true
+                };
+            }
+
             const services = [
                 {
                     name: 'backend',
-                    url: `http://${config.host}:${config.port}`, // Backend is always HTTP unless configured otherwise
+                    url: `${serverProtocol}://127.0.0.1:${config.port}`,
                     routes: ['/api', '/uploads', '/themes', '/plugins', '/.well-known']
-                },
-                {
-                    name: 'frontend',
-                    url: config.site.frontendUrl || 'http://localhost:3001',
-                    routes: ['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']
                 }
             ];
 
@@ -396,13 +437,21 @@ async function initialize() {
                 return new Promise((resolve, reject) => {
                     const protocol = protocolName === 'https' ? https : http;
                     const data = JSON.stringify(serviceData);
+                    const targetHost = config.gatewayHost || 'localhost';
 
-                    const req = protocol.request({
-                        hostname: 'localhost',
-                        port: gatewayPort,
+                    // Port logic: If we have mTLS certs, we use the INTERNAL management port.
+                    // Otherwise we fallback to the public gateway port.
+                    const useMtls = Object.keys(clientOpts).length > 0;
+                    const targetPort = useMtls ? gatewayInternalPort : gatewayPort;
+                    const targetProtocol = useMtls ? https : protocol;
+
+                    const req = targetProtocol.request({
+                        hostname: targetHost,
+                        port: targetPort,
                         path: '/register',
                         method: 'POST',
-                        rejectUnauthorized: false,
+                        rejectUnauthorized: false, // For local dev/self-signed, but mTLS uses clientOpts.ca
+                        ...clientOpts, // Inject client certs for mTLS
                         headers: {
                             'Content-Type': 'application/json',
                             'Content-Length': data.length,
@@ -427,28 +476,33 @@ async function initialize() {
 
             // Attempt registration with retry logic
             const registerAll = async () => {
-                // Try HTTPS first if configured, else HTTP. If fails, toggle.
                 let preferredProto = (config.gatewaySsl && config.gatewaySsl.enabled) ? 'https' : 'http';
                 let fallbackProto = preferredProto === 'https' ? 'http' : 'https';
+                let allSuccess = true;
 
                 for (const service of services) {
                     try {
                         await tryRegister(preferredProto, service);
                     } catch (e) {
                         try {
-                            // If preferred failed, try fallback (Zero Config Magic)
                             await tryRegister(fallbackProto, service);
-                            // If fallback worked, update preference for next service
                             preferredProto = fallbackProto;
                         } catch (e2) {
-                            console.error(`❌ Could not connect to Gateway for ${service.name} (Tried HTTP & HTTPS on port ${gatewayPort})`);
+                            console.warn(`⏳ Waiting for Gateway to register ${service.name}...`);
+                            allSuccess = false;
                         }
                     }
                 }
+
+                if (!allSuccess) {
+                    setTimeout(registerAll, 5000); // Retry in 5s
+                } else {
+                    console.log('🏁 All services successfully registered with Gateway.');
+                }
             };
 
-            // Wait a bit for Gateway to be ready
-            setTimeout(registerAll, 1000);
+            // Initial registration attempt
+            setTimeout(registerAll, 1500);
         };
 
         registerWithGateway();

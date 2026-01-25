@@ -2,7 +2,7 @@
 
 WordJS includes several utility scripts in the `backend/` root to help with maintenance and troubleshooting.
 
-## 1. Role Manager (`force-sync-roles.js`)
+## 1. Role Manager (`cli/force-sync-roles.js`)
 
 **Use case:** You accidentally deleted the Administrator role or permissions are corrupted.
 
@@ -10,7 +10,7 @@ This script wipes the `wordjs_user_roles` option in the database and re-initiali
 
 ```bash
 cd backend
-node force-sync-roles.js
+node cli/force-sync-roles.js
 ```
 
 **Output:**
@@ -27,7 +27,7 @@ node force-sync-roles.js
 
 ```bash
 cd backend
-node check_plugins.js
+node cli/check_plugins.js
 ```
 
 ## 3. Gateway Registry (`gateway-registry.json`)
