@@ -156,10 +156,13 @@ class PostgresDriver extends DatabaseDriverInterface {
             const columns = res.rows.map(col => {
                 let type = col.data_type.toUpperCase();
 
-                // Normalizations
+                // Normalizations for Universal Compatibility
                 if (type === 'CHARACTER VARYING') type = 'TEXT';
                 if (type.includes('INT')) type = 'INTEGER';
                 if (type === 'BOOLEAN') type = 'INTEGER'; // WordJS usually uses 0/1 for bools in SQLite
+                if (type.includes('TIMESTAMP')) type = 'DATETIME'; // Strip time zone info
+                if (type.includes('JSON')) type = 'TEXT'; // SQLite stores JSON as TEXT
+                if (type === 'USER-DEFINED') type = 'TEXT'; // Enums etc
 
                 let def = `${col.column_name} ${type}`;
 
@@ -167,7 +170,16 @@ class PostgresDriver extends DatabaseDriverInterface {
                 if (col.column_default) {
                     // Clean default value (Postgres adds type casts like '::text')
                     let dflt = col.column_default.replace(/::[a-z0-9_ ]+/i, '');
-                    def += ` DEFAULT ${dflt}`;
+                    // Clean 'now()' or similar functions if possible, but basic strip helps
+                    if (dflt.includes('nextval')) {
+                        // It's a sequence/serial. If it's a PK, we might want INT_PK?
+                        // For now, let's just strip default for sequences to avoid restore errors
+                        // provided the app logic handles ID gen or we enable AUTOINCREMENT logic.
+                        // But createPluginTable uses INT_PK for autoincrement. 
+                        // If we can't detect PK, skipping default is safer than syntax error.
+                        dflt = null;
+                    }
+                    if (dflt) def += ` DEFAULT ${dflt}`;
                 }
 
                 // Note: PK detection needs another query or complex logic. 

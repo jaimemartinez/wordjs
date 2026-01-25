@@ -7,46 +7,63 @@ const config = require('./app');
 const path = require('path');
 
 // 1. Load the Configured Driver
-const driverName = config.dbDriver || 'sqlite-legacy';
+// 1. Driver State
+let driverName = config.dbDriver || 'sqlite-legacy';
 let driver = null;
 let driverAsync = null; // New Async Driver
 
-try {
-  console.log(`🔌 DB Manager: Loading driver '${driverName}'...`);
-  driver = require(`../drivers/${driverName}`);
+// Helper to load driver dynamically
+function loadDriver(overrideName = null) {
+  const name = overrideName || config.dbDriver || 'sqlite-legacy';
+  driverName = name; // Update global state
 
-  // Try to load async version if available (convention: driver-name + '-async')
   try {
-    if (driverName === 'sqlite-native') {
-      driverAsync = require('../drivers/sqlite-native-async');
-      console.log(`🔌 DB Manager: Loaded Async Driver for '${driverName}'`);
-    } else if (driverName === 'postgres') {
-      // Postgres is natively async
-      driverAsync = require('../drivers/postgres');
-      console.log(`🔌 DB Manager: Loaded Async Driver for '${driverName}'`);
+    console.log(`🔌 DB Manager: Loading driver '${name}'...`);
+    driver = require(`../drivers/${name}`);
+    driverAsync = null; // Reset
 
-      // For Postgres, we don't have a sync driver. 
-      // We must mock it or ensure app checks for dbAsync.
-      // Current architecture enforces sync 'driver' for some fallback.
-      // We'll just define a dummy driver that throws errors for Sync calls.
-      driver = {
-        init: async () => { }, // No-op
-        get: () => { throw new Error('Synchronous DB access not supported with Postgres. Use dbAsync.'); },
-        close: () => { }
-      };
+    // Try to load async version
+    try {
+      if (name === 'sqlite-native') {
+        driverAsync = require('../drivers/sqlite-native-async');
+        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+      } else if (name === 'postgres') {
+        driverAsync = require('../drivers/postgres');
+        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+
+        // Mock sync driver for Postgres
+        driver = {
+          init: async () => { },
+          get: () => { throw new Error('Synchronous DB access not supported with Postgres. Use dbAsync.'); },
+          close: () => { }
+        };
+      }
+    } catch (e) {
+      console.warn(`⚠️  Async driver not found for '${name}': ${e.message}`);
     }
-  } catch (e) {
-    console.warn(`⚠️  Async driver not found for '${driverName}', some features may be disabled.`);
-  }
 
-} catch (e) {
-  console.error(`❌ Failed to load driver '${driverName}':`, e.message);
-  console.warn(`⚠️  Falling back to 'sqlite-legacy'`);
-  driver = require('../drivers/sqlite-legacy');
+  } catch (e) {
+    console.error(`❌ Failed to load driver '${name}':`, e.message);
+    // Only fallback if we weren't forcing a specific valid driver test
+    if (!overrideName) {
+      console.warn(`⚠️  Falling back to 'sqlite-legacy'`);
+      driver = require('../drivers/sqlite-legacy');
+      driverName = 'sqlite-legacy';
+    } else {
+      throw e;
+    }
+  }
 }
 
+// Initial Load (Default)
+loadDriver();
+
 // 2. Abstraction Proxies
-const init = async () => {
+const init = async (options = {}) => {
+  // Support dynamic driver switching (e.g. for Tests or Migrations)
+  if (options.driver) {
+    loadDriver(options.driver);
+  }
 
   // Auto-Start Embedded Core DB if configured
   if (driverName === 'postgres' && config.db.port == 5433) {
@@ -59,7 +76,7 @@ const init = async () => {
   }
 
   // Initialize Sync Driver
-  if (driver && driver.init) await driver.init();
+  if (driver && driver.init) await driver.init(options);
 
   // Initialize Async Driver
   if (driverAsync) {
