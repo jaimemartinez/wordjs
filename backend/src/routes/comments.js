@@ -13,8 +13,36 @@ const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 /**
- * GET /comments
- * List comments
+ * @swagger
+ * tags:
+ *   name: Comments
+ *   description: Comment management
+ */
+
+/**
+ * @swagger
+ * /comments:
+ *   get:
+ *     summary: List comments
+ *     tags: [Comments]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: post
+ *         description: Filter by post ID
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: ['1', '0', 'spam', 'trash', 'any']
+ *     responses:
+ *       200:
+ *         description: List of comments
  */
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const {
@@ -67,8 +95,22 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /comments/:id
- * Get single comment
+ * @swagger
+ * /comments/{id}:
+ *   get:
+ *     summary: Get a comment
+ *     tags: [Comments]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Comment details
+ *       404:
+ *         description: Comment not found
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
     const comment = await Comment.findById(parseInt(req.params.id, 10));
@@ -96,8 +138,36 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /comments
- * Create comment
+ * @swagger
+ * /comments:
+ *   post:
+ *     summary: Create a comment
+ *     tags: [Comments]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [post, content]
+ *             properties:
+ *               post:
+ *                 type: integer
+ *               content:
+ *                 type: string
+ *               author_name:
+ *                 type: string
+ *               author_email:
+ *                 type: string
+ *               parent:
+ *                 type: integer
+ *     responses:
+ *       201:
+ *         description: Comment created
+ *       400:
+ *         description: Validation error
  */
 router.post('/', optionalAuth, asyncHandler(async (req, res) => {
     const {
@@ -191,8 +261,33 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /comments/:id
- * Update comment
+ * @swagger
+ * /comments/{id}:
+ *   put:
+ *     summary: Update a comment
+ *     tags: [Comments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               content:
+ *                 type: string
+ *               status:
+ *                 type: string
+ *                 enum: ['1', '0', 'spam', 'trash']
+ *     responses:
+ *       200:
+ *         description: Comment updated
  */
 router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req, res) => {
     const commentId = parseInt(req.params.id, 10);
@@ -220,8 +315,26 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req, 
 }));
 
 /**
- * DELETE /comments/:id
- * Delete comment
+ * @swagger
+ * /comments/{id}:
+ *   delete:
+ *     summary: Delete a comment (Trash or Force)
+ *     tags: [Comments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: force
+ *         schema:
+ *           type: boolean
+ *     responses:
+ *       200:
+ *         description: Comment deleted
  */
 router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async (req, res) => {
     const commentId = parseInt(req.params.id, 10);

@@ -10,8 +10,25 @@ const { getOption } = require('../core/options');
 const { generateSitemap, generateRobotsTxt } = require('../core/seo-helper');
 
 /**
- * GET /sitemap.xml
- * Generate dynamic XML sitemap
+ * @swagger
+ * tags:
+ *   name: SEO
+ *   description: Search Engine Optimization endpoints
+ */
+
+/**
+ * @swagger
+ * /seo/sitemap.xml:
+ *   get:
+ *     summary: Get dynamic XML sitemap
+ *     tags: [SEO]
+ *     responses:
+ *       200:
+ *         description: XML sitemap
+ *         content:
+ *           application/xml:
+ *             schema:
+ *               type: string
  */
 router.get('/sitemap.xml', async (req, res) => {
     try {
@@ -36,8 +53,18 @@ router.get('/sitemap.xml', async (req, res) => {
 });
 
 /**
- * GET /robots.txt
- * Generate dynamic robots.txt
+ * @swagger
+ * /seo/robots.txt:
+ *   get:
+ *     summary: Get dynamic robots.txt
+ *     tags: [SEO]
+ *     responses:
+ *       200:
+ *         description: robots.txt content
+ *         content:
+ *           text/plain:
+ *             schema:
+ *               type: string
  */
 router.get('/robots.txt', async (req, res) => {
     try {
@@ -54,8 +81,22 @@ router.get('/robots.txt', async (req, res) => {
 });
 
 /**
- * GET /api/v1/seo/meta/:postId
- * Get SEO meta data for a post (for admin preview)
+ * @swagger
+ * /seo/meta/{postId}:
+ *   get:
+ *     summary: Get SEO metadata for a post (Admin Preview)
+ *     tags: [SEO]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: postId
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: SEO metadata
  */
 router.get('/meta/:postId', async (req, res) => {
     try {

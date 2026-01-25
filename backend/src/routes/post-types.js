@@ -14,8 +14,27 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 /**
- * GET /types
- * List all post types
+ * @swagger
+ * tags:
+ *   name: PostTypes
+ *   description: Custom Post Type management
+ */
+
+/**
+ * @swagger
+ * /types:
+ *   get:
+ *     summary: List all post types
+ *     tags: [PostTypes]
+ *     parameters:
+ *       - in: query
+ *         name: rest
+ *         schema:
+ *           type: boolean
+ *         description: Filter by rest visibility
+ *     responses:
+ *       200:
+ *         description: List of post types
  */
 router.get('/', asyncHandler(async (req, res) => {
     const showInRest = req.query.rest !== 'false';
@@ -36,8 +55,20 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /types/:name
- * Get a specific post type
+ * @swagger
+ * /types/{name}:
+ *   get:
+ *     summary: Get a specific post type
+ *     tags: [PostTypes]
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Post type details
  */
 router.get('/:name', asyncHandler(async (req, res) => {
     const type = getPostType(req.params.name);
@@ -50,8 +81,30 @@ router.get('/:name', asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /types
- * Create a custom post type
+ * @swagger
+ * /types:
+ *   post:
+ *     summary: Register a custom post type
+ *     tags: [PostTypes]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:
+ *                 type: string
+ *               label:
+ *                 type: string
+ *               public:
+ *                 type: boolean
+ *     responses:
+ *       201:
+ *         description: Post type created
  */
 router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const { name, label, labels, supports, taxonomies, ...options } = req.body;
@@ -76,8 +129,22 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /types/:name
- * Delete a custom post type
+ * @swagger
+ * /types/{name}:
+ *   delete:
+ *     summary: Delete a custom post type
+ *     tags: [PostTypes]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: name
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Post type deleted
  */
 router.delete('/:name', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const result = deleteCustomPostType(req.params.name);

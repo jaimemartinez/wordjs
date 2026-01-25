@@ -15,6 +15,13 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { execFile } = require('child_process');
 
+/**
+ * @swagger
+ * tags:
+ *   name: Plugins
+ *   description: Plugin management (Install, Activate, Delete)
+ */
+
 // Configure multer for zip uploads
 const upload = multer({
     dest: 'os-tmp/', // Use system temp dir or local tmp
@@ -81,8 +88,27 @@ function validateSlug(slug) {
     return safePath.startsWith(path.resolve(PLUGINS_DIR));
 }
 /**
- * POST /plugins/upload
- * Upload and install a plugin
+ * @swagger
+ * /plugins/upload:
+ *   post:
+ *     summary: Upload and install a plugin (ZIP)
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               plugin:
+ *                 type: string
+ *                 format: binary
+ *     responses:
+ *       200:
+ *         description: Plugin installed
+ *       400:
+ *         description: Invalid file or zip slip detected
  */
 router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req, res) => {
     if (!req.file) {
@@ -145,9 +171,14 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
 }));
 
 /**
- * GET /plugins/registry
- * Public endpoint - returns full manifest data for active plugins
- * Used by frontend for dynamic plugin loading
+ * @swagger
+ * /plugins/registry:
+ *   get:
+ *     summary: Get public plugin registry (for frontend)
+ *     tags: [Plugins]
+ *     responses:
+ *       200:
+ *         description: List of active plugins with manifest data
  */
 router.get('/registry', asyncHandler(async (req, res) => {
     // Await getAllPlugins()
@@ -197,8 +228,14 @@ router.get('/registry', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /plugins/active
- * Public endpoint - returns only active plugin slugs (no auth required)
+ * @swagger
+ * /plugins/active:
+ *   get:
+ *     summary: Get list of active plugin slugs
+ *     tags: [Plugins]
+ *     responses:
+ *       200:
+ *         description: Array of active plugin slugs
  */
 router.get('/active', asyncHandler(async (req, res) => {
     // Await getAllPlugins()
@@ -210,8 +247,16 @@ router.get('/active', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /plugins
- * List all plugins (requires admin)
+ * @swagger
+ * /plugins:
+ *   get:
+ *     summary: List all installed plugins (Admin)
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of all plugins
  */
 router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // Await getAllPlugins()
@@ -220,8 +265,22 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /plugins/:slug/activate
- * Activate a plugin and regenerate frontend registry
+ * @swagger
+ * /plugins/{slug}/activate:
+ *   post:
+ *     summary: Activate a plugin
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Plugin activated
  */
 router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // SECURITY: Validate slug to prevent path traversal
@@ -238,8 +297,22 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
 }));
 
 /**
- * POST /plugins/:slug/deactivate
- * Deactivate a plugin and regenerate frontend registry
+ * @swagger
+ * /plugins/{slug}/deactivate:
+ *   post:
+ *     summary: Deactivate a plugin
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Plugin deactivated
  */
 router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // SECURITY: Validate slug
@@ -256,9 +329,35 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req,
 }));
 
 /**
- * DELETE /plugins/:slug
- * Delete a plugin (must be inactive)
- * Requires password in body for security
+ * @swagger
+ * /plugins/{slug}:
+ *   delete:
+ *     summary: Delete a plugin
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [password]
+ *             properties:
+ *               password:
+ *                 type: string
+ *                 description: Admin password for confirmation
+ *     responses:
+ *       200:
+ *         description: Plugin deleted
+ *       403:
+ *         description: Invalid password
  */
 router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const slug = req.params.slug;
@@ -303,8 +402,32 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => 
 }));
 
 /**
- * GET /plugins/:slug/download
- * Download a plugin as a ZIP file
+ * @swagger
+ * /plugins/{slug}/download:
+ *   get:
+ *     summary: Download plugin as ZIP
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: token
+ *         schema:
+ *           type: string
+ *         description: Bearer token for download authentication
+ *     responses:
+ *       200:
+ *         description: Plugin ZIP file
+ *         content:
+ *           application/zip:
+ *             schema:
+ *               type: string
+ *               format: binary
  */
 router.get('/:slug/download', authenticateAllowQuery, isAdmin, asyncHandler(async (req, res) => {
     const slug = req.params.slug;
@@ -334,8 +457,16 @@ router.get('/:slug/download', authenticateAllowQuery, isAdmin, asyncHandler(asyn
 }));
 
 /**
- * POST /plugins/sample
- * Create sample plugin
+ * @swagger
+ * /plugins/sample:
+ *   post:
+ *     summary: Generate a sample plugin
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Sample plugin created
  */
 router.post('/sample', authenticate, isAdmin, asyncHandler(async (req, res) => {
     createSamplePlugin();
@@ -343,9 +474,16 @@ router.post('/sample', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /plugins/menus
- * Get all admin menu items registered by ACTIVE plugins only
- * Uses filters to allow dynamic visibility rules
+ * @swagger
+ * /plugins/menus:
+ *   get:
+ *     summary: Get admin menu items from active plugins
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of menu items
  */
 router.get('/menus', authenticate, asyncHandler(async (req, res) => {
     const { getAdminMenuItems } = require('../core/adminMenu');

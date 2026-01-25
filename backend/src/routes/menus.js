@@ -11,8 +11,21 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 /**
- * GET /menus
- * List all menus
+ * @swagger
+ * tags:
+ *   name: Menus
+ *   description: Menu and navigation management
+ */
+
+/**
+ * @swagger
+ * /menus:
+ *   get:
+ *     summary: List all menus
+ *     tags: [Menus]
+ *     responses:
+ *       200:
+ *         description: List of menus
  */
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const menus = await Menu.findAll();
@@ -25,8 +38,14 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /menus/locations
- * Get menu locations
+ * @swagger
+ * /menus/locations:
+ *   get:
+ *     summary: Get registered menu locations
+ *     tags: [Menus]
+ *     responses:
+ *       200:
+ *         description: List of locations
  */
 router.get('/locations', asyncHandler(async (req, res) => {
     const locations = await Menu.getLocations();
@@ -34,8 +53,22 @@ router.get('/locations', asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /menus/:id
- * Get menu with items
+ * @swagger
+ * /menus/{id}:
+ *   get:
+ *     summary: Get a menu with items
+ *     tags: [Menus]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Menu details with items
+ *       404:
+ *         description: Menu not found
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
     const menu = await Menu.findById(parseInt(req.params.id, 10));
@@ -55,8 +88,22 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /menus/location/:location
- * Get menu by location
+ * @swagger
+ * /menus/location/{location}:
+ *   get:
+ *     summary: Get a menu by its location
+ *     tags: [Menus]
+ *     parameters:
+ *       - in: path
+ *         name: location
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Menu details with items
+ *       404:
+ *         description: No menu assigned
  */
 router.get('/location/:location', optionalAuth, asyncHandler(async (req, res) => {
     const menu = await Menu.findByLocation(req.params.location);
@@ -76,8 +123,32 @@ router.get('/location/:location', optionalAuth, asyncHandler(async (req, res) =>
 }));
 
 /**
- * POST /menus
- * Create menu
+ * @swagger
+ * /menus:
+ *   post:
+ *     summary: Create a menu
+ *     tags: [Menus]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:
+ *                 type: string
+ *               slug:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Menu created
+ *       400:
+ *         description: Validation error
  */
 router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const { name, slug, description } = req.body;
@@ -95,8 +166,34 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * PUT /menus/:id
- * Update menu
+ * @swagger
+ * /menus/{id}:
+ *   put:
+ *     summary: Update a menu
+ *     tags: [Menus]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               slug:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Menu updated
  */
 router.put('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const menuId = parseInt(req.params.id, 10);
@@ -107,8 +204,24 @@ router.put('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /menus/:id
- * Delete menu
+ * @swagger
+ * /menus/{id}:
+ *   delete:
+ *     summary: Delete a menu
+ *     tags: [Menus]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Menu deleted
+ *       404:
+ *         description: Menu not found
  */
 router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const menuId = parseInt(req.params.id, 10);
@@ -127,8 +240,32 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /menus/:id/location
- * Set menu location
+ * @swagger
+ * /menus/{id}/location:
+ *   post:
+ *     summary: Set menu location
+ *     tags: [Menus]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [location]
+ *             properties:
+ *               location:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Location updated
  */
 router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const menuId = parseInt(req.params.id, 10);

@@ -13,8 +13,30 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const TAXONOMY = 'category';
 
 /**
- * GET /categories
- * List categories
+ * @swagger
+ * tags:
+ *   name: Categories
+ *   description: Category management
+ */
+
+/**
+ * @swagger
+ * /categories:
+ *   get:
+ *     summary: List categories
+ *     tags: [Categories]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: List of categories
  */
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const {
@@ -51,8 +73,22 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * GET /categories/:id
- * Get single category
+ * @swagger
+ * /categories/{id}:
+ *   get:
+ *     summary: Get a category
+ *     tags: [Categories]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Category details
+ *       404:
+ *         description: Category not found
  */
 router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
     const term = await Term.findById(parseInt(req.params.id, 10), TAXONOMY);
@@ -69,8 +105,34 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /categories
- * Create category
+ * @swagger
+ * /categories:
+ *   post:
+ *     summary: Create a category
+ *     tags: [Categories]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [name]
+ *             properties:
+ *               name:
+ *                 type: string
+ *               slug:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               parent:
+ *                 type: integer
+ *     responses:
+ *       201:
+ *         description: Category created
+ *       400:
+ *         description: Validation error
  */
 router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const { name, slug, description, parent } = req.body;
@@ -106,8 +168,38 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
 }));
 
 /**
- * PUT /categories/:id
- * Update category
+ * @swagger
+ * /categories/{id}:
+ *   put:
+ *     summary: Update a category
+ *     tags: [Categories]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *               slug:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               parent:
+ *                 type: integer
+ *     responses:
+ *       200:
+ *         description: Category updated
+ *       404:
+ *         description: Category not found
  */
 router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const termId = parseInt(req.params.id, 10);
@@ -134,8 +226,24 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
 }));
 
 /**
- * DELETE /categories/:id
- * Delete category
+ * @swagger
+ * /categories/{id}:
+ *   delete:
+ *     summary: Delete a category
+ *     tags: [Categories]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: integer
+ *     responses:
+ *       200:
+ *         description: Category deleted
+ *       404:
+ *         description: Category not found
  */
 router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
     const termId = parseInt(req.params.id, 10);

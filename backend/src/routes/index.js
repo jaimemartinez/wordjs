@@ -88,12 +88,15 @@ router.get('/pages', (req, res, next) => {
     postsRoutes.handle(req, res, next);
 });
 
+const { authenticate } = require('../middleware/auth');
+const { isAdmin } = require('../middleware/permissions');
+
 // Documentation
 const swaggerUi = require('swagger-ui-express');
 const swaggerSpecs = require('../config/swagger');
 const swaggerTheme = require('../config/swagger-theme');
 
-router.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
+router.use('/docs', authenticate, isAdmin, swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
     customCss: swaggerTheme,
     customSiteTitle: "WordJS API Documentation"
 }));
