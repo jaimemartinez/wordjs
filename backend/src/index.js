@@ -70,9 +70,6 @@ app.use(helmet({
 }));
 app.disable('x-powered-by');
 
-// Health check for Gateway
-app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
-
 // CORS configuration
 // CORS configuration
 app.use(cors({
@@ -170,8 +167,14 @@ if (config.nodeEnv === 'development') {
 }
 
 // Health check endpoint
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/health', async (req, res) => {
+    const SystemHealth = require('./core/system-health');
+    const status = await SystemHealth.checkDatabase();
+    res.json({
+        status: status.status === 'OK' ? 'ok' : 'error',
+        timestamp: new Date().toISOString(),
+        details: config.nodeEnv === 'development' ? status : undefined
+    });
 });
 
 // Installation and Migration Guard Middleware

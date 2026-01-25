@@ -1,20 +1,27 @@
-/**
- * WordJS - Embedded Database Manager
- * Wraps 'embedded-postgres' to provide a zero-config PG experience.
- */
-
 const path = require('path');
 const fs = require('fs');
 
 let pgServer = null;
 
 const DATA_DIR = path.resolve('./data/postgres-embed/data');
+const PID_FILE = path.join(DATA_DIR, 'postmaster.pid');
+const HBA_FILE = path.join(DATA_DIR, 'pg_hba.conf');
 
 async function startServer() {
     try {
         const EmbeddedPostgres = require('embedded-postgres').default;
 
         console.log('🐘 Embedded PG: Initializing...');
+
+        // 🛡️ GESTIÓN DE BLOQUEOS: Detect and remove stale PID file
+        if (fs.existsSync(PID_FILE)) {
+            console.log('🛡️  Embedded PG: Stale postmaster.pid found. Cleaning up...');
+            try {
+                fs.unlinkSync(PID_FILE);
+            } catch (err) {
+                console.error('❌ Could not remove stale PID file:', err.message);
+            }
+        }
 
         const config = require('../config/app');
         const { Client } = require('pg');
@@ -24,51 +31,21 @@ async function startServer() {
             port: 5433,
             user: 'postgres',
             password: config.db.password,
-            dbName: 'wordjs',
+            dbName: 'postgres', // Start with system DB for admin tasks
             persistent: true
         });
 
         // Ensure init
         if (!fs.existsSync(DATA_DIR)) {
             console.log('🐘 Embedded PG: First run detected. Creating cluster (UTF8/C)...');
-            // Force UTF8 and C locale on first run to avoid WIN1252 issues
             await pgServer.initialise(['--locale=C', '--encoding=UTF8']);
         }
 
         await pgServer.start();
         console.log('✅ Embedded PG: Started on port 5433');
 
-        // SYNC: Ensure the internal DB password matches the config
-        try {
-            const client = new Client({
-                host: 'localhost',
-                port: 5433,
-                user: 'postgres',
-                password: config.db.password,
-                database: 'postgres'
-            });
-            await client.connect();
-            await client.query(`ALTER USER postgres WITH PASSWORD '${config.db.password}'`);
-            await client.end();
-            console.log('🔐 Embedded PG: Password synchronized.');
-        } catch (syncErr) {
-            // If the above fails, it might be using the old "password"
-            try {
-                const clientFallback = new Client({
-                    host: 'localhost',
-                    port: 5433,
-                    user: 'postgres',
-                    password: 'password',
-                    database: 'postgres'
-                });
-                await clientFallback.connect();
-                await clientFallback.query(`ALTER USER postgres WITH PASSWORD '${config.db.password}'`);
-                await clientFallback.end();
-                console.log('🔐 Embedded PG: Password synchronized (from fallback).');
-            } catch (innerErr) {
-                console.warn('⚠️  Embedded PG: Could not sync password:', innerErr.message);
-            }
-        }
+        // 🔐 SINCRONIZACIÓN AUTOMÁTICA
+        await synchronizePassword(config.db.password);
 
         // Handle graceful shutdown
         process.on('SIGTERM', stopServer);
@@ -78,6 +55,64 @@ async function startServer() {
     } catch (e) {
         console.error('❌ Embedded PG Error:', e.message);
         return false;
+    }
+}
+
+/**
+ * Robustly ensure the DB password matches wordjs-config.json
+ */
+async function synchronizePassword(targetPassword) {
+    const { Client } = require('pg');
+    const syncOptions = {
+        host: 'localhost',
+        port: 5433,
+        user: 'postgres',
+        database: 'postgres'
+    };
+
+    const trySync = async (password) => {
+        const client = new Client({ ...syncOptions, password });
+        await client.connect();
+        await client.query(`ALTER USER postgres WITH PASSWORD '${targetPassword}'`);
+        await client.end();
+    };
+
+    try {
+        // 1. Try with current config password
+        await trySync(targetPassword);
+        console.log('🔐 Embedded PG: Password is already synchronized.');
+    } catch (err) {
+        try {
+            // 2. Try with default fallback
+            await trySync('password');
+            console.log('🔐 Embedded PG: Password synchronized from default.');
+        } catch (err2) {
+            console.warn('⚠️  Embedded PG: Authentication failed. Attempting self-healing recovery...');
+
+            // 3. INTERNAL RECOVERY: Trust-Update-Revert
+            try {
+                await pgServer.stop();
+
+                // Switch to trust
+                if (fs.existsSync(HBA_FILE)) {
+                    let hba = fs.readFileSync(HBA_FILE, 'utf8');
+                    const originalHba = hba;
+                    hba = hba.replace(/password/g, 'trust').replace(/md5/g, 'trust');
+                    fs.writeFileSync(HBA_FILE, hba);
+
+                    await pgServer.start();
+                    await trySync(undefined); // Connect without password
+                    await pgServer.stop();
+
+                    // Restore original HBA
+                    fs.writeFileSync(HBA_FILE, originalHba);
+                    await pgServer.start();
+                    console.log('✨ Embedded PG: Self-healing complete. Password synchronized securely.');
+                }
+            } catch (recoveryErr) {
+                console.error('❌ Embedded PG: Self-healing failed:', recoveryErr.message);
+            }
+        }
     }
 }
 

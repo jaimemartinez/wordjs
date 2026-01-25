@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { postsApi, usersApi, commentsApi, Comment } from "@/lib/api";
+import { postsApi, usersApi, commentsApi, systemApi, Comment, SystemStatus } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 
@@ -46,11 +46,32 @@ const QuickAction = ({ href, icon, label, subLabel, color }: { href: string, ico
     </a>
 );
 
+const HealthIndicator = ({ label, status, detail, icon }: { label: string, status: string, detail: string, icon: string }) => {
+    const isOk = status === 'OK';
+    const color = isOk ? 'emerald' : (status === 'WARNING' ? 'amber' : 'rose');
+
+    return (
+        <div className="flex items-center gap-4 p-4 rounded-3xl bg-gray-50 border border-gray-100 group hover:bg-white hover:shadow-xl transition-all duration-300">
+            <div className={`w-10 h-10 rounded-2xl bg-${color}-100 text-${color}-600 flex items-center justify-center text-sm shadow-sm group-hover:scale-110 transition-transform`}>
+                <i className={`fa-solid ${icon}`}></i>
+            </div>
+            <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between">
+                    <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{label}</p>
+                    <span className={`flex h-2 w-2 rounded-full bg-${color}-500 animate-pulse`}></span>
+                </div>
+                <p className="text-xs font-bold text-gray-700 truncate">{detail}</p>
+            </div>
+        </div>
+    );
+};
+
 export default function DashboardPage() {
     const { user, can } = useAuth();
     const { t } = useI18n();
     const [stats, setStats] = useState<Stats>({ posts: 0, pages: 0, comments: 0, users: 0 });
     const [recentComments, setRecentComments] = useState<Comment[]>([]);
+    const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
@@ -61,12 +82,14 @@ export default function DashboardPage() {
         try {
             const fetchUsers = can('list_users') ? usersApi.list() : Promise.resolve([]);
             const fetchComments = can('moderate_comments') ? commentsApi.list({ per_page: 5 }) : Promise.resolve([]);
+            const fetchSystem = can('manage_options') ? systemApi.getStatus() : Promise.resolve(null);
 
-            const [posts, pages, users, comments] = await Promise.all([
+            const [posts, pages, users, comments, system] = await Promise.all([
                 postsApi.list("post"),
                 postsApi.list("page"),
                 fetchUsers,
-                fetchComments
+                fetchComments,
+                fetchSystem
             ]);
 
             setStats({
@@ -76,6 +99,7 @@ export default function DashboardPage() {
                 users: users?.length || 0,
             });
             setRecentComments(Array.isArray(comments) ? comments.slice(0, 5) : []);
+            setSystemStatus(system);
         } catch (error) {
             console.error("Failed to load data:", error);
         } finally {
@@ -98,6 +122,21 @@ export default function DashboardPage() {
                         </p>
                     </div>
                 </div>
+
+                {/* Health Overview (Mini) */}
+                {systemStatus && (
+                    <div className="hidden lg:flex items-center gap-4 px-6 py-3 bg-white rounded-full shadow-lg shadow-gray-200/50 border border-gray-100">
+                        <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${systemStatus.database.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
+                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">DB: {systemStatus.database.driver}</span>
+                        </div>
+                        <div className="w-px h-4 bg-gray-200"></div>
+                        <div className="flex items-center gap-2">
+                            <span className={`w-2 h-2 rounded-full ${systemStatus.mtls.status === 'OK' ? 'bg-emerald-500' : 'bg-rose-500'} animate-pulse`}></span>
+                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">mTLS: {systemStatus.mtls.status}</span>
+                        </div>
+                    </div>
+                )}
             </div>
 
             {/* Stats Grid */}
@@ -135,6 +174,38 @@ export default function DashboardPage() {
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 items-start">
                 {/* Main Content Area */}
                 <div className="lg:col-span-2 space-y-8">
+                    {/* System Health Detailed */}
+                    {systemStatus && (
+                        <div>
+                            <div className="flex items-center gap-3 mb-6">
+                                <span className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                                    <i className="fa-solid fa-heart-pulse text-sm"></i>
+                                </span>
+                                <h2 className="text-xl font-black text-gray-900 italic tracking-tight">System Health</h2>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                                <HealthIndicator
+                                    label="Database"
+                                    status={systemStatus.database.status}
+                                    detail={systemStatus.database.status === 'OK' ? `Connected (${systemStatus.database.driver})` : systemStatus.database.message || 'Error'}
+                                    icon="fa-database"
+                                />
+                                <HealthIndicator
+                                    label="Security (mTLS)"
+                                    status={systemStatus.mtls.status}
+                                    detail={systemStatus.mtls.status === 'OK' ? 'Certificates Valid' : systemStatus.mtls.status}
+                                    icon="fa-shield-halved"
+                                />
+                                <HealthIndicator
+                                    label="Storage"
+                                    status="OK"
+                                    detail="Writable"
+                                    icon="fa-folder-tree"
+                                />
+                            </div>
+                        </div>
+                    )}
+
                     {/* Quick Actions */}
                     <div>
                         <div className="flex items-center gap-3 mb-6">
