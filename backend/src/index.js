@@ -70,6 +70,9 @@ app.use(helmet({
 }));
 app.disable('x-powered-by');
 
+// Health check for Gateway
+app.get('/health', (req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+
 // CORS configuration
 // CORS configuration
 app.use(cors({
@@ -460,7 +463,8 @@ async function initialize() {
                         timeout: 2000
                     }, (res) => {
                         if (res.statusCode === 200) {
-                            console.log(`✅ ${serviceData.name} Registered with Gateway via ${protocolName.toUpperCase()}`);
+                            const actualProto = useMtls ? 'HTTPS (mTLS)' : protocolName.toUpperCase();
+                            console.log(`✅ ${serviceData.name} Registered with Gateway via ${actualProto}`);
                             resolve(protocolName);
                         } else {
                             reject(new Error(`Status ${res.statusCode}`));
