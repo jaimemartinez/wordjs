@@ -93,7 +93,9 @@ async function checkDependencyConflicts(slug, manifest) {
                     activeDependencies.set(dep, { range, pluginSlug: activeSlug });
                 }
             }
-        } catch { }
+        } catch (e) {
+            console.warn(`[Plugins] Error reading manifest for ${activeSlug}:`, e.message);
+        }
     }
 
     // Check each new dependency against existing ones
@@ -268,7 +270,9 @@ async function prunePluginDependencies(slug, manifest) {
                             usedDependencies.add(dep);
                         }
                     }
-                } catch { }
+                } catch (e) {
+                    console.warn(`[Plugins] Error reading manifest during cleanup for ${activeSlug}:`, e.message);
+                }
             }
         }
     }

@@ -23,7 +23,9 @@ const nextConfig: NextConfig = {
           backendUrl = `https://localhost:${config.gatewayPort}`;
         }
       }
-    } catch (e) { }
+    } catch (e: any) {
+      console.warn('[NextConfig] Failed to load wordjs-config.json for rewrites:', e.message);
+    }
 
     return [
       {

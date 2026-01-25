@@ -34,10 +34,14 @@ export async function register() {
                         try {
                             const url = new URL(config.frontendUrl);
                             if (url.port) port = url.port;
-                        } catch (e) { }
+                        } catch (e: any) {
+                            console.warn('[Frontend Instrumentation] Failed to parse frontendUrl:', e.message);
+                        }
                     }
                 }
-            } catch (e) { }
+            } catch (e: any) {
+                console.warn('[Frontend Instrumentation] Failed to load/parse wordjs-config.json:', e.message);
+            }
 
             // mTLS Certs Load
             let clientOpts: any = {};

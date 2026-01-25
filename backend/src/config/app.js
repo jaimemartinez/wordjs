@@ -8,7 +8,7 @@ const configPath = path.join(rootDir, 'wordjs-config.json');
 // Default backup configuration
 const defaultConfig = {
     port: 4000,
-    host: 'localhost',
+    host: '127.0.0.1',
     gatewayPort: 3000,
     siteUrl: 'http://localhost:3000',
     frontendUrl: 'http://localhost:3001',

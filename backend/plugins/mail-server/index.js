@@ -476,7 +476,11 @@ exports.init = async function () {
     } catch (e) { console.error('Failed to load bayes db', e); }
 
     const saveBayes = async () => {
-        try { fs.writeFileSync(bayesFile, classifier.toJson()); } catch (e) { }
+        try {
+            fs.writeFileSync(bayesFile, classifier.toJson());
+        } catch (e) {
+            console.error('[MailServer] Failed to save Bayes classifier:', e.message);
+        }
     };
 
     // Initialize

@@ -313,7 +313,13 @@ class Email {
         const attachments = await this.getAttachments(id);
         for (const att of attachments) {
             const fullPath = path.join(UPLOAD_DIR, att.storage_path);
-            try { await fs.unlink(fullPath); } catch { }
+            try {
+                await fs.unlink(fullPath);
+            } catch (e) {
+                if (e.code !== 'ENOENT') {
+                    console.error(`[Email] Failed to delete attachment at ${fullPath}:`, e.message);
+                }
+            }
         }
         await dbAsync.run('DELETE FROM email_attachments WHERE email_id = ?', [id]);
         return await dbAsync.run('DELETE FROM received_emails WHERE id = ?', [id]);

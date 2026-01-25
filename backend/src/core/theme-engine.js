@@ -113,7 +113,11 @@ class ThemeEngine {
                 // Try to load actual manifest if exists
                 const manifestPath = path.join(this.activeTheme.path, 'manifest.json');
                 if (fs.existsSync(manifestPath)) {
-                    try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch (e) { }
+                    try {
+                        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                    } catch (e) {
+                        console.warn(`[Theme] Failed to parse manifest for ${this.activeTheme.slug}:`, e.message);
+                    }
                 }
 
                 try {
