@@ -445,6 +445,24 @@ export interface SystemStatus {
     timestamp: string;
 }
 
+// Backup API
+export interface BackupFile {
+    filename: string;
+    size: number;
+    date: string;
+}
+
+export const backupsApi = {
+    list: () => apiGet<BackupFile[]>("/backups"),
+    create: () => apiPost<{ filename: string; size: number; date: string }>("/backups", {}),
+    restore: (filename: string) => apiPost<{ success: boolean; results: any }>(`/backups/${filename}/restore`, {}),
+    delete: (filename: string) => apiDelete<{ success: boolean }>(`/backups/${filename}`),
+    download: (filename: string) => {
+        const baseUrl = getBaseUrl();
+        window.location.href = `${baseUrl}/backups/${filename}/download`;
+    },
+};
+
 export const systemApi = {
     getStatus: () => apiGet<SystemStatus>("/health/details"),
 };

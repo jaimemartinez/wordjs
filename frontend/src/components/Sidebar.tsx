@@ -34,6 +34,7 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/themes", label: "nav.themes", icon: "fa-palette", cap: "switch_themes" },
     { href: "/admin/fonts", label: "nav.fonts", icon: "fa-font", cap: "manage_options" },
     { href: "/admin/settings", label: "nav.settings", icon: "fa-gear", cap: "manage_options" },
+    { href: "/admin/settings/backups", label: "Backups", icon: "fa-box-archive", cap: "manage_options" },
     { href: "/admin/security", label: "Security", icon: "fa-lock", cap: "manage_options" },
 ];
 
