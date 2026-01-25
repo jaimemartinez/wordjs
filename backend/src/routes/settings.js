@@ -66,7 +66,9 @@ const ALL_SETTINGS = [
     'medium_size_w',
     'medium_size_h',
     'large_size_w',
-    'large_size_h'
+    'large_size_w',
+    'large_size_h',
+    'backup_schedule' // Backup Scheduler Frequency
 ];
 
 /**
