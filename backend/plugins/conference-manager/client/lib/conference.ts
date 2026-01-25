@@ -1,4 +1,4 @@
-import { apiGet, apiPost, apiDelete } from "../../../../../admin-next/src/lib/api";
+import { apiGet, apiPost, apiDelete } from "../../../../../frontend/src/lib/api";
 
 export interface Conference {
     id: number;

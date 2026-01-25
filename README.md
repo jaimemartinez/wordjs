@@ -43,7 +43,7 @@ graph TD
 
 - **[Gateway](gateway.js):** Enterprise-grade entry point using **Cluster Mode**. Handles routing, **Circuit Breaking**, **Log Rotation**, and **Advanced Metrics**.
 - **[Backend](backend/):** The core engine. Manages content, users, and the plugin ecosystem.
-- **[Frontend](admin-next/):** The public site and management interface.
+- **[Frontend](frontend/):** The public site and management interface.
 
 ---
 

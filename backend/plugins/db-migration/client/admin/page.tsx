@@ -2,7 +2,7 @@
 "use client";
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
-import { PageHeader } from "../../../../../admin-next/src/components/ui/PageHeader";
+import { PageHeader } from "../../../../../frontend/src/components/ui/PageHeader";
 
 import { useModal } from "@/contexts/ModalContext";
 

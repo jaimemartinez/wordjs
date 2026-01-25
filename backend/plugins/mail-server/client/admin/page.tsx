@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState, useRef, useCallback } from "react";
-import { api, apiPost } from "../../../../../admin-next/src/lib/api";
-import { useAuth } from "../../../../../admin-next/src/contexts/AuthContext";
+import { api, apiPost } from "../../../../../frontend/src/lib/api";
+import { useAuth } from "../../../../../frontend/src/contexts/AuthContext";
 import { useModal } from "@/contexts/ModalContext";
 
 type Email = {

@@ -3,10 +3,10 @@
 
 import { useState, useEffect } from "react";
 // Removed ConfirmationModal import
-import MediaPickerModal from "../../../../../admin-next/src/components/MediaPickerModal";
+import MediaPickerModal from "../../../../../frontend/src/components/MediaPickerModal";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader } from "../../../../../admin-next/src/components/ui/PageHeader";
-import { Card } from "../../../../../admin-next/src/components/ui/Card";
+import { PageHeader } from "../../../../../frontend/src/components/ui/PageHeader";
+import { Card } from "../../../../../frontend/src/components/ui/Card";
 
 // Local type definitions - plugin is self-contained
 interface CarouselImage {
@@ -37,7 +37,7 @@ interface MediaItem {
 // Direct API functions - no external dependencies
 // Direct API functions - no external dependencies
 // We use the main app's API helper to ensure auth tokens are sent
-import { api } from "../../../../../admin-next/src/lib/api";
+import { api } from "../../../../../frontend/src/lib/api";
 
 const carouselsApi = {
     list: () => api<Carousel[]>('/carousels'),

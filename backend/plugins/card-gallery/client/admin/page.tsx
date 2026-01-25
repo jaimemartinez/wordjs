@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
-import MediaPickerModal from "../../../../../admin-next/src/components/MediaPickerModal";
+import MediaPickerModal from "../../../../../frontend/src/components/MediaPickerModal";
 import { useModal } from "@/contexts/ModalContext";
 
 // Types

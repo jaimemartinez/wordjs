@@ -22,13 +22,13 @@ git clone <your-repo-url>
 cd wordjs
 npm install
 cd backend && npm install
-cd ../admin-next && npm install
+cd ../frontend && npm install
 ```
 
 ### 2. Build the Frontend
 The frontend must be compiled for production to ensure maximum speed.
 ```bash
-cd admin-next
+cd frontend
 npm run build
 cd ..
 ```
@@ -90,7 +90,7 @@ cd backend
 pm2 start src/index.js --name "wordjs-backend"
 
 # Start Frontend
-cd ../admin-next
+cd ../frontend
 pm2 start "npm run start -- -p 3001" --name "wordjs-frontend"
 ```
 
@@ -110,7 +110,7 @@ To update the CMS:
 ```bash
 git pull
 npm install
-cd admin-next && npm install && npm run build
+cd frontend && npm install && npm run build
 cd ../backend && npm install && node scripts/build-plugin.js --all
 pm2 restart all
 ```

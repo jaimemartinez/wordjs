@@ -1,6 +1,6 @@
 # WordJS Frontend Documentation
 
-The Frontend (`admin-next/`) is a **Next.js** application serving both the public site and the admin dashboard.
+The Frontend (`frontend/`) is a **Next.js** application serving both the public site and the admin dashboard.
 
 ## Structure
 

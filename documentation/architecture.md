@@ -442,7 +442,7 @@ graph TD
 
 ```
 wordjs/
-├── 📁 admin-next/              # Next.js Frontend
+├── 📁 frontend/              # Next.js Frontend
 │   ├── 📁 src/
 │   │   ├── 📁 app/             # App Router Pages
 │   │   │   ├── 📁 (public)/    # Public Site
