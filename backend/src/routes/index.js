@@ -27,6 +27,7 @@ const rolesRoutes = require('./roles');
 const notificationsRoutes = require('./notifications');
 const certsRoutes = require('./certs');
 const seoRoutes = require('./seo');
+const healthRoutes = require('./health');
 
 // API Info endpoint
 router.get('/', (req, res) => {
@@ -77,6 +78,7 @@ router.use('/roles', rolesRoutes);
 router.use('/notifications', notificationsRoutes);
 router.use('/fonts', require('./fonts'));
 router.use('/system/certs', certsRoutes);
+router.use('/health', healthRoutes);
 router.use('/seo', seoRoutes);
 router.use('/', exportRoutes);
 
