@@ -3,7 +3,7 @@
  * Interacts with the central database.
  */
 
-const { db, dbAsync, createPluginTable } = require('../config/database');
+const { db, dbAsync, createPluginTable, getDbType } = require('../config/database');
 const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
@@ -49,19 +49,41 @@ class Email {
             'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
         ]);
 
+        // Helper: Check if column exists to avoid "duplicate column" errors
+        const columnExists = async (table, col) => {
+            const { isPostgres } = getDbType();
+            try {
+                if (isPostgres) {
+                    const res = await dbAsync.get(
+                        "SELECT column_name FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
+                        [table, col]
+                    );
+                    return !!res;
+                } else {
+                    const cols = await dbAsync.all(`PRAGMA table_info(${table})`);
+                    return cols.some(c => c.name === col);
+                }
+            } catch (e) {
+                return false;
+            }
+        };
+
         // Add columns if they don't exist (Migration)
-        try {
-            await dbAsync.run("ALTER TABLE received_emails ADD COLUMN cc_address TEXT");
-        } catch (e) { }
-        try {
-            await dbAsync.run("ALTER TABLE received_emails ADD COLUMN bcc_address TEXT");
-        } catch (e) { }
-        try {
-            await dbAsync.run("ALTER TABLE received_emails ADD COLUMN is_trash INT DEFAULT 0");
-        } catch (e) { }
-        try {
-            await dbAsync.run("ALTER TABLE received_emails ADD COLUMN scheduled_at DATETIME");
-        } catch (e) { }
+        const migrate = async (col, type) => {
+            if (!(await columnExists('received_emails', col))) {
+                try {
+                    await dbAsync.run(`ALTER TABLE received_emails ADD COLUMN ${col} ${type}`);
+                    console.log(`[MailServer] Migrated: Added ${col} to received_emails`);
+                } catch (e) {
+                    // Ignore if race condition or still fails
+                }
+            }
+        };
+
+        await migrate('cc_address', 'TEXT');
+        await migrate('bcc_address', 'TEXT');
+        await migrate('is_trash', 'INT DEFAULT 0');
+        await migrate('scheduled_at', 'DATETIME');
     }
 
     static async create(data) {
