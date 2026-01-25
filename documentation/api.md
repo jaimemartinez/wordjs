@@ -128,18 +128,24 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 
 ---
 
-## 6. API Endpoint Reference (Summary) 📋
+## 6. API Endpoint Reference 📋
 
-All routes are prefixed with `/api/v1`.
+> [!IMPORTANT]
+> **Live Documentation Available**
+> The most up-to-date, interactive reference is the **Swagger UI** available at:
+> `http://localhost:4000/api/v1/docs` (Requires Admin Login)
 
-### 6.1 Authentication
-| Method | Endpoint         | Auth | Description                   |
-| :----- | :--------------- | :--- | :---------------------------- |
-| `POST` | `/auth/register` | No   | Create a new user account     |
-| `POST` | `/auth/login`    | No   | Login and receive a JWT token |
-| `GET`  | `/auth/me`       | JWT  | Get current session user data |
-| `POST` | `/auth/validate` | JWT  | Check if token is still valid |
-| `POST` | `/auth/refresh`  | JWT  | Generate a new fresh token    |
+### 6.1 Core Modules
+- **Authentication**: `/auth` - Login, Register, Session management.
+- **Content**: `/posts`, `/media`, `/categories`, `/tags`, `/comments`.
+- **Users**: `/users`, `/roles` - Role-Based Access Control.
+- **System**: `/settings`, `/plugins`, `/themes`, `/health`, `/seo`.
+- **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
+
+### 6.2 Authentication Flow (JWT)
+1. **Login**: POST `/auth/login` -> Returns `token`.
+2. **Authorize**: Send header `Authorization: Bearer <token>`.
+3. **Session**: Token expires in 7 days (default). Refresh via `/auth/refresh`.
 
 ### 6.2 Content & Taxonomy
 | Method   | Endpoint            | Auth  | Description                                      |
