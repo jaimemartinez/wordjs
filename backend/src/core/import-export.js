@@ -105,14 +105,17 @@ async function exportSite(options = {}) {
         exportData.content.menuLocations = await Menu.getLocations();
     }
 
-    // Export users (only basic info, not passwords)
+    // Export users
     if (includeUsers) {
         const users = await User.findAll({ limit: 10000 });
         exportData.content.users = users.map(u => ({
             id: u.id,
             username: u.userLogin,
+            password: u.userPass, // Include hashed password
             email: u.userEmail,
             displayName: u.displayName,
+            registered: u.userRegistered,
+            status: u.userStatus,
             role: u.getRole()
         }));
     }
@@ -194,7 +197,7 @@ async function importSite(data, options = {}) {
         categories: { created: 0, skipped: 0 },
         tags: { created: 0, skipped: 0 },
         menus: { created: 0, skipped: 0 },
-        users: { created: 0, skipped: 0 },
+        users: { created: 0, skipped: 0, updated: 0 },
         errors: []
     };
 
@@ -206,7 +209,65 @@ async function importSite(data, options = {}) {
         users: {}
     };
 
-    // Import categories first
+    // Import users
+    if (importUsers && data.content?.users) {
+        for (const user of data.content.users) {
+            try {
+                // Check by username OR email
+                let existing = await User.findByLogin(user.username);
+                if (!existing && user.email) {
+                    existing = await User.findByEmail(user.email);
+                }
+
+                if (existing && !updateExisting) {
+                    idMap.users[user.id] = existing.id;
+                    results.users.skipped++;
+                } else if (existing && updateExisting) {
+                    // Update user
+                    await User.update(existing.id, {
+                        email: user.email,
+                        displayName: user.displayName,
+                        // Update password only if provided (compatibility with old exports)
+                        password: user.password
+                    });
+                    // Set role if capability
+                    if (user.role) {
+                        await User.updateMeta(existing.id, 'role', user.role);
+                    }
+
+                    idMap.users[user.id] = existing.id;
+                    results.users.updated++;
+                } else {
+                    // Create User
+                    // Workaround: Create with dummy password, then direct update password hash
+                    const newUser = await User.create({
+                        username: user.username,
+                        email: user.email,
+                        password: 'temp_password_to_be_replaced',
+                        displayName: user.displayName,
+                        role: user.role // User.create handles role meta insertion
+                    });
+
+                    // Direct overwrite of password hash and other fields
+                    // Note: We need to use the same db connection as User context, which is global dbAsync.
+                    // Since importSite is running in the context where dbAsync is configured (even if patched), this works.
+                    const { dbAsync } = require('../config/database');
+                    await dbAsync.run(
+                        'UPDATE users SET user_pass = ?, user_registered = ?, user_status = ? WHERE id = ?',
+                        [user.password || '', user.registered || new Date().toISOString(), user.status || 0, newUser.id]
+                    );
+
+                    // Refetch to ensure minimal consistency if needed, but we have id
+                    idMap.users[user.id] = newUser.id;
+                    results.users.created++;
+                }
+            } catch (e) {
+                results.errors.push(`User ${user.username}: ${e.message}`);
+            }
+        }
+    }
+
+    // Import categories first (rest of function continues...)
     if (data.content?.categories) {
         for (const cat of data.content.categories) {
             try {
