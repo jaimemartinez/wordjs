@@ -95,6 +95,18 @@ async function startServer() {
 
         // Helper to spin up the instance
         const boot = async () => {
+            // Check for stale lock file
+            const lockFile = path.join(DATA_DIR, 'postmaster.pid');
+            if (fs.existsSync(lockFile)) {
+                console.log('   ⚠️ Found stale postmaster.pid, removing...');
+                try {
+                    fs.unlinkSync(lockFile);
+                } catch (err) {
+                    console.warn('   ⚠️ Failed to remove lock file:', err.message);
+                }
+            }
+
+            console.log('   📦 Creating EmbeddedPostgres instance...');
             const pg = new EmbeddedPostgres({
                 databaseDir: DATA_DIR,
                 port: PORT,
@@ -102,7 +114,9 @@ async function startServer() {
                 password: config.db.password,
                 authMethod: 'trust'
             });
+            console.log('   🚀 Calling pg.start()...');
             await pg.start();
+            console.log('   ✅ pg.start() completed.');
             return pg;
         };
 
@@ -188,7 +202,8 @@ exports.start = async (req, res) => {
         await startServer();
         res.json({ success: true, message: 'Server started' });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        console.error('❌ Start API Error:', e);
+        res.status(500).json({ error: e ? e.message || String(e) : 'Unknown Start Error' });
     }
 };
 
@@ -200,6 +215,7 @@ exports.stop = async (req, res) => {
         embeddedProcess = null;
         res.json({ success: true, message: 'Server stopped' });
     } catch (e) {
-        res.status(500).json({ error: e.message });
+        res.status(500).json({ error: e ? e.message || String(e) : 'Unknown Stop Error' });
     }
 };
+
