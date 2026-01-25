@@ -261,14 +261,35 @@ Usage in Editor: `[youtube id="dQw4w9WgXcQ"]`
 
 ---
 
-## 11. Import/Export 📦
+## 11. Custom Backups & System State 📦
 
-Full site backup and migration tools located in `backend/src/core/import-export.js`.
+WordJS features a powerful **Full System State Backup** engine located in `backend/src/core/backup.js`. unlike traditional CMS backups that only save the database, WordJS creates a portable, self-contained snapshot of the entire application.
 
-### 11.1 Functions
-*   `exportSite(options)`: Generates a complete JSON dump of the site (posts, pages, media, settings, users).
-*   `importSite(data, options)`: Restores site content from a JSON object. Supports strict ID mapping and duplicate skipping.
-*   `exportToWXR()`: Generates a WordPress-compatible XML file.
+### 11.1 What is included?
+ The backup zip file represents the **entire backend directory state**, ensuring a 1:1 restoration.
+*   **Source Code:** `src/`, `server.js`, `package.json`.
+*   **Content:** `uploads/` (images, videos), `languages/`.
+*   **Extensions:** `plugins/`, `themes/`.
+*   **Configuration:** `.env` (sensitive vars), `wordjs-config.json`.
+*   **Database:** A logical dump (`wordjs-content.json`) is generated and added to ensure data integrity across versions.
+
+**Excluded:**
+*   `node_modules/`: Re-generated via `npm install`.
+*   `backups/`: Preventing recursive loops.
+*   `logs/`, `os-tmp/`, `.git/`.
+
+### 11.2 Key Functions
+*   `createBackup()`: Scans the root directory, filters exclusions, and generates a timestamped ZIP.
+*   `restoreBackup(filename)`:
+    1.  **Physical Restore:** Extracts files, overwriting the current system (code + assets).
+    2.  **Logical Restore:** Parses `wordjs-content.json` and rebuilds the SQLite database using `importSite()`.
+*   `listBackups()`: Returns available backup files from `backend/backups/`.
+*   `deleteBackup(filename)`: safely removes a backup file.
+
+### 11.3 Import/Expert (Logical Data Only)
+Located in `backend/src/core/import-export.js`.
+*   `exportSite(options)`: Generates the JSON dump used inside full backups. Can also return WXR (WordPress XML).
+*   `importSite(data, options)`: The engine that consumes the JSON dump to populate the DB.
 
 ---
 
