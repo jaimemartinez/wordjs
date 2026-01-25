@@ -42,11 +42,32 @@ async function createBackup() {
     // 3. Add DB Dump
     zip.addFile('wordjs-content.json', Buffer.from(JSON.stringify(siteData, null, 2)));
 
-    // 4. Add Media Files
-    // We only add the folder if it exists
-    if (fs.existsSync(UPLOADS_DIR)) {
-        zip.addLocalFolder(UPLOADS_DIR, 'uploads');
+    // 4. Add Full System Files (Excluding dependencies and temp)
+    const backendRoot = path.resolve(__dirname, '../../');
+    const excludes = ['node_modules', 'backups', 'logs', 'os-tmp', '.git', '.DS_Store', 'wordjs-content.json'];
+
+    function addDirectoryToZip(zip, rootPath, relPath = '') {
+        const fullPath = path.join(rootPath, relPath);
+        const files = fs.readdirSync(fullPath);
+
+        for (const file of files) {
+            if (excludes.includes(file)) continue;
+            // Also ignore backup zip files if they are somehow in root
+            if (file.endsWith('.zip')) continue;
+
+            const filePath = path.join(fullPath, file);
+            const entryPath = relPath ? path.join(relPath, file) : file;
+            const stats = fs.statSync(filePath);
+
+            if (stats.isDirectory()) {
+                addDirectoryToZip(zip, rootPath, entryPath);
+            } else {
+                zip.addLocalFile(filePath, relPath);
+            }
+        }
     }
+
+    addDirectoryToZip(zip, backendRoot);
 
     // 5. Save Zip
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -159,6 +180,11 @@ async function restoreBackup(filename) {
     const backendRoot = path.resolve(__dirname, '../../');
     zip.extractAllTo(backendRoot, true);
 
+    // Note: extractAllTo will overwrite files in the destination.
+    // Since we added 'plugins', 'themes', 'uploads' as top-level folders in the zip,
+    // and 'wordjs-config.json' and '.env' as top-level files,
+    // extracting to backendRoot works perfectly to restore the structure.
+
     // 3. Import Database
     const contentEntry = zip.getEntry('wordjs-content.json');
     if (!contentEntry) {
@@ -167,6 +193,22 @@ async function restoreBackup(filename) {
 
     const contentJson = contentEntry.getData().toString('utf8');
     const data = JSON.parse(contentJson);
+
+    // CRITICAL: For non-file-based drivers (like Postgres) OR for exact restoration,
+    // we should effectively WIPE the database before importing if we want to match valid state.
+    // For SQLite, the zip extraction might have already replaced the .db file physically.
+    // If it did, 'importSite' is technically redundant but harmless (merge).
+    // If we want to support "System State" for Postgres, we must Wipe then Import.
+
+    const { getDbType, clearDatabase } = require('../config/database');
+    const dbType = getDbType();
+
+    if (dbType.driver !== 'sqlite-native' && dbType.driver !== 'sqlite-legacy') {
+        // e.g. Postgres. Zip extraction didn't touch the DB. 
+        // We must wipe it to ensure "deleted" items during backup window disappear.
+        console.log(`🧹 Non-file driver detected (${dbType.driver}). Wiping database for clean restore...`);
+        await clearDatabase();
+    }
 
     // Run import
     const results = await importSite(data, {
