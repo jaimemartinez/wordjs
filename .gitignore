@@ -27,7 +27,10 @@ backend/tmp-*/
 # Security
 /certs/
 backend/certs/
-admin-next/certs/
+frontend/certs/
+**/certs/
+*.key
+*.crt
 ssl-auto.*
 /gateway-registry.json
 gateway/gateway-config.json
@@ -77,3 +80,7 @@ backend/plugins/conference-manager/
 
 # Client-Specific Themes (not for public repo)
 backend/themes/vidaParaTodos/
+
+# Packaged releases
+/release/
+/release-bundles/
