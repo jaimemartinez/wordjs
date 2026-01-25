@@ -428,6 +428,47 @@ function getDbType() {
   };
 }
 
+async function clearDatabase(db = null) {
+  const targetDb = db || driverAsync || getDb();
+  console.log('🧹 DB Manager: Clearing database content...');
+
+  // Tables to clear (Order matters for foreign keys if enforced, though SQLite usually permissive)
+  const tables = [
+    'term_relationships', 'term_taxonomy', 'terms',
+    'comment_meta', 'comments',
+    'post_meta', 'posts',
+    'user_meta', 'users',
+    'options', 'links', 'notifications'
+  ];
+
+  for (const table of tables) {
+    // Determine deletion syntax
+    const sql = driverName === 'postgres'
+      ? `TRUNCATE TABLE ${table} RESTART IDENTITY CASCADE`
+      : `DELETE FROM ${table}`;
+
+    try {
+      if (driverAsync || (db && db.run)) {
+        await targetDb.run(sql);
+        // Reset sequence for SQLite
+        if (driverName !== 'postgres') {
+          try {
+            await targetDb.run(`DELETE FROM sqlite_sequence WHERE name='${table}'`);
+          } catch (ignore) { }
+        }
+      } else {
+        targetDb.exec(sql); // Sync legacy
+      }
+    } catch (e) {
+      // Ignore "no such table" errors if schema is broken
+      if (!e.message.includes('no such table')) {
+        console.warn(`⚠️ Failed to clear table ${table}: ${e.message}`);
+      }
+    }
+  }
+  console.log('✅ Database cleared.');
+}
+
 module.exports = {
   init,
   getDb,
@@ -436,6 +477,7 @@ module.exports = {
   initializeSchema,
   saveDatabase,
   closeDatabase,
+  clearDatabase, // Exposed
   createPluginTable,
   getDbType,
   db: dbProxy,
