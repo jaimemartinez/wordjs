@@ -52,14 +52,14 @@ graph TD
 Detailed guides are available in the [`documentation/`](documentation/) folder:
 
 - 🏗️ **[Architecture Overview](documentation/architecture.md)**: System diagrams and component flow.
+- 📡 **[Live API Docs](http://localhost:4000/api/v1/docs)**: Complete Swagger/OpenAPI reference (Admin Only).
 - 🛰️ **[Gateway Guide](documentation/gateway.md)**: Reverse proxy and service registration logic.
-- 📡 **[API Reference](documentation/api.md)**: Endpoints, authentication, and the Hook system (Actions/Filters).
 - 🖥️ **[Frontend Guide](documentation/frontend.md)**: Next.js structure, visual editor, and Puck components.
 - 🎨 **[Themes Guide](documentation/themes.md)**: CSS variables, available themes, and creating custom themes.
 - 🔌 **[Plugin Tutorial](documentation/plugins.md)**: Step-by-step guide to creating your first plugin.
 - 🗄️ **[Database Guide](documentation/database.md)**: SQLite and PostgreSQL configuration.
 - 🚀 **[Deployment Guide](documentation/deployment.md)**: How to host WordJS on a production server.
-- 🔐 **[Security Guide](documentation/security.md)**: Plugin security, scanning, and permissions.
+- 🔐 **[Security Policy](SECURITY.md)**: Vulnerability reporting and active defenses.
 
 ---
 
