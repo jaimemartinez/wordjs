@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { PageHeader, Card, Button } from "@/components/ui";
-import { backupsApi, BackupFile } from "@/lib/api";
+import { backupsApi, settingsApi, BackupFile } from "@/lib/api";
 import { format } from "date-fns";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
@@ -11,6 +11,11 @@ export default function BackupsPage() {
     const [backups, setBackups] = useState<BackupFile[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
+
+    // Scheduler State
+    const [schedule, setSchedule] = useState("daily");
+    const [savingSchedule, setSavingSchedule] = useState(false);
+
     // removing local restoring state as useModal handles it
     const [error, setError] = useState<string | null>(null);
 
@@ -32,7 +37,32 @@ export default function BackupsPage() {
 
     useEffect(() => {
         fetchBackups();
+        fetchSchedule();
     }, []);
+
+    const fetchSchedule = async () => {
+        try {
+            const settings = await settingsApi.get();
+            if (settings.backup_schedule) {
+                setSchedule(settings.backup_schedule);
+            }
+        } catch (e) {
+            console.error("Failed to load backup schedule", e);
+        }
+    };
+
+    const handleSaveSchedule = async (newSchedule: string) => {
+        setSchedule(newSchedule);
+        setSavingSchedule(true);
+        try {
+            await settingsApi.update({ backup_schedule: newSchedule });
+            addToast(`Backup schedule updated to ${newSchedule}`, "success");
+        } catch (err: any) {
+            addToast("Failed to update schedule: " + err.message, "error");
+        } finally {
+            setSavingSchedule(false);
+        }
+    };
 
     const handleCreate = async () => {
         setCreating(true);
@@ -126,6 +156,44 @@ export default function BackupsPage() {
                     )}
                 </Button>
             </div>
+
+            {/* Scheduler Card */}
+            <Card className="rounded-[40px] border-none shadow-sm mb-8 p-8">
+                <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
+                    <div>
+                        <h3 className="text-xl font-bold text-gray-800 mb-2">
+                            <i className="fa-solid fa-calendar-days text-blue-500 mr-3"></i>
+                            Automatic Schedule
+                        </h3>
+                        <p className="text-gray-500">
+                            Configure how often the system should automatically back up your data.
+                        </p>
+                    </div>
+
+                    <div className="flex items-center gap-4 bg-gray-50 p-2 rounded-2xl border border-gray-100">
+                        <select
+                            value={schedule}
+                            onChange={(e) => handleSaveSchedule(e.target.value)}
+                            disabled={savingSchedule}
+                            className="bg-transparent border-none text-gray-700 font-medium focus:ring-0 cursor-pointer py-2 pl-4 pr-8"
+                        >
+                            <option value="off">Disabled</option>
+                            <option value="hourly">Hourly</option>
+                            <option value="twicedaily">Twice Daily (12h)</option>
+                            <option value="daily">Daily</option>
+                            <option value="weekly">Weekly</option>
+                        </select>
+                        <div className="w-px h-8 bg-gray-200"></div>
+                        <div className="pr-4 text-gray-400">
+                            {savingSchedule ? (
+                                <i className="fa-solid fa-spinner fa-spin text-blue-500"></i>
+                            ) : (
+                                <i className="fa-solid fa-check text-green-500 opacity-50"></i>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </Card>
 
             <Card className="rounded-[40px] border-none shadow-sm">
                 <div className="overflow-x-auto">
