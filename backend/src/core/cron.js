@@ -4,7 +4,7 @@
  */
 
 const { getOption, updateOption } = require('./options');
-const { doAction } = require('./hooks');
+const { doAction, addAction } = require('./hooks');
 
 // Registered cron jobs
 const cronJobs = new Map();
@@ -243,6 +243,25 @@ function initDefaultCronEvents() {
     if (!nextScheduled('wordjs_db_maintenance')) {
         scheduleEvent(Date.now(), 'weekly', 'wordjs_db_maintenance');
     }
+
+    // Schedule backups (daily) if enabled
+    if (!nextScheduled('wordjs_daily_backup')) {
+        scheduleEvent(Date.now(), 'daily', 'wordjs_daily_backup');
+    }
+
+    // Register the actual logic for the backup hook
+    addAction('wordjs_daily_backup', async () => {
+        const autoBackup = getOption('auto_backup', 'yes');
+        if (autoBackup === 'yes') {
+            console.log('⏰ Running automatic daily backup...');
+            const { createBackup } = require('./backup');
+            try {
+                await createBackup();
+            } catch (e) {
+                console.error('Backup failed:', e);
+            }
+        }
+    });
 }
 
 module.exports = {
