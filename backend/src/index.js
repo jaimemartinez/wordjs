@@ -136,6 +136,7 @@ app.use(`${config.api.prefix}/auth/register`, authLimiter);
 app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
+app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to backups too
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
@@ -301,7 +302,14 @@ async function initialize() {
         console.log('⚙️  Setting up default options...');
         await initDefaultOptions(config);
 
-        // Initialize Post Types (Async)
+
+        // Register routes that were not in the initial index.js routes list if needed
+        // But better to add it to src/routes/index.js if possible, OR just here dynamically.
+        // Let's add it to src/routes/index.js instead for cleanliness?
+        // Actually, looking at src/routes/index.js (I haven't seen it yet), but usually it's better.
+        // However, I can inject it here.
+        app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
+
         const { initPostTypes } = require('./core/post-types');
         await initPostTypes();
 
