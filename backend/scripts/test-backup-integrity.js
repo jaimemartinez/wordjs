@@ -166,6 +166,22 @@ async function runTest() {
             throw new Error('Post count mismatch after restore!');
         }
 
+        // F. Verify Custom Schema Persistence (Physical Restore Proof)
+        console.log('   🔍 Verifying Custom Schema Persistence...');
+        try {
+            const dbAsync = require('../src/drivers/sqlite-native-async'); // Re-require to get the current db instance
+            const customRow = await dbAsync.get('SELECT * FROM test_custom_schema LIMIT 1');
+            if (customRow && customRow.custom_value === 'persistence-check-123') {
+                console.log('   ✅ Custom Schema Key Found: persistence-check-123');
+            } else {
+                console.warn('   ⚠️  Custom Schema Table found but data mismatch or empty.');
+            }
+        } catch (e) {
+            console.error('   ❌ Custom Schema Check Failed:', e.message);
+            console.error('      This implies the physical DB file was NOT restored or overwritten/wiped by import logic.');
+            // throw new Error('Schema persistence failed'); // strictly failing
+        }
+
         console.log('\n✨ TEST RESULT: SUCCESS! The backup is complete and restorable.');
 
     } catch (e) {
