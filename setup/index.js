@@ -141,16 +141,39 @@ class WordJSSetup {
         };
         await fs.writeJson(gatewayConfigPath, gatewayConfig, { spaces: 2 });
 
-        // 3. SYNC CERTS
-        const certFiles = await fs.readdir(this.certsDir);
-        for (const file of certFiles) {
-            const src = path.join(this.certsDir, file);
-            // Copy to Gateway
-            await fs.copy(src, path.join(this.gatewayDir, 'certs', file));
-            // Copy to Frontend
-            if (await fs.pathExists(this.frontDir)) {
-                await fs.copy(src, path.join(this.frontDir, 'certs', file));
+        // 3. SELECTIVE CERT DISTRIBUTION
+        // Ensure destination directories exist
+        const gatewayCertsDir = path.join(this.gatewayDir, 'certs');
+        const frontCertsDir = path.join(this.frontDir, 'certs');
+        const backendCertsDir = path.join(this.backendDir, 'certs');
+
+        await fs.ensureDir(gatewayCertsDir);
+        await fs.ensureDir(backendCertsDir);
+        if (await fs.pathExists(this.frontDir)) {
+            await fs.ensureDir(frontCertsDir);
+        }
+
+        // Clean existing certs to avoid stale files
+        await Promise.all([
+            fs.emptyDir(gatewayCertsDir),
+            fs.emptyDir(backendCertsDir),
+            fs.pathExists(this.frontDir).then(exists => exists ? fs.emptyDir(frontCertsDir) : null)
+        ]);
+
+        const distributeCert = async (serviceName, targetDir) => {
+            const files = ['cluster-ca.crt', `${serviceName}.crt`, `${serviceName}.key`];
+            for (const file of files) {
+                const src = path.join(this.certsDir, file);
+                if (await fs.pathExists(src)) {
+                    await fs.copy(src, path.join(targetDir, file));
+                }
             }
+        };
+
+        await distributeCert('gateway-internal', gatewayCertsDir);
+        await distributeCert('backend', backendCertsDir);
+        if (await fs.pathExists(this.frontDir)) {
+            await distributeCert('frontend', frontCertsDir);
         }
 
         process.stdout.write('🚀 Distribution Complete.\n');
