@@ -5,6 +5,7 @@
 
 const { dbAsync } = require('../config/database');
 const { verifyPermission, runWithContext } = require('./plugin-context');
+const { doAction } = require('./hooks');
 
 /**
  * Get an option value
@@ -51,6 +52,11 @@ async function updateOption(name, value, autoload = 'yes') {
         } else {
             await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
         }
+
+        // Trigger reactive hooks
+        // We pass parsed value if possible or just the raw arg? 
+        // options.js logic serializes it. Let's pass the raw 'value' arg as that's arguably more useful.
+        await doAction('updated_option', name, value);
 
         return true;
     });

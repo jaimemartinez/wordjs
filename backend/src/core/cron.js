@@ -14,7 +14,8 @@ const schedules = {
     hourly: { interval: 3600000, display: 'Once Hourly' },
     twicedaily: { interval: 43200000, display: 'Twice Daily' },
     daily: { interval: 86400000, display: 'Once Daily' },
-    weekly: { interval: 604800000, display: 'Once Weekly' }
+    weekly: { interval: 604800000, display: 'Once Weekly' },
+    off: { interval: 0, display: 'Disabled' }
 };
 
 // Cron timer
@@ -35,11 +36,11 @@ function getSchedules() {
 }
 
 /**
- * Schedule an event
+ * Schedule an event (Async)
  * Equivalent to wp_schedule_event()
  */
-function scheduleEvent(timestamp, recurrence, hook, args = []) {
-    const events = getOption('cron', {});
+async function scheduleEvent(timestamp, recurrence, hook, args = []) {
+    const events = await getOption('cron', {});
 
     if (!events[timestamp]) {
         events[timestamp] = {};
@@ -53,16 +54,16 @@ function scheduleEvent(timestamp, recurrence, hook, args = []) {
         interval: schedules[recurrence]?.interval || 0
     };
 
-    updateOption('cron', events);
+    await updateOption('cron', events);
     return true;
 }
 
 /**
- * Schedule a single event
+ * Schedule a single event (Async)
  * Equivalent to wp_schedule_single_event()
  */
-function scheduleSingleEvent(timestamp, hook, args = []) {
-    const events = getOption('cron', {});
+async function scheduleSingleEvent(timestamp, hook, args = []) {
+    const events = await getOption('cron', {});
 
     if (!events[timestamp]) {
         events[timestamp] = {};
@@ -75,16 +76,16 @@ function scheduleSingleEvent(timestamp, hook, args = []) {
         schedule: false
     };
 
-    updateOption('cron', events);
+    await updateOption('cron', events);
     return true;
 }
 
 /**
- * Unschedule an event
+ * Unschedule an event (Async)
  * Equivalent to wp_unschedule_event()
  */
-function unscheduleEvent(timestamp, hook, args = []) {
-    const events = getOption('cron', {});
+async function unscheduleEvent(timestamp, hook, args = []) {
+    const events = await getOption('cron', {});
     const key = `${hook}_${JSON.stringify(args)}`;
 
     if (events[timestamp] && events[timestamp][key]) {
@@ -94,7 +95,7 @@ function unscheduleEvent(timestamp, hook, args = []) {
             delete events[timestamp];
         }
 
-        updateOption('cron', events);
+        await updateOption('cron', events);
         return true;
     }
 
@@ -102,13 +103,14 @@ function unscheduleEvent(timestamp, hook, args = []) {
 }
 
 /**
- * Clear all scheduled hooks
+ * Clear all scheduled hooks (Async)
  * Equivalent to wp_clear_scheduled_hook()
  */
-function clearScheduledHook(hook, args = null) {
-    const events = getOption('cron', {});
+async function clearScheduledHook(hook, args = null) {
+    const events = await getOption('cron', {});
     let cleared = false;
 
+    // Iterate efficiently
     for (const timestamp of Object.keys(events)) {
         for (const key of Object.keys(events[timestamp])) {
             const event = events[timestamp][key];
@@ -127,18 +129,18 @@ function clearScheduledHook(hook, args = null) {
     }
 
     if (cleared) {
-        updateOption('cron', events);
+        await updateOption('cron', events);
     }
 
     return cleared;
 }
 
 /**
- * Get next scheduled time for a hook
+ * Get next scheduled time for a hook (Async)
  * Equivalent to wp_next_scheduled()
  */
-function nextScheduled(hook, args = []) {
-    const events = getOption('cron', {});
+async function nextScheduled(hook, args = []) {
+    const events = await getOption('cron', {});
     const key = `${hook}_${JSON.stringify(args)}`;
 
     for (const timestamp of Object.keys(events).sort()) {
@@ -155,7 +157,7 @@ function nextScheduled(hook, args = []) {
  */
 async function runCron() {
     const now = Date.now();
-    const events = getOption('cron', {});
+    const events = await getOption('cron', {});
     let updated = false;
 
     for (const timestamp of Object.keys(events)) {
@@ -166,6 +168,8 @@ async function runCron() {
 
             try {
                 // Run the hook
+                // Note: We use execute the action but don't await fully if we want parallel?
+                // Standard WP Cron is sequential per request usually. Let's await for safety.
                 await doAction(event.hook, ...event.args);
                 console.log(`Cron: Executed ${event.hook}`);
             } catch (error) {
@@ -183,7 +187,7 @@ async function runCron() {
                 events[nextTime][key] = event;
             }
 
-            // Remove executed event
+            // Remove executed event (or moved event)
             delete events[timestamp][key];
             updated = true;
         }
@@ -194,7 +198,7 @@ async function runCron() {
     }
 
     if (updated) {
-        updateOption('cron', events);
+        await updateOption('cron', events);
     }
 }
 
@@ -210,7 +214,7 @@ function startCron(intervalMs = 60000) {
     console.log(`   ⏰ Cron started (checking every ${intervalMs / 1000}s)`);
 
     // Run immediately
-    runCron();
+    runCron(); // Async call, but we don't await it here to not block startup
 }
 
 /**
@@ -231,29 +235,66 @@ function registerCronJob(name, callback) {
 }
 
 /**
- * Initialize default cron events
+ * Reschedule backup job based on frequency
+ * ('hourly', 'daily', 'weekly', 'off')
  */
-function initDefaultCronEvents() {
-    // Schedule version check (daily)
-    if (!nextScheduled('wordjs_version_check')) {
-        scheduleEvent(Date.now(), 'daily', 'wordjs_version_check');
+async function rescheduleBackup(frequency) {
+    console.log(`⏰ Cron: Rescheduling backup to '${frequency}'`);
+
+    // 1. Clear existing generic backup hook
+    await clearScheduledHook('wordjs_scheduled_backup');
+    // Also clear legacy name if exists (backward compat)
+    await clearScheduledHook('wordjs_daily_backup');
+
+    if (frequency === 'off' || !schedules[frequency]) {
+        console.log('   Create backup schedule disabled.');
+        return;
     }
 
-    // Schedule database maintenance (weekly)
-    if (!nextScheduled('wordjs_db_maintenance')) {
-        scheduleEvent(Date.now(), 'weekly', 'wordjs_db_maintenance');
+    // 2. Schedule new
+    await scheduleEvent(Date.now(), frequency, 'wordjs_scheduled_backup');
+    console.log(`   Next backup scheduled: Now + ${frequency}`);
+}
+
+/**
+ * Initialize default cron events
+ * Now handles async nature
+ */
+async function initDefaultCronEvents() {
+    try {
+        // Schedule version check (daily)
+        if (!(await nextScheduled('wordjs_version_check'))) {
+            await scheduleEvent(Date.now(), 'daily', 'wordjs_version_check');
+        }
+
+        // Schedule database maintenance (weekly)
+        if (!(await nextScheduled('wordjs_db_maintenance'))) {
+            await scheduleEvent(Date.now(), 'weekly', 'wordjs_db_maintenance');
+        }
+
+        // Check Backup Schedule preference
+        const backupFreq = await getOption('backup_schedule', 'daily');
+        if (backupFreq !== 'off') {
+            const hasScheduled = await nextScheduled('wordjs_scheduled_backup');
+            const hasLegacy = await nextScheduled('wordjs_daily_backup');
+
+            // Migration: If legacy exists but new doesn't, or if nothing exists
+            if (!hasScheduled) {
+                if (hasLegacy) await clearScheduledHook('wordjs_daily_backup');
+                await scheduleEvent(Date.now(), backupFreq, 'wordjs_scheduled_backup');
+            }
+        }
+    } catch (e) {
+        console.error('Failed to init cron events:', e);
     }
 
-    // Schedule backups (daily) if enabled
-    if (!nextScheduled('wordjs_daily_backup')) {
-        scheduleEvent(Date.now(), 'daily', 'wordjs_daily_backup');
-    }
+    // Register Actions Implementation
 
-    // Register the actual logic for the backup hook
-    addAction('wordjs_daily_backup', async () => {
-        const autoBackup = getOption('auto_backup', 'yes');
-        if (autoBackup === 'yes') {
-            console.log('⏰ Running automatic daily backup...');
+    // 1. Backup Action
+    addAction('wordjs_scheduled_backup', async () => {
+        const autoBackup = await getOption('auto_backup', 'yes'); // redundancy check
+        if (autoBackup === 'yes' || autoBackup === true) {
+            console.log('⏰ Running scheduled backup...');
             const { createBackup } = require('./backup');
             try {
                 await createBackup();
@@ -262,15 +303,22 @@ function initDefaultCronEvents() {
             }
         }
     });
+
+    // 2. React to Option Updates
+    addAction('updated_option', async (name, value) => {
+        if (name === 'backup_schedule') {
+            await rescheduleBackup(value);
+        }
+    });
 }
 
 module.exports = {
     addSchedule,
     getSchedules,
-    scheduleEvent,
-    scheduleSingleEvent,
-    unscheduleEvent,
-    clearScheduledHook,
+    scheduleEvent, // Exposed API
+    scheduleSingleEvent, // Exposed API
+    unscheduleEvent, // Exposed API
+    clearScheduledHook, // Exposed API
     nextScheduled,
     runCron,
     startCron,
