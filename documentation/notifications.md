@@ -31,7 +31,7 @@ await notificationService.send({
 
 ## Frontend Integration
 
-The frontend (`admin-next`) connects to the SSE stream at `/api/v1/notifications/stream`.
+The frontend (`frontend`) connects to the SSE stream at `/api/v1/notifications/stream`.
 
 ### Components
 *   **`NotificationCenter.tsx`**: The main UI component in the top bar. It handles receiving events, playing sounds, and managing unread counts.

@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
-import { pluginHooks } from '../../../../admin-next/src/lib/plugin-hooks';
+import { pluginHooks } from '../../../../frontend/src/lib/plugin-hooks';
 
 /**
  * UserFormExtension

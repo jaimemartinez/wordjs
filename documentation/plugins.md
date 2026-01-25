@@ -228,7 +228,7 @@ WordJS is highly sophisticated about how it handles React.
 1.  Create your folder directly in `backend/plugins/`.
 2.  Refresh the **Plugins** list.
 3.  Click **Activate**.
-4.  Run `npm run dev` in `admin-next` to enable Hot Reload for your plugin source.
+4.  Run `npm run dev` in `frontend` to enable Hot Reload for your plugin source.
 
 ---
 

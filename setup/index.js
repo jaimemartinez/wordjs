@@ -13,7 +13,7 @@ class WordJSSetup {
         this.rootDir = path.resolve(baseDir);
         this.backendDir = path.join(this.rootDir, 'backend');
         this.gatewayDir = path.join(this.rootDir, 'gateway');
-        this.frontDir = path.join(this.rootDir, 'admin-next');
+        this.frontDir = path.join(this.rootDir, 'frontend');
         this.certsDir = path.join(this.rootDir, 'certs');
     }
 
