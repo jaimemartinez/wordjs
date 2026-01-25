@@ -431,3 +431,20 @@ export const widgetsApi = {
 // See: plugins/<plugin-name>/client/components/*.tsx
 // =============================================================================
 
+// System Health API
+export interface SystemStatus {
+    database: { status: string; driver: string; message?: string };
+    mtls: {
+        status: string;
+        enabled: boolean;
+        cert: string;
+        ca: string;
+        expiry: string | null;
+    };
+    filesystem: Record<string, string>;
+    timestamp: string;
+}
+
+export const systemApi = {
+    getStatus: () => apiGet<SystemStatus>("/health/details"),
+};
