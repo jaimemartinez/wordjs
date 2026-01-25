@@ -11,24 +11,63 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 /**
- * GET /roles
- * List all roles
+ * @swagger
+ * tags:
+ *   name: Roles
+ *   description: User Capability and Role management
+ */
+
+/**
+ * @swagger
+ * /roles:
+ *   get:
+ *     summary: List all roles
+ *     tags: [Roles]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Map of roles and capabilities
  */
 router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     res.json(getRoles());
 }));
 
 /**
- * GET /roles/capabilities
- * List all available capabilities
+ * @swagger
+ * /roles/capabilities:
+ *   get:
+ *     summary: List all available system capabilities
+ *     tags: [Roles]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of capabilities
  */
 router.get('/capabilities', authenticate, isAdmin, asyncHandler(async (req, res) => {
     res.json(getAllAvailableCapabilities());
 }));
 
 /**
- * GET /roles/:slug
- * Get single role
+ * @swagger
+ * /roles/{slug}:
+ *   get:
+ *     summary: Get a single role
+ *     tags: [Roles]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Role details
+ *       404:
+ *         description: Role not found
  */
 router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const role = getRole(req.params.slug);
@@ -43,8 +82,30 @@ router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * POST /roles
- * Create or update a role
+ * @swagger
+ * /roles:
+ *   post:
+ *     summary: Create or update a role
+ *     tags: [Roles]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [slug, name]
+ *             properties:
+ *               slug:
+ *                 type: string
+ *               name:
+ *                 type: string
+ *               capabilities:
+ *                 type: object
+ *     responses:
+ *       201:
+ *         description: Role saved
  */
 router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const { slug, name, capabilities } = req.body;
@@ -62,8 +123,24 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
 }));
 
 /**
- * DELETE /roles/:slug
- * Delete a role
+ * @swagger
+ * /roles/{slug}:
+ *   delete:
+ *     summary: Delete a role
+ *     tags: [Roles]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Role deleted
+ *       400:
+ *         description: Cannot delete core roles
  */
 router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const slug = req.params.slug;
