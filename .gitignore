@@ -14,8 +14,15 @@ backend/data/
 backend/uploads/
 backend/tmp-*/
 *.db
+*.db3
+*.s3db
 *.sqlite
 *.sqlite3
+*.sl3
+*.db-journal
+*.db-wal
+*.sqlite-journal
+*.sqlite-wal
 
 # Security
 /certs/
