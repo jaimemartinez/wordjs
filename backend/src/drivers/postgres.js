@@ -133,6 +133,60 @@ class PostgresDriver extends DatabaseDriverInterface {
         }
     }
 
+    async getTables() {
+        try {
+            const res = await this.pool.query(
+                "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
+            );
+            return res.rows.map(r => r.table_name);
+        } catch (err) {
+            console.error('❌ Postgres getTables Error:', err.message);
+            throw err;
+        }
+    }
+
+    async getTableSchema(tableName) {
+        try {
+            const res = await this.pool.query(
+                "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position",
+                [tableName]
+            );
+
+            // Map to generic format roughly compatible with createPluginTable
+            const columns = res.rows.map(col => {
+                let type = col.data_type.toUpperCase();
+
+                // Normalizations
+                if (type === 'CHARACTER VARYING') type = 'TEXT';
+                if (type.includes('INT')) type = 'INTEGER';
+                if (type === 'BOOLEAN') type = 'INTEGER'; // WordJS usually uses 0/1 for bools in SQLite
+
+                let def = `${col.column_name} ${type}`;
+
+                if (col.is_nullable === 'NO') def += ' NOT NULL';
+                if (col.column_default) {
+                    // Clean default value (Postgres adds type casts like '::text')
+                    let dflt = col.column_default.replace(/::[a-z0-9_ ]+/i, '');
+                    def += ` DEFAULT ${dflt}`;
+                }
+
+                // Note: PK detection needs another query or complex logic. 
+                // For simplicity in this universal backup, data restoration is priority.
+                // Assuming Schema is recreated by Plugin OR we rely on generic Create.
+
+                return def;
+            });
+
+            return {
+                sql: null, // Postgres doesn't give us easy SQL
+                columns: columns
+            };
+        } catch (err) {
+            console.error('❌ Postgres getTableSchema Error:', err.message);
+            throw err;
+        }
+    }
+
     async close() {
         if (this.pool) {
             await this.pool.end();

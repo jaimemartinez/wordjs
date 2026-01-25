@@ -44,7 +44,12 @@ async function createBackup() {
 
     // 4. Add Full System Files (Excluding dependencies and temp)
     const backendRoot = path.resolve(__dirname, '../../');
-    const excludes = ['node_modules', 'backups', 'logs', 'os-tmp', '.git', '.DS_Store', 'wordjs-content.json', 'postgres-embed'];
+    const excludes = [
+        'node_modules', 'backups', 'logs', 'os-tmp', '.git', '.DS_Store', 'wordjs-content.json',
+        'postgres-embed',
+        'wordjs-native.db', 'wordjs-native.db-wal', 'wordjs-native.db-shm',
+        'wordjs.db', 'wordjs.db-wal', 'wordjs.db-shm'
+    ];
 
     function addDirectoryToZip(zip, rootPath, relPath = '') {
         const fullPath = path.join(rootPath, relPath);
