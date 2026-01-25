@@ -1,4 +1,4 @@
-const app = require('./backend/src/index');
+const app = require('../src/index');
 const listEndpoints = require('express-list-endpoints');
 
 // Wait for a bit to ensure plugins are loaded if they were async

@@ -269,20 +269,23 @@ export default function PluginsPage() {
                     subtitle={t('plugins.extend.functionality')}
                     icon="fa-plug"
                     actions={
-                        <label
-                            className={`cursor-pointer ${uploading ? 'opacity-70 cursor-wait' : ''}`}
-                        >
-                            <Button icon={uploading ? "fa-spinner fa-spin" : "fa-upload"} loading={uploading}>
+                        <div className="relative">
+                            <Button
+                                icon={uploading ? "fa-spinner fa-spin" : "fa-upload"}
+                                loading={uploading}
+                                onClick={() => document.getElementById('plugin-upload-input')?.click()}
+                            >
                                 {uploading ? t('plugins.installing') : t('plugins.upload')}
                             </Button>
                             <input
+                                id="plugin-upload-input"
                                 type="file"
                                 accept=".zip"
                                 className="hidden"
                                 onChange={handleUpload}
                                 disabled={uploading}
                             />
-                        </label>
+                        </div>
                     }
                 />
             </div>

@@ -1,9 +1,9 @@
 const fs = require('fs');
-const { init } = require('./src/config/database');
-const { getAdminMenuItems } = require('./src/core/adminMenu');
-const { getActivePlugins } = require('./src/core/plugins');
-const { applyFiltersSync } = require('./src/core/hooks');
-const { setApp } = require('./src/core/appRegistry');
+const { init } = require('../src/config/database');
+const { getAdminMenuItems } = require('../src/core/adminMenu');
+const { getActivePlugins } = require('../src/core/plugins');
+const { applyFiltersSync } = require('../src/core/hooks');
+const { setApp } = require('../src/core/appRegistry');
 
 async function debugMenus() {
     try {
@@ -22,7 +22,7 @@ async function debugMenus() {
         await init();
 
         console.log('Loading active plugins...');
-        const { loadActivePlugins } = require('./src/core/plugins');
+        const { loadActivePlugins } = require('../src/core/plugins');
         await loadActivePlugins();
 
         console.log('Fetching active plugins list...');

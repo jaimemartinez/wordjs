@@ -1,4 +1,4 @@
-const { initSqlJsDb, getDb } = require('./src/config/database');
+const { initSqlJsDb, getDb } = require('../src/config/database');
 
 async function run() {
     try {
@@ -6,10 +6,9 @@ async function run() {
         const db = getDb();
         const row = db.prepare('SELECT option_value FROM options WHERE option_name = "wordjs_user_roles"').get();
         if (row) {
-            const roles = JSON.parse(row.option_value);
-            console.log("SUBSCRIBER_CAPS:", JSON.stringify(roles.subscriber?.capabilities || []));
+            console.log("ROLES_DB:", row.option_value);
         } else {
-            console.log("ROLES_NOT_FOUND");
+            console.log("ROLES_DB: NOT_FOUND");
         }
         process.exit(0);
     } catch (e) {

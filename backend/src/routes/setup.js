@@ -79,7 +79,17 @@ router.post('/install', async (req, res) => {
         siteUrl,
         frontendUrl,
         port: 4000,
+        frontendPort: 3001,
+        gatewayPort: 3000,
+        port: 4000,
+        frontendPort: 3001,
+        gatewayPort: 3000,
+        gatewayInternalPort: 3100,
+        // Host for the backend server listen binding (usually localhost or 0.0.0.0)
         host: 'localhost',
+        // Public Gateway URL (FQDN/IP) captured from the request (Forwarded or Host)
+        gatewayUrl: `${protocol}://${host}`, // Store full URL just in case
+        gatewayHost: host.split(':')[0], // Store hostname for reference
         gatewaySecret: gatewaySecret,
         jwtSecret: jwtSecret // Store in config for reference
     };
@@ -89,7 +99,7 @@ router.post('/install', async (req, res) => {
 
     if (saveConfig(newConfig)) {
         try {
-            // Initialize DB connection dynamically (since index.js skipped it)
+            // Initialize DB connection dynamically
             console.log('📦 Setup: Initializing database...');
             const { init, initializeDatabase } = require('../config/database');
             await init();
@@ -102,55 +112,98 @@ router.post('/install', async (req, res) => {
             updateOption('siteurl', siteUrl);
             updateOption('home', frontendUrl);
 
-            // Initialize Roles & Capabilities (CRITICAL)
+            // SECURITY: Generate mTLS Certificates
+            console.log('🔐 Setup: Generating mTLS certificates...');
+            try {
+                const { generateClusterCA, generateServiceCert } = require('../core/certManager');
+                const ca = generateClusterCA();
+
+                // Derive Subdomains based on installation host
+                const baseHost = host.split(':')[0];
+                const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(baseHost);
+
+                // Logic: If host is "wordjs.com", we create "gateway.wordjs.com", "backend.wordjs.com", etc.
+                // If it's an IP, we just use the IP.
+                const getSubdomain = (prefix) => {
+                    if (isIp || baseHost === 'localhost') return baseHost;
+                    // Avoid double prefixing if user installed on a subdomain already
+                    const parts = baseHost.split('.');
+                    if (parts.length > 2) {
+                        // Already a subdomain, just replace the first part or append
+                        return `${prefix}.${parts.slice(1).join('.')}`;
+                    }
+                    return `${prefix}.${baseHost}`;
+                };
+
+                const gatewayHost = getSubdomain('gateway');
+                const backendHost = getSubdomain('backend');
+                const frontendHost = getSubdomain('frontend');
+
+                // Save identities to config for persistence
+                newConfig.gatewayHost = gatewayHost; // Align target with identity
+                newConfig.gatewayHostIdentity = gatewayHost;
+                newConfig.backendHostIdentity = backendHost;
+                newConfig.frontendHostIdentity = frontendHost;
+
+                // SAVE EXPLICIT mTLS PATHS
+                newConfig.mtls = {
+                    ca: './certs/cluster-ca.crt',
+                    key: './certs/backend.key',
+                    cert: './certs/backend.crt'
+                };
+
+                // Generate Service Certs with specific SANs
+                generateServiceCert('gateway-internal', ca.key, ca.cert, [
+                    isIp ? { type: 7, ip: gatewayHost } : { type: 2, value: gatewayHost }
+                ]);
+                generateServiceCert('backend', ca.key, ca.cert, [
+                    isIp ? { type: 7, ip: backendHost } : { type: 2, value: backendHost }
+                ]);
+                generateServiceCert('frontend', ca.key, ca.cert, [
+                    isIp ? { type: 7, ip: frontendHost } : { type: 2, value: frontendHost }
+                ]);
+
+                console.log(`✅ mTLS Certificates generated for: ${gatewayHost}, ${backendHost}, ${frontendHost}`);
+
+            } catch (e) {
+                console.error('❌ Setup failed during mTLS generation:', e);
+                res.status(500).json({ error: 'Setup failed during mTLS generation: ' + e.message });
+                return; // Exit if mTLS generation fails
+            }
+
+            // SECURITY: Delegate cluster orchestration to autonomous Setup service
+            console.log('🏗️ Setup: Orchestrating cluster via standalone service...');
+            try {
+                const WordJSSetup = require('../../setup/index');
+                const orchestrator = new WordJSSetup(path.resolve(__dirname, '../../'));
+                await orchestrator.distribute(newConfig);
+                console.log('✅ Cluster artifacts distributed via autonomous Setup service');
+            } catch (err) {
+                console.error('❌ Failed to trigger autonomous setup:', err.message);
+                console.warn('⚠️ Manual distribution might be required: npm run setup');
+            }
+
+            // Initialize Roles & CMS items
             const { loadRoles, syncRoles } = require('../core/roles');
-            // We need to load config again or use newConfig to get roles if defined there
-            // Usually roles are predefined in core/roles.js if passed empty
             await loadRoles();
             await syncRoles({});
 
-            // Create Default Category
             const Term = require('../models/Term');
-            await Term.create({
-                name: 'Uncategorized',
-                taxonomy: 'category',
-                slug: 'uncategorized',
-                description: 'Default category'
-            });
+            await Term.create({ name: 'Uncategorized', taxonomy: 'category', slug: 'uncategorized', description: 'Default category' });
 
-            // Create Default Theme
             const { createDefaultTheme } = require('../core/themes');
             createDefaultTheme();
 
-            // Create admin user
             const User = require('../models/User');
-            // Check if admin exists, if not create
-            const adminLink = adminEmail || `${adminUser}@no-email.local`;
-
-            // Try detection by email OR username
-            let admin = await User.findByEmail(adminLink);
-            if (!admin) {
-                admin = await User.findByLogin(adminUser);
-            }
+            const adminEmailDisplay = adminEmail || `${adminUser}@no-email.local`;
+            let admin = await User.findByEmail(adminEmailDisplay) || await User.findByLogin(adminUser);
 
             if (!admin) {
-                await User.create({
-                    username: adminUser,
-                    email: adminLink,
-                    password: adminPassword,
-                    displayName: 'Administrator',
-                    role: 'administrator'
-                });
+                await User.create({ username: adminUser, email: adminEmailDisplay, password: adminPassword, displayName: 'Administrator', role: 'administrator' });
             } else {
-                // Update existing admin
-                await User.update(admin.id, {
-                    password: adminPassword,
-                    email: adminLink,
-                    role: 'administrator'
-                });
+                await User.update(admin.id, { password: adminPassword, email: adminEmailDisplay, role: 'administrator' });
             }
 
-            // Run CMS core tests to verify system integrity
             const { runCoreTests } = require('../core/plugin-test-runner');
             const testResults = await runCoreTests();
 
@@ -161,15 +214,12 @@ router.post('/install', async (req, res) => {
 
             res.json({
                 success: true,
-                tests: {
-                    total: testResults.tests,
-                    passed: testResults.passed,
-                    failed: testResults.failed
-                }
+                tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed }
             });
+
         } catch (e) {
-            console.error(e);
-            res.status(500).json({ error: 'Setup failed during DB ops' });
+            console.error('❌ Setup failed:', e);
+            res.status(500).json({ error: 'Setup failed during operation: ' + e.message });
         }
     } else {
         res.status(500).json({ error: 'Failed to save configuration' });
@@ -233,6 +283,55 @@ router.post('/migrate', async (req, res) => {
             const { updateOption } = require('../core/options');
             updateOption('siteurl', newConfig.siteUrl);
             updateOption('home', newConfig.frontendUrl);
+
+            // SECURITY: Regenerate mTLS Certificates for new domain
+            console.log('🔐 Migration: Regenerating mTLS certificates for new domain...');
+            try {
+                const { generateClusterCA, generateServiceCert } = require('../core/certManager');
+                const fs = require('fs');
+                const path = require('path');
+
+                // Read CA (we keep the same CA for stability, just issue new identities)
+                const caKey = fs.readFileSync(path.resolve(__dirname, '../../certs/cluster-ca.key'), 'utf8');
+                const caCert = fs.readFileSync(path.resolve(__dirname, '../../certs/cluster-ca.crt'), 'utf8');
+
+                // Derive New Subdomains
+                const baseHost = new URL(newConfig.siteUrl).hostname;
+                const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(baseHost);
+
+                const getSubdomain = (prefix) => {
+                    if (isIp || baseHost === 'localhost') return baseHost;
+                    const parts = baseHost.split('.');
+                    return parts.length > 2 ? `${prefix}.${parts.slice(1).join('.')}` : `${prefix}.${baseHost}`;
+                };
+
+                const identities = {
+                    gateway: getSubdomain('gateway'),
+                    backend: getSubdomain('backend'),
+                    frontend: getSubdomain('frontend')
+                };
+
+                // Generate New Identities
+                generateServiceCert('gateway-internal', caKey, caCert, [{ type: isIp ? 7 : 2, [isIp ? 'ip' : 'value']: identities.gateway }]);
+                generateServiceCert('backend', caKey, caCert, [{ type: isIp ? 7 : 2, [isIp ? 'ip' : 'value']: identities.backend }]);
+                generateServiceCert('frontend', caKey, caCert, [{ type: isIp ? 7 : 2, [isIp ? 'ip' : 'value']: identities.frontend }]);
+
+                // Redistribute
+                const rootDir = path.resolve(__dirname, '../../');
+                const frontDir = path.resolve(__dirname, '../../admin-next');
+                const backendCertsDir = path.join(rootDir, 'certs');
+
+                if (fs.existsSync(backendCertsDir)) {
+                    fs.cpSync(backendCertsDir, path.join(rootDir, 'certs'), { recursive: true });
+                    if (fs.existsSync(frontDir)) {
+                        fs.cpSync(backendCertsDir, path.join(frontDir, 'certs'), { recursive: true });
+                    }
+                }
+
+                console.log('✅ Identity Migration Complete');
+            } catch (e) {
+                console.error('❌ Failed to regenerate certificates during migration:', e.message);
+            }
 
             res.json({ success: true, newConfig });
         } else {

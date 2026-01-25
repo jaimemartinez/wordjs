@@ -1,6 +1,6 @@
-const { init } = require('./src/config/database');
-const User = require('./src/models/User');
-const { getRoles } = require('./src/core/roles');
+const { init } = require('../src/config/database');
+const User = require('../src/models/User');
+const { getRoles } = require('../src/core/roles');
 
 async function debugUser() {
     try {

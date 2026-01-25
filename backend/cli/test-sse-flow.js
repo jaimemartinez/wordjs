@@ -1,4 +1,4 @@
-const notificationService = require('./backend/src/core/notifications');
+const notificationService = require('../src/core/notifications');
 const fs = require('fs');
 const path = require('path');
 
@@ -54,7 +54,7 @@ async function testSSEFlow() {
 }
 
 // Simple mock for verifyPermission to allow script to run
-const pluginContext = require('./backend/src/core/plugin-context');
+const pluginContext = require('../src/core/plugin-context');
 const originalVerify = pluginContext.verifyPermission;
 pluginContext.verifyPermission = () => true;
 

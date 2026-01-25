@@ -1,7 +1,7 @@
-const { init, dbAsync } = require('./backend/src/config/database');
-const User = require('./backend/src/models/User');
-const Email = require('./backend/src/models/Email');
-const config = require('./backend/src/config/app');
+const { init, dbAsync } = require('../src/config/database');
+const User = require('../src/models/User');
+const Email = require('../src/models/Email');
+const config = require('../src/config/app');
 
 async function debugInbox() {
     await init();

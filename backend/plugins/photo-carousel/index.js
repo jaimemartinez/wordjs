@@ -33,7 +33,9 @@ exports.init = function () {
     // GET /api/v1/carousels - List all carousels
     // GET /api/v1/carousels - List all carousels
     router.get('/', async (req, res) => {
+        console.log('📸 API: GET /api/v1/carousels (Plugin)');
         const list = await getOption('carousels_list', []);
+        console.log(`📸 API: Found ${list.length} carousels in list`);
 
         // Parallel fetch of all items
         const carousels = await Promise.all(list.map(async id => {
@@ -41,7 +43,9 @@ exports.init = function () {
             return data ? { id, ...data } : null;
         }));
 
-        res.json(carousels.filter(Boolean));
+        const result = carousels.filter(Boolean);
+        console.log(`📸 API: Returning ${result.length} carousels`);
+        res.json(result);
     });
 
     // GET /api/v1/carousels/:id - Get single carousel

@@ -26,18 +26,29 @@ const IGNORE_PATTERNS = [
     '.github',
     '.gitignore',
     '.next/cache',
+    '.next/dev',     // Exclude development cache
     'release',
     'os-tmp',
     'logs',
     '*.log',
     '.DS_Store',
     'desktop.ini',
-    'database.sqlite', // Don't include local DB
-    'wordjs-config.json', // Don't include local config
+    'database.sqlite', // Local DB
+    'wordjs-config.json', // Local config
+    'gateway-registry.json', // Gateway state
     '.env',
     'brain',
     '.agent',
-    '.gemini'
+    '.gemini',
+    'ssl-auto.crt',    // Exclude local certs
+    'ssl-auto.key',
+    'backend/cli',     // Exclude test/debug scripts
+    'backend/uploads', // Exclude local uploads
+    'backend/check_plugins.js', // Legacy debug
+    'check_plugins.js',
+    'debug-inbox.js',
+    'dump-routes.js',
+    'build-production.ps1'
 ];
 
 async function run() {
@@ -125,8 +136,11 @@ function shouldIgnore(filePath) {
 
     // Don't include the release folder itself
     if (relativePath.startsWith('release')) return true;
-    if (relativePath.includes('node_modules')) return true;
-    if (relativePath.includes('.git')) return true;
+
+    // Check if path contains any ignored pattern (e.g. .next/cache, node_modules)
+    for (const pattern of IGNORE_PATTERNS) {
+        if (relativePath.includes(pattern)) return true;
+    }
 
     return false;
 }

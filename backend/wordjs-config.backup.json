@@ -6,7 +6,7 @@
   "host": "localhost",
   "updatedAt": "2026-01-19T20:09:02.876Z",
   "gatewaySecret": "8280f373eda00c98d53be3cbb36b14125733120da863cff29e8924bbcdc0fd0e",
-  "dbDriver": "postgres",
+  "dbDriver": "sqlite-native",
   "dbPath": "./data/wordjs-native.db",
   "dbHost": "localhost",
   "dbUser": "postgres",
@@ -19,6 +19,11 @@
     "user": "postgres",
     "name": "wordjs",
     "password": "password"
+  },
+  "mtls": {
+    "ca": "./certs/cluster-ca.crt",
+    "key": "./certs/backend.key",
+    "cert": "./certs/backend.crt"
   },
   "gatewayPort": 3000,
   "ssl": {

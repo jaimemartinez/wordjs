@@ -1,0 +1,15 @@
+{
+    "name": "wordjs-setup",
+    "version": "1.0.0",
+    "description": "WordJS Cluster Orchestrator - Setup & Migration Utility",
+    "main": "index.js",
+    "bin": {
+        "wordjs-setup": "index.js"
+    },
+    "dependencies": {
+        "fs-extra": "^11.2.0",
+        "path": "^0.12.7",
+        "crypto": "^1.0.1",
+        "node-forge": "^1.3.1"
+    }
+}

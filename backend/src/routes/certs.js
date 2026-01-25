@@ -89,8 +89,21 @@ router.post('/upload-custom', async (req, res) => {
 });
 router.get('/config', async (req, res) => {
     try {
-        const config = certManager.getConfig();
+        const config = await certManager.getConfig();
         res.json(config);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /check
+ * Ensure certificate exists (Generate Self-Signed if missing)
+ */
+router.post('/check', async (req, res) => {
+    try {
+        const result = await certManager.ensureGatewayCert();
+        res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });
     }
@@ -103,7 +116,13 @@ router.get('/config', async (req, res) => {
 router.post('/config', async (req, res) => {
     try {
         const { port, sslEnabled } = req.body;
-        const result = certManager.updateGatewayConfig(port, sslEnabled);
+        const result = await certManager.updateGatewayConfig(port, sslEnabled);
+
+        // If SSL is being enabled, automatically ensure a certificate exists
+        if (sslEnabled) {
+            await certManager.ensureGatewayCert();
+        }
+
         res.json(result);
     } catch (e) {
         res.status(500).json({ error: e.message });

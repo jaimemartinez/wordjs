@@ -23,6 +23,7 @@
 - **🌍 Internationalization (i18n):** Native multi-language support for core and plugins.
 - **🧩 Shortcodes:** WordPress-style shortcode system for dynamic content rendering.
 - **📦 Import/Export:** Full site backup and restoration capabilities.
+- **🔐 Certificate Management:** Auto-provisioning of **Let's Encrypt** SSL certificates (HTTP-01) and manual upload support directly from the Admin Panel.
 - **🚀 High Availability:** Cluster Mode architecture with circuit breaking and auto-healing services.
 
 ---

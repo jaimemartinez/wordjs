@@ -99,10 +99,25 @@ function GatewayConfigForm() {
 
     useEffect(() => {
         setLoading(true);
-        apiGet('/system/certs/config?t=' + Date.now())
-            .then(data => setConfig(data))
-            .catch(err => setConfig({ error: err.message }))
-            .finally(() => setLoading(false));
+        const load = async () => {
+            try {
+                // 1. Get Config
+                let data = await apiGet('/system/certs/config?t=' + Date.now());
+
+                // 2. If valid response but no cert, try to auto-generate (Self-Signed) via check
+                if (data && (!data.certInfo || data.certInfo.type === 'none')) {
+                    await apiPost('/system/certs/check', {});
+                    // Reload config
+                    data = await apiGet('/system/certs/config?t=' + Date.now());
+                }
+                setConfig(data);
+            } catch (err: any) {
+                setConfig({ error: err.message });
+            } finally {
+                setLoading(false);
+            }
+        };
+        load();
     }, []);
 
     const handleSave = async (e: React.FormEvent) => {

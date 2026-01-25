@@ -108,6 +108,12 @@ const config = {
     jwt: {
         secret: fileConfig.jwtSecret || 'wordjs-default-secret',
         expiresIn: '2h'
+    },
+    // mTLS Paths
+    mtls: {
+        ca: fileConfig.mtls?.ca || './certs/cluster-ca.crt',
+        key: fileConfig.mtls?.key || './certs/backend.key',
+        cert: fileConfig.mtls?.cert || './certs/backend.crt'
     }
 };
 

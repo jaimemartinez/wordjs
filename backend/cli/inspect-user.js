@@ -1,4 +1,4 @@
-const { initSqlJsDb, getDb } = require('./src/config/database');
+const { initSqlJsDb, getDb } = require('../src/config/database');
 
 async function run() {
     try {
