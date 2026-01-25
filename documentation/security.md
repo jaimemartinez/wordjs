@@ -108,7 +108,33 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
 
 ---
 
-## 6. Production Security Checklist ✅
+---
+
+## 6. Internal Cluster Security (mTLS) 🔒
+
+WordJS uses a **Mutual TLS (mTLS)** architecture to secure communication between internal components (Gateway, Backend, Frontend).
+
+### 6.1 Gateway as Certificate Authority
+The Gateway acts as the master of the mTLS infrastructure:
+*   **Location:** The master certificates, including the **Cluster Root CA key**, are stored in `gateway/certs/`.
+*   **Isolation:** The private key of the CA NEVER leaves the Gateway folder.
+*   **Identity Provisioning:** During setup, the Orchestrator generates unique identities for the Backend and Frontend, firming them with the CA stored in the Gateway.
+
+### 6.2 Selective Distribution (Least Privilege)
+To prevent lateral movement if a service is compromised, certificates are distributed selectively:
+*   **Backend:** Receives `backend.crt`, `backend.key`, and `cluster-ca.crt`.
+*   **Frontend:** Receives `frontend.crt`, `frontend.key`, and `cluster-ca.crt`.
+*   **Gateway:** Receives ALL files (as it is the master) but only uses `gateway-internal` for identity.
+
+### 6.3 Secure Control Plane
+The Backend manages the Gateway via a dedicated **Internal API** (Port 3100). This API:
+*   Requires a valid `backend` mTLS certificate to connect.
+*   Allows the Backend to push new public SSL certificates (from Let's Encrypt) to the Gateway without direct filesystem access.
+*   Allows remote configuration of the Gateway without restarting the main OS process.
+
+---
+
+## 7. Production Security Checklist ✅
 
 Before deploying WordJS to production, ensure the following:
 
