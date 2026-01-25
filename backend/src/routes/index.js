@@ -88,5 +88,11 @@ router.get('/pages', (req, res, next) => {
     postsRoutes.handle(req, res, next);
 });
 
+// Documentation
+const swaggerUi = require('swagger-ui-express');
+const swaggerSpecs = require('../config/swagger');
+
+router.use('/docs', swaggerUi.serve, swaggerUi.setup(swaggerSpecs));
+
 module.exports = router;
 
