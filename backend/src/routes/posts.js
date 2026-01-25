@@ -26,8 +26,61 @@ const sanitize = (html) => {
 };
 
 /**
- * GET /posts
- * List posts
+ * @swagger
+ * components:
+ *   schemas:
+ *     Post:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: integer
+ *         title:
+ *           type: object
+ *           properties:
+ *             rendered:
+ *               type: string
+ *         content:
+ *           type: object
+ *           properties:
+ *             rendered:
+ *               type: string
+ *         date:
+ *           type: string
+ *           format: date-time
+ *         status:
+ *           type: string
+ *           enum: [publish, draft, pending, private, trash]
+ *
+ * /posts:
+ *   get:
+ *     summary: Retrieve a list of posts
+ *     tags: [Posts]
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: per_page
+ *         schema:
+ *           type: integer
+ *       - in: query
+ *         name: search
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: A list of posts
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: array
+ *               items:
+ *                 $ref: '#/components/schemas/Post'
  */
 router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const {
