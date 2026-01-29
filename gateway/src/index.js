@@ -488,7 +488,13 @@ if (cluster.isPrimary) {
 
     app.use(helmet({ contentSecurityPolicy: false }));
     app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
-    app.use(compression());
+    const shouldCompress = (req, res) => {
+        if (req.headers['accept'] === 'text/event-stream' || res.getHeader('Content-Type') === 'text/event-stream') {
+            return false;
+        }
+        return compression.filter(req, res);
+    };
+    app.use(compression({ filter: shouldCompress }));
 
     app.get('/gateway-status', requireAuth, (req, res) => {
         res.send('<h1>Gateway Active</h1>');
@@ -512,15 +518,22 @@ if (cluster.isPrimary) {
         const target = getTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
+            const isSSE = req.headers['accept'] === 'text/event-stream';
+
+            logger.debug(`[Gateway] Proxying ${req.method} ${req.url} to ${target}`);
             proxy.web(req, res, {
                 target,
                 agent: isHttps ? proxyAgent : null,
                 secure: false,
-                timeout: 5000,
-                proxyTimeout: 5000
+                // Increase timeout for SSE (1 hour)
+                timeout: isSSE ? 3600000 : 60000,
+                proxyTimeout: isSSE ? 3600000 : 60000
             }, (err) => {
                 if (!res.headersSent) {
                     const code = err.code || 'UNKNOWN';
+                    // Don't log ECONNRESET for SSE as it's common on client close
+                    if (isSSE && (code === 'ECONNRESET' || code === 'EPIPE')) return;
+
                     logger.error(`[Gateway] Proxy Error [${target}] [${code}]: ${err.message}`);
                     if (code === 'ECONNREFUSED') {
                         res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.', target });

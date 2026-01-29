@@ -3,8 +3,11 @@ const { SMTPServer } = require('smtp-server');
 const { simpleParser } = require('mailparser');
 const dns = require('dns').promises;
 const Email = require('../../src/models/Email');
+const { authenticate } = require('../../src/middleware/auth');
 const User = require('../../src/models/User');
 const notificationService = require('../../src/core/notifications');
+const { getOption, updateOption } = require('../../src/core/options');
+const config = require('../../src/config/app');
 const path = require('path');
 const fs = require('fs');
 
@@ -205,7 +208,8 @@ function isValidEmail(email) {
         if (localPart.includes('@')) return false;
     }
     // Standard RFC 5322 simplified validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    // Allow "localhost" for internal mail
+    const emailRegex = /^[^\s@]+@([^\s@]+\.[^\s@]+|localhost)$/;
     return emailRegex.test(email);
 }
 
@@ -215,6 +219,8 @@ function isValidEmail(email) {
 async function sendMail(data) {
     const { getOption } = require('../../src/core/options');
     const config = require('../../src/config/app');
+
+    console.log(`[MailServer] sendMail called. Subject: "${data.subject}"`);
 
     // SECURITY: Validate recipient email (CVE-2025-14874)
     // We validate the primary 'to' if it's a string, or loop if array
@@ -229,6 +235,8 @@ async function sendMail(data) {
     // Combine for distinct processing
     const allRecipients = [...toAttendees, ...ccAttendees, ...bccAttendees];
     const distinctRecipients = [...new Set(allRecipients.filter(Boolean))];
+
+    console.log(`[MailServer] Total unique recipients: ${distinctRecipients.length}`);
 
     // Identity resolution
     const defaultEmail = await getOption('admin_email', 'noreply@wordjs.com');
@@ -256,136 +264,138 @@ async function sendMail(data) {
 
     // 1. Create Sent Copy (Source of Truth)
     // We do this first to ensure we have a record even if delivery fails partially
-    if (draftId) {
-        await Email.update(draftId, {
-            toAddress: toAttendees.join(', '),
-            ccAddress: ccAttendees.join(', '),
-            bccAddress: bccAttendees.join(', '),
-            subject: data.subject,
-            bodyText: data.text,
-            bodyHtml: data.html,
-            rawContent: data.html || data.text,
-            isSent: 1,
-            isDraft: 0,
-            attachments: data.attachments
-        });
-    } else {
-        await Email.create({
-            messageId: `<sent-${Date.now()}@wordjs.com>`,
-            fromAddress: fromEmail.toLowerCase(),
-            fromName: fromName,
-            toAddress: toAttendees.join(', '),
-            ccAddress: ccAttendees.join(', '),
-            bccAddress: bccAttendees.join(', '),
-            subject: data.subject,
-            bodyText: data.text,
-            bodyHtml: data.html,
-            isSent: 1,
-            rawContent: data.html || data.text,
-            parentId,
-            threadId,
-            attachments: data.attachments
-        });
+    // This is stored in the SENDER'S "Sent" folder (or updated if draft)
+    try {
+        if (draftId) {
+            console.log(`[MailServer] Updating draft ${draftId} to Sent status.`);
+            await Email.update(draftId, {
+                toAddress: toAttendees.join(', '),
+                ccAddress: ccAttendees.join(', '),
+                bccAddress: bccAttendees.join(', '),
+                subject: data.subject,
+                bodyText: data.text,
+                bodyHtml: data.html,
+                rawContent: data.html || data.text,
+                isSent: 1,
+                isDraft: 0,
+                attachments: data.attachments
+            });
+        } else {
+            console.log(`[MailServer] Creating new Sent email record.`);
+            await Email.create({
+                messageId: `<sent-${Date.now()}@wordjs.com>`,
+                fromAddress: fromEmail.toLowerCase(),
+                fromName: fromName,
+                toAddress: toAttendees.join(', '),
+                ccAddress: ccAttendees.join(', '),
+                bccAddress: bccAttendees.join(', '),
+                subject: data.subject,
+                bodyText: data.text,
+                bodyHtml: data.html,
+                isSent: 1,
+                rawContent: data.html || data.text,
+                parentId,
+                threadId,
+                attachments: data.attachments
+            });
+        }
+    } catch (e) {
+        console.error('[MailServer] Failed to save/update SENT record:', e);
+        throw e; // If we can't save the sent record, we probably shouldn't send? Or warn?
     }
 
     // 2. Deliver to Internal Users (Inbox Copy)
     const siteUrl = new URL(config.site.url);
     const siteDomain = siteUrl.hostname;
 
-    for (const recipient of distinctRecipients) {
-        const [rName, rDomain] = recipient.split('@');
-        let localUser = await User.findByEmail(recipient);
-        if (!localUser && rDomain === siteDomain) {
-            localUser = await User.findByLogin(rName);
-        }
+    console.log(`[MailServer] Processing internal delivery for domain: ${siteDomain}`);
 
-        if (localUser) {
-            // Local delivery logic...
-            await Email.create({
-                // ...
-            });
+    // Track which recipients are local so we filter them out of SMTP
+    const localRecipients = new Set();
+
+    for (const recipient of distinctRecipients) {
+        try {
+            console.log(`[MailServer] Checking recipient: ${recipient}`);
+            const [rName, rDomain] = recipient.split('@');
+            let localUser = await User.findByEmail(recipient);
+
+            if (!localUser && rDomain === siteDomain) {
+                console.log(`[MailServer] Searching by login for ${rName}...`);
+                localUser = await User.findByLogin(rName);
+            }
+
+            if (localUser) {
+                console.log(`[MailServer] Local user found: ${localUser.id} (${localUser.username})`);
+
+                // Check if user_id is valid
+                if (!localUser.id) {
+                    console.error(`[MailServer] ❌ Critical: Local user found but has no ID!`, localUser);
+                    continue;
+                }
+
+                localRecipients.add(recipient);
+
+                // Local delivery: Create a copy in the recipient's inbox
+                const inboxEmail = await Email.create({
+                    messageId: `<local-${Date.now()}-${Math.random()}@wordjs.com>`,
+                    fromAddress: fromEmail.toLowerCase(),
+                    fromName: fromName,
+                    toAddress: toAttendees.join(', '), // Preserve context
+                    ccAddress: ccAttendees.join(', '),
+                    subject: data.subject,
+                    bodyText: data.text,
+                    bodyHtml: data.html,
+                    isSent: 0, // Received
+                    user_id: localUser.id,
+                    rawContent: data.html || data.text,
+                    parentId,
+                    threadId,
+                    attachments: data.attachments
+                });
+
+                console.log(`[MailServer] ✅ Delivered to local inbox: ${inboxEmail.id}`);
+
+                // Notify
+                if (recipient.toLowerCase() !== fromEmail.toLowerCase()) {
+                    await notificationService.send({
+                        user_id: localUser.id,
+                        type: 'email',
+                        title: 'New Internal Email',
+                        message: `You have a new message from ${fromName}: "${data.subject}"`,
+                        icon: 'fa-envelope',
+                        color: 'indigo',
+                        action_url: `/admin/plugin/emails?id=${inboxEmail.id}`,
+                        transports: ['db', 'sse']
+                    });
+                }
+            } else {
+                console.log(`[MailServer] User ${recipient} not found locally.`);
+            }
+        } catch (err) {
+            console.error(`[MailServer] ❌ Error processing recipient ${recipient}:`, err);
         }
     }
 
     // 3. Deliver to External SMTP
-    // Only if there are recipients not handled locally
-    // ... logic for external ...
-    // Note: The original code for external delivery was likely further down or implied. 
-    // We assume 'transporter' is global. If not, we need to ensure it uses DKIM.
-
-    if (transporter) {
-        // We need to construct the mail options for nodemailer
-        const mailOptions = {
-            from: `"${fromName}" <${fromEmail}>`,
-            to: toAttendees,
-            cc: ccAttendees,
-            bcc: bccAttendees,
-            subject: data.subject,
-            text: data.text,
-            html: data.html,
-            attachments: data.attachments,
-            dkim: dkimOptions // Inject DKIM
-        };
-        // Send...
-        // NOTE: The previous code handled separate delivery logic. check where valid 'send' happens.
-        // Looking at original file, assume we just inject 'dkim' into the object passed to transporter.sendMail
-    }
-    // Create a copy for the recipient's inbox
-    const inboxEmail = await Email.create({
-        messageId: `<local-${Date.now()}-${Math.random()}@wordjs.com>`,
-        fromAddress: fromEmail.toLowerCase(),
-        fromName: fromName,
-        toAddress: toAttendees.join(', '), // Preserve original To/CC headers for context
-        ccAddress: ccAttendees.join(', '),
-        subject: data.subject,
-        bodyText: data.text,
-        bodyHtml: data.html,
-        isSent: 0,
-        rawContent: data.html || data.text,
-        parentId,
-        threadId,
-        attachments: data.attachments
-    });
-
-    // Notify
-    if (recipient.toLowerCase() !== fromEmail.toLowerCase()) {
-        await notificationService.send({
-            user_id: localUser.id,
-            type: 'email',
-            title: 'New Internal Email',
-            message: `You have a new message from ${fromName}: "${data.subject}"`,
-            icon: 'fa-envelope',
-            color: 'indigo',
-            action_url: `/admin/plugin/emails?id=${inboxEmail.id}`,
-            transports: ['db', 'sse']
-        });
-    }
-
-
-
-    // 3. Deliver to External Users via SMTP
     // Filter recipients who are NOT local users (we don't want to double-send if we are the mail server)
-    const externalRecipients = [];
-    for (const r of distinctRecipients) {
-        const [rName, rDomain] = r.split('@');
-        let isLocal = false;
-        // Check DB
-        if (await User.findByEmail(r)) isLocal = true;
-        if (!isLocal && rDomain === siteDomain && await User.findByLogin(rName)) isLocal = true;
-
-        if (!isLocal) externalRecipients.push(r);
-    }
+    const externalRecipients = distinctRecipients.filter(r => !localRecipients.has(r));
 
     if (externalRecipients.length > 0) {
-        console.log(`Delivering to ${externalRecipients.length} external recipients via SMTP...`);
+        console.log(`[MailServer] Delivering to ${externalRecipients.length} external recipients via SMTP...`);
 
         // If we have a fallback transporter, use it for everything (simpler & reliable)
         if (transporter) {
+            console.log(`[MailServer] Using configured SMTP Transporter.`);
             await transporter.sendMail({
                 from: `"${fromName}" <${fromEmail}>`,
-                to: toAttendees,
-                cc: ccAttendees,
-                bcc: bccAttendees, // SMTP handles stripping BCC
+                to: externalRecipients, // Only send to external
+                // NOTE: If we send only to external, the CC/BCC headers might look weird if we don't include everyone.
+                // But if we include everyone, the SMTP server might try to deliver to local users again.
+                // Usually direct delivery sends ONE envelope per recipient.
+                // But nodemailer with 'to' sends to all.
+                // Let's send the *headers* with everyone, but the envelope logic handles delivery?
+                // Nodemailer separates this.
+                // However, standard practice: Send to externalRecipients is safest.
                 subject: data.subject,
                 text: data.text,
                 html: data.html,
@@ -395,10 +405,10 @@ async function sendMail(data) {
                 })) : [],
                 dkim: dkimOptions
             });
+            console.log('[MailServer] SMTP delivery sent.');
         } else {
+            console.log(`[MailServer] Using Direct MX Delivery.`);
             // Direct MX Delivery loop
-            // We send individually to avoid revealing BCC or mixing domains in a complex way without a relay.
-            // This is "Direct Send" mode.
             for (const extR of externalRecipients) {
                 try {
                     await sendMailDirectSimple(extR, data, fromEmail, fromName, dkimOptions);
@@ -407,6 +417,8 @@ async function sendMail(data) {
                 }
             }
         }
+    } else {
+        console.log('[MailServer] No external recipients. Skipping SMTP.');
     }
 
     return { success: true };

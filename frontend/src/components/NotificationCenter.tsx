@@ -73,14 +73,41 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
     useEffect(() => {
         if (!user) return;
 
+        let retryCount = 0;
+        let retryTimeoutId: NodeJS.Timeout;
+        let isMounted = true;
+
         const connectStream = () => {
-            // SSE doesn't support credentials, but cookies are sent automatically for same-origin
+            if (!isMounted) return;
+
+            // Close existing connection if any
+            if (eventSourceRef.current) {
+                eventSourceRef.current.close();
+                eventSourceRef.current = null;
+            }
+
             const url = `${API_URL}/notifications/stream`;
+            console.debug(`[SSE] Connecting to ${url}...`);
+
             const es = new EventSource(url, { withCredentials: true });
             eventSourceRef.current = es;
 
+            es.onopen = () => {
+                if (!isMounted) {
+                    es.close();
+                    return;
+                }
+                retryCount = 0;
+                console.debug("[SSE] Connected");
+            };
+
             es.onmessage = (event) => {
+                if (!isMounted) return;
                 const newNotification = JSON.parse(event.data);
+
+                // Handle Keep-Alive
+                if (event.data === ': keepalive') return;
+
                 setNotifications(prev => {
                     const exists = prev.some(n => n.uuid === newNotification.uuid);
                     if (exists) return prev;
@@ -89,7 +116,6 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                 setUnreadCount(prev => prev + 1);
                 addToast(newNotification.title || "New Notification", "info");
 
-                // Dispatch global event for other components to react (e.g. Inbox refresh)
                 window.dispatchEvent(new CustomEvent('wordjs:notification', { detail: newNotification }));
 
                 if ("vibrate" in navigator) {
@@ -98,20 +124,33 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             };
 
             es.onerror = () => {
-                console.warn("SSE Connection lost. Reconnecting in 5s...");
+                if (!isMounted) return;
                 es.close();
-                setTimeout(connectStream, 5000);
+                eventSourceRef.current = null;
+
+                // Exponential Backoff
+                const delay = Math.min(1000 * Math.pow(2, retryCount), 30000); // Max 30s
+                retryCount++;
+
+                console.warn(`[SSE] Connection lost. Reconnecting in ${delay}ms... (Attempt ${retryCount})`);
+
+                if (retryTimeoutId) clearTimeout(retryTimeoutId);
+                retryTimeoutId = setTimeout(connectStream, delay);
             };
         };
 
         connectStream();
 
         return () => {
+            isMounted = false;
             if (eventSourceRef.current) {
+                console.debug("[SSE] Cleaning up connection...");
                 eventSourceRef.current.close();
+                eventSourceRef.current = null;
             }
+            if (retryTimeoutId) clearTimeout(retryTimeoutId);
         };
-    }, [user]);
+    }, [user?.id]);
 
     const markAsRead = async (uuid: string) => {
         try {

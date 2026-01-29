@@ -262,7 +262,7 @@ export default function MailServerAdmin() {
             cc: "",
             bcc: "",
             subject: isReply ? email.subject : `Re: ${email.subject}`,
-            body: `\n\n\n--- On ${new Date(email.date_received).toLocaleString()}, ${email.from_name || email.from_address} wrote: ---\n${email.body_text}`,
+            body: `<br/><br/><br/><br/>________________________________<br/><strong>From:</strong> ${email.from_name || email.from_address}<br/><strong>Sent:</strong> ${new Date(email.date_received).toLocaleString()}<br/><strong>Subject:</strong> ${email.subject}<br/><br/>${email.body_html || email.body_text.replace(/\n/g, '<br/>')}`,
             attachments: [],
             useSignature: true
         });

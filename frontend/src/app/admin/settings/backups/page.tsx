@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { PageHeader, Card, Button } from "@/components/ui";
+import { PageHeader, Card, Button, Select, TimePicker } from "@/components/ui";
 import { backupsApi, settingsApi, BackupFile } from "@/lib/api";
 import { format } from "date-fns";
 import { useModal } from "@/contexts/ModalContext";
@@ -14,6 +14,16 @@ export default function BackupsPage() {
 
     // Scheduler State
     const [schedule, setSchedule] = useState("daily");
+    const [scheduleTime, setScheduleTime] = useState("00:00");
+    const [scheduleDay, setScheduleDay] = useState("1"); // Default Monday
+
+    // Track original state for "dirty" check
+    const [originalSettings, setOriginalSettings] = useState({
+        schedule: "daily",
+        time: "00:00",
+        day: "1"
+    });
+
     const [savingSchedule, setSavingSchedule] = useState(false);
 
     // removing local restoring state as useModal handles it
@@ -42,26 +52,60 @@ export default function BackupsPage() {
 
     const fetchSchedule = async () => {
         try {
-            const settings = await settingsApi.get();
-            if (settings.backup_schedule) {
-                setSchedule(settings.backup_schedule);
-            }
+            const settings = await settingsApi.getAll();
+            const newSettings = {
+                schedule: settings.backup_schedule || "daily",
+                time: settings.backup_time || "00:00",
+                day: settings.backup_day ? settings.backup_day.toString() : "1"
+            };
+
+            setSchedule(newSettings.schedule);
+            setScheduleTime(newSettings.time);
+            setScheduleDay(newSettings.day);
+            setOriginalSettings(newSettings);
         } catch (e) {
             console.error("Failed to load backup schedule", e);
         }
     };
 
-    const handleSaveSchedule = async (newSchedule: string) => {
-        setSchedule(newSchedule);
+    const hasChanges =
+        schedule !== originalSettings.schedule ||
+        scheduleTime !== originalSettings.time ||
+        scheduleDay !== originalSettings.day;
+
+    const handleSaveChanges = async () => {
         setSavingSchedule(true);
         try {
-            await settingsApi.update({ backup_schedule: newSchedule });
-            addToast(`Backup schedule updated to ${newSchedule}`, "success");
+            await settingsApi.update({
+                backup_schedule: schedule,
+                backup_time: scheduleTime,
+                backup_day: scheduleDay
+            });
+
+            setOriginalSettings({
+                schedule,
+                time: scheduleTime,
+                day: scheduleDay
+            });
+
+            addToast("Backup schedule saved successfully", "success");
         } catch (err: any) {
-            addToast("Failed to update schedule: " + err.message, "error");
+            addToast("Failed to save schedule: " + err.message, "error");
         } finally {
             setSavingSchedule(false);
         }
+    };
+
+    const handleSaveSchedule = (newSchedule: string) => {
+        setSchedule(newSchedule);
+    };
+
+    const handleSaveTime = (newTime: string) => {
+        setScheduleTime(newTime);
+    };
+
+    const handleSaveDay = (newDay: string) => {
+        setScheduleDay(newDay);
     };
 
     const handleCreate = async () => {
@@ -158,7 +202,7 @@ export default function BackupsPage() {
             </div>
 
             {/* Scheduler Card */}
-            <Card className="rounded-[40px] border-none shadow-sm mb-8 p-8">
+            <Card className="rounded-[40px] border-none shadow-sm mb-8 p-8" overflow="visible">
                 <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
                     <div>
                         <h3 className="text-xl font-bold text-gray-800 mb-2">
@@ -170,27 +214,68 @@ export default function BackupsPage() {
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-4 bg-gray-50 p-2 rounded-2xl border border-gray-100">
-                        <select
-                            value={schedule}
-                            onChange={(e) => handleSaveSchedule(e.target.value)}
-                            disabled={savingSchedule}
-                            className="bg-transparent border-none text-gray-700 font-medium focus:ring-0 cursor-pointer py-2 pl-4 pr-8"
-                        >
-                            <option value="off">Disabled</option>
-                            <option value="hourly">Hourly</option>
-                            <option value="twicedaily">Twice Daily (12h)</option>
-                            <option value="daily">Daily</option>
-                            <option value="weekly">Weekly</option>
-                        </select>
-                        <div className="w-px h-8 bg-gray-200"></div>
-                        <div className="pr-4 text-gray-400">
-                            {savingSchedule ? (
-                                <i className="fa-solid fa-spinner fa-spin text-blue-500"></i>
-                            ) : (
-                                <i className="fa-solid fa-check text-green-500 opacity-50"></i>
+                    <div className="flex items-center gap-4">
+                        <div className="flex items-center gap-4 bg-gray-50 p-2 rounded-2xl border border-gray-100">
+                            <div className="w-56">
+                                <Select
+                                    value={schedule}
+                                    onChange={setSchedule}
+                                    options={[
+                                        { value: "off", label: "Disabled" },
+                                        { value: "hourly", label: "Hourly" },
+                                        { value: "twicedaily", label: "Twice Daily (12h)" },
+                                        { value: "daily", label: "Daily" },
+                                        { value: "weekly", label: "Weekly" }
+                                    ]}
+                                />
+                            </div>
+
+                            {/* Day Picker for Weekly */}
+                            {schedule === 'weekly' && (
+                                <div className="w-40 animate-in fade-in slide-in-from-left-2 duration-300">
+                                    <Select
+                                        value={scheduleDay}
+                                        onChange={setScheduleDay}
+                                        options={[
+                                            { value: "1", label: "Monday" },
+                                            { value: "2", label: "Tuesday" },
+                                            { value: "3", label: "Wednesday" },
+                                            { value: "4", label: "Thursday" },
+                                            { value: "5", label: "Friday" },
+                                            { value: "6", label: "Saturday" },
+                                            { value: "0", label: "Sunday" }
+                                        ]}
+                                    />
+                                </div>
+                            )}
+
+                            {/* Time Picker for Daily/Weekly */}
+                            {(schedule === 'daily' || schedule === 'weekly') && (
+                                <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                                    <TimePicker
+                                        value={scheduleTime}
+                                        onChange={setScheduleTime}
+                                    />
+                                </div>
                             )}
                         </div>
+
+                        {/* Save Button */}
+                        {hasChanges && (
+                            <div className="animate-in fade-in slide-in-from-left-2 duration-300">
+                                <Button
+                                    onClick={handleSaveChanges}
+                                    disabled={savingSchedule}
+                                    className="bg-blue-600 hover:bg-blue-700 text-white shadow-lg"
+                                >
+                                    {savingSchedule ? (
+                                        <i className="fa-solid fa-spinner fa-spin"></i>
+                                    ) : (
+                                        <>Save <i className="fa-solid fa-check ml-2"></i></>
+                                    )}
+                                </Button>
+                            </div>
+                        )}
                     </div>
                 </div>
             </Card>
