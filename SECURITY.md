@@ -18,7 +18,7 @@ WordJS is built with a "Security First" architecture.
 
 ## 🐛 Reporting a Vulnerability
 
-If you discover a security vulnerability within WordJS, please report it via email to `security@wordjs.com`. 
+If you discover a security vulnerability within WordJS, please report it via the **GitHub Security Advisories** tab or contact the maintainer directly.
 **Do NOT open a public GitHub issue.**
 
 ### Response Time
