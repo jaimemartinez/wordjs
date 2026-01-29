@@ -58,11 +58,23 @@ class NotificationService {
     addClient(res, userId) {
         res._wordjs_user_id = userId;
         this.clients.add(res);
-        console.log(`🔌 SSE Connected: User ${userId}. Active clients: ${this.clients.size}`);
+        console.log(`[SSE] 🔌 Client Connected. User: ${userId}. Total Active Clients: ${this.clients.size}`);
+
+        // Self-cleanup if not handled externally
+        // We attach this just in case, but safe to call removeClient manually too
         res.on('close', () => {
-            this.clients.delete(res);
-            console.log(`🔌 SSE Disconnected: User ${userId}. Active clients: ${this.clients.size}`);
+            this.removeClient(userId, res);
         });
+    }
+
+    /**
+     * Remove a client manually
+     */
+    removeClient(userId, res) {
+        if (this.clients.has(res)) {
+            this.clients.delete(res);
+            console.log(`[SSE] 🔌 Client Disconnected. User: ${userId}. Remaining Active Clients: ${this.clients.size}`);
+        }
     }
 
     /**

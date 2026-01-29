@@ -14,7 +14,9 @@ The **WordJS Gateway** (`gateway.js`) is an enterprise-grade entry point for the
 *   **🔒 Security & Protection:**
     *   **Helmet:** Secure HTTP headers out of the box.
     *   **Payload Protection:** 10MB limits on all incoming requests.
-    *   **Timeout Guard:** Hard 15s cutoffs for upstream requests to prevent socket leakage.
+    *   **Payload Protection:** 10MB limits on all incoming requests.
+    *   **Timeout Guard:** Hard 15s cutoffs for HTTP requests (1 Hour for SSE) to prevent socket leakage.
+    *   **Private Metrics:** Authenticated `/gateway-status` dashboard.
     *   **Private Metrics:** Authenticated `/gateway-status` dashboard.
 *   **📡 Modern Connectivity:** WebSocket proxying support for bidirectional communication.
 *   **🧵 Traceability:** Automatic injection of `X-Correlation-ID` for distributed tracing.

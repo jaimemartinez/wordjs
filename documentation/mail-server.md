@@ -44,3 +44,8 @@ Or via the HTTP API (authenticated):
     "isHtml": true
 }
 ```
+
+## Updates (Jan 2026)
+*   **Localhost Support**: Explicit accepted support for `admin@localhost` and other dotless domains for internal testing.
+*   **HTML Replies**: Reply formatting creates a standard Outlook/Gmail style HTML block with proper quoting.
+*   **Logging**: Enhanced verbose logging with `[MailServer]` tag for troubleshooting delivery paths.
