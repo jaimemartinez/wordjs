@@ -94,7 +94,7 @@ A native, privacy-focused analytics engine built directly into WordJS to track t
 ### Architecture
 *   **Database:** Uses a dedicated table `wordjs_analytics` optimized for high-volume write operations.
 *   **Performance:** Uses `dbAsync` (SQLite WAL mode or Postgres) for non-blocking writes.
-*   **Privacy:** Tracks anonymized sessions and events; does not store invasive PII by default.
+*   **Privacy:** Tracks anonymized sessions using **SHA-256 hashing** with daily rotation. Raw IP addresses are **never** stored, ensuring GDPR compliance.
 
 ### Key Features
 1.  **Event Tracking:** Logs `page_view`, `api_call`, and custom `engagement` events.

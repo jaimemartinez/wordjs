@@ -36,9 +36,18 @@ class Analytics {
     async track({ type, resource, user_id = null, ip = null, metadata = {} }) {
         const id = uuidv4();
 
+        // PRIVACY: Anonymize IP
+        let visitor_ip = '0.0.0.0';
+        if (ip) {
+            const crypto = require('crypto');
+            // Use day as salt to rotate hashes daily for privacy
+            const date = new Date().toISOString().split('T')[0];
+            visitor_ip = crypto.createHash('sha256').update(`${ip}-${date}`).digest('hex').substring(0, 16);
+        }
+
         await dbAsync.run(
             `INSERT INTO ${this.tableName} (id, type, resource, visitor_ip, user_id, metadata, created_at) VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-            [id, type, resource, ip, user_id, JSON.stringify(metadata)]
+            [id, type, resource, visitor_ip, user_id, JSON.stringify(metadata)]
         );
 
         return id;
