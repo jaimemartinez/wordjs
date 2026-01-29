@@ -28,6 +28,7 @@ const notificationsRoutes = require('./notifications');
 const certsRoutes = require('./certs');
 const seoRoutes = require('./seo');
 const healthRoutes = require('./health');
+const hooksRoutes = require('./hooks');
 
 // API Info endpoint
 router.get('/', (req, res) => {
@@ -53,7 +54,8 @@ router.get('/', (req, res) => {
             export: '/api/v1/export',
             import: '/api/v1/import',
             roles: '/api/v1/roles',
-            notifications: '/api/v1/notifications'
+            notifications: '/api/v1/notifications',
+            hooks: '/api/v1/hooks'
         }
     });
 });
@@ -80,6 +82,7 @@ router.use('/fonts', require('./fonts'));
 router.use('/system/certs', certsRoutes);
 router.use('/health', healthRoutes);
 router.use('/seo', seoRoutes);
+router.use('/hooks', hooksRoutes);
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)
