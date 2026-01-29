@@ -168,6 +168,19 @@ User feedback on content.
 | `comment_type`         | VARCHAR    | `comment`        |
 | `user_id`              | INTEGER    | If registered    |
 
+### 2.8 `wordjs_analytics`
+High-volume event logging table for the internal analytics engine.
+
+| Column       | Type        | Description                                |
+| :----------- | :---------- | :----------------------------------------- |
+| `id`         | UUID PK     | Unique Event ID                            |
+| `type`       | VARCHAR     | `page_view`, `api_call`, `engagement`      |
+| `resource`   | VARCHAR     | The URL or resource accessed               |
+| `visitor_ip` | VARCHAR     | Anonymized or raw IP (depending on config) |
+| `user_id`    | VARCHAR     | User uuid (if logged in) or NULL           |
+| `metadata`   | TEXT (JSON) | Extra payload                              |
+| `created_at` | DATETIME    | Timestamp                                  |
+
 ---
 
 ## 3. Extending the Schema

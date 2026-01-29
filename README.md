@@ -23,7 +23,8 @@
 - **🌍 Internationalization (i18n):** Native multi-language support for core and plugins.
 - **🧩 Shortcodes:** WordPress-style shortcode system for dynamic content rendering.
 - **📦 Import/Export:** Full site backup and restoration capabilities.
-- **📦 Import/Export:** Full site backup and restoration capabilities.
+- **📊 Privacy-First Analytics:** Built-in tracking engine with **No Cookies**, real-time charts, and data ownership.
+- **🪝 Live Hook Registry:** Visual debugger for the event bus with real-time fire monitoring.
 - **🔐 Certificate Management:** Auto-provisioning of **Let's Encrypt** SSL certificates (HTTP-01) and manual upload support directly from the Admin Panel.
 - **✉️ Native Mail Server:** Full SMTP capabilities with internal routing, external delivery, and attachment handling.
 - **🛡️ High Availability:**
@@ -109,7 +110,6 @@ We are constantly evolving WordJS. Here's what's planned:
 
 - **☁️ Media CDN Integration:** Built-in support for S3-compatible cloud storage (AWS, DigitalOcean, etc.).
 - **🌐 Multi-Site Architecture:** Manage multiple domains and sites from a single WordJS installation.
-- **🧩 Global Hook Registry:** A more visual way to manage and discover Actions and Filters.
 
 ---
 
