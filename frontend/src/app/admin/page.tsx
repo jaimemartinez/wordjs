@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { postsApi, usersApi, commentsApi, systemApi, Comment, SystemStatus } from "@/lib/api";
+import { postsApi, usersApi, commentsApi, systemApi, api, Comment, SystemStatus } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 
@@ -11,6 +11,31 @@ interface Stats {
     comments: number;
     users: number;
 }
+
+interface ChartData {
+    name: string;
+    traffic: number;
+    engagement: number;
+}
+
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
+
+const weeklyData = [
+    { name: 'Mon', traffic: 4000, engagement: 2400 },
+    { name: 'Tue', traffic: 3000, engagement: 1398 },
+    { name: 'Wed', traffic: 2000, engagement: 9800 },
+    { name: 'Thu', traffic: 2780, engagement: 3908 },
+    { name: 'Fri', traffic: 1890, engagement: 4800 },
+    { name: 'Sat', traffic: 2390, engagement: 3800 },
+    { name: 'Sun', traffic: 3490, engagement: 4300 },
+];
+
+const monthlyData = [
+    { name: 'Week 1', traffic: 14000, engagement: 12400 },
+    { name: 'Week 2', traffic: 13000, engagement: 11398 },
+    { name: 'Week 3', traffic: 12000, engagement: 19800 },
+    { name: 'Week 4', traffic: 12780, engagement: 13908 },
+];
 
 // Premium Stat Card Component
 const StatCard = ({ label, value, icon, color, gradient }: { label: string, value: number, icon: string, color: string, gradient: string }) => (
@@ -69,20 +94,43 @@ const HealthIndicator = ({ label, status, detail, icon }: { label: string, statu
 export default function DashboardPage() {
     const { user, can } = useAuth();
     const { t } = useI18n();
+
+    // Core Dashboard State
     const [stats, setStats] = useState<Stats>({ posts: 0, pages: 0, comments: 0, users: 0 });
     const [recentComments, setRecentComments] = useState<Comment[]>([]);
     const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
     const [loading, setLoading] = useState(true);
 
+    // Analytics State
+    const [chartData, setChartData] = useState<ChartData[]>([]);
+    const [chartPeriod, setChartPeriod] = useState<'weekly' | 'monthly'>('weekly');
+
     useEffect(() => {
         loadData();
     }, []);
 
+    useEffect(() => {
+        loadAnalytics();
+    }, [chartPeriod]);
+
+    const loadAnalytics = async () => {
+        try {
+            const data = await api(`/analytics/stats?period=${chartPeriod}`);
+            setChartData(data as ChartData[]);
+        } catch (e) {
+            console.error('Failed to load analytics', e);
+        }
+    };
+
     const loadData = async () => {
         try {
+            loadAnalytics();
+
             const fetchUsers = can('list_users') ? usersApi.list() : Promise.resolve([]);
             const fetchComments = can('moderate_comments') ? commentsApi.list({ per_page: 5 }) : Promise.resolve([]);
             const fetchSystem = can('manage_options') ? systemApi.getStatus() : Promise.resolve(null);
+
+            // ... (keep rest of function)
 
             const [posts, pages, users, comments, system] = await Promise.all([
                 postsApi.list("post"),
@@ -246,7 +294,7 @@ export default function DashboardPage() {
                         </div>
                     </div>
 
-                    {/* Placeholder for Chart/Graph */}
+                    {/* Chart/Graph */}
                     <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-10 relative overflow-hidden group hover:shadow-2xl transition-all duration-500">
                         <div className="absolute top-0 right-0 w-64 h-64 bg-gray-50 rounded-full blur-[80px] opacity-50 pointer-events-none"></div>
                         <div className="flex items-center justify-between mb-8 relative z-10">
@@ -255,16 +303,73 @@ export default function DashboardPage() {
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-1">Traffic & Engagement</p>
                             </div>
                             <div className="flex gap-2">
-                                <span className="px-3 py-1 rounded-lg bg-gray-100 text-[10px] uppercase font-bold text-gray-500 tracking-wider">Weekly</span>
-                                <span className="px-3 py-1 rounded-lg bg-white border border-gray-200 text-[10px] uppercase font-bold text-gray-400 tracking-wider">Monthly</span>
+                                <button
+                                    onClick={() => setChartPeriod('weekly')}
+                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
+                                >
+                                    Weekly
+                                </button>
+                                <button
+                                    onClick={() => setChartPeriod('monthly')}
+                                    className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'monthly' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-400 hover:bg-gray-50'}`}
+                                >
+                                    Monthly
+                                </button>
                             </div>
                         </div>
 
-                        <div className="h-48 flex items-center justify-center border-2 border-dashed border-gray-100 rounded-[40px] bg-gray-50/50">
-                            <div className="text-center opacity-40">
-                                <i className="fa-solid fa-chart-area text-4xl mb-2 text-gray-400"></i>
-                                <p className="text-xs font-bold uppercase tracking-widest text-gray-400">Chart Visualization Coming Soon</p>
-                            </div>
+                        <div className="h-64 w-full">
+                            <ResponsiveContainer width="100%" height="100%">
+                                <AreaChart
+                                    data={chartData}
+                                    margin={{ top: 10, right: 10, left: 0, bottom: 0 }}
+                                >
+                                    <defs>
+                                        <linearGradient id="colorTraffic" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#2563eb" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#2563eb" stopOpacity={0} />
+                                        </linearGradient>
+                                        <linearGradient id="colorEngagement" x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="5%" stopColor="#7c3aed" stopOpacity={0.3} />
+                                            <stop offset="95%" stopColor="#7c3aed" stopOpacity={0} />
+                                        </linearGradient>
+                                    </defs>
+                                    <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                                    <XAxis
+                                        dataKey="name"
+                                        axisLine={false}
+                                        tickLine={false}
+                                        tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }}
+                                        dy={10}
+                                    />
+                                    <YAxis
+                                        axisLine={false}
+                                        tickLine={false}
+                                        tick={{ fontSize: 10, fill: '#94a3b8', fontWeight: 'bold' }}
+                                    />
+                                    <Tooltip
+                                        contentStyle={{ backgroundColor: '#fff', borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgba(0, 0, 0, 0.1)' }}
+                                        itemStyle={{ fontSize: '12px', fontWeight: 'bold' }}
+                                        labelStyle={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.05em' }}
+                                    />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="traffic"
+                                        stroke="#2563eb"
+                                        strokeWidth={3}
+                                        fillOpacity={1}
+                                        fill="url(#colorTraffic)"
+                                    />
+                                    <Area
+                                        type="monotone"
+                                        dataKey="engagement"
+                                        stroke="#7c3aed"
+                                        strokeWidth={3}
+                                        fillOpacity={1}
+                                        fill="url(#colorEngagement)"
+                                    />
+                                </AreaChart>
+                            </ResponsiveContainer>
                         </div>
                     </div>
                 </div>

@@ -146,6 +146,15 @@ function initCoreMenus() {
         order: 80,
         capability: 'manage_options'
     });
+
+    // 9. Tools (Hooks Registry)
+    registerAdminMenu('core', {
+        href: '/admin/hooks',
+        label: 'Hooks Registry',
+        icon: 'fa-microscope',
+        order: 90,
+        capability: 'manage_options'
+    });
 }
 
 function getAllRegisteredCapabilities() {
