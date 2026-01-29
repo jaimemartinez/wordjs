@@ -62,3 +62,45 @@ Enforces quality control by running unit tests before enabling a plugin.
 🧪 Running tests for plugin 'my-plugin'...
    ✅ All tests passed (5/5)
 ```
+
+---
+
+## 5. Hook System & Live Registry 🪝
+
+**Location:** `backend/src/core/hooks.js`
+
+The central event bus that allows Core and Plugins to communicate through Actions and Filters.
+
+### Features
+*   **Global Registry:** A unified dictionary of all active hooks in the system.
+*   **Admin UI:** Accessible via **Settings -> Hooks Registry** (`/admin/hooks`).
+*   **Live Monitoring:** A real-time timeline (using Server-Sent Events) to watch hooks fire as they happen.
+*   **Empty State Handling:** Gracefully handles cases where no hooks are currently registered by showing clear "No Actions/Filters found" states.
+
+### Key Components
+*   `addAction(hook, callback, priority)`: Register a function to run at a specific event.
+*   `addFilter(hook, callback, priority)`: Register a function to modify data.
+*   `doAction(hook, ...args)`: Trigger an event.
+*   `applyFilters(hook, value, ...args)`: Pass data through registered filters.
+
+---
+
+## 6. Analytics System 📊
+
+**Location:** `backend/src/models/Analytics.js` + `backend/src/routes/analytics.js`
+
+A native, privacy-focused analytics engine built directly into WordJS to track traffic and engagement without external dependencies (like Google Analytics).
+
+### Architecture
+*   **Database:** Uses a dedicated table `wordjs_analytics` optimized for high-volume write operations.
+*   **Performance:** Uses `dbAsync` (SQLite WAL mode or Postgres) for non-blocking writes.
+*   **Privacy:** Tracks anonymized sessions and events; does not store invasive PII by default.
+
+### Key Features
+1.  **Event Tracking:** Logs `page_view`, `api_call`, and custom `engagement` events.
+2.  **Aggregation:** Provides a `getStats(period)` method to aggregate raw logs into daily/weekly metrics for the Dashboard chart.
+3.  **Frontend Integration:** Includes a `<AnalyticsTracker />` component that automatically pings the server on route changes, handling Strict Mode debouncing and client-side navigation.
+
+### API Endpoints
+*   `POST /api/v1/analytics/track`: Public endpoint for reporting events (Beacon/Pixel).
+*   `GET /api/v1/analytics/stats`: Protected admin endpoint for retrieving aggregated chart data.

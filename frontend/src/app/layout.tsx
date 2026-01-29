@@ -4,6 +4,7 @@ import "./globals.css";
 import { headers } from 'next/headers';
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
 import { ModalProvider } from "@/contexts/ModalContext";
+import { AnalyticsTracker } from '@/components/AnalyticsTracker';
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -57,6 +58,7 @@ export default function RootLayout({
             <body className={inter.className} suppressHydrationWarning>
                 <ModalProvider>
                     <SystemFontsLoader />
+                    <AnalyticsTracker />
                     {children}
                 </ModalProvider>
             </body>

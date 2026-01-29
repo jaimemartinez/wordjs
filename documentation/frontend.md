@@ -190,6 +190,21 @@ The Admin Panel is fully responsive ("Mobile First").
     *   The `Sidebar.tsx` component overrides `isCollapsed` styles using `md:` prefixes (e.g., `md:w-24 w-80`) to ensure text labels are always visible on small screens.
     *   Uses a Backdrop (`z-[5001]`) and High Z-Index Sidebar (`z-[5002]`) to float above the interface.
 
-### Top Bar
-*   **Dynamic Branding:** Fetches site logo and title from the backend Settings API.
+*   **Top Bar:** Fetches site logo and title from the backend Settings API.
 *   **Notification Center:** Integrated directly into the mobile header as an "Inline" variant for easy access.
+
+---
+
+## Analytics & Tracking 📊
+
+The frontend includes a native tracking component that logs page views to the backend without external scripts.
+
+### `<AnalyticsTracker />`
+**Location:** `src/components/AnalyticsTracker.tsx`
+
+*   **Behavior:**
+    *   Listens to route changes via `usePathname()` and `useSearchParams()`.
+    *   Sends a `POST` request to `/api/v1/analytics/track` with the current URL and resource.
+    *   Debounces duplicate calls (e.g., from React Strict Mode).
+*   **Integration:**
+    *   Mounted in `src/app/layout.tsx` (the Root Layout) so it runs on every page load (Frontend and Admin).

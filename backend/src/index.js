@@ -278,6 +278,9 @@ app.use('/api/internal', require('./routes/internal'));
 const frontendRoutes = require('./routes/frontend');
 app.use(frontendRoutes);
 
+// Add analytics route
+app.use('/api/v1/analytics', require('./routes/analytics'));
+
 // Note: 404 and error handlers are registered in initialize() after plugins load
 
 /**
@@ -301,6 +304,10 @@ async function initialize() {
         // Initialize default options
         console.log('⚙️  Setting up default options...');
         await initDefaultOptions(config);
+
+        // Initialize Analytics Table
+        await require('./models/Analytics').init();
+
 
 
         // Register routes that were not in the initial index.js routes list if needed

@@ -176,6 +176,13 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST` | `/setup/install`          | No    | Run the installation wizard           |
 | `GET`  | `/export`                 | Admin | Download a database backup            |
 
+### 6.4 Analytics System 📊
+| Method | Endpoint           | Auth  | Description                        |
+| :----- | :----------------- | :---- | :--------------------------------- |
+| `POST` | `/analytics/track` | No    | Log a page view or event           |
+| `GET`  | `/analytics/stats` | Admin | Get aggregated stats for dashboard |
+
+
 ### 6.5 Certificate Management (SSL) 🔒
 Base path: `/api/v1/system/certs`
 

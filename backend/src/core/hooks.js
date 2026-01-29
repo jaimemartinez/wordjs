@@ -3,10 +3,45 @@
  * Equivalent to wp-includes/plugin.php (actions and filters)
  */
 
+const EventEmitter = require('events');
+
 class Hooks {
     constructor() {
         this.actions = new Map();
         this.filters = new Map();
+        this.monitor = new EventEmitter();
+        this.monitoringActive = 0; // Reference count
+    }
+
+    enableMonitoring() {
+        this.monitoringActive++;
+    }
+
+    disableMonitoring() {
+        if (this.monitoringActive > 0) this.monitoringActive--;
+    }
+
+    _emitMonitor(type, hook, args) {
+        if (this.monitoringActive > 0) {
+            // Light cloning to avoid reference issues in async transmission
+            // simplistic serialize for now to avoid circular json errors
+            const safeArgs = args.map(a => {
+                try {
+                    const type = typeof a;
+                    if (type === 'object' && a !== null) {
+                        return Array.isArray(a) ? `Array(${a.length})` : `Object(${a.constructor.name})`;
+                    }
+                    return a;
+                } catch (e) { return '[Circular/Unsafe]'; }
+            });
+
+            this.monitor.emit('hook:call', {
+                timestamp: Date.now(),
+                type,
+                hook,
+                args: safeArgs
+            });
+        }
     }
 
     /**
@@ -43,6 +78,7 @@ class Hooks {
      * Equivalent to do_action()
      */
     async doAction(hook, ...args) {
+        this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
         for (const { callback, pluginSlug } of this.actions.get(hook)) {
@@ -58,6 +94,7 @@ class Hooks {
      * Execute an action hook synchronously
      */
     doActionSync(hook, ...args) {
+        this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         for (const { callback } of this.actions.get(hook)) {
             callback(...args);
@@ -103,6 +140,7 @@ class Hooks {
      * Equivalent to apply_filters()
      */
     async applyFilters(hook, value, ...args) {
+        this._emitMonitor('filter', hook, [value, ...args]);
         if (!this.filters.has(hook)) return value;
         const { runWithContext } = require('./plugin-context');
         let result = value;
@@ -120,6 +158,7 @@ class Hooks {
      * Apply filters synchronously
      */
     applyFiltersSync(hook, value, ...args) {
+        this._emitMonitor('filter', hook, [value, ...args]);
         if (!this.filters.has(hook)) return value;
         let result = value;
         for (const { callback } of this.filters.get(hook)) {
@@ -142,6 +181,38 @@ class Hooks {
      */
     getActionCount(hook) {
         return this.actions.has(hook) ? this.actions.get(hook).length : 0;
+    }
+    /**
+     * Get all registered hooks (Actions and Filters)
+     * For debugging/admin registry
+     */
+    getHooks() {
+        const serializeHooks = (map) => {
+            const result = {};
+            for (const [hookName, handlers] of map.entries()) {
+                result[hookName] = handlers.map(h => {
+                    let fnName = h.callback.name;
+                    if (!fnName || fnName === 'anonymous') {
+                        // Extract preview of anonymous function
+                        const source = h.callback.toString()
+                            .replace(/\s+/g, ' ') // Collapse whitespace
+                            .substring(0, 60);    // Truncate
+                        fnName = `Anonymous: ${source}${source.length >= 60 ? '...' : ''}`;
+                    }
+                    return {
+                        priority: h.priority,
+                        pluginSlug: h.pluginSlug || 'core',
+                        callback: fnName
+                    };
+                });
+            }
+            return result;
+        };
+
+        return {
+            actions: serializeHooks(this.actions),
+            filters: serializeHooks(this.filters)
+        };
     }
 }
 

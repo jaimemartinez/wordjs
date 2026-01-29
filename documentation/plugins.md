@@ -315,7 +315,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ## 8. Advanced Features
 
-### 6.1 Admin Menus & Deduplication ⚠️
+### 8.1 Admin Menus & Deduplication ⚠️
 WordJS's frontend (`Sidebar.tsx`) automatically **deduplicates** menu items.
 *   **Core Items:** Dashboard, Media, Posts, Settings, etc., are hardcoded in the frontend.
 *   **Plugin Items:** Fetched from the backend.
@@ -326,7 +326,7 @@ Always use unique paths (e.g., `/admin/plugin/my-plugin-media`) unless you inten
 **Use `plugin: 'core'` filtering:**
 The backend marks standard menus with `plugin: 'core'`. The frontend filters these out from the dynamic list.
 
-### 6.2 Widgets API
+### 8.2 Widgets API
 Plugins can register "Widgets" using the backend API. These widgets appear in the `Widgets` admin panel and can be assigned to sidebars.
 
 ```javascript
@@ -339,11 +339,38 @@ registerWidget('my_weather_widget', {
 });
 ```
 
-### 6.3 Sending Notifications 🔔
+### 8.3 Sending Notifications 🔔
 Plugins can push real-time alerts to the Admin UI.
 See **[Notification System](notifications.md)** for full details.
 
-### 6.4 Sending Emails 📧
+### 8.4 Sending Emails 📧
 If the Mail Server plugin is active, you can send emails easily.
 See **[Mail Server](mail-server.md)** for full details.
+
+### 8.5 Hook System (Actions & Filters) 🪝
+WordJS exposes a global hook system similar to WordPress. You can plug into core events or modify data.
+
+**Using Actions (Do something):**
+```javascript
+const { addAction } = require('../../src/core/hooks');
+
+addAction('init', () => {
+    console.log('System is ready!');
+});
+```
+
+**Using Filters (Modify something):**
+```javascript
+const { addFilter } = require('../../src/core/hooks');
+
+addFilter('the_content', (content) => {
+    return content + '<p>Modified by my plugin!</p>';
+});
+```
+
+**Debugging Hooks:**
+You can use the **Hooks Registry** in the Admin Panel (`/admin/hooks`) to:
+1.  **Inspect:** See exactly which hooks are registered and by whom.
+2.  **Live Monitor:** Watch events fire in real-time to debug timing issues.
+
 
