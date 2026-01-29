@@ -11,6 +11,9 @@ const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
  * SSE Endpoint for real-time notifications
  */
 router.get('/stream', authenticateAllowQuery, (req, res) => {
+    const startTime = Date.now();
+    console.log(`[SSE] 📥 New Stream Request from User ${req.user.id} (IP: ${req.ip})`);
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -21,13 +24,27 @@ router.get('/stream', authenticateAllowQuery, (req, res) => {
 
     notificationService.addClient(res, req.user.id);
 
-    // Keep connection alive
+    // Keep connection alive (Ping every 5s to prevent proxy timeouts)
     const keepAlive = setInterval(() => {
-        res.write(': keepalive\n\n');
-    }, 30000);
+        if (res.writableTimeout || res.writable) {
+            try {
+                // console.debug(`[SSE] 💓 Ping User ${req.user.id}`); // Optional: Uncomment for extreme debug
+                res.write(': keepalive\n\n');
+            } catch (e) {
+                console.error(`[SSE] ❌ Keepalive Failed for User ${req.user.id}: ${e.message}`);
+                clearInterval(keepAlive);
+            }
+        } else {
+            console.warn(`[SSE] ⚠️ Socket not writable for User ${req.user.id}. Terminating loop.`);
+            clearInterval(keepAlive);
+        }
+    }, 5000); // Reduced from 30s to 5s
 
     req.on('close', () => {
+        const duration = (Date.now() - startTime) / 1000;
+        console.log(`[SSE] 🛑 Stream Closed for User ${req.user.id} after ${duration}s`);
         clearInterval(keepAlive);
+        notificationService.removeClient(req.user.id, res);
     });
 });
 

@@ -323,6 +323,7 @@ export const themesApi = {
 
 export const settingsApi = {
     get: () => apiGet<Record<string, string>>("/settings"),
+    getAll: () => apiGet<Record<string, string>>("/settings/all"),
     update: (data: Record<string, string>) => apiPut("/settings", data),
 };
 

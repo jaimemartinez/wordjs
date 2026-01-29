@@ -68,7 +68,9 @@ const ALL_SETTINGS = [
     'large_size_w',
     'large_size_w',
     'large_size_h',
-    'backup_schedule' // Backup Scheduler Frequency
+    'backup_schedule', // Backup Scheduler Frequency
+    'backup_time',     // Backup Time of Day (HH:mm)
+    'backup_day'       // Backup Day (0-6)
 ];
 
 /**

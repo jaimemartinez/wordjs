@@ -35,6 +35,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         fetchUser();
     }, []);
 
+    // Sliding Window Session Logic
+    useEffect(() => {
+        if (!user) return; // Only track if logged in
+
+        let lastActivity = Date.now();
+        const ACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 minutes
+        const REFRESH_INTERVAL = 15 * 60 * 1000; // 15 minutes checking cycle
+
+        const updateActivity = () => {
+            // Throttling could be added here if needed, but simple assignment is cheap
+            lastActivity = Date.now();
+        };
+
+        // Listeners for activity
+        const events = ['mousedown', 'keydown', 'scroll', 'touchstart'];
+        events.forEach(event => window.addEventListener(event, updateActivity));
+
+        const checkActivity = async () => {
+            const now = Date.now();
+            // If active within the last 30 minutes
+            if (now - lastActivity < ACTIVITY_TIMEOUT) {
+                try {
+                    // Refresh token to extend session
+                    await fetch(`${API_URL}/auth/refresh`, {
+                        method: "POST",
+                        credentials: "include",
+                    });
+                    console.debug("Session extended via Sliding Window");
+                } catch (err) {
+                    console.warn("Failed to extend session", err);
+                }
+            }
+        };
+
+        const intervalId = setInterval(checkActivity, REFRESH_INTERVAL);
+
+        return () => {
+            events.forEach(event => window.removeEventListener(event, updateActivity));
+            clearInterval(intervalId);
+        };
+    }, [user]);
+
     const fetchUser = async () => {
         try {
             const res = await fetch(`${API_URL}/auth/me`, {

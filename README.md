@@ -23,8 +23,13 @@
 - **🌍 Internationalization (i18n):** Native multi-language support for core and plugins.
 - **🧩 Shortcodes:** WordPress-style shortcode system for dynamic content rendering.
 - **📦 Import/Export:** Full site backup and restoration capabilities.
+- **📦 Import/Export:** Full site backup and restoration capabilities.
 - **🔐 Certificate Management:** Auto-provisioning of **Let's Encrypt** SSL certificates (HTTP-01) and manual upload support directly from the Admin Panel.
-- **🚀 High Availability:** Cluster Mode architecture with circuit breaking and auto-healing services.
+- **✉️ Native Mail Server:** Full SMTP capabilities with internal routing, external delivery, and attachment handling.
+- **🛡️ High Availability:**
+    - **Cluster Mode:** Multiprocess architecture with circuit breaking.
+    - **Self-Healing:** Automatic service recovery and database synchronization.
+    - **Resilient Connectivity:** SSE with exponential backoff and 1-hour connection buffers.
 
 ---
 
@@ -56,10 +61,13 @@ Detailed guides are available in the [`documentation/`](documentation/) folder:
 - 🛰️ **[Gateway Guide](documentation/gateway.md)**: Reverse proxy and service registration logic.
 - 🖥️ **[Frontend Guide](documentation/frontend.md)**: Next.js structure, visual editor, and Puck components.
 - 🎨 **[Themes Guide](documentation/themes.md)**: CSS variables, available themes, and creating custom themes.
+- 🎨 **[Themes Guide](documentation/themes.md)**: CSS variables, available themes, and creating custom themes.
 - 🔌 **[Plugin Tutorial](documentation/plugins.md)**: Step-by-step guide to creating your first plugin.
+- ✉️ **[Mail Server Guide](documentation/mail-server.md)**: SMTP configuration, internal routing, and API usage.
 - 🗄️ **[Database Guide](documentation/database.md)**: SQLite and PostgreSQL configuration.
 - 🚀 **[Deployment Guide](documentation/deployment.md)**: How to host WordJS on a production server.
 - 🔐 **[Security Policy](SECURITY.md)**: Vulnerability reporting and active defenses.
+- 🔔 **[Notifications System](documentation/notifications.md)**: Real-time transport architecture.
 
 ---
 

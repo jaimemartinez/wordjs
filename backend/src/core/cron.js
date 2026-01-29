@@ -239,7 +239,11 @@ function registerCronJob(name, callback) {
  * ('hourly', 'daily', 'weekly', 'off')
  */
 async function rescheduleBackup(frequency) {
-    console.log(`⏰ Cron: Rescheduling backup to '${frequency}'`);
+    if (!frequency) frequency = await getOption('backup_schedule', 'daily');
+    const time = await getOption('backup_time', '00:00'); // Default midnight
+    const day = parseInt(await getOption('backup_day', '1')); // Default Monday (1)
+
+    console.log(`⏰ Cron: Rescheduling backup to '${frequency}' at '${time}' (Day: ${day})`);
 
     // 1. Clear existing generic backup hook
     await clearScheduledHook('wordjs_scheduled_backup');
@@ -251,9 +255,47 @@ async function rescheduleBackup(frequency) {
         return;
     }
 
-    // 2. Schedule new
-    await scheduleEvent(Date.now(), frequency, 'wordjs_scheduled_backup');
-    console.log(`   Next backup scheduled: Now + ${frequency}`);
+    // 2. Calculate Start Time
+    let nextRun = new Date();
+    const [hours, minutes] = time.split(':').map(Number);
+
+    nextRun.setHours(hours, minutes, 0, 0);
+
+    // Logic for next run
+    if (frequency === 'weekly') {
+        const currentDay = nextRun.getDay(); // 0 = Sunday
+        let daysUntilTarget = day - currentDay;
+
+        if (daysUntilTarget < 0) {
+            daysUntilTarget += 7;
+        }
+
+        // If today is the target day but time has passed, move to next week
+        if (daysUntilTarget === 0 && nextRun.getTime() <= Date.now()) {
+            daysUntilTarget = 7;
+        } else if (daysUntilTarget === 0 && nextRun.getTime() > Date.now()) {
+            // Today is the day and time hasn't passed, do nothing (keep today)
+        } else {
+            // Add days
+            nextRun.setDate(nextRun.getDate() + daysUntilTarget);
+        }
+
+    } else if (nextRun.getTime() <= Date.now()) {
+        // Time has passed for today (Daily/Hourly fallback logic)
+
+        if (frequency === 'daily') {
+            nextRun.setDate(nextRun.getDate() + 1);
+        } else if (frequency === 'hourly') {
+            // Align to next hour
+            nextRun.setHours(nextRun.getHours() + 1);
+        } else {
+            // twicedaily etc - just move to tomorrow
+            nextRun.setDate(nextRun.getDate() + 1);
+        }
+    }
+
+    await scheduleEvent(nextRun.getTime(), frequency, 'wordjs_scheduled_backup');
+    console.log(`   Next backup scheduled: ${nextRun.toISOString()}`);
 }
 
 /**
@@ -308,6 +350,9 @@ async function initDefaultCronEvents() {
     addAction('updated_option', async (name, value) => {
         if (name === 'backup_schedule') {
             await rescheduleBackup(value);
+        }
+        if (name === 'backup_time' || name === 'backup_day') {
+            await rescheduleBackup();
         }
     });
 }

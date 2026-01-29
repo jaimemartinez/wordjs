@@ -1,0 +1,28 @@
+{
+  "jwtSecret": "7b737b1dd7b91df2922f36bc5611933e38665529e3cbc518f058202eae99abc3db7e29baf6e573e3c4ce1cb",
+  "siteName": "My wordJS Site",
+  "siteUrl": "https://localhost:3000",
+  "frontendUrl": "https://localhost:3001",
+  "gatewayPort": 3000,
+  "gatewayInternalPort": 3100,
+  "gatewaySecret": "b7da753da4ad373bf082fb3e8a89b8325b88b7151bcd5322e9c8886579be8a58",
+  "dbDriver": "sqlite-native",
+  "dbPath": "./data/wordjs-native.db",
+  "ssl": {
+    "enabled": true
+  },
+  "mtls": {
+    "ca": "./certs/cluster-ca.crt",
+    "key": "./certs/backend.key",
+    "cert": "./certs/backend.crt"
+  },
+  "updatedAt": "2026-01-25T02:16:34.292Z",
+  "dbPassword": "9b16919462c13a977c0f24d99d863118",
+  "db": {
+    "host": "localhost",
+    "port": "5433",
+    "user": "postgres",
+    "name": "wordjs",
+    "password": "password"
+  }
+}

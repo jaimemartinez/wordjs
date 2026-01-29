@@ -37,11 +37,13 @@ The frontend (`frontend`) connects to the SSE stream at `/api/v1/notifications/s
 *   **`NotificationCenter.tsx`**: The main UI component in the top bar. It handles receiving events, playing sounds, and managing unread counts.
 *   **`ToastContext.tsx`**: Displays transient "toast" popups for incoming notifications.
 
-### Global Events
-When a notification arrives, the browser dispatches a window event:
-
 ```javascript
 window.addEventListener('wordjs:notification', (e) => {
     console.log('New notification received:', e.detail);
 });
 ```
+
+## Stability Improvements (Jan 2026)
+*   **Heartbeat:** Server sends Keep-Alive pings every 5 seconds to detect dead connections instantly.
+*   **Resiliency:** Frontend implements **Exponential Backoff** (1s -> 30s) to prevent reconnection storms during outages.
+*   **Context Aware:** Connection state tracks accurate `user.id` to avoid duplicate streams on minor React state changes.

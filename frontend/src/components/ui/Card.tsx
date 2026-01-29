@@ -12,6 +12,7 @@ interface CardProps {
     className?: string;
     hoverable?: boolean;
     padding?: "none" | "sm" | "md" | "lg";
+    overflow?: "hidden" | "visible";
 }
 
 const variantClasses: Record<CardVariant, string> = {
@@ -48,8 +49,9 @@ export function Card({
     className = "",
     hoverable = false,
     padding = "lg",
+    overflow = "hidden",
 }: CardProps) {
-    const baseClasses = "rounded-[40px] overflow-hidden relative";
+    const baseClasses = `rounded-[40px] relative ${overflow === "hidden" ? "overflow-hidden" : "overflow-visible"}`;
     const variantClass = variant === "accent" ? accentColorClasses[color] : variantClasses[variant];
     const hoverClasses = hoverable
         ? "hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 cursor-pointer"
