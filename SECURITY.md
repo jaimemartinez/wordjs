@@ -13,8 +13,8 @@ WordJS is built with a "Security First" architecture.
 - **Identity Isolation**: mTLS authentication between Gateway, Backend, and Services.
 
 ### Vulnerability Management
-- **Dependency Scanning**: Automated `npm audit` checks.
-- **Deep Static Analysis (SAST)**: Regular scans for Injection, RCE, and Secrets.
+- **Deep Static Analysis (SAST)**: AST-based scanning of plugins to block Injection, RCE, and Obfuscation.
+- **Dependency Conflict Check**: Strict SemVer verification to prevent plugin dependency collision.
 
 ## 🐛 Reporting a Vulnerability
 
