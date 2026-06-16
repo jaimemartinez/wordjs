@@ -63,7 +63,6 @@
     "uuid": "^10.0.0"
   },
   "optionalDependencies": {
-    "//": "Embedded Postgres is OPT-IN (db.embedded:true). It spawns a PG server process + native binaries; kept optional so a normal install (SQLite or external Postgres) never depends on it and never fails if it can't build.",
     "embedded-postgres": "^18.1.0-beta.15"
   },
   "devDependencies": {
