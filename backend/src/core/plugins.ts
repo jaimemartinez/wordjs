@@ -9,6 +9,7 @@ const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const fs = require('fs');
 const path = require('path');
 const { addAction, doAction, addFilter } = require('./hooks');
+const { createPluginApi } = require('./plugin-api');
 const { getOption, updateOption } = require('./options');
 
 const semver = require('semver');
@@ -768,9 +769,9 @@ async function activatePlugin(slug) {
 
         // Call init/activate function if exists
         if (typeof pluginModule.init === 'function') {
-            await runWithContext(slug, () => pluginModule.init());
+            await runWithContext(slug, () => pluginModule.init(createPluginApi(slug)));
         } else if (typeof pluginModule.activate === 'function') {
-            await runWithContext(slug, () => pluginModule.activate());
+            await runWithContext(slug, () => pluginModule.activate(createPluginApi(slug)));
         }
 
         // Reorder middleware to ensure plugin routes work
@@ -915,7 +916,7 @@ async function loadActivePlugins() {
 
             if (typeof pluginModule.init === 'function') {
                 console.log(`   ⚙️  Calling init() for ${slug}...`);
-                await runWithContext(slug, () => pluginModule.init());
+                await runWithContext(slug, () => pluginModule.init(createPluginApi(slug)));
                 console.log(`   ✅  init() completed for ${slug}`);
             }
 
