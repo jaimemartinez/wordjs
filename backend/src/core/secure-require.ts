@@ -539,7 +539,7 @@ function installSecureRequire() {
             if (typeof cb === 'function') {
                 const slug = timerCtx.getEffectivePlugin();
                 if (slug) {
-                    const wrapped = function (...a) { return timerCtx.runWithContext(slug, () => cb.apply(this, a)); };
+                    const wrapped = function (this: any, ...a: any[]) { return timerCtx.runWithContext(slug, () => cb.apply(this, a)); };
                     return orig.call(this, wrapped, ...rest);
                 }
             }
@@ -563,7 +563,7 @@ function installSecureRequire() {
             if (slug && typeof listener === 'function') {
                 let wrapped = (listener as any).__wordjsWrapped;
                 if (!wrapped) {
-                    wrapped = function (...a) { return emCtx.runWithContext(slug, () => listener.apply(this, a)); };
+                    wrapped = function (this: any, ...a: any[]) { return emCtx.runWithContext(slug, () => listener.apply(this, a)); };
                     try { Object.defineProperty(listener, '__wordjsWrapped', { value: wrapped, configurable: true, enumerable: false }); }
                     catch (e) { return orig.call(this, event, listener); }
                 }

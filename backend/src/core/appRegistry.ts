@@ -19,7 +19,7 @@ const ROUTE_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head
 function wrapHandler(slug, fn) {
     if (typeof fn !== 'function') return fn;
     const { runWithContext } = require('./plugin-context');
-    const wrapped = function (...args) {
+    const wrapped = function (this: any, ...args: any[]) {
         return runWithContext(slug, () => fn.apply(this, args));
     };
     // Preserve arity so Express still detects 4-arg error-handling middleware.
