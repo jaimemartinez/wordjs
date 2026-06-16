@@ -175,16 +175,27 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 const p = pendingShortcode.get(msg.id);
                 if (p) { pendingShortcode.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
             } else if (msg.kind === 'register-mail-provider') {
-                // This isolate provides the host-wide mail send. Install a shim that RPCs it.
-                (global as any).wordjs_send_mail = (mailMsg: any) => invokeMail(mailMsg);
+                // Becoming the host-wide mail sender is host-level hijack potential, so it is
+                // restricted to operator-trusted plugins (config.trustedSystemPlugins) — an untrusted
+                // uploaded plugin cannot intercept everyone's outbound mail.
+                if (isTrustedPlugin(slug)) {
+                    (global as any).wordjs_send_mail = (mailMsg: any) => invokeMail(mailMsg);
+                } else {
+                    console.warn(`[Isolate ${slug}] provideMail denied: only operator-trusted plugins may register the host mail sender.`);
+                }
             } else if (msg.kind === 'mail-reply') {
                 const p = pendingMail.get(msg.id);
                 if (p) { pendingMail.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
             } else if (msg.kind === 'register-notify-transport') {
-                // Register a core notification transport backed by this isolate over RPC.
-                try {
-                    require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification));
-                } catch (e: any) { console.warn(`[Isolate ${slug}] notify transport register failed:`, e && e.message); }
+                // Registering a core notification transport can intercept dispatched notifications,
+                // so it is likewise restricted to operator-trusted plugins.
+                if (isTrustedPlugin(slug)) {
+                    try {
+                        require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification));
+                    } catch (e: any) { console.warn(`[Isolate ${slug}] notify transport register failed:`, e && e.message); }
+                } else {
+                    console.warn(`[Isolate ${slug}] notify.registerTransport denied: only operator-trusted plugins may register a notification transport.`);
+                }
             } else if (msg.kind === 'notify-transport-reply') {
                 const p = pendingTransport.get(msg.id);
                 if (p) { pendingTransport.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
