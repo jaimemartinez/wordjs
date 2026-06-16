@@ -2,6 +2,8 @@ const nodemailer = require('nodemailer');
 const { SMTPServer } = require('smtp-server');
 const { simpleParser } = require('mailparser');
 const dns = require('dns').promises;
+const net = require('net');
+const SPFValidator = require('spf-validator');
 const Email = require('../../src/models/Email');
 const { authenticate } = require('../../src/middleware/auth');
 const User = require('../../src/models/User');
@@ -74,6 +76,121 @@ async function resolveMX(domain) {
 }
 
 /**
+ * Real inbound SPF evaluation.
+ *
+ * The installed `spf-validator` package (new SPFValidator(domain).hasRecords(cb)) only reports
+ * whether a domain *has* an SPF record — it does NOT evaluate a policy against an IP. So we use it
+ * to short-circuit the 'none' case, then parse the v=spf1 record ourselves and match the connecting
+ * IP against the a / mx / ip4 / ip6 / include mechanisms and the trailing `all` qualifier.
+ *
+ * Returns one of: 'pass' | 'fail' | 'softfail' | 'neutral' | 'none'.
+ * Fails OPEN (throws → caller tags 'none') on any DNS error/timeout.
+ */
+async function evaluateSPF(domain, ip, depth = 0) {
+    if (!ip || depth > 5) return 'none'; // guard against include loops / missing IP
+
+    // 1. Presence check via the spf-validator library.
+    const validator = new SPFValidator(domain);
+    const hasRecords = await new Promise((resolve, reject) => {
+        validator.hasRecords((err, has) => (err ? reject(err) : resolve(has)));
+    });
+    if (!hasRecords) return 'none';
+
+    // 2. Fetch and locate the v=spf1 record.
+    const txt = await dns.resolveTxt(domain);
+    const records = txt.map(chunks => chunks.join(''));
+    const spf = records.find(r => /^v=spf1\b/i.test(r.trim()));
+    if (!spf) return 'none';
+
+    // 3. Evaluate mechanisms left-to-right; first match wins.
+    const terms = spf.trim().split(/\s+/).slice(1); // drop "v=spf1"
+    let defaultQualifier = '?'; // neutral if no all/match
+    for (const term of terms) {
+        const qualifier = '+-~?'.includes(term[0]) ? term[0] : '+';
+        const mechanism = '+-~?'.includes(term[0]) ? term.slice(1) : term;
+        // Split on the first ':' or '=' into mechanism name and its value (a:host, ip4:cidr, include:dom).
+        const sepMatch = mechanism.match(/[:=]/);
+        const name = sepMatch ? mechanism.slice(0, sepMatch.index) : mechanism;
+        const value = sepMatch ? mechanism.slice(sepMatch.index + 1) : null;
+
+        let matched = false;
+        try {
+            if (name === 'all') {
+                defaultQualifier = qualifier;
+                matched = true;
+            } else if (name === 'ip4' || name === 'ip6') {
+                matched = ipInCidr(ip, value);
+            } else if (name === 'a') {
+                const host = value || domain;
+                const addrs = await dns.resolve(host).catch(() => []);
+                matched = addrs.includes(ip);
+            } else if (name === 'mx') {
+                const host = value || domain;
+                const mx = await dns.resolveMx(host).catch(() => []);
+                for (const rec of mx) {
+                    const addrs = await dns.resolve(rec.exchange).catch(() => []);
+                    if (addrs.includes(ip)) { matched = true; break; }
+                }
+            } else if (name === 'include' && value) {
+                // Recurse into the included policy; a 'pass' there counts as a match here.
+                const sub = await evaluateSPF(value, ip, depth + 1);
+                matched = sub === 'pass';
+            }
+            // Unknown mechanisms (ptr, exists, redirect, etc.) are ignored — conservative.
+        } catch (e) {
+            // Ignore a single mechanism's lookup failure and keep evaluating.
+            matched = false;
+        }
+
+        if (matched && name !== 'all') return qualifierToResult(qualifier);
+        if (name === 'all') return qualifierToResult(qualifier);
+    }
+    return qualifierToResult(defaultQualifier);
+}
+
+function qualifierToResult(q) {
+    if (q === '+') return 'pass';
+    if (q === '-') return 'fail';
+    if (q === '~') return 'softfail';
+    return 'neutral'; // '?'
+}
+
+/**
+ * Match an IP against a CIDR or bare address (IPv4/IPv6). No external deps.
+ */
+function ipInCidr(ip, cidr) {
+    if (!cidr) return false;
+    const [range, bitsRaw] = cidr.split('/');
+    const v4 = net.isIPv4(ip) && net.isIPv4(range);
+    const v6 = net.isIPv6(ip) && net.isIPv6(range);
+    if (!v4 && !v6) return false;
+
+    const toBig = (addr, isV6) => {
+        if (!isV6) {
+            return addr.split('.').reduce((acc, o) => (acc << 8n) + BigInt(parseInt(o, 10)), 0n);
+        }
+        // Expand IPv6 to 8 hextets.
+        let [head, tail] = addr.split('::');
+        const h = head ? head.split(':') : [];
+        const t = tail !== undefined ? (tail ? tail.split(':') : []) : null;
+        let parts;
+        if (t === null) { parts = h; }
+        else { parts = [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]; }
+        return parts.reduce((acc, p) => (acc << 16n) + BigInt(parseInt(p || '0', 16)), 0n);
+    };
+
+    const isV6 = v6;
+    const totalBits = isV6 ? 128 : 32;
+    const bits = bitsRaw === undefined ? totalBits : parseInt(bitsRaw, 10);
+    if (isNaN(bits) || bits < 0 || bits > totalBits) return false;
+
+    const ipBig = toBig(ip, isV6);
+    const rangeBig = toBig(range, isV6);
+    const mask = bits === 0 ? 0n : (~0n << BigInt(totalBits - bits)) & ((1n << BigInt(totalBits)) - 1n);
+    return (ipBig & mask) === (rangeBig & mask);
+}
+
+/**
  * Initialize the Inbound SMTP Server
  */
 async function initSMTPServer() {
@@ -110,16 +227,39 @@ async function initSMTPServer() {
             });
         },
 
-        // 2. SPF Protection
+        // 2. SPF Protection — real check against the connecting IP and MAIL FROM domain.
         onMailFrom(address, session, callback) {
-            getOption('mail_security_spf_enabled', '0').then(enabled => {
+            getOption('mail_security_spf_enabled', '0').then(async (enabled) => {
                 if (enabled !== '1') return callback();
 
-                // Placeholder for SPF check - full implementation requires robust DNS TXT parsing
-                // or a working library. We set a header for downstream processing.
-                session.spfheader = `Received-SPF: none (wordjs: no SPF check for ${address.address})`;
+                const ip = session.remoteAddress;
+                const mailFrom = (address && address.address) || '';
+                const domain = mailFrom.split('@')[1] || '';
+
+                // Fail OPEN on any problem: no domain, validator error, or DNS timeout → tag 'none', accept.
+                let result = 'none';
+                try {
+                    if (domain) result = await evaluateSPF(domain, ip);
+                } catch (e) {
+                    console.warn(`[Security][SPF] evaluation error for ${domain} (${ip}): ${e.message} — failing open`);
+                    result = 'none';
+                }
+
+                // Set the Received-SPF header for downstream storage (RFC 7208 §9.1 shape).
+                session.spfheader = `Received-SPF: ${result} (wordjs: ${domain || 'unknown'} via ${ip})`;
+                session.spfResult = result;
+
+                // Optionally reject hard failures, but only if explicitly enabled (default: just tag).
+                if (result === 'fail') {
+                    const rejectRaw = await getOption('mail_security_spf_reject', '0');
+                    if (rejectRaw === '1') {
+                        console.warn(`[Security][SPF] Rejecting ${mailFrom} from ${ip} (hard SPF fail)`);
+                        return callback(new Error('550 SPF check failed: sending IP not authorized for ' + domain));
+                    }
+                    console.warn(`[Security][SPF] SPF fail for ${mailFrom} from ${ip} — tagged only (reject disabled)`);
+                }
                 callback();
-            });
+            }).catch(() => callback()); // Fail open if the option lookup itself throws.
         },
 
         onData(stream, session, callback) {
@@ -267,8 +407,15 @@ async function sendMail(data) {
     // 1. Create Sent Copy (Source of Truth)
     // We do this first to ensure we have a record even if delivery fails partially
     // This is stored in the SENDER'S "Sent" folder (or updated if draft)
+    // sentRecordId tracks the row so the retry queue can update (not duplicate) it.
+    // On a retry pass (data.isRetry) we already have a Sent record and the recipients passed in are
+    // exactly the still-failed external ones: skip creating a new Sent copy and skip local delivery.
+    const isRetry = !!data.isRetry;
+    let sentRecordId = draftId || data.sentRecordId || 0;
     try {
-        if (draftId) {
+        if (isRetry) {
+            // Reuse the existing Sent record; nothing to (re)create.
+        } else if (draftId) {
             console.log(`[MailServer] Updating draft ${draftId} to Sent status.`);
             await Email.update(draftId, {
                 toAddress: toAttendees.join(', '),
@@ -284,7 +431,7 @@ async function sendMail(data) {
             });
         } else {
             console.log(`[MailServer] Creating new Sent email record.`);
-            await Email.create({
+            const sentRec = await Email.create({
                 messageId: `<sent-${Date.now()}@wordjs.com>`,
                 fromAddress: fromEmail.toLowerCase(),
                 fromName: fromName,
@@ -300,6 +447,7 @@ async function sendMail(data) {
                 threadId,
                 attachments: data.attachments
             });
+            sentRecordId = sentRec ? sentRec.id : 0;
         }
     } catch (e) {
         console.error('[MailServer] Failed to save/update SENT record:', e);
@@ -315,7 +463,9 @@ async function sendMail(data) {
     // Track which recipients are local so we filter them out of SMTP
     const localRecipients = new Set();
 
-    for (const recipient of distinctRecipients) {
+    // On a retry pass the local inbox copies were already delivered on the first attempt;
+    // the recipients we were handed are the still-failed EXTERNAL ones. Skip local delivery.
+    for (const recipient of (isRetry ? [] : distinctRecipients)) {
         try {
             console.log(`[MailServer] Checking recipient: ${recipient}`);
             const [rName, rDomain] = recipient.split('@');
@@ -420,9 +570,90 @@ async function sendMail(data) {
         }
     }
 
+    // Update the retry queue state on the Sent record (Feature: retry temporary failures).
+    // Only meaningful when we actually attempted external delivery and have a record to track.
+    await updateRetryState(sentRecordId, data, externalRecipients, failed);
+
     // Surface delivery outcome so callers (the /send, /test endpoints) report accurately instead of
     // silently "succeeding". The Sent record + local inbox copies are already persisted above.
     return { success: failed.length === 0, delivered, failed };
+}
+
+const MAX_DELIVERY_ATTEMPTS = 5;
+
+/**
+ * Persist outbound retry state on the Sent record based on this attempt's outcome.
+ * - all external recipients delivered (or none were external) → 'sent'
+ * - any PERMANENT failure (5xx) and no temporary ones → 'failed' immediately + bounce
+ * - temporary (4xx/network) failures → 'retry' with exponential backoff, until MAX attempts → 'failed' + bounce
+ * The list of recipients to retry is stored as the record's to_address so the next pass targets
+ * exactly the still-failed ones.
+ */
+async function updateRetryState(sentRecordId, data, externalRecipients, failed) {
+    if (!sentRecordId) return;
+    // No external delivery was attempted (purely local) — leave as a normal sent message.
+    if (externalRecipients.length === 0 && (!failed || failed.length === 0)) {
+        try { await Email.markSent(sentRecordId); } catch (e) { /* non-fatal */ }
+        return;
+    }
+
+    if (!failed || failed.length === 0) {
+        try { await Email.markSent(sentRecordId); } catch (e) { /* non-fatal */ }
+        return;
+    }
+
+    const attempts = (parseInt(data.deliveryAttempts, 10) || 0) + 1;
+    const temporary = failed.filter(f => !f.permanent);
+    const permanent = failed.filter(f => f.permanent);
+    const lastError = failed.map(f => `${f.recipient}: ${f.error}`).join('; ');
+
+    // Permanent failures never retry. If everything left is permanent (or we're out of attempts),
+    // mark failed and bounce to the sender.
+    if (temporary.length === 0 || attempts >= MAX_DELIVERY_ATTEMPTS) {
+        try {
+            await Email.markFailed(sentRecordId, attempts, lastError);
+            // Persist the failed recipients for visibility.
+            await Email.update(sentRecordId, { toAddress: failed.map(f => f.recipient).join(', ') });
+        } catch (e) { /* non-fatal */ }
+        await sendBounce(data, failed);
+        return;
+    }
+
+    // Schedule a retry for the temporary failures only. Exponential backoff: attempt^2 minutes, cap ~6h.
+    const backoffMinutes = Math.min(attempts * attempts, 360);
+    const nextAttemptAt = new Date(Date.now() + backoffMinutes * 60 * 1000).toISOString();
+    try {
+        await Email.markRetry(sentRecordId, attempts, nextAttemptAt, lastError);
+        // Store ONLY the still-failed recipients so the next pass retries exactly those.
+        await Email.update(sentRecordId, { toAddress: temporary.map(f => f.recipient).join(', ') });
+    } catch (e) { /* non-fatal */ }
+
+    // If there were also permanent failures mixed in, bounce those now (they won't be retried).
+    if (permanent.length > 0) await sendBounce(data, permanent);
+}
+
+/**
+ * Best-effort bounce notification to the sender for permanently failed recipients.
+ */
+async function sendBounce(data, failedList) {
+    try {
+        const fromEmail = (data.fromEmail || '').toLowerCase();
+        if (!fromEmail) return;
+        const user = await User.findByEmail(fromEmail);
+        if (!user || !user.id) return;
+        const detail = failedList.map(f => `${f.recipient} (${f.error})`).join(', ');
+        await notificationService.send({
+            user_id: user.id,
+            type: 'alert',
+            title: 'Email delivery failed',
+            message: `Could not deliver "${data.subject}" to: ${detail}`,
+            icon: 'fa-exclamation-triangle',
+            color: 'red',
+            transports: ['db', 'sse']
+        });
+    } catch (e) {
+        console.error('[MailServer] Failed to send bounce notification:', e.message);
+    }
 }
 
 /**
@@ -608,6 +839,49 @@ exports.init = async function () {
             }
         } catch (e) {
             console.error('[MailServer] Scheduled queue error:', e);
+        }
+
+        // Retry queue: re-attempt outbound emails whose temporary failures are now due.
+        try {
+            const retries = await Email.getPendingRetries();
+            if (retries.length > 0) console.log(`[MailServer] Processing ${retries.length} retry emails...`);
+
+            for (const email of retries) {
+                try {
+                    // to_address holds exactly the still-failed (external) recipients for this row.
+                    const recipients = (email.to_address || '').split(',').map(s => s.trim()).filter(Boolean);
+                    if (recipients.length === 0) {
+                        await Email.markFailed(email.id, email.delivery_attempts || 0, 'No recipients to retry');
+                        continue;
+                    }
+
+                    const attachments = await Email.getAttachments(email.id);
+                    const formattedAttachments = attachments.map(att => ({
+                        filename: att.filename,
+                        path: path.join(__dirname, '../../uploads/mail-attachments', att.storage_path)
+                    }));
+
+                    await sendMail({
+                        to: recipients,
+                        subject: email.subject,
+                        text: email.body_text,
+                        html: email.body_html,
+                        fromEmail: email.from_address,
+                        fromName: email.from_name,
+                        parentId: email.parent_id,
+                        threadId: email.thread_id,
+                        // Reuse the existing Sent record instead of creating a duplicate copy.
+                        isRetry: true,
+                        sentRecordId: email.id,
+                        deliveryAttempts: email.delivery_attempts || 0,
+                        attachments: formattedAttachments
+                    });
+                } catch (err) {
+                    console.error(`[MailServer] Failed to retry email ${email.id}:`, err);
+                }
+            }
+        } catch (e) {
+            console.error('[MailServer] Retry queue error:', e);
         }
     }, 60 * 1000);
 
@@ -914,7 +1188,8 @@ exports.init = async function () {
             mail_security_dkim_selector: await getOption('mail_security_dkim_selector', 'default'),
             mail_security_dkim_enabled: (await getOption('mail_security_dkim_private_key', '')) ? '1' : '0',
             mail_security_dnsbl_enabled: await getOption('mail_security_dnsbl_enabled', '0'),
-            mail_security_spf_enabled: await getOption('mail_security_spf_enabled', '0')
+            mail_security_spf_enabled: await getOption('mail_security_spf_enabled', '0'),
+            mail_security_spf_reject: await getOption('mail_security_spf_reject', '0')
             // NOTE: the DKIM private key is never returned (secret).
         });
     });
@@ -926,7 +1201,7 @@ exports.init = async function () {
             'smtp_listen_port', 'smtp_catch_all',
             'mail_helo_host',
             'mail_security_dkim_domain', 'mail_security_dkim_selector',
-            'mail_security_dnsbl_enabled', 'mail_security_spf_enabled'
+            'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject'
         ];
 
         for (const f of fields) {
