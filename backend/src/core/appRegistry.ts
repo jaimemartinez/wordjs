@@ -29,31 +29,45 @@ function wrapHandler(slug, fn) {
     return wrapped;
 }
 
-/**
- * Patch the app's routing methods so plugin-registered handlers run inside the plugin context.
- * Core registrations (no effective plugin at registration time) are left untouched.
- */
-function anchorPluginRoutes(app) {
-    if (!app || app.__wordjsAnchored) return;
+// Patch the ROUTE_METHODS on a target (app instance OR a shared prototype) so that any
+// handler registered while a plugin is the effective plugin is wrapped to re-enter its
+// context. Core registrations (no effective plugin at registration time) are untouched.
+function patchRouteMethods(target) {
+    if (!target || target.__wordjsAnchored) return;
     const { getEffectivePlugin } = require('./plugin-context');
-
     for (const method of ROUTE_METHODS) {
-        const original = app[method];
+        const original = target[method];
         if (typeof original !== 'function') continue;
-
-        app[method] = function (...args) {
+        target[method] = function (...args) {
             const slug = getEffectivePlugin();
             if (slug) {
-                // Wrap every handler/middleware function argument; leave paths/options as-is.
                 args = args.map(a => (typeof a === 'function' ? wrapHandler(slug, a) : a));
             }
             return original.apply(this, args);
         };
     }
-
     try {
-        Object.defineProperty(app, '__wordjsAnchored', { value: true, enumerable: false });
+        Object.defineProperty(target, '__wordjsAnchored', { value: true, enumerable: false });
     } catch { /* non-fatal */ }
+}
+
+function anchorPluginRoutes(app) {
+    patchRouteMethods(app);
+}
+
+// CRITICAL: plugins register routes on `express.Router()` instances, NOT the app instance.
+// Those routers share a prototype; patch it ONCE so every plugin Router is anchored too.
+// Also covers the `app.route()` -> Route object via Route.prototype.
+function anchorExpressRouter() {
+    try {
+        const express = require('express');
+        const routerProto = Object.getPrototypeOf(express.Router());
+        patchRouteMethods(routerProto);
+        // Also cover app.route('/x').get(...) via the Route prototype, if reachable.
+        try {
+            patchRouteMethods(require('express/lib/router/route').prototype);
+        } catch { /* express internals layout may differ; Router proto is the main path */ }
+    } catch { /* express not resolvable here; app-instance patch still applies */ }
 }
 
 module.exports = {
@@ -63,6 +77,7 @@ module.exports = {
     setApp(app) {
         appInstance = app;
         anchorPluginRoutes(app);
+        anchorExpressRouter();
     },
 
     /**
