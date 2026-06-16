@@ -10,8 +10,10 @@ import Footer from "@/components/public/Footer";
 import { Data } from "@measured/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 export default function PostEditorPage() {
+    const { t } = useI18n();
     const router = useRouter();
     const params = useParams();
     const isNew = params.id === "new";
@@ -134,7 +136,7 @@ export default function PostEditorPage() {
             const finalSlug = root?.props?.slug || root?.slug || slug;
 
             if (!finalTitle) {
-                await alert("Title is required before saving.");
+                await alert(t('post.edit.titleRequired'));
                 setSaving(false);
                 return;
             }
@@ -164,14 +166,14 @@ export default function PostEditorPage() {
             setIsDirty(false); // Reset dirty state after successful save
         } catch (error: any) {
             console.error("Failed to save post:", error);
-            await alert(`Failed to save post: ${error.message || "Unknown error"}`);
+            await alert(`${t('post.edit.saveFailed')}: ${error.message || t('post.edit.unknownError')}`);
         } finally {
             setSaving(false);
         }
     };
 
     if (isLoading) {
-        return <div className="p-8 text-center text-gray-500">Loading editor...</div>;
+        return <div className="p-8 text-center text-gray-500">{t('post.edit.loading')}</div>;
     }
 
     return (
