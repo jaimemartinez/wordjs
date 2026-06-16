@@ -216,29 +216,51 @@ const originalRequire = Module.prototype.require;
  * Install the secure require hook
  * This intercepts require() calls and returns secure versions of sensitive modules
  */
-function installSecureRequire() {
-    Module.prototype.require = function (id) {
-        // Only sensitive modules need interception. Resolve the effective plugin (context OR
-        // call stack) ONLY for those ids so normal requires pay zero extra cost, while a plugin
-        // requiring fs/child_process from a detached context (route handler, timer) is still caught.
-        if (id === 'fs' || id === 'child_process' || id === 'fs/promises') {
-            const pluginSlug = getEffectivePlugin();
-            if (pluginSlug) {
-                if (id === 'fs') {
-                    return secureFs;
-                }
-                if (id === 'child_process') {
-                    return secureChildProcess;
-                }
-                if (id === 'fs/promises') {
-                    return createSecureFsPromises();
-                }
-            }
-        }
+// Resolve the secure replacement for a sensitive module id when a plugin is effective
+// (context OR call stack). Returns undefined for non-sensitive ids / core code, so callers
+// fall through to the original loader. Only sensitive ids pay the effective-plugin cost.
+function secureModuleFor(id) {
+    if (id !== 'fs' && id !== 'child_process' && id !== 'fs/promises') return undefined;
+    const pluginSlug = getEffectivePlugin();
+    if (!pluginSlug) return undefined;
+    if (id === 'fs') return secureFs;
+    if (id === 'child_process') return secureChildProcess;
+    return createSecureFsPromises();
+}
 
-        // For everything else, use original require
+function installSecureRequire() {
+    // 1. Patch Module.prototype.require (the normal `require('fs')` path).
+    Module.prototype.require = function (id) {
+        const secure = secureModuleFor(id);
+        if (secure !== undefined) return secure;
         return originalRequire.apply(this, arguments);
     };
+
+    // 2. Patch the lower-level Module._load too. Obfuscation paths like
+    //    `require('module').constructor._load('child_process')` bypass Module.prototype.require
+    //    but still go through _load, so guard it identically.
+    const originalLoad = Module._load;
+    Module._load = function (request, _parent, _isMain) {
+        const secure = secureModuleFor(request);
+        if (secure !== undefined) return secure;
+        return originalLoad.apply(this, arguments);
+    };
+
+    // 3. Block raw native bindings for plugins. process.binding('fs')/('spawn_sync') and
+    //    _linkedBinding hand out unproxied syscalls, escaping the require-based guards entirely.
+    //    (dlopen is intentionally NOT blocked — legitimate native addons load through it.)
+    for (const m of ['binding', '_linkedBinding']) {
+        const orig = (process as any)[m];
+        if (typeof orig === 'function') {
+            (process as any)[m] = function (...args) {
+                const pluginSlug = getEffectivePlugin();
+                if (pluginSlug) {
+                    throw createSecurityError(pluginSlug, `process.${m}`, 'native bindings are blocked for plugins');
+                }
+                return orig.apply(this, args);
+            };
+        }
+    }
 
     console.log('🛡️ Secure Require: Runtime security hooks installed for fs and child_process');
 }
