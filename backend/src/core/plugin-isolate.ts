@@ -74,7 +74,12 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         const invokeRoute = (routeId: string, req: any) => rpcSend(pendingRoute, { kind: 'invoke-route', routeId, req });
 
         const pendingShortcode = new Map<number, any>();
-        const registeredShortcodes: string[] = []; // tags to remove when the isolate exits
+        // Everything the plugin registers in host-side state, tracked so we can fully tear it
+        // down on unload/reload — otherwise a stale route/hook/shortcode would RPC a dead worker.
+        const registeredShortcodes: string[] = [];                                  // shortcode tags
+        const registeredRoutes: Array<{ m: string; full: string }> = [];            // mounted Express routes
+        const registeredHooks: Array<{ hook: string; type: string; shim: Function }> = []; // hook/filter shims
+        let providedMail = false;                                                   // did this plugin become the mail sender
         const invokeShortcode = (scId: string, payload: any) => rpcSend(pendingShortcode, { kind: 'invoke-shortcode', scId, ...payload });
 
         const pendingMail = new Map<number, any>();
@@ -99,6 +104,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'register') {
                 // Install a shim in the real hook system that calls back into the isolate.
                 const shim = (...args: any[]) => invokeWorker(msg.cbId, args);
+                registeredHooks.push({ hook: msg.hook, type: msg.hookType, shim });
                 runWithContext(slug, () => {
                     if (msg.hookType === 'filter') hooks.addFilter(msg.hook, shim, msg.priority);
                     else hooks.addAction(msg.hook, shim, msg.priority);
@@ -157,6 +163,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     ? msg.routePath
                     : `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
                 runWithContext(slug, () => app[m](full, ...mw, finalHandler));
+                registeredRoutes.push({ m, full });
             } else if (msg.kind === 'route-reply') {
                 rpcSettle(pendingRoute, msg, msg.response);
             } else if (msg.kind === 'register-shortcode') {
@@ -174,6 +181,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 // uploaded plugin cannot intercept everyone's outbound mail.
                 if (isTrustedPlugin(slug)) {
                     (global as any).wordjs_send_mail = (mailMsg: any) => invokeMail(mailMsg);
+                    providedMail = true;
                 } else {
                     console.warn(`[Isolate ${slug}] provideMail denied: only operator-trusted plugins may register the host mail sender.`);
                 }
@@ -194,21 +202,64 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             }
         });
 
+        // Remove every host-side registration this plugin made. Idempotent (safe to call twice)
+        // so it can run both from unloadIsolatedPlugin and as a crash safety-net in 'exit'.
+        const teardown = () => {
+            // Routes: splice the plugin's layers out of the Express stack (Express 4 has no public
+            // unmount API), so a request to its path no longer reaches a dead worker.
+            try {
+                const { getApp } = require('./appRegistry');
+                const app = getApp();
+                const stack = app && app._router && app._router.stack;
+                if (Array.isArray(stack) && registeredRoutes.length) {
+                    for (const { m, full } of registeredRoutes) {
+                        for (let i = stack.length - 1; i >= 0; i--) {
+                            const r = stack[i] && stack[i].route;
+                            if (r && r.path === full && r.methods && r.methods[m]) stack.splice(i, 1);
+                        }
+                    }
+                }
+            } catch { /* */ }
+            for (const { hook, type, shim } of registeredHooks) {
+                try { type === 'filter' ? hooks.removeFilter(hook, shim) : hooks.removeAction(hook, shim); } catch { /* */ }
+            }
+            for (const tag of registeredShortcodes) { try { removeShortcode(tag); } catch { /* */ } }
+            if (providedMail && (global as any).wordjs_send_mail) { try { delete (global as any).wordjs_send_mail; } catch { /* */ } }
+            try { require('./notifications').unregisterPluginTransports(slug); } catch { /* */ }
+            try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
+        };
+
         worker.on('error', (err: any) => { console.error(`[Isolate ${slug}] worker error:`, err.message); reject(err); });
         worker.on('exit', (code: number) => {
-            isolates.delete(slug);
-            // Drop the plugin's shortcodes so a dead isolate isn't RPC'd on the next render.
-            for (const tag of registeredShortcodes) { try { removeShortcode(tag); } catch { /* */ } }
+            // Only act if WE are still the registered isolate — on reload a fresh worker has already
+            // replaced us, and tearing down here would rip out the new worker's registrations.
+            const cur = isolates.get(slug);
+            if (cur && cur.worker === worker) { isolates.delete(slug); try { teardown(); } catch { /* */ } }
             if (code !== 0) console.warn(`[Isolate ${slug}] worker exited with code ${code}`);
         });
 
-        isolates.set(slug, { worker });
+        isolates.set(slug, { worker, teardown, entryFile });
     });
 }
 
 function unloadIsolatedPlugin(slug: string) {
     const h = isolates.get(slug);
-    if (h) { try { h.worker.terminate(); } catch (e) { /* */ } isolates.delete(slug); }
+    if (h) {
+        try { h.teardown && h.teardown(); } catch (e) { /* */ }
+        try { h.worker.terminate(); } catch (e) { /* */ }
+        isolates.delete(slug);
+    }
 }
 
-module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug) };
+// Tear the plugin down and start it again, reusing the entry file from the original load. Used by
+// the trust toggle so a now-trusted/untrusted plugin re-registers its routes (namespaced ↔ absolute)
+// and re-evaluates host-capability gates without a full server restart. No-op if not loaded.
+async function reloadIsolatedPlugin(slug: string): Promise<any> {
+    const h = isolates.get(slug);
+    if (!h || !h.entryFile) return null;
+    const entryFile = h.entryFile;
+    unloadIsolatedPlugin(slug);
+    return loadIsolatedPlugin(slug, entryFile);
+}
+
+module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug) };

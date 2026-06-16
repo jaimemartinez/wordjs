@@ -341,13 +341,25 @@ router.post('/:slug/trust', authenticate, isAdmin, asyncHandler(async (req, res)
     const trusted = !!(req.body && req.body.trusted);
     await setTrusted(slug, trusted);
 
+    // Reload the worker so its routes re-mount under the new tier (namespaced ↔ absolute) and the
+    // host-capability gates re-evaluate — no server restart needed. Best-effort: trust is already
+    // persisted, so a reload hiccup (e.g. plugin not currently running) must not fail the toggle.
+    let reloaded = false;
+    try {
+        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
+    } catch (e: any) {
+        console.warn(`[Trust] reload of '${slug}' after trust change failed:`, e && e.message);
+    }
+
     res.json({
         success: true,
         slug,
         trusted: isTrusted(slug),
+        reloaded,
         message: trusted
-            ? `Plugin '${slug}' is now TRUSTED — it can reach core data, secret options and host capabilities. Data-access takes effect immediately; restart to also re-mount its routes at non-namespaced paths.`
-            : `Trust revoked for '${slug}' — it is sandboxed again.`
+            ? `Plugin '${slug}' is now TRUSTED — it can reach core data, secret options and host capabilities.${reloaded ? ' Its worker was reloaded, so the change is fully in effect.' : ' Restart the server (or reactivate the plugin) to fully apply.'}`
+            : `Trust revoked for '${slug}' — it is sandboxed again.${reloaded ? ' Its worker was reloaded.' : ''}`
     });
 }));
 
