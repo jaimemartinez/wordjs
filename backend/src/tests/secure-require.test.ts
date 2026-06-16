@@ -462,6 +462,22 @@ test('express.Router() handler is ALS-anchored (#1)', () => {
     expect(res.seen).toBe('router-evil');
 });
 
+test('Plugin is denied symlink creation even in its own dir (#9)', () => {
+    const secureFs = createSecureFs();
+    runWithContext('test-malicious-plugin', () => {
+        expectThrows(() => secureFs.symlinkSync('/etc', '/tmp/evil-link'), 'not permitted');
+    });
+});
+
+test('Plugin is blocked from writing a manifest.json (#6)', () => {
+    const { isPathSafe } = require('../core/io-guard');
+    const pluginsDir = path.resolve(__dirname, '../../plugins');
+    runWithContext('test-malicious-plugin', () => {
+        const ok = isPathSafe(path.join(pluginsDir, 'test-malicious-plugin', 'manifest.json'), true);
+        expect(ok).toBeFalse();
+    });
+});
+
 // ============================================
 // Summary
 // ============================================
