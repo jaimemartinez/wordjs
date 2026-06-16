@@ -383,6 +383,18 @@ test('Plugin-registered route handler is ALS-anchored even when invoked detached
     expect(res.seen).toBe('anchored-evil');
 });
 
+test('Slug spoofing: an eval frame faking a plugins/ sourceURL is NOT attributed that slug', () => {
+    const pc = require('../core/plugin-context');
+    const fakeFile = path.resolve(__dirname, '../../plugins/conference-manager/spoof.js'); // does NOT exist
+    let detected: any = 'unset';
+    // eval'd code whose CallSite getFileName() is the fake plugins/ path via //# sourceURL.
+    const code = "detected = require('../core/plugin-context').getPluginFromStack();\n//# sourceURL=" + fakeFile;
+    // eslint-disable-next-line no-eval
+    (function () { eval(code); })();
+    // realpath of the non-existent fake file fails → not attributed; must not borrow a real slug.
+    expect(detected !== 'conference-manager').toBeTrue();
+});
+
 // ============================================
 // Summary
 // ============================================

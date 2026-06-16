@@ -28,11 +28,28 @@ function getCurrentPlugin() {
     return context ? context.pluginSlug : null;
 }
 
-// Regexes to detect a plugin/theme source frame in a V8 stack trace.
-// Matches the real plugins/ and themes/ directories (e.g. ".../plugins/<slug>/index.js"),
-// NOT core files like "src/core/plugins.ts" (which is "/core/plugins.ts", no trailing "/<slug>/").
+// Regexes to detect a plugin/theme source frame in a V8 stack trace (string fallback only).
 const PLUGIN_FRAME_RE = /[\\/]plugins[\\/]([A-Za-z0-9_.-]+)[\\/]/;
 const THEME_FRAME_RE = /[\\/]themes[\\/]([A-Za-z0-9_.-]+)[\\/]/;
+
+// Real (symlink-resolved) plugin/theme dirs — the slug is only trusted if a stack frame's file
+// actually resolves to a real file UNDER these dirs (defeats sourceURL/path-substring spoofing).
+let REAL_PLUGINS_DIR: string;
+let REAL_THEMES_DIR: string;
+try { REAL_PLUGINS_DIR = fs.realpathSync(PLUGINS_DIR); } catch { REAL_PLUGINS_DIR = path.resolve(PLUGINS_DIR); }
+try { REAL_THEMES_DIR = fs.realpathSync(THEMES_DIR); } catch { REAL_THEMES_DIR = path.resolve(THEMES_DIR); }
+
+// Resolve a stack frame's file to a plugin/theme slug ONLY if it is a real file under the real
+// dir. Returns null for non-existent (eval/sourceURL-spoofed) or out-of-dir files.
+function slugForFile(fileName: string, baseDir: string, prefix = ''): string | null {
+    if (!fileName) return null;
+    let real: string;
+    try { real = fs.realpathSync(fileName); } catch { return null; } // unverifiable → do not attribute
+    const baseWithSep = baseDir + path.sep;
+    if (!real.startsWith(baseWithSep)) return null;
+    const seg = real.slice(baseWithSep.length).split(path.sep)[0];
+    return seg ? prefix + seg : null;
+}
 
 /**
  * SECURITY: Fallback plugin detection via the call stack.
@@ -47,24 +64,41 @@ const THEME_FRAME_RE = /[\\/]themes[\\/]([A-Za-z0-9_.-]+)[\\/]/;
  */
 function getPluginFromStack(stack?: string): string | null {
     if (!stack) {
-        const holder: any = {};
-        // A malicious plugin can set Error.stackTraceLimit = 0 or override
-        // Error.prepareStackTrace to blind this scan. Save and force safe values locally,
-        // then restore in finally. We do NOT freeze these globally — ts-node /
-        // source-map-support legitimately set prepareStackTrace.
+        // Authoritative path: read structured CallSites and resolve each frame's real file under
+        // the real plugins/themes dir. A malicious plugin can set Error.stackTraceLimit = 0 or
+        // override Error.prepareStackTrace to blind this — save/force/restore locally (NOT frozen
+        // globally; ts-node/source-map-support legitimately set prepareStackTrace).
         const savedLimit = Error.stackTraceLimit;
         const savedPrepare = Error.prepareStackTrace;
         try {
             Error.stackTraceLimit = 200;
-            Error.prepareStackTrace = undefined;
+            Error.prepareStackTrace = (_e: any, frames: any) => frames; // raw CallSite[]
+            const holder: any = {};
             Error.captureStackTrace(holder, getPluginFromStack);
-            stack = holder.stack || '';
+            const frames = holder.stack;
+            if (Array.isArray(frames)) {
+                for (const f of frames) {
+                    let fileName: string | null = null;
+                    try { fileName = f.getFileName ? f.getFileName() : null; } catch { fileName = null; }
+                    if (!fileName) continue;
+                    // Cheap pre-filter so core frames don't pay a realpath syscall.
+                    if (fileName.indexOf('plugins') === -1 && fileName.indexOf('themes') === -1) continue;
+                    const p = slugForFile(fileName, REAL_PLUGINS_DIR);
+                    if (p) return p;
+                    const t = slugForFile(fileName, REAL_THEMES_DIR, 'theme:');
+                    if (t) return t;
+                }
+                return null;
+            }
+        } catch {
+            /* fall through to string scan */
         } finally {
             Error.stackTraceLimit = savedLimit;
             Error.prepareStackTrace = savedPrepare;
         }
     }
-    const lines = String(stack).split('\n');
+    // String fallback (only when a stack string is passed in, e.g. tests): regex scan.
+    const lines = String(stack || '').split('\n');
     for (const line of lines) {
         const p = line.match(PLUGIN_FRAME_RE);
         if (p) return p[1];
