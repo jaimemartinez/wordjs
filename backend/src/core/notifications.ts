@@ -10,7 +10,7 @@ const { hooks } = require('./hooks');
 const { verifyPermission } = require('./plugin-context');
 
 class NotificationService {
-    transports: Map<string, Function>;
+    transports: Map<string, { handler: Function; pluginSlug: string | null }>;
     clients: Set<any>;
 
     constructor() {
@@ -51,7 +51,10 @@ class NotificationService {
      * @param {Function} handler - Function to call when sending a notification
      */
     registerTransport(name, handler) {
-        this.transports.set(name, handler);
+        // Capture the registering plugin (if any) so its handler runs in its sandbox context
+        // when fired later by core's notify loop (otherwise it would run detached = trusted).
+        const { getCurrentPlugin } = require('./plugin-context');
+        this.transports.set(name, { handler, pluginSlug: getCurrentPlugin() });
         console.log(`📦 Notification Transport Registered: ${name}`);
     }
 
@@ -109,9 +112,13 @@ class NotificationService {
         // Execute all relevant transports
         const promises: Promise<any>[] = [];
         for (const name of targetTransports) {
-            const handler = this.transports.get(name);
-            if (handler) {
-                promises.push(Promise.resolve(handler(notification)));
+            const entry = this.transports.get(name);
+            if (entry) {
+                const { handler, pluginSlug } = entry;
+                const invoke = pluginSlug
+                    ? () => require('./plugin-context').runWithContext(pluginSlug, () => handler(notification))
+                    : () => handler(notification);
+                promises.push(Promise.resolve(invoke()));
             }
         }
 

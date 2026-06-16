@@ -37,6 +37,11 @@ const FS_WRITE_METHODS = [
     'write', 'writeSync', 'ftruncate', 'ftruncateSync'
 ];
 
+// Link-creating fs methods are DENIED for plugins entirely (even in their own dir): a plugin
+// could create a symlink pointing outside its dir and then follow it, and they enable
+// check-then-write TOCTOU races on containment. Plugins have no legitimate need for them.
+const FS_LINK_DENIED = ['symlink', 'symlinkSync', 'link', 'linkSync'];
+
 // All child_process methods are BLOCKED for plugins
 const CHILD_PROCESS_BLOCKED = [
     'exec', 'execSync', 'execFile', 'execFileSync',
@@ -142,6 +147,13 @@ function createSecureFs() {
                 return originalMethod;
             }
 
+            // Link/symlink creation is denied for plugins outright (TOCTOU + escape vector).
+            if (FS_LINK_DENIED.includes(prop)) {
+                return function () {
+                    throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'creating links/symlinks is not permitted for plugins');
+                };
+            }
+
             // Check if this is a read method
             if (FS_READ_METHODS.includes(prop)) {
                 return function (...args) {
@@ -219,8 +231,9 @@ function createSecureChildProcess() {
             // Check if this is a blocked method
             if (CHILD_PROCESS_BLOCKED.includes(prop)) {
                 return function (...args) {
-                    // Only allow if plugin has explicit 'system:admin' permission
-                    if (hasPermission('system', 'admin')) {
+                    // Allow only if the plugin declares system:admin AND is an operator-trusted
+                    // plugin (trustedSystemPlugins) — a self-declared/self-rewritten manifest is not enough.
+                    if (hasPermission('system', 'admin') && trustedPlugins().has(pluginSlug)) {
                         console.warn(`⚠️ Plugin '${pluginSlug}' executing shell command with SYSTEM permission: ${prop}`);
                         return originalMethod.apply(target, args);
                     }
@@ -262,7 +275,7 @@ const originalRequire = Module.prototype.require;
 // Modules whose entire surface is unsafe for plugins (worker spawning, arbitrary code
 // compilation, internal Module machinery, debugger control). We return a Proxy that
 // resolves fine but throws on ANY use, so require() succeeds but the module is inert.
-const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector'];
+const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events'];
 
 function createBlockedModuleProxy(pluginSlug, norm) {
     // Regular (non-arrow) function so it is usable as both a call target and a
