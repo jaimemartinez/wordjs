@@ -11,6 +11,7 @@ import RevisionsSidebar from "./RevisionsSidebar";
 import { revisionsApi, Revision } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 interface PuckEditorProps {
     initialData?: Data;
@@ -56,7 +57,7 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
             <div
                 id={elementId || undefined}
                 className="prose max-w-none"
-                dangerouslySetInnerHTML={{ __html: actualContent }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHTML(actualContent) }}
             />
         );
     }
@@ -144,7 +145,7 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
             <div
                 id={elementId || undefined}
                 className="prose max-w-none"
-                dangerouslySetInnerHTML={{ __html: actualContent }}
+                dangerouslySetInnerHTML={{ __html: sanitizeHTML(actualContent) }}
             />
         </div>
     );
