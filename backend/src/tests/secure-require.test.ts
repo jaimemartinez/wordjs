@@ -405,10 +405,14 @@ console.log('\n🧩 Core-module policy + fs.promises + Router anchoring:');
     // would otherwise run with the plugin on the stack and be (correctly) blocked.
     require('../config/app');
     require('../core/options');
+    require('../config/database');
 
     const pluginDir = path.join(path.resolve(__dirname, '../../plugins'), 'test-policy-plugin');
     const runnerPath = path.join(pluginDir, 'runner.js');
     if (!fs.existsSync(pluginDir)) fs.mkdirSync(pluginDir, { recursive: true });
+    // Manifest grants database:read so the dbAsync permission gate passes — isolating MY table-scoping
+    // guard (a permissioned plugin still must not touch users/options).
+    fs.writeFileSync(path.join(pluginDir, 'manifest.json'), JSON.stringify({ name: 'test-policy-plugin', permissions: [{ scope: 'database', access: 'read' }] }));
     fs.writeFileSync(runnerPath,
         "module.exports = {\n" +
         "  reqImportExport: () => require('../../src/core/import-export'),\n" +
@@ -416,6 +420,8 @@ console.log('\n🧩 Core-module policy + fs.promises + Router anchoring:');
         "  reqConfig: () => require('../../src/config/app'),\n" +
         "  reqOptions: () => require('../../src/core/options'),\n" +
         "  promisesEscape: () => require('fs').promises.readFile('/etc/passwd','utf8'),\n" +
+        "  dbUsers: () => require('../../src/config/database').dbAsync.all('SELECT * FROM users'),\n" +
+        "  dbOwn: () => require('../../src/config/database').dbAsync.all('SELECT 1 FROM sqlite_master WHERE 0'),\n" +
         "};\n");
     let runner: any;
     try { runner = require(runnerPath); } catch (e) { /* ignore */ }
@@ -435,14 +441,17 @@ console.log('\n🧩 Core-module policy + fs.promises + Router anchoring:');
         const opt = runner.reqOptions();
         expect(typeof opt.getOption).toBe('function');
     });
+    test('dbAsync scoping: plugin SQL on the users table is blocked (#dbscope)', () => {
+        expectThrows(() => runner.dbUsers(), 'dbAsync');
+    });
     test('fs.promises is proxied for plugins — escape outside dir rejects (#2)', async () => {
         let blocked = false;
         try { await runner.promisesEscape(); } catch (e) { blocked = /SECURITY BLOCK/i.test(e.message); }
         expect(blocked).toBeTrue();
     });
 
-    if (fs.existsSync(runnerPath)) { delete require.cache[require.resolve(runnerPath)]; fs.unlinkSync(runnerPath); }
-    try { fs.rmdirSync(pluginDir); } catch { /* */ }
+    if (fs.existsSync(runnerPath)) { delete require.cache[require.resolve(runnerPath)]; }
+    try { fs.rmSync(pluginDir, { recursive: true, force: true }); } catch { /* */ }
 })();
 
 test('express.Router() handler is ALS-anchored (#1)', () => {

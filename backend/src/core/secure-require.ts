@@ -381,7 +381,57 @@ function secureConfig() {
     return _secureConfig;
 }
 
-// Returns a replacement module (sanitized config), THROWS for blocked core modules, or
+const CONFIG_DB = path.join(CORE_DIR, '../config', 'database');
+
+// Core tables holding credentials / roles / secrets. Plugins get a SCOPED dbAsync that refuses
+// raw SQL touching these, so `database` permission can't be abused to read password hashes
+// (users), self-escalate (user_meta role), or steal stored secrets (options). Plugins use their
+// OWN tables (and the getOption/User APIs) for legitimate needs; trusted plugins are unrestricted.
+const PROTECTED_CORE_TABLES = new Set([
+    'users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions'
+]);
+
+function extractSqlTables(sql): string[] {
+    const out: string[] = [];
+    const re = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+["'`\[]?([a-z_][a-z0-9_]*)/gi;
+    let m;
+    while ((m = re.exec(String(sql || '')))) out.push(m[1].toLowerCase());
+    return out;
+}
+
+function guardPluginSql(sql) {
+    for (const t of extractSqlTables(sql)) {
+        if (PROTECTED_CORE_TABLES.has(t)) {
+            throw createSecurityError(getEffectivePlugin() || 'plugin', `dbAsync(${t})`,
+                'plugins may not access core credential/role/option tables via raw SQL');
+        }
+    }
+}
+
+let _secureDb: any = null;
+function secureDatabase() {
+    if (!_secureDb) {
+        const real: any = originalRequire.call(module, '../config/database');
+        const rawDb = real && real.dbAsync;
+        if (!rawDb) { _secureDb = real; return _secureDb; }
+        const guardedDb = new Proxy(rawDb, {
+            get(t: any, p) {
+                const v = t[p];
+                if (typeof v === 'function' && (p === 'run' || p === 'get' || p === 'all' || p === 'exec' || p === 'each')) {
+                    return function (sql, ...rest) { guardPluginSql(sql); return v.call(t, sql, ...rest); };
+                }
+                return v;
+            }
+        });
+        _secureDb = new Proxy(real, {
+            get(t: any, p) { return p === 'dbAsync' ? guardedDb : t[p]; },
+            set() { return false; }
+        });
+    }
+    return _secureDb;
+}
+
+// Returns a replacement module (sanitized config / scoped db), THROWS for blocked core modules, or
 // undefined to fall through. Keys on the REQUIRING module: only a plugin/theme file's OWN
 // requires are policed (core->core requires are always allowed, even inside a plugin context).
 function corePolicyFor(request, mod): any {
@@ -394,6 +444,7 @@ function corePolicyFor(request, mod): any {
     try { resolved = Module._resolveFilename(request, mod); } catch { return undefined; }
     const noExt = resolved.replace(/\.[cm]?[jt]s$/, '');
     if (noExt === CONFIG_APP) return secureConfig();
+    if (noExt === CONFIG_DB) return secureDatabase();
     if (BLOCKED_CORE.has(noExt)) {
         throw createSecurityError(slug, `require('${request}')`, 'this core module is not accessible to plugins');
     }

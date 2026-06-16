@@ -96,6 +96,21 @@ class Hooks {
     }
 
     /**
+     * Execute an action hook but ONLY invoke callbacks registered by a specific plugin, each in
+     * that plugin's context. Used by cron so a plugin-scheduled event cannot trigger CORE hook
+     * callbacks (with attacker-controlled args) — it only runs the scheduling plugin's own callbacks.
+     */
+    async doActionForPlugin(hook, slug, ...args) {
+        this._emitMonitor('action', hook, args);
+        if (!this.actions.has(hook)) return;
+        const { runWithContext } = require('./plugin-context');
+        for (const { callback, pluginSlug } of this.actions.get(hook)!) {
+            if (pluginSlug !== slug) continue; // only the scheduling plugin's own callbacks
+            await runWithContext(slug, () => callback(...args));
+        }
+    }
+
+    /**
      * Execute an action hook synchronously
      */
     doActionSync(hook, ...args) {
@@ -243,6 +258,7 @@ module.exports = {
     addAction: (hook, callback, priority) => hooks.addAction(hook, callback, priority),
     removeAction: (hook, callback) => hooks.removeAction(hook, callback),
     doAction: (hook, ...args) => hooks.doAction(hook, ...args),
+    doActionForPlugin: (hook, slug, ...args) => hooks.doActionForPlugin(hook, slug, ...args),
     doActionSync: (hook, ...args) => hooks.doActionSync(hook, ...args),
     hasAction: (hook) => hooks.hasAction(hook),
     addFilter: (hook, callback, priority) => hooks.addFilter(hook, callback, priority),
