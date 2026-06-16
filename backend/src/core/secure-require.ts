@@ -434,6 +434,30 @@ function installSecureRequire() {
         }
     }
 
+    // 4. Anchor plugin-scheduled timers. Capture the effective plugin AT SCHEDULE time (its frame
+    //    is on the stack then) and re-enter its context when the callback fires — so a plugin can't
+    //    strip its sandbox by deferring fs/exec to a later tick where ALS + the stack frame are gone.
+    //    Core schedulers (no effective plugin) are untouched; in-context schedules keep the same
+    //    context they already inherit via ALS (no behavior change).
+    // setImmediate / queueMicrotask are intentionally NOT wrapped: they're hot paths and the
+    // per-call effective-plugin resolution would tax core throughput for narrow gain. The
+    // common deliberate-defer vectors (setTimeout/setInterval) are anchored.
+    const timerCtx = require('./plugin-context');
+    for (const m of ['setTimeout', 'setInterval']) {
+        const orig = (global as any)[m];
+        if (typeof orig !== 'function') continue;
+        (global as any)[m] = function (cb, ...rest) {
+            if (typeof cb === 'function') {
+                const slug = timerCtx.getEffectivePlugin();
+                if (slug) {
+                    const wrapped = function (...a) { return timerCtx.runWithContext(slug, () => cb.apply(this, a)); };
+                    return orig.call(this, wrapped, ...rest);
+                }
+            }
+            return orig.apply(this, arguments);
+        };
+    }
+
     console.log('🛡️ Secure Require: Runtime security hooks installed for fs and child_process');
 }
 
