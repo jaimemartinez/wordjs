@@ -23,10 +23,7 @@ const { verifyPermission } = require('./plugin-context');
 // manifest permission, which a plugin self-declares and is therefore untrustworthy for this. An
 // uploaded plugin can ask for `database:admin` all it wants; it still can't reach `users`/`options`.
 function isTrustedPlugin(slug: string): boolean {
-    try {
-        const trusted = require('../config/app').trustedSystemPlugins || [];
-        return Array.isArray(trusted) && trusted.includes(slug);
-    } catch { return false; }
+    try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
 }
 
 const ROOT_DIR = path.resolve(__dirname, '../../');

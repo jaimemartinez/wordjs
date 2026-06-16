@@ -5,8 +5,9 @@ import { pluginsApi, Plugin } from "@/lib/api";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { FaPlug, FaUpload, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaBoxOpen } from "react-icons/fa";
+import { FaPlug, FaUpload, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaBoxOpen, FaShieldAlt } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
+import { useModal } from "@/contexts/ModalContext";
 
 export default function PluginsPage() {
     const { t } = useI18n();
@@ -23,10 +24,33 @@ export default function PluginsPage() {
     const [deleteError, setDeleteError] = useState("");
 
     const { addToast } = useToast();
+    const { confirm } = useModal();
 
     useEffect(() => {
         loadPlugins();
     }, []);
+
+    // Grant/revoke the privileged "trusted" tier. Granting shows a hard warning (it lets the plugin
+    // read all data incl. secrets + use host capabilities); the server is the source of truth.
+    const toggleTrust = async (plugin: Plugin) => {
+        if (plugin.trustedShipped) return; // first-party default: locked on
+        const granting = !plugin.trusted;
+        if (granting) {
+            const ok = await confirm(
+                `Trusting "${plugin.name}" lets it read ALL data — including users and secret settings — touch core tables, and use host capabilities (it bypasses the plugin sandbox). Only trust plugins whose code you have reviewed. Continue?`,
+                "Grant full trust?",
+                true
+            );
+            if (!ok) return;
+        }
+        try {
+            await pluginsApi.setTrust(plugin.slug, granting);
+            loadPlugins();
+            addToast(granting ? `"${plugin.name}" is now trusted` : `Trust revoked for "${plugin.name}"`, "success");
+        } catch (error: any) {
+            addToast("Failed to change trust: " + (error.message || "Unknown error"), "error");
+        }
+    };
 
     const loadPlugins = async () => {
         try {
@@ -372,9 +396,24 @@ export default function PluginsPage() {
                                 )}
 
                                 <div className="flex items-center justify-between pt-4 border-t border-gray-100">
-                                    <span className="text-xs font-bold text-gray-400 uppercase tracking-wider bg-gray-50 px-2 py-1 rounded-md">
-                                        v{plugin.version}
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-xs font-bold text-gray-400 uppercase tracking-wider bg-gray-50 px-2 py-1 rounded-md">
+                                            v{plugin.version}
+                                        </span>
+                                        {plugin.trustedShipped ? (
+                                            <span title="First-party system plugin — always trusted" className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center gap-1">
+                                                <FaShieldAlt /> System
+                                            </span>
+                                        ) : (
+                                            <button
+                                                onClick={() => toggleTrust(plugin)}
+                                                title={plugin.trusted ? 'Trusted — full host access. Click to sandbox.' : 'Sandboxed. Click to grant full trust.'}
+                                                className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border flex items-center gap-1 transition-colors ${plugin.trusted ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100' : 'bg-gray-50 text-gray-400 border-gray-100 hover:bg-gray-100'}`}
+                                            >
+                                                <FaShieldAlt /> {plugin.trusted ? 'Trusted' : 'Sandboxed'}
+                                            </button>
+                                        )}
+                                    </div>
 
                                     <button
                                         onClick={() => togglePlugin(plugin)}
