@@ -65,7 +65,7 @@ console.log('━━━━━━━━━━━━━━━━━━━━━━�
 // Import secure require module
 // ============================================
 
-const { createSecureFs, createSecureChildProcess } = require('../core/secure-require');
+const { createSecureFs, createSecureChildProcess, installSecureRequire } = require('../core/secure-require');
 const { runWithContext } = require('../core/plugin-context');
 
 // ============================================
@@ -246,6 +246,36 @@ test('Core code with no plugin frame still has full fs access (no regression)', 
     // getEffectivePlugin must be null here (test file is under src/tests, not plugins/)
     expect(getEffectivePlugin()).toBe(null);
     expect(secureFs.existsSync(__filename)).toBeTrue();
+});
+
+// ============================================
+console.log('\n🧬 Native-binding escape resistance (process.binding):');
+// ============================================
+
+// installSecureRequire patches process.binding / Module._load globally; do it once here.
+installSecureRequire();
+
+test('Detached plugin code is blocked from process.binding (escape closed)', () => {
+    const pluginDir = path.join(path.resolve(__dirname, '../../plugins'), 'test-binding-plugin');
+    const runnerPath = path.join(pluginDir, 'runner.js');
+    if (!fs.existsSync(pluginDir)) fs.mkdirSync(pluginDir, { recursive: true });
+    // A plugin trying to grab raw fs syscalls via process.binding, run WITHOUT runWithContext.
+    fs.writeFileSync(runnerPath, "module.exports = () => process.binding('fs');\n");
+    try {
+        const runner = require(runnerPath);
+        expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
+    } finally {
+        delete require.cache[require.resolve(runnerPath)];
+        fs.unlinkSync(runnerPath);
+        fs.rmdirSync(pluginDir);
+    }
+});
+
+test('Core code (no plugin frame) can still use process.binding', () => {
+    // No plugin on the stack → not blocked.
+    let threw = false;
+    try { (process as any).binding('fs'); } catch (e) { if (String(e.message).includes('RUNTIME SECURITY BLOCK')) threw = true; }
+    expect(threw).toBeFalse();
 });
 
 // ============================================
