@@ -26,7 +26,7 @@ WordJS is built with a "Security First" architecture.
 
 ### Known Limitations
 - **CSRF**: Protection is currently Origin/Referer header heuristic based, not token based. Token-based CSRF is future work.
-- **Sandbox escapes**: `process.binding` / `Module._load` style escapes are flagged by the AST scanner but not yet blocked at runtime.
+- **Sandbox escapes**: `Module._load` and `process.binding`/`_linkedBinding` escapes are now blocked at runtime for plugin contexts (`dlopen` left open for native addons).
 
 ## 🐛 Reporting a Vulnerability
 
