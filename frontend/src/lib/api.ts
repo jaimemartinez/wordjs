@@ -65,9 +65,16 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
 
     if (!res.ok) {
         let errorMessage = `HTTP ${res.status} ${res.statusText}`;
+        // Read the body exactly once, then attempt to parse it as JSON.
+        const raw = await res.text().catch(() => "");
+        let error: any = null;
         try {
-            const error = await res.json();
+            error = raw ? JSON.parse(raw) : null;
+        } catch {
+            error = null;
+        }
 
+        if (error) {
             // Handle global redirects (Installation/Migration)
             if (typeof window !== 'undefined' && error.redirect) {
                 // Prevent infinite redirect loops if already on the page
@@ -79,10 +86,9 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
             }
 
             errorMessage = error.message || error.error || errorMessage;
-        } catch {
-            // If not JSON, try to read text (e.g. HTML 500 error)
-            const text = await res.text().catch(() => "");
-            if (text) errorMessage += `: ${text.slice(0, 100)}`;
+        } else if (raw) {
+            // Not JSON (e.g. HTML 500 error): include the raw text snippet.
+            errorMessage += `: ${raw.slice(0, 100)}`;
         }
         throw new Error(errorMessage);
     }
@@ -200,6 +206,18 @@ export interface Menu {
     items: MenuItem[];
 }
 
+export interface Revision {
+    id: number;
+    postId: number;
+    authorId: number;
+    title: string;
+    content: string;
+    excerpt: string;
+    date: string;
+    modified: string;
+    meta?: Record<string, any>;
+}
+
 // API endpoints
 export const postsApi = {
     list: (type = "post", status?: string) => {
@@ -243,6 +261,13 @@ export const commentsApi = {
     delete: (id: number, force = false) => apiDelete<{ deleted: boolean }>(`/comments/${id}?force=${force}`),
     approve: (id: number) => apiPost<Comment>(`/comments/${id}/approve`, {}),
     spam: (id: number) => apiPost<Comment>(`/comments/${id}/spam`, {}),
+};
+
+export const revisionsApi = {
+    list: (postId: number, limit = 10, offset = 0) => apiGet<{ revisions: Revision[]; total: number; postId: number }>(`/revisions/post/${postId}?limit=${limit}&offset=${offset}`),
+    get: (id: number) => apiGet<Revision>(`/revisions/${id}`),
+    restore: (id: number) => apiPost<{ success: boolean; message: string }>(`/revisions/${id}/restore`, {}),
+    compare: (id1: number, id2: number) => apiGet<{ revision1: Revision; revision2: Revision; titleChanged: boolean; contentChanged: boolean; excerptChanged: boolean }>(`/revisions/compare/${id1}/${id2}`),
 };
 
 export const pluginsApi = {
@@ -342,6 +367,19 @@ export interface MediaItem {
     sourceUrl: string;
     mimeType: string;
     date: string;
+    mediaDetails?: {
+        width: number;
+        height: number;
+        file: string;
+        filesize: number;
+        sizes: Record<string, {
+            file: string;
+            width: number;
+            height: number;
+            mimeType: string;
+            filesize: number;
+        }>;
+    };
 }
 
 export const mediaApi = {

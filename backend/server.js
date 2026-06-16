@@ -10,7 +10,7 @@
 const { spawn } = require('child_process');
 const path = require('path');
 
-const APP_ENTRY = path.join(__dirname, 'src/index.js');
+const APP_ENTRY = path.join(__dirname, 'src/index.ts');
 const MAX_RESTARTS_FAST = 5;
 const FAST_RESET_TIME = 10000; // 10 seconds
 
@@ -21,7 +21,7 @@ function startApp() {
     console.log('🚀 Supervisor: Launching WordJS Core...');
 
     // Spawn the actual server
-    const child = spawn('node', [APP_ENTRY], {
+    const child = spawn('node', ['-r', 'ts-node/register', APP_ENTRY], {
         stdio: 'inherit', // Pipe logs directly to console
         env: process.env, // Pass environment variables
         cwd: __dirname

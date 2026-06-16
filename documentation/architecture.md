@@ -455,11 +455,12 @@ wordjs/
 │   │   └── 📁 lib/             # Utilities
 │   └── package.json
 │
-├── 📁 backend/                  # Express.js Backend
-│   ├── 📁 src/
+├── 📁 backend/                  # Express.js Backend (TypeScript via ts-node)
+│   ├── 📁 src/                 # All .ts, run in-place (no dist build)
 │   │   ├── 📁 core/            # Core Modules
 │   │   ├── 📁 routes/          # API Routes
-│   │   └── 📁 plugins/         # Plugin System
+│   │   └── 📁 plugins/         # Plugin System (plugin code stays .js)
+│   ├── tsconfig.json           # ts-node config (commonjs, transpile-only)
 │   ├── 📁 themes/              # Theme Files
 │   │   ├── 📁 default/
 │   │   ├── 📁 neo-digital/
@@ -490,8 +491,20 @@ wordjs/
 | ----------- | ----------------- | -------- | ------------------------------------------- |
 | **Gateway** | Node.js Cluster   | **3000** | **Identity & Routing (Single Entry Point)** |
 | Frontend    | Next.js           | 3001     | SSR, Visual Editor                          |
-| Backend     | Express.js        | 4000     | REST API, Plugins                           |
+| Backend     | Express.js (TypeScript / ts-node) | 4000 | REST API, Plugins                  |
 | Database    | SQLite/PostgreSQL | -        | Data Storage                                |
+
+---
+
+## 🟦 Backend Runtime (TypeScript via ts-node)
+
+The backend is written in **TypeScript** (`backend/src/**/*.ts`, ~88 files) and executed **in-place** by `ts-node` in CommonJS, transpile-only mode — there is **no compiled `dist/`** output. `__dirname` and dynamic plugin loading behave exactly as in the previous CommonJS setup.
+
+- **Config:** `backend/tsconfig.json` (`module: commonjs`, `moduleDetection: force`, `allowJs`, `strict: false`, `ignoreDeprecations`).
+- **Entry:** `npm start` runs the `server.js` supervisor, which spawns `node -r ts-node/register src/index.ts`; `npm run dev` uses `node --watch -r ts-node/register`.
+- **Type-checking is opt-in** (`npm run typecheck` → `tsc --noEmit`) and is **not** enforced at runtime. `strict` mode is not fully enabled yet.
+- **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`.
+- **Tooling:** ESLint (flat config `eslint.config.mjs`) + Prettier, a `node:test` suite (~111 tests, including supertest API integration tests in `src/tests/api.test.ts`), and a CI workflow at `.github/workflows/ci.yml`.
 
 ---
 

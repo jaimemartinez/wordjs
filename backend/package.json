@@ -2,13 +2,16 @@
   "name": "wordjs",
   "version": "1.0.0",
   "description": "WordPress-like CMS built with Node.js and SQLite",
-  "main": "src/index.js",
+  "main": "src/index.ts",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch src/index.js",
-    "migrate": "node src/database/migrate.js",
-    "seed": "node src/database/seed.js",
-    "test": "node --test src/**/*.test.js"
+    "dev": "node --watch -r ts-node/register src/index.ts",
+    "migrate": "node -r ts-node/register src/database/migrate.ts",
+    "seed": "node -r ts-node/register src/database/seed.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test -r ts-node/register src/tests/*.test.ts",
+    "lint": "eslint \"src/**/*.ts\"",
+    "format": "prettier --write \"src/**/*.ts\""
   },
   "keywords": [
     "cms",
@@ -38,6 +41,7 @@
     "handlebars": "^4.7.8",
     "helmet": "^8.1.0",
     "http-proxy": "^1.18.1",
+    "ioredis": "^5.9.2",
     "jsonwebtoken": "^9.0.2",
     "mailparser": "^3.9.1",
     "multer": "^1.4.5-lts.1",
@@ -47,6 +51,7 @@
     "sanitize-html": "^2.17.0",
     "selfsigned": "^5.5.0",
     "semver": "^7.7.3",
+    "sharp": "^0.34.5",
     "slugify": "^1.6.6",
     "smtp-server": "^3.18.0",
     "spf-validator": "^0.2.0",
@@ -56,9 +61,34 @@
     "uuid": "^10.0.0"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/adm-zip": "^0.5.8",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/cookie-parser": "^1.4.10",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.6",
+    "@types/jsonwebtoken": "^9.0.10",
+    "@types/morgan": "^1.9.10",
+    "@types/multer": "^2.1.0",
     "@types/node": "^22.5.0",
+    "@types/node-forge": "^1.3.14",
+    "@types/nodemailer": "^8.0.1",
+    "@types/sanitize-html": "^2.16.1",
+    "@types/semver": "^7.7.1",
+    "@types/supertest": "^7.2.0",
+    "@types/swagger-jsdoc": "^6.0.4",
+    "@types/swagger-ui-express": "^4.1.8",
+    "@typescript-eslint/eslint-plugin": "^8.61.1",
+    "@typescript-eslint/parser": "^8.61.1",
     "esbuild": "^0.27.2",
-    "tailwindcss": "^4.1.18"
+    "eslint": "^10.5.0",
+    "eslint-config-prettier": "^10.1.8",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.4",
+    "supertest": "^7.2.2",
+    "tailwindcss": "^4.1.18",
+    "ts-node": "^10.9.2",
+    "typescript": "^6.0.3"
   },
   "engines": {
     "node": ">=18.0.0"

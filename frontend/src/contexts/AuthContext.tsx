@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useState, useEffect, ReactNode } from "react";
+import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
 interface User {
@@ -96,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const login = async (username: string, password: string): Promise<boolean> => {
+    const login = useCallback(async (username: string, password: string): Promise<boolean> => {
         try {
             const res = await fetch(`${API_URL}/auth/login`, {
                 method: "POST",
@@ -115,9 +115,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             console.error("Login error:", error);
             return false;
         }
-    };
+    }, []);
 
-    const logout = async () => {
+    const logout = useCallback(async () => {
         try {
             // Call logout endpoint to clear HttpOnly cookie on server
             await fetch(`${API_URL}/auth/logout`, {
@@ -131,16 +131,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         localStorage.removeItem("wordjs_token");
         setUser(null);
         router.push("/login");
-    };
+    }, [router]);
 
-    const can = (capability: string): boolean => {
+    const can = useCallback((capability: string): boolean => {
         if (!user) return false;
         if (user.role === 'administrator' || user.capabilities.includes('*')) return true;
         return user.capabilities.includes(capability);
-    };
+    }, [user]);
+
+    const value = useMemo(
+        () => ({ user, login, logout, isLoading, can }),
+        [user, login, logout, isLoading, can]
+    );
 
     return (
-        <AuthContext.Provider value={{ user, login, logout, isLoading, can }}>
+        <AuthContext.Provider value={value}>
             {children}
         </AuthContext.Provider>
     );
