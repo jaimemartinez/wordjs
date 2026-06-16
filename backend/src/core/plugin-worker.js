@@ -35,6 +35,7 @@ const callbacks = new Map();       // cbId -> function (hook/filter callbacks li
 const routeHandlers = new Map();   // routeId -> route handler (req,res) living in this isolate
 const shortcodeHandlers = new Map(); // scId -> shortcode handler (attrs,content,tag)=>string living here
 let mailProvider = null;           // the send(msg) function this isolate provides, if any
+const notifyTransports = new Map(); // transport name -> handler(notification) living here
 
 function callHost(method, args) {
     return new Promise((resolve, reject) => {
@@ -75,7 +76,13 @@ const wordjs = {
         mailProvider = handler;
         parentPort.postMessage({ kind: 'register-mail-provider' });
     },
-    notify: (n) => callHost('notify', [n]),
+    notify: Object.assign((n) => callHost('notify', [n]), {
+        // Register a notification transport (e.g. 'email') whose handler lives in this isolate.
+        registerTransport(name, handler) {
+            notifyTransports.set(name, handler);
+            parentPort.postMessage({ kind: 'register-notify-transport', name });
+        }
+    }),
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
     cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
 
@@ -160,6 +167,15 @@ parentPort.on('message', async (msg) => {
             parentPort.postMessage({ kind: 'mail-reply', id: msg.id, ok: true, value: out });
         } catch (e) {
             parentPort.postMessage({ kind: 'mail-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+        }
+    } else if (msg.kind === 'invoke-notify-transport') {
+        // Core's notification loop is dispatching through a transport this isolate registered.
+        const handler = notifyTransports.get(msg.name);
+        try {
+            const out = handler ? await handler(msg.notification) : undefined;
+            parentPort.postMessage({ kind: 'notify-transport-reply', id: msg.id, ok: true, value: out });
+        } catch (e) {
+            parentPort.postMessage({ kind: 'notify-transport-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     }
 });
