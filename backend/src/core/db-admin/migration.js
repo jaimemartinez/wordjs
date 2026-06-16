@@ -1,8 +1,8 @@
 const path = require('path');
 const fs = require('fs');
-const config = require('../../../src/config/app');
-const configManager = require('../../../src/core/configManager');
-const dbManager = require('../../../src/config/database');
+const config = require('../../config/app');
+const configManager = require('../../core/configManager');
+const dbManager = require('../../config/database');
 
 const TABLES = [
     'users', 'user_meta',
@@ -162,7 +162,7 @@ exports.runMigration = async (req, res) => {
         }
 
         // 3. Connect to Target Driver
-        targetDriverModule = require(`../../../src/drivers/${targetDriver}`);
+        targetDriverModule = require(`../../drivers/${targetDriver}`);
 
         if (isPostgresTarget) {
             // Dynamic Init for Postgres
@@ -422,7 +422,7 @@ exports.runMigration = async (req, res) => {
 
             // Force touch src/index.js to trigger node --watch restart
             // (Just saving config might not be enough if it's out of watch scope)
-            const indexFile = path.resolve(__dirname, '../../../src/index.js');
+            const indexFile = path.resolve(__dirname, '../../index.js');
             try {
                 const time = new Date();
                 fs.utimesSync(indexFile, time, time);

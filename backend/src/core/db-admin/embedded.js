@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const { execSync } = require('child_process');
-const config = require('../../../src/config/app');
+const config = require('../../config/app');
 
 let embeddedProcess = null;
 let isInstalling = false;
