@@ -536,8 +536,8 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
         >
             {/* Modern Toolbar */}
             <div className={`
-                rich-text-toolbar flex flex-wrap items-center gap-1 p-2 border-gray-100
-                ${transparent ? 'absolute -top-14 left-0 z-50 bg-white/95 backdrop-blur shadow-xl rounded-lg border w-max' : 'bg-gray-50/50 border-b'}
+                rich-text-toolbar flex flex-nowrap items-center gap-1 p-2 border-gray-100
+                ${transparent ? 'absolute -top-14 left-0 z-[100000] !pointer-events-auto bg-white backdrop-blur-md shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] rounded-2xl border border-gray-100 w-max min-w-max whitespace-nowrap animate-in fade-in slide-in-from-bottom-2 duration-300' : 'bg-gray-50/50 border-b'}
             `}>
                 <div className="flex bg-white rounded-lg border border-gray-100 p-0.5 shadow-sm">
                     <ToolbarButton icon="fa-bold" onClick={() => execCmd('bold')} title="Negrita" />
@@ -1002,7 +1002,7 @@ const baseConfig = {
                                             borderColor: colStyle.borderColor || 'var(--wjs-border-subtle, #e5e7eb)',
                                             borderStyle: colStyle.borderWidth && colStyle.borderWidth !== '0px' ? 'solid' : 'none',
                                             borderRadius: colStyle.borderRadius || '0px',
-                                            overflow: "hidden"
+                                            overflow: "visible"
                                         }}
                                     >
                                         <Slot />
