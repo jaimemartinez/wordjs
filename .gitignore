@@ -70,3 +70,7 @@ Thumbs.db
 backend/plugins/conference-manager/
 backend/themes/vidaParaTodos/
 
+
+# Local knowledge-graph cache + scratch files (regenerated; do not track)
+graphify-out/
+temp_*
