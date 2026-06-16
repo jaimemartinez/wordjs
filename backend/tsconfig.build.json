@@ -1,0 +1,16 @@
+{
+  // Production build config: emit compiled JS to dist/ so prod runs `node dist/index.js`
+  // instead of ts-node (transpile-only) at runtime. Inherits the strict typecheck from
+  // tsconfig.json, so `npm run build` fails on any type error. Tests are excluded from the
+  // shipped output. The in-tree .js files (db-admin/*, plugin-worker.js) are copied via allowJs.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": "src",
+    "sourceMap": true,
+    "declaration": false
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "plugins", "themes", "dist", "data", "uploads", "src/tests"]
+}

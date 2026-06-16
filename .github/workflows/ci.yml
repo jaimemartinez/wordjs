@@ -18,9 +18,15 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci || npm install
-      - name: Type check
+      - name: Type check (strict)
         working-directory: backend
         run: npx tsc --noEmit
+      - name: Build (compile to dist — no ts-node in prod)
+        working-directory: backend
+        run: npm run build
+      - name: License gate (block network-copyleft AGPL/SSPL)
+        working-directory: backend
+        run: npx --yes license-checker --production --failOn 'AGPL;SSPL'
       - name: Test
         working-directory: backend
         run: npm test

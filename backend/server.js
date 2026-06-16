@@ -9,8 +9,14 @@
 
 const { spawn } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
-const APP_ENTRY = path.join(__dirname, 'src/index.ts');
+// Prefer the COMPILED build (no ts-node in production). `npm run build` emits dist/index.js;
+// if it exists we run that. Otherwise fall back to ts-node (dev / not-yet-built convenience).
+const DIST_ENTRY = path.join(__dirname, 'dist', 'index.js');
+const TS_ENTRY = path.join(__dirname, 'src', 'index.ts');
+const RUN_COMPILED = fs.existsSync(DIST_ENTRY);
+const APP_ARGS = RUN_COMPILED ? [DIST_ENTRY] : ['-r', 'ts-node/register', TS_ENTRY];
 const MAX_RESTARTS_FAST = 5;
 const FAST_RESET_TIME = 10000; // 10 seconds
 
@@ -18,10 +24,10 @@ let restartCount = 0;
 let lastRestart = Date.now();
 
 function startApp() {
-    console.log('🚀 Supervisor: Launching WordJS Core...');
+    console.log(`🚀 Supervisor: Launching WordJS Core (${RUN_COMPILED ? 'compiled dist/' : 'ts-node'})...`);
 
     // Spawn the actual server
-    const child = spawn('node', ['-r', 'ts-node/register', APP_ENTRY], {
+    const child = spawn('node', APP_ARGS, {
         stdio: 'inherit', // Pipe logs directly to console
         env: process.env, // Pass environment variables
         cwd: __dirname

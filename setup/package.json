@@ -2,6 +2,7 @@
     "name": "wordjs-setup",
     "version": "1.0.0",
     "description": "WordJS Cluster Orchestrator - Setup & Migration Utility",
+    "license": "MIT",
     "main": "index.js",
     "bin": {
         "wordjs-setup": "index.js"

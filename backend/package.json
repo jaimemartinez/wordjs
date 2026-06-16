@@ -6,6 +6,9 @@
   "scripts": {
     "start": "node server.js",
     "dev": "node --watch -r ts-node/register src/index.ts",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
+    "prebuild": "npm run clean",
+    "build": "tsc -p tsconfig.build.json",
     "migrate": "node -r ts-node/register src/database/migrate.ts",
     "seed": "node -r ts-node/register src/database/seed.ts",
     "typecheck": "tsc --noEmit",
@@ -21,7 +24,7 @@
     "rest-api"
   ],
   "author": "",
-  "license": "GPL-3.0",
+  "license": "MIT",
   "dependencies": {
     "acme-client": "^5.4.0",
     "acorn": "^8.15.0",

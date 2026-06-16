@@ -8,8 +8,14 @@
     "types": ["node"],
     "allowJs": true,
     "checkJs": false,
-    "strict": false,
+    // strict is ON. Two sub-flags are deliberately staged: noImplicitAny (the remaining ~1100
+    // implicit-any params, to be annotated with real types file-by-file — NOT blanket any) and
+    // useUnknownInCatchVariables (catch bindings stay any for now). strictNullChecks,
+    // strictFunctionTypes, strictBindCallApply, strictPropertyInitialization, noImplicitThis and
+    // alwaysStrict are all enforced.
+    "strict": true,
     "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
     "strictNullChecks": true,
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
