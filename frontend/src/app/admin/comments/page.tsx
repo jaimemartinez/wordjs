@@ -5,6 +5,7 @@ import { commentsApi, Comment } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, EmptyState } from "@/components/ui";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 type Tab = 'all' | 'pending' | 'approved' | 'spam' | 'trash';
 
@@ -165,7 +166,7 @@ export default function CommentsPage() {
                                         </td>
                                         <td className="px-6 py-4">
                                             <div className="text-sm text-gray-900 mb-2">
-                                                <div dangerouslySetInnerHTML={{ __html: comment.content }} />
+                                                <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
                                             </div>
                                             {/* Actions */}
                                             <div className="flex gap-3 text-xs opacity-0 group-hover:opacity-100 transition-opacity duration-200 action-row">

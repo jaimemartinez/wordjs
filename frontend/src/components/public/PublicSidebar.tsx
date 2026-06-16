@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { widgetsApi } from "@/lib/api";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 export default function PublicSidebar({ id, onEmpty }: { id: string, onEmpty?: () => void }) {
     const [html, setHtml] = useState<string>("");
@@ -23,7 +24,7 @@ export default function PublicSidebar({ id, onEmpty }: { id: string, onEmpty?: (
     return (
         <aside
             className="widget-area space-y-8"
-            dangerouslySetInnerHTML={{ __html: html }}
+            dangerouslySetInnerHTML={{ __html: sanitizeHTML(html) }}
         />
     );
 }
