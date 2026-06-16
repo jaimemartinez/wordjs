@@ -761,9 +761,10 @@ async function activatePlugin(slug) {
         const resolvedPath = require.resolve(mainFile);
         delete require.cache[resolvedPath];
 
-        const pluginModule = require(mainFile);
-
         const { runWithContext } = require('./plugin-context');
+        // SECURITY: load the module INSIDE the plugin context so its TOP-LEVEL code
+        // (which executes at require() time, before init) is sandboxed too — not just init().
+        const pluginModule = runWithContext(slug, () => require(mainFile));
 
         // Call init/activate function if exists
         if (typeof pluginModule.init === 'function') {
@@ -906,9 +907,9 @@ async function loadActivePlugins() {
             // MARK START
             CrashGuard.startLoading(slug);
 
-            const pluginModule = require(mainFile);
-
             const { runWithContext } = require('./plugin-context');
+            // SECURITY: anchor module top-level execution in the plugin context (see activatePlugin).
+            const pluginModule = runWithContext(slug, () => require(mainFile));
             loadedPlugins.set(slug, pluginModule);
             console.log(`   ✓ Plugin loaded: ${plugin.name} (${slug})`);
 
