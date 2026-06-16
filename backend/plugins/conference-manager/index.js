@@ -487,6 +487,11 @@ exports.init = async function () {
                 }
             });
 
+            // Fallback for required fields if missing (e.g. if the user deleted the system fields from the visual builder)
+            if (!values.first_name) values.first_name = 'Sin Nombre';
+            if (!values.last_name) values.last_name = 'Sin Apellido';
+
+
             const keys = Object.keys(values);
             const placeholders = keys.map(() => '?').join(', ');
 
