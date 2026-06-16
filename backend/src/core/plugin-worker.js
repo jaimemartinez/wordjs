@@ -34,6 +34,7 @@ const pending = new Map();         // id -> {resolve,reject} for our calls to th
 const callbacks = new Map();       // cbId -> function (hook/filter callbacks living in this isolate)
 const routeHandlers = new Map();   // routeId -> route handler (req,res) living in this isolate
 const shortcodeHandlers = new Map(); // scId -> shortcode handler (attrs,content,tag)=>string living here
+let mailProvider = null;           // the send(msg) function this isolate provides, if any
 
 function callHost(method, args) {
     return new Promise((resolve, reject) => {
@@ -58,7 +59,8 @@ const wordjs = {
         all: (sql, p = []) => callHost('db.all', [sql, p]),
         get: (sql, p = []) => callHost('db.get', [sql, p]),
         run: (sql, p = []) => callHost('db.run', [sql, p]),
-        createTable: (name, cols) => callHost('db.createTable', [name, cols])
+        createTable: (name, cols) => callHost('db.createTable', [name, cols]),
+        getType: () => callHost('db.getType', [])
     },
     hooks: {
         addAction: (hook, cb, priority) => registerCallback('action', hook, cb, priority),
@@ -67,6 +69,12 @@ const wordjs = {
     },
     fs: { read: (p, enc) => callHost('fs.read', [p, enc]), write: (p, d) => callHost('fs.write', [p, d]) },
     mail: (msg) => callHost('mail', [msg]),
+    // Provide the host-wide mail send function from THIS isolate. The host installs a shim that
+    // RPCs back here whenever anything calls wordjs.mail / global.wordjs_send_mail.
+    provideMail(handler) {
+        mailProvider = handler;
+        parentPort.postMessage({ kind: 'register-mail-provider' });
+    },
     notify: (n) => callHost('notify', [n]),
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
     cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
@@ -114,17 +122,20 @@ parentPort.on('message', async (msg) => {
         const handler = routeHandlers.get(msg.routeId);
         const reqData = msg.req || {};
         let settled = false;
-        const reply = (status, body, headers) => {
+        const reply = (status, body, headers, cookies) => {
             if (settled) return; settled = true;
-            parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers } });
+            parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers, cookies } });
         };
         const res = {
-            _status: 200, _headers: undefined,
+            _status: 200, _headers: undefined, _cookies: undefined,
             status(s) { this._status = s; return this; },
             set(h) { this._headers = Object.assign({}, this._headers, h); return this; },
-            json(b) { reply(this._status, b, this._headers); return this; },
-            send(b) { reply(this._status, b, this._headers); return this; },
-            end() { reply(this._status, undefined, this._headers); return this; }
+            // Record cookies; the host replays res.cookie()/clearCookie() on the real response.
+            cookie(name, value, options) { (this._cookies = this._cookies || []).push({ name, value, options, clear: false }); return this; },
+            clearCookie(name, options) { (this._cookies = this._cookies || []).push({ name, options, clear: true }); return this; },
+            json(b) { reply(this._status, b, this._headers, this._cookies); return this; },
+            send(b) { reply(this._status, b, this._headers, this._cookies); return this; },
+            end() { reply(this._status, undefined, this._headers, this._cookies); return this; }
         };
         try {
             if (!handler) throw new Error('No such route handler');
@@ -141,6 +152,14 @@ parentPort.on('message', async (msg) => {
             parentPort.postMessage({ kind: 'shortcode-reply', id: msg.id, ok: true, value: out == null ? '' : String(out) });
         } catch (e) {
             parentPort.postMessage({ kind: 'shortcode-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+        }
+    } else if (msg.kind === 'invoke-mail') {
+        // Host (on behalf of another plugin/core calling wordjs.mail) asks THIS provider to send.
+        try {
+            const out = mailProvider ? await mailProvider(msg.msg) : (() => { throw new Error('No mail provider'); })();
+            parentPort.postMessage({ kind: 'mail-reply', id: msg.id, ok: true, value: out });
+        } catch (e) {
+            parentPort.postMessage({ kind: 'mail-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     }
 });

@@ -18,6 +18,17 @@ const path = require('path');
 const fs = require('fs');
 const { verifyPermission } = require('./plugin-context');
 
+// Privileged capabilities (touch core DB tables, read/write secret-named options, provide mail) are
+// gated on the OPERATOR-MAINTAINED trusted allowlist (config.trustedSystemPlugins) — NOT on a
+// manifest permission, which a plugin self-declares and is therefore untrustworthy for this. An
+// uploaded plugin can ask for `database:admin` all it wants; it still can't reach `users`/`options`.
+function isTrustedPlugin(slug: string): boolean {
+    try {
+        const trusted = require('../config/app').trustedSystemPlugins || [];
+        return Array.isArray(trusted) && trusted.includes(slug);
+    } catch { return false; }
+}
+
 const ROOT_DIR = path.resolve(__dirname, '../../');
 const PLUGINS_DIR = path.join(ROOT_DIR, 'plugins');
 const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
@@ -68,47 +79,61 @@ function createPluginApi(slug: string) {
         options: {
             async get(key: string, def: any = null) {
                 verifyPermission('settings', 'read');
-                if (PROTECTED_OPTION_RE.test(String(key))) throw new Error(`🛡️ Option '${key}' is not readable by plugins.`);
+                // Secret-named options are off-limits UNLESS the plugin is operator-trusted
+                // (config.trustedSystemPlugins, e.g. mail-server reading its own DKIM private key).
+                if (PROTECTED_OPTION_RE.test(String(key)) && !isTrustedPlugin(slug)) {
+                    throw new Error(`🛡️ Option '${key}' is not readable by plugins.`);
+                }
                 const { getOption } = require('./options');
                 return getOption(key, def);
             },
             async set(key: string, value: any) {
                 verifyPermission('settings', 'write');
-                if (PROTECTED_OPTION_RE.test(String(key))) throw new Error(`🛡️ Option '${key}' is not writable by plugins.`);
+                if (PROTECTED_OPTION_RE.test(String(key)) && !isTrustedPlugin(slug)) {
+                    throw new Error(`🛡️ Option '${key}' is not writable by plugins.`);
+                }
                 const { updateOption } = require('./options');
                 return updateOption(key, value);
             }
         },
 
         db: {
-            // Read-only query (SELECT). Table-scoped away from core tables.
+            // Read-only query (SELECT). Table-scoped away from core tables — UNLESS the plugin is
+            // operator-trusted (config.trustedSystemPlugins, e.g. db-migration), which lifts the
+            // scoping so it can touch core tables. The isolate is still the boundary; host-enforced.
             async all(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.all(sql, params);
             },
             async get(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.get(sql, params);
             },
-            // Mutating query (INSERT/UPDATE/DELETE/CREATE on the plugin's own tables).
+            // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER). Scoped unless `database:admin`.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
-                assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.run(sql, params);
             },
-            // Create one of the plugin's own tables (driver-agnostic). Table name must not be a core table.
+            // Create a table (driver-agnostic). Core-table names are blocked unless `database:admin`.
             async createTable(name: string, columns: string[]) {
                 verifyPermission('database', 'write');
-                if (PROTECTED_TABLES.has(String(name).toLowerCase())) {
+                if (!isTrustedPlugin(slug) && PROTECTED_TABLES.has(String(name).toLowerCase())) {
                     throw new Error(`🛡️ Plugin DB access denied: '${name}' is a core table.`);
                 }
                 const { createPluginTable } = require('../config/database');
                 return createPluginTable(name, columns);
+            },
+            // Which SQL dialect is active (so a plugin can branch on Postgres vs SQLite DDL).
+            getType() {
+                verifyPermission('database', 'read');
+                const { getDbType } = require('../config/database');
+                return getDbType();
             }
         },
 
@@ -160,6 +185,14 @@ function createPluginApi(slug: string) {
             const send = (global as any).wordjs_send_mail;
             if (typeof send !== 'function') throw new Error('Mail server not available');
             return send(msg);
+        },
+
+        // A mail-PROVIDER plugin (e.g. mail-server) registers the host-wide send function that
+        // backs wordjs.mail / global.wordjs_send_mail. In-process this sets the global directly;
+        // for isolated providers the worker bridge wires a shim that RPCs the provider's worker.
+        provideMail(handler: (msg: any) => any) {
+            verifyPermission('email', 'admin');
+            (global as any).wordjs_send_mail = handler;
         },
 
         async notify(n: any) {

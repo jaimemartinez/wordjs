@@ -64,6 +64,13 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             worker.postMessage({ kind: 'invoke-shortcode', id, scId, ...payload });
         });
 
+        const pendingMail = new Map<number, any>();
+        const invokeMail = (mailMsg: any) => new Promise<any>((res, rej) => {
+            const id = ++invokeId;
+            pendingMail.set(id, { res, rej });
+            worker.postMessage({ kind: 'invoke-mail', id, msg: mailMsg });
+        });
+
         worker.on('message', async (msg: any) => {
             if (msg.kind === 'ready') {
                 resolve({ worker, slug });
@@ -99,11 +106,20 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 const finalHandler = async (req: any, res: any) => {
                     const reqData = {
                         method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
+                        cookies: req.cookies || {},
+                        headers: { 'x-portal-token': req.headers['x-portal-token'] }, // selected non-sensitive headers
                         user: req.user ? { id: req.user.id, role: req.user.role, userEmail: req.user.userEmail, userLogin: req.user.userLogin } : null
                     };
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
                         if (r.headers) res.set(r.headers);
+                        // Replay cookies the isolate set/cleared on the real response.
+                        if (Array.isArray(r.cookies)) {
+                            for (const c of r.cookies) {
+                                if (c.clear) res.clearCookie(c.name, c.options || {});
+                                else res.cookie(c.name, c.value, c.options || {});
+                            }
+                        }
                         res.status(r.status || 200);
                         if (r.body === undefined) res.end(); else res.json(r.body);
                     } catch (e: any) {
@@ -126,6 +142,12 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'shortcode-reply') {
                 const p = pendingShortcode.get(msg.id);
                 if (p) { pendingShortcode.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
+            } else if (msg.kind === 'register-mail-provider') {
+                // This isolate provides the host-wide mail send. Install a shim that RPCs it.
+                (global as any).wordjs_send_mail = (mailMsg: any) => invokeMail(mailMsg);
+            } else if (msg.kind === 'mail-reply') {
+                const p = pendingMail.get(msg.id);
+                if (p) { pendingMail.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
             }
         });
 
