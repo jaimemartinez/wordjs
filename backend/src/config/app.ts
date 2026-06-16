@@ -103,7 +103,7 @@ const defaultConfig = {
     ssl: { enabled: false },
     // SECURITY: only these (first-party, bundled) plugins may skip the AST scanner via a
     // system:admin manifest declaration. Uploaded third-party plugins cannot self-grant it.
-    trustedSystemPlugins: ['db-migration', 'conference-manager']
+    trustedSystemPlugins: ['db-migration', 'conference-manager', 'mail-server']
 };
 
 let fileConfig: FileConfig = {};
