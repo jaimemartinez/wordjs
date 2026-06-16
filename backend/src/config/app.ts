@@ -108,43 +108,47 @@ const defaultConfig = {
 
 let fileConfig: FileConfig = {};
 
-try {
-    if (fs.existsSync(configPath)) {
-        const rawData = fs.readFileSync(configPath, 'utf8');
-        fileConfig = JSON.parse(rawData);
-        console.log('📄 Config loaded from wordjs-config.json');
-    } else {
-        console.warn('⚠️  wordjs-config.json not found, using defaults.');
-    }
-} catch (e) {
-    console.error('❌ Failed to load wordjs-config.json:', e.message);
-}
-
-// 1.5 Secure Auto-Generation
 const crypto = require('crypto');
-let configChanged = false;
 
-// Generate secure keys if they are default or missing
-// Generate secure keys ONLY if config exists but is insecure
-if (fs.existsSync(configPath)) {
-    if (!fileConfig.jwtSecret || fileConfig.jwtSecret === 'wordjs-default-secret-change-me') {
-        fileConfig.jwtSecret = crypto.randomBytes(32).toString('hex');
-        configChanged = true;
-        console.log('🔐 Generated secure JWT secret for existing config.');
+// In the HOST: load wordjs-config.json and auto-generate/persist secrets. SKIP entirely inside an
+// isolated plugin worker (global.__WORDJS_ISOLATED__) — that file is outside the worker's sandbox
+// and the worker never needs these host secrets (it reaches config via the bridge). This avoids
+// the noisy (but already-harmless) EACCES blocks config/app would otherwise trigger at worker boot.
+if (!(global as any).__WORDJS_ISOLATED__) {
+    try {
+        if (fs.existsSync(configPath)) {
+            const rawData = fs.readFileSync(configPath, 'utf8');
+            fileConfig = JSON.parse(rawData);
+            console.log('📄 Config loaded from wordjs-config.json');
+        } else {
+            console.warn('⚠️  wordjs-config.json not found, using defaults.');
+        }
+    } catch (e) {
+        console.error('❌ Failed to load wordjs-config.json:', e.message);
     }
 
-    if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
-        fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
-        configChanged = true;
-        console.log('🔐 Generated secure Database password for existing config.');
-    }
+    // 1.5 Secure Auto-Generation — generate secure keys ONLY if config exists but is insecure.
+    let configChanged = false;
+    if (fs.existsSync(configPath)) {
+        if (!fileConfig.jwtSecret || fileConfig.jwtSecret === 'wordjs-default-secret-change-me') {
+            fileConfig.jwtSecret = crypto.randomBytes(32).toString('hex');
+            configChanged = true;
+            console.log('🔐 Generated secure JWT secret for existing config.');
+        }
 
-    if (configChanged) {
-        try {
-            fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
-            console.log('💾 wordjs-config.json updated with secure credentials.');
-        } catch (err) {
-            console.error('❌ Failed to persist secure credentials:', err.message);
+        if (!fileConfig.dbPassword || fileConfig.dbPassword === 'password') {
+            fileConfig.dbPassword = crypto.randomBytes(16).toString('hex');
+            configChanged = true;
+            console.log('🔐 Generated secure Database password for existing config.');
+        }
+
+        if (configChanged) {
+            try {
+                fs.writeFileSync(configPath, JSON.stringify(fileConfig, null, 2));
+                console.log('💾 wordjs-config.json updated with secure credentials.');
+            } catch (err) {
+                console.error('❌ Failed to persist secure credentials:', err.message);
+            }
         }
     }
 }
