@@ -25,6 +25,23 @@ const path = require('path');
 
 const { slug, entryFile, coreDir } = workerData;
 
+// Network egress policy. The raw socket modules (net/tls/dns/http/https/...) are denied to untrusted
+// plugins by secure-require, but the binding-backed globals `fetch`/`WebSocket`/`EventSource` are NOT
+// reachable through the module loader, so a denylist there is useless against them — trap the globals
+// here. Trust is supplied by the HOST via workerData (re-resolved on every reload, since the trust
+// toggle reloads the worker); secure-require also reads __WORDJS_PLUGIN_TRUSTED__ for its net branch.
+global.__WORDJS_PLUGIN_TRUSTED__ = !!workerData.isTrusted;
+if (!global.__WORDJS_PLUGIN_TRUSTED__) {
+    for (const name of ['fetch', 'WebSocket', 'EventSource']) {
+        try {
+            Object.defineProperty(globalThis, name, {
+                configurable: true,
+                get() { throw new Error(`[sandbox] global '${name}' (network) is blocked for untrusted plugin '${slug}'`); }
+            });
+        } catch { /* best-effort: if a global is non-configurable, leave it */ }
+    }
+}
+
 // Install the same capability guards inside this isolate (defense-in-depth: even after a heap
 // escape the worker can't freely touch fs/child_process), then run the plugin in its context.
 try {

@@ -205,7 +205,8 @@ function csrfProtection(req, res, next) {
         return next();
     }
 
-    // Allow configured CORS origins
+    // Allow configured CORS origins. `host` comes from X-Forwarded-Host, which the gateway now pins
+    // to the real client Host (it strips any client-supplied value), so trusting it here is safe.
     const allowedOrigins = [
         config.site?.url,
         config.site?.frontendUrl,
@@ -213,7 +214,12 @@ function csrfProtection(req, res, next) {
         `https://${host}`
     ].filter(Boolean);
 
-    if (requestOrigin && allowedOrigins.some(o => o && requestOrigin.startsWith(o.replace(/\/$/, '')))) {
+    // EXACT origin match — never startsWith (a prefix match lets `https://victim.com.evil.com`
+    // satisfy an allowed `https://victim.com`). Compare normalized origins via URL parsing.
+    const originMatches = (allowed: string) => {
+        try { return new URL(allowed).origin === requestOrigin; } catch { return false; }
+    };
+    if (requestOrigin && allowedOrigins.some(originMatches)) {
         return next();
     }
 

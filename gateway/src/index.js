@@ -546,6 +546,13 @@ if (cluster.isPrimary) {
     });
 
     app.use((req, res) => {
+        // SECURITY (CSRF / host-trust): the client must NOT control X-Forwarded-Host. http-proxy's
+        // xfwd keeps a client-supplied value (`clientXFH || host`), and the backend trusts XFH for
+        // its CSRF same-origin check and the migration guard. Pin XFH to the REAL client-facing Host
+        // this public listener saw, so a remote attacker can't forge it to bypass CSRF. (The internal
+        // mTLS listener is a separate app and is reached only by trusted, cert-authenticated peers.)
+        req.headers['x-forwarded-host'] = req.headers['host'] || '';
+        delete req.headers['x-forwarded-server'];
         const target = getTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');

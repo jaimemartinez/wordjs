@@ -277,6 +277,12 @@ const originalRequire = Module.prototype.require;
 // resolves fine but throws on ANY use, so require() succeeds but the module is inert.
 const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events'];
 
+// Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
+// (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and
+// allow ONLY operator-trusted plugins (e.g. mail-server's SMTP/MX delivery) — an untrusted uploaded
+// plugin gets no outbound sockets. NOT self-declarable.
+const NETWORK_MODULES = new Set(['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']);
+
 function createBlockedModuleProxy(pluginSlug, norm) {
     // Regular (non-arrow) function so it is usable as both a call target and a
     // constructor (new X()) — both paths throw our security error.
@@ -293,13 +299,25 @@ function createBlockedModuleProxy(pluginSlug, norm) {
 function secureModuleFor(id) {
     // Normalize the 'node:' prefix first so require('node:child_process') is proxied too.
     const norm = String(id).replace(/^node:/, '');
+    const isNet = NETWORK_MODULES.has(norm);
     if (norm !== 'fs' && norm !== 'child_process' && norm !== 'fs/promises'
-        && !BLOCKED_PLUGIN_MODULES.includes(norm)) return undefined;
+        && !BLOCKED_PLUGIN_MODULES.includes(norm) && !isNet) return undefined;
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return undefined;
     if (norm === 'fs') return secureFs;
     if (norm === 'child_process') return secureChildProcess;
     if (norm === 'fs/promises') return createSecureFsPromises();
+    if (isNet) {
+        // Trusted plugins (e.g. mail-server's SMTP/MX delivery) keep raw sockets; untrusted are denied.
+        // Inside a worker, trust is supplied by the bootstrap (workerData → __WORDJS_PLUGIN_TRUSTED__)
+        // because trustedPlugins() can't read config there and would be empty — which previously broke
+        // the trusted mail-server. On the main thread, fall back to trustedPlugins().
+        const netTrusted = (typeof global !== 'undefined' && (global as any).__WORDJS_ISOLATED__)
+            ? !!(global as any).__WORDJS_PLUGIN_TRUSTED__
+            : trustedPlugins().has(pluginSlug);
+        if (netTrusted) return undefined;
+        return createBlockedModuleProxy(pluginSlug, norm);
+    }
     // worker_threads / vm / module / inspector
     return createBlockedModuleProxy(pluginSlug, norm);
 }
