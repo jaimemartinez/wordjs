@@ -50,22 +50,52 @@ const CHILD_PROCESS_BLOCKED = [
 /**
  * Check if a path is within the plugin's own directory
  */
+// Resolve a path through symlinks so a plugin cannot create a symlink inside its own
+// directory pointing outside it and slip past containment. If the target doesn't exist
+// yet, resolve its nearest existing parent dir instead. Falls back to the lexical path
+// on any error so we never crash on a hostile/odd filesystem.
+function realResolve(targetPath) {
+    const resolved = path.resolve(targetPath);
+    try {
+        return originalFs.realpathSync(resolved);
+    } catch {
+        // Target doesn't exist (e.g. a file about to be written). Resolve the nearest
+        // existing ancestor and re-append the remaining segment(s) lexically.
+        try {
+            let dir = path.dirname(resolved);
+            let tail = path.basename(resolved);
+            // Walk up until an existing ancestor is found.
+            while (dir !== path.dirname(dir)) {
+                try {
+                    const realDir = originalFs.realpathSync(dir);
+                    return path.join(realDir, tail);
+                } catch {
+                    tail = path.join(path.basename(dir), tail);
+                    dir = path.dirname(dir);
+                }
+            }
+        } catch { /* fall through */ }
+        return resolved;
+    }
+}
+
 function isPathWithinPluginDir(pluginSlug, targetPath) {
     if (!pluginSlug) return true;
 
-    const resolvedPath = path.resolve(targetPath);
+    const resolvedPath = realResolve(targetPath);
 
-    // Plugin can access its own directory
-    const pluginDir = path.join(PLUGINS_DIR, pluginSlug);
-    if (resolvedPath.startsWith(pluginDir)) {
+    // Plugin can access its own directory. Use exact match or a trailing-separator
+    // prefix so slug 'foo' does NOT match sibling '.../plugins/foo-bar'.
+    const pluginDir = realResolve(path.join(PLUGINS_DIR, pluginSlug));
+    if (resolvedPath === pluginDir || resolvedPath.startsWith(pluginDir + path.sep)) {
         return true;
     }
 
     // Theme can access its own directory
     if (pluginSlug.startsWith('theme:')) {
         const themeSlug = pluginSlug.replace('theme:', '');
-        const themeDir = path.join(THEMES_DIR, themeSlug);
-        if (resolvedPath.startsWith(themeDir)) {
+        const themeDir = realResolve(path.join(THEMES_DIR, themeSlug));
+        if (resolvedPath === themeDir || resolvedPath.startsWith(themeDir + path.sep)) {
             return true;
         }
     }
@@ -144,8 +174,12 @@ function createSecureFs() {
                 };
             }
 
-            // For other methods, return as-is (bound to target)
-            return originalMethod.bind(target);
+            // DENY-BY-DEFAULT: any fs function not explicitly classified as a read or write
+            // method (cpSync, openAsBlob, glob, fd-based ops, etc.) is blocked for plugins so
+            // there is no un-guarded escape hatch. Non-function props already returned above.
+            return function () {
+                throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'is not permitted in the plugin sandbox');
+            };
         }
     };
 
@@ -219,13 +253,36 @@ const originalRequire = Module.prototype.require;
 // Resolve the secure replacement for a sensitive module id when a plugin is effective
 // (context OR call stack). Returns undefined for non-sensitive ids / core code, so callers
 // fall through to the original loader. Only sensitive ids pay the effective-plugin cost.
+// Modules whose entire surface is unsafe for plugins (worker spawning, arbitrary code
+// compilation, internal Module machinery, debugger control). We return a Proxy that
+// resolves fine but throws on ANY use, so require() succeeds but the module is inert.
+const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector'];
+
+function createBlockedModuleProxy(pluginSlug, norm) {
+    // Regular (non-arrow) function so it is usable as both a call target and a
+    // constructor (new X()) — both paths throw our security error.
+    function thrower(): never {
+        throw createSecurityError(pluginSlug, `require('${norm}')`, `module '${norm}' is not permitted in the plugin sandbox`);
+    }
+    return new Proxy(function () {}, {
+        get() { return thrower; },
+        apply() { return thrower(); },
+        construct() { return thrower(); }
+    });
+}
+
 function secureModuleFor(id) {
-    if (id !== 'fs' && id !== 'child_process' && id !== 'fs/promises') return undefined;
+    // Normalize the 'node:' prefix first so require('node:child_process') is proxied too.
+    const norm = String(id).replace(/^node:/, '');
+    if (norm !== 'fs' && norm !== 'child_process' && norm !== 'fs/promises'
+        && !BLOCKED_PLUGIN_MODULES.includes(norm)) return undefined;
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return undefined;
-    if (id === 'fs') return secureFs;
-    if (id === 'child_process') return secureChildProcess;
-    return createSecureFsPromises();
+    if (norm === 'fs') return secureFs;
+    if (norm === 'child_process') return secureChildProcess;
+    if (norm === 'fs/promises') return createSecureFsPromises();
+    // worker_threads / vm / module / inspector
+    return createBlockedModuleProxy(pluginSlug, norm);
 }
 
 function installSecureRequire() {
@@ -243,6 +300,14 @@ function installSecureRequire() {
     Module._load = function (request, _parent, _isMain) {
         const secure = secureModuleFor(request);
         if (secure !== undefined) return secure;
+        // Block native .node addons for plugins: compiled bindings hand out raw syscalls
+        // and bypass every JS-level guard. Resolve the request to catch indirect paths.
+        if (typeof request === 'string' && request.endsWith('.node')) {
+            const pluginSlug = getEffectivePlugin();
+            if (pluginSlug) {
+                throw createSecurityError(pluginSlug, `require('${request}')`, 'native .node addons are blocked for plugins');
+            }
+        }
         return originalLoad.apply(this, arguments);
     };
 
@@ -306,7 +371,10 @@ function createSecureFsPromises() {
                 };
             }
 
-            return originalMethod.bind(target);
+            // DENY-BY-DEFAULT for plugins (same rationale as createSecureFs).
+            return function () {
+                throw createSecurityError(pluginSlug, `fs.promises.${String(prop)}`, 'is not permitted in the plugin sandbox');
+            };
         }
     };
 
