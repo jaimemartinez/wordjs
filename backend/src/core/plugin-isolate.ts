@@ -18,12 +18,9 @@ const { addShortcode, removeShortcode } = require('./shortcodes');
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
 
-// Operator allowlist — same source as plugin-api; trusted plugins may keep their absolute route paths.
+// Trust = shipped default OR operator-toggled (admin UI). See core/plugin-trust.
 function isTrustedPlugin(slug: string): boolean {
-    try {
-        const trusted = require('../config/app').trustedSystemPlugins || [];
-        return Array.isArray(trusted) && trusted.includes(slug);
-    } catch { return false; }
+    try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
 }
 
 // Navigate "options.get" / "mail" on the api object and call it with args.
