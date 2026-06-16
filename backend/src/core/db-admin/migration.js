@@ -420,14 +420,28 @@ exports.runMigration = async (req, res) => {
         setTimeout(() => {
             console.log('🔄 Restarting server...');
 
-            // Force touch src/index.js to trigger node --watch restart
-            // (Just saving config might not be enough if it's out of watch scope)
-            const indexFile = path.resolve(__dirname, '../../index.js');
-            try {
-                const time = new Date();
-                fs.utimesSync(indexFile, time, time);
-            } catch (err) {
-                console.error('Could not touch index.js:', err);
+            // Trigger a restart so the new DB config is picked up. In dev (`node --watch`) this means
+            // touching the ACTUAL entry node is running — process.argv[1] is src/index.ts under ts-node
+            // (or dist/index.js when compiled) — so the watcher reruns it. The previous code hardcoded a
+            // non-existent 'src/index.js' (the entry is .ts), so utimesSync threw ENOENT and nothing
+            // restarted. In production the server.js supervisor restarts the child after this exit.
+            const candidates = [
+                process.argv[1],
+                path.resolve(__dirname, '../../index.ts'),
+                path.resolve(__dirname, '../../index.js')
+            ].filter(Boolean);
+            let touched = false;
+            for (const f of candidates) {
+                try {
+                    const t = new Date();
+                    fs.utimesSync(f, t, t);
+                    console.log(`🔄 Touched ${f} to trigger watch restart.`);
+                    touched = true;
+                    break;
+                } catch (err) { /* not this one — try the next candidate */ }
+            }
+            if (!touched) {
+                console.warn('🔄 Could not touch an entry file to trigger a watch restart; relying on process exit (the supervisor restarts in production).');
             }
 
             process.exit(0);
