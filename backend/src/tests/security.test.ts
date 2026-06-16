@@ -230,4 +230,43 @@ describe('CSRF Protection', () => {
     });
 });
 
+describe('JWT revocation (token_valid_after)', () => {
+    const { after } = require('node:test');
+    const jwt = require('jsonwebtoken');
+    const config = require('../config/app');
+    const User = require('../models/User');
+    const { authenticate } = require('../middleware/auth');
+    const origFindById = User.findById;
+    after(() => { User.findById = origFindById; });
+
+    // Drive the real `authenticate` with a mocked User.findById (no DB needed).
+    const callAuth = (token: string, user: any) => new Promise<any>((resolve) => {
+        User.findById = async () => user;
+        const req: any = { headers: { authorization: 'Bearer ' + token }, cookies: {} };
+        const res: any = { status(c: number) { (this as any)._c = c; return this; }, json(b: any) { resolve({ code: (this as any)._c, body: b }); return this; } };
+        authenticate(req, res, () => resolve({ code: 200, nexted: true }));
+    });
+
+    it('rejects a token issued before token_valid_after', async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const token = jwt.sign({ userId: 1, iat: now - 100 }, config.jwt.secret, { algorithm: 'HS256' });
+        const r = await callAuth(token, { id: 1, meta: { token_valid_after: String(now) } });
+        assert.strictEqual(r.code, 401);
+        assert.strictEqual(r.body.code, 'rest_token_revoked');
+    });
+
+    it('accepts a token issued after token_valid_after', async () => {
+        const now = Math.floor(Date.now() / 1000);
+        const token = jwt.sign({ userId: 1, iat: now }, config.jwt.secret, { algorithm: 'HS256' });
+        const r = await callAuth(token, { id: 1, meta: { token_valid_after: String(now - 100) } });
+        assert.strictEqual(r.nexted, true);
+    });
+
+    it('accepts a token when the user has no revocation epoch set', async () => {
+        const token = jwt.sign({ userId: 1 }, config.jwt.secret, { algorithm: 'HS256' });
+        const r = await callAuth(token, { id: 1, meta: {} });
+        assert.strictEqual(r.nexted, true);
+    });
+});
+
 console.log('Running WordJS Security Tests...');
