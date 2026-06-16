@@ -48,9 +48,11 @@ export default function SEOPanel({
     }, [title, excerpt]);
 
     const handleChange = (field: keyof SEOData, value: string | boolean) => {
-        const newData = { ...seoData, [field]: value };
-        setSeoData(newData);
-        onChange(newData);
+        setSeoData(prev => {
+            const newData = { ...prev, [field]: value };
+            onChange(newData);
+            return newData;
+        });
     };
 
     // Generate preview URL

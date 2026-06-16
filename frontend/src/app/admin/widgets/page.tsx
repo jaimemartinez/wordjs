@@ -209,7 +209,7 @@ export default function WidgetsPage() {
             setSidebars(sData);
         } catch (e) {
             console.error(e);
-            alert("Failed to load widgets/sidebars");
+            await alert("Failed to load widgets/sidebars", "Error");
         } finally {
             setLoading(false);
         }

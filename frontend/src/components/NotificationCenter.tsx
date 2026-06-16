@@ -103,10 +103,16 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
 
             es.onmessage = (event) => {
                 if (!isMounted) return;
-                const newNotification = JSON.parse(event.data);
 
-                // Handle Keep-Alive
-                if (event.data === ': keepalive') return;
+                // Handle Keep-Alive / empty frames BEFORE parsing (they are not valid JSON).
+                if (!event.data || event.data === ': keepalive' || event.data.startsWith(':')) return;
+
+                let newNotification;
+                try {
+                    newNotification = JSON.parse(event.data);
+                } catch {
+                    return; // ignore non-JSON frames instead of throwing on every tick
+                }
 
                 setNotifications(prev => {
                     const exists = prev.some(n => n.uuid === newNotification.uuid);
@@ -213,11 +219,19 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
         }
     };
 
+    // Static full class strings so Tailwind can compile them (dynamic
+    // `text-${base}-500` classes are purged and render unstyled).
+    const COLOR_STYLES: Record<string, string> = {
+        blue: 'text-blue-500 bg-blue-50/50',
+        green: 'text-green-500 bg-green-50/50',
+        emerald: 'text-emerald-500 bg-emerald-50/50',
+        rose: 'text-rose-500 bg-rose-50/50',
+        amber: 'text-amber-500 bg-amber-50/50',
+    };
+
     const getColorStyles = (n: Notification) => {
         if (n.color) {
-            // Support simple colors like 'blue', 'green', 'rose', 'amber'
-            const base = n.color;
-            return `text-${base}-500 bg-${base}-50/50`;
+            return COLOR_STYLES[n.color] || COLOR_STYLES.blue;
         }
         switch (n.type) {
             case 'success': return 'text-emerald-500 bg-emerald-50/50';
