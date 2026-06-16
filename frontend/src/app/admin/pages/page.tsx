@@ -44,7 +44,7 @@ export default function PagesPage() {
             {/* Premium Header */}
             <PageHeader
                 title={t('pages.title')}
-                subtitle="Manage your static pages"
+                subtitle={t('pages.subtitle')}
                 actions={
                     <Link href="/admin/pages/new">
                         <Button icon="fa-plus">{t('pages.new')}</Button>
