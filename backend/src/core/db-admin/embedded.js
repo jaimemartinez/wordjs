@@ -135,8 +135,11 @@ async function startServer() {
                 await client.connect();
             }
 
-            // Sync internal password
-            await client.query(`ALTER USER postgres WITH PASSWORD '${config.db.password}'`);
+            // Sync internal password. SECURITY: escape the literal (ALTER ROLE PASSWORD can't be
+            // parameterized) to prevent second-order SQLi via an admin-set config.db.password.
+            const _pw = String(config.db.password);
+            if (/[\0\r\n]/.test(_pw)) throw new Error('Invalid DB password (control characters)');
+            await client.query(`ALTER USER postgres WITH PASSWORD '${_pw.replace(/'/g, "''")}'`);
 
             const resEnc = await client.query("SHOW SERVER_ENCODING");
             const encoding = resEnc.rows[0].server_encoding;
