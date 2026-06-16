@@ -492,19 +492,28 @@ if (cluster.isPrimary) {
     }
 
     const requireAuth = (req, res, next) => {
-        if ((req.headers['x-gateway-secret'] || req.query.secret) !== GATEWAY_SECRET) {
+        // Never accept the shipped public default as valid auth: an unconfigured gateway must not
+        // expose management endpoints to anyone who knows the default string.
+        if (GATEWAY_SECRET === 'secure-your-gateway-secret') {
+            return res.status(503).json({ error: 'Gateway management disabled: configure gatewaySecret.' });
+        }
+        // Header ONLY — the secret must not travel in the query string (it leaks via access logs,
+        // Referer headers and browser history). Compare in constant time to avoid a timing oracle.
+        const provided = req.headers['x-gateway-secret'] || '';
+        const a = Buffer.from(String(provided));
+        const b = Buffer.from(GATEWAY_SECRET);
+        if (a.length !== b.length || !require('crypto').timingSafeEqual(a, b)) {
             return res.status(401).json({ error: 'Unauthorized' });
         }
         next();
     };
 
     app.use(helmet({ contentSecurityPolicy: false }));
-    // BUG/SECURITY: req.query.secret is still accepted for auth (documented at
-    // /gateway-status?secret=<SECRET>), so we cannot remove it without breaking that caller.
-    // Redact it before morgan logs the URL so the credential never lands on disk.
+    // The gateway secret is no longer accepted in the query string (header-only now), so there is no
+    // credential to redact and we log every request — the old skip let an attacker suppress logging
+    // for any request just by appending ?secret=.
     app.use(morgan('combined', {
-        stream: { write: (msg) => logger.info(msg.trim()) },
-        skip: (req) => typeof req.query.secret !== 'undefined'
+        stream: { write: (msg) => logger.info(msg.trim()) }
     }));
     const shouldCompress = (req, res) => {
         if ((req.headers['accept'] || '').includes('text/event-stream') || res.getHeader('Content-Type') === 'text/event-stream') {
