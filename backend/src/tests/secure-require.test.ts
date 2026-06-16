@@ -356,6 +356,34 @@ test("require('vm') is blocked (inert) for plugins", () => {
 });
 
 // ============================================
+console.log('\n⚓ ALS-anchoring (route handlers run in plugin context):');
+// ============================================
+
+test('Plugin-registered route handler is ALS-anchored even when invoked detached + stack blinded', () => {
+    const pc = require('../core/plugin-context');
+    const { anchorPluginRoutes } = require('../core/appRegistry');
+
+    // Minimal express-like app that just stores the registered handler.
+    let stored: any = null;
+    const app: any = { get(_path, h) { stored = h; return app; } };
+    anchorPluginRoutes(app);
+
+    // Register the handler AS the plugin (registration happens inside its context).
+    pc.runWithContext('anchored-evil', () => {
+        app.get('/x', (_req, res) => { res.seen = pc.getCurrentPlugin(); });
+    });
+
+    // Invoke later, fully DETACHED (no runWithContext) and with the stack scan blinded.
+    const savedLimit = Error.stackTraceLimit;
+    Error.stackTraceLimit = 0;
+    const res: any = {};
+    try { stored({}, res); } finally { Error.stackTraceLimit = savedLimit; }
+
+    // ALS context is authoritative — the handler ran as its plugin without relying on the stack.
+    expect(res.seen).toBe('anchored-evil');
+});
+
+// ============================================
 // Summary
 // ============================================
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
