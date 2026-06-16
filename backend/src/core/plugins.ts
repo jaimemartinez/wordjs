@@ -450,7 +450,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
             },
             MemberExpression(node, ancestors) {
                 // Detect access to sensitive globals
-                const sensitiveGlobals = ['process', 'global', 'require', 'module', 'arguments', '__dirname', '__filename', 'Buffer'];
+                const sensitiveGlobals = ['process', 'global', 'globalThis', 'require', 'module', 'arguments', '__dirname', '__filename', 'Buffer'];
                 if (node.object.type === 'Identifier' && sensitiveGlobals.includes(node.object.name)) {
                     // Check if this is an assignment (e.g. global.x = 1 or module.exports = ...)
                     // We allow WRITING to them for legitimate sharing/exporting, but BLOCK reading them as objects
