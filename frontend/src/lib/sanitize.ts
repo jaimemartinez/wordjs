@@ -51,21 +51,34 @@ const SANITIZE_OPTIONS = {
     FORBID_ATTR: ['onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur']
 };
 
+// Server-side (SSR) equivalent for sanitize-html (pure JS — DOMPurify needs a DOM). Mirrors the
+// DOMPurify allowlist so the initial server-rendered HTML is sanitized too. on* handlers and
+// <script>/<object>/etc. are absent from the allowlists → dropped. React does not re-diff
+// dangerouslySetInnerHTML on hydration, so a slight server/client sanitizer difference is harmless.
+const SERVER_SANITIZE_OPTIONS = {
+    allowedTags: SANITIZE_OPTIONS.ALLOWED_TAGS.filter(t => !SANITIZE_OPTIONS.FORBID_TAGS.includes(t)),
+    allowedAttributes: { '*': SANITIZE_OPTIONS.ALLOWED_ATTR },
+    allowedSchemes: ['http', 'https', 'mailto', 'tel'],
+    allowedSchemesByTag: { img: ['http', 'https', 'data'], source: ['http', 'https', 'data'] },
+    allowVulnerableTags: true // we intentionally keep <style>/<iframe> (matches the client allowlist)
+};
+
 /**
  * Sanitize HTML content to prevent XSS attacks
  * @param dirty - Raw HTML string (potentially dangerous)
  * @returns Clean HTML string safe for rendering
  */
 export function sanitizeHTML(dirty: string): string {
-    if (typeof window === 'undefined') {
-        // Server-side: return as-is (Next.js SSR)
-        // DOMPurify requires a DOM, so we skip on server
-        // The client will sanitize when hydrating
-        return dirty || '';
-    }
-
     if (!dirty) return '';
-
+    if (typeof window === 'undefined') {
+        // Server-side (SSR): sanitize with sanitize-html so the initial HTML is safe BEFORE hydration.
+        // Returning raw here was an XSS window (the payload ran before the client could sanitize).
+        try {
+            return require('sanitize-html')(dirty, SERVER_SANITIZE_OPTIONS);
+        } catch {
+            return dirty.replace(/<[^>]*>/g, ''); // fail closed
+        }
+    }
     return DOMPurify.sanitize(dirty, SANITIZE_OPTIONS);
 }
 
@@ -73,9 +86,15 @@ export function sanitizeHTML(dirty: string): string {
  * Sanitize HTML with custom options
  */
 export function sanitizeHTMLCustom(dirty: string, options: object): string {
-    if (typeof window === 'undefined') return dirty || '';
     if (!dirty) return '';
-
+    if (typeof window === 'undefined') {
+        // Custom options are DOMPurify-shaped; on the server fall back to the base allowlist (still safe).
+        try {
+            return require('sanitize-html')(dirty, SERVER_SANITIZE_OPTIONS);
+        } catch {
+            return dirty.replace(/<[^>]*>/g, '');
+        }
+    }
     return DOMPurify.sanitize(dirty, { ...SANITIZE_OPTIONS, ...options });
 }
 
@@ -83,13 +102,16 @@ export function sanitizeHTMLCustom(dirty: string, options: object): string {
  * Strip all HTML tags, returning only text
  */
 export function stripHTML(dirty: string): string {
-    if (typeof window === 'undefined') {
-        // Server-side fallback
-        return dirty?.replace(/<[^>]*>/g, '') || '';
-    }
-
     if (!dirty) return '';
-
+    if (typeof window === 'undefined') {
+        // Server-side: use sanitize-html (allow nothing) rather than a regex strip, which is bypassable
+        // (e.g. `<scr<script>ipt>`). Fail closed to a regex strip only if the lib is unavailable.
+        try {
+            return require('sanitize-html')(dirty, { allowedTags: [], allowedAttributes: {} });
+        } catch {
+            return dirty.replace(/<[^>]*>/g, '');
+        }
+    }
     return DOMPurify.sanitize(dirty, { ALLOWED_TAGS: [], ALLOWED_ATTR: [] });
 }
 

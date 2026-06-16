@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { postsApi, usersApi, commentsApi, systemApi, api, Comment, SystemStatus } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 interface Stats {
     posts: number;
@@ -418,7 +419,7 @@ export default function DashboardPage() {
                                             </div>
                                             <div
                                                 className="text-xs text-gray-500 line-clamp-2 mt-1.5 font-medium leading-relaxed"
-                                                dangerouslySetInnerHTML={{ __html: comment.content }}
+                                                dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }}
                                             />
                                         </div>
                                     </div>
