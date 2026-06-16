@@ -440,13 +440,22 @@ function secureDatabase() {
         const real: any = originalRequire.call(module, '../config/database');
         const rawDb = real && real.dbAsync;
         if (!rawDb) { _secureDb = real; return _secureDb; }
+        const QUERY_METHODS = new Set(['run', 'get', 'all', 'exec', 'each']);
         const guardedDb = new Proxy(rawDb, {
             get(t: any, p) {
-                const v = t[p];
-                if (typeof v === 'function' && (p === 'run' || p === 'get' || p === 'all' || p === 'exec' || p === 'each')) {
-                    return function (sql, ...rest) { guardPluginSql(sql); return v.call(t, sql, ...rest); };
+                // Run the table-scope guard BEFORE resolving the underlying method. Accessing t[p]
+                // can itself throw — the dbAsync proxy resolves the LIVE driver on every property
+                // access, which errors if the DB isn't initialized — so resolving it first would mask
+                // the security guard with an unrelated DB-state error. A plugin's SQL against a core
+                // table (users/options/…) must be blocked regardless of driver readiness.
+                if (typeof p === 'string' && QUERY_METHODS.has(p)) {
+                    return function (sql: any, ...rest: any[]) {
+                        guardPluginSql(sql);
+                        const v = t[p];
+                        return typeof v === 'function' ? v.call(t, sql, ...rest) : v;
+                    };
                 }
-                return v;
+                return t[p];
             }
         });
         _secureDb = new Proxy(real, {
