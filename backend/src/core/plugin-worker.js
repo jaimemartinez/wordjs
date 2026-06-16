@@ -55,7 +55,8 @@ const wordjs = {
     db: {
         all: (sql, p = []) => callHost('db.all', [sql, p]),
         get: (sql, p = []) => callHost('db.get', [sql, p]),
-        run: (sql, p = []) => callHost('db.run', [sql, p])
+        run: (sql, p = []) => callHost('db.run', [sql, p]),
+        createTable: (name, cols) => callHost('db.createTable', [name, cols])
     },
     hooks: {
         addAction: (hook, cb, priority) => registerCallback('action', hook, cb, priority),

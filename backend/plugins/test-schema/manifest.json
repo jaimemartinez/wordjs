@@ -3,5 +3,7 @@
     "version": "1.0.0",
     "description": "Creates a custom table to test backup integrity",
     "main": "index.js",
-    "active": true
+    "active": true,
+    "isolated": true,
+    "permissions": [{ "scope": "database", "access": "admin" }]
 }

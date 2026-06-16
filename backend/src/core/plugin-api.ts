@@ -100,6 +100,15 @@ function createPluginApi(slug: string) {
                 assertSqlAllowed(sql);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.run(sql, params);
+            },
+            // Create one of the plugin's own tables (driver-agnostic). Table name must not be a core table.
+            async createTable(name: string, columns: string[]) {
+                verifyPermission('database', 'write');
+                if (PROTECTED_TABLES.has(String(name).toLowerCase())) {
+                    throw new Error(`🛡️ Plugin DB access denied: '${name}' is a core table.`);
+                }
+                const { createPluginTable } = require('../config/database');
+                return createPluginTable(name, columns);
             }
         },
 
