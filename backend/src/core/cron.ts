@@ -4,7 +4,8 @@
  */
 
 const { getOption, updateOption } = require('./options');
-const { doAction, addAction } = require('./hooks');
+const { doAction, doActionForPlugin, addAction } = require('./hooks');
+const { getCurrentPlugin } = require('./plugin-context');
 
 // Registered cron jobs
 const cronJobs = new Map();
@@ -51,7 +52,9 @@ async function scheduleEvent(timestamp, recurrence, hook, args = []) {
         hook,
         args,
         schedule: recurrence,
-        interval: schedules[recurrence]?.interval || 0
+        interval: schedules[recurrence]?.interval || 0,
+        // Record the scheduling plugin so the fired event only runs ITS callbacks (not core hooks).
+        pluginSlug: getCurrentPlugin()
     };
 
     await updateOption('cron', events);
@@ -73,7 +76,8 @@ async function scheduleSingleEvent(timestamp, hook, args = []) {
     events[timestamp][key] = {
         hook,
         args,
-        schedule: false
+        schedule: false,
+        pluginSlug: getCurrentPlugin()
     };
 
     await updateOption('cron', events);
@@ -172,10 +176,14 @@ async function runCron() {
             const event = events[timestamp][key];
 
             try {
-                // Run the hook
-                // Note: We use execute the action but don't await fully if we want parallel?
-                // Standard WP Cron is sequential per request usually. Let's await for safety.
-                await doAction(event.hook, ...event.args);
+                // SECURITY: a plugin-scheduled event runs ONLY that plugin's own callbacks, in its
+                // context — so a plugin cannot schedule a CORE hook with attacker args to trigger core
+                // code. Core-scheduled events (no pluginSlug) dispatch normally.
+                if (event.pluginSlug) {
+                    await doActionForPlugin(event.hook, event.pluginSlug, ...(event.args || []));
+                } else {
+                    await doAction(event.hook, ...(event.args || []));
+                }
                 console.log(`Cron: Executed ${event.hook}`);
             } catch (error) {
                 console.error(`Cron error for ${event.hook}:`, error);
