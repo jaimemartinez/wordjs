@@ -6,8 +6,10 @@ import { backupsApi, settingsApi, BackupFile } from "@/lib/api";
 import { format } from "date-fns";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 export default function BackupsPage() {
+    const { t } = useI18n();
     const [backups, setBackups] = useState<BackupFile[]>([]);
     const [loading, setLoading] = useState(true);
     const [creating, setCreating] = useState(false);
@@ -39,7 +41,7 @@ export default function BackupsPage() {
             setError(null);
         } catch (err: any) {
             setError(err.message);
-            addToast("Failed to load backups", "error");
+            addToast(t('backups.toast.loadFailed'), "error");
         } finally {
             setLoading(false);
         }
@@ -88,9 +90,9 @@ export default function BackupsPage() {
                 day: scheduleDay
             });
 
-            addToast("Backup schedule saved successfully", "success");
+            addToast(t('backups.toast.scheduleSaved'), "success");
         } catch (err: any) {
-            addToast("Failed to save schedule: " + err.message, "error");
+            addToast(t('backups.toast.scheduleSaveFailed') + err.message, "error");
         } finally {
             setSavingSchedule(false);
         }
@@ -112,11 +114,11 @@ export default function BackupsPage() {
         setCreating(true);
         try {
             await backupsApi.create();
-            addToast("Backup created successfully", "success");
+            addToast(t('backups.toast.created'), "success");
             await fetchBackups();
         } catch (err: any) {
             setError(err.message);
-            addToast(err.message || "Failed to create backup", "error");
+            addToast(err.message || t('backups.toast.createFailed'), "error");
         } finally {
             setCreating(false);
         }
@@ -124,8 +126,8 @@ export default function BackupsPage() {
 
     const handleDelete = async (filename: string) => {
         const confirmed = await confirm(
-            "Are you sure you want to delete this backup? This action cannot be undone.",
-            "Delete Backup",
+            t('backups.delete.confirm'),
+            t('backups.delete.title'),
             true // isDanger
         );
 
@@ -134,16 +136,16 @@ export default function BackupsPage() {
         try {
             await backupsApi.delete(filename);
             setBackups(backups.filter(b => b.filename !== filename));
-            addToast("Backup deleted successfully", "success");
+            addToast(t('backups.toast.deleted'), "success");
         } catch (err: any) {
-            addToast(err.message || "Failed to delete backup", "error");
+            addToast(err.message || t('backups.toast.deleteFailed'), "error");
         }
     };
 
     const handleRestore = async (filename: string) => {
         const confirmed = await confirm(
-            `You are about to restore ${filename}. This will overwrite all current data and files. Are you sure?`,
-            "Confirm System Restore",
+            t('backups.restore.confirm').replace('{filename}', filename),
+            t('backups.restore.title'),
             true // isDanger
         );
 
@@ -152,14 +154,14 @@ export default function BackupsPage() {
         try {
             setLoading(true); // Show full page loading (or overlay)
             await backupsApi.restore(filename);
-            addToast("System restored successfully!", "success");
+            addToast(t('backups.toast.restored'), "success");
 
             // Reload after a short delay to allow toast to be seen, or immediately
             setTimeout(() => {
                 window.location.reload();
             }, 1000);
         } catch (err: any) {
-            addToast("Restore failed: " + err.message, "error");
+            addToast(t('backups.toast.restoreFailed') + err.message, "error");
             setLoading(false);
         }
     };
@@ -175,8 +177,8 @@ export default function BackupsPage() {
     return (
         <div className="p-8 md:p-12 h-full bg-gray-50/50 overflow-auto">
             <PageHeader
-                title="System Backups"
-                subtitle="Manage and restore automated backups"
+                title={t('backups.title')}
+                subtitle={t('backups.subtitle')}
                 icon="fa-box-archive"
             />
 
@@ -194,9 +196,9 @@ export default function BackupsPage() {
                     className="bg-blue-600 hover:bg-blue-700 text-white"
                 >
                     {creating ? (
-                        <><i className="fa-solid fa-spinner fa-spin mr-2"></i> Creating...</>
+                        <><i className="fa-solid fa-spinner fa-spin mr-2"></i> {t('backups.creating')}</>
                     ) : (
-                        <><i className="fa-solid fa-plus mr-2"></i> Create Backup</>
+                        <><i className="fa-solid fa-plus mr-2"></i> {t('backups.create')}</>
                     )}
                 </Button>
             </div>
@@ -207,10 +209,10 @@ export default function BackupsPage() {
                     <div>
                         <h3 className="text-xl font-bold text-gray-800 mb-2">
                             <i className="fa-solid fa-calendar-days text-blue-500 mr-3"></i>
-                            Automatic Schedule
+                            {t('backups.schedule.title')}
                         </h3>
                         <p className="text-gray-500">
-                            Configure how often the system should automatically back up your data.
+                            {t('backups.schedule.description')}
                         </p>
                     </div>
 
@@ -221,11 +223,11 @@ export default function BackupsPage() {
                                     value={schedule}
                                     onChange={setSchedule}
                                     options={[
-                                        { value: "off", label: "Disabled" },
-                                        { value: "hourly", label: "Hourly" },
-                                        { value: "twicedaily", label: "Twice Daily (12h)" },
-                                        { value: "daily", label: "Daily" },
-                                        { value: "weekly", label: "Weekly" }
+                                        { value: "off", label: t('backups.frequency.off') },
+                                        { value: "hourly", label: t('backups.frequency.hourly') },
+                                        { value: "twicedaily", label: t('backups.frequency.twicedaily') },
+                                        { value: "daily", label: t('backups.frequency.daily') },
+                                        { value: "weekly", label: t('backups.frequency.weekly') }
                                     ]}
                                 />
                             </div>
@@ -237,13 +239,13 @@ export default function BackupsPage() {
                                         value={scheduleDay}
                                         onChange={setScheduleDay}
                                         options={[
-                                            { value: "1", label: "Monday" },
-                                            { value: "2", label: "Tuesday" },
-                                            { value: "3", label: "Wednesday" },
-                                            { value: "4", label: "Thursday" },
-                                            { value: "5", label: "Friday" },
-                                            { value: "6", label: "Saturday" },
-                                            { value: "0", label: "Sunday" }
+                                            { value: "1", label: t('backups.day.monday') },
+                                            { value: "2", label: t('backups.day.tuesday') },
+                                            { value: "3", label: t('backups.day.wednesday') },
+                                            { value: "4", label: t('backups.day.thursday') },
+                                            { value: "5", label: t('backups.day.friday') },
+                                            { value: "6", label: t('backups.day.saturday') },
+                                            { value: "0", label: t('backups.day.sunday') }
                                         ]}
                                     />
                                 </div>
@@ -271,7 +273,7 @@ export default function BackupsPage() {
                                     {savingSchedule ? (
                                         <i className="fa-solid fa-spinner fa-spin"></i>
                                     ) : (
-                                        <>Save <i className="fa-solid fa-check ml-2"></i></>
+                                        <>{t('backups.save')} <i className="fa-solid fa-check ml-2"></i></>
                                     )}
                                 </Button>
                             </div>
@@ -285,10 +287,10 @@ export default function BackupsPage() {
                     <table className="w-full">
                         <thead>
                             <tr className="border-b border-gray-100/50 text-left">
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">Filename</th>
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">Date</th>
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">Size</th>
-                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold text-right">Actions</th>
+                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">{t('backups.column.filename')}</th>
+                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">{t('backups.column.date')}</th>
+                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold">{t('backups.column.size')}</th>
+                                <th className="p-6 text-xs uppercase tracking-wider text-gray-400 font-bold text-right">{t('backups.column.actions')}</th>
                             </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-50">
@@ -296,7 +298,7 @@ export default function BackupsPage() {
                                 <tr>
                                     <td colSpan={4} className="p-12 text-center text-gray-400">
                                         <i className="fa-solid fa-spinner fa-spin text-2xl mb-3"></i>
-                                        <p>Loading backups...</p>
+                                        <p>{t('backups.loading')}</p>
                                     </td>
                                 </tr>
                             ) : backups.length === 0 ? (
@@ -305,8 +307,8 @@ export default function BackupsPage() {
                                         <div className="w-16 h-16 bg-gray-50 rounded-full flex items-center justify-center mx-auto mb-4">
                                             <i className="fa-solid fa-box-open text-2xl text-gray-300"></i>
                                         </div>
-                                        <p className="font-medium">No backups found</p>
-                                        <p className="text-sm mt-1">Create your first backup to ensure data safety.</p>
+                                        <p className="font-medium">{t('backups.empty.title')}</p>
+                                        <p className="text-sm mt-1">{t('backups.empty.description')}</p>
                                     </td>
                                 </tr>
                             ) : (
@@ -331,21 +333,21 @@ export default function BackupsPage() {
                                                 <button
                                                     onClick={() => backupsApi.download(backup.filename)}
                                                     className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"
-                                                    title="Download"
+                                                    title={t('backups.action.download')}
                                                 >
                                                     <i className="fa-solid fa-download"></i>
                                                 </button>
                                                 <button
                                                     onClick={() => handleRestore(backup.filename)}
                                                     className="p-2 hover:bg-orange-50 text-orange-500 rounded-lg transition-colors"
-                                                    title="Restore"
+                                                    title={t('backups.action.restore')}
                                                 >
                                                     <i className="fa-solid fa-clock-rotate-left"></i>
                                                 </button>
                                                 <button
                                                     onClick={() => handleDelete(backup.filename)}
                                                     className="p-2 hover:bg-red-50 text-red-500 rounded-lg transition-colors"
-                                                    title="Delete"
+                                                    title={t('backups.action.delete')}
                                                 >
                                                     <i className="fa-solid fa-trash"></i>
                                                 </button>

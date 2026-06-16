@@ -3,9 +3,11 @@
 import { useEffect, useState, useRef } from "react";
 import { themesApi, Theme } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 
 export default function ThemesPage() {
+    const { t } = useI18n();
     const [themes, setThemes] = useState<Theme[]>([]);
     const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
@@ -34,10 +36,10 @@ export default function ThemesPage() {
         try {
             await themesApi.activate(slug);
             loadThemes();
-            setMessage({ type: "success", text: "Theme activated successfully!" });
+            setMessage({ type: "success", text: t('themes.activateSuccess') });
         } catch (error) {
             console.error("Failed to activate theme:", error);
-            setMessage({ type: "error", text: "Failed to activate theme" });
+            setMessage({ type: "error", text: t('themes.activateError') });
         }
     };
 
@@ -46,14 +48,14 @@ export default function ThemesPage() {
     };
 
     const handleDelete = async (slug: string) => {
-        if (!await confirm("Are you sure you want to delete this theme? This action cannot be undone.", "Delete Theme", true)) return;
+        if (!await confirm(t('themes.deleteConfirm'), t('themes.deleteTitle'), true)) return;
 
         try {
             await themesApi.delete(slug);
-            setMessage({ type: "success", text: "Theme deleted successfully!" });
+            setMessage({ type: "success", text: t('themes.deleteSuccess') });
             loadThemes();
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || "Failed to delete theme" });
+            setMessage({ type: "error", text: error.message || t('themes.deleteError') });
         }
     };
 
@@ -72,7 +74,7 @@ export default function ThemesPage() {
             setMessage({ type: "success", text: result.message });
             loadThemes();
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || "Upload failed" });
+            setMessage({ type: "error", text: error.message || t('themes.uploadError') });
         } finally {
             setUploading(false);
             if (fileInputRef.current) fileInputRef.current.value = "";
@@ -84,8 +86,8 @@ export default function ThemesPage() {
             {/* Header Section */}
             <div className="max-w-7xl mx-auto">
                 <PageHeader
-                    title="Themes"
-                    subtitle="Personalize the look and feel of your public site."
+                    title={t('themes.title')}
+                    subtitle={t('themes.subtitle')}
                     actions={
                         <>
                             <Button
@@ -94,7 +96,7 @@ export default function ThemesPage() {
                                 loading={uploading}
                                 icon={uploading ? undefined : "fa-plus-circle"}
                             >
-                                {uploading ? `${Math.round(uploadProgress)}%` : 'Install Theme'}
+                                {uploading ? `${Math.round(uploadProgress)}%` : t('themes.install')}
                             </Button>
                             <input
                                 ref={fileInputRef}
@@ -129,8 +131,8 @@ export default function ThemesPage() {
                         <div className="col-span-full">
                             <EmptyState
                                 icon="fa-palette"
-                                title="No themes found"
-                                description="Upload your first theme to get started."
+                                title={t('themes.emptyTitle')}
+                                description={t('themes.emptyDescription')}
                             />
                         </div>
                     ) : (
@@ -168,7 +170,7 @@ export default function ThemesPage() {
                                         <div className="absolute top-6 right-6">
                                             <div className="bg-blue-600 text-white px-5 py-2.5 rounded-full text-xs font-black uppercase tracking-widest flex items-center gap-2 shadow-lg shadow-blue-500/50 border border-blue-400/30 backdrop-blur-md">
                                                 <span className="flex h-1.5 w-1.5 rounded-full bg-white animate-pulse"></span>
-                                                Active
+                                                {t('themes.active')}
                                             </div>
                                         </div>
                                     )}
@@ -189,13 +191,13 @@ export default function ThemesPage() {
                                             </span>
                                         </div>
                                         <p className="text-gray-500 font-medium text-sm leading-relaxed line-clamp-2">
-                                            {theme.description || "A beautiful look for your WordJS site with modern aesthetics."}
+                                            {theme.description || t('themes.defaultDescription')}
                                         </p>
                                     </div>
 
                                     <div className="mt-auto pt-6 flex flex-col gap-3">
                                         <div className="flex items-center justify-between text-xs font-bold text-gray-400 mb-2">
-                                            <span>BY <span className="text-gray-900">{theme.author || 'WordJS'}</span></span>
+                                            <span>{t('themes.by')} <span className="text-gray-900">{theme.author || 'WordJS'}</span></span>
                                         </div>
 
                                         {!theme.active ? (
@@ -203,14 +205,14 @@ export default function ThemesPage() {
                                                 onClick={() => activateTheme(theme.slug)}
                                                 className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl transition-all duration-300 hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30 active:scale-95 flex items-center justify-center gap-2"
                                             >
-                                                Activate Theme
+                                                {t('themes.activate')}
                                                 <i className="fa-solid fa-arrow-right text-xs opacity-50 group-hover:translate-x-1 transition-transform"></i>
                                             </button>
                                         ) : (
                                             <button
                                                 className="w-full bg-blue-50 text-blue-600 font-black py-4 rounded-2xl flex items-center justify-center gap-2 border border-blue-100 cursor-default"
                                             >
-                                                Currently In Use
+                                                {t('themes.inUse')}
                                             </button>
                                         )}
 
@@ -219,15 +221,15 @@ export default function ThemesPage() {
                                                 <button
                                                     onClick={() => handleDownload(theme.slug)}
                                                     className="flex-1 bg-gray-50 text-gray-600 font-bold py-3 rounded-xl hover:bg-gray-100 transition-all flex items-center justify-center gap-2 text-sm"
-                                                    title="Download ZIP"
+                                                    title={t('themes.downloadZip')}
                                                 >
                                                     <i className="fa-solid fa-download text-xs opacity-50"></i>
-                                                    Download
+                                                    {t('themes.download')}
                                                 </button>
                                                 <button
                                                     onClick={() => handleDelete(theme.slug)}
                                                     className="aspect-square bg-rose-50 text-rose-500 font-bold p-3 rounded-xl hover:bg-rose-500 hover:text-white transition-all flex items-center justify-center"
-                                                    title="Delete Theme"
+                                                    title={t('themes.deleteTitle')}
                                                 >
                                                     <i className="fa-solid fa-trash-can text-sm"></i>
                                                 </button>
