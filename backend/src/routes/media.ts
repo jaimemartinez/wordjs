@@ -232,17 +232,33 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         // SVG Sanitization (Defense in Depth)
         if (req.file.mimetype === 'image/svg+xml') {
             const rawSvg = fs.readFileSync(req.file.path, 'utf8');
-            // Clean the SVG
+            // Sanitize via an explicit ALLOWLIST. The previous config used allowedAttributes:false
+            // (allow ALL attributes) and only stripped <script> + tags whose NAME starts with 'on' —
+            // but event handlers like onload/onerror are ATTRIBUTES, never tag names, so they survived
+            // (stored XSS). An allowlist drops every unlisted attribute (all on* handlers) and tag.
             const cleanSvg = sanitizeHtml(rawSvg, {
-                allowedTags: false, // Allow all tags...
-                allowedAttributes: false, // ...and attributes
-                exclusiveFilter: function (frame) {
-                    // ...EXCEPT scripts and event handlers
-                    return frame.tag === 'script' || frame.tag.startsWith('on');
+                allowedTags: [
+                    'svg', 'g', 'path', 'rect', 'circle', 'ellipse', 'line', 'polyline', 'polygon',
+                    'text', 'tspan', 'defs', 'linearGradient', 'radialGradient', 'stop', 'clipPath',
+                    'mask', 'pattern', 'use', 'symbol', 'title', 'desc', 'marker', 'filter',
+                    'feGaussianBlur', 'feOffset', 'feBlend', 'feMerge', 'feMergeNode', 'feColorMatrix', 'image'
+                ],
+                allowedAttributes: {
+                    '*': [
+                        'id', 'class', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin',
+                        'stroke-dasharray', 'd', 'points', 'x', 'y', 'x1', 'y1', 'x2', 'y2', 'cx', 'cy',
+                        'r', 'rx', 'ry', 'width', 'height', 'viewBox', 'xmlns', 'xmlns:xlink', 'version',
+                        'transform', 'opacity', 'fill-opacity', 'stroke-opacity', 'offset', 'stop-color',
+                        'stop-opacity', 'gradientUnits', 'gradientTransform', 'patternUnits', 'clip-path',
+                        'mask', 'filter', 'font-size', 'font-family', 'text-anchor', 'preserveAspectRatio',
+                        'xlink:href', 'href', 'style'
+                    ]
                 },
-                textFilter: function (text) {
-                    return text.replace(/javascript:/gi, ''); // Prevent javascript: hrefs
-                }
+                // Block javascript:/data:text in href; allow only safe schemes (fragment refs like #id
+                // carry no scheme and are permitted). on* attributes are absent from the allowlist → dropped.
+                allowedSchemes: ['http', 'https', 'mailto'],
+                allowedSchemesByTag: { image: ['http', 'https', 'data'] },
+                parser: { lowerCaseAttributeNames: false }
             });
             fs.writeFileSync(req.file.path, cleanSvg);
         }

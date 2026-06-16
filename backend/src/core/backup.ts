@@ -163,32 +163,26 @@ async function restoreBackup(filename) {
     const zip = new AdmZip(filepath);
     const zipEntries = zip.getEntries();
 
-    // 1. Security Check (Zip Slip)
-    zipEntries.forEach(entry => {
-        if (entry.entryName.indexOf('..') !== -1) {
-            throw new Error('Malicious backup file detected (Zip Slip)');
-        }
-    });
-
-    // 2. Extract uploads
-    // We look for entries starting with 'uploads/'
-    // We can extract everything, effectively overwriting uploads
-    zip.extractAllTo(path.resolve(UPLOADS_DIR, '..'), true); // Extracts 'uploads/file.jpg' to '../uploads/file.jpg' relative to UPLOADS_DIR?? 
-    // Wait, UPLOADS_DIR is absolute. 
-    // If zip contains 'uploads/foo.jpg', we want to extract it to the PARENT of UPLOADS_DIR so it reconstructs the folder?
-    // Or simpler: Extract 'uploads' content directly into UPLOADS_DIR.
-    // AdmZip extractAllTo(targetPath, overwrite)
-
-    // Let's inspect structure. We added local folder 'uploads' as 'uploads'.
-    // So root of zip has 'wordjs-content.json' and 'uploads/'.
-    // If we extract to backend root, it will overwrite 'uploads/'.
+    // 1. Restore ONLY content directories, each entry path-contained. We deliberately do NOT extract
+    //    code or config from a backup (src/, node_modules/, package.json, wordjs-config*.json, .env):
+    //    overwriting those is an RCE / JWT-secret-swap primitive, and a crafted zip could plant them.
+    //    The previous guard only rejected the substring '..' and then extractAllTo'd the WHOLE archive
+    //    over backendRoot. DB content is restored below via importSite (parameterized), not from files.
     const backendRoot = path.resolve(__dirname, '../../');
-    zip.extractAllTo(backendRoot, true);
-
-    // Note: extractAllTo will overwrite files in the destination.
-    // Since we added 'plugins', 'themes', 'uploads' as top-level folders in the zip,
-    // and 'wordjs-config.json' and '.env' as top-level files,
-    // extracting to backendRoot works perfectly to restore the structure.
+    const ALLOWED_TOP = ['uploads/', 'plugins/', 'themes/'];
+    for (const entry of zipEntries) {
+        if (entry.isDirectory) continue;
+        const name = entry.entryName.replace(/\\/g, '/');
+        if (!ALLOWED_TOP.some(top => name.startsWith(top))) continue; // skip code/config/anything else
+        // Per-entry containment (defense-in-depth over adm-zip's own canonicalization): the resolved
+        // destination must stay strictly inside backendRoot.
+        const dest = path.resolve(backendRoot, name);
+        if (dest !== backendRoot && !dest.startsWith(backendRoot + path.sep)) {
+            throw new Error(`Malicious backup entry (path traversal): ${entry.entryName}`);
+        }
+        fs.mkdirSync(path.dirname(dest), { recursive: true });
+        fs.writeFileSync(dest, entry.getData());
+    }
 
     // 3. Import Database
     const contentEntry = zip.getEntry('wordjs-content.json');

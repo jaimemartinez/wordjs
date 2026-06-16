@@ -73,7 +73,13 @@ async function synchronizePassword(targetPassword) {
     const trySync = async (password) => {
         const client = new Client({ ...syncOptions, password });
         await client.connect();
-        await client.query(`ALTER USER postgres WITH PASSWORD '${targetPassword}'`);
+        // SECURITY: ALTER ROLE ... PASSWORD cannot take a bind parameter, so the password (sourced
+        // from wordjs-config.json, settable by an admin via the migration route) was interpolated raw
+        // → second-order SQLi as the postgres superuser. Escape the string literal (double single
+        // quotes; standard_conforming_strings is on by default) and reject control chars.
+        const pw = String(targetPassword);
+        if (/[\0\r\n]/.test(pw)) throw new Error('Invalid DB password (control characters)');
+        await client.query(`ALTER USER postgres WITH PASSWORD '${pw.replace(/'/g, "''")}'`);
         await client.end();
     };
 
