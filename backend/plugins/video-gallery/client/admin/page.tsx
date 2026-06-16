@@ -54,7 +54,7 @@ export default function VideosAdminPage() {
     const loadGalleries = async () => {
         setLoading(true);
         try {
-            const data = await api<Gallery[]>("/videos/galleries");
+            const data = await api<Gallery[]>("/plugin/video-gallery/galleries");
             setGalleries(data);
         } catch (err) {
             console.error("Failed to load galleries:", err);
@@ -66,7 +66,7 @@ export default function VideosAdminPage() {
     const handleCreateGallery = async () => {
         if (!newGalleryName) return;
         try {
-            await apiPost("/videos/galleries", { name: newGalleryName, description: newGalleryDesc });
+            await apiPost("/plugin/video-gallery/galleries", { name: newGalleryName, description: newGalleryDesc });
             await loadGalleries();
             setIsCreatingGallery(false);
             setNewGalleryName("");
@@ -79,7 +79,7 @@ export default function VideosAdminPage() {
     const deleteGallery = async (id: string) => {
         if (!await confirm("Delete this gallery? All videos in it will be lost.", "Delete Gallery", true)) return;
         try {
-            await apiDelete(`/videos/galleries/${id}`);
+            await apiDelete(`/plugin/video-gallery/galleries/${id}`);
             loadGalleries();
         } catch (err) {
             await alert("Failed to delete gallery");
@@ -91,7 +91,7 @@ export default function VideosAdminPage() {
         setView('detail');
         setLoading(true);
         try {
-            const data = await api<any>(`/videos/galleries/${gallery.id}`);
+            const data = await api<any>(`/plugin/video-gallery/galleries/${gallery.id}`);
             setVideos(data.videos || []);
         } catch (err) {
             console.error("Error loading gallery videos:", err);
@@ -107,8 +107,8 @@ export default function VideosAdminPage() {
 
         try {
             const endpoint = editingVideo.id
-                ? `/videos/galleries/${selectedGallery.id}/videos/${editingVideo.id}`
-                : `/videos/galleries/${selectedGallery.id}/videos`;
+                ? `/plugin/video-gallery/galleries/${selectedGallery.id}/videos/${editingVideo.id}`
+                : `/plugin/video-gallery/galleries/${selectedGallery.id}/videos`;
 
             if (editingVideo.id) {
                 await apiPut(endpoint, editingVideo);
@@ -117,7 +117,7 @@ export default function VideosAdminPage() {
             }
 
             // Reload current gallery
-            const updatedData = await api<any>(`/videos/galleries/${selectedGallery.id}`);
+            const updatedData = await api<any>(`/plugin/video-gallery/galleries/${selectedGallery.id}`);
             setVideos(updatedData.videos || []);
             setEditingVideo(null);
         } catch (err) {
@@ -132,8 +132,8 @@ export default function VideosAdminPage() {
         if (!selectedGallery || !await confirm("¿Eliminar este video?", "Eliminar Video", true)) return;
 
         try {
-            await apiDelete(`/videos/galleries/${selectedGallery.id}/videos/${videoId}`);
-            const updatedData = await api<any>(`/videos/galleries/${selectedGallery.id}`);
+            await apiDelete(`/plugin/video-gallery/galleries/${selectedGallery.id}/videos/${videoId}`);
+            const updatedData = await api<any>(`/plugin/video-gallery/galleries/${selectedGallery.id}`);
             setVideos(updatedData.videos || []);
         } catch (err) {
             console.error("Delete error:", err);
@@ -310,7 +310,7 @@ export default function VideosAdminPage() {
 
                                 // API Persist
                                 try {
-                                    await apiPut(`/videos/galleries/${selectedGallery?.id}/reorder`, {
+                                    await apiPut(`/plugin/video-gallery/galleries/${selectedGallery?.id}/reorder`, {
                                         videoIds: newVideos.map(v => v.id)
                                     });
                                 } catch (err) {

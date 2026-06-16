@@ -1,13 +1,15 @@
 /**
- * Photo Carousel Plugin for WordJS
- * Self-contained plugin with:
- * - Own API routes for CRUD operations
- * - Shortcode [carousel id="X"] for embedding
- * 
- * Usage: [carousel id="my-carousel"] or [carousel] for latest images
+ * Photo Carousel Plugin for WordJS — ISOLATED.
+ *
+ * Runs in a worker (manifest.isolated) and uses ONLY the injected `wordjs` capability bridge —
+ * no direct require of core modules, express, or uuid.
+ * Routes are namespaced under /api/v1/plugin/photo-carousel/* by the host.
+ *
+ * - CRUD API for carousels
+ * - Shortcode [carousel id="X"] for embedding (async)
+ *
+ * Usage: [carousel id="my-carousel"]
  */
-
-const { v4: uuidv4 } = require('uuid');
 
 exports.metadata = {
     name: 'Photo Carousel',
@@ -16,61 +18,38 @@ exports.metadata = {
     author: 'WordJS'
 };
 
-// Store reference to registered routes for cleanup
-let registeredRouter = null;
+exports.init = function (wordjs) {
+    const { options, http, shortcodes, adminMenu } = wordjs;
 
-exports.init = function () {
-    const { addShortcode } = require('../../src/core/shortcodes');
-    const { getOption, updateOption } = require('../../src/core/options');
-    const { addAction } = require('../../src/core/hooks');
-    const express = require('express');
+    // tiny id generator (no uuid dependency needed inside the isolate)
+    const newId = () => Math.random().toString(36).slice(2, 10);
 
-    // === API ROUTES ===
-    const router = express.Router();
-    const { authenticate } = require('../../src/middleware/auth');
-    const { isAdmin } = require('../../src/middleware/permissions');
+    // === API ROUTES (host namespaces them under /api/v1/plugin/photo-carousel) ===
 
-    // GET /api/v1/carousels - List all carousels
-    // GET /api/v1/carousels - List all carousels
-    router.get('/', async (req, res) => {
-        console.log('📸 API: GET /api/v1/carousels (Plugin)');
-        const list = await getOption('carousels_list', []);
-        console.log(`📸 API: Found ${list.length} carousels in list`);
+    // GET / — list all carousels (public)
+    http.route('get', '/', async (req, res) => {
+        const list = await options.get('carousels_list', []);
 
         // Parallel fetch of all items
         const carousels = await Promise.all(list.map(async id => {
-            const data = await getOption(`carousel_${id}`, null);
+            const data = await options.get(`carousel_${id}`, null);
             return data ? { id, ...data } : null;
         }));
 
-        const result = carousels.filter(Boolean);
-        console.log(`📸 API: Returning ${result.length} carousels`);
-        res.json(result);
+        res.json(carousels.filter(Boolean));
     });
 
-    // GET /api/v1/carousels/:id - Get single carousel
-    // GET /api/v1/carousels/:id - Get single carousel
-    router.get('/:id', async (req, res) => {
-        const data = await getOption(`carousel_${req.params.id}`, null);
-        if (!data) {
-            return res.status(404).json({ error: 'Carousel not found' });
-        }
-        res.json({ id: req.params.id, ...data });
-    });
-
-    // GET /api/v1/carousels/location/:location - Get carousel by location (e.g. 'hero')
-    // GET /api/v1/carousels/location/:location - Get carousel by location (e.g. 'hero')
-    router.get('/location/:location', async (req, res) => {
-        const list = await getOption('carousels_list', []);
+    // GET /location/:location — get carousel by location (e.g. 'hero') (public)
+    // NOTE: registered before /:id so it is not shadowed by the param route.
+    http.route('get', '/location/:location', async (req, res) => {
+        const list = await options.get('carousels_list', []);
 
         // Find carousel with matching location
-        // Since we don't have a direct index, we have to iterate
-        // In a real DB this would be a query
         let found = null;
         let foundId = null;
 
         for (const id of list) {
-            const data = await getOption(`carousel_${id}`, null);
+            const data = await options.get(`carousel_${id}`, null);
             if (data && data.location === req.params.location) {
                 found = data;
                 foundId = id;
@@ -84,37 +63,44 @@ exports.init = function () {
         res.json({ id: foundId, ...found });
     });
 
-    // POST /api/v1/carousels - Create carousel (Admin only)
-    // POST /api/v1/carousels - Create carousel (Admin only)
-    router.post('/', authenticate, isAdmin, async (req, res) => {
-        const { name, images = [], autoplay = true, interval = 5000, location = '' } = req.body;
+    // GET /:id — get single carousel (public)
+    http.route('get', '/:id', async (req, res) => {
+        const data = await options.get(`carousel_${req.params.id}`, null);
+        if (!data) {
+            return res.status(404).json({ error: 'Carousel not found' });
+        }
+        res.json({ id: req.params.id, ...data });
+    });
+
+    // POST / — create carousel (admin)
+    http.route('post', '/', { auth: true, admin: true }, async (req, res) => {
+        const { name, images = [], autoplay = true, interval = 5000, location = '' } = req.body || {};
 
         if (!name) {
             return res.status(400).json({ error: 'Name is required' });
         }
 
-        const id = uuidv4().split('-')[0]; // Short ID
+        const id = newId(); // Short ID
         const carousel = { name, images, autoplay, interval, location, createdAt: new Date().toISOString() };
 
-        await updateOption(`carousel_${id}`, carousel);
+        await options.set(`carousel_${id}`, carousel);
 
         // Update list
-        const list = await getOption('carousels_list', []);
+        const list = await options.get('carousels_list', []);
         list.push(id);
-        await updateOption('carousels_list', list);
+        await options.set('carousels_list', list);
 
         res.json({ success: true, id, ...carousel });
     });
 
-    // PUT /api/v1/carousels/:id - Update carousel (Admin only)
-    // PUT /api/v1/carousels/:id - Update carousel (Admin only)
-    router.put('/:id', authenticate, isAdmin, async (req, res) => {
-        const existing = await getOption(`carousel_${req.params.id}`, null);
+    // PUT /:id — update carousel (admin)
+    http.route('put', '/:id', { auth: true, admin: true }, async (req, res) => {
+        const existing = await options.get(`carousel_${req.params.id}`, null);
         if (!existing) {
             return res.status(404).json({ error: 'Carousel not found' });
         }
 
-        const { name, images, autoplay, interval, location } = req.body;
+        const { name, images, autoplay, interval, location } = req.body || {};
         const updated = {
             ...existing,
             name: name !== undefined ? name : existing.name,
@@ -125,51 +111,38 @@ exports.init = function () {
             updatedAt: new Date().toISOString()
         };
 
-        await updateOption(`carousel_${req.params.id}`, updated);
+        await options.set(`carousel_${req.params.id}`, updated);
         res.json({ success: true, id: req.params.id, ...updated });
     });
 
-    // DELETE /api/v1/carousels/:id - Delete carousel (Admin only)
-    // DELETE /api/v1/carousels/:id - Delete carousel (Admin only)
-    router.delete('/:id', authenticate, isAdmin, async (req, res) => {
-        const existing = await getOption(`carousel_${req.params.id}`, null);
+    // DELETE /:id — delete carousel (admin)
+    http.route('delete', '/:id', { auth: true, admin: true }, async (req, res) => {
+        const existing = await options.get(`carousel_${req.params.id}`, null);
         if (!existing) {
             return res.status(404).json({ error: 'Carousel not found' });
         }
 
-        await updateOption(`carousel_${req.params.id}`, null);
+        await options.set(`carousel_${req.params.id}`, null);
 
         // Remove from list
-        const list = await getOption('carousels_list', []);
+        const list = await options.get('carousels_list', []);
         const index = list.indexOf(req.params.id);
         if (index > -1) {
             list.splice(index, 1);
-            await updateOption('carousels_list', list);
+            await options.set('carousels_list', list);
         }
 
         res.json({ success: true });
     });
 
-    // Register routes with Express app immediately
-    const { getApp } = require('../../src/core/appRegistry');
-    const app = getApp();
-
-    if (app) {
-        app.use('/api/v1/carousels', router);
-        registeredRouter = router;
-        console.log('   ✓ Carousel API routes registered');
-    } else {
-        console.warn('   ⚠ Could not register carousel routes - app not available');
-    }
-
-    // === SHORTCODE ===
-    addShortcode('carousel', (attrs) => {
+    // === SHORTCODE (async — fixes the missing-await bug from the old code) ===
+    shortcodes.add('carousel', async (attrs) => {
         // Require a carousel ID
         if (!attrs.id) {
             return ''; // No ID provided, render nothing
         }
 
-        const carousel = getOption(`carousel_${attrs.id}`, null);
+        const carousel = await options.get(`carousel_${attrs.id}`, null);
         if (!carousel) {
             return ''; // Carousel not found, render nothing
         }
@@ -187,9 +160,8 @@ exports.init = function () {
         return renderCarousel(images, settings);
     });
 
-    // === REGISTER ADMIN MENU ===
-    const { registerAdminMenu } = require('../../src/core/adminMenu');
-    registerAdminMenu('photo-carousel', {
+    // === ADMIN MENU ===
+    adminMenu.add({
         href: '/admin/plugin/carousels',
         label: 'Photo Carousel',
         icon: 'fa-images',
@@ -197,14 +169,10 @@ exports.init = function () {
         cap: 'manage_carousels'
     });
 
-    console.log('Photo Carousel plugin v2.0 initialized!');
+    console.log('Photo Carousel plugin v2.0 initialized (isolated)!');
 };
 
 exports.deactivate = function () {
-    const { removeShortcode } = require('../../src/core/shortcodes');
-    const { unregisterAdminMenu } = require('../../src/core/adminMenu');
-    removeShortcode('carousel');
-    unregisterAdminMenu('photo-carousel');
     console.log('Photo Carousel plugin deactivated');
 };
 

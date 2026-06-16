@@ -295,7 +295,7 @@ export default function VideoGalleryPuck({ galleryId = "default", title = "Video
             const targetId = galleryId || 'default';
 
             // Use relative URL - works with any protocol/port via gateway
-            const res = await fetch(`/api/v1/videos/galleries/${targetId}`);
+            const res = await fetch(`/api/v1/plugin/video-gallery/galleries/${targetId}`);
 
             if (res.ok) {
                 const gallery = await res.json();
