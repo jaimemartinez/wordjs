@@ -1,10 +1,12 @@
 # Design Proposal: Hard Plugin Isolation (vm / process)
 
-> **Status update (2026-06-16): IMPLEMENTED, opt-in, cross-platform.** Phase 1 (the `wordjs`
-> capability bridge, `src/core/plugin-api.ts`) and the isolate runtime (`src/core/plugin-isolate.ts`
+> **Status update (2026-06-16): IMPLEMENTED — isolated-only (mandatory), cross-platform.** The `wordjs`
+> capability bridge (`src/core/plugin-api.ts`) and the isolate runtime (`src/core/plugin-isolate.ts`
 > + `plugin-worker.js`, **worker_threads** — works in any environment, no native deps) are in `main`.
-> A plugin with `"isolated": true` in its manifest runs in a separate V8 isolate, reaching core only
-> via the bridge over RPC. worker_threads gives heap / crash / resource isolation + host-owned
+> Every plugin runs in a separate V8 isolate, reaching core only via the bridge over RPC; a plugin
+> MUST declare `"isolated": true` and use the bridge. The **legacy in-process execution path has been
+> removed** — `loadActivePlugins`/`activatePlugin` reject non-isolated plugins and `deactivatePlugin`
+> terminates the worker. worker_threads gives heap / crash / resource isolation + host-owned
 > capabilities everywhere; `isolated-vm` or child-process + seccomp can swap in as the primitive (same
 > architecture) where the platform supports them.
 >
@@ -39,13 +41,14 @@
 > | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
 > | conference-manager | **isolated** | trusted: privileged DB + `db.getType` + absolute routes + portal cookies |
 > | mail-server | **isolated** | trusted: SMTP server on :25 + MX delivery in the worker; Email model → `db`, DKIM via secret options, multipart upload, `provideMail` + `notify.registerTransport` |
-> | ~~db-migration~~ | **moved to core** | was DB infrastructure, not a feature plugin (manages the embedded PostgreSQL *server process* via `child_process.execSync` + runs schema migrations at boot) — relocated to `src/core/db-admin/`, wired in at boot. |
+> | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (manages the embedded PostgreSQL *server process* via `child_process.execSync` + runs schema migrations at boot). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
 >
 > **Net (final): the sandbox is isolated-only.** Every plugin runs in a worker; the legacy in-process
 > execution path was removed (`loadActivePlugins`/`activatePlugin` reject non-isolated plugins,
 > `deactivatePlugin` terminates the worker). All feature plugins are isolated (verified in-browser
 > serving real data — incl. the mail server's inbox and its SMTP listener on :25). db-migration is no
-> longer a plugin: it moved into core because it manages the database server itself. Uploaded/untrusted
+> longer a plugin at all: its backend moved into core (it manages the database server itself) and its
+> admin UI is a native frontend route reached from a permanent core Sidebar item. Uploaded/untrusted
 > third-party plugins isolate by default and are hard-blocked from core tables/secrets regardless of
 > the permissions they request; trusted first-party plugins get the privileged bridge capabilities.
 > (The host-side guards — io-guard / secure-require / appRegistry anchoring — stay: bridge calls run in

@@ -3,72 +3,84 @@
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ]
+    ],
+    "metrics": {}
   },
   "/admin": {
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ]
+    ],
+    "metrics": {}
   },
   "/login": {
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ]
+    ],
+    "metrics": {}
   },
   "/install": {
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ]
+    ],
+    "metrics": {}
   },
   "/migration": {
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ]
+    ],
+    "metrics": {}
   },
   "/portal": {
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ]
+    ],
+    "metrics": {}
   },
   "/_next": {
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ]
+    ],
+    "metrics": {}
   },
   "/api": {
     "name": "backend",
     "targets": [
       "https://127.0.0.1:4000"
-    ]
+    ],
+    "metrics": {}
   },
   "/uploads": {
     "name": "backend",
     "targets": [
       "https://127.0.0.1:4000"
-    ]
+    ],
+    "metrics": {}
   },
   "/themes": {
     "name": "backend",
     "targets": [
       "https://127.0.0.1:4000"
-    ]
+    ],
+    "metrics": {}
   },
   "/plugins": {
     "name": "backend",
     "targets": [
       "https://127.0.0.1:4000"
-    ]
+    ],
+    "metrics": {}
   },
   "/.well-known": {
     "name": "backend",
     "targets": [
       "https://127.0.0.1:4000"
-    ]
+    ],
+    "metrics": {}
   }
 }
