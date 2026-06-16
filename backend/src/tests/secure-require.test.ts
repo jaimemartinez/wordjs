@@ -478,6 +478,21 @@ test('Plugin is blocked from writing a manifest.json (#6)', () => {
     });
 });
 
+test('EventEmitter listener registered by a plugin is ALS-anchored when fired detached (#crit-RCE)', () => {
+    const pc = require('../core/plugin-context');
+    const EventEmitter = require('events');
+    const em = new EventEmitter();
+    let seen: any = 'unset';
+    // Plugin registers the listener inside its context (as during init / a route handler).
+    pc.runWithContext('ee-evil', () => {
+        em.on('boom', () => { seen = pc.getCurrentPlugin(); });
+    });
+    // Core fires it later with empty ALS and a blinded stack — it must STILL run as the plugin.
+    const savedLimit = Error.stackTraceLimit; Error.stackTraceLimit = 0;
+    try { em.emit('boom'); } finally { Error.stackTraceLimit = savedLimit; }
+    expect(seen).toBe('ee-evil');
+});
+
 // ============================================
 // Summary
 // ============================================

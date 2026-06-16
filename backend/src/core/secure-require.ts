@@ -356,12 +356,24 @@ function secureConfig() {
     if (!_secureConfig) {
         const real: any = originalRequire.call(module, '../config/app');
         const SECRET = new Set(['jwtSecret', 'gatewaySecret', 'dbPassword']);
+        // Strip secret-ish keys from any nested config object (defense against field-blocklist rot:
+        // redis.password, smtp pass, etc. — anything whose key name looks like a credential).
+        const SECRET_KEY_RE = /pass|secret|key|token|credential/i;
+        const scrub = (obj: any): any => {
+            if (!obj || typeof obj !== 'object') return obj;
+            const out: any = Array.isArray(obj) ? [] : {};
+            for (const k of Object.keys(obj)) {
+                if (SECRET_KEY_RE.test(k)) continue;          // drop credential-like fields
+                out[k] = (obj[k] && typeof obj[k] === 'object') ? scrub(obj[k]) : obj[k];
+            }
+            return out;
+        };
         _secureConfig = new Proxy(real, {
             get(t: any, p) {
                 if (SECRET.has(p as string)) return undefined;
-                if (p === 'jwt') return { ...t.jwt, secret: undefined };
-                if (p === 'db') return { ...t.db, password: undefined };
-                return t[p];
+                const v = t[p];
+                // Return a scrubbed deep copy of nested objects so no credential leaks through.
+                return (v && typeof v === 'object') ? scrub(v) : v;
             },
             set() { return false; } // read-only view for plugins
         });
@@ -455,6 +467,41 @@ function installSecureRequire() {
                 }
             }
             return orig.apply(this, arguments);
+        };
+    }
+
+    // 5. Anchor EventEmitter listeners a plugin registers. emit() does NOT propagate ALS, so a
+    //    listener a plugin attaches to ANY emitter (process, the hooks monitor, a dep's server
+    //    socket, SSE responses) would otherwise run DETACHED when core fires it — the seed of the
+    //    detached-listener -> bare-fn-microtask RCE. Capture the plugin at REGISTRATION (cheap ALS
+    //    check; only wraps when a plugin is in context, so core/dep listeners are untouched) and
+    //    re-enter runWithContext on fire, so the listener and its microtasks carry the plugin context.
+    const EventEmitter = require('events');
+    const emCtx = require('./plugin-context');
+    for (const m of ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener']) {
+        const orig = EventEmitter.prototype[m];
+        if (typeof orig !== 'function') continue;
+        EventEmitter.prototype[m] = function (event, listener) {
+            const slug = emCtx.getCurrentPlugin();
+            if (slug && typeof listener === 'function') {
+                let wrapped = (listener as any).__wordjsWrapped;
+                if (!wrapped) {
+                    wrapped = function (...a) { return emCtx.runWithContext(slug, () => listener.apply(this, a)); };
+                    try { Object.defineProperty(listener, '__wordjsWrapped', { value: wrapped, configurable: true, enumerable: false }); }
+                    catch (e) { return orig.call(this, event, listener); }
+                }
+                return orig.call(this, event, wrapped);
+            }
+            return orig.apply(this, arguments);
+        };
+    }
+    // removeListener/off must resolve the wrapped form so plugin listeners can still be removed.
+    for (const m of ['removeListener', 'off']) {
+        const orig = EventEmitter.prototype[m];
+        if (typeof orig !== 'function') continue;
+        EventEmitter.prototype[m] = function (event, listener) {
+            const w = listener && (listener as any).__wordjsWrapped;
+            return orig.call(this, event, w || listener);
         };
     }
 
