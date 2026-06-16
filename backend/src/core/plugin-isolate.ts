@@ -49,42 +49,42 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         });
         const api = createPluginApi(slug);
         let invokeId = 0;
-        const pendingInvoke = new Map<number, any>();
 
-        const invokeWorker = (cbId: string, args: any[]) => new Promise((res, rej) => {
+        // Every host→worker RPC carries a hard timeout: a plugin that never replies (hang or DoS)
+        // must not pin an HTTP request open or leak a pending entry forever. rpcSettle clears it.
+        const RPC_TIMEOUT_MS = 30000;
+        const rpcSend = (map: Map<number, any>, message: any): Promise<any> => new Promise((res, rej) => {
             const id = ++invokeId;
-            pendingInvoke.set(id, { res, rej });
-            worker.postMessage({ kind: 'invoke', id, cbId, args });
+            const timer = setTimeout(() => {
+                if (map.has(id)) { map.delete(id); rej(new Error(`Isolated plugin '${slug}' RPC timed out`)); }
+            }, RPC_TIMEOUT_MS);
+            if ((timer as any).unref) (timer as any).unref();
+            map.set(id, { res, rej, timer });
+            worker.postMessage({ id, ...message });
         });
+        const rpcSettle = (map: Map<number, any>, msg: any, value: any) => {
+            const p = map.get(msg.id);
+            if (!p) return;
+            map.delete(msg.id);
+            clearTimeout(p.timer);
+            msg.ok ? p.res(value) : p.rej(new Error(msg.error));
+        };
+
+        const pendingInvoke = new Map<number, any>();
+        const invokeWorker = (cbId: string, args: any[]) => rpcSend(pendingInvoke, { kind: 'invoke', cbId, args });
 
         const pendingRoute = new Map<number, any>();
-        const invokeRoute = (routeId: string, req: any) => new Promise<any>((res, rej) => {
-            const id = ++invokeId;
-            pendingRoute.set(id, { res, rej });
-            worker.postMessage({ kind: 'invoke-route', id, routeId, req });
-        });
+        const invokeRoute = (routeId: string, req: any) => rpcSend(pendingRoute, { kind: 'invoke-route', routeId, req });
 
         const pendingShortcode = new Map<number, any>();
         const registeredShortcodes: string[] = []; // tags to remove when the isolate exits
-        const invokeShortcode = (scId: string, payload: any) => new Promise<any>((res, rej) => {
-            const id = ++invokeId;
-            pendingShortcode.set(id, { res, rej });
-            worker.postMessage({ kind: 'invoke-shortcode', id, scId, ...payload });
-        });
+        const invokeShortcode = (scId: string, payload: any) => rpcSend(pendingShortcode, { kind: 'invoke-shortcode', scId, ...payload });
 
         const pendingMail = new Map<number, any>();
-        const invokeMail = (mailMsg: any) => new Promise<any>((res, rej) => {
-            const id = ++invokeId;
-            pendingMail.set(id, { res, rej });
-            worker.postMessage({ kind: 'invoke-mail', id, msg: mailMsg });
-        });
+        const invokeMail = (mailMsg: any) => rpcSend(pendingMail, { kind: 'invoke-mail', msg: mailMsg });
 
         const pendingTransport = new Map<number, any>();
-        const invokeNotifyTransport = (name: string, notification: any) => new Promise<any>((res, rej) => {
-            const id = ++invokeId;
-            pendingTransport.set(id, { res, rej });
-            worker.postMessage({ kind: 'invoke-notify-transport', id, name, notification });
-        });
+        const invokeNotifyTransport = (name: string, notification: any) => rpcSend(pendingTransport, { kind: 'invoke-notify-transport', name, notification });
 
         worker.on('message', async (msg: any) => {
             if (msg.kind === 'ready') {
@@ -107,8 +107,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     else hooks.addAction(msg.hook, shim, msg.priority);
                 });
             } else if (msg.kind === 'invoke-reply') {
-                const p = pendingInvoke.get(msg.id);
-                if (p) { pendingInvoke.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
+                rpcSettle(pendingInvoke, msg, msg.value);
             } else if (msg.kind === 'register-route') {
                 // Mount an Express route owned by the host; run the real auth middleware, then forward
                 // a serialized request to the isolate and write back its response descriptor.
@@ -162,8 +161,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     : `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
                 runWithContext(slug, () => app[m](full, ...mw, finalHandler));
             } else if (msg.kind === 'route-reply') {
-                const p = pendingRoute.get(msg.id);
-                if (p) { pendingRoute.delete(msg.id); msg.ok ? p.res(msg.response) : p.rej(new Error(msg.error)); }
+                rpcSettle(pendingRoute, msg, msg.response);
             } else if (msg.kind === 'register-shortcode') {
                 // Register a shortcode shim that forwards {attrs,content,tag} to the isolate and
                 // resolves its HTML asynchronously (works with doShortcodeAsync).
@@ -172,8 +170,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 registeredShortcodes.push(msg.tag);
                 runWithContext(slug, () => addShortcode(msg.tag, shim));
             } else if (msg.kind === 'shortcode-reply') {
-                const p = pendingShortcode.get(msg.id);
-                if (p) { pendingShortcode.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
+                rpcSettle(pendingShortcode, msg, msg.value);
             } else if (msg.kind === 'register-mail-provider') {
                 // Becoming the host-wide mail sender is host-level hijack potential, so it is
                 // restricted to operator-trusted plugins (config.trustedSystemPlugins) — an untrusted
@@ -184,8 +181,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     console.warn(`[Isolate ${slug}] provideMail denied: only operator-trusted plugins may register the host mail sender.`);
                 }
             } else if (msg.kind === 'mail-reply') {
-                const p = pendingMail.get(msg.id);
-                if (p) { pendingMail.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
+                rpcSettle(pendingMail, msg, msg.value);
             } else if (msg.kind === 'register-notify-transport') {
                 // Registering a core notification transport can intercept dispatched notifications,
                 // so it is likewise restricted to operator-trusted plugins.
@@ -197,8 +193,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     console.warn(`[Isolate ${slug}] notify.registerTransport denied: only operator-trusted plugins may register a notification transport.`);
                 }
             } else if (msg.kind === 'notify-transport-reply') {
-                const p = pendingTransport.get(msg.id);
-                if (p) { pendingTransport.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
+                rpcSettle(pendingTransport, msg, msg.value);
             }
         });
 
