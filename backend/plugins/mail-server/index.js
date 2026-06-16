@@ -10,6 +10,8 @@ const { getOption, updateOption } = require('../../src/core/options');
 const config = require('../../src/config/app');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
+const crypto = require('crypto');
 
 // Define Attachment storage path
 const UPLOAD_DIR = path.join(__dirname, '../../uploads/mail-attachments');
@@ -376,75 +378,143 @@ async function sendMail(data) {
         }
     }
 
-    // 3. Deliver to External SMTP
-    // Filter recipients who are NOT local users (we don't want to double-send if we are the mail server)
+    // 3. Deliver to External recipients (NOT local users — avoid double-send to our own mailbox)
     const externalRecipients = distinctRecipients.filter(r => !localRecipients.has(r));
+    const delivered = [];
+    const failed = [];
 
     if (externalRecipients.length > 0) {
-        console.log(`[MailServer] Delivering to ${externalRecipients.length} external recipients via SMTP...`);
+        const attachments = (data.attachments || []).map(a => ({ filename: a.filename, path: a.path }));
+        const mailObj = { fromEmail, fromName, subject: data.subject, text: data.text, html: data.html, attachments };
 
-        // If we have a fallback transporter, use it for everything (simpler & reliable)
         if (transporter) {
-            console.log(`[MailServer] Using configured SMTP Transporter.`);
-            await transporter.sendMail({
-                from: `"${fromName}" <${fromEmail}>`,
-                to: externalRecipients, // Only send to external
-                // NOTE: If we send only to external, the CC/BCC headers might look weird if we don't include everyone.
-                // But if we include everyone, the SMTP server might try to deliver to local users again.
-                // Usually direct delivery sends ONE envelope per recipient.
-                // But nodemailer with 'to' sends to all.
-                // Let's send the *headers* with everyone, but the envelope logic handles delivery?
-                // Nodemailer separates this.
-                // However, standard practice: Send to externalRecipients is safest.
-                subject: data.subject,
-                text: data.text,
-                html: data.html,
-                attachments: data.attachments ? data.attachments.map(a => ({
-                    filename: a.filename,
-                    path: a.path
-                })) : [],
-                dkim: dkimOptions
-            });
-            console.log('[MailServer] SMTP delivery sent.');
-        } else {
-            console.log(`[MailServer] Using Direct MX Delivery.`);
-            // Direct MX Delivery loop
+            // Relay/smarthost path (used only if a relay is configured).
+            console.log(`[MailServer] Delivering ${externalRecipients.length} recipient(s) via configured relay...`);
             for (const extR of externalRecipients) {
                 try {
-                    await sendMailDirectSimple(extR, data, fromEmail, fromName, dkimOptions);
+                    const info = await transporter.sendMail({
+                        envelope: { from: fromEmail, to: extR },
+                        from: `"${fromName}" <${fromEmail}>`, to: extR,
+                        subject: data.subject, text: data.text, html: data.html, attachments, dkim: dkimOptions
+                    });
+                    delivered.push({ recipient: extR, via: 'relay', response: info.response });
                 } catch (e) {
-                    console.error(`Failed to direct send to ${extR}:`, e.message);
+                    console.error(`[MailServer] ❌ Relay delivery to ${extR} failed: ${e.message}`);
+                    failed.push({ recipient: extR, error: e.message, permanent: false });
+                }
+            }
+        } else {
+            // Direct-to-MX delivery (real MTA).
+            const heloName = await getHeloName();
+            console.log(`[MailServer] Direct MX delivery for ${externalRecipients.length} recipient(s) as ${heloName}...`);
+            for (const extR of externalRecipients) {
+                try {
+                    const r = await deliverDirect(extR, mailObj, dkimOptions, heloName);
+                    console.log(`[MailServer] ✅ Delivered to ${extR} via ${r.mx}: ${r.response}`);
+                    delivered.push({ recipient: extR, via: r.mx, response: r.response });
+                } catch (e) {
+                    console.error(`[MailServer] ❌ ${e.message}`);
+                    failed.push({ recipient: extR, error: e.message, permanent: !!e.permanent });
                 }
             }
         }
-    } else {
-        console.log('[MailServer] No external recipients. Skipping SMTP.');
     }
 
-    return { success: true };
+    // Surface delivery outcome so callers (the /send, /test endpoints) report accurately instead of
+    // silently "succeeding". The Sent record + local inbox copies are already persisted above.
+    return { success: failed.length === 0, delivered, failed };
 }
 
-// Helper for direct delivery single
-async function sendMailDirectSimple(recipient, data, fromEmail, fromName, dkimOptions) {
-    const recipientDomain = recipient.split('@')[1];
-    const mxRecords = await resolveMX(recipientDomain);
-    if (mxRecords.length === 0) mxRecords.push({ exchange: recipientDomain, priority: 0 });
+/**
+ * The hostname this server announces in EHLO and uses for envelope/identity. MUST match the
+ * sending IP's reverse DNS (PTR) or remote MX servers (Gmail/Outlook) will reject/spam the mail.
+ */
+async function getHeloName() {
+    const { getOption } = require('../../src/core/options');
+    const explicit = await getOption('mail_helo_host', '');
+    if (explicit) return explicit;
+    const dkimDomain = await getOption('mail_security_dkim_domain', '');
+    if (dkimDomain) return dkimDomain;
+    try { return new URL(config.site.url).hostname; } catch (e) { return os.hostname(); }
+}
 
+/**
+ * Build the DNS records the operator must publish for deliverability, given a DKIM public key.
+ */
+function buildDnsRecords(domain, selector, publicKeyPem) {
+    const pubDer = (publicKeyPem || '').replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+    return {
+        dkim: {
+            host: `${selector}._domainkey.${domain}`,
+            type: 'TXT',
+            value: `v=DKIM1; k=rsa; p=${pubDer}`
+        },
+        spf: {
+            host: domain,
+            type: 'TXT',
+            value: 'v=spf1 a mx ~all',
+            note: 'Add the sending host/IP if it is not the A/MX record (e.g. ip4:YOUR.IP).'
+        },
+        dmarc: {
+            host: `_dmarc.${domain}`,
+            type: 'TXT',
+            value: `v=DMARC1; p=none; rua=mailto:postmaster@${domain}`
+        },
+        ptr: {
+            type: 'PTR (reverse DNS)',
+            note: `Reverse DNS for your sending IP MUST resolve to ${domain} (or your mail FQDN), and forward-confirm. Without rDNS, Gmail/Outlook reject or spam your mail. Set this with your IP/hosting provider.`
+        }
+    };
+}
+
+/**
+ * Deliver ONE message to ONE recipient by connecting directly to its domain's MX servers.
+ * Resolves on success ({ ok, mx, response }); rejects with err.permanent set (5xx = permanent,
+ * 4xx/network = temporary so the caller may retry).
+ */
+async function deliverDirect(recipient, mail, dkimOptions, heloName) {
+    const domain = recipient.split('@')[1];
+    const mxRecords = await resolveMX(domain);
+    if (mxRecords.length === 0) mxRecords.push({ exchange: domain, priority: 0 });
+
+    let lastErr = null;
+    let permanent = false;
     for (const mx of mxRecords) {
+        const transport = nodemailer.createTransport({
+            host: mx.exchange,
+            port: 25,
+            secure: false,
+            name: heloName,               // EHLO/HELO hostname (must match rDNS)
+            connectionTimeout: 20000,
+            greetingTimeout: 15000,
+            socketTimeout: 30000,
+            tls: { rejectUnauthorized: false } // remote MX certs vary; STARTTLS still used when offered
+        });
         try {
-            const direct = nodemailer.createTransport({ host: mx.exchange, port: 25, secure: false, tls: { rejectUnauthorized: false } });
-            await direct.sendMail({
-                from: `"${fromName}" <${fromEmail}>`,
-                to: recipient, // Envelope recipient
-                subject: data.subject,
-                text: data.text,
-                html: data.html,
-                attachments: data.attachments ? data.attachments.map(a => ({ filename: a.filename, path: a.path })) : [],
+            const info = await transport.sendMail({
+                // Envelope (MAIL FROM / RCPT TO) drives SPF alignment & bounces; keep it our domain.
+                envelope: { from: mail.fromEmail, to: recipient },
+                from: `"${mail.fromName}" <${mail.fromEmail}>`,
+                to: recipient,
+                subject: mail.subject,
+                text: mail.text,
+                html: mail.html,
+                attachments: mail.attachments,
                 dkim: dkimOptions
             });
-            return;
-        } catch (e) { }
+            return { ok: true, mx: mx.exchange, response: info.response };
+        } catch (e) {
+            lastErr = e;
+            const code = e.responseCode || 0;
+            permanent = code >= 500 && code < 600;
+            if (permanent) break; // a hard 5xx reject won't differ on another MX
+        } finally {
+            try { transport.close(); } catch (e2) { /* ignore */ }
+        }
     }
+    const err = new Error(`Direct delivery to ${recipient} failed: ${lastErr ? lastErr.message : 'no MX reachable'}`);
+    err.permanent = permanent;
+    throw err;
 }
 
 exports.init = async function () {
@@ -787,7 +857,7 @@ exports.init = async function () {
                 return res.json({ success: true, message: 'Message scheduled', id: email.id });
             }
 
-            await sendMail({
+            const result = await sendMail({
                 to, // Now supports array
                 cc,
                 bcc,
@@ -801,7 +871,16 @@ exports.init = async function () {
                 draftId: id,
                 attachments: attachments || []
             });
-            res.json({ success: true, message: 'Message delivered' });
+            if (result.failed && result.failed.length > 0) {
+                // Partial/total external delivery failure — report it (the Sent copy is still saved).
+                return res.status(207).json({
+                    success: false,
+                    message: 'Saved, but external delivery failed for some recipients',
+                    delivered: result.delivered,
+                    failed: result.failed
+                });
+            }
+            res.json({ success: true, message: 'Message delivered', delivered: result.delivered });
         } catch (error) {
             res.status(500).json({ error: 'Delivery failed: ' + error.message });
         }
@@ -829,7 +908,14 @@ exports.init = async function () {
             mail_from_email: await getOption('mail_from_email', ''),
             mail_from_name: await getOption('mail_from_name', ''),
             smtp_listen_port: await getOption('smtp_listen_port', '2525'),
-            smtp_catch_all: await getOption('smtp_catch_all', '0')
+            smtp_catch_all: await getOption('smtp_catch_all', '0'),
+            mail_helo_host: await getOption('mail_helo_host', ''),
+            mail_security_dkim_domain: await getOption('mail_security_dkim_domain', ''),
+            mail_security_dkim_selector: await getOption('mail_security_dkim_selector', 'default'),
+            mail_security_dkim_enabled: (await getOption('mail_security_dkim_private_key', '')) ? '1' : '0',
+            mail_security_dnsbl_enabled: await getOption('mail_security_dnsbl_enabled', '0'),
+            mail_security_spf_enabled: await getOption('mail_security_spf_enabled', '0')
+            // NOTE: the DKIM private key is never returned (secret).
         });
     });
 
@@ -837,7 +923,10 @@ exports.init = async function () {
     router.post('/settings', authenticate, isAdmin, async (req, res) => {
         const fields = [
             'mail_from_email', 'mail_from_name',
-            'smtp_listen_port', 'smtp_catch_all'
+            'smtp_listen_port', 'smtp_catch_all',
+            'mail_helo_host',
+            'mail_security_dkim_domain', 'mail_security_dkim_selector',
+            'mail_security_dnsbl_enabled', 'mail_security_spf_enabled'
         ];
 
         for (const f of fields) {
@@ -848,16 +937,69 @@ exports.init = async function () {
         res.json({ success: true, message: 'Server settings updated' });
     });
 
-    // POST /api/v1/mail-server/test
+    // POST /api/v1/mail-server/test  — send a real test message (pass {to} to test EXTERNAL delivery)
     router.post('/test', authenticate, isAdmin, async (req, res) => {
         try {
-            await sendMail({
-                to: req.user.userEmail,
-                subject: 'Autonomous Test Email from WordJS',
-                text: 'This email was delivered DIRECTLY to your provider without a middleman!',
-                html: '<p>This email was delivered <strong>DIRECTLY</strong> to your provider without a middleman.</p>'
+            const to = (req.body && req.body.to) || req.user.userEmail;
+            const result = await sendMail({
+                to,
+                subject: 'WordJS Mail Server — delivery test',
+                text: 'If you received this, direct MX delivery is working.',
+                html: '<p>If you received this, <strong>direct MX delivery</strong> is working.</p>'
             });
-            res.json({ success: true, message: 'Test email delivered directly' });
+            // Report exactly what happened so the admin can diagnose (MX hit, SMTP response, or error).
+            res.status(result.success ? 200 : 207).json({
+                success: result.success,
+                to,
+                delivered: result.delivered,
+                failed: result.failed,
+                message: result.success
+                    ? 'Test message accepted by the recipient mail server'
+                    : 'Delivery failed — check rDNS/SPF/DKIM/DMARC and that outbound port 25 is open'
+            });
+        } catch (error) {
+            res.status(500).json({ error: error.message });
+        }
+    });
+
+    // GET /api/v1/mail-server/security/dns-records — records to publish for deliverability
+    router.get('/security/dns-records', authenticate, isAdmin, async (req, res) => {
+        const priv = await getOption('mail_security_dkim_private_key', '');
+        let domain = await getOption('mail_security_dkim_domain', '');
+        if (!domain) { try { domain = new URL(config.site.url).hostname; } catch (e) { domain = ''; } }
+        const selector = await getOption('mail_security_dkim_selector', 'default');
+        let publicKeyPem = '';
+        if (priv) {
+            try { publicKeyPem = crypto.createPublicKey(priv).export({ type: 'spki', format: 'pem' }); }
+            catch (e) { /* invalid stored key */ }
+        }
+        res.json({
+            domain,
+            selector,
+            heloHost: await getHeloName(),
+            dkimConfigured: !!priv,
+            records: buildDnsRecords(domain, selector, publicKeyPem)
+        });
+    });
+
+    // POST /api/v1/mail-server/security/dkim/generate — create a DKIM keypair + return DNS records
+    router.post('/security/dkim/generate', authenticate, isAdmin, async (req, res) => {
+        try {
+            const selector = String((req.body && req.body.selector) || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default';
+            let domain = (req.body && req.body.domain) || '';
+            if (!domain) { try { domain = new URL(config.site.url).hostname; } catch (e) { } }
+            if (!domain) return res.status(400).json({ error: 'A sending domain is required' });
+
+            const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
+                modulusLength: 2048,
+                publicKeyEncoding: { type: 'spki', format: 'pem' },
+                privateKeyEncoding: { type: 'pkcs8', format: 'pem' }
+            });
+            await updateOption('mail_security_dkim_private_key', privateKey);
+            await updateOption('mail_security_dkim_domain', domain);
+            await updateOption('mail_security_dkim_selector', selector);
+
+            res.json({ success: true, domain, selector, records: buildDnsRecords(domain, selector, publicKey) });
         } catch (error) {
             res.status(500).json({ error: error.message });
         }
