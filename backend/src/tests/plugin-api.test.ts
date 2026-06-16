@@ -40,14 +40,22 @@ test('bridge blocks reading secret-named options', async () => {
         const api = createPluginApi(SLUG);
         await assert.rejects(() => api.options.get('mail_security_dkim_private_key'), /not readable/);
         await assert.rejects(() => api.options.set('jwt_secret', 'x'), /not writable/);
+        // Broadened blocklist: keys with key/credential/auth/cert/api_key that the old regex missed.
+        await assert.rejects(() => api.options.get('stripe_api_key'), /not readable/);
+        await assert.rejects(() => api.options.get('encryption_key'), /not readable/);
+        await assert.rejects(() => api.options.get('oauth_credentials'), /not readable/);
     });
 });
 
-test('bridge blocks SQL touching core tables', async () => {
+test('bridge blocks SQL touching core tables (incl. regex-evasion bypasses)', async () => {
     await runWithContext(SLUG, async () => {
         const api = createPluginApi(SLUG);
         await assert.rejects(() => api.db.all('SELECT * FROM users'), /off-limits/);
         await assert.rejects(() => api.db.run("UPDATE user_meta SET meta_value='administrator'"), /off-limits/);
+        // Evasions that slipped past the old `FROM <table>` matcher:
+        await assert.rejects(() => api.db.all('SELECT * FROM plugin_t, users'), /off-limits/);   // comma join
+        await assert.rejects(() => api.db.all('SELECT * FROM/**/users'), /off-limits/);            // comment-as-whitespace
+        await assert.rejects(() => api.db.all("SELECT option_value FROM options WHERE option_name='jwt_secret'"), /off-limits/); // secret exfil via options table
     });
 });
 
