@@ -24,6 +24,18 @@ async function verifyAndAttachUser(token, req, res, next) {
             });
         }
 
+        // Stateless-JWT revocation: reject any token issued before the user's security epoch, which is
+        // stamped on logout and password change (User meta `token_valid_after`). Without this, a stolen
+        // token stays valid until expiry even after logout/password reset.
+        const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
+        if (validAfter && decoded.iat && decoded.iat < validAfter) {
+            return res.status(401).json({
+                code: 'rest_token_revoked',
+                message: 'Session has been revoked. Please log in again.',
+                data: { status: 401 }
+            });
+        }
+
         req.user = user;
         req.userId = user.id;
         next();
@@ -122,8 +134,15 @@ async function optionalAuth(req, res, next) {
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
         const user = await User.findById(decoded.userId);
-        req.user = user;
-        req.userId = user ? user.id : null;
+        // Honor token revocation here too (see verifyAndAttachUser): treat a revoked token as anonymous.
+        const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
+        if (user && validAfter && decoded.iat && decoded.iat < validAfter) {
+            req.user = null;
+            req.userId = null;
+        } else {
+            req.user = user;
+            req.userId = user ? user.id : null;
+        }
     } catch (e) {
         req.user = null;
         req.userId = null;

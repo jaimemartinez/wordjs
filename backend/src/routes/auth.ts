@@ -6,7 +6,7 @@
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
-const { authenticate, generateToken } = require('../middleware/auth');
+const { authenticate, generateToken, verifyToken } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
 const config = require('../config/app');
@@ -227,9 +227,22 @@ router.post('/refresh', authenticate, (req, res) => {
  * POST /auth/logout
  * Clear auth cookie
  */
-router.post('/logout', (req, res) => {
+router.post('/logout', asyncHandler(async (req, res) => {
+    // Best-effort revocation: stamp the user's security epoch so the just-cleared token (and any
+    // stolen copy of it) can no longer authenticate. Logout still succeeds without a valid token.
+    try {
+        const ah = req.headers.authorization;
+        let token = (ah && ah.startsWith('Bearer ')) ? ah.substring(7) : null;
+        if (!token && req.cookies && req.cookies.wordjs_token) token = req.cookies.wordjs_token;
+        if (token) {
+            const decoded = verifyToken(token);
+            if (decoded && decoded.userId) {
+                await User.updateMeta(decoded.userId, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
+            }
+        }
+    } catch { /* invalid/expired token — nothing to revoke */ }
     res.clearCookie('wordjs_token', { path: '/' });
     res.json({ success: true, message: 'Logged out successfully' });
-});
+}));
 
 module.exports = router;

@@ -168,4 +168,40 @@ describe('API HTTP layer', () => {
         const res = await request(app).get('/api/v1/this-route-does-not-exist');
         assert.strictEqual(res.status, 404);
     });
+
+    // 6. H1 — username-enumeration timing: authenticating a NON-existent user must burn real
+    //    cost-12 bcrypt time (the old malformed dummy hash returned in ~0.015ms → 16000x oracle).
+    it('login for a non-existent user burns real bcrypt time (no enumeration oracle)', async () => {
+        const User = require('../models/User');
+        const s = process.hrtime.bigint();
+        try { await User.authenticate('no-such-user-' + Date.now(), 'whatever'); } catch { /* expected */ }
+        const ms = Number(process.hrtime.bigint() - s) / 1e6;
+        assert.ok(ms > 20, `non-existent-user path must do a real cost-12 compare, got ${ms.toFixed(2)}ms`);
+    });
+
+    // 7. H3 — email update must validate format and reject duplicates (create did, update did not).
+    it('user email update validates format and rejects duplicates', async () => {
+        const User = require('../models/User');
+        const dbAsync = database.getDbAsync();
+        await dbAsync.run(`INSERT INTO users (user_login,user_pass,user_email,display_name) VALUES (?,?,?,?)`, ['h3a', 'x', 'h3a@example.com', 'A']);
+        await dbAsync.run(`INSERT INTO users (user_login,user_pass,user_email,display_name) VALUES (?,?,?,?)`, ['h3b', 'x', 'h3b@example.com', 'B']);
+        const b = await User.findByLogin('h3b');
+        await assert.rejects(() => User.update(b.id, { email: 'h3a@example.com' }), /already in use/i, 'duplicate email must be rejected');
+        await assert.rejects(() => User.update(b.id, { email: 'not-an-email' }), /Invalid email/i, 'malformed email must be rejected');
+        await User.update(b.id, { email: 'h3b-new@example.com' }); // unique + valid → ok
+        const updated = await User.findById(b.id);
+        assert.strictEqual(updated.userEmail, 'h3b-new@example.com');
+    });
+
+    // 8. user_meta leak — toJSON must NOT serialize sensitive meta keys (api keys, tokens, etc.).
+    it('User.toJSON strips sensitive meta keys', async () => {
+        const User = require('../models/User');
+        const u = await User.findById(1);
+        u.meta = { bio: 'hello', api_key: 'sk-secret', token_valid_after: '123', twofa_secret: 'ABC' };
+        const json = u.toJSON();
+        assert.strictEqual(json.meta.bio, 'hello', 'non-sensitive meta is kept');
+        assert.ok(!('api_key' in json.meta), 'api_key must be stripped');
+        assert.ok(!('token_valid_after' in json.meta), 'token_valid_after must be stripped');
+        assert.ok(!('twofa_secret' in json.meta), '2fa secret must be stripped');
+    });
 });

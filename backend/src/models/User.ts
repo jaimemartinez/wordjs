@@ -137,8 +137,11 @@ class User {
         // Always perform a hash comparison, even if user doesn't exist
         // We use a dummy hash to burn CPU time similar to a real login
         if (!user) {
-            // Dummy hash (bcrypt/cost=10)
-            const dummy = '$2a$10$abcdefghijklmnopqrstuv';
+            // Constant-time defense against username enumeration: compare against a REAL bcrypt hash
+            // at the SAME cost (12) as live passwords, so the no-user path burns the same ~CPU as a
+            // wrong-password path. The previous dummy was a malformed/truncated hash that bcrypt
+            // rejected in ~0ms, leaking user existence via a ~16000x timing gap.
+            const dummy = '$2a$12$r/WI9u0Eop2pwQ1nYgGWnOyH7eYYMRCEp0ATWSigC8ZNONV4KUm66';
             await bcrypt.compare(password, dummy);
             throw new Error('Invalid credentials');
         }
@@ -154,19 +157,35 @@ class User {
     static async update(id, data) {
         const updates: string[] = [];
         const values: any[] = [];
+        let passwordChanged = false;
 
-        if (data.email) { updates.push('user_email = ?'); values.push(data.email); }
+        if (data.email) {
+            // Validate + enforce uniqueness on update (create already does this; update did not, so a
+            // user could set their email to collide with another account → identity confusion/takeover).
+            const email = String(data.email).trim();
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Invalid email format');
+            const existing = await User.findByEmail(email);
+            if (existing && String(existing.id) !== String(id)) throw new Error('Email already in use');
+            updates.push('user_email = ?'); values.push(email);
+        }
         if (data.displayName) { updates.push('display_name = ?'); values.push(data.displayName); }
         if (data.url !== undefined) { updates.push('user_url = ?'); values.push(data.url); }
         if (data.password) {
             const hashedPassword = await bcrypt.hash(data.password, SALT_ROUNDS);
             updates.push('user_pass = ?');
             values.push(hashedPassword);
+            passwordChanged = true;
         }
 
         if (updates.length > 0) {
             values.push(id);
             await dbAsync.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
+        }
+
+        // Revoke all existing JWTs on password change — stateless tokens carry no server state, so we
+        // stamp a security epoch the auth middleware checks against the token's iat. See auth.ts.
+        if (passwordChanged) {
+            await User.updateMeta(id, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
         }
 
         // Update meta if provided
@@ -272,6 +291,14 @@ class User {
         const roles = getRoles();
         const roleObj = this.role ? roles[this.role] : undefined;
 
+        // Never blanket-dump user_meta: a plugin or core flow may stash secrets there (API keys,
+        // tokens, 2FA seeds, the token_valid_after epoch). Strip sensitive-looking keys before serializing.
+        const SENSITIVE_META = /secret|token|pass|pwd|priv(ate)?|[_-]?key$|^key|api[_-]?key|credential|salt|hash|2fa|otp|recovery|seed/i;
+        const safeMeta: { [k: string]: any } = {};
+        for (const [k, v] of Object.entries(this.meta || {})) {
+            if (!SENSITIVE_META.test(k)) safeMeta[k] = v;
+        }
+
         return {
             id: this.id,
             username: this.userLogin,     // Frontend expectation
@@ -282,7 +309,7 @@ class User {
             display_name: this.displayName, // Legacy expectation
             role: this.role || 'subscriber',
             capabilities: roleObj ? roleObj.capabilities : [],
-            meta: this.meta || {}
+            meta: safeMeta
         };
     }
 }
