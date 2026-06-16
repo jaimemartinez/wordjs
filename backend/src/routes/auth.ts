@@ -11,6 +11,28 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
 const config = require('../config/app');
 
+// Per-account login lockout: the per-IP rate limiter is defeated by a botnet/proxy pool targeting a
+// single account, and there was no account-level throttle. Lock an account for a cooldown after N
+// consecutive failures (in-memory; the backend runs single-process behind the gateway).
+const LOGIN_MAX_FAILS = 10;
+const LOGIN_LOCK_MS = 15 * 60 * 1000;
+const _loginFails = new Map(); // key -> { count, firstFailAt, lockedUntil }
+const _loginKey = (u) => String(u || '').trim().toLowerCase();
+function isLoginLocked(u) {
+    const e = _loginFails.get(_loginKey(u));
+    return !!(e && e.lockedUntil && e.lockedUntil > Date.now());
+}
+function recordLoginFail(u) {
+    const key = _loginKey(u);
+    const now = Date.now();
+    let e = _loginFails.get(key);
+    if (!e || (now - e.firstFailAt) > LOGIN_LOCK_MS) e = { count: 0, firstFailAt: now, lockedUntil: 0 };
+    e.count++;
+    if (e.count >= LOGIN_MAX_FAILS) e.lockedUntil = now + LOGIN_LOCK_MS;
+    _loginFails.set(key, e);
+}
+const clearLoginFails = (u) => _loginFails.delete(_loginKey(u));
+
 // Cookie configuration for secure HttpOnly tokens
 // Detect if site uses HTTPS from config
 const siteUsesHttps = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
@@ -174,13 +196,23 @@ router.post('/login', asyncHandler(async (req, res) => {
         });
     }
 
+    if (isLoginLocked(username)) {
+        return res.status(429).json({
+            code: 'rest_account_locked',
+            message: 'Account temporarily locked due to too many failed attempts. Try again later.',
+            data: { status: 429 }
+        });
+    }
+
     try {
         const user = await User.authenticate(username, password);
+        clearLoginFails(username);
         const token = generateToken(user);
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
 
         res.json({ user: user.toJSON() });
     } catch (error) {
+        recordLoginFail(username);
         return res.status(401).json({
             code: 'rest_invalid_credentials',
             message: 'Invalid username or password.',

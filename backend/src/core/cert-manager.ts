@@ -407,9 +407,19 @@ class CertManager {
      */
     async installCustomCert(keyContent, certContent) {
         try {
-            // Basic Validation
-            if (!keyContent.includes('PRIVATE KEY')) throw new Error('Invalid Private Key');
-            if (!certContent.includes('CERTIFICATE')) throw new Error('Invalid Certificate');
+            // Validation: actually PARSE the key + cert and verify they MATCH. The old check only looked
+            // for the substrings 'PRIVATE KEY' / 'CERTIFICATE', so a malformed or mismatched pair would
+            // be written and the gateway restarted with broken TLS (self-inflicted DoS) — or an
+            // attacker-supplied unrelated cert installed.
+            const crypto = require('crypto');
+            let keyObj, certObj;
+            try { keyObj = crypto.createPrivateKey(keyContent); }
+            catch { throw new Error('Invalid or unparseable private key'); }
+            try { certObj = new crypto.X509Certificate(certContent); }
+            catch { throw new Error('Invalid or unparseable certificate'); }
+            if (!certObj.checkPrivateKey(keyObj)) {
+                throw new Error('Certificate and private key do not match');
+            }
 
             const domain = 'custom'; // We could parse the cert to get the CN, but 'custom' folder is fine for now
             const customDir = path.join(LIVE_DIR, 'custom_upload');
