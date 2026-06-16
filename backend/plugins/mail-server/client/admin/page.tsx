@@ -29,6 +29,51 @@ type Email = {
     raw_content?: string;
 };
 
+type DnsRecord = { host?: string; type: string; value?: string; note?: string };
+type DnsInfo = {
+    domain: string;
+    selector: string;
+    heloHost: string;
+    dkimConfigured: boolean;
+    records: { dkim: DnsRecord; spf: DnsRecord; dmarc: DnsRecord; ptr: DnsRecord };
+};
+type TestResult = {
+    success: boolean;
+    to: string;
+    message: string;
+    delivered?: { recipient: string; via: string; response: string }[];
+    failed?: { recipient: string; error: string; permanent?: boolean }[];
+};
+
+// Lightweight client-side sanitizer for rendered email HTML. Strips active content
+// (scripts, inline event handlers, javascript: URLs, embedded frames/objects) so a
+// malicious email body cannot run code in the admin context. Defense-in-depth only;
+// the server should also sanitize on ingest.
+const sanitizeEmailHtml = (html: string): string => {
+    if (!html) return '';
+    if (typeof window === 'undefined' || typeof DOMParser === 'undefined') {
+        // SSR fallback: coarse regex strip
+        return html
+            .replace(/<\s*(script|iframe|object|embed)[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
+            .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, '');
+    }
+    try {
+        const doc = new DOMParser().parseFromString(html, 'text/html');
+        doc.querySelectorAll('script, iframe, object, embed, link, meta, style').forEach(el => el.remove());
+        doc.querySelectorAll('*').forEach(el => {
+            for (const attr of Array.from(el.attributes)) {
+                const name = attr.name.toLowerCase();
+                const val = attr.value.replace(/\s+/g, '').toLowerCase();
+                if (name.startsWith('on')) el.removeAttribute(attr.name);
+                else if ((name === 'href' || name === 'src' || name === 'xlink:href') && val.startsWith('javascript:')) el.removeAttribute(attr.name);
+            }
+        });
+        return doc.body.innerHTML;
+    } catch {
+        return '';
+    }
+};
+
 // Helper function to generate email signature
 const getSignature = (user: any) => {
     if (!user) return '';
@@ -42,12 +87,26 @@ export default function MailServerAdmin() {
     const [folder, setFolder] = useState<'inbox' | 'sent' | 'settings' | 'starred' | 'archive' | 'drafts' | 'trash'>('inbox');
     const [emails, setEmails] = useState<Email[]>([]);
     const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
-    const [settings, setSettings] = useState({
+    const [settings, setSettings] = useState<Record<string, string>>({
         mail_from_email: "",
         mail_from_name: "",
         smtp_listen_port: "2525",
-        smtp_catch_all: "0"
+        smtp_catch_all: "0",
+        mail_helo_host: "",
+        mail_security_dkim_domain: "",
+        mail_security_dkim_selector: "default",
+        mail_security_dkim_enabled: "0",
+        mail_security_dnsbl_enabled: "0",
+        mail_security_spf_enabled: "0"
     });
+
+    // Deliverability / Security State
+    const [dnsInfo, setDnsInfo] = useState<DnsInfo | null>(null);
+    const [dnsLoading, setDnsLoading] = useState(false);
+    const [generatingDkim, setGeneratingDkim] = useState(false);
+    const [testTo, setTestTo] = useState("");
+    const [testing, setTesting] = useState(false);
+    const [testResult, setTestResult] = useState<TestResult | null>(null);
 
     // Compose State
     const [composing, setComposing] = useState(false);
@@ -90,7 +149,8 @@ export default function MailServerAdmin() {
         try {
             if (folder === 'settings') {
                 const data = await api('/mail-server/settings');
-                setSettings(data as any);
+                setSettings(prev => ({ ...prev, ...(data as any) }));
+                loadDnsRecords();
             } else {
                 const endpoint = query
                     ? `/mail-server/emails/search?q=${query}`
@@ -251,6 +311,51 @@ export default function MailServerAdmin() {
             setMessage({ type: 'error', text: error.message || 'Failed' });
         } finally {
             setSaving(false);
+        }
+    };
+
+    const loadDnsRecords = async () => {
+        setDnsLoading(true);
+        try {
+            const data = await api('/mail-server/security/dns-records') as DnsInfo;
+            setDnsInfo(data);
+        } catch (error) {
+            console.error('Failed to load DNS records:', error);
+        } finally {
+            setDnsLoading(false);
+        }
+    };
+
+    const handleGenerateDkim = async () => {
+        const domain = settings.mail_security_dkim_domain || (dnsInfo?.domain ?? '');
+        const selector = settings.mail_security_dkim_selector || 'default';
+        if (dnsInfo?.dkimConfigured) {
+            if (!await confirm('Regenerating the DKIM key invalidates the old key. Any DNS record still pointing at the old key will fail signature checks until you publish the new value. Continue?', 'Regenerate DKIM Key', true)) return;
+        }
+        setGeneratingDkim(true);
+        setMessage(null);
+        try {
+            await api('/mail-server/security/dkim/generate', { method: 'POST', body: { domain, selector } });
+            setMessage({ type: 'success', text: 'DKIM key generated. Publish the new DNS record below.' });
+            await loadDnsRecords();
+        } catch (error: any) {
+            setMessage({ type: 'error', text: error.message || 'Failed to generate DKIM key' });
+        } finally {
+            setGeneratingDkim(false);
+        }
+    };
+
+    const handleSendTest = async () => {
+        setTesting(true);
+        setTestResult(null);
+        setMessage(null);
+        try {
+            const res = await api('/mail-server/test', { method: 'POST', body: { to: testTo || undefined } }) as TestResult;
+            setTestResult(res);
+        } catch (error: any) {
+            setTestResult({ success: false, to: testTo, message: error.message || 'Test request failed', delivered: [], failed: [] });
+        } finally {
+            setTesting(false);
         }
     };
 
@@ -528,7 +633,23 @@ export default function MailServerAdmin() {
             {folder === 'settings' ? (
                 // SETTINGS VIEW (Full Width)
                 <div className="flex-1 bg-white overflow-y-auto p-12">
-                    <SettingsView settings={settings} setSettings={setSettings} onSave={handleSaveSettings} saving={saving} message={message} />
+                    <SettingsView
+                        settings={settings}
+                        setSettings={setSettings}
+                        onSave={handleSaveSettings}
+                        saving={saving}
+                        message={message}
+                        dnsInfo={dnsInfo}
+                        dnsLoading={dnsLoading}
+                        onRefreshDns={loadDnsRecords}
+                        onGenerateDkim={handleGenerateDkim}
+                        generatingDkim={generatingDkim}
+                        testTo={testTo}
+                        setTestTo={setTestTo}
+                        onSendTest={handleSendTest}
+                        testing={testing}
+                        testResult={testResult}
+                    />
                 </div>
             ) : (
                 // MAIL VIEW
@@ -567,7 +688,12 @@ export default function MailServerAdmin() {
 
                         {/* List */}
                         <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50/50">
-                            {emails.length === 0 && !loading ? (
+                            {loading && emails.length === 0 ? (
+                                <div className="flex flex-col items-center justify-center h-64 text-slate-400">
+                                    <i className="fa-solid fa-circle-notch fa-spin text-3xl mb-4 text-violet-400"></i>
+                                    <span className="text-sm font-medium">Loading messages...</span>
+                                </div>
+                            ) : emails.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center h-64 text-slate-400 opacity-60">
                                     <i className="fa-solid fa-inbox text-4xl mb-4"></i>
                                     <span className="text-sm font-medium">All caught up</span>
@@ -685,17 +811,17 @@ export default function MailServerAdmin() {
                                                     <div className="flex-1 min-w-0">
                                                         <div className="flex items-baseline justify-between mb-3 pt-1">
                                                             <div>
-                                                                <span className="text-base font-bold text-slate-900 mr-2">{msg.from_name || msg.from_address}</span>
-                                                                <span className="text-sm text-slate-400 font-medium">&lt;{msg.from_address}&gt;</span>
+                                                                <span className="text-base font-bold text-slate-900 mr-2 break-words">{msg.from_name || msg.from_address}</span>
+                                                                <span className="text-sm text-slate-400 font-medium break-all">&lt;{msg.from_address}&gt;</span>
                                                             </div>
-                                                            <span className="text-xs text-slate-400 font-medium">{new Date(msg.date_received).toLocaleString()}</span>
+                                                            <span className="text-xs text-slate-400 font-medium shrink-0 ml-3">{new Date(msg.date_received).toLocaleString()}</span>
                                                         </div>
 
-                                                        <div className="prose prose-slate prose-sm max-w-none text-slate-600 leading-7 rounded-2xl bg-[#f8fafc] p-8 border border-slate-100 group-hover:border-slate-200 group-hover:shadow-sm transition-all">
+                                                        <div className="prose prose-slate prose-sm max-w-none text-slate-600 leading-7 rounded-2xl bg-[#f8fafc] p-8 border border-slate-100 group-hover:border-slate-200 group-hover:shadow-sm transition-all overflow-x-auto break-words [&_img]:max-w-full [&_img]:h-auto [&_a]:break-all [&_table]:max-w-full">
                                                             {msg.body_html ? (
-                                                                <div dangerouslySetInnerHTML={{ __html: msg.body_html }} />
+                                                                <div dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.body_html) }} />
                                                             ) : (
-                                                                <div className="whitespace-pre-wrap font-sans">{msg.body_text}</div>
+                                                                <div className="whitespace-pre-wrap font-sans break-words">{msg.body_text || <span className="text-slate-400 italic">(No content)</span>}</div>
                                                             )}
                                                         </div>
                                                     </div>
@@ -1010,17 +1136,19 @@ function SidebarLink({ icon, label, count, active, onClick, iconColor }: any) {
     );
 }
 
-function ActionButton({ icon, onClick, tooltip, active }: any) {
+function ActionButton({ icon, onClick, tooltip, active, className = '' }: any) {
     return (
         <button
             onClick={onClick}
             title={tooltip}
+            disabled={!onClick}
             className={`
-                w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-200
+                w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-200 disabled:opacity-40 disabled:cursor-not-allowed
                 ${active
                     ? 'bg-slate-100 text-slate-900 ring-1 ring-slate-200 shadow-sm'
                     : 'text-slate-400 hover:text-slate-700 hover:bg-slate-50'
                 }
+                ${className}
             `}
         >
             <i className={icon + " text-sm"}></i>
@@ -1073,11 +1201,73 @@ function SettingInput({ label, value, onChange, type = 'text', options = [], pla
     );
 }
 
-function SettingsView({ settings, setSettings, onSave, saving, message }: any) {
+function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }) {
+    const [copied, setCopied] = useState(false);
+    const copy = async () => {
+        try {
+            await navigator.clipboard.writeText(value);
+        } catch {
+            // Fallback for non-secure contexts
+            const ta = document.createElement('textarea');
+            ta.value = value;
+            ta.style.position = 'fixed';
+            ta.style.opacity = '0';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); } catch { }
+            document.body.removeChild(ta);
+        }
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1500);
+    };
     return (
-        <div className="max-w-2xl mx-auto pt-10">
-            <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">Mail Settings</h2>
-            <p className="text-slate-500 mb-10 text-lg">Configure your server's outbound identity.</p>
+        <button
+            type="button"
+            onClick={copy}
+            disabled={!value}
+            title={value ? `Copy ${label}` : 'Nothing to copy'}
+            className={`shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold transition-colors border disabled:opacity-40 disabled:cursor-not-allowed ${copied ? 'bg-emerald-50 text-emerald-600 border-emerald-200' : 'bg-white text-slate-500 border-slate-200 hover:text-violet-600 hover:border-violet-300'}`}
+        >
+            <i className={`fa-solid ${copied ? 'fa-check' : 'fa-copy'}`}></i>
+            {copied ? 'Copied' : label}
+        </button>
+    );
+}
+
+function DnsRecordRow({ title, record }: { title: string; record?: DnsRecord }) {
+    if (!record) return null;
+    return (
+        <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
+            <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="flex items-center gap-2 min-w-0">
+                    <span className="text-xs font-black uppercase tracking-wider text-slate-700">{title}</span>
+                    <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 font-mono">{record.type}</span>
+                </div>
+                {record.value && <CopyButton value={record.value} label="Copy value" />}
+            </div>
+            {record.host && (
+                <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 w-12 shrink-0">Host</span>
+                    <code className="text-xs text-slate-700 font-mono break-all flex-1">{record.host}</code>
+                    <CopyButton value={record.host} label="Copy host" />
+                </div>
+            )}
+            {record.value && (
+                <div className="flex items-start gap-2">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 w-12 shrink-0 mt-0.5">Value</span>
+                    <code className="text-xs text-slate-700 font-mono break-all flex-1 whitespace-pre-wrap">{record.value}</code>
+                </div>
+            )}
+            {record.note && <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">{record.note}</p>}
+        </div>
+    );
+}
+
+function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo, dnsLoading, onRefreshDns, onGenerateDkim, generatingDkim, testTo, setTestTo, onSendTest, testing, testResult }: any) {
+    return (
+        <div className="max-w-2xl mx-auto pt-10 pb-20">
+            <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">Server &amp; Deliverability</h2>
+            <p className="text-slate-500 mb-10 text-lg">Configure your server's outbound identity, security, and DNS.</p>
 
             {message && (
                 <div className={`mb-8 p-4 rounded-xl flex items-center gap-3 text-sm font-bold shadow-sm ${message.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
@@ -1086,48 +1276,169 @@ function SettingsView({ settings, setSettings, onSave, saving, message }: any) {
                 </div>
             )}
 
+            {/* SMTP + Identity */}
             <div className="bg-white rounded-[1.5rem] border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/40">
                 <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                     <h3 className="font-bold text-slate-800 flex items-center gap-2">
                         <i className="fa-solid fa-server text-violet-500"></i>
-                        SMTP Configuration
+                        SMTP &amp; Identity
                     </h3>
                 </div>
-
                 <div className="p-8 grid gap-8">
-                    <SettingInput label="Server Port" value={settings.smtp_listen_port} onChange={(v: string) => setSettings({ ...settings, smtp_listen_port: v })} />
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <SettingInput label="From Email (Default)" value={settings.mail_from_email} onChange={(v: string) => setSettings({ ...settings, mail_from_email: v })} placeholder="noreply@example.com" type="email" />
+                        <SettingInput label="From Name (Default)" value={settings.mail_from_name} onChange={(v: string) => setSettings({ ...settings, mail_from_name: v })} placeholder="My Site" />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <SettingInput label="SMTP Listen Port" value={settings.smtp_listen_port} onChange={(v: string) => setSettings({ ...settings, smtp_listen_port: v })} placeholder="2525" />
+                        <SettingInput label="HELO / EHLO Host" value={settings.mail_helo_host} onChange={(v: string) => setSettings({ ...settings, mail_helo_host: v })} placeholder="mail.example.com" />
+                    </div>
                     <SettingInput label="Catch-All Mode" value={settings.smtp_catch_all} onChange={(v: string) => setSettings({ ...settings, smtp_catch_all: v })} type="select" options={[{ label: 'Disabled (Strict)', value: '0' }, { label: 'Enabled (Catch All)', value: '1' }]} />
-                    <SettingInput label="From Name (Default)" value={settings.mail_from_name} onChange={(v: string) => setSettings({ ...settings, mail_from_name: v })} />
                 </div>
             </div>
 
+            {/* Security */}
             <div className="bg-white rounded-[1.5rem] border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/40 mt-8">
                 <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
                     <h3 className="font-bold text-slate-800 flex items-center gap-2">
                         <i className="fa-solid fa-shield-halved text-emerald-500"></i>
-                        Security Configuration
+                        Security
                     </h3>
                 </div>
                 <div className="p-8 grid gap-8">
-                    <div className="grid grid-cols-2 gap-8">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                         <SettingInput label="DNSBL Filtering" value={settings.mail_security_dnsbl_enabled} onChange={(v: string) => setSettings({ ...settings, mail_security_dnsbl_enabled: v })} type="select" options={[{ label: 'Disabled', value: '0' }, { label: 'Enabled (Zen.spamhaus)', value: '1' }]} />
                         <SettingInput label="SPF Verification" value={settings.mail_security_spf_enabled} onChange={(v: string) => setSettings({ ...settings, mail_security_spf_enabled: v })} type="select" options={[{ label: 'Disabled', value: '0' }, { label: 'Enabled', value: '1' }]} />
                     </div>
 
-                    <div className="border-t border-slate-100 pt-6 mt-2">
-                        <h4 className="text-sm font-bold text-slate-900 mb-4 flex items-center gap-2"><i className="fa-solid fa-key text-slate-400"></i> DKIM Signing (Outgoing)</h4>
-                        <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="border-t border-slate-100 pt-6 mt-1">
+                        <div className="flex items-center justify-between mb-4">
+                            <h4 className="text-sm font-bold text-slate-900 flex items-center gap-2"><i className="fa-solid fa-key text-slate-400"></i> DKIM Signing (Outgoing)</h4>
+                            <span className={`text-[10px] font-bold px-2 py-1 rounded-md ${dnsInfo?.dkimConfigured ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}`}>
+                                <i className={`fa-solid ${dnsInfo?.dkimConfigured ? 'fa-circle-check' : 'fa-triangle-exclamation'} mr-1`}></i>
+                                {dnsInfo?.dkimConfigured ? 'Configured' : 'Not configured'}
+                            </span>
+                        </div>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                             <SettingInput label="Domain" value={settings.mail_security_dkim_domain} onChange={(v: string) => setSettings({ ...settings, mail_security_dkim_domain: v })} placeholder="example.com" />
                             <SettingInput label="Selector" value={settings.mail_security_dkim_selector} onChange={(v: string) => setSettings({ ...settings, mail_security_dkim_selector: v })} placeholder="default" />
                         </div>
-                        <SettingInput label="Private Key (PEM)" value={settings.mail_security_dkim_private_key} onChange={(v: string) => setSettings({ ...settings, mail_security_dkim_private_key: v })} type="textarea" className="font-mono text-xs" />
+                        <button
+                            type="button"
+                            onClick={onGenerateDkim}
+                            disabled={generatingDkim}
+                            className="inline-flex items-center gap-2 bg-emerald-600 text-white px-5 py-2.5 rounded-xl font-bold text-xs shadow-lg shadow-emerald-600/20 hover:bg-emerald-500 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:transform-none"
+                        >
+                            {generatingDkim ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-key"></i>}
+                            {dnsInfo?.dkimConfigured ? 'Regenerate DKIM Key' : 'Generate DKIM Key'}
+                        </button>
+                        <p className="text-[11px] text-amber-600 mt-2 leading-relaxed">
+                            <i className="fa-solid fa-triangle-exclamation mr-1"></i>
+                            Regenerating invalidates the old key. Mail signed with the old key will fail until you publish the new DKIM DNS record below.
+                        </p>
                     </div>
+                </div>
+                <div className="bg-slate-50 px-8 py-6 border-t border-slate-100 flex justify-end">
+                    <button onClick={onSave} disabled={saving} className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold text-sm shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:transform-none">
+                        {saving ? <><i className="fa-solid fa-circle-notch fa-spin mr-2"></i>Saving...</> : 'Save Changes'}
+                    </button>
+                </div>
+            </div>
 
-                    <div className="bg-slate-50 px-8 py-6 border-t border-slate-100 flex justify-end">
-                        <button onClick={onSave} disabled={saving} className="bg-slate-900 text-white px-8 py-3 rounded-xl font-bold text-sm shadow-lg hover:shadow-xl hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:transform-none">
-                            {saving ? 'Saving...' : 'Save Changes'}
+            {/* DNS Records */}
+            <div className="bg-white rounded-[1.5rem] border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/40 mt-8">
+                <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                    <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                        <i className="fa-solid fa-globe text-indigo-500"></i>
+                        DNS Records to Publish
+                    </h3>
+                    <button type="button" onClick={onRefreshDns} disabled={dnsLoading} className="text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-50" title="Refresh records">
+                        <i className={`fa-solid fa-rotate-right ${dnsLoading ? 'fa-spin' : ''}`}></i>
+                    </button>
+                </div>
+                <div className="p-8 grid gap-4">
+                    {dnsLoading && !dnsInfo ? (
+                        <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                            <i className="fa-solid fa-circle-notch fa-spin text-2xl mb-3"></i>
+                            <span className="text-sm font-medium">Loading DNS records...</span>
+                        </div>
+                    ) : dnsInfo ? (
+                        <>
+                            <p className="text-xs text-slate-500 leading-relaxed -mt-1">
+                                Publish these at your DNS provider for domain <code className="font-mono text-slate-700">{dnsInfo.domain || '(set a domain)'}</code>. Sending HELO host: <code className="font-mono text-slate-700">{dnsInfo.heloHost}</code>.
+                            </p>
+                            <DnsRecordRow title="DKIM" record={dnsInfo.records?.dkim} />
+                            <DnsRecordRow title="SPF" record={dnsInfo.records?.spf} />
+                            <DnsRecordRow title="DMARC" record={dnsInfo.records?.dmarc} />
+                            <DnsRecordRow title="PTR" record={dnsInfo.records?.ptr} />
+                        </>
+                    ) : (
+                        <div className="flex flex-col items-center justify-center py-10 text-slate-400">
+                            <i className="fa-solid fa-globe text-2xl mb-3 opacity-50"></i>
+                            <span className="text-sm font-medium">No DNS records loaded</span>
+                            <button type="button" onClick={onRefreshDns} className="mt-3 text-xs font-bold text-indigo-600 hover:underline">Load records</button>
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Test Delivery */}
+            <div className="bg-white rounded-[1.5rem] border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/40 mt-8">
+                <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
+                    <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                        <i className="fa-solid fa-paper-plane text-violet-500"></i>
+                        Test Deliverability
+                    </h3>
+                </div>
+                <div className="p-8">
+                    <div className="flex flex-col sm:flex-row gap-3">
+                        <input
+                            type="email"
+                            value={testTo}
+                            onChange={(e) => setTestTo(e.target.value)}
+                            placeholder="recipient@example.com (defaults to your address)"
+                            className="flex-1 px-4 py-3 border border-slate-200 rounded-xl focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 outline-none transition-all text-sm"
+                        />
+                        <button
+                            type="button"
+                            onClick={onSendTest}
+                            disabled={testing}
+                            className="inline-flex items-center justify-center gap-2 bg-violet-600 text-white px-6 py-3 rounded-xl font-bold text-sm shadow-lg shadow-violet-600/20 hover:bg-violet-500 hover:-translate-y-0.5 transition-all disabled:opacity-50 disabled:transform-none shrink-0"
+                        >
+                            {testing ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-paper-plane"></i>}
+                            Send test email
                         </button>
                     </div>
+                    <p className="text-[11px] text-slate-500 mt-3 leading-relaxed">
+                        Real external delivery requires reverse DNS (rDNS/PTR) for your sending IP, published SPF/DKIM/DMARC records, and an open outbound port 25.
+                    </p>
+
+                    {testResult && (
+                        <div className={`mt-5 rounded-xl border p-4 text-sm ${testResult.success ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                            <div className={`flex items-center gap-2 font-bold ${testResult.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                <i className={`fa-solid ${testResult.success ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>
+                                {testResult.message}
+                            </div>
+                            {testResult.delivered && testResult.delivered.length > 0 && (
+                                <div className="mt-3 space-y-1.5">
+                                    {testResult.delivered.map((d: any, i: number) => (
+                                        <div key={`d-${i}`} className="text-xs text-emerald-800 bg-emerald-100/50 rounded-lg px-3 py-2 font-mono break-all">
+                                            <span className="font-bold">{d.recipient}</span> via <span className="font-bold">{d.via}</span> — {d.response}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                            {testResult.failed && testResult.failed.length > 0 && (
+                                <div className="mt-3 space-y-1.5">
+                                    {testResult.failed.map((f: any, i: number) => (
+                                        <div key={`f-${i}`} className="text-xs text-red-800 bg-red-100/50 rounded-lg px-3 py-2 font-mono break-all">
+                                            <span className="font-bold">{f.recipient}</span> — {f.error}{f.permanent ? ' (permanent)' : ''}
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
             </div>
         </div>

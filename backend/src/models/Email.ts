@@ -84,6 +84,13 @@ class Email {
         await migrate('bcc_address', 'TEXT');
         await migrate('is_trash', 'INT DEFAULT 0');
         await migrate('scheduled_at', 'DATETIME');
+
+        // Retry-queue columns for outbound delivery (Feature: retry temporary failures).
+        // delivery_status: 'pending'|'sent'|'retry'|'failed'; nullable for legacy/received rows.
+        await migrate('delivery_status', 'TEXT');
+        await migrate('delivery_attempts', 'INTEGER DEFAULT 0');
+        await migrate('next_attempt_at', 'TEXT'); // ISO timestamp of next retry, nullable
+        await migrate('last_error', 'TEXT');
     }
 
     static async create(data) {
@@ -360,6 +367,45 @@ class Email {
             WHERE is_sent = 0 AND is_draft = 0 AND is_trash = 0 
             AND scheduled_at IS NOT NULL AND scheduled_at <= DATETIME('now', 'localtime')
         `);
+    }
+
+    // --- Outbound retry queue ---------------------------------------------
+
+    // Sent rows whose external delivery failed temporarily and are now due for another attempt.
+    static async getPendingRetries() {
+        return await dbAsync.all(`
+            SELECT * FROM received_emails
+            WHERE delivery_status = 'retry'
+            AND next_attempt_at IS NOT NULL
+            AND next_attempt_at <= ?
+        `, [new Date().toISOString()]);
+    }
+
+    // Record a temporary failure: schedule the next attempt and bump the counter.
+    static async markRetry(id, attempts, nextAttemptAt, lastError) {
+        return await dbAsync.run(`
+            UPDATE received_emails
+            SET delivery_status = 'retry', delivery_attempts = ?, next_attempt_at = ?, last_error = ?
+            WHERE id = ?
+        `, [attempts, nextAttemptAt, lastError ? String(lastError).slice(0, 1000) : null, id]);
+    }
+
+    // Give up (permanent failure or max attempts reached).
+    static async markFailed(id, attempts, lastError) {
+        return await dbAsync.run(`
+            UPDATE received_emails
+            SET delivery_status = 'failed', delivery_attempts = ?, next_attempt_at = NULL, last_error = ?
+            WHERE id = ?
+        `, [attempts, lastError ? String(lastError).slice(0, 1000) : null, id]);
+    }
+
+    // All recipients delivered.
+    static async markSent(id) {
+        return await dbAsync.run(`
+            UPDATE received_emails
+            SET delivery_status = 'sent', next_attempt_at = NULL, last_error = NULL
+            WHERE id = ?
+        `, [id]);
     }
 
     static async getAttachments(emailId) {
