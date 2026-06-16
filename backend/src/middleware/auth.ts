@@ -170,7 +170,12 @@ function csrfProtection(req, res, next) {
 
     const origin = req.get('Origin');
     const referer = req.get('Referer');
-    const host = req.get('Host');
+    // Behind the gateway (changeOrigin:true) req.get('Host') is the internal upstream address
+    // (127.0.0.1:PORT), so the same-origin check below would never match a real browser request.
+    // The gateway forwards the original client Host as X-Forwarded-Host (xfwd:true) — honor it first,
+    // exactly like the migration guard does. Take the first hop if a list is present.
+    const fwdHost = (req.get('X-Forwarded-Host') || '').split(',')[0].trim();
+    const host = fwdHost || req.get('Host');
 
     // If no Origin header, check Referer (some browsers)
     let requestOrigin = origin;
