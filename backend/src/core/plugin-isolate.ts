@@ -18,6 +18,14 @@ const { addShortcode, removeShortcode } = require('./shortcodes');
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
 
+// Operator allowlist — same source as plugin-api; trusted plugins may keep their absolute route paths.
+function isTrustedPlugin(slug: string): boolean {
+    try {
+        const trusted = require('../config/app').trustedSystemPlugins || [];
+        return Array.isArray(trusted) && trusted.includes(slug);
+    } catch { return false; }
+}
+
 // Navigate "options.get" / "mail" on the api object and call it with args.
 function callApi(api: any, method: string, args: any[]) {
     const parts = String(method).split('.');
@@ -127,7 +135,12 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     }
                 };
                 const m = String(msg.method).toLowerCase();
-                const full = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
+                // Untrusted plugins are namespaced under /api/v1/plugin/<slug> (no route hijack).
+                // Operator-trusted plugins may opt into their ORIGINAL absolute path (opts.absolute)
+                // so a first-party plugin can isolate without rewriting its whole frontend's URLs.
+                const full = (msg.opts && msg.opts.absolute && isTrustedPlugin(slug))
+                    ? msg.routePath
+                    : `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
                 runWithContext(slug, () => app[m](full, ...mw, finalHandler));
             } else if (msg.kind === 'route-reply') {
                 const p = pendingRoute.get(msg.id);
