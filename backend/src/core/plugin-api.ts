@@ -34,22 +34,26 @@ const PLUGINS_DIR = path.join(ROOT_DIR, 'plugins');
 const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
 
 // Option keys a plugin may never read/write through the bridge (secrets / security-critical).
-const PROTECTED_OPTION_RE = /secret|password|private_key|dkim_private|token|salt|jwt/i;
+// Deliberately broad (matches getProtectedEnv): the previous narrow list let an untrusted plugin
+// read options like `stripe_key`, `api_key`, `*_credential`, `encryption_key`, certs, etc.
+const PROTECTED_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privatekey|dkim|\bkey\b|[_-]key\b|key$|api[_-]?key|token|\bsalt\b|jwt|credential|encryption|signing|certificate|\.pem|access[_-]?key/i;
 // Core DB tables a plugin may never touch (mirrors the dbAsync scoping in secure-require).
 const PROTECTED_TABLES = new Set(['users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions']);
 
-function extractSqlTables(sql: string): string[] {
-    const out: string[] = [];
-    const re = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+["'`\[]?([a-z_][a-z0-9_]*)/gi;
-    let m;
-    while ((m = re.exec(String(sql || '')))) out.push(m[1].toLowerCase());
-    return out;
-}
-
+// Reject any SQL that references a core table. Regex *structural* parsing of SQL is bypassable
+// (comma joins `FROM a, users`, subqueries, and comment-as-whitespace `FROM/**/users` all slip a
+// table past a `FROM <table>` matcher). So strip comments, then deny if a protected table name
+// appears as a STANDALONE WORD anywhere in the statement — a conservative text denylist, not a
+// parse. Over-blocks queries that merely mention a core-table name (acceptable: an untrusted plugin
+// has no business naming core tables). Trusted plugins skip this entirely (see callers).
 function assertSqlAllowed(sql: string) {
-    for (const t of extractSqlTables(sql)) {
-        if (PROTECTED_TABLES.has(t)) {
-            throw new Error(`🛡️ Plugin DB access denied: core table '${t}' is off-limits to plugins.`);
+    const stripped = String(sql || '')
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')   // /* block comments */ (used as whitespace to evade)
+        .replace(/--[^\n]*/g, ' ')           // -- line comments
+        .toLowerCase();
+    for (const t of PROTECTED_TABLES) {
+        if (new RegExp(`\\b${t}\\b`).test(stripped)) {
+            throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
         }
     }
 }
