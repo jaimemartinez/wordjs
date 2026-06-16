@@ -79,6 +79,13 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             worker.postMessage({ kind: 'invoke-mail', id, msg: mailMsg });
         });
 
+        const pendingTransport = new Map<number, any>();
+        const invokeNotifyTransport = (name: string, notification: any) => new Promise<any>((res, rej) => {
+            const id = ++invokeId;
+            pendingTransport.set(id, { res, rej });
+            worker.postMessage({ kind: 'invoke-notify-transport', id, name, notification });
+        });
+
         worker.on('message', async (msg: any) => {
             if (msg.kind === 'ready') {
                 resolve({ worker, slug });
@@ -111,11 +118,23 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 const mw: any[] = [];
                 if (msg.opts && msg.opts.auth) mw.push(require('../middleware/auth').authenticate);
                 if (msg.opts && msg.opts.admin) mw.push(require('../middleware/permissions').isAdmin);
+                // Multipart uploads can't be serialized over RPC, so the HOST parses them (multer)
+                // and forwards the saved file's metadata to the isolate. opts.multipart = field name.
+                if (msg.opts && msg.opts.multipart) {
+                    try {
+                        const multer = require('multer');
+                        const os = require('os');
+                        const up = multer({ dest: path.join(os.tmpdir(), 'wordjs-uploads') });
+                        mw.push(up.single(String(msg.opts.multipart)));
+                    } catch (e: any) { console.warn(`[Isolate ${slug}] multipart unavailable:`, e && e.message); }
+                }
                 const finalHandler = async (req: any, res: any) => {
                     const reqData = {
                         method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
                         cookies: req.cookies || {},
                         headers: { 'x-portal-token': req.headers['x-portal-token'] }, // selected non-sensitive headers
+                        // Saved-upload metadata (multer) — the isolate gets the path/name, not the stream.
+                        file: req.file ? { path: req.file.path, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size, filename: req.file.filename } : undefined,
                         user: req.user ? { id: req.user.id, role: req.user.role, userEmail: req.user.userEmail, userLogin: req.user.userLogin } : null
                     };
                     try {
@@ -161,6 +180,14 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'mail-reply') {
                 const p = pendingMail.get(msg.id);
                 if (p) { pendingMail.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
+            } else if (msg.kind === 'register-notify-transport') {
+                // Register a core notification transport backed by this isolate over RPC.
+                try {
+                    require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification));
+                } catch (e: any) { console.warn(`[Isolate ${slug}] notify transport register failed:`, e && e.message); }
+            } else if (msg.kind === 'notify-transport-reply') {
+                const p = pendingTransport.get(msg.id);
+                if (p) { pendingTransport.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
             }
         });
 
