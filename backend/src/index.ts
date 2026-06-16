@@ -284,6 +284,10 @@ app.use(frontendRoutes);
 // Add analytics route
 app.use('/api/v1/analytics', require('./routes/analytics'));
 
+// DB administration (embedded Postgres + schema migrations) — core infrastructure, formerly the
+// db-migration plugin. Mounted here in the host (it manages the DB server process; can't be isolated).
+require('./core/db-admin').register(app);
+
 // Note: 404 and error handlers are registered in initialize() after plugins load
 
 /**
