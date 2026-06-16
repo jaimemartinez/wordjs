@@ -48,6 +48,13 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             worker.postMessage({ kind: 'invoke', id, cbId, args });
         });
 
+        const pendingRoute = new Map<number, any>();
+        const invokeRoute = (routeId: string, req: any) => new Promise<any>((res, rej) => {
+            const id = ++invokeId;
+            pendingRoute.set(id, { res, rej });
+            worker.postMessage({ kind: 'invoke-route', id, routeId, req });
+        });
+
         worker.on('message', async (msg: any) => {
             if (msg.kind === 'ready') {
                 resolve({ worker, slug });
@@ -71,6 +78,35 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'invoke-reply') {
                 const p = pendingInvoke.get(msg.id);
                 if (p) { pendingInvoke.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
+            } else if (msg.kind === 'register-route') {
+                // Mount an Express route owned by the host; run the real auth middleware, then forward
+                // a serialized request to the isolate and write back its response descriptor.
+                const { getApp } = require('./appRegistry');
+                const app = getApp();
+                if (!app) return;
+                const mw: any[] = [];
+                if (msg.opts && msg.opts.auth) mw.push(require('../middleware/auth').authenticate);
+                if (msg.opts && msg.opts.admin) mw.push(require('../middleware/permissions').isAdmin);
+                const finalHandler = async (req: any, res: any) => {
+                    const reqData = {
+                        method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
+                        user: req.user ? { id: req.user.id, role: req.user.role, userEmail: req.user.userEmail, userLogin: req.user.userLogin } : null
+                    };
+                    try {
+                        const r = await invokeRoute(msg.routeId, reqData);
+                        if (r.headers) res.set(r.headers);
+                        res.status(r.status || 200);
+                        if (r.body === undefined) res.end(); else res.json(r.body);
+                    } catch (e: any) {
+                        res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
+                    }
+                };
+                const m = String(msg.method).toLowerCase();
+                const full = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
+                runWithContext(slug, () => app[m](full, ...mw, finalHandler));
+            } else if (msg.kind === 'route-reply') {
+                const p = pendingRoute.get(msg.id);
+                if (p) { pendingRoute.delete(msg.id); msg.ok ? p.res(msg.response) : p.rej(new Error(msg.error)); }
             }
         });
 
