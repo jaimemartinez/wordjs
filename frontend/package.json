@@ -8,7 +8,7 @@
     "dev": "node scripts/start-frontend.js dev",
     "build": "next build",
     "start": "node scripts/start-frontend.js prod",
-    "lint": "next lint",
+    "lint": "eslint .",
     "postinstall": "node scripts/patch-puck-actions.js",
     "generate-plugins": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js"
   },

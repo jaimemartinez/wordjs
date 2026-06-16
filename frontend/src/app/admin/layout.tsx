@@ -3,6 +3,10 @@ import DashboardLayoutClient from "./DashboardLayoutClient";
 
 import { headers } from 'next/headers';
 
+// Admin is an authenticated, data-driven dashboard (Sidebar/pages use useSearchParams);
+// render it dynamically instead of static-prerendering, which would bail out on those hooks.
+export const dynamic = 'force-dynamic';
+
 export async function generateMetadata(): Promise<Metadata> {
     try {
         // Zero-config default: Connect directly to the backend on port 3000 for SSR
