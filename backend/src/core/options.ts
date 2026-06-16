@@ -12,7 +12,7 @@ const cache = require('./cache');
  * Get an option value
  * Equivalent to get_option()
  */
-async function getOption(name, defaultValue = null) {
+async function getOption(name, defaultValue: any = null) {
     // Only verify if we are in a plugin context
     verifyPermission('settings', 'read');
 

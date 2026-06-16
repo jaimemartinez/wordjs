@@ -6,7 +6,7 @@
 const Redis = require('ioredis');
 const config = require('../config/app');
 
-let redis = null;
+let redis: any = null;
 let redisAvailable = false;
 let enabledBySettings = false; // Master switch from DB settings
 

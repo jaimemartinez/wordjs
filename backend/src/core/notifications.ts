@@ -107,7 +107,7 @@ class NotificationService {
         const targetTransports = data.transports || Array.from(this.transports.keys());
 
         // Execute all relevant transports
-        const promises = [];
+        const promises: Promise<any>[] = [];
         for (const name of targetTransports) {
             const handler = this.transports.get(name);
             if (handler) {

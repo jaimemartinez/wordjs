@@ -10,7 +10,7 @@ const config = require('../config/app');
 const ROLES_OPTION_NAME = 'wordjs_user_roles';
 
 // Cache roles in memory for synchronous access (required by User.toJSON)
-let _rolesCache = null;
+let _rolesCache: Record<string, any> | null = null;
 
 /**
  * Initialize roles from DB (Async)
@@ -21,7 +21,7 @@ async function loadRoles() {
     if (!_rolesCache || Object.keys(_rolesCache).length === 0) {
         _rolesCache = config.roles || {};
     }
-    console.log(`DEBUG: Roles loaded into cache. Count: ${Object.keys(_rolesCache).length}`);
+    console.log(`DEBUG: Roles loaded into cache. Count: ${Object.keys(_rolesCache || {}).length}`);
     return _rolesCache;
 }
 
@@ -67,8 +67,8 @@ function getRole(slug) {
 async function removeRole(slug) {
     if (!_rolesCache) await loadRoles();
 
-    if (_rolesCache[slug]) {
-        delete _rolesCache[slug];
+    if (_rolesCache![slug]) {
+        delete _rolesCache![slug];
         return await updateOption(ROLES_OPTION_NAME, _rolesCache);
     }
     return false;
@@ -129,7 +129,7 @@ async function syncRoles(configRoles) {
     // Ensure cache is loaded first
     if (!_rolesCache) await loadRoles();
 
-    const dbRoles = _rolesCache; // Work on reference
+    const dbRoles = _rolesCache!; // Work on reference
     let changed = false;
 
     // Check subscriber specifically for the new capability

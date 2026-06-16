@@ -23,7 +23,7 @@ function generateMetaTags(post, options: SeoOptions = {}) {
     const canonicalUrl = `${siteUrl}/${post.type === 'page' ? '' : 'blog/'}${post.slug}`;
     const ogImage = post.og_image || post.featured_image || `${siteUrl}/images/default-og.jpg`;
 
-    const tags = [];
+    const tags: string[] = [];
 
     // Basic meta
     tags.push(`<title>${escapeHtml(title)} | ${escapeHtml(siteName)}</title>`);

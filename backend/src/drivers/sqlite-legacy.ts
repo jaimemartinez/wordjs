@@ -7,9 +7,9 @@ const path = require('path');
 const fs = require('fs');
 const config = require('../config/app');
 
-let dbInstance = null;
-let SQL = null;
-let activeDbPath = null;
+let dbInstance: any = null;
+let SQL: any = null;
+let activeDbPath: string | null = null;
 
 async function init(options: any = {}) {
     SQL = await initSqlJs();
@@ -151,7 +151,7 @@ class StatementWrapper {
 
     all(...params) {
         try {
-            const results = [];
+            const results: any[] = [];
             const stmt = this.sqlDb.prepare(this.sql);
             stmt.bind(params);
 
@@ -159,7 +159,7 @@ class StatementWrapper {
 
             while (stmt.step()) {
                 const values = stmt.get();
-                const row = {};
+                const row: any = {};
                 columns.forEach((col, i) => {
                     row[col] = values[i];
                 });
