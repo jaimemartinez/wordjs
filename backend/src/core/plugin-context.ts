@@ -48,8 +48,21 @@ const THEME_FRAME_RE = /[\\/]themes[\\/]([A-Za-z0-9_.-]+)[\\/]/;
 function getPluginFromStack(stack?: string): string | null {
     if (!stack) {
         const holder: any = {};
-        Error.captureStackTrace(holder, getPluginFromStack);
-        stack = holder.stack || '';
+        // A malicious plugin can set Error.stackTraceLimit = 0 or override
+        // Error.prepareStackTrace to blind this scan. Save and force safe values locally,
+        // then restore in finally. We do NOT freeze these globally — ts-node /
+        // source-map-support legitimately set prepareStackTrace.
+        const savedLimit = Error.stackTraceLimit;
+        const savedPrepare = Error.prepareStackTrace;
+        try {
+            Error.stackTraceLimit = 200;
+            Error.prepareStackTrace = undefined;
+            Error.captureStackTrace(holder, getPluginFromStack);
+            stack = holder.stack || '';
+        } finally {
+            Error.stackTraceLimit = savedLimit;
+            Error.prepareStackTrace = savedPrepare;
+        }
     }
     const lines = String(stack).split('\n');
     for (const line of lines) {
@@ -179,7 +192,7 @@ function getProtectedEnv() {
 
     return new Proxy(process.env, {
         get(target: any, prop) {
-            const pluginSlug = getCurrentPlugin();
+            const pluginSlug = getEffectivePlugin();
             if (pluginSlug && isSensitive(prop)) {
                 console.warn(`[Security] Plugin '${pluginSlug}' tried to access sensitive ENV: ${prop.toString()}`);
                 return undefined; // Return undefined instead of masked string to mimic non-existence
@@ -187,7 +200,7 @@ function getProtectedEnv() {
             return target[prop];
         },
         set(target: any, prop, value) {
-            const pluginSlug = getCurrentPlugin();
+            const pluginSlug = getEffectivePlugin();
             if (pluginSlug && isSensitive(prop)) {
                 console.warn(`[Security] Plugin '${pluginSlug}' attempted to modify sensitive ENV: ${prop.toString()}`);
                 return false;
@@ -197,7 +210,7 @@ function getProtectedEnv() {
         },
         // Hide keys from Object.keys(), for...in, JSON.stringify()
         ownKeys(target) {
-            const pluginSlug = getCurrentPlugin();
+            const pluginSlug = getEffectivePlugin();
             if (pluginSlug) {
                 return Reflect.ownKeys(target).filter(key => !isSensitive(key));
             }
@@ -205,7 +218,7 @@ function getProtectedEnv() {
         },
         // Ensure hidden keys are reported as non-configurable/non-enumerable if accessed directly
         getOwnPropertyDescriptor(target, prop) {
-            const pluginSlug = getCurrentPlugin();
+            const pluginSlug = getEffectivePlugin();
             if (pluginSlug && isSensitive(prop)) {
                 return undefined;
             }

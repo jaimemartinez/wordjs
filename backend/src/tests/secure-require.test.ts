@@ -279,6 +279,83 @@ test('Core code (no plugin frame) can still use process.binding', () => {
 });
 
 // ============================================
+console.log('\n🔴 Red-team Adversarial Escape Tests:');
+// ============================================
+
+// installSecureRequire() already called above. These run a real runner file under plugins/
+// so getEffectivePlugin() (call-stack detection) classifies them as a plugin even without
+// runWithContext — exactly the detached scenario the audit exploited.
+
+function withRunner(slug, src, fn) {
+    const pluginDir = path.join(path.resolve(__dirname, '../../plugins'), slug);
+    const runnerPath = path.join(pluginDir, 'runner.js');
+    if (!fs.existsSync(pluginDir)) fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(runnerPath, src);
+    try {
+        const runner = require(runnerPath);
+        fn(runner);
+    } finally {
+        delete require.cache[require.resolve(runnerPath)];
+        if (fs.existsSync(runnerPath)) fs.unlinkSync(runnerPath);
+        if (fs.existsSync(pluginDir)) fs.rmdirSync(pluginDir);
+    }
+}
+
+test("require('node:child_process') from plugin returns the SECURE blocking module", () => {
+    withRunner('rt-node-cp', "module.exports = () => require('node:child_process').execSync('echo pwned');\n", (runner) => {
+        expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
+    });
+});
+
+test("require('node:fs') in plugin returns the secure proxy (write outside dir throws)", () => {
+    withRunner('rt-node-fs', "module.exports = () => require('node:fs').writeFileSync('/tmp/pwn.txt','x');\n", (runner) => {
+        expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
+    });
+});
+
+test("Detached plugin with Error.stackTraceLimit=0 is STILL blocked from fs (stack hardening)", () => {
+    const secureFs = createSecureFs();
+    withRunner('rt-stacklimit', "module.exports = (sfs) => { Error.stackTraceLimit = 0; return sfs.readFileSync('/etc/passwd','utf8'); };\n", (runner) => {
+        const saved = Error.stackTraceLimit;
+        try {
+            expectThrows(() => runner(secureFs), 'RUNTIME SECURITY BLOCK');
+        } finally {
+            Error.stackTraceLimit = saved;
+        }
+    });
+});
+
+test('fs deny-by-default: secureFs.cpSync throws in plugin context', () => {
+    const secureFs = createSecureFs();
+    runWithContext('rt-deny-plugin', () => {
+        expectThrows(() => {
+            secureFs.cpSync('/tmp/a', '/tmp/b');
+        }, 'RUNTIME SECURITY BLOCK');
+    });
+});
+
+test('fs deny-by-default: secureFs.openAsBlob throws in plugin context', () => {
+    const secureFs = createSecureFs();
+    runWithContext('rt-deny-plugin', () => {
+        expectThrows(() => {
+            secureFs.openAsBlob(__filename);
+        }, 'RUNTIME SECURITY BLOCK');
+    });
+});
+
+test("require('worker_threads') is blocked (inert) for plugins", () => {
+    withRunner('rt-worker', "module.exports = () => new (require('worker_threads').Worker)('x');\n", (runner) => {
+        expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
+    });
+});
+
+test("require('vm') is blocked (inert) for plugins", () => {
+    withRunner('rt-vm', "module.exports = () => require('vm').runInThisContext('1+1');\n", (runner) => {
+        expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
+    });
+});
+
+// ============================================
 // Summary
 // ============================================
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

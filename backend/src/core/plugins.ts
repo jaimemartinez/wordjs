@@ -352,8 +352,10 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                     !['client', 'frontend'].includes(file)) {
                     results = results.concat(getFiles(fullPath));
                 }
-            } else if (file.endsWith('.js') || file.endsWith('.ts')) {
-                // Exclude .tsx (frontend components) from backend security scan
+            } else if (file.endsWith('.js') || file.endsWith('.ts') ||
+                       file.endsWith('.cjs') || file.endsWith('.mjs')) {
+                // Exclude .tsx (frontend components) from backend security scan.
+                // .cjs/.mjs are scanned too since the runtime can load them.
                 results.push(fullPath);
             }
         });
@@ -377,7 +379,10 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
         try {
             ast = acorn.parse(content, { ecmaVersion: 'latest', sourceType: 'module' });
         } catch (e) {
-            console.warn(`[Security] Could not parse ${file} for AST analysis, skipping...`);
+            // FAIL-CLOSED: a file that is actually loaded but cannot be parsed is treated as
+            // a violation, so an attacker cannot hide a payload behind a deliberate parse-buster.
+            console.warn(`[Security] Could not parse ${file} for AST analysis — treating as a violation (fail-closed).`);
+            dangerousCalls.add(`Unparseable source file (${path.basename(file)})`);
             continue;
         }
 
@@ -392,8 +397,10 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                     if (name === 'require' && node.arguments.length > 0) {
                         const arg = node.arguments[0];
                         if (arg.type === 'Literal') {
-                            const moduleName = arg.value;
-                            const sensitiveModules = ['child_process', 'fs', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads'];
+                            // Strip a leading 'node:' prefix so require('node:child_process')
+                            // is detected the same as require('child_process').
+                            const moduleName = String(arg.value).replace(/^node:/, '');
+                            const sensitiveModules = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads'];
                             if (sensitiveModules.includes(moduleName)) {
                                 if (moduleName === 'dns' || moduleName === 'net') {
                                     if (!hasDeclared('network', 'admin') && !hasDeclared('email', 'admin')) {

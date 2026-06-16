@@ -104,7 +104,9 @@ function isPathSafe(targetPath, isWrite = false) {
     ];
 
     const dirsToCheck = isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS;
-    const isAllowed = dirsToCheck.some(dir => resolved.startsWith(dir));
+    // Exact-match or trailing-separator prefix so safe dir 'foo' does not also whitelist
+    // a sibling 'foo-bar' that merely shares a string prefix.
+    const isAllowed = dirsToCheck.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));
 
     if (!isAllowed) {
         console.warn(`[Security Block] Plugin '${pluginSlug}' tried to ${isWrite ? 'WRITE' : 'READ'} outside safe zones: ${resolved}`);
