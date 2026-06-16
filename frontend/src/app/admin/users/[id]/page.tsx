@@ -6,8 +6,10 @@ import { usersApi } from "@/lib/api";
 import ModernSelect from "@/components/ModernSelect";
 import { PluginHook, pluginHooks } from "@/lib/plugin-hooks";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 export default function UserEditorPage() {
+    const { t } = useI18n();
     const router = useRouter();
     const params = useParams();
     const isNew = params.id === "new";
@@ -69,7 +71,7 @@ export default function UserEditorPage() {
             router.push("/admin/users");
         } catch (error) {
             console.error("Failed to save user:", error);
-            await alert("Failed to save user");
+            await alert(t('user.edit.saveError'));
         } finally {
             setSaving(false);
         }
@@ -85,13 +87,13 @@ export default function UserEditorPage() {
                         className="flex items-center gap-2 text-gray-400 hover:text-gray-600 transition-colors mb-4 group"
                     >
                         <i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>
-                        <span className="text-sm font-medium">Back</span>
+                        <span className="text-sm font-medium">{t('user.edit.back')}</span>
                     </button>
                     <h1 className="text-4xl md:text-5xl font-black text-gray-900 italic tracking-tighter">
-                        {isNew ? "New User" : "Edit User"}
+                        {isNew ? t('user.edit.titleNew') : t('user.edit.titleEdit')}
                     </h1>
                     <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                        {isNew ? "Create a new user account" : "Update user information"}
+                        {isNew ? t('user.edit.subtitleNew') : t('user.edit.subtitleEdit')}
                     </p>
                 </div>
             </div>
@@ -99,7 +101,7 @@ export default function UserEditorPage() {
             <form onSubmit={handleSubmit} className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 max-w-2xl">
                 <div className="space-y-6">
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Username</label>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('user.edit.username')}</label>
                         <input
                             type="text"
                             value={formData.username}
@@ -111,7 +113,7 @@ export default function UserEditorPage() {
                     </div>
                     <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Email</label>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('user.edit.email')}</label>
                         <input
                             type="email"
                             value={formData.email}
@@ -124,7 +126,7 @@ export default function UserEditorPage() {
                         />
                     </div>
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Display Name</label>
+                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t('user.edit.displayName')}</label>
                         <input
                             type="text"
                             value={formData.displayName}
@@ -133,19 +135,19 @@ export default function UserEditorPage() {
                         />
                     </div>
                     <ModernSelect
-                        label="Role"
+                        label={t('user.edit.role')}
                         value={formData.role}
                         onChange={(e) => setFormData({ ...formData, role: e.target.value })}
                         options={[
-                            { value: "subscriber", label: "Subscriber" },
-                            { value: "author", label: "Author" },
-                            { value: "editor", label: "Editor" },
-                            { value: "administrator", label: "Administrator" },
+                            { value: "subscriber", label: t('user.edit.roleSubscriber') },
+                            { value: "author", label: t('user.edit.roleAuthor') },
+                            { value: "editor", label: t('user.edit.roleEditor') },
+                            { value: "administrator", label: t('user.edit.roleAdministrator') },
                         ]}
                     />
                     <div>
                         <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
-                            {isNew ? "Password" : "New Password (leave blank to keep current)"}
+                            {isNew ? t('user.edit.password') : t('user.edit.newPassword')}
                         </label>
                         <input
                             type="password"
@@ -163,14 +165,14 @@ export default function UserEditorPage() {
                         onClick={() => router.back()}
                         className="px-6 py-3 border-2 border-gray-100 rounded-2xl hover:bg-gray-50 text-gray-600 font-bold text-xs uppercase tracking-widest transition-all"
                     >
-                        Cancel
+                        {t('user.edit.cancel')}
                     </button>
                     <button
                         type="submit"
                         disabled={saving}
                         className="px-8 py-4 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-xl shadow-gray-200 hover:shadow-blue-500/30 transform hover:-translate-y-1 transition-all disabled:opacity-50"
                     >
-                        {saving ? "Saving..." : "Save User"}
+                        {saving ? t('user.edit.saving') : t('user.edit.save')}
                     </button>
                 </div>
             </form>
