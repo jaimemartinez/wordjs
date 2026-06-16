@@ -155,6 +155,18 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
             }
         }
 
+        // SECURITY: an uploaded plugin must NOT claim the slug of an operator-trusted system plugin.
+        // Trust is keyed on the slug (config.trustedSystemPlugins), so squatting a trusted name —
+        // and extractAllTo(..., true) would even overwrite the bundled one — would hand uploaded code
+        // the privileged bridge tier (core DB, secret options, absolute routes, mail provider).
+        const intendedSlug = (rootDirs.size === 1 ? Array.from(rootDirs)[0] : zipName) as string;
+        let trustedSlugs: string[] = [];
+        try { trustedSlugs = require('../config/app').trustedSystemPlugins || []; } catch { /* */ }
+        if (trustedSlugs.includes(intendedSlug)) {
+            fs.unlinkSync(zipPath);
+            return res.status(409).json({ error: `Refused: '${intendedSlug}' is a reserved trusted system plugin and cannot be uploaded or overwritten.` });
+        }
+
         if (rootDirs.size === 1) {
             // Extract as is
             zip.extractAllTo(PLUGINS_DIR, true);
