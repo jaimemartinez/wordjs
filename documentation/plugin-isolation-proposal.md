@@ -1,5 +1,14 @@
 # Design Proposal: Hard Plugin Isolation (vm / process)
 
+> **Status update (2026-06-16): IMPLEMENTED, opt-in, cross-platform.** Phase 1 (the `wordjs`
+> capability bridge, `src/core/plugin-api.ts`) and the isolate runtime (`src/core/plugin-isolate.ts`
+> + `plugin-worker.js`, **worker_threads** — works in any environment, no native deps) are in `main`.
+> A plugin with `"isolated": true` in its manifest runs in a separate V8 isolate, reaching core only
+> via the bridge over RPC; `hello-world` ships isolated as the reference. worker_threads gives heap /
+> crash / resource isolation + host-owned capabilities everywhere; `isolated-vm` or child-process +
+> seccomp can swap in as the primitive (same architecture) where the platform supports them. Remaining:
+> port more plugins to the bridge and (optionally) flip the default for untrusted plugins.
+
 Status: **proposal** · Author: WordJS · Context: after 4 red-team passes the in-process sandbox
 closes every *known* practical escape (AST scan + runtime require proxy + ALS-anchoring of every
 entry point + core-module deny-list + dbAsync scoping). But it remains a **soft** boundary: plugin
