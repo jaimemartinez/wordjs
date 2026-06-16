@@ -32,6 +32,7 @@ const { runWithContext } = require(path.join(coreDir, 'plugin-context'));
 let _id = 0;
 const pending = new Map();         // id -> {resolve,reject} for our calls to the host
 const callbacks = new Map();       // cbId -> function (hook/filter callbacks living in this isolate)
+const routeHandlers = new Map();   // routeId -> route handler (req,res) living in this isolate
 
 function callHost(method, args) {
     return new Promise((resolve, reject) => {
@@ -67,9 +68,19 @@ const wordjs = {
     mail: (msg) => callHost('mail', [msg]),
     notify: (n) => callHost('notify', [n]),
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
-    cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) }
-    // http.route is intentionally omitted here — request forwarding for isolated routes is a
-    // follow-up; isolated plugins use hooks today.
+    cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
+
+    // Register a JSON route. `opts` (optional): { auth, admin } -> host applies the real auth
+    // middleware before forwarding. The handler runs HERE with a mock (req,res) over RPC: it gets
+    // {method,path,query,params,body,user} and replies via res.status().json()/send()/end().
+    http: {
+        route(method, routePath, opts, handler) {
+            if (typeof opts === 'function') { handler = opts; opts = {}; }
+            const routeId = `route:${method}:${routePath}:${++_id}`;
+            routeHandlers.set(routeId, handler);
+            parentPort.postMessage({ kind: 'register-route', method, routePath, opts: opts || {}, routeId });
+        }
+    }
 };
 
 parentPort.on('message', async (msg) => {
@@ -86,6 +97,30 @@ parentPort.on('message', async (msg) => {
             parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: true, value });
         } catch (e) {
             parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+        }
+    } else if (msg.kind === 'invoke-route') {
+        // Host forwarded an HTTP request for a route handler living in this isolate.
+        const handler = routeHandlers.get(msg.routeId);
+        const reqData = msg.req || {};
+        let settled = false;
+        const reply = (status, body, headers) => {
+            if (settled) return; settled = true;
+            parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers } });
+        };
+        const res = {
+            _status: 200, _headers: undefined,
+            status(s) { this._status = s; return this; },
+            set(h) { this._headers = Object.assign({}, this._headers, h); return this; },
+            json(b) { reply(this._status, b, this._headers); return this; },
+            send(b) { reply(this._status, b, this._headers); return this; },
+            end() { reply(this._status, undefined, this._headers); return this; }
+        };
+        try {
+            if (!handler) throw new Error('No such route handler');
+            await handler(reqData, res);
+            if (!settled) reply(res._status, undefined, res._headers);
+        } catch (e) {
+            parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: false, error: String(e && e.stack || e) });
         }
     }
 });
