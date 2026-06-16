@@ -18,7 +18,7 @@ const CarouselPicker = ({ value, onChange }: { value: string; onChange: (value: 
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        apiGet<any[]>("/carousels")
+        apiGet<any[]>("/plugin/photo-carousel")
             .then(data => {
                 console.log("CarouselPicker loaded items:", data);
                 if (Array.isArray(data)) {
@@ -93,7 +93,7 @@ export default function PhotoCarouselPuck({ carouselId, autoSlide = true, interv
 
     useEffect(() => {
         // Use apiGet which handles auth and protocol correctly
-        apiGet<any[]>("/carousels")
+        apiGet<any[]>("/plugin/photo-carousel")
             .then(data => {
                 if (Array.isArray(data)) {
                     setCarousels(data);

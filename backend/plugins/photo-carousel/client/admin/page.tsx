@@ -40,16 +40,16 @@ interface MediaItem {
 import { api } from "../../../../../frontend/src/lib/api";
 
 const carouselsApi = {
-    list: () => api<Carousel[]>('/carousels'),
-    create: (data: Partial<Carousel>) => api<Carousel>('/carousels', {
+    list: () => api<Carousel[]>('/plugin/photo-carousel'),
+    create: (data: Partial<Carousel>) => api<Carousel>('/plugin/photo-carousel', {
         method: 'POST',
         body: data
     }),
-    update: (id: string, data: Partial<Carousel>) => api<Carousel>(`/carousels/${id}`, {
+    update: (id: string, data: Partial<Carousel>) => api<Carousel>(`/plugin/photo-carousel/${id}`, {
         method: 'PUT',
         body: data
     }),
-    delete: (id: string) => api<void>(`/carousels/${id}`, { method: 'DELETE' })
+    delete: (id: string) => api<void>(`/plugin/photo-carousel/${id}`, { method: 'DELETE' })
 };
 
 export default function CarouselsPage() {
