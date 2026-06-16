@@ -13,10 +13,11 @@ const migration = require('./migration');
 const embedded = require('./embedded');
 const { authenticate } = require('../../middleware/auth');
 const { can } = require('../../middleware/permissions');
-const { registerAdminMenu } = require('../adminMenu');
 
 /**
- * Mount the DB-admin API on the given Express app and register its admin menu.
+ * Mount the DB-admin API on the given Express app. The admin menu item is a core entry in the
+ * frontend Sidebar (href /admin/db-migration, a native route) — not a dynamic plugin menu — so it
+ * is always available and never tied to plugin activation state.
  */
 function register(app) {
     if (!app) return;
@@ -37,15 +38,6 @@ function register(app) {
     router.post('/embedded/stop', embedded.stop);
 
     app.use('/api/v1/db-migration', router);
-
-    registerAdminMenu('db-migration', {
-        href: '/admin/plugin/db-migration',
-        label: 'DB Migration',
-        icon: 'fa-exchange',
-        order: 999,
-        cap: 'manage_options',
-        section: 'management'
-    });
 
     console.log('✅ DB Admin (core) loaded.');
 }

@@ -37,6 +37,7 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/settings/backups", label: "Backups", icon: "fa-box-archive", cap: "manage_options" },
     { href: "/admin/security", label: "Security", icon: "fa-lock", cap: "manage_options" },
     { href: "/admin/hooks", label: "Hooks Registry", icon: "fa-microscope", cap: "manage_options" },
+    { href: "/admin/db-migration", label: "DB Migration", icon: "fa-database", cap: "manage_options" },
 ];
 
 interface SidebarProps {
