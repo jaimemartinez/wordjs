@@ -46,7 +46,7 @@ export default function PostsPage() {
             {/* Premium Header */}
             <PageHeader
                 title={t('posts.title')}
-                subtitle="Manage your blog content"
+                subtitle={t('posts.subtitle')}
                 actions={
                     <Link href="/admin/posts/new">
                         <Button icon="fa-plus">{t('posts.new')}</Button>
