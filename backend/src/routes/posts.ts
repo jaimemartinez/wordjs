@@ -110,7 +110,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     };
 
     // Determine which statuses to show
-    let includeStatuses = null;
+    let includeStatuses: string[] | null = null;
     if (req.user) {
         // Logged in users can see their own drafts
         if (status === 'any') {

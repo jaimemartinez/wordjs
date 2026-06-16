@@ -345,7 +345,7 @@ describe('Crash Guard', () => {
     });
 
     it('should clean up after successful load', () => {
-        const state = { loading: 'my-plugin' };
+        const state: { loading: string | null } = { loading: 'my-plugin' };
 
         // Simulate successful load
         state.loading = null;

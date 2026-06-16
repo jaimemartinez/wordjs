@@ -152,8 +152,8 @@ class User {
     }
 
     static async update(id, data) {
-        const updates = [];
-        const values = [];
+        const updates: string[] = [];
+        const values: any[] = [];
 
         if (data.email) { updates.push('user_email = ?'); values.push(data.email); }
         if (data.displayName) { updates.push('display_name = ?'); values.push(data.displayName); }
@@ -193,8 +193,8 @@ class User {
         const { role, search, limit = 10, offset = 0 } = args;
 
         let sql = 'SELECT u.* FROM users u';
-        const params = [];
-        const where = [];
+        const params: any[] = [];
+        const where: string[] = [];
 
         if (role) {
             sql += ' JOIN user_meta um ON u.id = um.user_id';
@@ -234,12 +234,13 @@ class User {
 
     async loadMeta() {
         const rows = await dbAsync.all('SELECT meta_key, meta_value FROM user_meta WHERE user_id = ?', [this.id]);
-        this.meta = {};
+        const meta: { [key: string]: any } = {};
         rows.forEach(row => {
-            this.meta[row.meta_key] = row.meta_value;
+            meta[row.meta_key] = row.meta_value;
         });
+        this.meta = meta;
 
-        if (this.meta.role) this.role = this.meta.role;
+        if (meta.role) this.role = meta.role;
     }
 
     static async getMeta(userId, key) {
@@ -269,7 +270,7 @@ class User {
         // AND legacy backend compatibility (snake_case)
         const { getRoles } = require('../core/roles');
         const roles = getRoles();
-        const roleObj = roles[this.role];
+        const roleObj = this.role ? roles[this.role] : undefined;
 
         return {
             id: this.id,

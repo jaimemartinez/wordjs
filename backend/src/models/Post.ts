@@ -393,8 +393,8 @@ class Post {
         } = options;
 
         let sql = 'SELECT p.* FROM posts p';
-        const conditions = [];
-        const params = [];
+        const conditions: string[] = [];
+        const params: any[] = [];
 
         // Meta query join
         if (metaKey) {
@@ -480,8 +480,8 @@ class Post {
         const { type = 'post', status, author, search } = options;
 
         let sql = 'SELECT COUNT(*) as count FROM posts';
-        const conditions = [];
-        const params = [];
+        const conditions: string[] = [];
+        const params: any[] = [];
 
         if (type) {
             conditions.push('post_type = ?');
@@ -520,8 +520,8 @@ class Post {
         const post = await Post.findById(id);
         if (!post) throw new Error('Post not found');
 
-        const updates = [];
-        const values = [];
+        const updates: string[] = [];
+        const values: any[] = [];
 
         if (data.title !== undefined) {
             updates.push('post_title = ?');

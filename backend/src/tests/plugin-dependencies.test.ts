@@ -60,7 +60,7 @@ function semverRangesIntersect(range1, range2) {
         }
 
         // Fallback: test common versions
-        const testVersions = [];
+        const testVersions: string[] = [];
         for (let major = 0; major <= 30; major++) {
             for (let minor = 0; minor <= 20; minor += 5) {
                 testVersions.push(`${major}.${minor}.0`);
