@@ -25,7 +25,7 @@ export default function VideoCarousel() {
 
     const loadVideos = async () => {
         try {
-            const res = await fetch("/api/v1/videos");
+            const res = await fetch("/api/v1/plugin/video-gallery");
             if (res.ok) {
                 const data = await res.json();
                 setVideos(data);

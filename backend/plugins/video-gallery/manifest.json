@@ -4,6 +4,7 @@
     "version": "1.0.0",
     "description": "Manage and display YouTube video carousels",
     "author": "WordJS",
+    "isolated": true,
     "backend": {
         "entry": "index.js"
     },
