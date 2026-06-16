@@ -1,6 +1,8 @@
 /**
- * WordJS - Legacy SQLite Driver (In-Memory + File Flush)
- * Uses sql.js (WASM)
+ * WordJS - Legacy SQLite Driver (In-Memory + File Flush)  ☂ PURE-JS / WASM FALLBACK
+ * Uses sql.js (WASM) — no native build required, but slower than 'sqlite-native' (better-sqlite3).
+ * Not the default: the DB manager selects this automatically only when the native SQLite driver
+ * can't load. It reads/writes the same SQLite file format, so the fallback is transparent.
  */
 const initSqlJs = require('sql.js');
 const path = require('path');

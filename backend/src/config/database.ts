@@ -8,13 +8,15 @@ const path = require('path');
 
 // 1. Load the Configured Driver
 // 1. Driver State
-let driverName = config.dbDriver || 'sqlite-legacy';
+// Canonical SQLite driver is 'sqlite-native' (better-sqlite3). 'sqlite-legacy' (sql.js / pure-JS
+// WASM) is the automatic fallback when the native binary isn't available — it reads the same file.
+let driverName = config.dbDriver || 'sqlite-native';
 let driver: any = null;
 let driverAsync: any = null; // New Async Driver
 
 // Helper to load driver dynamically
 function loadDriver(overrideName: string | null = null) {
-  const name = overrideName || config.dbDriver || 'sqlite-legacy';
+  const name = overrideName || config.dbDriver || 'sqlite-native';
   driverName = name; // Update global state
 
   try {
@@ -44,11 +46,16 @@ function loadDriver(overrideName: string | null = null) {
 
   } catch (e) {
     console.error(`❌ Failed to load driver '${name}':`, e.message);
-    // Only fallback if we weren't forcing a specific valid driver test
-    if (!overrideName) {
-      console.warn(`⚠️  Falling back to 'sqlite-legacy'`);
+    // SQLite is always recoverable: 'sqlite-native' (better-sqlite3) needs a native binary that may
+    // be missing, while 'sqlite-legacy' (sql.js / pure-JS WASM) reads the SAME file format. Fall back
+    // to it whenever ANY sqlite driver fails (even an explicit one) or on the default path. A failed
+    // NON-sqlite override (e.g. an explicit 'postgres') is NOT silently downgraded to SQLite.
+    const recoverable = (!overrideName || /^sqlite/.test(name)) && name !== 'sqlite-legacy';
+    if (recoverable) {
+      console.warn(`⚠️  DB Manager: '${name}' unavailable — falling back to pure-JS 'sqlite-legacy'.`);
       driver = require('../drivers/sqlite-legacy');
       driverName = 'sqlite-legacy';
+      driverAsync = null;
     } else {
       throw e;
     }
@@ -65,13 +72,24 @@ const init = async (options: any = {}) => {
     loadDriver(options.driver);
   }
 
-  // Auto-Start Embedded Core DB if configured
-  if (driverName === 'postgres' && config.db.port == 5433) {
-    try {
-      const embedded = require('../core/embedded-db');
-      await embedded.startServer();
-    } catch (e) {
-      console.warn('⚠️  Could not auto-start embedded postgres:', e.message);
+  // Optionally start the EMBEDDED PostgreSQL server. This is OPT-IN: the 'postgres' driver connects
+  // to an EXTERNAL Postgres (the pg client) by default and does NOT bundle/start a server. Set
+  // db.embedded:true to run the embedded server (a heavyweight dev/managed convenience that spawns a
+  // PG process via the OPTIONAL 'embedded-postgres' dep). The old db.port==5433 heuristic still works
+  // but is deprecated in favor of the explicit flag.
+  if (driverName === 'postgres' && config.db) {
+    const wantEmbedded = config.db.embedded === true;
+    const legacyPortTrigger = !wantEmbedded && config.db.port == 5433;
+    if (legacyPortTrigger) {
+      console.warn('⚠️  DB Manager: starting embedded Postgres because db.port==5433 (deprecated). Set db.embedded:true to opt in explicitly.');
+    }
+    if (wantEmbedded || legacyPortTrigger) {
+      try {
+        const embedded = require('../core/embedded-db');
+        await embedded.startServer();
+      } catch (e) {
+        console.warn('⚠️  Could not auto-start embedded postgres:', e.message);
+      }
     }
   }
 

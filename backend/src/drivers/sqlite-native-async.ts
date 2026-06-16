@@ -1,6 +1,8 @@
 /**
- * WordJS - SQLite Native Async Driver
- * Wrapper around better-sqlite3 to provide an Async Interface
+ * WordJS - SQLite Native Async Driver  ★ CANONICAL SQLite driver
+ * Wrapper around better-sqlite3 (native, fast) implementing the async DatabaseDriverInterface.
+ * This is the default SQLite engine. If its native binary can't load, the DB manager falls back
+ * to the pure-JS 'sqlite-legacy' (sql.js) driver, which reads the same file format.
  */
 
 const DatabaseDriverInterface = require('./interface');

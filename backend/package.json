@@ -37,7 +37,6 @@
     "cors": "^2.8.5",
     "dnsbl": "^4.0.2",
     "dotenv": "^16.4.5",
-    "embedded-postgres": "^18.1.0-beta.15",
     "express": "^4.21.0",
     "express-rate-limit": "^8.2.1",
     "file-type": "^16.5.4",
@@ -62,6 +61,10 @@
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1",
     "uuid": "^10.0.0"
+  },
+  "optionalDependencies": {
+    "//": "Embedded Postgres is OPT-IN (db.embedded:true). It spawns a PG server process + native binaries; kept optional so a normal install (SQLite or external Postgres) never depends on it and never fails if it can't build.",
+    "embedded-postgres": "^18.1.0-beta.15"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
