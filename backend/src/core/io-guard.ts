@@ -5,7 +5,9 @@
 
 const fs = require('fs');
 const path = require('path');
-const { getCurrentPlugin } = require('./plugin-context');
+// Use the EFFECTIVE plugin (context OR call stack), not ALS-only, so this global-fs backstop
+// also applies to detached plugin code that reaches the real fs.
+const { getEffectivePlugin } = require('./plugin-context');
 
 const ORIGINALS = {
     // Write Ops
@@ -43,7 +45,7 @@ const ROOT_DIR = path.resolve(__dirname, '../../');
  * Check if a path is safe to access
  */
 function isPathSafe(targetPath, isWrite = false) {
-    const pluginSlug = getCurrentPlugin();
+    const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return true; // Core code is trusted
 
     // Normalize Windows extended-length / UNC prefixes (\\?\C:\... or \\?\UNC\...) that
@@ -72,6 +74,13 @@ function isPathSafe(targetPath, isWrite = false) {
     // Block files by name
     if (BLOCKED_FILES.includes(filename)) {
         console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access sensitive file: ${resolved}`);
+        return false;
+    }
+
+    // SECURITY: a plugin must NOT rewrite any manifest.json at runtime — permissions are read
+    // live from it, so a self-rewrite would be a permission-escalation primitive. Block all writes.
+    if (isWrite && filename === 'manifest.json') {
+        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to write a manifest.json: ${resolved}`);
         return false;
     }
 
