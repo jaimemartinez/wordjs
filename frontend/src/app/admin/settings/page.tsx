@@ -129,7 +129,7 @@ export default function SettingsPage() {
                                         <div className="h-32 w-32 bg-white rounded-2xl shadow-inner border-2 border-dashed border-gray-200 flex items-center justify-center p-2 relative overflow-hidden group-hover:border-blue-400 transition-colors">
                                             <img
                                                 src={settings.site_logo}
-                                                alt="Site Logo"
+                                                alt={t('settings.site.logo')}
                                                 className="max-h-full max-w-full object-contain"
                                             />
                                             <button
@@ -143,7 +143,7 @@ export default function SettingsPage() {
                                     ) : (
                                         <div className="h-32 w-32 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-blue-400 group-hover:bg-blue-50/30 transition-all">
                                             <i className="fa-solid fa-image text-3xl mb-2"></i>
-                                            <span className="text-[10px] uppercase font-bold tracking-widest">No Logo</span>
+                                            <span className="text-[10px] uppercase font-bold tracking-widest">{t('settings.no.logo')}</span>
                                         </div>
                                     )}
                                 </div>
@@ -168,7 +168,7 @@ export default function SettingsPage() {
                                         <div className="h-20 w-20 bg-white rounded-2xl shadow-inner border-2 border-dashed border-gray-200 flex items-center justify-center p-2 relative overflow-hidden group-hover:border-purple-400 transition-colors">
                                             <img
                                                 src={settings.site_icon}
-                                                alt="Site Icon"
+                                                alt={t('settings.site.icon')}
                                                 className="max-h-full max-w-full object-contain"
                                             />
                                             <button
@@ -182,7 +182,7 @@ export default function SettingsPage() {
                                     ) : (
                                         <div className="h-20 w-20 bg-gray-50 rounded-2xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 group-hover:border-purple-400 group-hover:bg-purple-50/30 transition-all">
                                             <i className="fa-solid fa-gem text-xl mb-1"></i>
-                                            <span className="text-[8px] uppercase font-bold tracking-widest text-center">No Icon</span>
+                                            <span className="text-[8px] uppercase font-bold tracking-widest text-center">{t('settings.no.icon')}</span>
                                         </div>
                                     )}
                                 </div>
@@ -203,7 +203,7 @@ export default function SettingsPage() {
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div className="space-y-2">
                                     <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                                        Site Title
+                                        {t('settings.site.title')}
                                     </label>
                                     <div className="relative group">
                                         <i className="fa-solid fa-signature absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
@@ -212,14 +212,14 @@ export default function SettingsPage() {
                                             value={settings.blogname}
                                             onChange={(e) => setSettings({ ...settings, blogname: e.target.value })}
                                             className="w-full pl-12 pr-4 py-3.5 bg-gray-50/50 border border-gray-200 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none"
-                                            placeholder="Your Site Name"
+                                            placeholder={t('settings.site.title.placeholder')}
                                         />
                                     </div>
                                 </div>
 
                                 <div className="space-y-2">
                                     <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                                        Tagline
+                                        {t('settings.tagline')}
                                     </label>
                                     <div className="relative group">
                                         <i className="fa-solid fa-quote-left absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
@@ -228,14 +228,14 @@ export default function SettingsPage() {
                                             value={settings.blogdescription}
                                             onChange={(e) => setSettings({ ...settings, blogdescription: e.target.value })}
                                             className="w-full pl-12 pr-4 py-3.5 bg-gray-50/50 border border-gray-200 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none"
-                                            placeholder="A brief catchphrase"
+                                            placeholder={t('settings.tagline.placeholder')}
                                         />
                                     </div>
                                 </div>
 
                                 <div className="space-y-2 md:col-span-2">
                                     <label className="text-sm font-bold text-gray-700 flex items-center gap-2">
-                                        Admin Email
+                                        {t('settings.admin.email')}
                                     </label>
                                     <div className="relative group">
                                         <i className="fa-solid fa-envelope absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 group-focus-within:text-blue-500 transition-colors"></i>
@@ -247,7 +247,7 @@ export default function SettingsPage() {
                                             placeholder="admin@example.com"
                                         />
                                     </div>
-                                    <p className="text-xs text-gray-400 mt-1">This address is used for admin purposes. If you change this we will send you an email at your new address to confirm it. The new address will not become active until confirmed.</p>
+                                    <p className="text-xs text-gray-400 mt-1">{t('settings.admin.email.help')}</p>
                                 </div>
                             </div>
                         </div>
@@ -257,25 +257,25 @@ export default function SettingsPage() {
                     <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
                             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                                <i className="fa-solid fa-book-open text-purple-500"></i> Reading & Discussion
+                                <i className="fa-solid fa-book-open text-purple-500"></i> {t('settings.reading.discussion')}
                             </h2>
                         </div>
                         <div className="p-8 space-y-8">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                                 <div className="space-y-2">
                                     <ModernSelect
-                                        label="Homepage Display"
+                                        label={t('settings.homepage.display')}
                                         value={settings.homepage_id}
                                         onChange={(e) => setSettings({ ...settings, homepage_id: e.target.value })}
                                         options={[
-                                            { value: "", label: "Default (Latest Posts)" },
+                                            { value: "", label: t('settings.homepage.default') },
                                             ...pages.map((page) => ({ value: page.id, label: page.title }))
                                         ]}
                                     />
                                 </div>
 
                                 <div className="space-y-2">
-                                    <label className="text-sm font-bold text-gray-700">Posts per Page</label>
+                                    <label className="text-sm font-bold text-gray-700">{t('settings.posts.per.page')}</label>
                                     <input
                                         type="number"
                                         value={settings.posts_per_page}
@@ -292,8 +292,8 @@ export default function SettingsPage() {
                                             <i className="fa-solid fa-user-plus text-xl"></i>
                                         </div>
                                         <div>
-                                            <h4 className="text-sm font-bold text-gray-900">Membership</h4>
-                                            <p className="text-xs text-gray-500 mt-0.5">Anyone can register as a new user on the site.</p>
+                                            <h4 className="text-sm font-bold text-gray-900">{t('settings.membership')}</h4>
+                                            <p className="text-xs text-gray-500 mt-0.5">{t('settings.membership.help')}</p>
                                         </div>
                                     </div>
                                     <button
@@ -310,7 +310,7 @@ export default function SettingsPage() {
                                 {settings.users_can_register === "1" && (
                                     <div className="pl-16 pt-2 animate-in fade-in slide-in-from-top-2 duration-300">
                                         <ModernSelect
-                                            label="New User Default Role"
+                                            label={t('settings.new.user.role')}
                                             value={settings.default_role}
                                             onChange={(e) => setSettings({ ...settings, default_role: e.target.value })}
                                             options={Object.entries(roles).map(([slug, role]) => ({
@@ -328,8 +328,8 @@ export default function SettingsPage() {
                                         <i className="fa-solid fa-comments text-xl"></i>
                                     </div>
                                     <div>
-                                        <h4 className="text-sm font-bold text-gray-900">Enable Comments Globally</h4>
-                                        <p className="text-xs text-gray-500 mt-0.5">Control if visitors can leave comments on your content.</p>
+                                        <h4 className="text-sm font-bold text-gray-900">{t('settings.comments.enable')}</h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">{t('settings.comments.enable.help')}</p>
                                     </div>
                                 </div>
                                 <button
@@ -349,8 +349,8 @@ export default function SettingsPage() {
                                         <i className="fa-solid fa-user-lock text-xl"></i>
                                     </div>
                                     <div>
-                                        <h4 className="text-sm font-bold text-gray-900">Registered Comments</h4>
-                                        <p className="text-xs text-gray-500 mt-0.5">Users must be registered and logged in to comment.</p>
+                                        <h4 className="text-sm font-bold text-gray-900">{t('settings.comments.registered')}</h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">{t('settings.comments.registered.help')}</p>
                                     </div>
                                 </div>
                                 <button
@@ -369,7 +369,7 @@ export default function SettingsPage() {
                     <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
                             <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
-                                <i className="fa-solid fa-bolt text-amber-500"></i> Performance & Cache
+                                <i className="fa-solid fa-bolt text-amber-500"></i> {t('settings.performance.cache')}
                             </h2>
                         </div>
                         <div className="p-8 space-y-8">
@@ -379,8 +379,8 @@ export default function SettingsPage() {
                                         <i className="fa-solid fa-server text-xl"></i>
                                     </div>
                                     <div>
-                                        <h4 className="text-sm font-bold text-gray-900">Redis Object Cache</h4>
-                                        <p className="text-xs text-gray-500 mt-0.5">Use Redis to cache database objects. This significantly improves site speed.</p>
+                                        <h4 className="text-sm font-bold text-gray-900">{t('settings.redis.cache')}</h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">{t('settings.redis.cache.help')}</p>
                                     </div>
                                 </div>
                                 <button
@@ -398,7 +398,7 @@ export default function SettingsPage() {
                                 <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
                                     <i className="fa-solid fa-circle-info text-emerald-500 mt-0.5"></i>
                                     <p className="text-xs text-emerald-700 leading-relaxed">
-                                        <strong>Pro Tip:</strong> Redis is active. If you don't have a Redis server installed on your host, the system will automatically fall back to the database without showing errors.
+                                        <strong>{t('settings.redis.protip.label')}</strong> {t('settings.redis.protip')}
                                     </p>
                                 </div>
                             )}
@@ -410,7 +410,7 @@ export default function SettingsPage() {
                     <div className="flex items-center justify-end gap-4 pt-4 pb-12">
                         {saved && (
                             <span className="text-sm font-bold text-emerald-600 flex items-center gap-2 animate-bounce">
-                                <i className="fa-solid fa-circle-check"></i> Changes saved successfully!
+                                <i className="fa-solid fa-circle-check"></i> {t('settings.saved.success')}
                             </span>
                         )}
                         <button
@@ -423,7 +423,7 @@ export default function SettingsPage() {
                             ) : (
                                 <i className="fa-solid fa-floppy-disk"></i>
                             )}
-                            {saving ? "Updating..." : "Save Settings"}
+                            {saving ? t('settings.saving') : t('settings.save')}
                         </button>
                     </div>
                 </form>

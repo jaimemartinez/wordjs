@@ -7,6 +7,7 @@ import { useState, useEffect } from "react";
 import MediaPickerModal from "./MediaPickerModal";
 import ModernSelect from "./ModernSelect";
 import { categoriesApi, Category, apiGet } from "@/lib/api";
+import { t as translate, getStoredLanguage } from "@/lib/i18n";
 
 
 // Plugin Puck Components
@@ -693,14 +694,15 @@ RichTextEditor.displayName = 'RichTextEditor';
 
 const baseConfig = {
     categories: {
-        layout: "Layout",
-        content: "Content",
-        'Card Gallery': "Card Gallery",
-        'Video Gallery': "Video Gallery",
-        'Photo Carousel': "Photo Carousel",
+        layout: translate('editor.category.layout', getStoredLanguage()),
+        content: translate('editor.category.content', getStoredLanguage()),
+        'Card Gallery': translate('editor.category.cardGallery', getStoredLanguage()),
+        'Video Gallery': translate('editor.category.videoGallery', getStoredLanguage()),
+        'Photo Carousel': translate('editor.category.photoCarousel', getStoredLanguage()),
     },
     components: {
         Heading: {
+            label: translate('editor.block.heading', getStoredLanguage()),
             category: "content",
             fields: {
                 title: { type: "text" },
@@ -750,6 +752,7 @@ const baseConfig = {
             },
         },
         Text: {
+            label: translate('editor.block.text', getStoredLanguage()),
             category: "content",
             fields: {
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
@@ -782,6 +785,7 @@ const baseConfig = {
             ),
         },
         Image: {
+            label: translate('editor.block.image', getStoredLanguage()),
             category: "content",
             fields: {
                 src: {
@@ -794,14 +798,14 @@ const baseConfig = {
                                     className="p-2 border rounded text-sm w-full"
                                     value={value || ""}
                                     onChange={(e) => onChange(e.target.value)}
-                                    placeholder="Image URL"
+                                    placeholder={translate('editor.field.imageUrl', getStoredLanguage())}
                                 />
                                 <button
                                     type="button"
                                     className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-sm text-gray-700 border"
                                     onClick={() => setIsModalOpen(true)}
                                 >
-                                    Select from Media
+                                    {translate('editor.field.selectFromMedia', getStoredLanguage())}
                                 </button>
                                 <MediaPickerModal
                                     isOpen={isModalOpen}
@@ -857,6 +861,7 @@ const baseConfig = {
             )
         },
         Columns: {
+            label: translate('editor.block.columns', getStoredLanguage()),
             category: "layout",
             fields: {
                 distribution: {
@@ -1015,6 +1020,7 @@ const baseConfig = {
             },
         },
         Card: {
+            label: translate('editor.block.card', getStoredLanguage()),
             category: "content",
             fields: {
                 title: { type: "text" },
@@ -1091,6 +1097,7 @@ const baseConfig = {
             }
         },
         Divider: {
+            label: translate('editor.block.divider', getStoredLanguage()),
             category: "layout",
             fields: {
                 type: {
@@ -1121,6 +1128,7 @@ const baseConfig = {
             }
         },
         Button: {
+            label: translate('editor.block.button', getStoredLanguage()),
             category: "content",
             fields: {
                 label: { type: "text" },
@@ -1190,6 +1198,7 @@ const baseConfig = {
             }
         },
         Spacer: {
+            label: translate('editor.block.spacer', getStoredLanguage()),
             category: "layout",
             fields: {
                 css: {
@@ -1221,6 +1230,7 @@ const baseConfig = {
         // ==========================================
 
         Section: {
+            label: translate('editor.block.section', getStoredLanguage()),
             category: "layout",
             fields: {
                 children: { type: "slot" },
@@ -1265,6 +1275,7 @@ const baseConfig = {
         },
 
         Grid: {
+            label: translate('editor.block.grid', getStoredLanguage()),
             category: "layout",
             fields: {
                 children: { type: "slot" },
@@ -1309,6 +1320,7 @@ const baseConfig = {
         },
 
         FlexRow: {
+            label: translate('editor.block.flexRow', getStoredLanguage()),
             category: "layout",
             fields: {
                 children: { type: "slot" },
@@ -1376,6 +1388,7 @@ const baseConfig = {
         },
 
         Accordion: {
+            label: translate('editor.block.accordion', getStoredLanguage()),
             category: "layout",
             fields: {
                 items: {
@@ -1440,6 +1453,7 @@ const baseConfig = {
         },
 
         Tabs: {
+            label: translate('editor.block.tabs', getStoredLanguage()),
             category: "layout",
             fields: {
                 tabs: {
@@ -1504,6 +1518,7 @@ const baseConfig = {
         // ==========================================
 
         VideoEmbed: {
+            label: translate('editor.block.videoEmbed', getStoredLanguage()),
             category: "content",
             fields: {
                 url: { type: "text", label: "Video URL (YouTube, Vimeo, or direct)" },
@@ -1588,6 +1603,7 @@ const baseConfig = {
         },
 
         AudioPlayer: {
+            label: translate('editor.block.audioPlayer', getStoredLanguage()),
             category: "content",
             fields: {
                 src: { type: "text", label: "Audio URL" },
@@ -1627,6 +1643,7 @@ const baseConfig = {
         // ==========================================
 
         PricingTable: {
+            label: translate('editor.block.pricingTable', getStoredLanguage()),
             category: "content",
             fields: {
                 plans: {
@@ -1700,6 +1717,7 @@ const baseConfig = {
         },
 
         Testimonial: {
+            label: translate('editor.block.testimonial', getStoredLanguage()),
             category: "content",
             fields: {
                 quote: { type: "textarea", label: "Quote" },
@@ -1737,6 +1755,7 @@ const baseConfig = {
         },
 
         CTABanner: {
+            label: translate('editor.block.ctaBanner', getStoredLanguage()),
             category: "content",
             fields: {
                 title: { type: "text", label: "Title" },
@@ -1806,6 +1825,7 @@ const baseConfig = {
         // ==========================================
 
         PostsGrid: {
+            label: translate('editor.block.postsGrid', getStoredLanguage()),
             category: "content",
             fields: {
                 count: { type: "number", label: "Number of Posts", min: 1, max: 12 },
@@ -1860,6 +1880,7 @@ const baseConfig = {
         },
 
         CategoryPosts: {
+            label: translate('editor.block.categoryPosts', getStoredLanguage()),
             category: "content",
             fields: {
                 categorySlug: { type: "text", label: "Category Slug" },
@@ -1923,6 +1944,7 @@ const baseConfig = {
         },
 
         SearchBar: {
+            label: translate('editor.block.searchBar', getStoredLanguage()),
             category: "content",
             fields: {
                 placeholder: { type: "text", label: "Placeholder Text" },
