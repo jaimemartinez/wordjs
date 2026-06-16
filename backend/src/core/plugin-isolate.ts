@@ -13,6 +13,7 @@ const path = require('path');
 const { createPluginApi } = require('./plugin-api');
 const { runWithContext } = require('./plugin-context');
 const hooks = require('./hooks');
+const { addShortcode, removeShortcode } = require('./shortcodes');
 
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
@@ -53,6 +54,14 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             const id = ++invokeId;
             pendingRoute.set(id, { res, rej });
             worker.postMessage({ kind: 'invoke-route', id, routeId, req });
+        });
+
+        const pendingShortcode = new Map<number, any>();
+        const registeredShortcodes: string[] = []; // tags to remove when the isolate exits
+        const invokeShortcode = (scId: string, payload: any) => new Promise<any>((res, rej) => {
+            const id = ++invokeId;
+            pendingShortcode.set(id, { res, rej });
+            worker.postMessage({ kind: 'invoke-shortcode', id, scId, ...payload });
         });
 
         worker.on('message', async (msg: any) => {
@@ -107,12 +116,24 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'route-reply') {
                 const p = pendingRoute.get(msg.id);
                 if (p) { pendingRoute.delete(msg.id); msg.ok ? p.res(msg.response) : p.rej(new Error(msg.error)); }
+            } else if (msg.kind === 'register-shortcode') {
+                // Register a shortcode shim that forwards {attrs,content,tag} to the isolate and
+                // resolves its HTML asynchronously (works with doShortcodeAsync).
+                const shim = (attrs: any, content: any, tag: any) =>
+                    invokeShortcode(msg.scId, { attrs, content, tag });
+                registeredShortcodes.push(msg.tag);
+                runWithContext(slug, () => addShortcode(msg.tag, shim));
+            } else if (msg.kind === 'shortcode-reply') {
+                const p = pendingShortcode.get(msg.id);
+                if (p) { pendingShortcode.delete(msg.id); msg.ok ? p.res(msg.value) : p.rej(new Error(msg.error)); }
             }
         });
 
         worker.on('error', (err: any) => { console.error(`[Isolate ${slug}] worker error:`, err.message); reject(err); });
         worker.on('exit', (code: number) => {
             isolates.delete(slug);
+            // Drop the plugin's shortcodes so a dead isolate isn't RPC'd on the next render.
+            for (const tag of registeredShortcodes) { try { removeShortcode(tag); } catch { /* */ } }
             if (code !== 0) console.warn(`[Isolate ${slug}] worker exited with code ${code}`);
         });
 
