@@ -10,6 +10,7 @@ import { RichTextEditor } from "./puckConfig";
 import RevisionsSidebar from "./RevisionsSidebar";
 import { revisionsApi, Revision } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 interface PuckEditorProps {
     initialData?: Data;
@@ -245,6 +246,7 @@ const OverlayBlocker = () => {
 
 // Floating Properties Panel with Premium Design
 const FloatingPropertiesPanel = () => {
+    const { t } = useI18n();
     const [panelState, setPanelState] = useState({ x: 0, y: 0, minimized: true });
     const panelRef = useRef<HTMLDivElement>(null);
     const dragRef = useRef<{ startX: number, startY: number, initialX: number, initialY: number } | null>(null);
@@ -296,8 +298,8 @@ const FloatingPropertiesPanel = () => {
                             <i className="fa-solid fa-sliders text-sm"></i>
                         </div>
                         <div>
-                            <h3 className="text-sm font-black text-gray-800 italic tracking-tight">Properties</h3>
-                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">Editor Controls</p>
+                            <h3 className="text-sm font-black text-gray-800 italic tracking-tight">{t('editor.properties')}</h3>
+                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">{t('editor.editorControls')}</p>
                         </div>
                     </div>
                     <button
@@ -333,6 +335,7 @@ export default function PuckEditor({
     config: passedConfig,
     pageId
 }: PuckEditorProps) {
+    const { t } = useI18n();
     const activeConfig = passedConfig || puckConfig;
 
     const [data, setData] = useState<Data>(() => {
@@ -491,9 +494,9 @@ export default function PuckEditor({
                         value={status}
                         onChange={(e) => onStatusChange(e.target.value)}
                         options={[
-                            { value: "draft", label: "Draft" },
-                            { value: "publish", label: "Publish" },
-                            { value: "pending", label: "Pending" },
+                            { value: "draft", label: t('editor.status.draft') },
+                            { value: "publish", label: t('editor.status.publish') },
+                            { value: "pending", label: t('editor.status.pending') },
                         ]}
                         className="!py-1.5 !px-3 !bg-white !border-gray-200 !rounded-md !text-sm font-normal min-w-[100px]"
                     />
@@ -503,7 +506,7 @@ export default function PuckEditor({
                         type="button"
                         onClick={() => setShowRevisions(!showRevisions)}
                         className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showRevisions ? 'bg-amber-500 text-white shadow-lg shadow-amber-200 scale-105' : 'bg-gray-50/50 text-gray-400 hover:text-amber-500 hover:bg-gray-100 border border-gray-100'}`}
-                        title="View Revision History"
+                        title={t('editor.revisionHistory')}
                     >
                         <i className="fa-solid fa-clock-rotate-left"></i>
                     </button>
@@ -514,7 +517,7 @@ export default function PuckEditor({
                         onClick={onCancel}
                         className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 transition-colors"
                     >
-                        Cancel
+                        {t('editor.cancel')}
                     </button>
                 )}
                 {onSave && (
@@ -526,10 +529,10 @@ export default function PuckEditor({
                             ? 'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white'
                             : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                             }`}
-                        title={hasChanges ? 'Save changes' : 'No changes to save'}
+                        title={hasChanges ? t('editor.saveChanges') : t('editor.noChangesToSave')}
                     >
                         <i className="fa-solid fa-floppy-disk text-xs"></i>
-                        {saving ? "Saving..." : hasChanges ? "Save" : "Saved"}
+                        {saving ? t('editor.saving') : hasChanges ? t('editor.save') : t('editor.saved')}
                     </button>
                 )}
             </div>
@@ -696,8 +699,8 @@ export default function PuckEditor({
                                         <i className="fa-solid fa-pen-nib text-lg"></i>
                                     </div>
                                     <div className="hidden md:block">
-                                        <h1 className="font-black italic text-xl tracking-tighter leading-none">Editor</h1>
-                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Visual Builder</span>
+                                        <h1 className="font-black italic text-xl tracking-tighter leading-none">{t('editor.title')}</h1>
+                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{t('editor.visualBuilder')}</span>
                                     </div>
                                 </div>
 
@@ -708,14 +711,14 @@ export default function PuckEditor({
                                     <button
                                         onClick={() => setShowSidebar(!showSidebar)}
                                         className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showSidebar ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-                                        title={showSidebar ? "Hide Sidebar" : "Show Sidebar"}
+                                        title={showSidebar ? t('editor.hideSidebar') : t('editor.showSidebar')}
                                     >
                                         <i className={`fa-solid fa-table-columns`}></i>
                                     </button>
                                     <button
                                         onClick={() => setShowProperties(!showProperties)}
                                         className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showProperties ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-                                        title={showProperties ? "Hide Properties" : "Show Properties"}
+                                        title={showProperties ? t('editor.hideProperties') : t('editor.showProperties')}
                                     >
                                         <i className={`fa-solid fa-sliders`}></i>
                                     </button>
@@ -747,9 +750,9 @@ export default function PuckEditor({
                                             value={status}
                                             onChange={(e) => onStatusChange(e.target.value)}
                                             options={[
-                                                { value: "draft", label: "Draft" },
-                                                { value: "publish", label: "Publish" },
-                                                { value: "pending", label: "Pending" },
+                                                { value: "draft", label: t('editor.status.draft') },
+                                                { value: "publish", label: t('editor.status.publish') },
+                                                { value: "pending", label: t('editor.status.pending') },
                                             ]}
                                             className="!py-2.5 !px-4 !bg-gray-50 !border-gray-100 !rounded-xl !text-xs !font-bold !uppercase !tracking-wider min-w-[120px]"
                                         />
@@ -760,7 +763,7 @@ export default function PuckEditor({
                                     <button
                                         onClick={() => setShowRevisions(!showRevisions)}
                                         className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-300 ${showRevisions ? 'bg-amber-500 text-white shadow-lg shadow-amber-200 scale-105' : 'bg-gray-50/50 text-gray-400 hover:text-amber-500 hover:bg-gray-100 border border-gray-100'}`}
-                                        title="Revision History"
+                                        title={t('editor.revisionHistory')}
                                     >
                                         <i className="fa-solid fa-clock-rotate-left"></i>
                                     </button>
@@ -773,7 +776,7 @@ export default function PuckEditor({
                                             onClick={onCancel}
                                             className="px-6 py-3 rounded-xl text-gray-500 font-bold hover:bg-gray-50 hover:text-red-500 transition-colors text-xs uppercase tracking-widest"
                                         >
-                                            Cancel
+                                            {t('editor.cancel')}
                                         </button>
                                     )}
                                     {onSave && (
@@ -791,7 +794,7 @@ export default function PuckEditor({
                                             ) : (
                                                 <i className="fa-solid fa-floppy-disk"></i>
                                             )}
-                                            {saving ? "Saving..." : "Save Changes"}
+                                            {saving ? t('editor.saving') : t('editor.saveChanges')}
                                         </button>
                                     )}
                                 </div>
@@ -818,7 +821,7 @@ export default function PuckEditor({
                                         <div className="sticky top-0 bg-white z-10 py-3 -mt-2 mb-4 border-b border-gray-50">
                                             <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest flex items-center gap-2">
                                                 <i className="fa-solid fa-shapes text-blue-500"></i>
-                                                Components
+                                                {t('editor.panel.components')}
                                             </h3>
                                         </div>
                                         <div className="puck-components-wrapper">
@@ -845,7 +848,7 @@ export default function PuckEditor({
                                         <div className="sticky top-0 bg-gray-50/95 backdrop-blur-sm z-10 py-3 -mt-2 mb-4 border-b border-gray-100">
                                             <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest flex items-center gap-2">
                                                 <i className="fa-solid fa-list-tree text-indigo-500"></i>
-                                                Structure
+                                                {t('editor.panel.structure')}
                                             </h3>
                                         </div>
                                         <Puck.Outline />
