@@ -238,7 +238,7 @@ async function importSite(data, options: Record<string, any> = {}) {
         menus: { created: 0, skipped: 0 },
         users: { created: 0, skipped: 0, updated: 0 },
         custom_tables: { created: 0, rows: 0 },
-        errors: []
+        errors: [] as string[]
     };
 
     const idMap = {

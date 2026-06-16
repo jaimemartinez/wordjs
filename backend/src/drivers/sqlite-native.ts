@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const config = require('../config/app');
 
-let dbInstance = null;
+let dbInstance: any = null;
 
 function init(options: any = {}) {
     const dbPath = path.resolve(options.dbPath || config.dbPath);

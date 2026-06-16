@@ -1,7 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 
-let pgServer = null;
+let pgServer: any = null;
 
 const DATA_DIR = path.resolve('./data/postgres-embed/data');
 const PID_FILE = path.join(DATA_DIR, 'postmaster.pid');

@@ -19,7 +19,7 @@ const schedules = {
 };
 
 // Cron timer
-let cronTimer = null;
+let cronTimer: NodeJS.Timeout | null = null;
 
 /**
  * Register a cron schedule
@@ -163,7 +163,7 @@ async function runCron() {
     // Snapshot timestamps once so we don't iterate over reschedules created in this pass.
     const timestamps = Object.keys(events);
     // Collect reschedules and apply them AFTER the loop to avoid mutating while iterating.
-    const reschedules = [];
+    const reschedules: any[] = [];
 
     for (const timestamp of timestamps) {
         if (parseInt(timestamp) > now) continue;

@@ -157,8 +157,8 @@ class Term {
       FROM terms t
       JOIN term_taxonomy tt ON t.term_id = tt.term_id
     `;
-        const conditions = [];
-        const params = [];
+        const conditions: string[] = [];
+        const params: any[] = [];
 
         if (taxonomy) {
             if (Array.isArray(taxonomy)) {
@@ -232,8 +232,8 @@ class Term {
 
         // Update terms table
         if (data.name || data.slug) {
-            const updates = [];
-            const values = [];
+            const updates: string[] = [];
+            const values: any[] = [];
 
             if (data.name) {
                 updates.push('name = ?');
@@ -251,8 +251,8 @@ class Term {
 
         // Update term_taxonomy table
         if (data.description !== undefined || data.parent !== undefined) {
-            const updates = [];
-            const values = [];
+            const updates: string[] = [];
+            const values: any[] = [];
 
             if (data.description !== undefined) {
                 updates.push('description = ?');
@@ -301,8 +301,8 @@ class Term {
         const { taxonomy, hideEmpty = false } = options;
 
         let sql = 'SELECT COUNT(*) as count FROM term_taxonomy';
-        const conditions = [];
-        const params = [];
+        const conditions: string[] = [];
+        const params: any[] = [];
 
         if (taxonomy) {
             conditions.push('taxonomy = ?');

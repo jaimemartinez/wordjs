@@ -68,12 +68,12 @@ async function checkDependencyConflicts(slug, manifest) {
         return { compatible: true, conflicts: [] };
     }
 
-    const conflicts = [];
+    const conflicts: any[] = [];
     const activePlugins = await getActivePlugins();
     const plugins = scanPlugins();
 
     // Build map of all dependencies from active plugins
-    const activeDependencies = new Map(); // dep -> { range, pluginSlug }
+    const activeDependencies = new Map<string, { range: any; pluginSlug: any }>(); // dep -> { range, pluginSlug }
 
     for (const activeSlug of activePlugins) {
         if (activeSlug === slug) continue; // Skip self
@@ -104,7 +104,7 @@ async function checkDependencyConflicts(slug, manifest) {
     for (const [dep, newRange] of Object.entries(manifest.dependencies)) {
         if (!activeDependencies.has(dep)) continue;
 
-        const existing = activeDependencies.get(dep);
+        const existing = activeDependencies.get(dep)!;
         const existingRange = existing.range;
 
         // Check if ranges intersect (have at least one common version)
@@ -135,7 +135,7 @@ function semverRangesIntersect(range1, range2) {
     try {
         // Try to find a version that satisfies both ranges
         // We test common major versions to find intersection
-        const testVersions = [];
+        const testVersions: string[] = [];
 
         // Extract potential major versions from ranges
         const majors = new Set();
@@ -223,7 +223,7 @@ function installPluginDependencies(slug, manifest, pluginPath = null) {
     }
 
     const installed = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
-    const toInstall = [];
+    const toInstall: string[] = [];
 
     for (const [dep, version] of Object.entries(manifest.dependencies)) {
         if (!installed[dep]) {
@@ -282,7 +282,7 @@ async function prunePluginDependencies(slug, manifest) {
     }
 
     // 3. Check for unused dependencies
-    const toRemove = [];
+    const toRemove: string[] = [];
 
     for (const dep of Object.keys(manifest.dependencies)) {
         if (!usedDependencies.has(dep)) {
@@ -330,7 +330,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
     // config.trustedSystemPlugins (defaults to the first-party bundled plugins). Untrusted plugins
     // that declare system:admin fall through to the full scan (so their child_process/eval use is caught).
     if (hasDeclared('system', 'admin')) {
-        let trusted = [];
+        let trusted: string[] = [];
         try { trusted = require('../config/app').trustedSystemPlugins || []; } catch { /* ignore */ }
         if (trusted.includes(slug)) {
             console.log(`🛡️ Security: Trusted plugin '${slug}' granted SYSTEM access (AST scan skipped).`);
@@ -339,8 +339,8 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
         console.warn(`[Security] Plugin '${slug}' declares system:admin but is NOT in config.trustedSystemPlugins — running full AST scan (self-granted system access denied).`);
     }
 
-    function getFiles(dir) {
-        let results = [];
+    function getFiles(dir): string[] {
+        let results: string[] = [];
         if (!fs.existsSync(dir)) return results;
         const list = fs.readdirSync(dir);
         list.forEach(file => {
@@ -498,7 +498,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
         });
     }
 
-    const errors = [];
+    const errors: string[] = [];
     if (missingPermissions.size > 0) {
         errors.push(`Undeclared capabilities required by code:\n- ${Array.from(missingPermissions).join('\n- ')}`);
     }
@@ -561,7 +561,7 @@ function ensurePluginsDir() {
  */
 function scanPlugins() {
     ensurePluginsDir();
-    const plugins = [];
+    const plugins: Plugin[] = [];
 
     const entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true });
 
@@ -669,7 +669,7 @@ function fixMiddlewareOrder() {
     if (!app || !app._router || !app._router.stack) return;
 
     const stack = app._router.stack;
-    const errorHandlers = [];
+    const errorHandlers: any[] = [];
 
     // Find and remove error handlers (iterating backwards)
     for (let i = stack.length - 1; i >= 0; i--) {
