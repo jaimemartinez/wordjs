@@ -12,7 +12,10 @@ export default function CommentsPage() {
     const [loading, setLoading] = useState(true);
     const [activeTab, setActiveTab] = useState<Tab>('all');
     const [page, setPage] = useState(1);
+    const [hasMore, setHasMore] = useState(false);
     const { alert, confirm } = useModal();
+
+    const PER_PAGE = 20;
 
     // Actions
     const [processingId, setProcessingId] = useState<number | null>(null);
@@ -35,9 +38,11 @@ export default function CommentsPage() {
             const data = await commentsApi.list({
                 status: statusMap[activeTab],
                 page,
-                per_page: 20
+                per_page: PER_PAGE
             });
             setComments(data);
+            // A full page implies there may be more; a short page is the last one.
+            setHasMore(data.length === PER_PAGE);
         } catch (err) {
             console.error("Failed to load comments", err);
         } finally {
@@ -91,7 +96,7 @@ export default function CommentsPage() {
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
                 title="Comments"
-                subtitle={`${comments.length} comments`}
+                subtitle={`Page ${page}${hasMore ? '' : ' (last)'} · ${comments.length} on this page`}
             />
 
             {/* Premium Tabs */}
@@ -248,8 +253,9 @@ export default function CommentsPage() {
                     </button>
                     <span className="text-gray-600 text-sm">Page {page}</span>
                     <button
+                        disabled={!hasMore}
                         onClick={() => setPage(p => p + 1)}
-                        className="px-3 py-1 border rounded hover:bg-gray-50"
+                        className="px-3 py-1 border rounded hover:bg-gray-50 disabled:opacity-50"
                     >
                         Next
                     </button>

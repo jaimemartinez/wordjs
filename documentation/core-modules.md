@@ -4,7 +4,7 @@ This document details the internal core modules of WordJS that handle critical s
 
 ## 1. CrashGuard 🛡️
 
-**Location:** `backend/src/core/crash-guard.js`
+**Location:** `backend/src/core/crash-guard.ts`
 
 CrashGuard is a stability mechanism designed to prevent "Boot Loops" caused by faulty plugins.
 
@@ -18,7 +18,7 @@ CrashGuard is a stability mechanism designed to prevent "Boot Loops" caused by f
 
 ## 2. Embedded Database Manager 🐘
 
-**Location:** `backend/src/core/embedded-db.js`
+**Location:** `backend/src/core/embedded-db.ts`
 
 WordJS includes a zero-configuration PostgreSQL experience using `embedded-postgres`.
 
@@ -32,7 +32,7 @@ WordJS includes a zero-configuration PostgreSQL experience using `embedded-postg
 
 ## 3. Certificate Manager 🔒
 
-**Location:** `backend/src/core/cert-manager.js`
+**Location:** `backend/src/core/cert-manager.ts`
 
 Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 
@@ -47,7 +47,7 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 
 ## 4. Plugin Test Runner 🧪
 
-**Location:** `backend/src/core/plugin-test-runner.js`
+**Location:** `backend/src/core/plugin-test-runner.ts`
 
 Enforces quality control by running unit tests before enabling a plugin.
 
@@ -67,7 +67,7 @@ Enforces quality control by running unit tests before enabling a plugin.
 
 ## 5. Hook System & Live Registry 🪝
 
-**Location:** `backend/src/core/hooks.js`
+**Location:** `backend/src/core/hooks.ts`
 
 The central event bus that allows Core and Plugins to communicate through Actions and Filters.
 

@@ -1,6 +1,5 @@
 require('dotenv').config();
 const express = require('express');
-const httpProxy = require('http-proxy');
 const rateLimit = require('express-rate-limit');
 const morgan = require('morgan');
 const compression = require('compression');
@@ -14,6 +13,8 @@ require('winston-daily-rotate-file');
 
 const fs = require('fs');
 const path = require('path');
+
+const { createProxyServer, createUpstreamAgent } = require('./proxy-config');
 
 // --- LOGGER SETUP ---
 const logger = winston.createLogger({
@@ -53,7 +54,7 @@ try {
     if (fs.existsSync(configPath)) {
         config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         configSecret = config.gatewaySecret;
-        if (config.gatewayPort) configPort = parseInt(config.gatewayPort);
+        if (config.gatewayPort) configPort = parseInt(config.gatewayPort, 10);
         const internalPort = config.gatewayInternalPort || (configPort + 100);
         global.INTERNAL_PORT = internalPort;
 
@@ -76,6 +77,11 @@ try {
 
 const FINAL_PORT = configPort;
 const GATEWAY_SECRET = configSecret || 'secure-your-gateway-secret';
+if (!configSecret) {
+    // SECURITY: the public default secret lets anyone call authenticated gateway endpoints /
+    // register rogue services. Must be set in gateway-config.json before production.
+    logger.warn('[Gateway] ⚠️ SECURITY: no gatewaySecret configured — using the PUBLIC default. Set gatewaySecret in gateway-config.json before deploying.');
+}
 
 // --- SSL AUTO-GENERATION ---
 const SSL_AUTO_KEY = path.resolve(__dirname, '../ssl-auto.key');
@@ -122,7 +128,11 @@ if (cluster.isPrimary) {
     const saveRegistry = () => {
         try {
             const data = {};
-            registry.forEach((value, key) => { data[key] = { name: value.name, targets: Array.from(value.targets) }; });
+            registry.forEach((value, key) => {
+                const metricsObj = {};
+                if (value.metrics) value.metrics.forEach((m, url) => { metricsObj[url] = m; });
+                data[key] = { name: value.name, targets: Array.from(value.targets), metrics: metricsObj };
+            });
             fs.writeFileSync(REGISTRY_TEMP, JSON.stringify(data, null, 2));
             fs.renameSync(REGISTRY_TEMP, REGISTRY_FILE);
         } catch (e) { logger.error(`[Gateway] Registry Save Error: ${e.message}`); }
@@ -133,7 +143,9 @@ if (cluster.isPrimary) {
             if (fs.existsSync(REGISTRY_FILE)) {
                 const data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
                 Object.entries(data).forEach(([key, value]) => {
-                    registry.set(key, { name: value.name, targets: new Set(value.targets), index: 0, metrics: new Map() });
+                    const metrics = new Map();
+                    if (value.metrics) Object.entries(value.metrics).forEach(([url, m]) => metrics.set(url, m));
+                    registry.set(key, { name: value.name, targets: new Set(value.targets), index: 0, metrics });
                 });
             }
         } catch (e) {
@@ -161,12 +173,10 @@ if (cluster.isPrimary) {
 
     if (fs.existsSync(MTLS_CA) && fs.existsSync(MTLS_KEY) && fs.existsSync(MTLS_CERT)) {
         try {
-            const https = require('https');
-            healthAgent = new https.Agent({
+            healthAgent = createUpstreamAgent({
                 ca: fs.readFileSync(MTLS_CA),
                 key: fs.readFileSync(MTLS_KEY),
-                cert: fs.readFileSync(MTLS_CERT),
-                rejectUnauthorized: false // Allow self-signed IP certs, but we provide client cert
+                cert: fs.readFileSync(MTLS_CERT)
             });
             logger.info('[Gateway] Primary mTLS Agent loaded for health checks.');
         } catch (e) { logger.error(`[Gateway] Failed to load mTLS agent: ${e.message}`); }
@@ -203,6 +213,10 @@ if (cluster.isPrimary) {
                     if (m.failCount >= 3) {
                         logger.error(`[Gateway] Service ${group.name} at ${url} EXPIRED. Removing.`);
                         group.targets.delete(url);
+                        if (group.metrics) group.metrics.delete(url);
+                        // Mirror handleRegistration cleanup: drop the route if it has no targets left,
+                        // otherwise getTarget would compute final[index % 0] === final[NaN] === undefined.
+                        if (group.targets.size === 0) registry.delete(route);
                         changed = true;
                     }
                 }
@@ -356,7 +370,7 @@ if (cluster.isPrimary) {
 
                     try {
                         // Update Config Object
-                        if (port) config.gatewayPort = parseInt(port);
+                        if (port) config.gatewayPort = parseInt(port, 10);
                         if (!config.ssl) config.ssl = {};
                         if (typeof sslEnabled !== 'undefined') config.ssl.enabled = !!sslEnabled;
 
@@ -461,7 +475,7 @@ if (cluster.isPrimary) {
 
     loadWorkerRegistry();
 
-    const proxy = httpProxy.createProxyServer({ xfwd: true });
+    const proxy = createProxyServer();
 
     const MTLS_CA = path.resolve(__dirname, '../certs/cluster-ca.crt');
     const MTLS_KEY = path.resolve(__dirname, '../certs/gateway-internal.key');
@@ -469,12 +483,10 @@ if (cluster.isPrimary) {
 
     let proxyAgent = null;
     if (fs.existsSync(MTLS_CA) && fs.existsSync(MTLS_KEY) && fs.existsSync(MTLS_CERT)) {
-        const https = require('https');
-        proxyAgent = new https.Agent({
+        proxyAgent = createUpstreamAgent({
             ca: fs.readFileSync(MTLS_CA),
             key: fs.readFileSync(MTLS_KEY),
-            cert: fs.readFileSync(MTLS_CERT),
-            rejectUnauthorized: false // Cluster CA is self-signed
+            cert: fs.readFileSync(MTLS_CERT)
         });
         logger.info(`[Gateway] Worker ${process.pid} mTLS ENABLED for upstream.`);
     }
@@ -487,9 +499,15 @@ if (cluster.isPrimary) {
     };
 
     app.use(helmet({ contentSecurityPolicy: false }));
-    app.use(morgan('combined', { stream: { write: (msg) => logger.info(msg.trim()) } }));
+    // BUG/SECURITY: req.query.secret is still accepted for auth (documented at
+    // /gateway-status?secret=<SECRET>), so we cannot remove it without breaking that caller.
+    // Redact it before morgan logs the URL so the credential never lands on disk.
+    app.use(morgan('combined', {
+        stream: { write: (msg) => logger.info(msg.trim()) },
+        skip: (req) => typeof req.query.secret !== 'undefined'
+    }));
     const shouldCompress = (req, res) => {
-        if (req.headers['accept'] === 'text/event-stream' || res.getHeader('Content-Type') === 'text/event-stream') {
+        if ((req.headers['accept'] || '').includes('text/event-stream') || res.getHeader('Content-Type') === 'text/event-stream') {
             return false;
         }
         return compression.filter(req, res);
@@ -507,6 +525,8 @@ if (cluster.isPrimary) {
                 const targets = Array.from(group.targets);
                 const healthy = targets.filter(t => !group.metrics || group.metrics[t]?.status !== 'Failing');
                 const final = healthy.length > 0 ? healthy : targets;
+                // Guard: an empty group (e.g. after health eviction) would yield final[NaN] === undefined.
+                if (final.length === 0) return null;
                 const target = final[group.index % final.length];
                 group.index++; return target;
             }
@@ -514,11 +534,22 @@ if (cluster.isPrimary) {
         return null;
     };
 
+    // SEO Rewrites: Map root sitemap/robots to backend SEO endpoints
+    app.get('/sitemap.xml', (req, res, next) => {
+        req.url = '/api/v1/seo/sitemap.xml';
+        next();
+    });
+
+    app.get('/robots.txt', (req, res, next) => {
+        req.url = '/api/v1/seo/robots.txt';
+        next();
+    });
+
     app.use((req, res) => {
         const target = getTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
-            const isSSE = req.headers['accept'] === 'text/event-stream';
+            const isSSE = (req.headers['accept'] || '').includes('text/event-stream');
 
             logger.debug(`[Gateway] Proxying ${req.method} ${req.url} to ${target}`);
             proxy.web(req, res, {
@@ -546,7 +577,10 @@ if (cluster.isPrimary) {
     });
 
     proxy.on('error', (err, req, res) => {
-        if (res && res.writeHead) {
+        // Note: per-request error callbacks are passed to proxy.web()/proxy.ws(), so this
+        // global handler is a safety net. The second arg may be an HTTP response (web) or a
+        // raw socket (ws). Only writeHead(502) on a real response; destroy a socket.
+        if (res && typeof res.writeHead === 'function') {
             if (!res.headersSent) {
                 try {
                     res.writeHead(502, { 'Content-Type': 'application/json' });
@@ -555,6 +589,8 @@ if (cluster.isPrimary) {
                     logger.error(`[Gateway] Could not send proxy error response: ${e.message}`);
                 }
             }
+        } else if (res && typeof res.destroy === 'function') {
+            try { res.destroy(); } catch (e) { /* socket already gone */ }
         }
     });
 

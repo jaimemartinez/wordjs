@@ -75,7 +75,15 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                                 `}
                             >
                                 {item.mimeType.startsWith('image/') ? (
-                                    <img src={item.guid} alt={item.title} className="w-full h-full object-cover" />
+                                    <img
+                                        src={
+                                            item.mediaDetails?.sizes?.thumbnail
+                                                ? item.guid.substring(0, item.guid.lastIndexOf('/') + 1) + item.mediaDetails.sizes.thumbnail.file
+                                                : item.guid
+                                        }
+                                        alt={item.title}
+                                        className="w-full h-full object-cover"
+                                    />
                                 ) : (
                                     <div className="flex items-center justify-center h-full w-full">
                                         <i className="fa-solid fa-file text-4xl text-gray-400"></i>

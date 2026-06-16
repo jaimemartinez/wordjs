@@ -57,6 +57,7 @@ Complex business logic for managing church conferences.
     *   Hotel & Room assignment
     *   Payment tracking
 *   **Permissions:** `database` (read/write), `express` (register_route).
+*   **Trusted:** Bundled first-party plugin; listed in `config.trustedSystemPlugins`.
 
 ---
 
@@ -70,6 +71,7 @@ System utility to migrate data between SQLite and PostgreSQL.
     *   Import to another
     *   Clean up legacy database files
 *   **Permissions:** `system` (admin), `database` (admin), `filesystem` (read/write).
+*   **Trusted:** Bundled first-party plugin; listed in `config.trustedSystemPlugins`, which is what authorizes its `system:admin` AST-scan skip — declaring `system:admin` alone is not sufficient for third-party plugins.
 
 ---
 

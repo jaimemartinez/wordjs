@@ -288,6 +288,12 @@ When you activate a plugin, WordJS runs a **Static Analysis Scan**. It parses yo
 *   Obfuscated property access (e.g., `global["ev"+"al"]`).
 *   Unauthorized `require()` of sensitive Node modules.
 
+### 6.3 Sandbox Applies Everywhere
+
+Your manifest permissions are enforced even for code that runs **detached** from the request — Express route handlers you register, synchronous hooks, timers (`setTimeout`/`setInterval`), and module top-level code. The runtime resolves the active plugin from the call stack when there is no async context, so there is no "escape hatch": `fs`/`child_process` stay restricted by your declared permissions in every execution path.
+
+> **`system:admin` is not self-granting.** Declaring `system:admin` does **not** skip the AST scan. The skip is reserved for trusted first-party plugins listed in `config.trustedSystemPlugins` (currently `db-migration` and `conference-manager`). An uploaded third-party plugin that declares it still goes through the full scan.
+
 For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ---
