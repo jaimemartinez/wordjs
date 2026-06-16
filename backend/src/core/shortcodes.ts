@@ -94,6 +94,55 @@ function doShortcode(content) {
 }
 
 /**
+ * Process shortcodes in content, awaiting async callbacks.
+ * Same matching as doShortcode(), but a callback may return a Promise<string> — required for
+ * shortcodes whose handler needs to await (e.g. fetching data) or that live in an isolated plugin
+ * worker (the bridge handler RPCs the worker and resolves asynchronously). Sync callbacks work too
+ * (awaiting a non-Promise is a no-op). Call this from async rendering paths instead of doShortcode.
+ *
+ * @param {string} content
+ * @returns {Promise<string>}
+ */
+async function doShortcodeAsync(content) {
+    if (!content || shortcodes.size === 0) return content;
+
+    const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
+    if (!tagPattern) return content;
+
+    const pattern = new RegExp(
+        `\\[(${tagPattern})([^\\]]*?)(?:\\/\\]|\\](?:([^\\[]*?)\\[\\/\\1\\]|))`,
+        'g'
+    );
+
+    // Collect matches first (regex .exec loop), then resolve callbacks concurrently, then splice
+    // back-to-front so earlier indices stay valid. String.replace can't await, hence this approach.
+    const matches: Array<{ index: number; length: number; full: string; tag: string; attrs: string; inner: string }> = [];
+    let m;
+    while ((m = pattern.exec(content)) !== null) {
+        matches.push({ index: m.index, length: m[0].length, full: m[0], tag: m[1], attrs: m[2], inner: m[3] });
+    }
+    if (matches.length === 0) return content;
+
+    const replacements = await Promise.all(matches.map(async (mm) => {
+        const callback = shortcodes.get(mm.tag);
+        if (!callback) return mm.full;
+        const parsedAttrs = parseAttrs((mm.attrs || '').trim());
+        try {
+            const out = await callback(parsedAttrs, mm.inner || '', mm.tag);
+            return out == null ? '' : String(out);
+        } catch (e) {
+            return mm.full; // leave the tag untouched if its handler errors
+        }
+    }));
+
+    let result = content;
+    for (let i = matches.length - 1; i >= 0; i--) {
+        result = result.slice(0, matches[i].index) + replacements[i] + result.slice(matches[i].index + matches[i].length);
+    }
+    return result;
+}
+
+/**
  * Escape regex special characters
  */
 function escapeRegex(str) {
@@ -192,6 +241,7 @@ module.exports = {
     removeShortcode,
     shortcodeExists,
     doShortcode,
+    doShortcodeAsync,
     stripShortcodes,
     parseAttrs
 };
