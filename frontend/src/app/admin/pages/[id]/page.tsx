@@ -11,8 +11,10 @@ import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import Header from "@/components/public/Header";
 import Footer from "@/components/public/Footer";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 export default function PageEditorPage() {
+    const { t } = useI18n();
     const router = useRouter();
     const params = useParams();
     const isNew = params.id === "new";
@@ -129,7 +131,7 @@ export default function PageEditorPage() {
             const finalSlug = root?.props?.slug || root?.slug || slug;
 
             if (!finalTitle) {
-                await alert("Title is required before saving.");
+                await alert(t('page.edit.titleRequired'));
                 setSaving(false);
                 return;
             }
@@ -154,14 +156,14 @@ export default function PageEditorPage() {
             setIsDirty(false); // Reset dirty state after successful save
         } catch (error: any) {
             console.error("Failed to save page:", error);
-            await alert(`Failed to save page: ${error.message || "Unknown error"}`);
+            await alert(`${t('page.edit.saveFailed')}: ${error.message || t('page.edit.unknownError')}`);
         } finally {
             setSaving(false);
         }
     };
 
     if (isLoading) {
-        return <div className="p-8 text-center text-gray-500">Loading editor...</div>;
+        return <div className="p-8 text-center text-gray-500">{t('page.edit.loading')}</div>;
     }
 
     return (
@@ -228,6 +230,7 @@ export default function PageEditorPage() {
 }
 
 const IframePreview = ({ children, theme }: { children: React.ReactNode, theme: string }) => {
+    const { t } = useI18n();
     const [mountNode, setMountNode] = useState<HTMLElement | null>(null);
     const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -283,7 +286,7 @@ const IframePreview = ({ children, theme }: { children: React.ReactNode, theme: 
         <iframe
             ref={iframeRef}
             className="w-full h-full border-none bg-white"
-            title="Preview"
+            title={t('page.edit.previewTitle')}
         >
             {mountNode && createPortal(children, mountNode)}
         </iframe>

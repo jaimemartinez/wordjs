@@ -5,8 +5,10 @@ import { rolesApi, Role } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useRouter } from "next/navigation";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 
 export default function RolesPage() {
+    const { t } = useI18n();
     const { user, isLoading: authLoading } = useAuth();
     const router = useRouter();
     const [roles, setRoles] = useState<Record<string, Role>>({});
@@ -57,7 +59,7 @@ export default function RolesPage() {
 
     const handleNewRole = () => {
         setEditingSlug("");
-        setEditName("New Role");
+        setEditName(t('roles.newRoleDefaultName'));
         setEditCaps(["read"]);
         setSuccess(null);
         setError(null);
@@ -83,7 +85,7 @@ export default function RolesPage() {
             await rolesApi.save(slug, { name: editName, capabilities: editCaps });
             const updatedRoles = await rolesApi.list();
             setRoles(updatedRoles);
-            setSuccess(`Role "${editName}" saved successfully!`);
+            setSuccess(t('roles.savedSuccess').replace('{name}', editName));
             setEditingSlug(null);
         } catch (err: any) {
             setError(err.message);
@@ -93,13 +95,13 @@ export default function RolesPage() {
     };
 
     const handleDelete = async (slug: string) => {
-        if (!await confirm(`Are you sure you want to delete the role "${slug}"?`, "Delete Role", true)) return;
+        if (!await confirm(t('roles.deleteConfirm').replace('{slug}', slug), t('roles.deleteRole'), true)) return;
 
         try {
             await rolesApi.delete(slug);
             const updatedRoles = await rolesApi.list();
             setRoles(updatedRoles);
-            setSuccess("Role deleted successfully.");
+            setSuccess(t('roles.deletedSuccess'));
         } catch (err: any) {
             setError(err.message);
         }
@@ -115,15 +117,15 @@ export default function RolesPage() {
         <div className="max-w-6xl mx-auto p-8">
             <div className="flex justify-between items-center mb-8">
                 <div>
-                    <h1 className="text-3xl font-black text-gray-900 tracking-tight">User Roles & Capabilities</h1>
-                    <p className="text-gray-500 mt-1">Manage what each user role is allowed to do across the platform.</p>
+                    <h1 className="text-3xl font-black text-gray-900 tracking-tight">{t('roles.title')}</h1>
+                    <p className="text-gray-500 mt-1">{t('roles.subtitle')}</p>
                 </div>
                 <button
                     onClick={handleNewRole}
                     className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-500/20 flex items-center gap-2"
                 >
                     <i className="fa-solid fa-plus text-sm"></i>
-                    Add New Role
+                    {t('roles.addNewRole')}
                 </button>
             </div>
 
@@ -162,7 +164,7 @@ export default function RolesPage() {
                                     <button
                                         onClick={(e) => { e.stopPropagation(); handleDelete(slug); }}
                                         className="text-gray-400 hover:text-red-500 p-1"
-                                        title="Delete Role"
+                                        title={t('roles.deleteRole')}
                                     >
                                         <i className="fa-solid fa-trash-can text-sm"></i>
                                     </button>
@@ -170,7 +172,7 @@ export default function RolesPage() {
                             </div>
                             <div className="mt-4 flex flex-wrap gap-1">
                                 <span className="text-[10px] px-2 py-0.5 bg-gray-100 text-gray-500 rounded-full font-bold">
-                                    {role.capabilities.length} Caps
+                                    {role.capabilities.length} {t('roles.caps')}
                                 </span>
                             </div>
                         </div>
@@ -184,7 +186,7 @@ export default function RolesPage() {
                             <form onSubmit={handleSave}>
                                 <div className="flex justify-between items-center mb-8">
                                     <h2 className="text-xl font-bold text-gray-900">
-                                        {editingSlug === "" ? "Create New Role" : `Editing: ${roles[editingSlug]?.name}`}
+                                        {editingSlug === "" ? t('roles.createNewRole') : t('roles.editing').replace('{name}', roles[editingSlug]?.name ?? '')}
                                     </h2>
                                     <div className="flex gap-3">
                                         <button
@@ -192,48 +194,48 @@ export default function RolesPage() {
                                             onClick={() => setEditingSlug(null)}
                                             className="px-4 py-2 text-gray-500 hover:text-gray-700 font-bold"
                                         >
-                                            Cancel
+                                            {t('roles.cancel')}
                                         </button>
                                         <button
                                             type="submit"
                                             disabled={isSaving || !editName}
                                             className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-xl font-bold transition-all disabled:opacity-50"
                                         >
-                                            {isSaving ? "Saving..." : "Save Changes"}
+                                            {isSaving ? t('roles.saving') : t('roles.saveChanges')}
                                         </button>
                                     </div>
                                 </div>
 
                                 <div className="space-y-6">
                                     <div>
-                                        <label className="block text-sm font-bold text-gray-700 mb-2">Display Name</label>
+                                        <label className="block text-sm font-bold text-gray-700 mb-2">{t('roles.displayName')}</label>
                                         <input
                                             type="text"
                                             value={editName}
                                             onChange={(e) => setEditName(e.target.value)}
                                             className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all outline-none"
-                                            placeholder="e.g. Content Moderator"
+                                            placeholder={t('roles.displayNamePlaceholder')}
                                             required
                                         />
                                     </div>
 
                                     <div>
                                         <div className="flex justify-between items-end mb-4">
-                                            <label className="block text-sm font-bold text-gray-700">Capabilities</label>
+                                            <label className="block text-sm font-bold text-gray-700">{t('roles.capabilities')}</label>
                                             <div className="flex gap-4">
                                                 <button
                                                     type="button"
                                                     onClick={() => setEditCaps(availableCaps)}
                                                     className="text-xs text-blue-600 hover:underline font-bold"
                                                 >
-                                                    Select All
+                                                    {t('roles.selectAll')}
                                                 </button>
                                                 <button
                                                     type="button"
                                                     onClick={() => setEditCaps(['read'])}
                                                     className="text-xs text-gray-400 hover:underline font-bold"
                                                 >
-                                                    Deselect All
+                                                    {t('roles.deselectAll')}
                                                 </button>
                                             </div>
                                         </div>
@@ -272,8 +274,8 @@ export default function RolesPage() {
                             <div className="w-16 h-16 bg-white rounded-2xl shadow-sm flex items-center justify-center mb-4">
                                 <i className="fa-solid fa-shield-halved text-2xl text-gray-200"></i>
                             </div>
-                            <h3 className="font-bold text-gray-900 mb-2">Select a Role to Edit</h3>
-                            <p className="text-sm max-w-[240px]">Click a role from the list on the left to manage its permissions or create a new one.</p>
+                            <h3 className="font-bold text-gray-900 mb-2">{t('roles.emptyStateTitle')}</h3>
+                            <p className="text-sm max-w-[240px]">{t('roles.emptyStateBody')}</p>
                         </div>
                     )}
                 </div>
