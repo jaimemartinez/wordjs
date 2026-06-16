@@ -183,6 +183,35 @@ High-volume event logging table for the internal analytics engine.
 
 ---
 
+---
+
+## 2.9 Indexes
+
+On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes with `CREATE INDEX IF NOT EXISTS` (supported by both SQLite and Postgres) on hot columns. These speed up meta lookups, listing queries, slug resolution, and comment/option access:
+
+| Index                          | Table / Columns                            |
+| :----------------------------- | :----------------------------------------- |
+| `idx_post_meta_post_id`        | `post_meta (post_id)`                      |
+| `idx_post_meta_post_id_key`    | `post_meta (post_id, meta_key)`            |
+| `idx_user_meta_user_id`        | `user_meta (user_id)`                      |
+| `idx_user_meta_user_id_key`    | `user_meta (user_id, meta_key)`            |
+| `idx_term_rel_object_id`       | `term_relationships (object_id)`           |
+| `idx_term_rel_tt_id`           | `term_relationships (term_taxonomy_id)`    |
+| `idx_term_taxonomy_taxonomy`   | `term_taxonomy (taxonomy)`                 |
+| `idx_posts_status_type`        | `posts (post_status, post_type)`           |
+| `idx_posts_name`               | `posts (post_name)`                        |
+| `idx_posts_parent`             | `posts (post_parent)`                      |
+| `idx_comments_post_approved`   | `comments (comment_post_id, comment_approved)` |
+| `idx_options_autoload`         | `options (autoload)`                       |
+
+> `options.option_name` is additionally enforced as **unique** at the column level.
+
+### Batched Meta Loading (N+1 avoidance)
+
+Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the whole result set in a single query rather than issuing one query per post, eliminating the previous N+1 pattern on listing pages.
+
+---
+
 ## 3. Extending the Schema
 
 Plugins should generally stick to `postmeta` or `usermeta` for storing extra data.

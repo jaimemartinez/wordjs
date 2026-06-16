@@ -18,6 +18,8 @@ Before a plugin is activated, its entire source code is parsed into an **Abstrac
 ### 1.2 Runtime Context Proxies
 WordJS uses `AsyncLocalStorage` to track the execution context of every request.
 
+> **Detached Code is Still Sandboxed:** Plugin code that runs *outside* the `AsyncLocalStorage` wrapper — Express route handlers a plugin registers, synchronous hooks, timers (`setTimeout`/`setInterval`), and module top-level code — used to run with an empty context and was therefore treated as trusted core (a real RCE bypass). The runtime guards now resolve the active plugin via `getEffectivePlugin()`, which uses the `AsyncLocalStorage` context **or**, when absent, the nearest plugin/theme frame on the call stack. Synchronous hooks (`doActionSync`/`applyFiltersSync`) also run their callbacks inside the plugin context. As a result, detached plugin code remains subject to its manifest permissions.
+
 *   **Environment Protection:** Global `process.env` is replaced with a **strict Read-Only Proxy**. 
     *   Plugins CANNOT read sensitive keys from the environment.
     *   Secrets (DB passwords, JWT keys) are loaded directly from `wordjs-config.json` by the core and never exposed to `process.env`.
@@ -74,6 +76,8 @@ To fix this:
 WordJS provides a high level of isolation, but it is not a virtual machine.
 *   **Vulnerability Scoping:** The AST scanner currently focuses on the plugin's source code, not its `node_modules`. 
 *   **Resource Limits:** The system does not currently enforce strict CPU or RAM quotas for plugins (DoS protection).
+*   **Runtime Escapes:** Low-level escapes such as `process.binding` and `Module._load` are flagged by the AST scanner but are **not** yet blocked at runtime. Treat them as future work.
+*   **CSRF:** Cross-site request protection is currently based on Origin/Referer header heuristics, not on per-request CSRF tokens. Token-based CSRF is future work.
 
 For ultra-high security environments, we recommend auditing third-party plugin dependencies before installation.
 
@@ -95,7 +99,9 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
 | **`network`**       | `admin` | allows `require('http')`, `require('net')`, outbound calls. |
 | **`email`**         | `admin` | allows `nodemailer`, sending via SMTP.                      |
 | **`notifications`** | `send`  | Allows sending alerts to users via `notificationService`.   |
-| **`system`**        | `admin` | **DANGEROUS**: Bypasses AST scans. Allows `child_process`.  |
+| **`system`**        | `admin` | **DANGEROUS**: Allows `child_process`. The AST scan is skipped **only** for trusted first-party plugins (see note below). |
+
+> **`system:admin` is not self-granting.** Declaring `system:admin` in a manifest is **not** enough to skip the AST scanner — otherwise any uploaded plugin could self-declare it. The skip requires the plugin's slug to be listed in `config.trustedSystemPlugins`, which defaults to the first-party bundled plugins (`db-migration`, `conference-manager`). An uploaded third-party plugin that declares `system:admin` falls through to the full AST scan, so its `child_process`/`eval` usage is still caught.
 
 ### Example Manifest declaration:
 
@@ -148,6 +154,8 @@ You can verify them by checking the file:
 "gatewaySecret": "b9c... (long random string)"
 ```
 
+The signing secret **never** falls back to a hardcoded/public constant. If no secret is configured (e.g. before setup completes), the backend uses a per-process ephemeral random secret so issued tokens cannot be forged — but those tokens reset on every restart. Complete setup so a persistent secret is written to `wordjs-config.json` for production. `jwt.verify` is also pinned to the `HS256` algorithm, and passwords are hashed with bcrypt at cost factor 12.
+
 ### Configuration (No Env Vars)
 
 WordJS does **not** use `.env` files. All security settings are in `wordjs-config.json`.
@@ -196,6 +204,10 @@ exec(`node "${scriptPath}"`);
 // ✅ Safe
 execFile('node', [scriptPath]);
 ```
+
+In particular, plugin dependency installation passes package names to `execFile` as an argument array (not a shell string), so a malicious manifest dependency name cannot inject shell commands.
+
+> **CORS:** In production, the backend allows only the configured origins (site / frontend / gateway) rather than reflecting arbitrary origins with credentials.
 
 ### Additional Recommendations
 
