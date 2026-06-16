@@ -1,12 +1,14 @@
 # WordJS CLI Toolkit 🛠️
 
-WordJS includes several utility scripts in the `backend/` root to help with maintenance and troubleshooting.
+WordJS includes several utility scripts in `backend/cli/` to help with maintenance and troubleshooting.
+
+> **Note:** The backend is now TypeScript, run via `ts-node` (no build step). CLI scripts that import core modules require ts-node registration, e.g. `node -r ts-node/register cli/force-sync-roles.js`.
 
 ## 1. Role Manager (`cli/force-sync-roles.js`)
 
 **Use case:** You accidentally deleted the Administrator role or permissions are corrupted.
 
-This script wipes the `wordjs_user_roles` option in the database and re-initializes it with the default "Hardcoded" roles defined in `backend/src/core/roles.js`.
+This script wipes the `wordjs_user_roles` option in the database and re-initializes it with the default "Hardcoded" roles defined in `backend/src/core/roles.ts`.
 
 ```bash
 cd backend
@@ -40,3 +42,13 @@ This is a **file** not a script, but it contains the current state of the Gatewa
 
 The database is a simple file at `backend/data/wordjs.db`.
 You can use any SQLite CLI or GUI (like *DB Browser for SQLite*) to open it directly if the server is stopped.
+
+### npm Scripts
+
+Migration and seeding are exposed as `package.json` scripts (run via ts-node):
+
+```bash
+cd backend
+npm run migrate   # node -r ts-node/register src/database/migrate.ts
+npm run seed      # node -r ts-node/register src/database/seed.ts
+```
