@@ -3,6 +3,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
 import { PageHeader, EmptyState, Button } from '@/components/ui';
+import { useI18n } from "@/contexts/I18nContext";
 
 // --- FontFamilyCard Component ---
 interface FontVariant {
@@ -21,6 +22,7 @@ interface FontFamilyCardProps {
 }
 
 const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCardProps) => {
+    const { t } = useI18n();
     // Sort variants: Regular/Normal first, then by name
     const sortedVariants = [...variants].sort((a, b) => {
         const priority = ['regular', 'normal', 'medium', 'bold', 'light'];
@@ -50,11 +52,11 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
             <div className="p-5 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
                 <div>
                     <h3 className="text-xl font-bold text-gray-900 leading-tight">{family}</h3>
-                    <p className="text-sm text-gray-500 mt-1">{variants.length} style{variants.length !== 1 ? 's' : ''} available</p>
+                    <p className="text-sm text-gray-500 mt-1">{variants.length} {variants.length !== 1 ? t('fonts.stylesAvailable') : t('fonts.styleAvailable')}</p>
                 </div>
                 {isSystem && (
                     <span className="text-[10px] font-bold bg-amber-100 text-amber-700 px-2 py-1 rounded border border-amber-200 flex items-center gap-1.5 shadow-sm">
-                        <i className="fa-solid fa-lock text-[8px]"></i> SYSTEM
+                        <i className="fa-solid fa-lock text-[8px]"></i> {t('fonts.system')}
                     </span>
                 )}
             </div>
@@ -72,10 +74,10 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                     >
                         Aa
                     </p>
-                    <p className="mt-4 text-lg text-gray-400 font-light truncate px-4">The quick brown fox jumps over the lazy dog</p>
+                    <p className="mt-4 text-lg text-gray-400 font-light truncate px-4">{t('fonts.pangram')}</p>
 
                     <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900/80 text-white text-xs px-2 py-1 rounded backdrop-blur-sm pointer-events-none">
-                        Now showing: {activeVariant.variant}
+                        {t('fonts.nowShowing')}: {activeVariant.variant}
                     </div>
                 </div>
             </div>
@@ -116,7 +118,7 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                                                 : 'text-gray-400 hover:text-red-500 hover:bg-red-50'
                                             }
                                         `}
-                                        title="Delete variant"
+                                        title={t('fonts.deleteVariant')}
                                     >
                                         <i className="fa-solid fa-xmark text-[10px]"></i>
                                     </button>
@@ -141,6 +143,7 @@ export default function FontsPage() {
     const [uploading, setUploading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const { alert, confirm } = useModal();
+    const { t } = useI18n();
 
     const fetchFonts = useCallback(async () => {
         setLoading(true);
@@ -190,7 +193,7 @@ export default function FontsPage() {
             await fetchFonts();
         } catch (err: any) {
             console.error(err);
-            await alert(`Upload failed: ${err.message}`);
+            await alert(`${t('fonts.uploadFailed')}: ${err.message}`);
         } finally {
             setUploading(false);
         }
@@ -207,7 +210,7 @@ export default function FontsPage() {
     });
 
     const deleteFont = async (filename: string) => {
-        if (!await confirm('Are you sure you want to delete this font variant?', 'Delete Font', true)) return;
+        if (!await confirm(t('fonts.confirmDelete'), t('fonts.deleteFont'), true)) return;
 
         try {
             await apiDelete(`/fonts/${filename}`);
@@ -220,7 +223,7 @@ export default function FontsPage() {
             fetchFonts();
         } catch (err) {
             console.error(err);
-            await alert('Failed to delete font');
+            await alert(t('fonts.deleteFailed'));
         }
     };
 
@@ -256,14 +259,14 @@ export default function FontsPage() {
             <div className="max-w-6xl mx-auto space-y-8">
                 {/* Header */}
                 <PageHeader
-                    title="Font Manager"
-                    subtitle="Manage custom typefaces and system typography"
+                    title={t('fonts.title')}
+                    subtitle={t('fonts.subtitle')}
                     actions={
                         <div className="relative w-full md:w-72">
                             <i className="fa-solid fa-magnifying-glass absolute left-4 top-1/2 -translate-y-1/2 text-gray-400"></i>
                             <input
                                 type="text"
-                                placeholder="Search fonts..."
+                                placeholder={t('fonts.searchPlaceholder')}
                                 value={searchQuery}
                                 onChange={(e) => setSearchQuery(e.target.value)}
                                 className="w-full pl-12 pr-4 py-4 bg-white border-2 border-gray-100 rounded-2xl focus:outline-none focus:ring-4 focus:ring-blue-100 focus:border-blue-500 transition-all font-medium"
@@ -285,11 +288,11 @@ export default function FontsPage() {
                         <i className="fa-solid fa-cloud-arrow-up text-2xl"></i>
                     </div>
                     {uploading ? (
-                        <p className="text-blue-600 font-bold animate-pulse">Uploading fonts...</p>
+                        <p className="text-blue-600 font-bold animate-pulse">{t('fonts.uploading')}</p>
                     ) : (
                         <>
-                            <p className="text-lg font-bold text-gray-700">Drop font files here</p>
-                            <p className="text-sm text-gray-400 mt-1">Supports TTF, OTF, WOFF, WOFF2</p>
+                            <p className="text-lg font-bold text-gray-700">{t('fonts.dropHere')}</p>
+                            <p className="text-sm text-gray-400 mt-1">{t('fonts.supportedFormats')}</p>
                         </>
                     )}
                 </div>
@@ -297,15 +300,15 @@ export default function FontsPage() {
                 {/* Font List Groups */}
                 <div className="space-y-6">
                     <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                        Installed Families
+                        {t('fonts.installedFamilies')}
                         <span className="bg-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full">{Object.keys(groupedFonts).length}</span>
                     </h2>
 
                     {Object.entries(groupedFonts).length === 0 ? (
                         <div className="text-center py-20 bg-white rounded-2xl border border-gray-200 border-dashed">
                             <i className="fa-regular fa-folder-open text-4xl text-gray-300 mb-4 block"></i>
-                            <p className="text-gray-400 font-medium">No fonts installed yet.</p>
-                            <p className="text-sm text-gray-300">Upload some files to get started.</p>
+                            <p className="text-gray-400 font-medium">{t('fonts.emptyTitle')}</p>
+                            <p className="text-sm text-gray-300">{t('fonts.emptySubtitle')}</p>
                         </div>
                     ) : (
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">

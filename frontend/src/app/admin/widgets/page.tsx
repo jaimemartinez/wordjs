@@ -26,6 +26,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { widgetsApi, Widget, Sidebar } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { PageHeader, EmptyState } from "@/components/ui";
+import { useI18n } from "@/contexts/I18nContext";
 
 // --- Components ---
 
@@ -67,6 +68,7 @@ function SidebarItem({
     sidebarId: string,
     onRemove: (id: string, key: string) => void
 }) {
+    const { t } = useI18n();
     const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
         id: instanceKey,
         data: { type: 'sidebar-item', instanceKey, sidebarId, widgetId }
@@ -90,7 +92,7 @@ function SidebarItem({
                     <button className="cursor-grab text-gray-400 hover:text-gray-600" {...listeners} {...attributes}>
                         <i className="fa-solid fa-grip-vertical"></i>
                     </button>
-                    <span className="font-medium select-none">{displayId} Widget</span>
+                    <span className="font-medium select-none">{displayId} {t('widgets.widget')}</span>
                 </div>
                 <div className="flex gap-2">
                     <button
@@ -117,9 +119,9 @@ function SidebarItem({
             {isExpanded && (
                 <div className="p-4">
                     {/* Config form placeholder - to be implemented fully */}
-                    <p className="text-sm text-gray-500 mb-2">Detailed settings for {widgetId}...</p>
+                    <p className="text-sm text-gray-500 mb-2">{t('widgets.detailedSettingsFor')} {widgetId}...</p>
                     <div className="text-sm text-yellow-600 bg-yellow-50 p-2 rounded">
-                        Settings editing coming soon.
+                        {t('widgets.settingsComingSoon')}
                     </div>
                 </div>
             )}
@@ -128,6 +130,7 @@ function SidebarItem({
 }
 
 function SidebarContainer({ sidebar, onRemove }: { sidebar: Sidebar, onRemove: (sid: string, key: string) => void }) {
+    const { t } = useI18n();
     const { setNodeRef } = useDroppable({
         id: sidebar.id,
         data: { type: 'sidebar-container', sidebarId: sidebar.id }
@@ -147,7 +150,7 @@ function SidebarContainer({ sidebar, onRemove }: { sidebar: Sidebar, onRemove: (
                     {sidebar.widgets.length === 0 && (
                         <div className="text-center text-gray-400 py-8 border-2 border-dashed border-gray-200 rounded-2xl text-sm font-medium">
                             <i className="fa-solid fa-arrows-up-down-left-right text-2xl mb-2 block text-gray-300"></i>
-                            Drag widgets here
+                            {t('widgets.dragWidgetsHere')}
                         </div>
                     )}
                     {sidebar.widgets.map(key => {
@@ -177,6 +180,7 @@ export default function WidgetsPage() {
     const [loading, setLoading] = useState(true);
 
     const { alert, confirm } = useModal();
+    const { t } = useI18n();
 
     const sensors = useSensors(
         useSensor(MouseSensor, {
@@ -209,7 +213,7 @@ export default function WidgetsPage() {
             setSidebars(sData);
         } catch (e) {
             console.error(e);
-            await alert("Failed to load widgets/sidebars", "Error");
+            await alert(t('widgets.loadError'), t('widgets.errorTitle'));
         } finally {
             setLoading(false);
         }
@@ -263,7 +267,7 @@ export default function WidgetsPage() {
     };
 
     const handleRemove = async (sidebarId: string, instanceKey: string) => {
-        if (await confirm("Are you sure you want to remove this widget? This action cannot be undone.", "Remove Widget", true)) {
+        if (await confirm(t('widgets.removeConfirm'), t('widgets.removeWidget'), true)) {
             try {
                 await widgetsApi.removeFromSidebar(sidebarId, instanceKey);
                 // Optimistic update
@@ -280,7 +284,7 @@ export default function WidgetsPage() {
         }
     };
 
-    if (loading && sidebars.length === 0) return <div className="p-8">Loading Widgets...</div>;
+    if (loading && sidebars.length === 0) return <div className="p-8">{t('widgets.loading')}</div>;
 
     return (
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 animate-in fade-in duration-500">
@@ -291,15 +295,15 @@ export default function WidgetsPage() {
                 onDragEnd={handleDragEnd}
             >
                 <PageHeader
-                    title="Widgets"
-                    subtitle="Drag and drop widgets to customize your sidebars"
+                    title={t('widgets.title')}
+                    subtitle={t('widgets.subtitle')}
                 />
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
                     {/* Available Widgets Column */}
                     <div className="bg-white rounded-[40px] p-6 border-2 border-gray-50 shadow-xl shadow-gray-100/50 h-fit">
-                        <h2 className="font-black text-xl text-gray-900 italic tracking-tight mb-2">Available Widgets</h2>
-                        <p className="text-xs text-gray-400 font-medium border-b border-gray-100 pb-4 mb-4">Drag to add</p>
+                        <h2 className="font-black text-xl text-gray-900 italic tracking-tight mb-2">{t('widgets.availableWidgets')}</h2>
+                        <p className="text-xs text-gray-400 font-medium border-b border-gray-100 pb-4 mb-4">{t('widgets.dragToAdd')}</p>
                         <div className="space-y-2">
                             {/* We treat this list as separate Draggables, NOT a SortableContext because we clone them */}
                             {widgets.map(w => (
@@ -324,7 +328,7 @@ export default function WidgetsPage() {
                     {activeId ? (
                         <div className="p-4 bg-white border-2 border-blue-500 rounded-2xl shadow-xl shadow-blue-200 opacity-90 w-[200px]">
                             <i className="fa-solid fa-grip-vertical text-blue-400 mr-2"></i>
-                            Dragging...
+                            {t('widgets.dragging')}
                         </div>
                     ) : null}
                 </DragOverlay>

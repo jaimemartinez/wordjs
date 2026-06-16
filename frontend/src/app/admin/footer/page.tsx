@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { settingsApi, menusApi, themesApi } from "@/lib/api";
 import Link from "next/link";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
 import ModernSelect from "@/components/ModernSelect";
 import Footer from "@/components/public/Footer";
 
@@ -29,6 +30,7 @@ const PLATFORMS = [
 
 export default function FooterSettingsPage() {
     const { addToast } = useToast();
+    const { t } = useI18n();
     const [settings, setSettings] = useState({
         footer_text: "",
         footer_copyright: "",
@@ -112,7 +114,7 @@ export default function FooterSettingsPage() {
 
         } catch (error) {
             console.error("Failed to load footer settings:", error);
-            addToast("Failed to load settings", "error");
+            addToast(t('footer.admin.loadError'), "error");
         }
     };
 
@@ -145,9 +147,9 @@ export default function FooterSettingsPage() {
 
         try {
             await settingsApi.update(payload);
-            addToast("Footer settings saved successfully!", "success");
+            addToast(t('footer.admin.saveSuccess'), "success");
         } catch (error) {
-            addToast("Failed to save settings", "error");
+            addToast(t('footer.admin.saveError'), "error");
         } finally {
             setSaving(false);
         }
@@ -164,8 +166,8 @@ export default function FooterSettingsPage() {
                             <i className="fa-solid fa-shoe-prints text-lg"></i>
                         </div>
                         <div className="hidden md:block">
-                            <h1 className="font-black italic text-xl tracking-tighter leading-none">Footer</h1>
-                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">Global Settings</span>
+                            <h1 className="font-black italic text-xl tracking-tighter leading-none">{t('footer.admin.title')}</h1>
+                            <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{t('footer.admin.subtitle')}</span>
                         </div>
                     </div>
                     <div className="h-8 w-px bg-gray-100 hidden md:block"></div>
@@ -187,7 +189,7 @@ export default function FooterSettingsPage() {
                         ) : (
                             <i className="fa-solid fa-floppy-disk"></i>
                         )}
-                        {saving ? "Guardando..." : "Guardar Cambios"}
+                        {saving ? t('footer.admin.saving') : t('footer.admin.save')}
                     </button>
                 </div>
             </div>
@@ -206,15 +208,15 @@ export default function FooterSettingsPage() {
                         <div className="space-y-3">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
                                 <div className="w-6 h-6 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center font-bold text-xs shadow-sm">1</div>
-                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Descripción del Sitio</h3>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.siteDescription')}</h3>
                             </div>
                             <div className="pl-9 space-y-2">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">Texto del Footer</label>
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('footer.admin.footerText')}</label>
                                 <textarea
                                     rows={4}
                                     value={settings.footer_text}
                                     onChange={(e) => setSettings({ ...settings, footer_text: e.target.value })}
-                                    placeholder="Escribe una breve descripción..."
+                                    placeholder={t('footer.admin.footerTextPlaceholder')}
                                     className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-600 font-medium text-sm resize-none placeholder:text-gray-300"
                                 />
                             </div>
@@ -224,7 +226,7 @@ export default function FooterSettingsPage() {
                         <div className="space-y-3">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
                                 <div className="w-6 h-6 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center font-bold text-xs shadow-sm">2</div>
-                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Redes Sociales</h3>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.socials')}</h3>
                             </div>
 
                             <div className="pl-9 space-y-4">
@@ -249,14 +251,14 @@ export default function FooterSettingsPage() {
                                     ))}
                                     {socialLinks.length === 0 && (
                                         <div className="text-center py-4 bg-gray-50 rounded-xl border border-dashed border-gray-200">
-                                            <p className="text-[10px] text-gray-400 font-bold uppercase">Sin redes conectadas</p>
+                                            <p className="text-[10px] text-gray-400 font-bold uppercase">{t('footer.admin.noSocials')}</p>
                                         </div>
                                     )}
                                 </div>
 
                                 {/* Add New */}
                                 <div className="bg-gray-50/50 p-4 rounded-2xl border border-gray-100 space-y-3">
-                                    <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest">Añadir nueva red</h4>
+                                    <h4 className="text-[9px] font-black text-gray-400 uppercase tracking-widest">{t('footer.admin.addSocial')}</h4>
                                     <ModernSelect
                                         value={newPlatform}
                                         onChange={(e) => setNewPlatform(e.target.value)}
@@ -288,10 +290,10 @@ export default function FooterSettingsPage() {
                         <div className="space-y-3">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
                                 <div className="w-6 h-6 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center font-bold text-xs shadow-sm">3</div>
-                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Copyright</h3>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.copyright')}</h3>
                             </div>
                             <div className="pl-9 space-y-2">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">Texto Legal</label>
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-wider">{t('footer.admin.legalText')}</label>
                                 <input
                                     type="text"
                                     value={settings.footer_copyright}
@@ -306,18 +308,18 @@ export default function FooterSettingsPage() {
                         <div className="space-y-3 pb-10">
                             <div className="flex items-center gap-3 mb-2 border-b border-gray-50 pb-2">
                                 <div className="w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center font-bold text-xs shadow-sm">4</div>
-                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">Navegación</h3>
+                                <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest">{t('footer.admin.navigation')}</h3>
                             </div>
                             <div className="pl-9">
                                 <div className="bg-white border-2 border-gray-50 p-4 rounded-2xl shadow-sm flex items-center justify-between group hover:border-emerald-100 transition-all">
                                     <div>
-                                        <h4 className="font-black text-gray-700 text-xs uppercase tracking-wide">Quick Links</h4>
+                                        <h4 className="font-black text-gray-700 text-xs uppercase tracking-wide">{t('footer.admin.quickLinks')}</h4>
                                         <p className="text-[10px] text-gray-400 mt-1">
-                                            Gestionados en Menús
+                                            {t('footer.admin.managedInMenus')}
                                         </p>
                                     </div>
                                     <Link href="/admin/menus" className="bg-gray-50 text-gray-600 border border-gray-200 px-3 py-2 rounded-lg text-[10px] font-black uppercase tracking-widest hover:bg-emerald-50 hover:text-emerald-600 hover:border-emerald-200 transition-all">
-                                        Editar
+                                        {t('footer.admin.edit')}
                                     </Link>
                                 </div>
                             </div>
@@ -333,7 +335,7 @@ export default function FooterSettingsPage() {
 
                     <div className="relative w-full max-w-5xl h-full flex flex-col">
                         <div className="absolute top-4 right-4 bg-white/90 backdrop-blur px-3 py-1.5 rounded-xl text-[10px] font-black text-gray-400 uppercase tracking-widest shadow-sm pointer-events-none z-20 border border-gray-100">
-                            <i className="fa-solid fa-eye mr-2 text-blue-500"></i>Live Preview
+                            <i className="fa-solid fa-eye mr-2 text-blue-500"></i>{t('footer.admin.livePreview')}
                         </div>
 
                         {/* Device Container */}

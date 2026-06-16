@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { commentsApi, Comment } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
+import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, EmptyState } from "@/components/ui";
 
 type Tab = 'all' | 'pending' | 'approved' | 'spam' | 'trash';
@@ -14,6 +15,7 @@ export default function CommentsPage() {
     const [page, setPage] = useState(1);
     const [hasMore, setHasMore] = useState(false);
     const { alert, confirm } = useModal();
+    const { t } = useI18n();
 
     const PER_PAGE = 20;
 
@@ -67,36 +69,36 @@ export default function CommentsPage() {
             loadComments();
         } catch (err) {
             console.error(err);
-            await alert("Failed to perform action");
+            await alert(t('comments.action.failed'));
         } finally {
             setProcessingId(null);
         }
     };
 
     const handleDeletePermanently = async (commentId: number) => {
-        if (!await confirm("Are you sure? This action cannot be undone.", "Delete Comment Permanently", true)) return;
+        if (!await confirm(t('comments.delete.confirm'), t('comments.delete.confirmTitle'), true)) return;
         try {
             await commentsApi.delete(commentId, true); // Force delete
             loadComments();
         } catch (err) {
             console.error(err);
-            await alert("Failed to delete comment");
+            await alert(t('comments.delete.failed'));
         }
     };
 
     const tabs: { id: Tab; label: string }[] = [
-        { id: 'all', label: 'All' },
-        { id: 'pending', label: 'Pending' },
-        { id: 'approved', label: 'Approved' },
-        { id: 'spam', label: 'Spam' },
-        { id: 'trash', label: 'Trash' },
+        { id: 'all', label: t('comments.tab.all') },
+        { id: 'pending', label: t('comments.tab.pending') },
+        { id: 'approved', label: t('comments.tab.approved') },
+        { id: 'spam', label: t('comments.tab.spam') },
+        { id: 'trash', label: t('comments.tab.trash') },
     ];
 
     return (
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
-                title="Comments"
-                subtitle={`Page ${page}${hasMore ? '' : ' (last)'} · ${comments.length} on this page`}
+                title={t('comments.title')}
+                subtitle={`${t('comments.subtitle.page')} ${page}${hasMore ? '' : ` ${t('comments.subtitle.last')}`} · ${comments.length} ${t('comments.subtitle.onThisPage')}`}
             />
 
             {/* Premium Tabs */}
@@ -120,23 +122,23 @@ export default function CommentsPage() {
                 {loading ? (
                     <div className="p-20 text-center">
                         <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                        <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">Loading...</p>
+                        <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{t('comments.loading')}</p>
                     </div>
                 ) : comments.length === 0 ? (
                     <EmptyState
                         icon="fa-comments"
-                        title="No comments found"
-                        description="Comments will appear here when visitors interact with your content."
+                        title={t('comments.empty.title')}
+                        description={t('comments.empty.description')}
                     />
                 ) : (
                     <div className="overflow-hidden">
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">Author</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Comment</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48">In Response To</th>
-                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">Date</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-64">{t('comments.column.author')}</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('comments.column.comment')}</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-48">{t('comments.column.inResponseTo')}</th>
+                                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-32">{t('comments.column.date')}</th>
                                 </tr>
                             </thead>
                             <tbody className="bg-white divide-y divide-gray-200">
@@ -157,7 +159,7 @@ export default function CommentsPage() {
                                                             {comment.authorUrl}
                                                         </a>
                                                     )}
-                                                    <div className="text-xs text-gray-400 mt-1">{comment.status === '0' && <span className="text-yellow-600 font-bold">Pending</span>}</div>
+                                                    <div className="text-xs text-gray-400 mt-1">{comment.status === '0' && <span className="text-yellow-600 font-bold">{t('comments.status.pending')}</span>}</div>
                                                 </div>
                                             </div>
                                         </td>
@@ -173,7 +175,7 @@ export default function CommentsPage() {
                                                         disabled={processingId === comment.id}
                                                         className="text-green-600 hover:text-green-900 font-medium"
                                                     >
-                                                        Approve
+                                                        {t('comments.approve')}
                                                     </button>
                                                 )}
                                                 {comment.status === '1' && (
@@ -182,7 +184,7 @@ export default function CommentsPage() {
                                                         disabled={processingId === comment.id}
                                                         className="text-yellow-600 hover:text-yellow-900"
                                                     >
-                                                        Unapprove
+                                                        {t('comments.unapprove')}
                                                     </button>
                                                 )}
 
@@ -193,14 +195,14 @@ export default function CommentsPage() {
                                                             disabled={processingId === comment.id}
                                                             className="text-red-600 hover:text-red-900"
                                                         >
-                                                            Spam
+                                                            {t('comments.spam')}
                                                         </button>
                                                         <button
                                                             onClick={() => handleAction(comment.id, 'trash')}
                                                             disabled={processingId === comment.id}
                                                             className="text-red-600 hover:text-red-900"
                                                         >
-                                                            Trash
+                                                            {t('comments.trash')}
                                                         </button>
                                                     </>
                                                 )}
@@ -212,14 +214,14 @@ export default function CommentsPage() {
                                                             disabled={processingId === comment.id}
                                                             className="text-green-600 hover:text-green-900"
                                                         >
-                                                            Restore
+                                                            {t('comments.restore')}
                                                         </button>
                                                         <button
                                                             onClick={() => handleDeletePermanently(comment.id)}
                                                             disabled={processingId === comment.id}
                                                             className="text-red-600 hover:text-red-900"
                                                         >
-                                                            Delete Permanently
+                                                            {t('comments.deletePermanently')}
                                                         </button>
                                                     </>
                                                 )}
@@ -230,7 +232,7 @@ export default function CommentsPage() {
                                         </td>
                                         <td className="px-6 py-4 text-sm text-gray-500">
                                             <a href={`/post/${comment.postId}`} target="_blank" className="hover:text-blue-600 hover:underline">
-                                                View Post #{comment.postId}
+                                                {t('comments.viewPost')} #{comment.postId}
                                             </a>
                                         </td>
                                         <td className="px-6 py-4 text-sm text-gray-500">
@@ -249,15 +251,15 @@ export default function CommentsPage() {
                         onClick={() => setPage(p => p - 1)}
                         className="px-3 py-1 border rounded disabled:opacity-50"
                     >
-                        Previous
+                        {t('comments.pagination.previous')}
                     </button>
-                    <span className="text-gray-600 text-sm">Page {page}</span>
+                    <span className="text-gray-600 text-sm">{t('comments.subtitle.page')} {page}</span>
                     <button
                         disabled={!hasMore}
                         onClick={() => setPage(p => p + 1)}
                         className="px-3 py-1 border rounded hover:bg-gray-50 disabled:opacity-50"
                     >
-                        Next
+                        {t('comments.pagination.next')}
                     </button>
                 </div>
             </div>
