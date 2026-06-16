@@ -9,8 +9,7 @@ const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const fs = require('fs');
 const path = require('path');
 const { addAction, doAction, addFilter } = require('./hooks');
-const { createPluginApi } = require('./plugin-api');
-const { loadIsolatedPlugin } = require('./plugin-isolate');
+const { loadIsolatedPlugin, unloadIsolatedPlugin } = require('./plugin-isolate');
 const { getOption, updateOption } = require('./options');
 
 const semver = require('semver');
@@ -516,9 +515,6 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
     return true;
 }
 
-// Loaded plugins registry
-const loadedPlugins = new Map();
-
 /**
  * Plugin metadata structure
  */
@@ -759,21 +755,18 @@ async function activatePlugin(slug) {
     }
 
     try {
-        // Clear require cache to ensure fresh load
-        const resolvedPath = require.resolve(mainFile);
-        delete require.cache[resolvedPath];
-
-        const { runWithContext } = require('./plugin-context');
-        // SECURITY: load the module INSIDE the plugin context so its TOP-LEVEL code
-        // (which executes at require() time, before init) is sandboxed too — not just init().
-        const pluginModule = runWithContext(slug, () => require(mainFile));
-
-        // Call init/activate function if exists
-        if (typeof pluginModule.init === 'function') {
-            await runWithContext(slug, () => pluginModule.init(createPluginApi(slug)));
-        } else if (typeof pluginModule.activate === 'function') {
-            await runWithContext(slug, () => pluginModule.activate(createPluginApi(slug)));
+        // Plugins run ISOLATED (in a worker, core only via the bridge). Legacy in-process execution
+        // was removed — a plugin must declare "isolated": true in its manifest.
+        let manifest: any = null;
+        const manifestPath = path.join(plugin.path, 'manifest.json');
+        if (fs.existsSync(manifestPath)) {
+            try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* */ }
         }
+        if (!manifest || !manifest.isolated) {
+            throw new Error(`Plugin '${slug}' must declare "isolated": true and use the wordjs bridge — legacy in-process plugins are no longer supported.`);
+        }
+
+        await loadIsolatedPlugin(slug, mainFile);
 
         // Reorder middleware to ensure plugin routes work
         fixMiddlewareOrder();
@@ -782,8 +775,6 @@ async function activatePlugin(slug) {
         const active = await getActivePlugins();
         active.push(slug);
         await updateOption('active_plugins', active);
-
-        loadedPlugins.set(slug, pluginModule);
 
         await doAction('activated_plugin', slug);
 
@@ -818,12 +809,8 @@ async function deactivatePlugin(slug) {
         }
     }
 
-    const pluginModule = loadedPlugins.get(slug);
-
-    // Call deactivate function if exists
-    if (pluginModule && typeof pluginModule.deactivate === 'function') {
-        await pluginModule.deactivate();
-    }
+    // Terminate the plugin's worker — that IS deactivation for the isolated model.
+    try { unloadIsolatedPlugin(slug); } catch (e) { /* worker may already be gone */ }
 
     // Remove from active plugins
     const active = await getActivePlugins();
@@ -832,8 +819,6 @@ async function deactivatePlugin(slug) {
         active.splice(index, 1);
         await updateOption('active_plugins', active);
     }
-
-    loadedPlugins.delete(slug);
 
     await doAction('deactivated_plugin', slug);
 
@@ -910,7 +895,8 @@ async function loadActivePlugins() {
             // MARK START
             CrashGuard.startLoading(slug);
 
-            // ISOLATED tier: run the plugin in a worker (separate heap; core only via the bridge).
+            // Plugins run ISOLATED in a worker (separate heap; core only via the bridge). Legacy
+            // in-process execution has been removed — a plugin MUST declare "isolated": true.
             if (manifest && manifest.isolated) {
                 await loadIsolatedPlugin(slug, mainFile);
                 console.log(`   ✓ Plugin loaded ISOLATED: ${plugin.name} (${slug})`);
@@ -918,19 +904,7 @@ async function loadActivePlugins() {
                 continue;
             }
 
-            const { runWithContext } = require('./plugin-context');
-            // SECURITY: anchor module top-level execution in the plugin context (see activatePlugin).
-            const pluginModule = runWithContext(slug, () => require(mainFile));
-            loadedPlugins.set(slug, pluginModule);
-            console.log(`   ✓ Plugin loaded: ${plugin.name} (${slug})`);
-
-            if (typeof pluginModule.init === 'function') {
-                console.log(`   ⚙️  Calling init() for ${slug}...`);
-                await runWithContext(slug, () => pluginModule.init(createPluginApi(slug)));
-                console.log(`   ✅  init() completed for ${slug}`);
-            }
-
-            // MARK SUCCESS
+            console.warn(`   ⚠ Skipping '${slug}': not isolated. Set "isolated": true to run it in the sandbox (legacy in-process loading was removed).`);
             CrashGuard.finishLoading(slug);
         } catch (error) {
             // If we caught the error (it didn't crash the process), we should still clear the lock
