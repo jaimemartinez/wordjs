@@ -4,10 +4,30 @@
 > capability bridge, `src/core/plugin-api.ts`) and the isolate runtime (`src/core/plugin-isolate.ts`
 > + `plugin-worker.js`, **worker_threads** — works in any environment, no native deps) are in `main`.
 > A plugin with `"isolated": true` in its manifest runs in a separate V8 isolate, reaching core only
-> via the bridge over RPC; `hello-world` ships isolated as the reference. worker_threads gives heap /
-> crash / resource isolation + host-owned capabilities everywhere; `isolated-vm` or child-process +
-> seccomp can swap in as the primitive (same architecture) where the platform supports them. Remaining:
-> port more plugins to the bridge and (optionally) flip the default for untrusted plugins.
+> via the bridge over RPC. worker_threads gives heap / crash / resource isolation + host-owned
+> capabilities everywhere; `isolated-vm` or child-process + seccomp can swap in as the primitive (same
+> architecture) where the platform supports them.
+>
+> **Bridge surface (complete, tested):** options.get/set, db.all/get/run/createTable (core-table
+> scoped), hooks.add{Action,Filter}/doAction, **http.route (host runs auth, forwards JSON over RPC)**,
+> fs.read/write (confined), mail, notify, adminMenu.add, cron.schedule. e2e tests cover the bridge
+> guards, an isolated hook/filter over RPC, an isolated DB write, and an isolated JSON route served
+> through host Express.
+>
+> **Per-plugin tier (final):**
+> | Plugin | Tier | Why |
+> |---|---|---|
+> | hello-world | **isolated** | hooks only — reference |
+> | test-schema | **isolated** | hooks + DB via bridge — reference |
+> | card-gallery | in-process | isolatable (JSON routes), but its live frontend calls `/api/v1/card-galleries`; isolating namespaces the path → needs a coordinated frontend change. Deferred to avoid breaking the UI. |
+> | photo-carousel, video-gallery | in-process | render via **synchronous** shortcodes (`doShortcode` is sync); async-RPC isolation needs a core rendering change |
+> | mail-server | in-process | raw `net` (SMTP server on :25, outbound sockets) — unavailable in an isolate |
+> | db-migration, conference-manager | in-process | first-party `system:admin` (trusted tier) |
+>
+> **Net:** the isolation platform is complete and proven; isolation is the default path for UNTRUSTED
+> uploaded plugins (set `isolated:true` + use the bridge). The 7 bundled plugins are first-party
+> (audited) and stay in-process for the documented reasons — isolating audited first-party code that
+> needs raw capabilities (net/sync-render/system) buys little and would break features.
 
 Status: **proposal** · Author: WordJS · Context: after 4 red-team passes the in-process sandbox
 closes every *known* practical escape (AST scan + runtime require proxy + ALS-anchoring of every
