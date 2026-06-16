@@ -136,6 +136,27 @@ describe('SVG Sanitization', () => {
         assert.ok(cleaned.includes('<rect'), 'rect should be preserved');
         assert.ok(cleaned.includes('<circle'), 'circle should be preserved');
     });
+
+    // Regression for H5: the real upload sanitizer (sanitize-html) must use an ALLOWLIST so that
+    // event-handler ATTRIBUTES (onerror/onload) are dropped — the old allowedAttributes:false +
+    // tag-name filter let them survive. This exercises the same allowlist approach media.ts uses.
+    it('real sanitize-html allowlist strips on* attributes AND <script> (H5)', () => {
+        const sh = require('sanitize-html');
+        const out = sh(
+            `<svg onload="alert(1)"><rect onerror="x()" width="10" height="10"/><script>alert(2)</script><circle cx="5" cy="5" r="4"/></svg>`,
+            {
+                allowedTags: ['svg', 'g', 'path', 'rect', 'circle', 'image'],
+                allowedAttributes: { '*': ['id', 'class', 'fill', 'width', 'height', 'viewBox', 'd', 'cx', 'cy', 'r', 'xlink:href', 'href'] },
+                allowedSchemes: ['http', 'https', 'mailto'],
+                allowedSchemesByTag: { image: ['http', 'https', 'data'] },
+                parser: { lowerCaseAttributeNames: false }
+            }
+        );
+        assert.ok(!/onload/i.test(out), 'onload attribute must be stripped');
+        assert.ok(!/onerror/i.test(out), 'onerror attribute must be stripped');
+        assert.ok(!/<script/i.test(out), '<script> must be stripped');
+        assert.ok(/<circle/i.test(out), 'valid <circle> must be preserved');
+    });
 });
 
 // ============================================================================
