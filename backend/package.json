@@ -9,7 +9,7 @@
     "migrate": "node -r ts-node/register src/database/migrate.ts",
     "seed": "node -r ts-node/register src/database/seed.ts",
     "typecheck": "tsc --noEmit",
-    "test": "node --test -r ts-node/register \"src/**/*.test.ts\"",
+    "test": "node --test -r ts-node/register src/tests/*.test.ts",
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\""
   },
