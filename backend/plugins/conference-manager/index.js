@@ -1,8 +1,11 @@
-const express = require('express');
-const { dbAsync, createPluginTable, getDbType } = require('../../src/config/database');
-const { authenticate } = require('../../src/middleware/auth');
-const { isAdmin } = require('../../src/middleware/permissions');
-const config = require('../../src/config/app');
+/**
+ * Conference Manager Plugin for WordJS — ISOLATED (operator-trusted).
+ *
+ * Runs via the capability bridge (manifest.isolated). Uses ONLY the injected `wordjs`
+ * capability bridge — no direct require of express/core/dbAsync. Because this plugin is
+ * listed in config.trustedSystemPlugins it gets privileged (unscoped) DB access and keeps
+ * its ORIGINAL absolute route paths under /api/v1/conference/*.
+ */
 
 exports.metadata = {
     name: 'Conference Manager',
@@ -11,290 +14,292 @@ exports.metadata = {
     author: 'WordJS'
 };
 
-/**
- * Initialize Database Schema (Multi-Conference Ready)
- */
-async function initSchema() {
-    const { isPostgres } = getDbType();
+exports.init = async function (wordjs) {
+    const { db, http, adminMenu } = wordjs;
 
-    // 1. Conferences Table
-    await createPluginTable('conferences', [
-        'id INT_PK',
-        'name TEXT NOT NULL',
-        'slug TEXT UNIQUE NOT NULL',
-        'date_start DATETIME',
-        'date_end DATETIME',
-        'status TEXT DEFAULT \'draft\'',
-        'is_form_published INT DEFAULT 0',
-        'fee_default REAL DEFAULT 0',
-        'description TEXT'
-    ]);
-
-    // Locations
-    await createPluginTable('conference_locations', [
-        'id INT_PK',
-        'conference_id INT NOT NULL',
-        'name TEXT NOT NULL',
-        'code TEXT NOT NULL',
-        'responsible_name TEXT',
-        'responsible_phone TEXT',
-        'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
-    ]);
-
-    // 2. Hotels (Linked to Conference)
-    await createPluginTable('conference_hotels', [
-        'id INT_PK',
-        'conference_id INT NOT NULL',
-        'name TEXT NOT NULL',
-        'address TEXT',
-        'description TEXT',
-        'capacity INT DEFAULT 0',
-        'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
-    ]);
-
-    // 3. Rooms
-    await createPluginTable('conference_rooms', [
-        'id INT_PK',
-        'hotel_id INT NOT NULL',
-        'room_number TEXT NOT NULL',
-        'capacity INT DEFAULT 2',
-        'gender TEXT DEFAULT \'Mixed\'',
-        'is_family INT DEFAULT 0',
-        'family_name TEXT',
-        'notes TEXT',
-        'FOREIGN KEY (hotel_id) REFERENCES conference_hotels(id) ON DELETE CASCADE'
-    ]);
-
-    // 4. Inscriptions (Linked to Conference)
-    await createPluginTable('conference_inscriptions', [
-        'id INT_PK',
-        'conference_id INT NOT NULL',
-        'first_name TEXT NOT NULL',
-        'last_name TEXT NOT NULL',
-        'gender TEXT',
-        'email TEXT',
-        'phone TEXT',
-        'age INT',
-        'location TEXT',
-        'document_type TEXT',
-        'document_number TEXT',
-        'blood_type TEXT',
-        'eps TEXT',
-        'family_group TEXT',
-        'registration_date DATETIME DEFAULT CURRENT_TIMESTAMP',
-        'status TEXT DEFAULT \'pending\'',
-        'payment_status TEXT DEFAULT \'unpaid\'',
-        'total_due REAL DEFAULT 0',
-        'amount_paid REAL DEFAULT 0',
-        'room_id INT',
-        'notes TEXT',
-        'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE',
-        'FOREIGN KEY (room_id) REFERENCES conference_rooms(id) ON DELETE SET NULL'
-    ]);
-
-    // 5. Payments
-    await createPluginTable('conference_payments', [
-        'id INT_PK',
-        'inscription_id INT NOT NULL',
-        'amount REAL NOT NULL',
-        'date DATETIME DEFAULT CURRENT_TIMESTAMP',
-        'method TEXT',
-        'reference TEXT',
-        'proof TEXT',
-        'FOREIGN KEY (inscription_id) REFERENCES conference_inscriptions(id) ON DELETE CASCADE'
-    ]);
-
-    // 6. Assignment Rules
-    await createPluginTable('conference_assignment_rules', [
-        'id INT_PK',
-        'conference_id INT NOT NULL',
-        'name TEXT NOT NULL',
-        'type TEXT NOT NULL',
-        'enabled INT DEFAULT 1',
-        'priority INT DEFAULT 0',
-        'config TEXT',
-        'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
-    ]);
-
-    // 7. Dynamic Fields
-    await createPluginTable('conference_fields', [
-        'id INT_PK',
-        'conference_id INT NOT NULL',
-        'name TEXT NOT NULL',
-        'label TEXT NOT NULL',
-        'type TEXT DEFAULT \'text\'',
-        'options TEXT',
-        'is_required INT DEFAULT 0',
-        'sort_order INT DEFAULT 0',
-        'width INT DEFAULT 100',
-        'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
-    ]);
-
-    // Migration: Add missing columns to existing tables
-    // Compatible with both SQLite and PostgreSQL
-    try {
-        const { isPostgres } = getDbType();
-
-        // Helper function to check if column exists (driver-agnostic)
-        async function columnExists(tableName, columnName) {
-            if (isPostgres) {
-                const result = await dbAsync.get(
-                    `SELECT COUNT(*) as count FROM information_schema.columns 
-                     WHERE table_name = ? AND column_name = ?`,
-                    [tableName, columnName]
-                );
-                return result.count > 0;
-            } else {
-                // SQLite - PRAGMA doesn't support parameters, but tableName is from our code, not user input
-                const result = await dbAsync.all(`PRAGMA table_info(${tableName})`);
-                return result.some(col => col.name === columnName);
-            }
-        }
-
-        // Check if conference_locations exists
-        let locationsTableExists = false;
-        try {
-            if (isPostgres) {
-                const result = await dbAsync.get(
-                    `SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = ?`,
-                    ['conference_locations']
-                );
-                locationsTableExists = result.count > 0;
-            } else {
-                await dbAsync.get('SELECT 1 FROM conference_locations LIMIT 1');
-                locationsTableExists = true;
-            }
-        } catch (e) {
-            locationsTableExists = false;
-        }
-
-        if (!locationsTableExists) {
-            console.log('🔄 Migrating: Creating conference_locations table...');
-            await createPluginTable('conference_locations', [
-                'id INT_PK',
-                'conference_id INT NOT NULL',
-                'name TEXT NOT NULL',
-                'code TEXT NOT NULL',
-                'responsible_name TEXT',
-                'responsible_phone TEXT',
-                'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
-            ]);
-        } else {
-            // Check for responsible_phone column
-            const hasPhone = await columnExists('conference_locations', 'responsible_phone');
-            if (!hasPhone) {
-                console.log('🔄 Migrating conference_locations: adding responsible_phone column...');
-                await dbAsync.run('ALTER TABLE conference_locations ADD COLUMN responsible_phone TEXT');
-            }
-        }
-
-        // Migrate document fields if missing
-        const hasDocumentType = await columnExists('conference_inscriptions', 'document_type');
-        if (!hasDocumentType) {
-            console.log('🔄 Migrating conference_inscriptions: adding document fields...');
-            await dbAsync.run('ALTER TABLE conference_inscriptions ADD COLUMN document_type TEXT');
-            await dbAsync.run('ALTER TABLE conference_inscriptions ADD COLUMN document_number TEXT');
-            await dbAsync.run('ALTER TABLE conference_inscriptions ADD COLUMN blood_type TEXT');
-            await dbAsync.run('ALTER TABLE conference_inscriptions ADD COLUMN eps TEXT');
-        }
-
-        // Migrate custom_data if missing
-        const hasCustomData = await columnExists('conference_inscriptions', 'custom_data');
-        if (!hasCustomData) {
-            console.log('🔄 Migrating conference_inscriptions: adding custom_data column...');
-            await dbAsync.run('ALTER TABLE conference_inscriptions ADD COLUMN custom_data TEXT');
-        }
-
-        // Migrate is_form_published if missing
-        const hasFormPublished = await columnExists('conferences', 'is_form_published');
-        if (!hasFormPublished) {
-            console.log('🔄 Migrating conferences: adding is_form_published column...');
-            await dbAsync.run('ALTER TABLE conferences ADD COLUMN is_form_published INT DEFAULT 0');
-        }
-
-        // Check if conference_hotels exists but lacks conference_id
-        let hotelsTableExists = false;
-        try {
-            if (isPostgres) {
-                const result = await dbAsync.get(
-                    `SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = ?`,
-                    ['conference_hotels']
-                );
-                hotelsTableExists = result.count > 0;
-            } else {
-                await dbAsync.get('SELECT 1 FROM conference_hotels LIMIT 1');
-                hotelsTableExists = true;
-            }
-        } catch (e) {
-            hotelsTableExists = false;
-        }
-
-        if (hotelsTableExists) {
-            const hotelsHasConferenceId = await columnExists('conference_hotels', 'conference_id');
-            if (!hotelsHasConferenceId) {
-                console.log('🔄 Migrating conference_hotels: adding conference_id column...');
-                await dbAsync.run('ALTER TABLE conference_hotels ADD COLUMN conference_id INTEGER');
-                const defaultConf = await dbAsync.get('SELECT id FROM conferences LIMIT 1');
-                if (defaultConf) {
-                    await dbAsync.run(
-                        'UPDATE conference_hotels SET conference_id = ? WHERE conference_id IS NULL',
-                        [defaultConf.id]
-                    );
-                }
-            }
-        }
-
-        // Migrate conference_fields: add width if missing
-        const hasWidth = await columnExists('conference_fields', 'width');
-        if (!hasWidth) {
-            console.log('🔄 Migrating conference_fields: adding width column...');
-            await dbAsync.run('ALTER TABLE conference_fields ADD COLUMN width INT DEFAULT 100');
-        }
-
-        // Migrate conference_payments: add proof if missing
-        const hasProof = await columnExists('conference_payments', 'proof');
-        if (!hasProof) {
-            console.log('🔄 Migrating conference_payments: adding proof column...');
-            await dbAsync.run('ALTER TABLE conference_payments ADD COLUMN proof TEXT');
-        }
-    } catch (e) {
-        // Table might not exist yet, which is fine
-        console.log('Migration check:', e.message);
-    }
-
-    // Create a default conference if none exists
-    const count = await dbAsync.get('SELECT COUNT(*) as count FROM conferences');
-    if (count.count === 0) {
-        await dbAsync.run(
-            "INSERT INTO conferences (name, slug, status, description) VALUES (?, ?, ?, ?)",
-            ['Default Conference', 'default-conf', 'active', 'Initial system conference']
-        );
-    }
-}
-
-exports.init = async function () {
     console.log('🔌 Loading Conference Manager Plugin...');
     console.log('Initializing Conference Manager Plugin (Multi-Event Edition)...');
+
+    /**
+     * Initialize Database Schema (Multi-Conference Ready)
+     */
+    async function initSchema() {
+        // eslint-disable-next-line no-unused-vars
+        const { isPostgres } = await db.getType();
+
+        // 1. Conferences Table
+        await db.createTable('conferences', [
+            'id INT_PK',
+            'name TEXT NOT NULL',
+            'slug TEXT UNIQUE NOT NULL',
+            'date_start DATETIME',
+            'date_end DATETIME',
+            'status TEXT DEFAULT \'draft\'',
+            'is_form_published INT DEFAULT 0',
+            'fee_default REAL DEFAULT 0',
+            'description TEXT'
+        ]);
+
+        // Locations
+        await db.createTable('conference_locations', [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'name TEXT NOT NULL',
+            'code TEXT NOT NULL',
+            'responsible_name TEXT',
+            'responsible_phone TEXT',
+            'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
+        ]);
+
+        // 2. Hotels (Linked to Conference)
+        await db.createTable('conference_hotels', [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'name TEXT NOT NULL',
+            'address TEXT',
+            'description TEXT',
+            'capacity INT DEFAULT 0',
+            'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
+        ]);
+
+        // 3. Rooms
+        await db.createTable('conference_rooms', [
+            'id INT_PK',
+            'hotel_id INT NOT NULL',
+            'room_number TEXT NOT NULL',
+            'capacity INT DEFAULT 2',
+            'gender TEXT DEFAULT \'Mixed\'',
+            'is_family INT DEFAULT 0',
+            'family_name TEXT',
+            'notes TEXT',
+            'FOREIGN KEY (hotel_id) REFERENCES conference_hotels(id) ON DELETE CASCADE'
+        ]);
+
+        // 4. Inscriptions (Linked to Conference)
+        await db.createTable('conference_inscriptions', [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'first_name TEXT NOT NULL',
+            'last_name TEXT NOT NULL',
+            'gender TEXT',
+            'email TEXT',
+            'phone TEXT',
+            'age INT',
+            'location TEXT',
+            'document_type TEXT',
+            'document_number TEXT',
+            'blood_type TEXT',
+            'eps TEXT',
+            'family_group TEXT',
+            'registration_date DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'status TEXT DEFAULT \'pending\'',
+            'payment_status TEXT DEFAULT \'unpaid\'',
+            'total_due REAL DEFAULT 0',
+            'amount_paid REAL DEFAULT 0',
+            'room_id INT',
+            'notes TEXT',
+            'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE',
+            'FOREIGN KEY (room_id) REFERENCES conference_rooms(id) ON DELETE SET NULL'
+        ]);
+
+        // 5. Payments
+        await db.createTable('conference_payments', [
+            'id INT_PK',
+            'inscription_id INT NOT NULL',
+            'amount REAL NOT NULL',
+            'date DATETIME DEFAULT CURRENT_TIMESTAMP',
+            'method TEXT',
+            'reference TEXT',
+            'proof TEXT',
+            'FOREIGN KEY (inscription_id) REFERENCES conference_inscriptions(id) ON DELETE CASCADE'
+        ]);
+
+        // 6. Assignment Rules
+        await db.createTable('conference_assignment_rules', [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'name TEXT NOT NULL',
+            'type TEXT NOT NULL',
+            'enabled INT DEFAULT 1',
+            'priority INT DEFAULT 0',
+            'config TEXT',
+            'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
+        ]);
+
+        // 7. Dynamic Fields
+        await db.createTable('conference_fields', [
+            'id INT_PK',
+            'conference_id INT NOT NULL',
+            'name TEXT NOT NULL',
+            'label TEXT NOT NULL',
+            'type TEXT DEFAULT \'text\'',
+            'options TEXT',
+            'is_required INT DEFAULT 0',
+            'sort_order INT DEFAULT 0',
+            'width INT DEFAULT 100',
+            'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
+        ]);
+
+        // Migration: Add missing columns to existing tables
+        // Compatible with both SQLite and PostgreSQL
+        try {
+            const { isPostgres } = await db.getType();
+
+            // Helper function to check if column exists (driver-agnostic)
+            async function columnExists(tableName, columnName) {
+                if (isPostgres) {
+                    const result = await db.get(
+                        `SELECT COUNT(*) as count FROM information_schema.columns
+                         WHERE table_name = ? AND column_name = ?`,
+                        [tableName, columnName]
+                    );
+                    return result.count > 0;
+                } else {
+                    // SQLite - PRAGMA doesn't support parameters, but tableName is from our code, not user input
+                    const result = await db.all(`PRAGMA table_info(${tableName})`);
+                    return result.some(col => col.name === columnName);
+                }
+            }
+
+            // Check if conference_locations exists
+            let locationsTableExists = false;
+            try {
+                if (isPostgres) {
+                    const result = await db.get(
+                        `SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = ?`,
+                        ['conference_locations']
+                    );
+                    locationsTableExists = result.count > 0;
+                } else {
+                    await db.get('SELECT 1 FROM conference_locations LIMIT 1');
+                    locationsTableExists = true;
+                }
+            } catch (e) {
+                locationsTableExists = false;
+            }
+
+            if (!locationsTableExists) {
+                console.log('🔄 Migrating: Creating conference_locations table...');
+                await db.createTable('conference_locations', [
+                    'id INT_PK',
+                    'conference_id INT NOT NULL',
+                    'name TEXT NOT NULL',
+                    'code TEXT NOT NULL',
+                    'responsible_name TEXT',
+                    'responsible_phone TEXT',
+                    'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
+                ]);
+            } else {
+                // Check for responsible_phone column
+                const hasPhone = await columnExists('conference_locations', 'responsible_phone');
+                if (!hasPhone) {
+                    console.log('🔄 Migrating conference_locations: adding responsible_phone column...');
+                    await db.run('ALTER TABLE conference_locations ADD COLUMN responsible_phone TEXT');
+                }
+            }
+
+            // Migrate document fields if missing
+            const hasDocumentType = await columnExists('conference_inscriptions', 'document_type');
+            if (!hasDocumentType) {
+                console.log('🔄 Migrating conference_inscriptions: adding document fields...');
+                await db.run('ALTER TABLE conference_inscriptions ADD COLUMN document_type TEXT');
+                await db.run('ALTER TABLE conference_inscriptions ADD COLUMN document_number TEXT');
+                await db.run('ALTER TABLE conference_inscriptions ADD COLUMN blood_type TEXT');
+                await db.run('ALTER TABLE conference_inscriptions ADD COLUMN eps TEXT');
+            }
+
+            // Migrate custom_data if missing
+            const hasCustomData = await columnExists('conference_inscriptions', 'custom_data');
+            if (!hasCustomData) {
+                console.log('🔄 Migrating conference_inscriptions: adding custom_data column...');
+                await db.run('ALTER TABLE conference_inscriptions ADD COLUMN custom_data TEXT');
+            }
+
+            // Migrate is_form_published if missing
+            const hasFormPublished = await columnExists('conferences', 'is_form_published');
+            if (!hasFormPublished) {
+                console.log('🔄 Migrating conferences: adding is_form_published column...');
+                await db.run('ALTER TABLE conferences ADD COLUMN is_form_published INT DEFAULT 0');
+            }
+
+            // Check if conference_hotels exists but lacks conference_id
+            let hotelsTableExists = false;
+            try {
+                if (isPostgres) {
+                    const result = await db.get(
+                        `SELECT COUNT(*) as count FROM information_schema.tables WHERE table_name = ?`,
+                        ['conference_hotels']
+                    );
+                    hotelsTableExists = result.count > 0;
+                } else {
+                    await db.get('SELECT 1 FROM conference_hotels LIMIT 1');
+                    hotelsTableExists = true;
+                }
+            } catch (e) {
+                hotelsTableExists = false;
+            }
+
+            if (hotelsTableExists) {
+                const hotelsHasConferenceId = await columnExists('conference_hotels', 'conference_id');
+                if (!hotelsHasConferenceId) {
+                    console.log('🔄 Migrating conference_hotels: adding conference_id column...');
+                    await db.run('ALTER TABLE conference_hotels ADD COLUMN conference_id INTEGER');
+                    const defaultConf = await db.get('SELECT id FROM conferences LIMIT 1');
+                    if (defaultConf) {
+                        await db.run(
+                            'UPDATE conference_hotels SET conference_id = ? WHERE conference_id IS NULL',
+                            [defaultConf.id]
+                        );
+                    }
+                }
+            }
+
+            // Migrate conference_fields: add width if missing
+            const hasWidth = await columnExists('conference_fields', 'width');
+            if (!hasWidth) {
+                console.log('🔄 Migrating conference_fields: adding width column...');
+                await db.run('ALTER TABLE conference_fields ADD COLUMN width INT DEFAULT 100');
+            }
+
+            // Migrate conference_payments: add proof if missing
+            const hasProof = await columnExists('conference_payments', 'proof');
+            if (!hasProof) {
+                console.log('🔄 Migrating conference_payments: adding proof column...');
+                await db.run('ALTER TABLE conference_payments ADD COLUMN proof TEXT');
+            }
+        } catch (e) {
+            // Table might not exist yet, which is fine
+            console.log('Migration check:', e.message);
+        }
+
+        // Create a default conference if none exists
+        const count = await db.get('SELECT COUNT(*) as count FROM conferences');
+        if (count.count === 0) {
+            await db.run(
+                "INSERT INTO conferences (name, slug, status, description) VALUES (?, ?, ?, ?)",
+                ['Default Conference', 'default-conf', 'active', 'Initial system conference']
+            );
+        }
+    }
+
     await initSchema();
 
     // Ensure foreign keys are enabled for SQLite
-    const { isPostgres } = getDbType();
+    const { isPostgres } = await db.getType();
     if (!isPostgres) {
-        await dbAsync.run('PRAGMA foreign_keys = ON');
+        await db.run('PRAGMA foreign_keys = ON');
     }
 
-    const router = express.Router();
-
     // === CONFERENCES MANAGEMENT ===
-    router.get('/list', authenticate, isAdmin, async (req, res) => {
-        const list = await dbAsync.all('SELECT * FROM conferences ORDER BY id DESC');
+    http.route('get', '/api/v1/conference/list', { absolute: true, auth: true, admin: true }, async (req, res) => {
+        const list = await db.all('SELECT * FROM conferences ORDER BY id DESC');
         res.json(list);
     });
 
-    router.post('/create', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/create', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { name, slug, date_start, date_end, fee_default } = req.body;
         try {
-            const result = await dbAsync.run(
+            const result = await db.run(
                 'INSERT INTO conferences (name, slug, date_start, date_end, fee_default) VALUES (?, ?, ?, ?, ?)',
                 [name, slug, date_start, date_end, fee_default || 0]
             );
@@ -312,7 +317,7 @@ exports.init = async function () {
             ];
 
             for (const f of defaults) {
-                await dbAsync.run(
+                await db.run(
                     'INSERT INTO conference_fields (conference_id, name, label, type, options, is_required, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
                     [conference_id, f.name, f.label, f.type, f.options || '', f.required, f.order]
                 );
@@ -322,9 +327,9 @@ exports.init = async function () {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.delete('/:id', authenticate, isAdmin, async (req, res) => {
+    http.route('delete', '/api/v1/conference/:id', { absolute: true, auth: true, admin: true }, async (req, res) => {
         try {
-            await dbAsync.run('DELETE FROM conferences WHERE id = ?', [req.params.id]);
+            await db.run('DELETE FROM conferences WHERE id = ?', [req.params.id]);
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
@@ -332,17 +337,17 @@ exports.init = async function () {
     // === DATA SEGMENTATION (requires conference_id in query/body) ===
 
     // Hotels for a conference
-    router.get('/hotels', authenticate, isAdmin, async (req, res) => {
+    http.route('get', '/api/v1/conference/hotels', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
 
         try {
-            const hotels = await dbAsync.all('SELECT * FROM conference_hotels WHERE conference_id = ? ORDER BY name', [conference_id]);
+            const hotels = await db.all('SELECT * FROM conference_hotels WHERE conference_id = ? ORDER BY name', [conference_id]);
             for (const h of hotels) {
-                const rooms = await dbAsync.all('SELECT * FROM conference_rooms WHERE hotel_id = ?', [h.id]);
+                const rooms = await db.all('SELECT * FROM conference_rooms WHERE hotel_id = ?', [h.id]);
                 h.rooms = rooms;
                 for (const r of rooms) {
-                    const occupants = await dbAsync.get('SELECT COUNT(*) as count FROM conference_inscriptions WHERE room_id = ?', [r.id]);
+                    const occupants = await db.get('SELECT COUNT(*) as count FROM conference_inscriptions WHERE room_id = ?', [r.id]);
                     r.occupied = occupants.count;
                 }
             }
@@ -351,13 +356,13 @@ exports.init = async function () {
     });
 
     // Inscriptions for a conference
-    router.get('/inscriptions', authenticate, isAdmin, async (req, res) => {
+    http.route('get', '/api/v1/conference/inscriptions', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id, search, family_group, payment_status, assigned, location } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
 
         try {
             let query = `
-                SELECT i.*, r.room_number, r.hotel_id, h.name as hotel_name 
+                SELECT i.*, r.room_number, r.hotel_id, h.name as hotel_name
                 FROM conference_inscriptions i
                 LEFT JOIN conference_rooms r ON i.room_id = r.id
                 LEFT JOIN conference_hotels h ON r.hotel_id = h.id
@@ -393,7 +398,7 @@ exports.init = async function () {
             }
 
             query += ` ORDER BY i.last_name, i.first_name`;
-            const list = await dbAsync.all(query, params);
+            const list = await db.all(query, params);
 
             // Parse custom_data
             const parsedList = list.map(item => ({
@@ -405,40 +410,40 @@ exports.init = async function () {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.post('/publish', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/publish', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id, published } = req.body;
         try {
-            await dbAsync.run('UPDATE conferences SET is_form_published = ? WHERE id = ?', [published ? 1 : 0, conference_id]);
+            await db.run('UPDATE conferences SET is_form_published = ? WHERE id = ?', [published ? 1 : 0, conference_id]);
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // === FIELDS ===
-    router.get('/fields', authenticate, isAdmin, async (req, res) => {
+    http.route('get', '/api/v1/conference/fields', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const list = await dbAsync.all('SELECT * FROM conference_fields WHERE conference_id = ? ORDER BY sort_order ASC', [conference_id]);
+            const list = await db.all('SELECT * FROM conference_fields WHERE conference_id = ? ORDER BY sort_order ASC', [conference_id]);
             res.json(list);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.post('/fields', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/fields', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { id, conference_id, name, label, type, options, is_required, sort_order } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             // Check if published
-            const conf = await dbAsync.get('SELECT is_form_published FROM conferences WHERE id = ?', [conference_id]);
+            const conf = await db.get('SELECT is_form_published FROM conferences WHERE id = ?', [conference_id]);
             if (conf?.is_form_published && !id) {
                 return res.status(400).json({ error: 'No se pueden añadir campos después de publicar el formulario.' });
             }
             if (id) {
-                await dbAsync.run(
+                await db.run(
                     'UPDATE conference_fields SET name = ?, label = ?, type = ?, options = ?, is_required = ?, sort_order = ? WHERE id = ?',
                     [name, label, type, options, is_required, sort_order, id]
                 );
             } else {
-                await dbAsync.run(
+                await db.run(
                     'INSERT INTO conference_fields (conference_id, name, label, type, options, is_required, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?)',
                     [conference_id, name, label, type, options, is_required, sort_order]
                 );
@@ -447,22 +452,22 @@ exports.init = async function () {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.delete('/fields/:id', authenticate, isAdmin, async (req, res) => {
+    http.route('delete', '/api/v1/conference/fields/:id', { absolute: true, auth: true, admin: true }, async (req, res) => {
         try {
-            const field = await dbAsync.get('SELECT conference_id FROM conference_fields WHERE id = ?', [req.params.id]);
+            const field = await db.get('SELECT conference_id FROM conference_fields WHERE id = ?', [req.params.id]);
             if (field) {
-                const conf = await dbAsync.get('SELECT is_form_published FROM conferences WHERE id = ?', [field.conference_id]);
+                const conf = await db.get('SELECT is_form_published FROM conferences WHERE id = ?', [field.conference_id]);
                 if (conf?.is_form_published) {
                     return res.status(400).json({ error: 'No se pueden eliminar campos después de publicar el formulario.' });
                 }
             }
-            await dbAsync.run('DELETE FROM conference_fields WHERE id = ?', [req.params.id]);
+            await db.run('DELETE FROM conference_fields WHERE id = ?', [req.params.id]);
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // Create Inscription
-    router.post('/inscriptions', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/inscriptions', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id, ...fieldValues } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
 
@@ -500,7 +505,7 @@ exports.init = async function () {
             const dataStr = typeof customData === 'string' ? customData : JSON.stringify(customData);
             const queryValues = [...Object.values(values), dataStr];
 
-            const result = await dbAsync.run(
+            const result = await db.run(
                 `INSERT INTO conference_inscriptions (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
                 queryValues
             );
@@ -511,17 +516,17 @@ exports.init = async function () {
     // ... (rest of methods: post hotels, post rooms, assign, payments - all using conference_id context)
 
     // === LOCATIONS ===
-    router.get('/locations', authenticate, isAdmin, async (req, res) => {
+    http.route('get', '/api/v1/conference/locations', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const conf = await dbAsync.get('SELECT *, (SELECT COUNT(*) FROM conference_fields WHERE conference_id = conferences.id) as fields_count FROM conferences WHERE id = ?', [conference_id]);
-            const locations = await dbAsync.all('SELECT * FROM conference_locations WHERE conference_id = ? ORDER BY name', [conference_id]);
+            const conf = await db.get('SELECT *, (SELECT COUNT(*) FROM conference_fields WHERE conference_id = conferences.id) as fields_count FROM conferences WHERE id = ?', [conference_id]);
+            const locations = await db.all('SELECT * FROM conference_locations WHERE conference_id = ? ORDER BY name', [conference_id]);
             res.json({ locations, conference: conf });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.post('/locations', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/locations', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id, name, responsible_name, responsible_phone } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
 
@@ -529,7 +534,7 @@ exports.init = async function () {
         const code = Math.floor(100000 + Math.random() * 900000).toString();
 
         try {
-            const result = await dbAsync.run(
+            const result = await db.run(
                 'INSERT INTO conference_locations (conference_id, name, code, responsible_name, responsible_phone) VALUES (?, ?, ?, ?, ?)',
                 [conference_id, name, code, responsible_name, responsible_phone]
             );
@@ -537,66 +542,66 @@ exports.init = async function () {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.delete('/locations/:id', authenticate, isAdmin, async (req, res) => {
+    http.route('delete', '/api/v1/conference/locations/:id', { absolute: true, auth: true, admin: true }, async (req, res) => {
         try {
-            await dbAsync.run('DELETE FROM conference_locations WHERE id = ?', [req.params.id]);
+            await db.run('DELETE FROM conference_locations WHERE id = ?', [req.params.id]);
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // Bridge for missing methods (compact for speed)
-    router.post('/hotels', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/hotels', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id, name, address, description, capacity } = req.body;
-        const r = await dbAsync.run('INSERT INTO conference_hotels (conference_id, name, address, description, capacity) VALUES (?, ?, ?, ?, ?)', [conference_id, name, address, description, capacity]);
+        const r = await db.run('INSERT INTO conference_hotels (conference_id, name, address, description, capacity) VALUES (?, ?, ?, ?, ?)', [conference_id, name, address, description, capacity]);
         res.json({ success: true, id: r.lastID });
     });
-    router.post('/rooms', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/rooms', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { hotel_id, room_number, capacity, gender, is_family, family_name, notes } = req.body;
-        const r = await dbAsync.run('INSERT INTO conference_rooms (hotel_id, room_number, capacity, gender, is_family, family_name, notes) VALUES (?, ?, ?, ?, ?, ?, ?)', [hotel_id, room_number, capacity, gender, is_family, family_name, notes]);
+        const r = await db.run('INSERT INTO conference_rooms (hotel_id, room_number, capacity, gender, is_family, family_name, notes) VALUES (?, ?, ?, ?, ?, ?, ?)', [hotel_id, room_number, capacity, gender, is_family, family_name, notes]);
         res.json({ success: true, id: r.lastID });
     });
-    router.post('/inscriptions/:id/assign', authenticate, isAdmin, async (req, res) => {
-        await dbAsync.run('UPDATE conference_inscriptions SET room_id = ? WHERE id = ?', [req.body.room_id, req.params.id]);
+    http.route('post', '/api/v1/conference/inscriptions/:id/assign', { absolute: true, auth: true, admin: true }, async (req, res) => {
+        await db.run('UPDATE conference_inscriptions SET room_id = ? WHERE id = ?', [req.body.room_id, req.params.id]);
         res.json({ success: true });
     });
-    router.post('/inscriptions/:id/payments', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/inscriptions/:id/payments', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { amount, method, reference, proof } = req.body;
-        await dbAsync.run('INSERT INTO conference_payments (inscription_id, amount, method, reference, proof) VALUES (?, ?, ?, ?, ?)', [req.params.id, amount, method, reference, proof]);
-        const total = await dbAsync.get('SELECT SUM(amount) as s FROM conference_payments WHERE inscription_id = ?', [req.params.id]);
-        const p = await dbAsync.get('SELECT total_due FROM conference_inscriptions WHERE id = ?', [req.params.id]);
+        await db.run('INSERT INTO conference_payments (inscription_id, amount, method, reference, proof) VALUES (?, ?, ?, ?, ?)', [req.params.id, amount, method, reference, proof]);
+        const total = await db.get('SELECT SUM(amount) as s FROM conference_payments WHERE inscription_id = ?', [req.params.id]);
+        const p = await db.get('SELECT total_due FROM conference_inscriptions WHERE id = ?', [req.params.id]);
         const status = total.s >= (p?.total_due || 0) ? 'paid' : 'partial';
-        await dbAsync.run('UPDATE conference_inscriptions SET amount_paid = ?, payment_status = ? WHERE id = ?', [total.s, status, req.params.id]);
+        await db.run('UPDATE conference_inscriptions SET amount_paid = ?, payment_status = ? WHERE id = ?', [total.s, status, req.params.id]);
         res.json({ success: true });
     });
 
-    router.get('/inscriptions/:id/payments', authenticate, isAdmin, async (req, res) => {
+    http.route('get', '/api/v1/conference/inscriptions/:id/payments', { absolute: true, auth: true, admin: true }, async (req, res) => {
         try {
-            const list = await dbAsync.all('SELECT * FROM conference_payments WHERE inscription_id = ? ORDER BY date DESC', [req.params.id]);
+            const list = await db.all('SELECT * FROM conference_payments WHERE inscription_id = ? ORDER BY date DESC', [req.params.id]);
             res.json(list);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // === ASSIGNMENT RULES ===
-    router.get('/assignment/rules', authenticate, isAdmin, async (req, res) => {
+    http.route('get', '/api/v1/conference/assignment/rules', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const list = await dbAsync.all('SELECT * FROM conference_assignment_rules WHERE conference_id = ? ORDER BY priority DESC', [conference_id]);
+            const list = await db.all('SELECT * FROM conference_assignment_rules WHERE conference_id = ? ORDER BY priority DESC', [conference_id]);
             res.json(list);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.post('/assignment/rules', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/assignment/rules', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { id, conference_id, name, type, enabled, priority, config } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             if (id) {
-                await dbAsync.run(
+                await db.run(
                     'UPDATE conference_assignment_rules SET name = ?, type = ?, enabled = ?, priority = ?, config = ? WHERE id = ?',
                     [name, type, enabled, priority, config, id]
                 );
             } else {
-                await dbAsync.run(
+                await db.run(
                     'INSERT INTO conference_assignment_rules (conference_id, name, type, enabled, priority, config) VALUES (?, ?, ?, ?, ?, ?)',
                     [conference_id, name, type, enabled, priority, config]
                 );
@@ -605,16 +610,16 @@ exports.init = async function () {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.post('/assignment/reset', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/assignment/reset', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            await dbAsync.run('UPDATE conference_inscriptions SET room_id = NULL WHERE conference_id = ?', [conference_id]);
+            await db.run('UPDATE conference_inscriptions SET room_id = NULL WHERE conference_id = ?', [conference_id]);
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    router.post('/assignment/run', authenticate, isAdmin, async (req, res) => {
+    http.route('post', '/api/v1/conference/assignment/run', { absolute: true, auth: true, admin: true }, async (req, res) => {
         const { conference_id } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
@@ -628,10 +633,10 @@ exports.init = async function () {
      */
     async function runAssignment(conferenceId) {
         // 1. Get enabled rules
-        const rules = await dbAsync.all('SELECT * FROM conference_assignment_rules WHERE conference_id = ? AND enabled = 1 ORDER BY priority DESC', [conferenceId]);
+        const rules = await db.all('SELECT * FROM conference_assignment_rules WHERE conference_id = ? AND enabled = 1 ORDER BY priority DESC', [conferenceId]);
 
         // 2. Get unassigned inscriptions
-        let participantsData = await dbAsync.all('SELECT * FROM conference_inscriptions WHERE conference_id = ? AND room_id IS NULL', [conferenceId]);
+        let participantsData = await db.all('SELECT * FROM conference_inscriptions WHERE conference_id = ? AND room_id IS NULL', [conferenceId]);
         let participants = participantsData.map(p => ({
             ...p,
             custom_data: typeof p.custom_data === 'string' ? JSON.parse(p.custom_data || '{}') : (p.custom_data || {})
@@ -639,13 +644,13 @@ exports.init = async function () {
 
         // 3. Get all rooms with current occupancy and hotel context
         const query = `
-            SELECT r.*, h.name as hotel_name, 
+            SELECT r.*, h.name as hotel_name,
             (SELECT COUNT(*) FROM conference_inscriptions i WHERE i.room_id = r.id) as occupied
             FROM conference_rooms r
             JOIN conference_hotels h ON r.hotel_id = h.id
             WHERE h.conference_id = ?
         `;
-        let rooms = await dbAsync.all(query, [conferenceId]);
+        let rooms = await db.all(query, [conferenceId]);
 
         let assignedCount = 0;
         const roomConstraints = {}; // room_id -> inscription_template
@@ -653,7 +658,7 @@ exports.init = async function () {
         // Initialize room constraints from already occupied rooms
         for (const r of rooms) {
             if (r.occupied > 0) {
-                const first = await dbAsync.get('SELECT * FROM conference_inscriptions WHERE room_id = ? LIMIT 1', [r.id]);
+                const first = await db.get('SELECT * FROM conference_inscriptions WHERE room_id = ? LIMIT 1', [r.id]);
                 if (first) {
                     first.custom_data = typeof first.custom_data === 'string' ? JSON.parse(first.custom_data || '{}') : (first.custom_data || {});
                     roomConstraints[r.id] = first;
@@ -706,7 +711,7 @@ exports.init = async function () {
 
                 if (targetRoom) {
                     for (const member of group) {
-                        await dbAsync.run('UPDATE conference_inscriptions SET room_id = ? WHERE id = ?', [targetRoom.id, member.id]);
+                        await db.run('UPDATE conference_inscriptions SET room_id = ? WHERE id = ?', [targetRoom.id, member.id]);
                         targetRoom.occupied++;
                         roomConstraints[targetRoom.id] = member;
                         assignedCount++;
@@ -725,7 +730,7 @@ exports.init = async function () {
             );
 
             if (targetRoom) {
-                await dbAsync.run('UPDATE conference_inscriptions SET room_id = ? WHERE id = ?', [targetRoom.id, p.id]);
+                await db.run('UPDATE conference_inscriptions SET room_id = ? WHERE id = ?', [targetRoom.id, p.id]);
                 targetRoom.occupied++;
                 roomConstraints[targetRoom.id] = p;
                 assignedCount++;
@@ -736,48 +741,67 @@ exports.init = async function () {
     }
 
 
+    // === PORTAL AUTH HELPER ===
+    // The original authPortal middleware cannot be passed as middleware in the isolated
+    // bridge, so we inline the same check via this helper. Returns the resolved location
+    // row on success, or null on any failure (caller responds 401).
+    async function resolvePortalLocation(req) {
+        let token = req.cookies.wordjs_portal_token || req.headers['x-portal-token'];
+        if (!token) return null;
+        try {
+            const decoded = atob(token);
+            const [id, code] = decoded.split(':');
+            const location = await db.get('SELECT * FROM conference_locations WHERE id = ? AND code = ?', [id, code]);
+            if (!location) return null;
+            return location;
+        } catch (e) {
+            return null;
+        }
+    }
+
+
     // === PUBLIC PORTAL API ===
 
-    router.get('/public/list', async (req, res) => {
+    http.route('get', '/api/v1/conference/public/list', { absolute: true }, async (req, res) => {
         try {
-            const list = await dbAsync.all("SELECT id, name, slug, date_start, date_end, description, status, is_form_published FROM conferences WHERE is_form_published = 1 ORDER BY id DESC");
+            const list = await db.all("SELECT id, name, slug, date_start, date_end, description, status, is_form_published FROM conferences WHERE is_form_published = 1 ORDER BY id DESC");
             res.json(list);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // 2. List Locations for Login (Public)
-    router.get('/public/locations', async (req, res) => {
+    http.route('get', '/api/v1/conference/public/locations', { absolute: true }, async (req, res) => {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const conf = await dbAsync.get('SELECT is_form_published FROM conferences WHERE id = ?', [conference_id]);
+            const conf = await db.get('SELECT is_form_published FROM conferences WHERE id = ?', [conference_id]);
             if (!conf || !conf.is_form_published) {
                 return res.status(403).json({ error: 'El formulario de esta conferencia no está publicado.' });
             }
             // Only return necessary info for login selection
-            const list = await dbAsync.all('SELECT id, name, responsible_name FROM conference_locations WHERE conference_id = ? ORDER BY name', [conference_id]);
+            const list = await db.all('SELECT id, name, responsible_name FROM conference_locations WHERE conference_id = ? ORDER BY name', [conference_id]);
             res.json(list);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // 2b. Get Fields for Portal (Public)
-    router.get('/public/fields', async (req, res) => {
+    http.route('get', '/api/v1/conference/public/fields', { absolute: true }, async (req, res) => {
         const { conference_id } = req.query;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
-            const list = await dbAsync.all('SELECT name, label, type, options, is_required, width FROM conference_fields WHERE conference_id = ? ORDER BY sort_order ASC', [conference_id]);
+            const list = await db.all('SELECT name, label, type, options, is_required, width FROM conference_fields WHERE conference_id = ? ORDER BY sort_order ASC', [conference_id]);
             res.json(list);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // 3. Login
-    router.post('/portal/login', async (req, res) => {
+    http.route('post', '/api/v1/conference/portal/login', { absolute: true }, async (req, res) => {
         const { location_id, code } = req.body;
         try {
-            const location = await dbAsync.get('SELECT * FROM conference_locations WHERE id = ?', [location_id]);
+            const location = await db.get('SELECT * FROM conference_locations WHERE id = ?', [location_id]);
             if (!location) return res.status(404).json({ error: 'Location not found' });
 
-            const conf = await dbAsync.get('SELECT is_form_published FROM conferences WHERE id = ?', [location.conference_id]);
+            const conf = await db.get('SELECT is_form_published FROM conferences WHERE id = ?', [location.conference_id]);
             if (!conf || !conf.is_form_published) {
                 return res.status(403).json({ error: 'El formulario de esta conferencia no está publicado.' });
             }
@@ -802,44 +826,32 @@ exports.init = async function () {
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    // Middleware for Portal Auth
-    const authPortal = async (req, res, next) => {
-        let token = req.cookies.wordjs_portal_token || req.headers['x-portal-token'];
-        if (!token) return res.status(401).json({ error: 'No token' });
-
-        try {
-            const decoded = atob(token);
-            const [id, code] = decoded.split(':');
-            const location = await dbAsync.get('SELECT * FROM conference_locations WHERE id = ? AND code = ?', [id, code]);
-
-            if (!location) return res.status(401).json({ error: 'Invalid token' });
-            req.location = location;
-            next();
-        } catch (e) {
-            res.status(401).json({ error: 'Auth failed' });
-        }
-    };
-
     // 4. Get Current Location Info
-    router.get('/portal/me', authPortal, async (req, res) => {
-        res.json(req.location);
+    http.route('get', '/api/v1/conference/portal/me', { absolute: true }, async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
+        res.json(location);
     });
 
     // 5. Get Inscriptions for Location
-    router.get('/portal/inscriptions', authPortal, async (req, res) => {
+    http.route('get', '/api/v1/conference/portal/inscriptions', { absolute: true }, async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
         try {
-            const list = await dbAsync.all('SELECT * FROM conference_inscriptions WHERE location = ? AND conference_id = ? ORDER BY first_name', [req.location.name, req.location.conference_id]);
+            const list = await db.all('SELECT * FROM conference_inscriptions WHERE location = ? AND conference_id = ? ORDER BY first_name', [location.name, location.conference_id]);
             res.json(list);
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
     // 6. Create Inscription (Portal)
-    router.post('/portal/inscriptions', authPortal, async (req, res) => {
+    http.route('post', '/api/v1/conference/portal/inscriptions', { absolute: true }, async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
         const { ...fieldValues } = req.body;
-        const conference_id = req.location.conference_id;
+        const conference_id = location.conference_id;
 
         try {
-            const conf = await dbAsync.get('SELECT is_form_published, fee_default FROM conferences WHERE id = ?', [conference_id]);
+            const conf = await db.get('SELECT is_form_published, fee_default FROM conferences WHERE id = ?', [conference_id]);
             if (!conf || !conf.is_form_published) {
                 return res.status(403).json({ error: 'El formulario no está publicado.' });
             }
@@ -852,7 +864,7 @@ exports.init = async function () {
 
             const values = {
                 conference_id,
-                location: req.location.name,
+                location: location.name,
                 total_due: conf.fee_default || 0,
                 status: 'pending'
             };
@@ -871,7 +883,7 @@ exports.init = async function () {
             const dataStr = JSON.stringify(customData);
             const queryValues = [...Object.values(values), dataStr];
 
-            const result = await dbAsync.run(
+            const result = await db.run(
                 `INSERT INTO conference_inscriptions (${keys.join(', ')}) VALUES (${keys.map(() => '?').join(', ')})`,
                 queryValues
             );
@@ -880,36 +892,34 @@ exports.init = async function () {
     });
 
     // 7. Bulk Payments (Portal)
-    router.post('/portal/payments/bulk', authPortal, async (req, res) => {
+    http.route('post', '/api/v1/conference/portal/payments/bulk', { absolute: true }, async (req, res) => {
+        const location = await resolvePortalLocation(req);
+        if (!location) return res.status(401).json({ error: 'No token' });
         const { inscription_ids, amount_per_person, method, reference, proof } = req.body;
         if (!inscription_ids || !Array.isArray(inscription_ids)) return res.status(400).json({ error: 'Missing inscription_ids' });
 
         try {
             for (const id of inscription_ids) {
                 // Verify inscription belongs to this location
-                const ins = await dbAsync.get('SELECT * FROM conference_inscriptions WHERE id = ? AND location = ? AND conference_id = ?', [id, req.location.name, req.location.conference_id]);
+                const ins = await db.get('SELECT * FROM conference_inscriptions WHERE id = ? AND location = ? AND conference_id = ?', [id, location.name, location.conference_id]);
                 if (!ins) continue;
 
-                await dbAsync.run(
+                await db.run(
                     'INSERT INTO conference_payments (inscription_id, amount, method, reference, proof) VALUES (?, ?, ?, ?, ?)',
                     [id, amount_per_person, method, reference, proof]
                 );
 
                 // Update inscription totals
-                const total = await dbAsync.get('SELECT SUM(amount) as s FROM conference_payments WHERE inscription_id = ?', [id]);
+                const total = await db.get('SELECT SUM(amount) as s FROM conference_payments WHERE inscription_id = ?', [id]);
                 const status = total.s >= (ins.total_due || 0) ? 'paid' : 'partial';
-                await dbAsync.run('UPDATE conference_inscriptions SET amount_paid = ?, payment_status = ? WHERE id = ?', [total.s, status, id]);
+                await db.run('UPDATE conference_inscriptions SET amount_paid = ?, payment_status = ? WHERE id = ?', [total.s, status, id]);
             }
             res.json({ success: true });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 
-    const { getApp } = require('../../src/core/appRegistry');
-    const app = getApp();
-    if (app) app.use('/api/v1/conference', router);
-
-    const { registerAdminMenu } = require('../../src/core/adminMenu');
-    registerAdminMenu('conference-manager', {
+    // === ADMIN MENU ===
+    adminMenu.add({
         href: '/admin/plugin/conference-manager',
         label: 'Conference',
         icon: 'fa-users',
@@ -918,4 +928,8 @@ exports.init = async function () {
     });
 
     console.log('Conference Manager Plugin (Multi-Event) initialized.');
+};
+
+exports.deactivate = function () {
+    console.log('Conference Manager plugin deactivated');
 };
