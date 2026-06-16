@@ -229,25 +229,25 @@ export default function DashboardPage() {
                                 <span className="w-8 h-8 rounded-xl bg-emerald-100 text-emerald-600 flex items-center justify-center">
                                     <i className="fa-solid fa-heart-pulse text-sm"></i>
                                 </span>
-                                <h2 className="text-xl font-black text-gray-900 italic tracking-tight">System Health</h2>
+                                <h2 className="text-xl font-black text-gray-900 italic tracking-tight">{t('dashboard.system.health')}</h2>
                             </div>
                             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                                 <HealthIndicator
-                                    label="Database"
+                                    label={t('dashboard.health.database')}
                                     status={systemStatus.database.status}
-                                    detail={systemStatus.database.status === 'OK' ? `Connected (${systemStatus.database.driver})` : systemStatus.database.message || 'Error'}
+                                    detail={systemStatus.database.status === 'OK' ? `${t('dashboard.health.connected')} (${systemStatus.database.driver})` : systemStatus.database.message || t('dashboard.health.error')}
                                     icon="fa-database"
                                 />
                                 <HealthIndicator
-                                    label="Security (mTLS)"
+                                    label={t('dashboard.health.security')}
                                     status={systemStatus.mtls.status}
-                                    detail={systemStatus.mtls.status === 'OK' ? 'Certificates Valid' : systemStatus.mtls.status}
+                                    detail={systemStatus.mtls.status === 'OK' ? t('dashboard.health.certs.valid') : systemStatus.mtls.status}
                                     icon="fa-shield-halved"
                                 />
                                 <HealthIndicator
-                                    label="Storage"
+                                    label={t('dashboard.health.storage')}
                                     status="OK"
-                                    detail="Writable"
+                                    detail={t('dashboard.health.writable')}
                                     icon="fa-folder-tree"
                                 />
                             </div>
@@ -267,28 +267,28 @@ export default function DashboardPage() {
                                 href="/admin/posts/new"
                                 icon="fa-plus"
                                 label={t('dashboard.new.post')}
-                                subLabel="Write something new"
+                                subLabel={t('dashboard.new.post.sub')}
                                 color="bg-blue-500"
                             />
                             <QuickAction
                                 href="/admin/pages/new"
                                 icon="fa-layer-group"
                                 label={t('dashboard.new.page')}
-                                subLabel="Create a static page"
+                                subLabel={t('dashboard.new.page.sub')}
                                 color="bg-indigo-500"
                             />
                             <QuickAction
                                 href="/admin/media"
                                 icon="fa-cloud-arrow-up"
                                 label={t('dashboard.add.media')}
-                                subLabel="Upload files"
+                                subLabel={t('dashboard.add.media.sub')}
                                 color="bg-purple-500"
                             />
                             <QuickAction
                                 href="/admin/users/new"
                                 icon="fa-user-plus"
-                                label="Add User"
-                                subLabel="Invite team member"
+                                label={t('dashboard.add.user')}
+                                subLabel={t('dashboard.add.user.sub')}
                                 color="bg-emerald-500"
                             />
                         </div>
@@ -299,21 +299,21 @@ export default function DashboardPage() {
                         <div className="absolute top-0 right-0 w-64 h-64 bg-gray-50 rounded-full blur-[80px] opacity-50 pointer-events-none"></div>
                         <div className="flex items-center justify-between mb-8 relative z-10">
                             <div>
-                                <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">Activity Overview</h2>
-                                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-1">Traffic & Engagement</p>
+                                <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">{t('dashboard.activity.overview')}</h2>
+                                <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-1">{t('dashboard.traffic.engagement')}</p>
                             </div>
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => setChartPeriod('weekly')}
                                     className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}
                                 >
-                                    Weekly
+                                    {t('dashboard.weekly')}
                                 </button>
                                 <button
                                     onClick={() => setChartPeriod('monthly')}
                                     className={`px-3 py-1 rounded-lg text-[10px] uppercase font-bold tracking-wider transition-colors ${chartPeriod === 'monthly' ? 'bg-gray-900 text-white' : 'bg-white border border-gray-200 text-gray-400 hover:bg-gray-50'}`}
                                 >
-                                    Monthly
+                                    {t('dashboard.monthly')}
                                 </button>
                             </div>
                         </div>
@@ -382,7 +382,7 @@ export default function DashboardPage() {
                         </span>
                         <div>
                             <h2 className="text-xl font-black text-gray-900 italic tracking-tight">{t('dashboard.recent.comments')}</h2>
-                            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-0.5">Community Engagement</p>
+                            <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-0.5">{t('dashboard.community.engagement')}</p>
                         </div>
                     </div>
 
@@ -393,7 +393,7 @@ export default function DashboardPage() {
                     ) : recentComments.length === 0 ? (
                         <div className="text-center py-20 opacity-50">
                             <i className="fa-solid fa-comment-slash text-4xl mb-4 text-gray-300"></i>
-                            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">No comments yet</p>
+                            <p className="text-xs font-bold uppercase tracking-widest text-gray-400">{t('dashboard.no.comments.yet')}</p>
                         </div>
                     ) : (
                         <div className="space-y-6">
@@ -432,7 +432,7 @@ export default function DashboardPage() {
                         href="/admin/comments"
                         className="mt-8 flex items-center justify-center gap-2 w-full py-4 rounded-2xl bg-gray-50 text-gray-600 font-black text-[10px] uppercase tracking-widest hover:bg-gray-900 hover:text-white transition-all duration-300 group"
                     >
-                        View all <i className="fa-solid fa-arrow-right-long group-hover:translate-x-1 transition-transform"></i>
+                        {t('dashboard.view.all')} <i className="fa-solid fa-arrow-right-long group-hover:translate-x-1 transition-transform"></i>
                     </a>
                 </div>
             </div>
