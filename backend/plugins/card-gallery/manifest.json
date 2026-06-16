@@ -4,6 +4,7 @@
     "version": "1.0.0",
     "description": "Manage event promo cards with zigzag layout",
     "author": "WordJS",
+    "isolated": true,
     "backend": {
         "entry": "index.js"
     },
