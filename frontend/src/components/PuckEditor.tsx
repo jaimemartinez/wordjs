@@ -7,6 +7,9 @@ import ModernSelect from "./ModernSelect";
 import PublicLayout from "@/app/(public)/layout";
 import { puckConfig } from "./puckConfig";
 import { RichTextEditor } from "./puckConfig";
+import RevisionsSidebar from "./RevisionsSidebar";
+import { revisionsApi, Revision } from "@/lib/api";
+import { useModal } from "@/contexts/ModalContext";
 
 interface PuckEditorProps {
     initialData?: Data;
@@ -89,11 +92,10 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
         ctx.setActiveEditorId(null);
     };
 
-    // Edit Mode: Show RichTextEditor in-place
     if (isEditing) {
         return (
             <div
-                className="relative z-[9999] isolate !pointer-events-auto min-h-[100px] border-2 border-blue-400 rounded-xl p-1 bg-transparent inline-editor-container"
+                className="relative z-[99999] !overflow-visible !pointer-events-auto min-h-[100px] border-2 border-blue-400 rounded-xl p-1 bg-transparent inline-editor-container"
                 data-item-id={id}
                 onMouseDownCapture={(e) => {
                     const target = e.target as HTMLElement;
@@ -159,12 +161,11 @@ const OverlayBlocker = () => {
             setActiveId(initialId);
         }
 
-        // Listen for changes from the parent or same window
-        const handleIdChange = (e: any) => {
-            setActiveId(e.detail);
+        const handleUpdate = (e: any) => {
+            setActiveId(e.detail?.activeId || null);
         };
-        window.addEventListener('puck-editor-change', handleIdChange);
-        return () => window.removeEventListener('puck-editor-change', handleIdChange);
+        window.addEventListener('puckActiveEditorIdChanged', handleUpdate as any);
+        return () => window.removeEventListener('puckActiveEditorIdChanged', handleUpdate as any);
     }, []);
 
     React.useEffect(() => {
@@ -174,8 +175,6 @@ const OverlayBlocker = () => {
         if (!activeId) {
             const styleEl = doc.getElementById(styleId);
             if (styleEl) styleEl.remove();
-
-            // Explicitly restore pointer events just in case
             if (doc.body) doc.body.style.pointerEvents = 'auto';
             return;
         }
@@ -189,27 +188,30 @@ const OverlayBlocker = () => {
 
         styleEl.textContent = `
             /* Hide only Puck-specific overlays when text editing is active */
-            /* Be careful NOT to hide general content - only draggable component overlays */
             [data-puck-overlay-portal],
-            [data-puck-overlay] {
-                pointer-events: none !important;
-                opacity: 0 !important;
-            }
-            
-            /* Hide Puck draggable overlays specifically */
+            [data-puck-overlay],
             [class*="DraggableComponent-overlay"],
             [class*="DraggableComponent-actionsOverlay"] {
-                display: none !important;
-                visibility: hidden !important;
                 pointer-events: none !important;
+                opacity: 0 !important;
+                display: none !important;
+            }
+            
+            /* Absolute overflow override when editing to prevent toolbar clipping */
+            section.wp-block-section, 
+            div.flex-col, 
+            div.inline-editor-container,
+            [data-puck-node],
+            [data-puck-component],
+            .puck-drop-zone {
+                overflow: visible !important;
+                contain: none !important;
             }
 
-            /* Force text cursor and selection in the editor writing area */
             .rich-text-content, .rich-text-content * {
                 cursor: text !important;
             }
 
-            /* Force pointer cursor on buttons and interactive elements */
             .inline-editor-container button, 
             .inline-editor-container button *,
             .inline-editor-container input,
@@ -227,7 +229,6 @@ const OverlayBlocker = () => {
                 pointer-events: auto !important;
             }
 
-            /* Disable drag cursor on the component wrapper while editing */
             [data-puck-component] {
                 cursor: default !important;
             }
@@ -497,6 +498,16 @@ export default function PuckEditor({
                         className="!py-1.5 !px-3 !bg-white !border-gray-200 !rounded-md !text-sm font-normal min-w-[100px]"
                     />
                 )}
+                {pageId && (
+                    <button
+                        type="button"
+                        onClick={() => setShowRevisions(!showRevisions)}
+                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showRevisions ? 'bg-amber-500 text-white shadow-lg shadow-amber-200 scale-105' : 'bg-gray-50/50 text-gray-400 hover:text-amber-500 hover:bg-gray-100 border border-gray-100'}`}
+                        title="View Revision History"
+                    >
+                        <i className="fa-solid fa-clock-rotate-left"></i>
+                    </button>
+                )}
                 {onCancel && (
                     <button
                         type="button"
@@ -547,9 +558,25 @@ export default function PuckEditor({
 
 
     // Layout Visibility State
+    const { alert } = useModal();
     const [showSidebar, setShowSidebar] = useState(true);
     const [showProperties, setShowProperties] = useState(true);
+    const [showRevisions, setShowRevisions] = useState(false);
     const [isUiLoaded, setIsUiLoaded] = useState(false);
+
+    const handleRestore = async (revision: Revision) => {
+        if (!pageId) return;
+        try {
+            await revisionsApi.restore(revision.id);
+            // After restore, we need to reload the page to refresh the state
+            // or just reload the post data. 
+            // In WordJS, the easiest is to just reload the window to ensure everything is fresh
+            window.location.reload();
+        } catch (error) {
+            console.error("Failed to restore revision:", error);
+            await alert("Failed to restore revision. Please try again.", "Error");
+        }
+    };
 
     // Persist UI preferences
     useEffect(() => {
@@ -729,6 +756,16 @@ export default function PuckEditor({
                                     </div>
                                 )}
 
+                                {pageId && (
+                                    <button
+                                        onClick={() => setShowRevisions(!showRevisions)}
+                                        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-300 ${showRevisions ? 'bg-amber-500 text-white shadow-lg shadow-amber-200 scale-105' : 'bg-gray-50/50 text-gray-400 hover:text-amber-500 hover:bg-gray-100 border border-gray-100'}`}
+                                        title="Revision History"
+                                    >
+                                        <i className="fa-solid fa-clock-rotate-left"></i>
+                                    </button>
+                                )}
+
                                 <div className="flex items-center gap-2">
                                     {onCancel && (
                                         <button
@@ -838,6 +875,14 @@ export default function PuckEditor({
                     </div>
                 </Puck>
             </div>
+            {pageId && (
+                <RevisionsSidebar
+                    postId={pageId}
+                    isOpen={showRevisions}
+                    onClose={() => setShowRevisions(false)}
+                    onRestore={handleRestore}
+                />
+            )}
         </EditorContext.Provider>
     );
 }

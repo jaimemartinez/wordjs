@@ -23,6 +23,7 @@ export default function SettingsPage() {
         users_can_register: "0",
         default_role: "subscriber",
         comment_registration: "0",
+        redis_cache_enabled: "0",
     });
     const [roles, setRoles] = useState<Record<string, Role>>({});
     const [saving, setSaving] = useState(false);
@@ -69,6 +70,7 @@ export default function SettingsPage() {
                 users_can_register: data.users_can_register !== undefined ? String(data.users_can_register) : "0",
                 default_role: data.default_role || "subscriber",
                 comment_registration: data.comment_registration !== undefined ? String(data.comment_registration) : "0",
+                redis_cache_enabled: data.redis_cache_enabled !== undefined ? String(data.redis_cache_enabled) : "0",
             });
         } catch (error) {
             console.error("Failed to load settings:", error);
@@ -361,6 +363,45 @@ export default function SettingsPage() {
                                     />
                                 </button>
                             </div>
+                        </div>
+                    </div>
+                    {/* Performance Section */}
+                    <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
+                        <div className="px-8 py-6 border-b border-gray-50 bg-gray-50/30">
+                            <h2 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                                <i className="fa-solid fa-bolt text-amber-500"></i> Performance & Cache
+                            </h2>
+                        </div>
+                        <div className="p-8 space-y-8">
+                            <div className="p-5 bg-blue-50/30 rounded-2xl border border-blue-100 flex items-center justify-between gap-6 group hover:bg-blue-100/50 transition-colors">
+                                <div className="flex gap-4 items-center">
+                                    <div className="bg-white p-3 rounded-xl shadow-sm border border-blue-200 text-blue-600">
+                                        <i className="fa-solid fa-server text-xl"></i>
+                                    </div>
+                                    <div>
+                                        <h4 className="text-sm font-bold text-gray-900">Redis Object Cache</h4>
+                                        <p className="text-xs text-gray-500 mt-0.5">Use Redis to cache database objects. This significantly improves site speed.</p>
+                                    </div>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setSettings({ ...settings, redis_cache_enabled: settings.redis_cache_enabled === "1" ? "0" : "1" })}
+                                    className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.redis_cache_enabled === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
+                                >
+                                    <span
+                                        className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.redis_cache_enabled === "1" ? 'translate-x-6' : 'translate-x-1'}`}
+                                    />
+                                </button>
+                            </div>
+
+                            {settings.redis_cache_enabled === "1" && (
+                                <div className="p-4 bg-emerald-50 rounded-xl border border-emerald-100 flex items-start gap-3 animate-in fade-in slide-in-from-top-2">
+                                    <i className="fa-solid fa-circle-info text-emerald-500 mt-0.5"></i>
+                                    <p className="text-xs text-emerald-700 leading-relaxed">
+                                        <strong>Pro Tip:</strong> Redis is active. If you don't have a Redis server installed on your host, the system will automatically fall back to the database without showing errors.
+                                    </p>
+                                </div>
+                            )}
                         </div>
                     </div>
 
