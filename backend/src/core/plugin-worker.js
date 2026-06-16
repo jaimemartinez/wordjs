@@ -16,6 +16,10 @@
  *                     {kind:'invoke', id, cbId, args}        // run a registered callback
  */
 'use strict';
+// Mark this V8 isolate as a plugin worker BEFORE any core module loads, so core code (e.g.
+// config/app) can skip host-only, sandbox-blocked side-effects (reading/persisting
+// wordjs-config.json, secret generation) — the worker reaches all of that via the bridge instead.
+global.__WORDJS_ISOLATED__ = true;
 const { parentPort, workerData } = require('worker_threads');
 const path = require('path');
 

@@ -1,21 +1,33 @@
+/**
+ * WordJS - Mail Server plugin (ISOLATED, operator-trusted).
+ *
+ * Runs in a worker via the capability bridge. ALL behavior is preserved (SMTP server, MX delivery,
+ * DKIM, SPF, spam filter, retry queue, scheduled send, attachments) — only the core-access layer was
+ * swapped to `wordjs`:
+ *   - core models/Email          -> ./lib/email-store(wordjs.db)
+ *   - core models/User           -> raw SQL on the `users` table via wordjs.db
+ *   - core options get/update    -> wordjs.options.get/set
+ *   - core config/app.site.url   -> stored option 'siteurl' (read via wordjs.options)
+ *   - express router             -> wordjs.http.route(..., { absolute:true })
+ *   - notificationService        -> wordjs.notify / wordjs.notify.registerTransport
+ *   - registerAdminMenu          -> wordjs.adminMenu.add
+ *   - global.wordjs_send_mail    -> wordjs.provideMail(sendMail)
+ *
+ * node builtins (net/dns/tls/crypto/os/path) and npm deps (nodemailer/smtp-server/mailparser/
+ * spf-validator/dnsbl/bayes) are required normally — they are NOT blocked inside the worker.
+ */
 const nodemailer = require('nodemailer');
 const { SMTPServer } = require('smtp-server');
 const { simpleParser } = require('mailparser');
 const dns = require('dns').promises;
 const net = require('net');
 const SPFValidator = require('spf-validator');
-const Email = require('../../src/models/Email');
-const { authenticate } = require('../../src/middleware/auth');
-const User = require('../../src/models/User');
-const notificationService = require('../../src/core/notifications');
-const { getOption, updateOption } = require('../../src/core/options');
-const config = require('../../src/config/app');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 
-// Define Attachment storage path
+// Define Attachment storage path (backend/uploads/mail-attachments)
 const UPLOAD_DIR = path.join(__dirname, '../../uploads/mail-attachments');
 
 exports.metadata = {
@@ -25,15 +37,66 @@ exports.metadata = {
     author: 'WordJS'
 };
 
+// === Bridge-backed module state (set in init) ===
+let wordjs = null;        // the injected capability bridge
+let Email = null;         // plugin-local email store backed by wordjs.db
+let getOption = null;     // wordjs.options.get
+let updateOption = null;  // wordjs.options.set
+let classifier = null;    // bayes classifier
+let saveBayes = null;     // persists the classifier
 let transporter = null;
 let smtpServer = null;
+
+// === User lookups via raw SQL on the `users` table (replaces core models/User) ===
+// Normalize raw rows so the rest of the code can keep using .userEmail / .username / .displayName.
+function mapUser(row) {
+    if (!row) return null;
+    return {
+        id: row.id,
+        userLogin: row.user_login,
+        username: row.user_login,
+        userEmail: row.user_email,
+        displayName: row.display_name,
+        role: row.role
+    };
+}
+
+const User = {
+    async findByEmail(email) {
+        const row = await wordjs.db.get('SELECT * FROM users WHERE LOWER(user_email) = LOWER(?)', [email]);
+        return mapUser(row);
+    },
+    async findByLogin(login) {
+        const row = await wordjs.db.get('SELECT * FROM users WHERE user_login = ?', [login]);
+        return mapUser(row);
+    },
+    async findById(id) {
+        const row = await wordjs.db.get('SELECT * FROM users WHERE id = ?', [id]);
+        return mapUser(row);
+    },
+    async findAll({ search, limit } = {}) {
+        const term = `%${search || ''}%`;
+        const lim = limit || 50;
+        const rows = await wordjs.db.all(
+            'SELECT * FROM users WHERE (user_login LIKE ? OR display_name LIKE ? OR user_email LIKE ?) LIMIT ?',
+            [term, term, term, lim]
+        );
+        return (rows || []).map(mapUser);
+    }
+};
+
+// Resolve the site URL from options (replaces core config/app.site.url).
+async function getSiteUrl() {
+    return await getOption('siteurl', await getOption('home', 'http://localhost'));
+}
+async function getSiteDomain() {
+    try { return new URL(await getSiteUrl()).hostname; } catch (e) { return 'localhost'; }
+}
 
 /**
  * Initialize the fallback transporter (optional)
  */
 async function initTransporter() {
-    const { getOption } = require('../../src/core/options');
-
     const host = await getOption('mail_server', '');
     const port = parseInt(await getOption('mail_port', '587'), 10);
     const user = await getOption('mail_user', '');
@@ -194,10 +257,7 @@ function ipInCidr(ip, cidr) {
  * Initialize the Inbound SMTP Server
  */
 async function initSMTPServer() {
-    const { getOption } = require('../../src/core/options');
-    const config = require('../../src/config/app');
-    const siteUrl = new URL(config.site.url);
-    const siteDomain = siteUrl.hostname;
+    const siteDomain = await getSiteDomain();
     const port = parseInt(await getOption('smtp_listen_port', '2525'), 10);
     const catchAllRaw = await getOption('smtp_catch_all', '0');
 
@@ -267,6 +327,7 @@ async function initSMTPServer() {
                 if (err) return callback(err);
 
                 try {
+                    const siteDomain = await getSiteDomain();
                     // 3. Bayesian Analysis
                     const text = (parsed.subject || '') + ' ' + (parsed.text || '');
                     const category = await classifier.categorize(text);
@@ -298,11 +359,11 @@ async function initSMTPServer() {
                                 isTrash: isSpam ? 1 : 0 // Auto-trash spam
                             });
 
-                            // Auto-learn (Naive logic: if we accepted it and user didn't mark it, it's ham. 
+                            // Auto-learn (Naive logic: if we accepted it and user didn't mark it, it's ham.
                             // But here we just classify. Learning should happen on user action.)
 
                             if (user) {
-                                await notificationService.send({
+                                await wordjs.notify({
                                     user_id: user.id,
                                     type: isSpam ? 'alert' : 'email',
                                     title: isSpam ? 'Spam Detected' : 'New Inbound Email',
@@ -359,9 +420,6 @@ function isValidEmail(email) {
  * Send an email directly using MX delivery or Fallback
  */
 async function sendMail(data) {
-    const { getOption } = require('../../src/core/options');
-    const config = require('../../src/config/app');
-
     console.log(`[MailServer] sendMail called. Subject: "${data.subject}"`);
 
     // SECURITY: Validate recipient email (CVE-2025-14874)
@@ -455,8 +513,7 @@ async function sendMail(data) {
     }
 
     // 2. Deliver to Internal Users (Inbox Copy)
-    const siteUrl = new URL(config.site.url);
-    const siteDomain = siteUrl.hostname;
+    const siteDomain = await getSiteDomain();
 
     console.log(`[MailServer] Processing internal delivery for domain: ${siteDomain}`);
 
@@ -509,7 +566,7 @@ async function sendMail(data) {
 
                 // Notify
                 if (recipient.toLowerCase() !== fromEmail.toLowerCase()) {
-                    await notificationService.send({
+                    await wordjs.notify({
                         user_id: localUser.id,
                         type: 'email',
                         title: 'New Internal Email',
@@ -642,7 +699,7 @@ async function sendBounce(data, failedList) {
         const user = await User.findByEmail(fromEmail);
         if (!user || !user.id) return;
         const detail = failedList.map(f => `${f.recipient} (${f.error})`).join(', ');
-        await notificationService.send({
+        await wordjs.notify({
             user_id: user.id,
             type: 'alert',
             title: 'Email delivery failed',
@@ -661,12 +718,11 @@ async function sendBounce(data, failedList) {
  * sending IP's reverse DNS (PTR) or remote MX servers (Gmail/Outlook) will reject/spam the mail.
  */
 async function getHeloName() {
-    const { getOption } = require('../../src/core/options');
     const explicit = await getOption('mail_helo_host', '');
     if (explicit) return explicit;
     const dkimDomain = await getOption('mail_security_dkim_domain', '');
     if (dkimDomain) return dkimDomain;
-    try { return new URL(config.site.url).hostname; } catch (e) { return os.hostname(); }
+    try { return new URL(await getSiteUrl()).hostname; } catch (e) { return os.hostname(); }
 }
 
 /**
@@ -748,39 +804,19 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
     throw err;
 }
 
-exports.init = async function () {
-    const { getOption, updateOption } = require('../../src/core/options');
-    const express = require('express');
-    const { authenticate } = require('../../src/middleware/auth');
-    const { isAdmin } = require('../../src/middleware/permissions');
-    const multer = require('multer');
+exports.init = async function (bridge) {
+    wordjs = bridge;
+    getOption = (key, def) => wordjs.options.get(key, def);
+    updateOption = (key, value) => wordjs.options.set(key, value);
+    Email = require('./lib/email-store')(wordjs.db);
 
-    // Configure Uploads
-    const TEMP_UPLOAD_DIR = path.join(__dirname, '../../uploads/mail-server-temp');
-    fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true });
-
-    const storage = multer.diskStorage({
-        destination: (req, file, cb) => cb(null, TEMP_UPLOAD_DIR),
-        filename: (req, file, cb) => {
-            // SECURITY: Use crypto.randomBytes instead of Math.random for unpredictable filenames
-            const crypto = require('crypto');
-            const uniqueSuffix = Date.now() + '-' + crypto.randomBytes(8).toString('hex');
-            cb(null, uniqueSuffix + path.extname(file.originalname));
-        }
-    });
-
-    const upload = multer({
-        storage,
-        limits: { fileSize: 25 * 1024 * 1024 } // 25MB limit
-    });
-
-    // Security Data Directory
+    // Security Data Directory (confined fs writes within uploads dir are allowed)
     const SEC_DATA_DIR = path.join(__dirname, '../../uploads/mail-server-data');
     try { fs.mkdirSync(SEC_DATA_DIR, { recursive: true }); } catch (e) { }
 
     // Initialize Bayes
     const bayes = require('bayes');
-    let classifier = bayes();
+    classifier = bayes();
     const bayesFile = path.join(SEC_DATA_DIR, 'bayes.json');
     try {
         if (fs.existsSync(bayesFile)) {
@@ -788,7 +824,7 @@ exports.init = async function () {
         }
     } catch (e) { console.error('Failed to load bayes db', e); }
 
-    const saveBayes = async () => {
+    saveBayes = async () => {
         try {
             fs.writeFileSync(bayesFile, classifier.toJson());
         } catch (e) {
@@ -814,7 +850,7 @@ exports.init = async function () {
                     const attachments = await Email.getAttachments(email.id);
                     const formattedAttachments = attachments.map(att => ({
                         filename: att.filename,
-                        path: path.join(__dirname, '../../uploads/mail-attachments', att.storage_path)
+                        path: path.join(UPLOAD_DIR, att.storage_path)
                     }));
 
                     await sendMail({
@@ -858,7 +894,7 @@ exports.init = async function () {
                     const attachments = await Email.getAttachments(email.id);
                     const formattedAttachments = attachments.map(att => ({
                         filename: att.filename,
-                        path: path.join(__dirname, '../../uploads/mail-attachments', att.storage_path)
+                        path: path.join(UPLOAD_DIR, att.storage_path)
                     }));
 
                     await sendMail({
@@ -885,11 +921,15 @@ exports.init = async function () {
         }
     }, 60 * 1000);
 
-    // === API ROUTES ===
-    const router = express.Router();
+    // === API ROUTES (host keeps the original /api/v1/mail-server/* paths via opts.absolute) ===
+    const ROUTE_BASE = '/api/v1/mail-server';
+    const route = (method, sub, opts, handler) => {
+        if (typeof opts === 'function') { handler = opts; opts = {}; }
+        wordjs.http.route(method, ROUTE_BASE + sub, Object.assign({ absolute: true }, opts), handler);
+    };
 
     // GET /api/v1/mail-server/emails/search
-    router.get('/emails/search', authenticate, async (req, res) => {
+    route('get', '/emails/search', { auth: true }, async (req, res) => {
         const query = req.query.q || '';
         if (query.length < 2) return res.json({ emails: [] });
 
@@ -903,7 +943,7 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/emails
-    router.get('/emails', authenticate, async (req, res) => {
+    route('get', '/emails', { auth: true }, async (req, res) => {
         const folder = req.query.folder || 'inbox'; // 'inbox', 'sent', 'trash', 'archive', 'starred', 'drafts'
         const limit = parseInt(req.query.limit || '50', 10);
         const offset = parseInt(req.query.offset || '0', 10);
@@ -915,7 +955,7 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/stats
-    router.get('/stats', authenticate, async (req, res) => {
+    route('get', '/stats', { auth: true }, async (req, res) => {
         try {
             const unread = await Email.countUnreadInbox(req.user.userEmail);
             res.json({ unread });
@@ -925,7 +965,7 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/emails/:id
-    router.get('/emails/:id', authenticate, async (req, res) => {
+    route('get', '/emails/:id', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
@@ -948,7 +988,7 @@ exports.init = async function () {
     });
 
     // DELETE /api/v1/mail-server/emails/:id - Move to Trash (Soft Delete)
-    router.delete('/emails/:id', authenticate, async (req, res) => {
+    route('delete', '/emails/:id', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
@@ -967,7 +1007,7 @@ exports.init = async function () {
     });
 
     // PUT /api/v1/mail-server/emails/:id/restore - Restore from Trash
-    router.put('/emails/:id/restore', authenticate, async (req, res) => {
+    route('put', '/emails/:id/restore', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
@@ -980,13 +1020,13 @@ exports.init = async function () {
     });
 
     // DELETE /api/v1/mail-server/trash/empty - Empty Trash
-    router.delete('/trash/empty', authenticate, async (req, res) => {
+    route('delete', '/trash/empty', { auth: true }, async (req, res) => {
         await Email.emptyTrash(req.user.userEmail);
         res.json({ success: true, message: 'Trash emptied' });
     });
 
     // PUT /api/v1/mail-server/emails/:id/star
-    router.put('/emails/:id/star', authenticate, async (req, res) => {
+    route('put', '/emails/:id/star', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail) return res.status(403).json({ error: 'Forbidden' });
@@ -996,7 +1036,7 @@ exports.init = async function () {
     });
 
     // PUT /api/v1/mail-server/emails/:id/archive
-    router.put('/emails/:id/archive', authenticate, async (req, res) => {
+    route('put', '/emails/:id/archive', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail) return res.status(403).json({ error: 'Forbidden' });
@@ -1006,7 +1046,7 @@ exports.init = async function () {
     });
 
     // POST /api/v1/mail-server/classification/train
-    router.post('/classification/train', authenticate, async (req, res) => {
+    route('post', '/classification/train', { auth: true }, async (req, res) => {
         try {
             const { id, category } = req.body; // category: 'spam' or 'ham'
             if (!['spam', 'ham'].includes(category)) return res.status(400).json({ error: 'Invalid category' });
@@ -1034,7 +1074,7 @@ exports.init = async function () {
     });
 
     // POST /api/v1/mail-server/drafts
-    router.post('/drafts', authenticate, async (req, res) => {
+    route('post', '/drafts', { auth: true }, async (req, res) => {
         const { id, to, cc, bcc, subject, body, isHtml = true, replyToId, attachments } = req.body;
 
         try {
@@ -1081,7 +1121,7 @@ exports.init = async function () {
     });
 
     // POST /api/v1/mail-server/send
-    router.post('/send', authenticate, async (req, res) => {
+    route('post', '/send', { auth: true }, async (req, res) => {
         const { to, cc, bcc, subject, body, isHtml = true, replyToId, id, attachments, scheduledAt } = req.body;
         if (!to || !subject || !body) {
             return res.status(400).json({ error: 'Missing required fields' });
@@ -1161,12 +1201,11 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/users/search
-    router.get('/users/search', authenticate, async (req, res) => {
+    route('get', '/users/search', { auth: true }, async (req, res) => {
         const query = req.query.q || '';
         if (query.length < 2) return res.json([]);
 
-        const siteUrl = new URL(config.site.url);
-        const siteDomain = siteUrl.hostname;
+        const siteDomain = await getSiteDomain();
 
         const users = await User.findAll({ search: query, limit: 5 });
         res.json(users.map(u => ({
@@ -1177,7 +1216,7 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/settings
-    router.get('/settings', authenticate, isAdmin, async (req, res) => {
+    route('get', '/settings', { auth: true, admin: true }, async (req, res) => {
         res.json({
             mail_from_email: await getOption('mail_from_email', ''),
             mail_from_name: await getOption('mail_from_name', ''),
@@ -1195,7 +1234,7 @@ exports.init = async function () {
     });
 
     // POST /api/v1/mail-server/settings
-    router.post('/settings', authenticate, isAdmin, async (req, res) => {
+    route('post', '/settings', { auth: true, admin: true }, async (req, res) => {
         const fields = [
             'mail_from_email', 'mail_from_name',
             'smtp_listen_port', 'smtp_catch_all',
@@ -1213,7 +1252,7 @@ exports.init = async function () {
     });
 
     // POST /api/v1/mail-server/test  — send a real test message (pass {to} to test EXTERNAL delivery)
-    router.post('/test', authenticate, isAdmin, async (req, res) => {
+    route('post', '/test', { auth: true, admin: true }, async (req, res) => {
         try {
             const to = (req.body && req.body.to) || req.user.userEmail;
             const result = await sendMail({
@@ -1238,10 +1277,10 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/security/dns-records — records to publish for deliverability
-    router.get('/security/dns-records', authenticate, isAdmin, async (req, res) => {
+    route('get', '/security/dns-records', { auth: true, admin: true }, async (req, res) => {
         const priv = await getOption('mail_security_dkim_private_key', '');
         let domain = await getOption('mail_security_dkim_domain', '');
-        if (!domain) { try { domain = new URL(config.site.url).hostname; } catch (e) { domain = ''; } }
+        if (!domain) { try { domain = await getSiteDomain(); } catch (e) { domain = ''; } }
         const selector = await getOption('mail_security_dkim_selector', 'default');
         let publicKeyPem = '';
         if (priv) {
@@ -1258,11 +1297,11 @@ exports.init = async function () {
     });
 
     // POST /api/v1/mail-server/security/dkim/generate — create a DKIM keypair + return DNS records
-    router.post('/security/dkim/generate', authenticate, isAdmin, async (req, res) => {
+    route('post', '/security/dkim/generate', { auth: true, admin: true }, async (req, res) => {
         try {
             const selector = String((req.body && req.body.selector) || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default';
             let domain = (req.body && req.body.domain) || '';
-            if (!domain) { try { domain = new URL(config.site.url).hostname; } catch (e) { } }
+            if (!domain) { try { domain = await getSiteDomain(); } catch (e) { } }
             if (!domain) return res.status(400).json({ error: 'A sending domain is required' });
 
             const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
@@ -1281,12 +1320,11 @@ exports.init = async function () {
     });
 
     // GET /api/v1/mail-server/attachments/:fileId
-    router.get('/attachments/:fileId', authenticate, async (req, res) => {
+    route('get', '/attachments/:fileId', { auth: true }, async (req, res) => {
         const fileId = req.params.fileId;
 
         try {
-            const { dbAsync } = require('../../src/config/database');
-            const attachment = await dbAsync.get('SELECT * FROM email_attachments WHERE id = ?', [fileId]);
+            const attachment = await wordjs.db.get('SELECT * FROM email_attachments WHERE id = ?', [fileId]);
 
             if (!attachment) return res.status(404).json({ error: 'File not found' });
 
@@ -1301,7 +1339,13 @@ exports.init = async function () {
 
             if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Physical file missing' });
 
-            res.download(filePath, attachment.filename);
+            // Stream the file back through the bridge response (res.download is not available in the
+            // isolate's mock res; send the buffer with a download disposition header instead).
+            const buf = fs.readFileSync(filePath);
+            res.set({
+                'Content-Type': attachment.content_type || 'application/octet-stream',
+                'Content-Disposition': `attachment; filename="${attachment.filename}"`
+            }).send(buf);
 
         } catch (e) {
             console.error("Download failed:", e);
@@ -1310,7 +1354,8 @@ exports.init = async function () {
     });
 
     // POST /api/v1/mail-server/upload/attachment
-    router.post('/upload/attachment', authenticate, upload.single('file'), (req, res) => {
+    // Host parses the multipart upload (multer) and forwards req.file metadata to this handler.
+    route('post', '/upload/attachment', { auth: true, multipart: 'file' }, (req, res) => {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
         res.json({
             success: true,
@@ -1323,16 +1368,8 @@ exports.init = async function () {
         });
     });
 
-    // Register API
-    const { getApp } = require('../../src/core/appRegistry');
-    const app = getApp();
-    if (app) {
-        app.use('/api/v1/mail-server', router);
-    }
-
     // Register Admin Menu
-    const { registerAdminMenu } = require('../../src/core/adminMenu');
-    registerAdminMenu('mail-server', {
+    wordjs.adminMenu.add({
         href: '/admin/plugin/emails',
         label: 'Email Center',
         icon: 'fa-envelope',
@@ -1340,11 +1377,11 @@ exports.init = async function () {
         cap: 'access_admin_panel'
     });
 
-    // Expose sendMail utility for other plugins
-    global.wordjs_send_mail = sendMail;
+    // Expose sendMail utility for other plugins (host installs a shim for wordjs.mail / global.wordjs_send_mail).
+    wordjs.provideMail(sendMail);
 
     // Register as a Notification Transport
-    notificationService.registerTransport('email', async (notification) => {
+    wordjs.notify.registerTransport('email', async (notification) => {
         let targetEmail = null;
         if (notification.user_id !== 0) {
             const user = await User.findById(notification.user_id);
@@ -1364,4 +1401,9 @@ exports.init = async function () {
             }
         }
     });
+};
+
+exports.deactivate = function () {
+    try { if (smtpServer) smtpServer.close(); } catch (e) { /* ignore */ }
+    console.log('Mail Server plugin deactivated');
 };

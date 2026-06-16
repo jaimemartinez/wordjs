@@ -4,6 +4,7 @@
     "version": "1.0.0",
     "description": "Manage SMTP settings and send automated emails",
     "author": "WordJS",
+    "isolated": true,
     "backend": {
         "entry": "index.js"
     },
@@ -23,43 +24,33 @@
     "permissions": [
         {
             "scope": "database",
-            "access": "read",
-            "reason": "Required to list and search archived emails."
-        },
-        {
-            "scope": "database",
-            "access": "write",
-            "reason": "Required to log emails and manage server state."
+            "access": "admin",
+            "reason": "Privileged: unscoped reads/writes on users, received_emails and email_attachments via the trusted bridge."
         },
         {
             "scope": "settings",
-            "access": "write",
-            "reason": "Required to manage SMTP and global email configurations."
-        },
-        {
-            "scope": "settings",
-            "access": "read",
-            "reason": "Required to read SMTP and global email configurations."
+            "access": "admin",
+            "reason": "Privileged: read/write SMTP, global email and secret-named options (e.g. DKIM private key)."
         },
         {
             "scope": "email",
             "access": "admin",
-            "reason": "Required for MX resolution (DNS) and direct SMTP delivery (NET)."
+            "reason": "Required for MX resolution (DNS), direct SMTP delivery (NET) and providing the host-wide send function."
         },
         {
             "scope": "notifications",
             "access": "send",
-            "reason": "Required to alert users about new inbound emails in real-time."
-        },
-        {
-            "scope": "filesystem",
-            "access": "write",
-            "reason": "Required to save email attachments to disk."
+            "reason": "Required to alert users about new inbound emails in real-time and register the email transport."
         },
         {
             "scope": "filesystem",
             "access": "read",
-            "reason": "Required to read and attach files to outgoing emails."
+            "reason": "Required to read email attachments and check paths under uploads/mail-attachments."
+        },
+        {
+            "scope": "filesystem",
+            "access": "write",
+            "reason": "Required to save email attachments under uploads/mail-attachments."
         }
     ],
     "dependencies": {

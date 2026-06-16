@@ -345,7 +345,15 @@ function requirerSlug(filename: string): string | null {
 let _trusted: Set<string> | null = null;
 function trustedPlugins(): Set<string> {
     if (!_trusted) {
-        try { _trusted = new Set((originalRequire.call(module, '../config/app').trustedSystemPlugins) || []); }
+        try {
+            // Inside an isolated plugin worker the trusted-core-module check is moot: the plugin
+            // reaches core ONLY through the `wordjs` bridge (RPC), never by require()ing core modules.
+            // Loading config/app here would also run its wordjs-config.json read + secret-persist +
+            // env reads INSIDE the sandbox (blocked, noisy). Skip it — treat as empty trusted set.
+            const { isMainThread } = originalRequire.call(module, 'worker_threads');
+            if (!isMainThread) { _trusted = new Set(); return _trusted; }
+            _trusted = new Set((originalRequire.call(module, '../config/app').trustedSystemPlugins) || []);
+        }
         catch { _trusted = new Set(); }
     }
     return _trusted;
