@@ -76,7 +76,7 @@ To fix this:
 WordJS provides a high level of isolation, but it is not a virtual machine.
 *   **Vulnerability Scoping:** The AST scanner currently focuses on the plugin's source code, not its `node_modules`. 
 *   **Resource Limits:** The system does not currently enforce strict CPU or RAM quotas for plugins (DoS protection).
-*   **Runtime Escapes:** Low-level escapes such as `process.binding` and `Module._load` are flagged by the AST scanner but are **not** yet blocked at runtime. Treat them as future work.
+*   **Runtime Escapes:** Low-level escapes are now blocked at runtime — `Module._load` is intercepted like `Module.prototype.require`, and `process.binding`/`_linkedBinding` throw for plugin contexts. (`process.dlopen` is intentionally left open for legitimate native addons.)
 *   **CSRF:** Cross-site request protection is currently based on Origin/Referer header heuristics, not on per-request CSRF tokens. Token-based CSRF is future work.
 
 For ultra-high security environments, we recommend auditing third-party plugin dependencies before installation.
