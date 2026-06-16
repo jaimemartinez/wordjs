@@ -39,14 +39,17 @@
 > | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
 > | conference-manager | **isolated** | trusted: privileged DB + `db.getType` + absolute routes + portal cookies |
 > | mail-server | **isolated** | trusted: SMTP server on :25 + MX delivery in the worker; Email model → `db`, DKIM via secret options, multipart upload, `provideMail` + `notify.registerTransport` |
-> | db-migration | in-process | **infrastructure, not a feature plugin**: manages the embedded PostgreSQL *server process* via `child_process.execSync` (install/start/stop) and runs schema migrations during boot. A sandboxed worker can't (and shouldn't) control the host DB process the host itself depends on. |
+> | ~~db-migration~~ | **moved to core** | was DB infrastructure, not a feature plugin (manages the embedded PostgreSQL *server process* via `child_process.execSync` + runs schema migrations at boot) — relocated to `src/core/db-admin/`, wired in at boot. |
 >
-> **Net:** **7 of 8 bundled plugins run isolated** (each verified in-browser serving real data through
-> its worker — incl. the mail server's inbox and SMTP listener on :25). The only in-process plugin,
-> db-migration, is DB infrastructure that by its nature manages the database server — a principled
-> exception, not a limitation. Uploaded/untrusted third-party plugins isolate by default
-> (`isolated:true` + the `wordjs` bridge), hard-blocked from core tables/secrets regardless of the
-> permissions they request.
+> **Net (final): the sandbox is isolated-only.** Every plugin runs in a worker; the legacy in-process
+> execution path was removed (`loadActivePlugins`/`activatePlugin` reject non-isolated plugins,
+> `deactivatePlugin` terminates the worker). All feature plugins are isolated (verified in-browser
+> serving real data — incl. the mail server's inbox and its SMTP listener on :25). db-migration is no
+> longer a plugin: it moved into core because it manages the database server itself. Uploaded/untrusted
+> third-party plugins isolate by default and are hard-blocked from core tables/secrets regardless of
+> the permissions they request; trusted first-party plugins get the privileged bridge capabilities.
+> (The host-side guards — io-guard / secure-require / appRegistry anchoring — stay: bridge calls run in
+> plugin context on the host, so they're still load-bearing.)
 
 Status: **proposal** · Author: WordJS · Context: after 4 red-team passes the in-process sandbox
 closes every *known* practical escape (AST scan + runtime require proxy + ALS-anchoring of every
