@@ -10,6 +10,7 @@ const fs = require('fs');
 const path = require('path');
 const { addAction, doAction, addFilter } = require('./hooks');
 const { createPluginApi } = require('./plugin-api');
+const { loadIsolatedPlugin } = require('./plugin-isolate');
 const { getOption, updateOption } = require('./options');
 
 const semver = require('semver');
@@ -888,10 +889,11 @@ async function loadActivePlugins() {
         if (!mainFile) continue;
 
         // Auto-Check/Install Deps and VALIDATE permissions on Load
+        let manifest: any = null;
         const manifestPath = path.join(plugin.path, 'manifest.json');
         if (fs.existsSync(manifestPath)) {
             try {
-                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
                 // CRITICAL: Re-validate permissions on every boot to prevent code poisoning
                 validatePluginPermissions(slug, plugin.path, manifest);
@@ -907,6 +909,14 @@ async function loadActivePlugins() {
         try {
             // MARK START
             CrashGuard.startLoading(slug);
+
+            // ISOLATED tier: run the plugin in a worker (separate heap; core only via the bridge).
+            if (manifest && manifest.isolated) {
+                await loadIsolatedPlugin(slug, mainFile);
+                console.log(`   ✓ Plugin loaded ISOLATED: ${plugin.name} (${slug})`);
+                CrashGuard.finishLoading(slug);
+                continue;
+            }
 
             const { runWithContext } = require('./plugin-context');
             // SECURITY: anchor module top-level execution in the plugin context (see activatePlugin).
