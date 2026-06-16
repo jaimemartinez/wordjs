@@ -64,7 +64,7 @@ export default function MenusPage() {
                 setActiveMenuId(data[0].id);
             }
         } catch (error) {
-            addToast("Failed to load menus", "error");
+            addToast(t('menus.loadMenusError'), "error");
         }
     };
 
@@ -73,7 +73,7 @@ export default function MenusPage() {
             const data = await menusApi.get(id);
             setActiveMenu(data);
         } catch (error) {
-            addToast("Failed to load menu", "error");
+            addToast(t('menus.loadMenuError'), "error");
         }
     };
 
@@ -82,7 +82,7 @@ export default function MenusPage() {
             const data = await postsApi.list("page", "any");
             setPages(data);
         } catch (error) {
-            addToast("Failed to load pages", "error");
+            addToast(t('menus.loadPagesError'), "error");
         }
     };
 
@@ -93,16 +93,16 @@ export default function MenusPage() {
             setMenus([...menus, menu]);
             setActiveMenuId(menu.id);
             setNewMenuName("");
-            addToast("Menu created successfully!", "success");
+            addToast(t('menus.createSuccess'), "success");
         } catch (error) {
-            addToast("Failed to create menu", "error");
+            addToast(t('menus.createError'), "error");
         }
     };
 
     // Prepare Delete Menu
     const confirmDeleteMenu = () => {
         if (!activeMenuId) return;
-        setDeleteMessage("Are you sure you want to delete this menu? This action cannot be undone.");
+        setDeleteMessage(t('menus.deleteMenuConfirm'));
         setDeleteAction(() => async () => {
             try {
                 await menusApi.delete(activeMenuId);
@@ -110,9 +110,9 @@ export default function MenusPage() {
                 setMenus(remaining);
                 setActiveMenuId(remaining.length ? remaining[0].id : null);
                 setDeleteModalOpen(false);
-                addToast("Menu deleted", "success");
+                addToast(t('menus.deleteMenuSuccess'), "success");
             } catch (error) {
-                addToast("Failed to delete menu", "error");
+                addToast(t('menus.deleteMenuError'), "error");
             }
         });
         setDeleteModalOpen(true);
@@ -129,9 +129,9 @@ export default function MenusPage() {
             });
             loadMenu(activeMenuId);
             setCustomLink({ title: "", url: "http://" });
-            addToast("Link added", "success");
+            addToast(t('menus.linkAddedSuccess'), "success");
         } catch (error) {
-            addToast("Failed to add link", "error");
+            addToast(t('menus.linkAddedError'), "error");
         }
     };
 
@@ -150,9 +150,9 @@ export default function MenusPage() {
             });
             loadMenu(activeMenuId);
             setSelectedPageId("");
-            addToast("Page added to menu", "success");
+            addToast(t('menus.pageAddedSuccess'), "success");
         } catch (error) {
-            addToast("Failed to add page", "error");
+            addToast(t('menus.pageAddedError'), "error");
         }
     };
 
@@ -170,22 +170,22 @@ export default function MenusPage() {
             });
             loadMenu(activeMenuId);
             setSelectedSystemUrl("");
-            addToast("System page added", "success");
+            addToast(t('menus.systemPageAddedSuccess'), "success");
         } catch (error) {
-            addToast("Failed to add system page", "error");
+            addToast(t('menus.systemPageAddedError'), "error");
         }
     };
 
     const confirmDeleteItem = (itemId: number) => {
-        setDeleteMessage("Remove this item from the menu?");
+        setDeleteMessage(t('menus.deleteItemConfirm'));
         setDeleteAction(() => async () => {
             try {
                 await menusApi.deleteItem(itemId);
                 loadMenu(activeMenuId!);
                 setDeleteModalOpen(false);
-                addToast("Item removed", "success");
+                addToast(t('menus.itemRemovedSuccess'), "success");
             } catch (error) {
-                addToast("Failed to delete item", "error");
+                addToast(t('menus.itemRemovedError'), "error");
             }
         });
         setDeleteModalOpen(true);
@@ -196,9 +196,9 @@ export default function MenusPage() {
             try {
                 await menusApi.setLocation(activeMenuId, location);
                 setLocations({ ...locations, [location]: activeMenuId });
-                addToast(`Menu assigned to ${location}`, "success");
+                addToast(`${t('menus.locationAssignedSuccess')} ${location}`, "success");
             } catch (err) {
-                addToast("Failed to set location", "error");
+                addToast(t('menus.locationAssignedError'), "error");
             }
         }
     };
@@ -225,9 +225,9 @@ export default function MenusPage() {
             await menusApi.updateItem(itemId, editFormData);
             setEditingItemId(null);
             loadMenu(activeMenuId!);
-            addToast("Item updated", "success");
+            addToast(t('menus.itemUpdatedSuccess'), "success");
         } catch (error) {
-            addToast("Failed to update item", "error");
+            addToast(t('menus.itemUpdatedError'), "error");
         }
     };
 
@@ -237,9 +237,9 @@ export default function MenusPage() {
                 isOpen={deleteModalOpen}
                 onClose={() => setDeleteModalOpen(false)}
                 onConfirm={deleteAction || (() => { })}
-                title="Confirm Action"
+                title={t('menus.confirmActionTitle')}
                 message={deleteMessage}
-                confirmText="Confirm"
+                confirmText={t('menus.confirmButton')}
                 isDanger={true}
             />
 
@@ -252,7 +252,7 @@ export default function MenusPage() {
                     <div className="flex items-center gap-2">
                         <div className="h-1 w-10 bg-blue-600 rounded-full"></div>
                         <p className="text-xs font-bold uppercase tracking-widest text-gray-400">
-                            {menus.length} Menus Available
+                            {menus.length} {t('menus.menusAvailable')}
                         </p>
                     </div>
                 </div>
@@ -267,7 +267,7 @@ export default function MenusPage() {
                         {/* Background Blob */}
                         <div className="absolute -right-10 -top-10 w-40 h-40 bg-gradient-to-br from-blue-500 to-indigo-600 rounded-full blur-[60px] opacity-10 group-hover:opacity-20 transition-opacity duration-700 pointer-events-none"></div>
 
-                        <h3 className="font-black text-xl mb-4 text-gray-900 italic tracking-tight">Select Menu</h3>
+                        <h3 className="font-black text-xl mb-4 text-gray-900 italic tracking-tight">{t('menus.selectMenu')}</h3>
                         <div className="flex items-center gap-3 mb-6">
                             <ModernSelect
                                 containerClassName="flex-1"
@@ -286,13 +286,13 @@ export default function MenusPage() {
                         </div>
 
                         <div className="border-t border-gray-100 pt-6">
-                            <h4 className="text-[10px] font-black text-gray-400 uppercase mb-3 tracking-widest">Create New Menu</h4>
+                            <h4 className="text-[10px] font-black text-gray-400 uppercase mb-3 tracking-widest">{t('menus.createNewMenu')}</h4>
                             <form onSubmit={handleCreateMenu} className="flex gap-2">
                                 <input
                                     type="text"
                                     value={newMenuName}
                                     onChange={e => setNewMenuName(e.target.value)}
-                                    placeholder="Menu Name..."
+                                    placeholder={t('menus.menuNamePlaceholder')}
                                     className="flex-1 bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 text-sm font-bold text-gray-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all placeholder:font-normal"
                                     required
                                 />
@@ -306,7 +306,7 @@ export default function MenusPage() {
                     {/* Add Items Tools */}
                     <div className="bg-white rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">
                         <div className="p-6 bg-gray-50/50 border-b border-gray-100">
-                            <h3 className="font-black text-lg text-gray-900 italic tracking-tight">Add Items</h3>
+                            <h3 className="font-black text-lg text-gray-900 italic tracking-tight">{t('menus.addItems')}</h3>
                         </div>
 
                         <div className="divide-y divide-gray-100">
@@ -316,7 +316,7 @@ export default function MenusPage() {
                                     <div className="w-8 h-8 rounded-lg bg-blue-100 text-blue-600 flex items-center justify-center text-xs">
                                         <i className="fa-solid fa-link"></i>
                                     </div>
-                                    <h4 className="font-bold text-sm text-gray-700">Custom Link</h4>
+                                    <h4 className="font-bold text-sm text-gray-700">{t('menus.customLink')}</h4>
                                 </div>
                                 <div className="space-y-3">
                                     <input
@@ -330,7 +330,7 @@ export default function MenusPage() {
                                         type="text"
                                         value={customLink.title}
                                         onChange={e => setCustomLink({ ...customLink, title: e.target.value })}
-                                        placeholder="Link Text"
+                                        placeholder={t('menus.linkTextPlaceholder')}
                                         className="w-full bg-gray-50 border border-gray-200 rounded-xl px-4 py-3 text-sm focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 outline-none transition-all"
                                     />
                                     <button
@@ -338,7 +338,7 @@ export default function MenusPage() {
                                         disabled={!activeMenuId || !customLink.title}
                                         className="w-full py-3 bg-white border-2 border-gray-100 hover:border-blue-500 hover:text-blue-600 text-gray-600 rounded-xl transition-all text-sm font-black uppercase tracking-widest disabled:opacity-50 hover:shadow-lg hover:-translate-y-0.5"
                                     >
-                                        Add to Menu
+                                        {t('menus.addToMenu')}
                                     </button>
                                 </div>
                             </div>
@@ -349,11 +349,11 @@ export default function MenusPage() {
                                     <div className="w-8 h-8 rounded-lg bg-indigo-100 text-indigo-600 flex items-center justify-center text-xs">
                                         <i className="fa-regular fa-file-lines"></i>
                                     </div>
-                                    <h4 className="font-bold text-sm text-gray-700">Pages</h4>
+                                    <h4 className="font-bold text-sm text-gray-700">{t('menus.pages')}</h4>
                                 </div>
 
                                 {pages.length === 0 ? (
-                                    <p className="text-sm text-gray-400 italic font-medium">No pages available.</p>
+                                    <p className="text-sm text-gray-400 italic font-medium">{t('menus.noPagesAvailable')}</p>
                                 ) : (
                                     <div className="space-y-4">
                                         <div className="max-h-48 overflow-y-auto custom-scrollbar border-2 border-gray-100 rounded-xl bg-gray-50/30 p-2">
@@ -378,7 +378,7 @@ export default function MenusPage() {
                                             disabled={!activeMenuId || !selectedPageId}
                                             className="w-full py-3 bg-white border-2 border-gray-100 hover:border-indigo-500 hover:text-indigo-600 text-gray-600 rounded-xl transition-all text-sm font-black uppercase tracking-widest disabled:opacity-50 hover:shadow-lg hover:-translate-y-0.5"
                                         >
-                                            Add Page
+                                            {t('menus.addPage')}
                                         </button>
                                     </div>
                                 )}
@@ -390,7 +390,7 @@ export default function MenusPage() {
                                     <div className="w-8 h-8 rounded-lg bg-purple-100 text-purple-600 flex items-center justify-center text-xs">
                                         <i className="fa-solid fa-gear"></i>
                                     </div>
-                                    <h4 className="font-bold text-sm text-gray-700">System Pages</h4>
+                                    <h4 className="font-bold text-sm text-gray-700">{t('menus.systemPages')}</h4>
                                 </div>
                                 <div className="space-y-4">
                                     <div className="max-h-48 overflow-y-auto custom-scrollbar border-2 border-gray-100 rounded-xl bg-gray-50/30 p-2">
@@ -415,7 +415,7 @@ export default function MenusPage() {
                                         disabled={!activeMenuId || !selectedSystemUrl}
                                         className="w-full py-3 bg-white border-2 border-gray-100 hover:border-purple-500 hover:text-purple-600 text-gray-600 rounded-xl transition-all text-sm font-black uppercase tracking-widest disabled:opacity-50 hover:shadow-lg hover:-translate-y-0.5"
                                     >
-                                        Add System Page
+                                        {t('menus.addSystemPage')}
                                     </button>
                                 </div>
                             </div>
@@ -434,17 +434,17 @@ export default function MenusPage() {
                         <div className="p-8 border-b border-gray-100 flex flex-col md:flex-row justify-between items-start md:items-center gap-6 bg-white z-10">
                             <div>
                                 <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter mb-1">
-                                    {activeMenu ? activeMenu.name : "Menu Structure"}
+                                    {activeMenu ? activeMenu.name : t('menus.menuStructure')}
                                 </h2>
                                 <p className="text-sm font-bold text-gray-400 uppercase tracking-wide">
-                                    {activeMenu ? "Drag items to reorder." : "Select a menu to start."}
+                                    {activeMenu ? t('menus.dragToReorder') : t('menus.selectMenuToStart')}
                                 </p>
                             </div>
                             {activeMenu && (
                                 <div className="flex gap-4">
                                     {[
-                                        { key: 'header', label: 'Main Menu' },
-                                        { key: 'footer', label: 'Footer Menu' }
+                                        { key: 'header', label: t('menus.mainMenu') },
+                                        { key: 'footer', label: t('menus.footerMenu') }
                                     ].map((loc) => (
                                         <label key={loc.key} className="flex items-center gap-3 cursor-pointer group bg-gray-50 px-4 py-2 rounded-xl border border-gray-200 hover:border-blue-500 hover:bg-blue-50 transition-all">
                                             <div className="relative flex items-center">
@@ -472,16 +472,16 @@ export default function MenusPage() {
                                     <div className="w-24 h-24 rounded-full bg-gray-100 flex items-center justify-center mb-6">
                                         <i className="fa-solid fa-arrow-left text-4xl"></i>
                                     </div>
-                                    <p className="text-2xl font-black italic tracking-tight">Select a menu from the left</p>
+                                    <p className="text-2xl font-black italic tracking-tight">{t('menus.selectMenuFromLeft')}</p>
                                 </div>
                             ) : activeMenu.items.length === 0 ? (
                                 <div className="h-full flex flex-col items-center justify-center text-center p-8 border-4 border-dashed border-gray-100 rounded-[32px]">
                                     <div className="w-20 h-20 bg-blue-50 rounded-[40px] flex items-center justify-center mb-6 text-blue-300 animate-pulse">
                                         <i className="fa-solid fa-layer-group text-3xl"></i>
                                     </div>
-                                    <h3 className="text-xl font-black text-gray-900 mb-2 italic tracking-tight">Empty Menu</h3>
+                                    <h3 className="text-xl font-black text-gray-900 mb-2 italic tracking-tight">{t('menus.emptyMenu')}</h3>
                                     <p className="text-gray-400 font-bold max-w-sm">
-                                        Add generic links or pages using the tools on the left sidebar.
+                                        {t('menus.emptyMenuHint')}
                                     </p>
                                 </div>
                             ) : (
@@ -500,7 +500,7 @@ export default function MenusPage() {
                                                     <div>
                                                         <span className="font-bold text-gray-800 block text-base mb-1">{item.title}</span>
                                                         <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-1 rounded-lg ${item.type === 'post' ? 'bg-indigo-50 text-indigo-500' : 'bg-blue-50 text-blue-500'}`}>
-                                                            {item.type === 'post' ? 'Page' : 'Link'}
+                                                            {item.type === 'post' ? t('menus.typePage') : t('menus.typeLink')}
                                                         </span>
                                                     </div>
                                                 </div>
@@ -526,7 +526,7 @@ export default function MenusPage() {
                                                 <div className="px-6 pb-6 pt-2 animate-in slide-in-from-top-4 duration-300">
                                                     <div className="bg-gray-50 rounded-xl p-6 border-2 border-gray-100 space-y-5">
                                                         <div>
-                                                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">Navigation Label</label>
+                                                            <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('menus.navigationLabel')}</label>
                                                             <input
                                                                 type="text"
                                                                 className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-sm font-bold text-gray-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all"
@@ -536,7 +536,7 @@ export default function MenusPage() {
                                                         </div>
                                                         {item.type === 'custom' && (
                                                             <div>
-                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">URL</label>
+                                                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest mb-2">{t('menus.url')}</label>
                                                                 <input
                                                                     type="text"
                                                                     className="w-full bg-white border-2 border-gray-200 rounded-xl px-4 py-3 text-sm font-medium text-gray-600 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all"
@@ -550,13 +550,13 @@ export default function MenusPage() {
                                                                 onClick={cancelEditing}
                                                                 className="px-6 py-3 text-xs font-bold text-gray-500 hover:text-gray-900 uppercase tracking-widest transition-colors"
                                                             >
-                                                                Cancel
+                                                                {t('menus.cancel')}
                                                             </button>
                                                             <button
                                                                 onClick={() => handleUpdateItem(item.id)}
                                                                 className="px-6 py-3 bg-blue-600 text-white text-xs font-black uppercase tracking-widest rounded-xl hover:bg-blue-700 shadow-xl shadow-blue-500/20 hover:shadow-blue-600/30 hover:-translate-y-1 transition-all"
                                                             >
-                                                                Save Changes
+                                                                {t('menus.saveChanges')}
                                                             </button>
                                                         </div>
                                                     </div>
