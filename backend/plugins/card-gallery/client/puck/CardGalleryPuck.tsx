@@ -208,7 +208,7 @@ const GalleryPicker = ({ value, onChange }: { value: string; onChange: (value: s
     const [loading, setLoading] = useState(true);
 
     useEffect(() => {
-        fetch("/api/v1/card-galleries")
+        fetch("/api/v1/plugin/card-gallery")
             .then(res => res.json())
             .then(data => {
                 if (Array.isArray(data)) {
@@ -268,7 +268,7 @@ export default function CardGalleryPuck({ galleryId = "", elementId = "" }: Card
             return;
         }
 
-        fetch(`/api/v1/card-galleries/${galleryId}`)
+        fetch(`/api/v1/plugin/card-gallery/${galleryId}`)
             .then(res => res.json())
             .then(data => {
                 setGallery(data);

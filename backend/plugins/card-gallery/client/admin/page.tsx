@@ -29,19 +29,19 @@ interface Gallery {
 // API functions
 const galleriesApi = {
     list: async (): Promise<Gallery[]> => {
-        return api<Gallery[]>("/card-galleries");
+        return api<Gallery[]>("/plugin/card-gallery");
     },
     get: async (id: string): Promise<Gallery> => {
-        return api<Gallery>(`/card-galleries/${id}`);
+        return api<Gallery>(`/plugin/card-gallery/${id}`);
     },
     create: async (data: { name: string; cards?: Card[] }): Promise<Gallery> => {
-        return apiPost<Gallery>("/card-galleries", data);
+        return apiPost<Gallery>("/plugin/card-gallery", data);
     },
     update: async (id: string, data: Partial<Gallery>): Promise<Gallery> => {
-        return apiPut<Gallery>(`/card-galleries/${id}`, data);
+        return apiPut<Gallery>(`/plugin/card-gallery/${id}`, data);
     },
     delete: async (id: string): Promise<void> => {
-        return apiDelete(`/card-galleries/${id}`);
+        return apiDelete(`/plugin/card-gallery/${id}`);
     }
 };
 
