@@ -102,13 +102,13 @@ function GatewayConfigForm() {
         const load = async () => {
             try {
                 // 1. Get Config
-                let data = await apiGet('/system/certs/config?t=' + Date.now());
+                let data = await apiGet<any>('/system/certs/config?t=' + Date.now());
 
                 // 2. If valid response but no cert, try to auto-generate (Self-Signed) via check
                 if (data && (!data.certInfo || data.certInfo.type === 'none')) {
                     await apiPost('/system/certs/check', {});
                     // Reload config
-                    data = await apiGet('/system/certs/config?t=' + Date.now());
+                    data = await apiGet<any>('/system/certs/config?t=' + Date.now());
                 }
                 setConfig(data);
             } catch (err: any) {

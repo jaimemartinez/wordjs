@@ -2,7 +2,7 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jaimemartinez/wordjs) [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/dherreraj9805)
 
-**WordJS** is a high-performance, developer-first CMS designed to bring the familiarity of WordPress into the modern JavaScript era. Built with **Node.js**, **Next.js**, and an extensible plugin architecture, it offers a "Zero Config" experience with the power of a modern stack.
+**WordJS** is a high-performance, developer-first CMS designed to bring the familiarity of WordPress into the modern JavaScript era. Built with **TypeScript** (backend), **Next.js**, and an extensible plugin architecture, it offers a "Zero Config" experience with the power of a modern stack.
 
 ---
 
@@ -42,13 +42,13 @@ WordJS uses a microservices-inspired architecture managed by a custom **Gateway*
 graph TD
     User((User)) --> Gateway[Gateway:3000]
     Gateway --> Frontend[Next.js Frontend:3001]
-    Gateway --> Backend[Node.js Backend:4000]
+    Gateway --> Backend[TypeScript Backend:4000]
     Backend --> DB[(SQLite / PG)]
     Backend --> Plugins{Plugins}
 ```
 
 - **[Gateway](gateway.js):** Enterprise-grade entry point using **Cluster Mode**. Handles routing, **Circuit Breaking**, **Log Rotation**, and **Advanced Metrics**.
-- **[Backend](backend/):** The core engine. Manages content, users, and the plugin ecosystem.
+- **[Backend](backend/):** The core engine. Manages content, users, and the plugin ecosystem. Written in **TypeScript**, run directly via `ts-node` (no build step).
 - **[Frontend](frontend/):** The public site and management interface.
 
 ---
@@ -89,17 +89,38 @@ Detailed guides are available in the [`documentation/`](documentation/) folder:
    - **Public Site:** `http://localhost:3000`
    - **Admin Dash:** `http://localhost:3000/admin`
 
+### Backend Scripts
+
+The backend is TypeScript executed in-place via `ts-node` (CommonJS, transpile-only) — there is **no compiled `dist/`** output. From `backend/`:
+
+| Script              | Purpose                                                            |
+| :------------------ | :---------------------------------------------------------------- |
+| `npm start`         | Production start (`server.js` supervisor spawns `ts-node`).       |
+| `npm run dev`       | Watch-mode dev server (`node --watch -r ts-node/register`).       |
+| `npm run typecheck` | Opt-in type-checking (`tsc --noEmit`). Not enforced at runtime.   |
+| `npm test`          | Run the test suite (`node --test` via ts-node, ~111 tests).       |
+| `npm run lint`      | ESLint (flat config).                                             |
+| `npm run format`    | Prettier.                                                         |
+| `npm run migrate`   | Run database migrations.                                          |
+| `npm run seed`      | Seed default data.                                                |
+
+> Type-checking is opt-in via `npm run typecheck`; `strict` mode is **not** fully enabled. Plugins under `backend/plugins/*` remain JavaScript on purpose (the AST security scanner and dynamic `require` assume `.js`).
+
+A GitHub Actions workflow (`.github/workflows/ci.yml`) runs backend type-checking + tests, gateway tests, and frontend lint + build.
+
 ---
 
 ## 🛠️ Tech Stack
 
 - **Runtime:** Node.js
+- **Backend Language:** TypeScript (run via `ts-node`, transpile-only)
 - **Frontend Framework:** Next.js (React)
 - **Styling:** Vanilla CSS + Tailwind
 - **Editor:** Puck
 - **Communication:** REST API + JWT + WebSockets
 - **Logging:** Structured JSON via Winston
 - **Server:** Express.js + Cluster Mode
+- **Tooling:** ESLint + Prettier, `node:test` test suite, GitHub Actions CI
 - **Database:** SQLite (Legacy/Native) or PostgreSQL - *Interchangeable via Migration System*
 
 ---
