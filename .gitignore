@@ -15,6 +15,9 @@ yarn.lock
 # WordJS Security & Config (SENSITIVE)
 wordjs-config.json
 backend/wordjs-config.json
+# Catch every wordjs-config variant (e.g. wordjs-config.backup.json) in any dir — these hold
+# jwtSecret/gatewaySecret/dbPassword and must NEVER be committed.
+**/wordjs-config*.json
 gateway/gateway-config.json
 gateway-registry.json
 **/certs/
@@ -74,3 +77,5 @@ backend/themes/vidaParaTodos/
 # Local knowledge-graph cache + scratch files (regenerated; do not track)
 graphify-out/
 temp_*
+# Red-team scratch artifact left in the plugins dir (not a real plugin; test uses /tmp instead)
+backend/plugins/malicious.txt

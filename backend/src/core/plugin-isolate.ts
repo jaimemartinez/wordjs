@@ -40,7 +40,10 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         // execArgv allowlist.
         const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
         const worker = new Worker(WORKER_FILE, {
-            workerData: { slug, entryFile, coreDir: __dirname },
+            // isTrusted is resolved HERE (host) at spawn and re-resolved on every reload (the trust
+            // toggle reloads the worker), so the worker's network policy always matches current trust.
+            // It must come from the host: trustedPlugins()/options can't be read inside the worker.
+            workerData: { slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) },
             execArgv,
             resourceLimits: { maxOldGenerationSizeMb: 256 } // cap isolate memory (DoS containment)
         });

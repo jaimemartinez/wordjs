@@ -14,6 +14,7 @@ import { t as translate, getStoredLanguage } from "@/lib/i18n";
 // Plugin Puck Components
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
+import { sanitizeHTML } from "@/lib/sanitize";
 
 // Custom Category Field component
 const CategoryField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
@@ -780,7 +781,7 @@ const baseConfig = {
                         fontFamily: 'var(--wjs-font-family, inherit)',
                         ...css
                     }}
-                    dangerouslySetInnerHTML={{ __html: content }}
+                    dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }}
                 />
             ),
         },

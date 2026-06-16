@@ -32,6 +32,11 @@ before(async () => {
         "  wordjs.hooks.addFilter('test_iso_filter', (v) => '[iso]' + v);\n" +
         "  wordjs.http.route('get', '/ping', (req, res) => res.status(200).json({ ok: true, echo: req.query.x || null }));\n" +
         "  wordjs.shortcodes.add('iso_sc', async (attrs) => '<b>' + (attrs.x || '') + '</b>');\n" +
+        "  wordjs.http.route('get', '/netcheck', (req, res) => {\n" +
+        "    let fetchBlocked = false; try { void fetch; } catch (e) { fetchBlocked = true; }\n" +
+        "    let netBlocked = false; try { require('net').createServer(); } catch (e) { netBlocked = true; }\n" +
+        "    res.status(200).json({ fetchBlocked, netBlocked });\n" +
+        "  });\n" +
         "};\n");
     await loadIsolatedPlugin(SLUG, entry);
 });
@@ -55,6 +60,16 @@ test('isolated plugin JSON route is served via host Express + RPC forwarding', a
 test('isolated plugin async shortcode expands via doShortcodeAsync over RPC', async () => {
     const out = await doShortcodeAsync('a [iso_sc x="hi"] b');
     assert.strictEqual(out, 'a <b>hi</b> b');
+});
+
+test('untrusted isolated plugin cannot reach the network (global fetch + raw sockets are blocked)', async () => {
+    // The test plugin is not operator-trusted, so workerData.isTrusted=false: secure-require blocks
+    // the net module AND the worker bootstrap traps the binding-backed global fetch (which the module
+    // denylist can't reach). Both must be blocked, or an untrusted plugin can exfiltrate / SSRF.
+    const r = await request(app).get(`/api/v1/plugin/${SLUG}/netcheck`);
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(r.body.fetchBlocked, true, 'global fetch must be trapped for an untrusted plugin');
+    assert.strictEqual(r.body.netBlocked, true, 'raw net sockets must be blocked for an untrusted plugin');
 });
 
 const countRouteLayers = (full: string) =>

@@ -192,25 +192,41 @@ describe('IO Guard - Path Safety', () => {
 // CSRF PROTECTION TESTS
 // ============================================================================
 describe('CSRF Protection', () => {
-    it('should validate same-origin requests', () => {
-        const host = 'example.com';
-        const origin = 'https://example.com';
-        const originHost = new URL(origin).host;
-        assert.strictEqual(originHost === host, true);
+    const { csrfProtection } = require('../middleware/auth');
+    // Exercise the REAL middleware with a mock req/res. The gateway pins X-Forwarded-Host to the
+    // true client Host, so trusting it here is safe; these tests pin the origin-matching logic.
+    const run = (method, headers, path = '/api/v1/posts') => {
+        const h: any = {};
+        for (const k in headers) h[k.toLowerCase()] = (headers as any)[k];
+        const req: any = { method, path, get: (name: string) => h[String(name).toLowerCase()] };
+        let nexted = false, statusCode: number | null = null;
+        const res: any = { status(c: number) { statusCode = c; return this; }, json() { return this; } };
+        csrfProtection(req, res, () => { nexted = true; });
+        return { nexted, statusCode };
+    };
+
+    it('allows a genuine same-origin request (Origin host === X-Forwarded-Host)', () => {
+        const r = run('POST', { Origin: 'https://example.com', 'X-Forwarded-Host': 'example.com' });
+        assert.strictEqual(r.nexted, true);
     });
 
-    it('should detect cross-origin attacks', () => {
-        const host = 'example.com';
-        const maliciousOrigin = 'https://evil.com';
-        const originHost = new URL(maliciousOrigin).host;
-        assert.strictEqual(originHost === host, false);
+    it('blocks a cross-origin state-changing request', () => {
+        const r = run('POST', { Origin: 'https://evil.com', 'X-Forwarded-Host': 'example.com' });
+        assert.strictEqual(r.nexted, false);
+        assert.strictEqual(r.statusCode, 403);
     });
 
-    it('should handle requests without origin header', () => {
-        const origin = undefined;
-        const referer = undefined;
-        const shouldAllow = !origin && !referer;
-        assert.strictEqual(shouldAllow, true);
+    it('blocks origin-PREFIX confusion (example.com.evil.com must NOT match example.com)', () => {
+        // Regression for the startsWith() allowlist bug: `https://example.com.evil.com`.startsWith
+        // (`https://example.com`) was true → bypass. Exact-origin comparison must reject it.
+        const r = run('POST', { Origin: 'https://example.com.evil.com', 'X-Forwarded-Host': 'example.com' });
+        assert.strictEqual(r.nexted, false);
+        assert.strictEqual(r.statusCode, 403);
+    });
+
+    it('does not CSRF-check safe methods', () => {
+        const r = run('GET', { Origin: 'https://evil.com', 'X-Forwarded-Host': 'example.com' });
+        assert.strictEqual(r.nexted, true);
     });
 });
 
