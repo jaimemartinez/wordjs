@@ -10,24 +10,33 @@
 >
 > **Bridge surface (complete, tested):** options.get/set, db.all/get/run/createTable (core-table
 > scoped), hooks.add{Action,Filter}/doAction, **http.route (host runs auth, forwards JSON over RPC)**,
-> fs.read/write (confined), mail, notify, adminMenu.add, cron.schedule. e2e tests cover the bridge
-> guards, an isolated hook/filter over RPC, an isolated DB write, and an isolated JSON route served
-> through host Express.
+> **shortcodes.add (async, RPC'd + expanded by doShortcodeAsync)**, fs.read/write (confined), mail,
+> notify, adminMenu.add, cron.schedule. e2e tests cover the bridge guards, an isolated hook/filter
+> over RPC, an isolated DB write, an isolated JSON route served through host Express, and an isolated
+> async shortcode expanded via doShortcodeAsync.
+>
+> **Shortcodes (was the last blocker, now solved):** `doShortcode()` is synchronous so it couldn't
+> await an isolated worker. Added `doShortcodeAsync()` (collect matches → resolve callbacks
+> concurrently → splice back-to-front) and switched the content render path (`Post.toJSON`) to it.
+> Isolated plugins register shortcodes via `wordjs.shortcodes.add`; the host runs a shim that RPCs the
+> worker. (This also fixed a latent bug in the old in-process carousel shortcode, which read options
+> without awaiting.)
 >
 > **Per-plugin tier (final):**
 > | Plugin | Tier | Why |
 > |---|---|---|
 > | hello-world | **isolated** | hooks only — reference |
-> | test-schema | **isolated** | hooks + DB via bridge — reference |
-> | card-gallery | in-process | isolatable (JSON routes), but its live frontend calls `/api/v1/card-galleries`; isolating namespaces the path → needs a coordinated frontend change. Deferred to avoid breaking the UI. |
-> | photo-carousel, video-gallery | in-process | render via **synchronous** shortcodes (`doShortcode` is sync); async-RPC isolation needs a core rendering change |
+> | test-schema | **isolated** | hooks + DB via bridge |
+> | card-gallery | **isolated** | JSON routes + options + admin menu; frontend updated to namespaced path |
+> | photo-carousel | **isolated** | routes + options + **async shortcode** (`[carousel]`) + admin menu |
+> | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) + admin menu |
 > | mail-server | in-process | raw `net` (SMTP server on :25, outbound sockets) — unavailable in an isolate |
 > | db-migration, conference-manager | in-process | first-party `system:admin` (trusted tier) |
 >
-> **Net:** the isolation platform is complete and proven; isolation is the default path for UNTRUSTED
-> uploaded plugins (set `isolated:true` + use the bridge). The 7 bundled plugins are first-party
-> (audited) and stay in-process for the documented reasons — isolating audited first-party code that
-> needs raw capabilities (net/sync-render/system) buys little and would break features.
+> **Net:** the isolation platform is complete and proven, and **5 of 7 bundled plugins now run
+> isolated** (verified in-browser serving real data through their workers). Only mail-server (raw net)
+> and the two `system:admin` plugins remain in-process — by design, not limitation. Uploaded/untrusted
+> third-party plugins isolate by default (set `isolated:true` + use the `wordjs` bridge).
 
 Status: **proposal** · Author: WordJS · Context: after 4 red-team passes the in-process sandbox
 closes every *known* practical escape (AST scan + runtime require proxy + ALS-anchoring of every
