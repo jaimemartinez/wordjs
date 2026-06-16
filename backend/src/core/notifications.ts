@@ -59,6 +59,19 @@ class NotificationService {
     }
 
     /**
+     * Drop every transport a plugin registered. Called when an isolated plugin is unloaded
+     * or reloaded, so a dispatched notification is never routed to a dead worker.
+     */
+    unregisterPluginTransports(slug) {
+        for (const [name, t] of this.transports) {
+            if (t.pluginSlug === slug) {
+                this.transports.delete(name);
+                console.log(`🗑️  Notification Transport Unregistered: ${name} (plugin ${slug})`);
+            }
+        }
+    }
+
+    /**
      * Register a web client (for SSE)
      */
     addClient(res, userId) {

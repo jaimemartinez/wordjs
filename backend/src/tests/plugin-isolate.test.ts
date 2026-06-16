@@ -12,7 +12,7 @@ const path = require('path');
 require('../config/app'); // preload (trusted context)
 const express = require('express');
 const request = require('supertest');
-const { loadIsolatedPlugin, unloadIsolatedPlugin } = require('../core/plugin-isolate');
+const { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin } = require('../core/plugin-isolate');
 const { setApp } = require('../core/appRegistry');
 const hooks = require('../core/hooks');
 const { doShortcodeAsync } = require('../core/shortcodes');
@@ -55,4 +55,33 @@ test('isolated plugin JSON route is served via host Express + RPC forwarding', a
 test('isolated plugin async shortcode expands via doShortcodeAsync over RPC', async () => {
     const out = await doShortcodeAsync('a [iso_sc x="hi"] b');
     assert.strictEqual(out, 'a <b>hi</b> b');
+});
+
+const countRouteLayers = (full: string) =>
+    (app._router?.stack || []).filter((l: any) => l.route && l.route.path === full).length;
+
+test('reloading an isolated plugin re-registers cleanly — no stale/duplicate route layer', async () => {
+    const full = `/api/v1/plugin/${SLUG}/ping`;
+    assert.strictEqual(countRouteLayers(full), 1, 'precondition: exactly one route layer');
+
+    await reloadIsolatedPlugin(SLUG);
+
+    // The fresh worker serves the route...
+    const r = await request(app).get(`${full}?x=re`);
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(r.body, { ok: true, echo: 're' });
+    // ...the old layer was torn down (not left as a duplicate pointing at the dead worker)...
+    assert.strictEqual(countRouteLayers(full), 1, 'reload must not duplicate the route layer');
+    // ...and the filter still applies (re-registered as a single shim, no stale shim accumulating).
+    assert.strictEqual(await hooks.applyFilters('test_iso_filter', 'x'), '[iso]x');
+});
+
+test('unloading an isolated plugin tears down its route AND hook (no dead-worker RPC left behind)', async () => {
+    const full = `/api/v1/plugin/${SLUG}/ping`;
+    unloadIsolatedPlugin(SLUG);
+
+    assert.strictEqual(countRouteLayers(full), 0, 'route layer must be removed on unload');
+    const r = await request(app).get(full);
+    assert.strictEqual(r.status, 404, 'route must 404 after unload, not 502 from a dead worker');
+    assert.strictEqual(await hooks.applyFilters('test_iso_filter', 'hello'), 'hello', 'hook shim must be removed');
 });
