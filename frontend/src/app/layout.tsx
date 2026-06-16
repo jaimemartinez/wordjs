@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import { headers } from 'next/headers';
@@ -58,7 +59,11 @@ export default function RootLayout({
             <body className={inter.className} suppressHydrationWarning>
                 <ModalProvider>
                     <SystemFontsLoader />
-                    <AnalyticsTracker />
+                    {/* AnalyticsTracker uses useSearchParams → must be Suspense-wrapped to not
+                        bail out static prerendering of every page. */}
+                    <Suspense fallback={null}>
+                        <AnalyticsTracker />
+                    </Suspense>
                     {children}
                 </ModalProvider>
             </body>
