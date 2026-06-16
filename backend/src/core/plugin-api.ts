@@ -168,6 +168,15 @@ function createPluginApi(slug: string) {
             return notificationService.send(n);
         },
 
+        shortcodes: {
+            // Register a shortcode. Handler may be async (rendered via doShortcodeAsync). In-process
+            // here; for isolated plugins the worker bridge forwards it over RPC (see plugin-isolate).
+            add(tag: string, handler: (attrs: any, content: string, tag: string) => any) {
+                const { addShortcode } = require('./shortcodes');
+                return addShortcode(tag, handler);
+            }
+        },
+
         adminMenu: {
             add(item: any) {
                 const { registerAdminMenu } = require('./adminMenu');

@@ -5,7 +5,7 @@
 
 const { db, dbAsync } = require('../config/database');
 const { doAction, applyFilters } = require('../core/hooks');
-const { doShortcode, stripShortcodes } = require('../core/shortcodes');
+const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
 const { sanitizeTitle, sanitizeContent, generateExcerpt, currentTimeGMT, currentTime } = require('../core/formatting');
 const config = require('../config/app');
 const cache = require('../core/cache');
@@ -156,7 +156,7 @@ class Post {
         };
 
         if (includeContent) {
-            json.content = doShortcode(this.postContent);
+            json.content = await doShortcodeAsync(this.postContent);
         }
 
         // Add featured image

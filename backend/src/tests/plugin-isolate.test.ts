@@ -15,6 +15,7 @@ const request = require('supertest');
 const { loadIsolatedPlugin, unloadIsolatedPlugin } = require('../core/plugin-isolate');
 const { setApp } = require('../core/appRegistry');
 const hooks = require('../core/hooks');
+const { doShortcodeAsync } = require('../core/shortcodes');
 
 const SLUG = 'test-isolate-plugin';
 const dir = path.join(path.resolve(__dirname, '../../plugins'), SLUG);
@@ -30,6 +31,7 @@ before(async () => {
         "exports.init = function (wordjs) {\n" +
         "  wordjs.hooks.addFilter('test_iso_filter', (v) => '[iso]' + v);\n" +
         "  wordjs.http.route('get', '/ping', (req, res) => res.status(200).json({ ok: true, echo: req.query.x || null }));\n" +
+        "  wordjs.shortcodes.add('iso_sc', async (attrs) => '<b>' + (attrs.x || '') + '</b>');\n" +
         "};\n");
     await loadIsolatedPlugin(SLUG, entry);
 });
@@ -48,4 +50,9 @@ test('isolated plugin JSON route is served via host Express + RPC forwarding', a
     const r = await request(app).get(`/api/v1/plugin/${SLUG}/ping?x=hi`);
     assert.strictEqual(r.status, 200);
     assert.deepStrictEqual(r.body, { ok: true, echo: 'hi' });
+});
+
+test('isolated plugin async shortcode expands via doShortcodeAsync over RPC', async () => {
+    const out = await doShortcodeAsync('a [iso_sc x="hi"] b');
+    assert.strictEqual(out, 'a <b>hi</b> b');
 });

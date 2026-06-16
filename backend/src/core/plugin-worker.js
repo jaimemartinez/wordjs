@@ -33,6 +33,7 @@ let _id = 0;
 const pending = new Map();         // id -> {resolve,reject} for our calls to the host
 const callbacks = new Map();       // cbId -> function (hook/filter callbacks living in this isolate)
 const routeHandlers = new Map();   // routeId -> route handler (req,res) living in this isolate
+const shortcodeHandlers = new Map(); // scId -> shortcode handler (attrs,content,tag)=>string living here
 
 function callHost(method, args) {
     return new Promise((resolve, reject) => {
@@ -80,6 +81,16 @@ const wordjs = {
             routeHandlers.set(routeId, handler);
             parentPort.postMessage({ kind: 'register-route', method, routePath, opts: opts || {}, routeId });
         }
+    },
+
+    // Register a shortcode. The handler runs HERE (may be async / use the bridge) and returns the
+    // HTML string; the host expands it via doShortcodeAsync, forwarding {attrs,content,tag} over RPC.
+    shortcodes: {
+        add(tag, handler) {
+            const scId = `sc:${tag}:${++_id}`;
+            shortcodeHandlers.set(scId, handler);
+            parentPort.postMessage({ kind: 'register-shortcode', tag, scId });
+        }
     }
 };
 
@@ -121,6 +132,15 @@ parentPort.on('message', async (msg) => {
             if (!settled) reply(res._status, undefined, res._headers);
         } catch (e) {
             parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: false, error: String(e && e.stack || e) });
+        }
+    } else if (msg.kind === 'invoke-shortcode') {
+        // Host is expanding a shortcode whose handler lives in this isolate.
+        const handler = shortcodeHandlers.get(msg.scId);
+        try {
+            const out = handler ? await handler(msg.attrs || {}, msg.content || '', msg.tag) : '';
+            parentPort.postMessage({ kind: 'shortcode-reply', id: msg.id, ok: true, value: out == null ? '' : String(out) });
+        } catch (e) {
+            parentPort.postMessage({ kind: 'shortcode-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     }
 });
