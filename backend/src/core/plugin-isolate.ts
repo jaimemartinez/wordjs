@@ -129,7 +129,11 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     try {
                         const multer = require('multer');
                         const os = require('os');
-                        const up = multer({ dest: path.join(os.tmpdir(), 'wordjs-uploads') });
+                        // Cap upload size: this was the ONE multer instance with no fileSize limit, so a
+                        // plugin multipart route (e.g. mail attachments) accepted multi-GB bodies → tmp-disk DoS.
+                        let maxFileSize = 10 * 1024 * 1024;
+                        try { maxFileSize = require('../config/app').uploads.maxFileSize || maxFileSize; } catch { /* default */ }
+                        const up = multer({ dest: path.join(os.tmpdir(), 'wordjs-uploads'), limits: { fileSize: maxFileSize, files: 1 } });
                         mw.push(up.single(String(msg.opts.multipart)));
                     } catch (e: any) { console.warn(`[Isolate ${slug}] multipart unavailable:`, e && e.message); }
                 }

@@ -269,6 +269,12 @@ async function initSMTPServer() {
         authOptional: true,
         disabledCommands: ['AUTH'],
 
+        // DoS containment for the unauthenticated inbound MTA: cap per-message size and concurrent
+        // connections so a flood of huge/many messages can't exhaust worker memory or tmp disk.
+        size: 25 * 1024 * 1024, // 25 MB hard cap per message
+        maxClients: 50,
+        socketTimeout: 60 * 1000, // drop idle/slow-loris connections after 60s
+
         // 1. DNSBL Protection (Connection Level)
         onConnect(session, callback) {
             if (session.remoteAddress === '127.0.0.1' || session.remoteAddress === '::1') return callback();
@@ -399,6 +405,28 @@ async function initSMTPServer() {
 /**
  * SECURITY: Validate email address to prevent CVE-2025-14874 (DoS) and CVE-2025-13033 (misdirection)
  */
+// SECURITY (H8): per-user outbound rate limiting (anti-spam). An authenticated account otherwise had
+// no ceiling on outbound mail (only the global 1000/15min API limiter), enough to blast DKIM-signed
+// spam from our IP and get the domain blacklisted. Cap messages AND total recipients per rolling hour.
+const MAX_RECIPIENTS_PER_MESSAGE = 50;
+const OUTBOUND_WINDOW_MS = 60 * 60 * 1000;
+const OUTBOUND_MAX_MESSAGES = 100;
+const OUTBOUND_MAX_RECIPIENTS = 500;
+const _outboundUsage = new Map(); // userId -> { windowStart, messages, recipients }
+function outboundRateLimitOk(userId, recipientCount) {
+    const now = Date.now();
+    let e = _outboundUsage.get(userId);
+    if (!e || now - e.windowStart > OUTBOUND_WINDOW_MS) {
+        e = { windowStart: now, messages: 0, recipients: 0 };
+        _outboundUsage.set(userId, e);
+    }
+    if (e.messages + 1 > OUTBOUND_MAX_MESSAGES) return false;
+    if (e.recipients + recipientCount > OUTBOUND_MAX_RECIPIENTS) return false;
+    e.messages += 1;
+    e.recipients += recipientCount;
+    return true;
+}
+
 function isValidEmail(email) {
     if (!email || typeof email !== 'string') return false;
     // Block extremely long addresses (DoS prevention)
@@ -429,6 +457,13 @@ async function sendMail(data) {
         if (!isValidEmail(email)) throw new Error(`Invalid recipient email address format: ${email}`);
     }
 
+    // SECURITY (H7): strip CR/LF from header-bound fields to prevent email-header injection. A newline
+    // in subject/fromName could smuggle extra headers (e.g. Bcc:) into the outbound message. Recipients
+    // are validated above; this defends the remaining user-controlled header fields at the source.
+    const stripCRLF = (v) => (typeof v === 'string' ? v.replace(/[\r\n]+/g, ' ').trim() : v);
+    if (data.subject !== undefined) data.subject = stripCRLF(data.subject);
+    if (data.fromName !== undefined) data.fromName = stripCRLF(data.fromName);
+
     const ccAttendees = data.cc ? (Array.isArray(data.cc) ? data.cc : [data.cc]) : [];
     const bccAttendees = data.bcc ? (Array.isArray(data.bcc) ? data.bcc : [data.bcc]) : [];
 
@@ -443,7 +478,8 @@ async function sendMail(data) {
     const defaultName = await getOption('blogname', 'WordJS');
 
     const fromEmail = data.fromEmail || await getOption('mail_from_email', defaultEmail);
-    const fromName = data.fromName || await getOption('mail_from_name', defaultName);
+    // stripCRLF the final fromName too (covers the admin-configured mail_from_name fallback).
+    const fromName = stripCRLF(data.fromName || await getOption('mail_from_name', defaultName));
     const parentId = data.parentId || 0;
     const threadId = data.threadId || 0;
     const draftId = data.draftId || 0;
@@ -1127,6 +1163,15 @@ exports.init = async function (bridge) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
+        // SECURITY (H8): cap recipients per message and enforce a per-user outbound rate limit.
+        const recipientCount = [].concat(to || [], cc || [], bcc || []).filter(Boolean).length;
+        if (recipientCount > MAX_RECIPIENTS_PER_MESSAGE) {
+            return res.status(400).json({ error: `Too many recipients (max ${MAX_RECIPIENTS_PER_MESSAGE} per message).` });
+        }
+        if (!outboundRateLimitOk(req.user.id, recipientCount)) {
+            return res.status(429).json({ error: 'Outbound mail rate limit exceeded. Please try again later.' });
+        }
+
         let parentId = 0;
         let threadId = 0;
 
@@ -1303,6 +1348,15 @@ exports.init = async function (bridge) {
             let domain = (req.body && req.body.domain) || '';
             if (!domain) { try { domain = await getSiteDomain(); } catch (e) { } }
             if (!domain) return res.status(400).json({ error: 'A sending domain is required' });
+
+            // F8: don't silently overwrite an existing DKIM key — rotating it breaks signing for all
+            // already-published DNS records until the operator re-publishes. Require an explicit force.
+            const existing = await getOption('mail_security_dkim_private_key', '');
+            if (existing && !(req.body && req.body.force === true)) {
+                return res.status(409).json({
+                    error: 'A DKIM key already exists. Rotating it invalidates your published DNS record until you re-publish. Resend with { "force": true } to rotate.'
+                });
+            }
 
             const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
                 modulusLength: 2048,
