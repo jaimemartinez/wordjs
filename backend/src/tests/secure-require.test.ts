@@ -396,6 +396,73 @@ test('Slug spoofing: an eval frame faking a plugins/ sourceURL is NOT attributed
 });
 
 // ============================================
+console.log('\n🧩 Core-module policy + fs.promises + Router anchoring:');
+// ============================================
+
+(() => {
+    // Pre-load (from core context) so they're cached before the plugin runner requires them —
+    // in production these load at startup before any plugin; the lazy first-load fs.existsSync
+    // would otherwise run with the plugin on the stack and be (correctly) blocked.
+    require('../config/app');
+    require('../core/options');
+
+    const pluginDir = path.join(path.resolve(__dirname, '../../plugins'), 'test-policy-plugin');
+    const runnerPath = path.join(pluginDir, 'runner.js');
+    if (!fs.existsSync(pluginDir)) fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(runnerPath,
+        "module.exports = {\n" +
+        "  reqImportExport: () => require('../../src/core/import-export'),\n" +
+        "  reqPluginContext: () => require('../../src/core/plugin-context'),\n" +
+        "  reqConfig: () => require('../../src/config/app'),\n" +
+        "  reqOptions: () => require('../../src/core/options'),\n" +
+        "  promisesEscape: () => require('fs').promises.readFile('/etc/passwd','utf8'),\n" +
+        "};\n");
+    let runner: any;
+    try { runner = require(runnerPath); } catch (e) { /* ignore */ }
+
+    test('Core policy: plugin requiring import-export is blocked (#4)', () => {
+        expectThrows(() => runner.reqImportExport(), 'not accessible');
+    });
+    test('Core policy: plugin requiring plugin-context is blocked (#7)', () => {
+        expectThrows(() => runner.reqPluginContext(), 'not accessible');
+    });
+    test('Core policy: plugin requiring config/app gets secrets redacted (#3)', () => {
+        const cfg = runner.reqConfig();
+        expect(cfg.jwtSecret === undefined).toBeTrue();
+        expect((cfg.jwt || {}).secret === undefined).toBeTrue();
+    });
+    test('Core policy: legitimate plugin-API module (options) still loads', () => {
+        const opt = runner.reqOptions();
+        expect(typeof opt.getOption).toBe('function');
+    });
+    test('fs.promises is proxied for plugins — escape outside dir rejects (#2)', async () => {
+        let blocked = false;
+        try { await runner.promisesEscape(); } catch (e) { blocked = /SECURITY BLOCK/i.test(e.message); }
+        expect(blocked).toBeTrue();
+    });
+
+    if (fs.existsSync(runnerPath)) { delete require.cache[require.resolve(runnerPath)]; fs.unlinkSync(runnerPath); }
+    try { fs.rmdirSync(pluginDir); } catch { /* */ }
+})();
+
+test('express.Router() handler is ALS-anchored (#1)', () => {
+    const express = require('express');
+    const pc = require('../core/plugin-context');
+    const appReg = require('../core/appRegistry');
+    appReg.setApp(express()); // patches the shared Router prototype
+    const router = express.Router();
+    pc.runWithContext('router-evil', () => {
+        router.get('/x', (_req, res) => { res.seen = pc.getCurrentPlugin(); });
+    });
+    const layer = router.stack.find((l: any) => l.route);
+    const handler = layer.route.stack[0].handle;
+    const savedLimit = Error.stackTraceLimit; Error.stackTraceLimit = 0;
+    const res: any = {};
+    try { handler({}, res, () => {}); } finally { Error.stackTraceLimit = savedLimit; }
+    expect(res.seen).toBe('router-evil');
+});
+
+// ============================================
 // Summary
 // ============================================
 console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
