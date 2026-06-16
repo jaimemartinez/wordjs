@@ -204,4 +204,16 @@ describe('API HTTP layer', () => {
         assert.ok(!('token_valid_after' in json.meta), 'token_valid_after must be stripped');
         assert.ok(!('twofa_secret' in json.meta), '2fa secret must be stripped');
     });
+
+    // 9. Account lockout: repeated failed logins for one account must lock it (429), independent of
+    //    the per-IP rate limiter. Seeded 'admin' has an invalid stored hash so every attempt fails fast.
+    it('locks an account after repeated failed logins (429)', async () => {
+        for (let i = 0; i < 10; i++) {
+            const r = await request(app).post('/api/v1/auth/login').send({ username: 'admin', password: 'wrong-pass' });
+            assert.strictEqual(r.status, 401, `attempt ${i + 1} should be 401, got ${r.status}`);
+        }
+        const locked = await request(app).post('/api/v1/auth/login').send({ username: 'admin', password: 'wrong-pass' });
+        assert.strictEqual(locked.status, 429, 'account must be locked after 10 failures');
+        assert.strictEqual(locked.body.code, 'rest_account_locked');
+    });
 });

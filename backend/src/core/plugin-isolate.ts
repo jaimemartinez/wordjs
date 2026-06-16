@@ -49,6 +49,10 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         });
         const api = createPluginApi(slug);
         let invokeId = 0;
+        // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't
+        // flood the host with privileged RPCs (each runs a permission-checked bridge call here).
+        let inflightCalls = 0;
+        const MAX_INFLIGHT_CALLS = 200;
 
         // Every host→worker RPC carries a hard timeout: a plugin that never replies (hang or DoS)
         // must not pin an HTTP request open or leak a pending entry forever. rpcSettle clears it.
@@ -98,11 +102,18 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 reject(new Error(msg.error));
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
+                if (inflightCalls >= MAX_INFLIGHT_CALLS) {
+                    worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: `Isolated plugin '${slug}' exceeded concurrent bridge-call limit` });
+                    return;
+                }
+                inflightCalls++;
                 try {
                     const value = await runWithContext(slug, () => callApi(api, msg.method, msg.args));
                     worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value });
                 } catch (e: any) {
                     worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+                } finally {
+                    inflightCalls--;
                 }
             } else if (msg.kind === 'register') {
                 // Install a shim in the real hook system that calls back into the isolate.
