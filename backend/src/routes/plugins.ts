@@ -280,7 +280,10 @@ router.get('/active', asyncHandler(async (req, res) => {
 router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // Await getAllPlugins()
     const plugins = await getAllPlugins();
-    res.json(plugins);
+    // Annotate each with its trust state so the admin UI can render the toggle.
+    // `trusted` = currently privileged; `trustedShipped` = first-party default (toggle locked on).
+    const { isTrusted, isShippedTrusted } = require('../core/plugin-trust');
+    res.json(plugins.map((p: any) => ({ ...p, trusted: isTrusted(p.slug), trustedShipped: isShippedTrusted(p.slug) })));
 }));
 
 /**
@@ -313,6 +316,39 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
     regenerateRegistry();
 
     res.json(result);
+}));
+
+/**
+ * @swagger
+ * /plugins/{slug}/trust:
+ *   post:
+ *     summary: Grant or revoke the privileged "trusted" tier for a plugin (admin)
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ */
+router.post('/:slug/trust', authenticate, isAdmin, asyncHandler(async (req, res) => {
+    if (!validateSlug(req.params.slug)) {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+    const slug = req.params.slug;
+    const { isShippedTrusted, setTrusted, isTrusted } = require('../core/plugin-trust');
+
+    // First-party defaults are always trusted and can't be toggled off via the UI.
+    if (isShippedTrusted(slug)) {
+        return res.status(409).json({ error: `'${slug}' is a first-party system plugin (always trusted); its trust can't be changed here.` });
+    }
+
+    const trusted = !!(req.body && req.body.trusted);
+    await setTrusted(slug, trusted);
+
+    res.json({
+        success: true,
+        slug,
+        trusted: isTrusted(slug),
+        message: trusted
+            ? `Plugin '${slug}' is now TRUSTED — it can reach core data, secret options and host capabilities. Data-access takes effect immediately; restart to also re-mount its routes at non-namespaced paths.`
+            : `Trust revoked for '${slug}' — it is sandboxed again.`
+    });
 }));
 
 /**

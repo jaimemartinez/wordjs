@@ -316,6 +316,9 @@ async function initialize() {
         // (moved out of options.ts import-time to avoid a startup race).
         await require('./core/options').initCacheSetting();
 
+        // Load the operator-toggled plugin trust set (admin UI) so the bridge gates see it.
+        await require('./core/plugin-trust').loadTrusted();
+
         // Initialize Analytics Table
         await require('./models/Analytics').init();
 
