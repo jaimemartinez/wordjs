@@ -161,8 +161,8 @@ class Email {
         } = data;
 
         // Build dynamic query
-        let fields = [];
-        let params = [];
+        let fields: string[] = [];
+        let params: any[] = [];
 
         if (toAddress !== undefined) { fields.push("to_address = ?"); params.push(toAddress); }
         if (ccAddress !== undefined) { fields.push("cc_address = ?"); params.push(ccAddress); }
@@ -208,7 +208,7 @@ class Email {
 
     static async findAllByUser(email, folder = 'inbox', limit = 50, offset = 0) {
         let whereClause = "";
-        let params = [];
+        let params: any[] = [];
         const likeEmail = `%${email}%`;
 
         // Common excluded check
@@ -247,7 +247,7 @@ class Email {
 
     static async countByUser(email, folder = 'inbox') {
         let whereClause = "";
-        let params = [];
+        let params: any[] = [];
         const likeEmail = `%${email}%`;
 
         if (folder === 'sent') {

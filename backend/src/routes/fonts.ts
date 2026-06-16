@@ -100,8 +100,8 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
                 // Split by common delimiters
                 const parts = nameWithoutExt.split(/[-_ ]+/);
 
-                let familyParts = [];
-                let variantParts = [];
+                let familyParts: string[] = [];
+                let variantParts: string[] = [];
 
                 parts.forEach(part => {
                     if (variantTokens.includes(part.toLowerCase())) {

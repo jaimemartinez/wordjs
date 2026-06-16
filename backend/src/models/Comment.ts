@@ -202,8 +202,8 @@ class Comment {
         } = options;
 
         let sql = 'SELECT * FROM comments';
-        const conditions = [];
-        const params = [];
+        const conditions: string[] = [];
+        const params: any[] = [];
 
         if (postId) {
             conditions.push('comment_post_id = ?');
@@ -259,8 +259,8 @@ class Comment {
         const { postId, status, type = 'comment' } = options;
 
         let sql = 'SELECT COUNT(*) as count FROM comments';
-        const conditions = [];
-        const params = [];
+        const conditions: string[] = [];
+        const params: any[] = [];
 
         if (postId) {
             conditions.push('comment_post_id = ?');
@@ -339,8 +339,8 @@ class Comment {
         const comment = await Comment.findById(id);
         if (!comment) throw new Error('Comment not found');
 
-        const updates = [];
-        const values = [];
+        const updates: string[] = [];
+        const values: any[] = [];
 
         if (data.author !== undefined) {
             updates.push('comment_author = ?');

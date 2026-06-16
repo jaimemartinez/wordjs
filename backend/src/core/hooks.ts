@@ -63,8 +63,8 @@ class Hooks {
         if (!this.actions.has(hook)) {
             this.actions.set(hook, []);
         }
-        this.actions.get(hook).push({ callback, priority, pluginSlug });
-        this.actions.get(hook).sort((a, b) => a.priority - b.priority);
+        this.actions.get(hook)!.push({ callback, priority, pluginSlug });
+        this.actions.get(hook)!.sort((a, b) => a.priority - b.priority);
     }
 
     /**
@@ -73,7 +73,7 @@ class Hooks {
      */
     removeAction(hook, callback) {
         if (!this.actions.has(hook)) return;
-        const hooks = this.actions.get(hook);
+        const hooks = this.actions.get(hook)!;
         const index = hooks.findIndex(h => h.callback === callback);
         if (index > -1) hooks.splice(index, 1);
     }
@@ -86,7 +86,7 @@ class Hooks {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
-        for (const { callback, pluginSlug } of this.actions.get(hook)) {
+        for (const { callback, pluginSlug } of this.actions.get(hook)!) {
             if (pluginSlug) {
                 await runWithContext(pluginSlug, () => callback(...args));
             } else {
@@ -104,7 +104,7 @@ class Hooks {
         // SECURITY: run plugin callbacks inside their plugin context (like the async doAction)
         // so the runtime sandbox applies. Previously sync hooks ran uncontexted = trusted.
         const { runWithContext } = require('./plugin-context');
-        for (const { callback, pluginSlug } of this.actions.get(hook)) {
+        for (const { callback, pluginSlug } of this.actions.get(hook)!) {
             if (pluginSlug) {
                 runWithContext(pluginSlug, () => callback(...args));
             } else {
@@ -118,7 +118,7 @@ class Hooks {
      * Equivalent to has_action()
      */
     hasAction(hook) {
-        return this.actions.has(hook) && this.actions.get(hook).length > 0;
+        return this.actions.has(hook) && this.actions.get(hook)!.length > 0;
     }
 
     /**
@@ -132,8 +132,8 @@ class Hooks {
         if (!this.filters.has(hook)) {
             this.filters.set(hook, []);
         }
-        this.filters.get(hook).push({ callback, priority, pluginSlug });
-        this.filters.get(hook).sort((a, b) => a.priority - b.priority);
+        this.filters.get(hook)!.push({ callback, priority, pluginSlug });
+        this.filters.get(hook)!.sort((a, b) => a.priority - b.priority);
     }
 
     /**
@@ -142,7 +142,7 @@ class Hooks {
      */
     removeFilter(hook, callback) {
         if (!this.filters.has(hook)) return;
-        const hooks = this.filters.get(hook);
+        const hooks = this.filters.get(hook)!;
         const index = hooks.findIndex(h => h.callback === callback);
         if (index > -1) hooks.splice(index, 1);
     }
@@ -156,7 +156,7 @@ class Hooks {
         if (!this.filters.has(hook)) return value;
         const { runWithContext } = require('./plugin-context');
         let result = value;
-        for (const { callback, pluginSlug } of this.filters.get(hook)) {
+        for (const { callback, pluginSlug } of this.filters.get(hook)!) {
             if (pluginSlug) {
                 result = await runWithContext(pluginSlug, () => callback(result, ...args));
             } else {
@@ -175,7 +175,7 @@ class Hooks {
         // SECURITY: run plugin filter callbacks inside their plugin context (like applyFilters).
         const { runWithContext } = require('./plugin-context');
         let result = value;
-        for (const { callback, pluginSlug } of this.filters.get(hook)) {
+        for (const { callback, pluginSlug } of this.filters.get(hook)!) {
             if (pluginSlug) {
                 result = runWithContext(pluginSlug, () => callback(result, ...args));
             } else {
@@ -190,7 +190,7 @@ class Hooks {
      * Equivalent to has_filter()
      */
     hasFilter(hook) {
-        return this.filters.has(hook) && this.filters.get(hook).length > 0;
+        return this.filters.has(hook) && this.filters.get(hook)!.length > 0;
     }
 
     /**
@@ -198,7 +198,7 @@ class Hooks {
      * Equivalent to did_action() - simplified version
      */
     getActionCount(hook) {
-        return this.actions.has(hook) ? this.actions.get(hook).length : 0;
+        return this.actions.has(hook) ? this.actions.get(hook)!.length : 0;
     }
     /**
      * Get all registered hooks (Actions and Filters)

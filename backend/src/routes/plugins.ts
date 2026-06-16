@@ -192,7 +192,7 @@ router.get('/registry', asyncHandler(async (req, res) => {
     const plugins = await getAllPlugins();
     const activePlugins = plugins.filter(p => p.active);
 
-    const registry = [];
+    const registry: any[] = [];
 
     for (const plugin of activePlugins) {
         const manifestPath = path.join(PLUGINS_DIR, plugin.slug, 'manifest.json');

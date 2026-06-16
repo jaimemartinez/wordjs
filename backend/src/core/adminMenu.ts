@@ -46,7 +46,7 @@ function unregisterAdminMenu(pluginSlug) {
  * @returns {Array} Array of menu items
  */
 function getAdminMenuItems() {
-    const items = [];
+    const items: any[] = [];
     for (const [slug, menus] of adminMenuItems) {
         for (const menu of menus) {
             items.push({ ...menu, plugin: slug });

@@ -107,7 +107,7 @@ function parseThemeMetadata(themeDir, slug) {
  */
 function scanThemes() {
   ensureThemesDir();
-  const themes = [];
+  const themes: Theme[] = [];
 
   const entries = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
 

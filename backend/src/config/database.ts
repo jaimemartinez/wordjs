@@ -9,11 +9,11 @@ const path = require('path');
 // 1. Load the Configured Driver
 // 1. Driver State
 let driverName = config.dbDriver || 'sqlite-legacy';
-let driver = null;
-let driverAsync = null; // New Async Driver
+let driver: any = null;
+let driverAsync: any = null; // New Async Driver
 
 // Helper to load driver dynamically
-function loadDriver(overrideName = null) {
+function loadDriver(overrideName: string | null = null) {
   const name = overrideName || config.dbDriver || 'sqlite-legacy';
   driverName = name; // Update global state
 
@@ -476,7 +476,7 @@ function getDbType() {
   };
 }
 
-async function clearDatabase(db = null) {
+async function clearDatabase(db: any = null) {
   const targetDb = db || driverAsync || getDb();
   console.log('🧹 DB Manager: Clearing database content...');
 
