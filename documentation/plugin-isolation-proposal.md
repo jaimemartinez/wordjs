@@ -22,21 +22,31 @@
 > worker. (This also fixed a latent bug in the old in-process carousel shortcode, which read options
 > without awaiting.)
 >
-> **Per-plugin tier (final):**
+> **Trusted-tier bridge capabilities (gated on `config.trustedSystemPlugins`, NOT self-declared
+> manifest perms):** unscoped `db.*` + `db.createTable` on core tables, `db.getType()`, read/write of
+> secret-named options, `http.route` `opts.absolute` (keep original paths, no frontend churn),
+> `opts.multipart` (host parses the upload, forwards file metadata), `provideMail(handler)`,
+> `notify.registerTransport(name, handler)`. (net/dns/crypto/os and npm deps were never blocked in a
+> worker — only fs/child_process are proxied — so raw-socket plugins like the SMTP server isolate fine.)
+>
+> **Per-plugin tier (final — 7 of 8 isolated):**
 > | Plugin | Tier | Why |
 > |---|---|---|
 > | hello-world | **isolated** | hooks only — reference |
 > | test-schema | **isolated** | hooks + DB via bridge |
-> | card-gallery | **isolated** | JSON routes + options + admin menu; frontend updated to namespaced path |
-> | photo-carousel | **isolated** | routes + options + **async shortcode** (`[carousel]`) + admin menu |
-> | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) + admin menu |
-> | mail-server | in-process | raw `net` (SMTP server on :25, outbound sockets) — unavailable in an isolate |
-> | db-migration, conference-manager | in-process | first-party `system:admin` (trusted tier) |
+> | card-gallery | **isolated** | JSON routes + options + admin menu (frontend → namespaced path) |
+> | photo-carousel | **isolated** | routes + options + **async shortcode** (`[carousel]`) |
+> | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
+> | conference-manager | **isolated** | trusted: privileged DB + `db.getType` + absolute routes + portal cookies |
+> | mail-server | **isolated** | trusted: SMTP server on :25 + MX delivery in the worker; Email model → `db`, DKIM via secret options, multipart upload, `provideMail` + `notify.registerTransport` |
+> | db-migration | in-process | **infrastructure, not a feature plugin**: manages the embedded PostgreSQL *server process* via `child_process.execSync` (install/start/stop) and runs schema migrations during boot. A sandboxed worker can't (and shouldn't) control the host DB process the host itself depends on. |
 >
-> **Net:** the isolation platform is complete and proven, and **5 of 7 bundled plugins now run
-> isolated** (verified in-browser serving real data through their workers). Only mail-server (raw net)
-> and the two `system:admin` plugins remain in-process — by design, not limitation. Uploaded/untrusted
-> third-party plugins isolate by default (set `isolated:true` + use the `wordjs` bridge).
+> **Net:** **7 of 8 bundled plugins run isolated** (each verified in-browser serving real data through
+> its worker — incl. the mail server's inbox and SMTP listener on :25). The only in-process plugin,
+> db-migration, is DB infrastructure that by its nature manages the database server — a principled
+> exception, not a limitation. Uploaded/untrusted third-party plugins isolate by default
+> (`isolated:true` + the `wordjs` bridge), hard-blocked from core tables/secrets regardless of the
+> permissions they request.
 
 Status: **proposal** · Author: WordJS · Context: after 4 red-team passes the in-process sandbox
 closes every *known* practical escape (AST scan + runtime require proxy + ALS-anchoring of every
