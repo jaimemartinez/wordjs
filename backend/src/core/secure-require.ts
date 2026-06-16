@@ -122,6 +122,12 @@ function createSecurityError(pluginSlug, action, details = '') {
 function createSecureFs() {
     const handler = {
         get(target, prop) {
+            // SECURITY: fs.promises is a non-function OBJECT, so without this it would be
+            // returned raw and bypass every guard. Hand plugins the secured promises proxy.
+            if (prop === 'promises') {
+                return getEffectivePlugin() ? createSecureFsPromises() : target.promises;
+            }
+
             const originalMethod = target[prop];
 
             // If it's not a function, return as-is
@@ -285,11 +291,97 @@ function secureModuleFor(id) {
     return createBlockedModuleProxy(pluginSlug, norm);
 }
 
+// ============================================
+// Core-module access policy for plugins
+// ============================================
+// A plugin that loads a core module which itself holds raw fs/child_process or secrets can
+// escape the proxies entirely (the core module captured the real modules at load time, before
+// any plugin was on the stack). So untrusted plugins are DENIED these core modules, and
+// config/app is handed back with secrets redacted. Plugin-API modules (options, hooks,
+// appRegistry, adminMenu, shortcodes, widgets, middleware/*, config/database) are NOT blocked.
+const CORE_DIR = __dirname;
+const CONFIG_APP = path.join(CORE_DIR, '../config', 'app');
+const BLOCKED_CORE = new Set([
+    'plugin-test-runner', 'import-export', 'backup', 'cert-manager', 'certManager',
+    'embedded-db', 'plugin-context', 'secure-require', 'io-guard', 'crash-guard', 'configManager'
+].map(n => path.join(CORE_DIR, n)));
+
+// Realpath-resolved plugin/theme dirs, used to classify the REQUIRING module by its filename.
+let REAL_PLUGINS_DIR: string;
+let REAL_THEMES_DIR: string;
+try { REAL_PLUGINS_DIR = originalFs.realpathSync(PLUGINS_DIR); } catch { REAL_PLUGINS_DIR = path.resolve(PLUGINS_DIR); }
+try { REAL_THEMES_DIR = originalFs.realpathSync(THEMES_DIR); } catch { REAL_THEMES_DIR = path.resolve(THEMES_DIR); }
+
+// Extract the plugin/theme slug from a requiring module's filename, or null if it is NOT
+// plugin/theme code (i.e. core). The policy keys on WHO requires (the immediate requirer),
+// not the ambient effective plugin — so core modules can require core modules even while
+// running inside a plugin's async context.
+function requirerSlug(filename: string): string | null {
+    if (!filename) return null;
+    let real: string;
+    try { real = originalFs.realpathSync(filename); } catch { real = filename; }
+    if (real.startsWith(REAL_PLUGINS_DIR + path.sep)) {
+        return real.slice(REAL_PLUGINS_DIR.length + 1).split(path.sep)[0];
+    }
+    if (real.startsWith(REAL_THEMES_DIR + path.sep)) {
+        return 'theme:' + real.slice(REAL_THEMES_DIR.length + 1).split(path.sep)[0];
+    }
+    return null;
+}
+
+let _trusted: Set<string> | null = null;
+function trustedPlugins(): Set<string> {
+    if (!_trusted) {
+        try { _trusted = new Set((originalRequire.call(module, '../config/app').trustedSystemPlugins) || []); }
+        catch { _trusted = new Set(); }
+    }
+    return _trusted;
+}
+
+let _secureConfig: any = null;
+function secureConfig() {
+    if (!_secureConfig) {
+        const real: any = originalRequire.call(module, '../config/app');
+        const SECRET = new Set(['jwtSecret', 'gatewaySecret', 'dbPassword']);
+        _secureConfig = new Proxy(real, {
+            get(t: any, p) {
+                if (SECRET.has(p as string)) return undefined;
+                if (p === 'jwt') return { ...t.jwt, secret: undefined };
+                if (p === 'db') return { ...t.db, password: undefined };
+                return t[p];
+            },
+            set() { return false; } // read-only view for plugins
+        });
+    }
+    return _secureConfig;
+}
+
+// Returns a replacement module (sanitized config), THROWS for blocked core modules, or
+// undefined to fall through. Keys on the REQUIRING module: only a plugin/theme file's OWN
+// requires are policed (core->core requires are always allowed, even inside a plugin context).
+function corePolicyFor(request, mod): any {
+    if (typeof request !== 'string' || request[0] !== '.') return undefined;
+    const requirer = mod && mod.filename;
+    if (!requirer) return undefined;
+    const slug = requirerSlug(requirer);
+    if (!slug || trustedPlugins().has(slug)) return undefined; // core + trusted plugins unrestricted
+    let resolved: string;
+    try { resolved = Module._resolveFilename(request, mod); } catch { return undefined; }
+    const noExt = resolved.replace(/\.[cm]?[jt]s$/, '');
+    if (noExt === CONFIG_APP) return secureConfig();
+    if (BLOCKED_CORE.has(noExt)) {
+        throw createSecurityError(slug, `require('${request}')`, 'this core module is not accessible to plugins');
+    }
+    return undefined;
+}
+
 function installSecureRequire() {
     // 1. Patch Module.prototype.require (the normal `require('fs')` path).
     Module.prototype.require = function (id) {
         const secure = secureModuleFor(id);
         if (secure !== undefined) return secure;
+        const core = corePolicyFor(id, this);
+        if (core !== undefined) return core;
         return originalRequire.apply(this, arguments);
     };
 
@@ -300,6 +392,8 @@ function installSecureRequire() {
     Module._load = function (request, _parent, _isMain) {
         const secure = secureModuleFor(request);
         if (secure !== undefined) return secure;
+        const core = corePolicyFor(request, _parent);
+        if (core !== undefined) return core;
         // Block native .node addons for plugins: compiled bindings hand out raw syscalls
         // and bypass every JS-level guard. Resolve the request to catch indirect paths.
         if (typeof request === 'string' && request.endsWith('.node')) {
@@ -334,7 +428,9 @@ function installSecureRequire() {
  * Create secure version of fs/promises
  */
 function createSecureFsPromises() {
-    const originalFsPromises = require('fs').promises;
+    // Use the captured RAW fs (not require('fs'), which returns the proxy in plugin context
+    // and would make secureFs.promises -> createSecureFsPromises -> require('fs').promises recurse).
+    const originalFsPromises = originalFs.promises;
 
     const handler = {
         get(target, prop) {
