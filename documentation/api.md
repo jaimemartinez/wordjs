@@ -147,6 +147,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
 - **Users**: `/users`, `/roles` - Role-Based Access Control.
 - **System**: `/settings`, `/plugins`, `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/system/certs`.
+- **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8).
 - **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
 - **Data**: `/export`, `/export/wxr`, `/import`, `/backups`, `/db-migration` (engine migration & embedded Postgres).
 
@@ -191,7 +192,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`  | `/export/wxr`               | Admin | Export as WordPress WXR (XML)                       |
 | `POST` | `/import`                   | Admin | Import a site from JSON (file upload or `data`)     |
 
-> **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.js`, distinct from the logical `/export` above.
+> **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.ts`, distinct from the logical `/export` above.
 
 ### 6.4 Analytics System 📊
 | Method | Endpoint           | Auth  | Description                        |
@@ -236,6 +237,17 @@ Base path: `/api/v1/revisions`. All routes require `authenticate`. Access is gat
 | `POST`   | `/:id/restore`              | owner+edit / edit_others | Restore a revision              |
 | `DELETE` | `/:id`                      | owner+edit / edit_others | Delete a revision               |
 | `GET`    | `/compare/:id1/:id2`        | owner / edit_others | Diff two revisions (both must be readable) |
+
+### 6.8 Prometheus Metrics 📈
+A Prometheus scrape endpoint is served at the **root path** `GET /metrics` (`backend/src/core/metrics.ts`). It exposes the default Node/process metrics (`wordjs_`-prefixed: CPU, RSS/heap, event-loop lag, GC, handles) plus a `wordjs_sse_clients` gauge (active SSE clients on this node) and a `wordjs_ready` gauge.
+
+| Method | Endpoint   | Auth         | Description                                  |
+| :----- | :--------- | :----------- | :------------------------------------------- |
+| `GET`  | `/metrics` | Scrape token | Prometheus text-format metrics for this node |
+
+*   **Disabled by default:** the endpoint returns **`404`** unless a scrape token is configured at `config.metrics.token` (in `wordjs-config.json`) or via the `METRICS_TOKEN` env var. With no token, metrics are never exposed.
+*   **Auth:** scrape with `Authorization: Bearer <token>` (or `?token=<token>`); a missing/incorrect token returns `401` (constant-time compare). It is mounted at root level — CSRF-free and not rate-limited.
+*   **Routing:** exposed publicly through the gateway (in the backend's advertised route list) and in monolith mode (`BACKEND_PREFIXES`). Never reachable without the token regardless of mode.
 
 ---
 
@@ -310,7 +322,7 @@ Usage in Editor: `[youtube id="dQw4w9WgXcQ"]`
 
 ## 11. Custom Backups & System State 📦
 
-WordJS features a powerful **Full System State Backup** engine located in `backend/src/core/backup.js`. unlike traditional CMS backups that only save the database, WordJS creates a portable, self-contained snapshot of the entire application.
+WordJS features a powerful **Full System State Backup** engine located in `backend/src/core/backup.ts`. unlike traditional CMS backups that only save the database, WordJS creates a portable, self-contained snapshot of the entire application.
 
 ### 11.1 What is included?
  The backup zip file represents the **entire backend directory state**, ensuring a 1:1 restoration.
@@ -330,8 +342,11 @@ WordJS features a powerful **Full System State Backup** engine located in `backe
 *   `restoreBackup(filename)`:
     1.  **Physical Restore:** Extracts files, overwriting the current system (code + assets).
     2.  **Logical Restore:** Parses `wordjs-content.json` and rebuilds the SQLite database using `importSite()`.
-*   `listBackups()`: Returns available backup files from `backend/backups/`.
+*   `listBackups()`: Returns available backup files from `backend/backups/` (newest first).
 *   `deleteBackup(filename)`: safely removes a backup file.
+*   `pruneBackups(keep?)`: **Retention pruning.** Keeps only the newest `keep` backups and deletes the rest. `createBackup()` calls it automatically after every backup so scheduled/auto backups don't fill the disk unbounded. When `keep` is omitted it is read from the `backup_retention` option (**default 7**); set `backup_retention` to `0` (or any value ≤ 0) to disable pruning and keep all backups.
+
+> **Retention:** Backups still live **on-host** in `backend/backups/`; off-host / S3 storage is roadmap. The only automatic cleanup is the retention prune above.
 
 ### 11.3 Import/Expert (Logical Data Only)
 Located in `backend/src/core/import-export.js`.

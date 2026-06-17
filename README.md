@@ -18,8 +18,10 @@ reachable only through a permission-checked capability bridge.
 > - It ships some **pre-release / experimental dependencies** — notably
 >   `embedded-postgres` (beta).
 > - The backend **compiles to `dist/` for production** (no `ts-node` at runtime) with a
->   **strict** type-check enforced in CI. A couple of strict sub-flags (`noImplicitAny`)
->   are still being rolled out file-by-file.
+>   **strict** type-check enforced in CI. The strict core (`strictNullChecks`, etc.) is
+>   on, but two sub-flags — `noImplicitAny` and `useUnknownInCatchVariables` — are
+>   deliberately **off**: enabling `noImplicitAny` today still surfaces **~1,220
+>   implicit-any sites** that need real type annotations. This is ongoing, not nearly done.
 > - There is **no plugin marketplace or community ecosystem yet**. The repo ships a
 >   handful of first-party/example plugins and themes.
 >
@@ -58,10 +60,12 @@ reachable only through a permission-checked capability bridge.
 - **Visual builder** via [Puck](https://puckeditor.com/) (drag-and-drop page editing).
 - **Hooks & filters** event system, with admin-side hook inspection.
 - **Shortcodes** (WordPress-style) for dynamic content, including from plugins.
-- **Themes** with CSS-variable theming (9 themes ship in-repo).
+- **Themes** with CSS-variable theming (13 first-party themes ship in-repo).
 - **Dynamic roles & permissions**, database-driven.
 - **i18n** for core and plugins (es / en / pt).
-- **Import / export** for full site backup and restore.
+- **Import / export** for full site backup and restore, with **retention pruning** — after
+  each backup only the newest N are kept (`backup_retention`, default 7; `0` keeps all) so
+  scheduled backups can't fill the disk. Backups are on-host (off-host/S3 is roadmap).
 - **Built-in cron** for maintenance and plugin background jobs.
 - **Privacy-conscious analytics**: a lightweight first-party event log with **no cookies**
   and **daily-rotated, salted IP hashing** (you own the data). Aggregated stats are shown
@@ -76,7 +80,15 @@ reachable only through a permission-checked capability bridge.
   disabled and 1-hour timeouts for event streams).
 - **TLS**: automatic **Let's Encrypt** certificates via `acme-client` (**HTTP-01** and
   **DNS-01** challenges), plus **manual certificate upload** and a self-signed fallback for
-  local development.
+  local development. ACME **auto-renewal works in monolith mode too** — in embedded mode the
+  cert-manager writes the renewed cert and hot-reloads the running HTTPS server in-process
+  (via `setSecureContext`, no restart); it still needs the opt-in HTTP-01 listener
+  (`acme.http01Port`, e.g. 80) reachable.
+- **Prometheus metrics** at `GET /metrics` — default Node/process metrics plus a
+  `wordjs_sse_clients` gauge. **Disabled (404) unless a scrape token is configured**
+  (`config.metrics.token` or the `METRICS_TOKEN` env var); scrape with
+  `Authorization: Bearer <token>`. Routed publicly via the gateway and in monolith mode, and
+  never exposed without a token.
 - **Pluggable storage**: SQLite via `sql.js` (WASM, "legacy") or `better-sqlite3` (native),
   and PostgreSQL via `pg` / `embedded-postgres` (beta), with a migration system to move
   between them.
@@ -205,16 +217,25 @@ no `ts-node` at runtime. In development it runs in-place via `ts-node`. From `ba
 
 > The schema is created/verified automatically at boot (`initializeDatabase`); first-run
 > data seeding is handled by the setup CLI (`npm run setup` at the repo root), not a backend
-> script. Driver migration is the root `npm run migrate` (`setup/index.js --migrate`).
+> script. To apply pending **schema** migrations without starting the server (e.g. in a deploy
+> pipeline), run the root `npm run migrate` (`setup/index.js --migrate` → `backend/scripts/migrate.js`);
+> it's **idempotent** (the same migrations also run at boot). Switching the DB *driver* itself
+> (copying data between SQLite and PostgreSQL) is a **separate** operation in the admin panel
+> (Admin → Database), not `npm run migrate`.
 
-> `strict` is **on**. Two sub-flags are deliberately staged: `noImplicitAny` (the remaining
-> implicit-any parameters, being annotated with real types incrementally) and
-> `useUnknownInCatchVariables`. Plugins under `backend/plugins/*` stay **JavaScript** on
-> purpose — the AST scanner and dynamic `require` assume `.js`.
+> `strict` is **on** (`strictNullChecks`, `strictFunctionTypes`, etc. are enforced). Two
+> sub-flags are deliberately **off**: `noImplicitAny` and `useUnknownInCatchVariables`.
+> Turning on `noImplicitAny` today still surfaces **~1,220 implicit-any sites** to annotate
+> with real types — this is in progress, not nearly complete. Plugins under
+> `backend/plugins/*` stay **JavaScript** on purpose — the AST scanner and dynamic `require`
+> assume `.js`.
 
-A GitHub Actions workflow (`.github/workflows/ci.yml`) runs the backend strict type-check,
-the compiled build, a dependency **license gate** (blocks AGPL/SSPL), and tests; the gateway
-tests; and the frontend lint + build.
+A GitHub Actions workflow (`.github/workflows/ci.yml`, on **Node 22**) runs the backend strict
+type-check, the compiled build, a dependency **license gate** (blocks AGPL/SSPL), the unit
+tests, and **integration tests against real `postgres:16` + `redis:7` service containers**
+(`npm run test:integration` — multi-node dist-lock lease CAS, Redis pub/sub coherence, and the
+health/metrics endpoints); the gateway tests; and the frontend lint, type-check, **vitest unit
+tests** (`npm run test`, e.g. the XSS sanitizer), and build.
 
 ---
 

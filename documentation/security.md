@@ -250,8 +250,9 @@ In particular, plugin dependency installation passes package names to `execFile`
 1. **HTTPS**: Always use SSL/TLS in production (via Nginx or Caddy)
 2. **Rate Limiting**: The Gateway includes rate limiting by default
 3. **Firewall**: Only expose port 3000 (or 80/443)
-4. **Backups**: Configure automatic database backups
-5. **Updates**: Keep Node.js and dependencies updated
+4. **Backups**: Configure automatic backups. Backups are stored **on-host** in `backend/backups/` and are **retention-pruned** after each run — only the newest N are kept (the `backup_retention` option, default `7`; set `0` to keep all), so scheduled backups can't fill the disk. Off-host / S3 storage is roadmap, so copy backups off the box for disaster recovery.
+5. **Metrics endpoint**: The Prometheus `GET /metrics` endpoint is **disabled by default** and returns `404` unless you set a scrape token (`config.metrics.token` or the `METRICS_TOKEN` env var). When enabled, scrape it only over a trusted network with `Authorization: Bearer <token>`; never expose it without a token.
+6. **Updates**: Keep Node.js and dependencies updated
 
 ---
 

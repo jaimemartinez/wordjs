@@ -22,7 +22,7 @@ Uses the `better-sqlite3` library, the fastest SQLite driver for Node.js. This i
 *   **Safety:** Atomic writes prevent database corruption during power outages.
 *   **Requirement:** Requires a native binary (prebuilt for most platforms; building from source needs C++ tools like `python`, `make`, `g++`).
 *   **Driver file:** `backend/src/drivers/sqlite-native-async.ts` (async, implements the interface). The older sync `sqlite-native.ts` wrapper still exists for compatibility.
-*   **Data file:** stores its database at `backend/data/wordjs-native.db` (default). This is a **different file** from the legacy driver — see [§1.7 SQLite Drivers Use Different Files](#17-sqlite-drivers-use-different-files).
+*   **Data file:** stores its database at `backend/data/wordjs-native.db` (default). This is a **different file** from the legacy driver — see [§1.8 SQLite Drivers Use Different Files](#18-sqlite-drivers-use-different-files).
 
 #### **PostgreSQL**
 Uses the `pg` client (connection **Pool**) via `backend/src/drivers/postgres.ts`.
@@ -34,7 +34,7 @@ Uses the `pg` client (connection **Pool**) via `backend/src/drivers/postgres.ts`
 Uses a pure JavaScript WASM build of SQLite (`sql.js`) via `backend/src/drivers/sqlite-legacy.ts`.
 *   **Use Case:** Restricted hosting environments (some shared hosting, strictly locked-down containers) where the native binary cannot load.
 *   **Trade-off:** Slower than Native for heavy writes, and it uses the older **synchronous** driver shape (the DB Manager adapts it). It reads/writes the **same SQLite file format**.
-*   **Data file:** stores its database at `backend/data/wordjs.db` (the config default `dbPath`). Although the file *format* is identical to Native, the two SQLite drivers use **different files by default** — see [§1.7 SQLite Drivers Use Different Files](#17-sqlite-drivers-use-different-files).
+*   **Data file:** stores its database at `backend/data/wordjs.db` (the config default `dbPath`). Although the file *format* is identical to Native, the two SQLite drivers use **different files by default** — see [§1.8 SQLite Drivers Use Different Files](#18-sqlite-drivers-use-different-files).
 
 ### 1.2 The Driver Interface & Conformance Suite
 
@@ -86,7 +86,13 @@ WordJS includes a **Zero Data Loss** migration tool for switching drivers withou
 
 The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` + the `manage_options` permission) and also exposes embedded-PG management endpoints (`/embedded/install`, `/embedded/start`, `/embedded/stop`, `/embedded/status`).
 
-### 1.6 Configuration
+### 1.6 Backups & Retention
+
+Full-site backups (logical DB export + a physical DB snapshot for SQLite + the `uploads/`, `plugins/`, `themes/` content roots) are produced by `backend/src/core/backup.ts` (`createBackup()`) and stored **on-host** under `backend/backups/`. Off-host/S3 destinations remain on the roadmap.
+
+After every backup, retention pruning runs automatically (`pruneBackups()` in `backend/src/core/backup.ts`): only the newest **N** backups are kept and older ones are deleted, so scheduled/auto backups can no longer fill the disk unbounded. **N** comes from the `backup_retention` option (**default 7**); set it to `0` (or a negative value) to keep all backups and disable pruning.
+
+### 1.7 Configuration
 
 To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`dbDriver`, `dbHost`, `dbUser`, `dbPassword`, `dbName`, `dbPort`, `dbSsl`, `dbPath`) and a nested `db: { … }` object are both accepted; the config layer normalizes them into a single `db` connection object (`backend/src/config/app.ts`).
 
@@ -117,11 +123,11 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
   "dbPath": "./data/wordjs-native.db"
 }
 ```
-> Each SQLite driver defaults to its **own** file (`sqlite-native` → `data/wordjs-native.db`, `sqlite-legacy` → `data/wordjs.db`). If you set `dbPath` explicitly, point it at the file for the driver you selected. See [§1.7](#17-sqlite-drivers-use-different-files).
+> Each SQLite driver defaults to its **own** file (`sqlite-native` → `data/wordjs-native.db`, `sqlite-legacy` → `data/wordjs.db`). If you set `dbPath` explicitly, point it at the file for the driver you selected. See [§1.8](#18-sqlite-drivers-use-different-files).
 
 > **Secrets:** on boot the config layer auto-generates and persists a secure `jwtSecret` and `dbPassword` if the existing config still holds the insecure defaults. Operators should still review these.
 
-### 1.7 SQLite Drivers Use Different Files
+### 1.8 SQLite Drivers Use Different Files
 
 The two SQLite drivers do **not** share a data file by default — each maps to a distinct file under `backend/data/`:
 
@@ -134,7 +140,9 @@ PostgreSQL (via `pg`, or the opt-in `embedded-postgres` — beta) is a **separat
 
 > ⚠️ **Switching `dbDriver` points the app at a different file/engine.** Data written under one driver is **not** visible under another until it is migrated. Flipping `dbDriver` in `backend/wordjs-config.json` alone makes your existing data look **"missing"** — nothing is lost, the app is just reading a different file (or engine). The same applies when switching between SQLite and PostgreSQL.
 
-To actually move your data between drivers/engines, use the migration system rather than editing the config by hand: run **`npm run migrate`** from the repo root (or use the admin **DB Migration** route described in [§1.5](#15-live-data-migration)). For SQLite-to-SQLite (e.g. `sqlite-legacy` → `sqlite-native`) the tool performs an atomic file swap; the result is the data ending up in the new driver's file.
+To actually **move your data between drivers/engines** (e.g. `sqlite-legacy` → `sqlite-native`, or SQLite → Postgres), use the admin **DB Migration** route described in [§1.5](#15-live-data-migration) — it streams the data into the target driver and, for SQLite-to-SQLite, performs an atomic file swap so the data ends up in the new driver's file. Do **not** edit `dbDriver` by hand for this.
+
+> **`npm run migrate` is a different thing — it does *not* switch drivers.** The root `npm run migrate` (`node setup/index.js --migrate` → `backend/scripts/migrate.js`) applies any pending **schema** migrations to the *currently configured* database and exits, without copying data between drivers or starting the server. It is idempotent and useful in deploy pipelines (apply migrations before rolling out new code); the same schema migrations also run automatically at boot.
 
 > **Run modes:** both run modes (split services and the single-process monolith) use the **same configured database** — the run mode does not change which driver or file is used; only `dbDriver` (and `dbPath`) in `wordjs-config.json` does.
 

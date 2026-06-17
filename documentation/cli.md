@@ -2,7 +2,7 @@
 
 WordJS includes several utility scripts in `backend/cli/` plus a set of `npm` scripts in `backend/package.json` for building, running, and maintaining the backend.
 
-> **Runtime model:** The backend is TypeScript. For **production** it now **compiles**: `npm run build` (`tsc -p tsconfig.build.json`) emits `dist/`, and `server.js` runs `dist/index.js` when that build exists. `ts-node` is used only in **development** (or when `dist/` hasn't been built yet) — `server.js` falls back to `node -r ts-node/register src/index.ts`. TypeScript `strict` is on (with `noImplicitAny` and `useUnknownInCatchVariables` staged sub-flags).
+> **Runtime model:** The backend is TypeScript. For **production** it now **compiles**: `npm run build` (`tsc -p tsconfig.build.json`) emits `dist/`, and `server.js` runs `dist/index.js` when that build exists. `ts-node` is used only in **development** (or when `dist/` hasn't been built yet) — `server.js` falls back to `node -r ts-node/register src/index.ts`. The strict core is enforced (`strictNullChecks`, `strictFunctionTypes`, `strictPropertyInitialization`, etc.), but two sub-flags are still **off**: `noImplicitAny: false` and `useUnknownInCatchVariables: false`. Enabling `noImplicitAny` today surfaces **~1,220 implicit-`any` sites** that still need real type annotations, so it stays off for now.
 >
 > **CLI scripts and ts-node:** any `cli/*` script that imports core modules (e.g. `require('../src/config/database')`, which resolves to `.ts`) must be run with ts-node registration, e.g. `node -r ts-node/register cli/force-sync-roles.js`. Scripts that only use plain dependencies (e.g. `check_plugins.js`, which uses `better-sqlite3` directly) run with plain `node`.
 
@@ -17,13 +17,14 @@ Run from `backend/`.
 | `npm run build`     | `tsc -p tsconfig.build.json`                      | Compile TypeScript to `dist/` for production (runs `clean` first).  |
 | `npm run clean`     | removes `dist/`                                   | Wipe the compiled output (also runs automatically before `build`).  |
 | `npm run typecheck` | `tsc --noEmit`                                    | Strict type-check with no emit (also run in CI).                    |
-| `npm test`          | `node --test -r ts-node/register src/tests/*.test.ts` | Run the test suite (includes the DB **driver conformance** suite). |
+| `npm test`          | `node --test -r ts-node/register src/tests/*.test.ts` | Run the unit test suite (includes the DB **driver conformance** suite). |
+| `npm run test:integration` | `node --test --test-force-exit -r ts-node/register src/tests-integration/*.test.ts` | Multi-node / endpoint integration tests (run in CI against real `postgres:16` + `redis:7`). |
 | `npm run lint`      | `eslint "src/**/*.ts"`                            | Lint the backend.                                                   |
 | `npm run format`    | `prettier --write "src/**/*.ts"`                  | Format the backend.                                                 |
 
-> **CI gate:** continuous integration runs the strict typecheck + `build` + the test suite, plus a **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`). The project and all packages are MIT-licensed; dual-licensed dependencies are listed in `THIRD-PARTY-NOTICES.md`.
+> **CI gate:** continuous integration (Node 22) runs the strict typecheck + `build` + the unit test suite + the **integration suite** (`npm run test:integration`, against real `postgres:16` + `redis:7` service containers), plus a **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`). The project and all packages are MIT-licensed; dual-licensed dependencies are listed in `THIRD-PARTY-NOTICES.md`.
 
-> **`migrate` / `seed`:** `package.json` declares `npm run migrate` (`node -r ts-node/register src/database/migrate.ts`) and `npm run seed` (`.../seed.ts`). Note that database **schema creation** is performed by the DB manager at boot, and **engine migrations** (SQLite ↔ PostgreSQL) are driven at runtime through the DB-Admin API (`/api/v1/db-migration/*`, see below). See "Known gaps" if these script targets are missing in your checkout.
+> **`migrate`:** the **root** `package.json` declares `npm run migrate` (`node setup/index.js --migrate`), which delegates to `backend/scripts/migrate.js`. It applies any pending **schema migrations** to the configured database without starting the server (prefers compiled `dist/`, falls back to ts-node on `src/`). It is **idempotent** — the same schema migrations also run automatically at boot — so it's safe to run in a deploy pipeline before rolling out new code. It does **not** switch DB *drivers* (the SQLite ↔ PostgreSQL data copy); that is a separate runtime operation in the **DB-Admin** API (`/api/v1/db-migration/*`, see below).
 
 ## 2. Role Manager (`cli/force-sync-roles.js`)
 
@@ -78,6 +79,6 @@ You can open any SQLite file with a SQLite CLI or GUI (like *DB Browser for SQLi
 
 Switching DB engines and managing the embedded PostgreSQL server is done at runtime via the **DB-Admin** core module (`backend/src/core/db-admin/`, formerly the `db-migration` plugin), exposed under `/api/v1/db-migration/*` (requires the `manage_options` capability). See `documentation/api.md` § 6.6 for the endpoint list.
 
-## 6. Known gaps
+## 6. Notes
 
-* The `migrate` / `seed` npm scripts point at `src/database/migrate.ts` and `src/database/seed.ts`. If those files are absent in your checkout, the scripts will fail — schema setup happens at boot and engine migrations run via the DB-Admin API instead.
+* **`migrate` vs. engine migration:** `npm run migrate` (root) applies pending DB **schema** migrations via `backend/scripts/migrate.js` (idempotent; also run at boot). Switching DB **engines** (SQLite ↔ PostgreSQL data copy) is a separate runtime operation in the DB-Admin API (`/api/v1/db-migration/*`).

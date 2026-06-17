@@ -23,7 +23,7 @@ All public traffic should go through the **Gateway on 3000**; 4000 and 3001 stay
 
 ## 📦 Install
 
-- **Node:** v18 or higher (`backend/package.json` `engines.node >= 18`; CI runs on Node 20).
+- **Node:** v18 or higher (`backend/package.json` `engines.node >= 18`; CI runs on Node 22).
 
 Install every workspace's dependencies in one shot from the repo root:
 
@@ -75,21 +75,24 @@ cd backend
 npm run typecheck  # tsc --noEmit
 ```
 
-`tsconfig.json` has `strict: true` — `strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitThis`, and `alwaysStrict` are all enforced. Two sub-flags are **deliberately staged off** for now and will be tightened file-by-file:
+`tsconfig.json` has `strict: true` — `strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitThis`, and `alwaysStrict` are all enforced. Two sub-flags remain **off**, and there's still meaningful work left before either can be turned on:
 
-- `noImplicitAny: false` — remaining implicit-`any` params are to be annotated with real types, not blanket `any`.
-- `useUnknownInCatchVariables: false` — catch bindings stay loose for now.
+- `noImplicitAny: false` — enabling it today surfaces **~1,220 implicit-`any` sites** that still need real type annotations (not a blanket `any`). This is in-progress, not nearly done.
+- `useUnknownInCatchVariables: false` — catch bindings stay `any` for now.
 
 ### Tests, lint, format
 
 ```bash
 cd backend
-npm test      # node --test -r ts-node/register src/tests/*.test.ts (node:test + supertest)
-npm run lint  # eslint (flat config)
+npm test               # node --test -r ts-node/register src/tests/*.test.ts (node:test + supertest)
+npm run test:integration  # node --test … src/tests-integration/*.test.ts (needs Postgres + Redis)
+npm run lint           # eslint (flat config)
 npm run format
 ```
 
 The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs every driver (`sqlite-native`, `sqlite-legacy`, `postgres`, embedded) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/close`). **Adding a new database** = implement that interface and add a conformance block.
+
+The **integration suite** (`src/tests-integration/`, run by `npm run test:integration` and in CI against real `postgres:16` + `redis:7` containers) exercises the multi-node coordination paths and full-app endpoints: distributed-lock lease CAS against Postgres (`dist-lock.integration.test.ts`), Redis pub/sub coherence (`coherence.integration.test.ts`), and the health/metrics endpoints (`health.integration.test.ts`).
 
 ### Plugin frontends
 
@@ -110,6 +113,7 @@ npm run dev    # node scripts/start-frontend.js dev
 npm run build  # next build
 npm start      # node scripts/start-frontend.js prod
 npm run lint   # eslint .
+npm run test   # vitest run (unit tests, e.g. the XSS sanitizer in src/lib/__tests__/sanitize.test.ts)
 ```
 
 In **production** the frontend loads plugin UI from pre-compiled bundles via the Plugin API (no `next build` of plugin code required); in **development** it uses Next.js dynamic imports with HMR.
@@ -184,14 +188,16 @@ npm run setup     # node setup/index.js --install
 npm run migrate   # node setup/index.js --migrate
 ```
 
+`npm run migrate` delegates to `backend/scripts/migrate.js`: it applies any pending DB **schema** migrations to the configured database without booting the server (compiled `dist/` if present, else ts-node on `src/`). It is **idempotent** — the same migrations also run automatically at boot — so it's safe to run ahead of a rollout in a deploy pipeline. It does **not** switch DB *drivers* (the SQLite ↔ PostgreSQL data copy); that is a separate runtime operation in the admin **DB Migration** route (`/api/v1/db-migration/*`).
+
 ---
 
 ## 🤖 CI
 
-`.github/workflows/ci.yml` runs three parallel jobs on every push/PR (Node 20):
+`.github/workflows/ci.yml` runs three parallel jobs on every push/PR (Node 22):
 
-- **Backend:** strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → tests.
+- **Backend:** strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers.
 - **Gateway:** tests (proxy + mTLS integration).
-- **Frontend:** lint + production build.
+- **Frontend:** lint → **vitest** (`npm run test`) → production build.
 
 The license gate keeps the distribution MIT-clean by failing on network-copyleft (AGPL/SSPL) production dependencies.
