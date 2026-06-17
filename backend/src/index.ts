@@ -135,6 +135,7 @@ const apiLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     store: limiterStore('rl:api:'),
+    passOnStoreError: true, // if the Redis store errors (outage), ALLOW the request rather than 500 the whole API
     message: { error: 'Too many requests, please try again later.' }
 });
 
@@ -144,6 +145,7 @@ const authLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     store: limiterStore('rl:auth:'),
+    passOnStoreError: true,
     message: { error: 'Too many login attempts, please try again later.' }
 });
 
@@ -153,6 +155,7 @@ const uploadLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     store: limiterStore('rl:upload:'),
+    passOnStoreError: true,
     message: { error: 'Too many file uploads, please try again later.' }
 });
 
@@ -162,6 +165,7 @@ const setupLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     store: limiterStore('rl:setup:'),
+    passOnStoreError: true,
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
