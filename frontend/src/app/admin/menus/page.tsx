@@ -486,7 +486,7 @@ export default function MenusPage() {
                                 </div>
                             ) : (
                                 <div className="space-y-4 max-w-3xl mx-auto">
-                                    {activeMenu.items.sort((a, b) => a.order - b.order).map((item) => (
+                                    {[...activeMenu.items].sort((a, b) => a.order - b.order).map((item) => (
                                         <div
                                             key={item.id}
                                             className={`group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 ${editingItemId === item.id ? 'border-2 border-blue-500 ring-4 ring-blue-500/10 z-20 relative scale-[1.02]' : 'border border-gray-100 hover:border-blue-200 hover:-translate-y-1'}`}

@@ -12,14 +12,13 @@ interface I18nContextType {
 const I18nContext = createContext<I18nContextType | undefined>(undefined);
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-    const [language, setLanguageState] = useState<Language>(getStoredLanguage());
+    // Initialize to the deterministic server default to avoid SSR hydration
+    // mismatches; the stored language is applied on mount below.
+    const [language, setLanguageState] = useState<Language>('es');
 
     useEffect(() => {
         // Load language from localStorage on mount
-        const stored = getStoredLanguage();
-        if (stored !== language) {
-            setLanguageState(stored);
-        }
+        setLanguageState(getStoredLanguage());
     }, []);
 
     const setLanguage = (lang: Language) => {
