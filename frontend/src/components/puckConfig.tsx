@@ -2,7 +2,6 @@
 
 import React from "react";
 
-import { Config, DropZone, PuckComponent } from "@measured/puck";
 import { useState, useEffect } from "react";
 import MediaPickerModal from "./MediaPickerModal";
 import ModernSelect from "./ModernSelect";
@@ -353,7 +352,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 }) => {
     const editorRef = React.useRef<HTMLDivElement>(null);
     const savedSelectionRef = React.useRef<Range | null>(null);
-    const [editorBg, setEditorBg] = React.useState(transparent ? 'transparent' : '#ffffff');
+    const [editorBg] = React.useState(transparent ? 'transparent' : '#ffffff');
     const [availableFonts, setAvailableFonts] = React.useState<any[]>([]);
 
     useEffect(() => {
@@ -366,12 +365,6 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
             })
             .catch(err => console.error("Failed to load fonts for Editor", err));
     }, []);
-
-    const cycleEditorBg = () => {
-        const bgs = ['#ffffff', '#1f2937', '#000000', '#f3f4f6'];
-        const currentIdx = bgs.indexOf(editorBg);
-        setEditorBg(bgs[(currentIdx + 1) % bgs.length]);
-    };
 
     // ... (rest of logic is same, hook deps might change)
 
@@ -392,7 +385,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
             // silently vanish on save. CSS spans survive the sanitizer.
             try {
                 document.execCommand('styleWithCSS', false, 'true');
-            } catch (e) { }
+            } catch { }
 
             // Auto-focus on mount
             setTimeout(() => {
@@ -430,7 +423,6 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 
     const execCmd = (command: string, cmdValue?: string) => {
         const doc = editorRef.current?.ownerDocument || document;
-        const win = doc.defaultView || window;
 
         // Ensure editor is focused first
         if (editorRef.current) {
@@ -442,7 +434,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 
         // Check if command is enabled
         try {
-            const result = doc.execCommand(command, false, cmdValue);
+            doc.execCommand(command, false, cmdValue);
 
             if (editorRef.current) {
                 onChange(editorRef.current.innerHTML);
@@ -666,7 +658,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
                     saveSelection();
                     updateFontSizeFromSelection();
                 }}
-                onKeyUp={(e) => {
+                onKeyUp={() => {
                     saveSelection();
                     updateFontSizeFromSelection();
                 }}
@@ -795,7 +787,7 @@ const baseConfig = {
             fields: {
                 src: {
                     type: "custom",
-                    render: ({ name, onChange, value }: any) => {
+                    render: ({ onChange, value }: any) => {
                         const [isModalOpen, setIsModalOpen] = useState(false);
                         return (
                             <div className="flex flex-col gap-2">
@@ -1746,7 +1738,7 @@ const baseConfig = {
             },
             render: ({ quote, author, role, avatar, css }: any) => (
                 <div className="wp-block-testimonial" style={{ padding: "32px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "16px", border: "1px solid var(--wjs-border-subtle, #e5e7eb)", ...css }}>
-                    <div style={{ fontSize: "3rem", color: "var(--wjs-color-primary, #2563eb)", marginBottom: "16px", lineHeight: 1 }}>"</div>
+                    <div style={{ fontSize: "3rem", color: "var(--wjs-color-primary, #2563eb)", marginBottom: "16px", lineHeight: 1 }}>&quot;</div>
                     <p style={{ fontSize: "1.25rem", fontStyle: "italic", color: "var(--wjs-color-text-main, #1a1a1a)", marginBottom: "24px", lineHeight: 1.6 }}>{quote}</p>
                     <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
                         {avatar && <img src={avatar} alt={author} style={{ width: "56px", height: "56px", borderRadius: "50%", objectFit: "cover" }} />}
@@ -2114,7 +2106,7 @@ export const pageConfig: any = {
             title: { type: "text", label: "Title" },
             slug: { type: "text", label: "Slug (Permalink)" },
         },
-        render: ({ children, title }: any) => {
+        render: ({ children }: any) => {
             return (
                 <div className="container mx-auto px-4">
                     {/* Full width within container, components can break out if needed */}

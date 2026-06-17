@@ -16,7 +16,6 @@ import {
     TouchSensor
 } from "@dnd-kit/core";
 import {
-    arrayMove,
     SortableContext,
     sortableKeyboardCoordinates,
     verticalListSortingStrategy,
@@ -25,7 +24,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { widgetsApi, Widget, Sidebar } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader, EmptyState } from "@/components/ui";
+import { PageHeader } from "@/components/ui";
 import { useI18n } from "@/contexts/I18nContext";
 
 // --- Components ---

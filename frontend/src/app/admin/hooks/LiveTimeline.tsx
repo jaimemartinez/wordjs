@@ -71,7 +71,7 @@ export default function LiveTimeline() {
                                         return newEvents.slice(-100); // Keep last 100
                                     });
                                 }
-                            } catch (e) {
+                            } catch {
                                 // console.log('Keep alive/Parse error', line);
                             }
                         }

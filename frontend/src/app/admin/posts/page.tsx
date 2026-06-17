@@ -5,7 +5,7 @@ import Link from "next/link";
 import { postsApi, Post } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader, Button, EmptyState, StatusBadge, Card } from "@/components/ui";
+import { PageHeader, Button, EmptyState, StatusBadge } from "@/components/ui";
 
 export default function PostsPage() {
     const { t } = useI18n();

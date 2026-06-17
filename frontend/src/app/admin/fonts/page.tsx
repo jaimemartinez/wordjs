@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import { useDropzone } from 'react-dropzone';
-import { PageHeader, EmptyState, Button } from '@/components/ui';
+import { PageHeader } from '@/components/ui';
 import { useI18n } from "@/contexts/I18nContext";
 
 // --- FontFamilyCard Component ---
@@ -139,7 +139,7 @@ import { useModal } from "@/contexts/ModalContext";
 
 export default function FontsPage() {
     const [fonts, setFonts] = useState<any[]>([]);
-    const [loading, setLoading] = useState(true);
+    const [, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const { alert, confirm } = useModal();

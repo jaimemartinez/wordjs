@@ -5,7 +5,7 @@ import { pluginsApi, Plugin } from "@/lib/api";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { FaPlug, FaUpload, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaBoxOpen, FaShieldAlt } from "react-icons/fa";
+import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaShieldAlt } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import { useModal } from "@/contexts/ModalContext";
 

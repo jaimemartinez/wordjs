@@ -7,7 +7,6 @@ import Link from "next/link";
 import { Render, Config } from "@measured/puck";
 import "@measured/puck/puck.css";
 import { puckConfig } from "@/components/puckConfig";
-import Header from "@/components/public/Header";
 import { sanitizeHTML } from "@/lib/sanitize";
 
 // Initialize any carousels in the content

@@ -41,7 +41,7 @@ export const EditorContext = React.createContext<{
 } | null>(null);
 
 // Inline Text Component - Simple Textarea Swap
-const InlineText = ({ id, content, title, elementId, ...props }: any) => {
+const InlineText = ({ id, content, title, elementId }: any) => {
     const ctx = React.useContext(EditorContext);
 
     // Distinguish Text (content) vs Heading (title) by which prop is DEFINED, not by truthiness —

@@ -1,9 +1,7 @@
 "use client";
 
-import { useState } from "react";
 import Header from "@/components/public/Header";
 import Footer from "@/components/public/Footer";
-import PublicSidebar from "@/components/public/PublicSidebar";
 import ThemeLoader from "@/components/public/ThemeLoader";
 import { ActivePluginsProvider } from "@/lib/useActivePlugins";
 
@@ -12,8 +10,6 @@ export default function PublicLayout({
 }: {
     children: React.ReactNode;
 }) {
-    const [hasSidebar, setHasSidebar] = useState(true);
-
     return (
         <ActivePluginsProvider>
             <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)' }}>

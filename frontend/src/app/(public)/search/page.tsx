@@ -3,7 +3,7 @@
 import { useEffect, useState, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { postsApi, Post } from "@/lib/api";
+import { Post } from "@/lib/api";
 
 function SearchResults() {
     const searchParams = useSearchParams();
@@ -63,7 +63,7 @@ function SearchResults() {
                 </h1>
                 {searchedQuery && (
                     <p className="text-lg text-[var(--wjs-color-text-muted,#6b7280)]">
-                        {results.length} result{results.length !== 1 ? 's' : ''} for "{searchedQuery}"
+                        {results.length} result{results.length !== 1 ? 's' : ''} for &quot;{searchedQuery}&quot;
                     </p>
                 )}
             </div>
@@ -123,7 +123,7 @@ function SearchResults() {
                         No Results Found
                     </h2>
                     <p className="text-[var(--wjs-color-text-muted,#6b7280)] mb-6">
-                        We couldn't find anything matching "{searchedQuery}".
+                        We couldn&apos;t find anything matching &quot;{searchedQuery}&quot;.
                     </p>
                     <p className="text-sm text-[var(--wjs-color-text-muted,#9ca3af)]">
                         Try different keywords or check for typos.

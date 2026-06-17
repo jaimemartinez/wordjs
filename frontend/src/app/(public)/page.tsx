@@ -2,10 +2,9 @@
 
 import { useEffect, useState, Fragment } from "react";
 import Link from "next/link";
-import { postsApi, Post } from "@/lib/api";
+import { Post } from "@/lib/api";
 import PluginLoader from "@/components/PluginLoader";
-import { useActivePlugins } from "@/lib/useActivePlugins";
-import { Render, Config } from "@measured/puck";
+import { Render } from "@measured/puck";
 import "@measured/puck/puck.css";
 import { pageConfig } from "@/components/puckConfig";
 import { sanitizeHTML } from "@/lib/sanitize";

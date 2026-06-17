@@ -32,7 +32,7 @@ const getBaseUrl = () => {
                 backendPort = config.port;
             }
         }
-    } catch (e) {
+    } catch {
         // console.warn('Could not load wordjs-config.json, using default port 4000');
     }
 
@@ -314,7 +314,6 @@ export const themesApi = {
     activate: (slug: string) => apiPost(`/themes/${slug}/activate`, {}),
     upload: (file: File, onProgress?: (percent: number) => void) => {
         return new Promise<{ success: boolean; message: string; slug: string }>((resolve, reject) => {
-            const token = localStorage.getItem("wordjs_token");
             const formData = new FormData();
             formData.append("theme", file);
 
@@ -415,7 +414,7 @@ export const mediaApi = {
                     try {
                         const response = JSON.parse(xhr.responseText);
                         resolve(response);
-                    } catch (e) {
+                    } catch {
                         reject(new Error("Invalid JSON response"));
                     }
                 } else {

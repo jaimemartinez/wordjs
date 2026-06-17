@@ -6,7 +6,7 @@ import { postsApi, Post } from "@/lib/api";
 import Link from "next/link";
 import { Render, Config } from "@measured/puck";
 import "@measured/puck/puck.css";
-import { puckConfig, postConfig, pageConfig } from "@/components/puckConfig";
+import { postConfig, pageConfig } from "@/components/puckConfig";
 import NotFoundState from "@/components/NotFoundState";
 import { sanitizeHTML } from "@/lib/sanitize";
 

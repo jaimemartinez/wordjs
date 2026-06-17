@@ -63,7 +63,7 @@ export default function MenusPage() {
             if (data.length > 0 && !activeMenuId) {
                 setActiveMenuId(data[0].id);
             }
-        } catch (error) {
+        } catch {
             addToast(t('menus.loadMenusError'), "error");
         }
     };
@@ -72,7 +72,7 @@ export default function MenusPage() {
         try {
             const data = await menusApi.get(id);
             setActiveMenu(data);
-        } catch (error) {
+        } catch {
             addToast(t('menus.loadMenuError'), "error");
         }
     };
@@ -81,7 +81,7 @@ export default function MenusPage() {
         try {
             const data = await postsApi.list("page", "any");
             setPages(data);
-        } catch (error) {
+        } catch {
             addToast(t('menus.loadPagesError'), "error");
         }
     };
@@ -94,7 +94,7 @@ export default function MenusPage() {
             setActiveMenuId(menu.id);
             setNewMenuName("");
             addToast(t('menus.createSuccess'), "success");
-        } catch (error) {
+        } catch {
             addToast(t('menus.createError'), "error");
         }
     };
@@ -111,7 +111,7 @@ export default function MenusPage() {
                 setActiveMenuId(remaining.length ? remaining[0].id : null);
                 setDeleteModalOpen(false);
                 addToast(t('menus.deleteMenuSuccess'), "success");
-            } catch (error) {
+            } catch {
                 addToast(t('menus.deleteMenuError'), "error");
             }
         });
@@ -130,7 +130,7 @@ export default function MenusPage() {
             loadMenu(activeMenuId);
             setCustomLink({ title: "", url: "http://" });
             addToast(t('menus.linkAddedSuccess'), "success");
-        } catch (error) {
+        } catch {
             addToast(t('menus.linkAddedError'), "error");
         }
     };
@@ -151,7 +151,7 @@ export default function MenusPage() {
             loadMenu(activeMenuId);
             setSelectedPageId("");
             addToast(t('menus.pageAddedSuccess'), "success");
-        } catch (error) {
+        } catch {
             addToast(t('menus.pageAddedError'), "error");
         }
     };
@@ -171,7 +171,7 @@ export default function MenusPage() {
             loadMenu(activeMenuId);
             setSelectedSystemUrl("");
             addToast(t('menus.systemPageAddedSuccess'), "success");
-        } catch (error) {
+        } catch {
             addToast(t('menus.systemPageAddedError'), "error");
         }
     };
@@ -184,7 +184,7 @@ export default function MenusPage() {
                 loadMenu(activeMenuId!);
                 setDeleteModalOpen(false);
                 addToast(t('menus.itemRemovedSuccess'), "success");
-            } catch (error) {
+            } catch {
                 addToast(t('menus.itemRemovedError'), "error");
             }
         });
@@ -197,7 +197,7 @@ export default function MenusPage() {
                 await menusApi.setLocation(activeMenuId, location);
                 setLocations({ ...locations, [location]: activeMenuId });
                 addToast(`${t('menus.locationAssignedSuccess')} ${location}`, "success");
-            } catch (err) {
+            } catch {
                 addToast(t('menus.locationAssignedError'), "error");
             }
         }
@@ -226,7 +226,7 @@ export default function MenusPage() {
             setEditingItemId(null);
             loadMenu(activeMenuId!);
             addToast(t('menus.itemUpdatedSuccess'), "success");
-        } catch (error) {
+        } catch {
             addToast(t('menus.itemUpdatedError'), "error");
         }
     };
