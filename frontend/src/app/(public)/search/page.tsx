@@ -1,90 +1,50 @@
-"use client";
-
-import { useEffect, useState, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { Post } from "@/lib/api";
+import type { Metadata } from "next";
+import { searchPosts } from "@/lib/server-api";
 
-function SearchResults() {
-    const searchParams = useSearchParams();
-    const query = searchParams.get("q") || "";
+interface SearchParams {
+    q?: string | string[];
+}
 
-    const [results, setResults] = useState<Post[]>([]);
-    const [loading, setLoading] = useState(true);
-    const [searchedQuery, setSearchedQuery] = useState("");
+function readQuery(q: SearchParams["q"]): string {
+    const raw = Array.isArray(q) ? q[0] : q;
+    return (raw || "").trim();
+}
 
-    useEffect(() => {
-        if (query) {
-            performSearch(query);
-        } else {
-            setLoading(false);
-        }
-    }, [query]);
-
-    const performSearch = async (searchQuery: string) => {
-        setLoading(true);
-        setSearchedQuery(searchQuery);
-
-        try {
-            // Search posts and pages in parallel (the two requests are independent)
-            const [postsResponse, pagesResponse] = await Promise.all([
-                fetch(`/api/v1/posts?search=${encodeURIComponent(searchQuery)}&status=publish`),
-                fetch(`/api/v1/posts?type=page&search=${encodeURIComponent(searchQuery)}&status=publish`),
-            ]);
-
-            const posts = postsResponse.ok ? await postsResponse.json() : [];
-            const pages = pagesResponse.ok ? await pagesResponse.json() : [];
-
-            // Combine results
-            const allResults = [...(posts.posts || posts || []), ...(pages.posts || pages || [])];
-            setResults(allResults);
-        } catch (error) {
-            console.error("Search failed:", error);
-            setResults([]);
-        } finally {
-            setLoading(false);
-        }
+export async function generateMetadata({ searchParams }: { searchParams: Promise<SearchParams> }): Promise<Metadata> {
+    const query = readQuery((await searchParams).q);
+    // Search result pages should not be indexed (thin/duplicate content).
+    return {
+        title: query ? `Search: ${query}` : "Search",
+        robots: { index: false, follow: true },
     };
+}
 
-    if (loading) {
-        return (
-            <div className="flex justify-center items-center py-20">
-                <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
-            </div>
-        );
-    }
+export default async function SearchPage({ searchParams }: { searchParams: Promise<SearchParams> }) {
+    const query = readQuery((await searchParams).q);
+    const results = query ? await searchPosts(query) : [];
 
     return (
         <div className="max-w-4xl mx-auto px-4 py-12">
-            {/* Search Header */}
+            {/* Header */}
             <div className="mb-12">
                 <h1 className="text-4xl font-bold text-[var(--wjs-color-text-main,#1a1a1a)] mb-4">
                     Search Results
                 </h1>
-                {searchedQuery && (
+                {query && (
                     <p className="text-lg text-[var(--wjs-color-text-muted,#6b7280)]">
-                        {results.length} result{results.length !== 1 ? 's' : ''} for &quot;{searchedQuery}&quot;
+                        {results.length} result{results.length !== 1 ? "s" : ""} for &quot;{query}&quot;
                     </p>
                 )}
             </div>
 
-            {/* New Search Form */}
-            <form
-                className="mb-12"
-                onSubmit={(e) => {
-                    e.preventDefault();
-                    const formData = new FormData(e.currentTarget);
-                    const newQuery = formData.get("q") as string;
-                    if (newQuery.trim()) {
-                        window.location.href = `/search?q=${encodeURIComponent(newQuery.trim())}`;
-                    }
-                }}
-            >
+            {/* Search form — a plain GET form, so it works with JavaScript disabled. */}
+            <form className="mb-12" action="/search" method="get">
                 <div className="flex gap-3">
                     <input
                         type="search"
                         name="q"
-                        defaultValue={searchedQuery}
+                        defaultValue={query}
                         placeholder="Search again..."
                         className="flex-1 px-5 py-4 text-lg border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-xl bg-[var(--wjs-bg-surface,#fff)] focus:outline-none focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent transition-all"
                     />
@@ -98,8 +58,8 @@ function SearchResults() {
                 </div>
             </form>
 
-            {/* No Query */}
-            {!searchedQuery && (
+            {/* No query */}
+            {!query && (
                 <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-2xl">
                     <div className="text-6xl mb-6 text-[var(--wjs-color-text-muted,#9ca3af)]">
                         <i className="fa-solid fa-magnifying-glass"></i>
@@ -113,8 +73,8 @@ function SearchResults() {
                 </div>
             )}
 
-            {/* No Results */}
-            {searchedQuery && results.length === 0 && (
+            {/* No results */}
+            {query && results.length === 0 && (
                 <div className="text-center py-16 bg-[var(--wjs-bg-surface,#f9fafb)] rounded-2xl">
                     <div className="text-6xl mb-6 text-[var(--wjs-color-text-muted,#9ca3af)]">
                         <i className="fa-solid fa-face-meh"></i>
@@ -123,7 +83,7 @@ function SearchResults() {
                         No Results Found
                     </h2>
                     <p className="text-[var(--wjs-color-text-muted,#6b7280)] mb-6">
-                        We couldn&apos;t find anything matching &quot;{searchedQuery}&quot;.
+                        We couldn&apos;t find anything matching &quot;{query}&quot;.
                     </p>
                     <p className="text-sm text-[var(--wjs-color-text-muted,#9ca3af)]">
                         Try different keywords or check for typos.
@@ -131,7 +91,7 @@ function SearchResults() {
                 </div>
             )}
 
-            {/* Results List */}
+            {/* Results */}
             {results.length > 0 && (
                 <div className="space-y-6">
                     {results.map((post) => (
@@ -140,18 +100,16 @@ function SearchResults() {
                             className="group bg-[var(--wjs-bg-surface,#fff)] rounded-2xl border border-[var(--wjs-border-subtle,#e5e7eb)] p-6 hover:shadow-lg hover:border-[var(--wjs-color-primary,#2563eb)] transition-all duration-300"
                         >
                             <div className="flex items-center gap-3 mb-3">
-                                <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${post.type === 'page'
-                                    ? 'bg-purple-100 text-purple-700'
-                                    : 'bg-blue-100 text-blue-700'
+                                <span className={`px-3 py-1 rounded-full text-xs font-semibold uppercase tracking-wide ${post.type === "page"
+                                    ? "bg-purple-100 text-purple-700"
+                                    : "bg-blue-100 text-blue-700"
                                     }`}>
-                                    {post.type === 'page' ? 'Page' : 'Post'}
+                                    {post.type === "page" ? "Page" : "Post"}
                                 </span>
                                 <span className="text-sm text-[var(--wjs-color-text-muted,#9ca3af)]">
-                                    {new Date(post.date).toLocaleDateString('es-ES', {
-                                        year: 'numeric',
-                                        month: 'long',
-                                        day: 'numeric'
-                                    })}
+                                    {post.date
+                                        ? new Date(post.date).toLocaleDateString("es-ES", { year: "numeric", month: "long", day: "numeric" })
+                                        : ""}
                                 </span>
                             </div>
 
@@ -176,7 +134,7 @@ function SearchResults() {
                 </div>
             )}
 
-            {/* Back to Home */}
+            {/* Back to home */}
             <div className="mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)]">
                 <Link
                     href="/"
@@ -187,17 +145,5 @@ function SearchResults() {
                 </Link>
             </div>
         </div>
-    );
-}
-
-export default function SearchPage() {
-    return (
-        <Suspense fallback={
-            <div className="flex justify-center items-center py-20">
-                <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
-            </div>
-        }>
-            <SearchResults />
-        </Suspense>
     );
 }
