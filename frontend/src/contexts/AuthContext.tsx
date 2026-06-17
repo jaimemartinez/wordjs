@@ -12,9 +12,14 @@ interface User {
     capabilities: string[];
 }
 
+interface LoginResult {
+    success: boolean;
+    error?: string;
+}
+
 interface AuthContextType {
     user: User | null;
-    login: (username: string, password: string) => Promise<boolean>;
+    login: (username: string, password: string) => Promise<LoginResult>;
     logout: () => void;
     isLoading: boolean;
     can: (capability: string) => boolean;
@@ -75,7 +80,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             events.forEach(event => window.removeEventListener(event, updateActivity));
             clearInterval(intervalId);
         };
-    }, [user]);
+    }, [user?.id]);
 
     const fetchUser = async () => {
         try {
@@ -85,18 +90,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (res.ok) {
                 const userData = await res.json();
                 setUser(userData);
-            } else {
+            } else if (res.status === 401 || res.status === 403) {
+                // Genuinely unauthenticated — clear the session.
                 setUser(null);
             }
+            // On 5xx / other transient errors, keep the previous user to avoid a spurious logout.
         } catch (error) {
+            // Network error — keep the previous user rather than forcing a logout.
             console.error("Auth error:", error);
-            setUser(null);
         } finally {
             setIsLoading(false);
         }
     };
 
-    const login = useCallback(async (username: string, password: string): Promise<boolean> => {
+    const login = useCallback(async (username: string, password: string): Promise<LoginResult> => {
         try {
             const res = await fetch(`${API_URL}/auth/login`, {
                 method: "POST",
@@ -108,12 +115,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (res.ok) {
                 const data = await res.json();
                 setUser(data.user);
-                return true;
+                return { success: true };
             }
-            return false;
+
+            // Surface the server-provided message (e.g. "account locked") when available.
+            let error: string | undefined;
+            try {
+                const data = await res.json();
+                error = data?.message || data?.error;
+            } catch {
+                // Non-JSON error body — fall back to the generic message in the caller.
+            }
+            return { success: false, error };
         } catch (error) {
             console.error("Login error:", error);
-            return false;
+            return { success: false };
         }
     }, []);
 

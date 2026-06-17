@@ -22,6 +22,8 @@ export default function CommentsSection({ postId }: { postId: number }) {
     }, [postId]);
 
     const loadComments = async () => {
+        setLoading(true);
+        setError("");
         try {
             const data = await commentsApi.list({ post: postId, status: '1' }); // Only approved
             setComments(data);

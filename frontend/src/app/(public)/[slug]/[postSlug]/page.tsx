@@ -11,7 +11,8 @@ import NotFoundState from "@/components/NotFoundState";
 import { sanitizeHTML } from "@/lib/sanitize";
 
 // Initialize any carousels in the content
-function initCarousels() {
+function initCarousels(): () => void {
+    const intervals: ReturnType<typeof setInterval>[] = [];
     document.querySelectorAll('.photo-carousel:not([data-initialized])').forEach((el) => {
         el.setAttribute('data-initialized', 'true');
         const slides = el.querySelectorAll('.slide');
@@ -47,8 +48,9 @@ function initCarousels() {
         // Autoplay
         const autoplay = el.getAttribute('data-autoplay') === 'true';
         const interval = parseInt(el.getAttribute('data-interval') || '5000');
-        if (autoplay) setInterval(() => go(current + 1), interval);
+        if (autoplay) intervals.push(setInterval(() => go(current + 1), interval));
     });
+    return () => intervals.forEach(clearInterval);
 }
 
 export default function CategoryPostPage() {
@@ -65,31 +67,47 @@ export default function CategoryPostPage() {
 
     useEffect(() => {
         if (postSlug) {
-            loadPost(postSlug);
+            const ignore = { current: false };
+            loadPost(postSlug, ignore);
+            return () => {
+                ignore.current = true;
+            };
         }
     }, [postSlug]);
 
     // Initialize carousels after post loads
     useEffect(() => {
         if (post) {
-            setTimeout(initCarousels, 100);
+            let dispose: (() => void) | undefined;
+            const timeoutId = setTimeout(() => {
+                dispose = initCarousels();
+            }, 100);
+            return () => {
+                clearTimeout(timeoutId);
+                dispose?.();
+            };
         }
     }, [post]);
 
-    const loadPost = async (slugToFetch: string) => {
+    const loadPost = async (slugToFetch: string, ignore: { current: boolean }) => {
+        setLoading(true);
+        setError('');
+        setPost(null);
         try {
             // Use the optimized backend endpoint
             const data = await postsApi.getBySlug(slugToFetch);
+            if (ignore.current) return; // out-of-order response, discard
             if (data) {
                 setPost(data);
             } else {
                 setError("Post not found");
             }
         } catch (err) {
+            if (ignore.current) return;
             console.error(err);
             setError("Failed to load post");
         } finally {
-            setLoading(false);
+            if (!ignore.current) setLoading(false);
         }
     };
 
