@@ -5,41 +5,45 @@ import "./globals.css";
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
 import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
+import { getSettings } from "@/lib/server-api";
 
 const inter = Inter({ subsets: ["latin"] });
 
 export async function generateMetadata(): Promise<Metadata> {
+    // Use the shared server data layer (mono/split-aware base URL + request-deduped) instead of a
+    // hand-rolled fetch — the old hardcoded http://localhost:3000 hit the HTTPS gateway and silently
+    // fell back to the "WordJS" default.
+    const settings = await getSettings();
+    const title = settings?.blogname || "WordJS";
+    const description = settings?.blogdescription || "WordPress-like CMS";
+    const icon = settings?.site_icon || "/favicon.ico";
+
+    const meta: Metadata = {
+        title: { default: title, template: `%s | ${title}` },
+        description,
+        icons: { icon, apple: icon },
+    };
+
+    // metadataBase makes the relative canonical/OpenGraph URLs (e.g. "/my-post") resolve to absolute
+    // URLs in the rendered <head>, which crawlers and social unfurlers require. Prefer the real
+    // request host (the domain the visitor/crawler actually used), then a configured site URL; only
+    // then fall back to Next's localhost default.
+    let base: URL | undefined;
     try {
-        // Zero-config default: Connect directly to the backend on port 3000 for SSR
-        // Since this runs on the server, we use the internal URL.
-        const apiUrl = process.env.INTERNAL_API_URL || "http://localhost:3000/api/v1";
-
-        const res = await fetch(`${apiUrl}/settings`, {
-            cache: 'no-store'
-        });
-        const settings = await res.json();
-
-        const title = settings.blogname || "WordJS";
-        const description = settings.blogdescription || "WordPress-like CMS Admin Dashboard";
-        const icon = settings.site_icon ? `${settings.site_icon}?t=${Date.now()}` : "/favicon.ico";
-
-        return {
-            title: {
-                default: title,
-                template: `%s | ${title}`,
-            },
-            description: description,
-            icons: {
-                icon: icon,
-                apple: icon,
-            }
-        };
-    } catch {
-        return {
-            title: "WordJS",
-            description: "CMS",
-        };
+        const { headers } = await import("next/headers");
+        const h = await headers();
+        const host = h.get("x-forwarded-host") || h.get("host");
+        const proto = h.get("x-forwarded-proto") || "https";
+        if (host) base = new URL(`${proto}://${host}`);
+    } catch { /* not in a request scope */ }
+    if (!base) {
+        const siteUrl = settings?.siteurl || settings?.home || settings?.site_url;
+        if (siteUrl && /^https?:\/\//i.test(siteUrl)) {
+            try { base = new URL(siteUrl); } catch { /* ignore malformed URL */ }
+        }
     }
+    if (base) meta.metadataBase = base;
+    return meta;
 }
 
 export default function RootLayout({

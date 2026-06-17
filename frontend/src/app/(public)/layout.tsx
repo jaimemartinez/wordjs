@@ -1,5 +1,6 @@
-"use client";
-
+// Server Component: no client hooks of its own. It composes the client chrome (ThemeLoader, Header,
+// Footer, ActivePluginsProvider) around the server-rendered page `children`, so public content
+// streams as real HTML while the interactive shell hydrates on top.
 import Header from "@/components/public/Header";
 import Footer from "@/components/public/Footer";
 import ThemeLoader from "@/components/public/ThemeLoader";
