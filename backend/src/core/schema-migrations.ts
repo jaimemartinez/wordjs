@@ -55,7 +55,14 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
     for (const m of pending) {
         try {
             await m.up(ctx);
-            await run('INSERT INTO schema_migrations (id) VALUES (?)', [m.id]);
+            // Idempotent recording: under the multi-node boot lock only one node applies migrations,
+            // but make the INSERT conflict-safe too so a duplicate id can never crash a boot.
+            await run(
+                isPostgres
+                    ? 'INSERT INTO schema_migrations (id) VALUES (?) ON CONFLICT (id) DO NOTHING'
+                    : 'INSERT OR IGNORE INTO schema_migrations (id) VALUES (?)',
+                [m.id]
+            );
             console.log(`   ✓ applied schema migration ${m.id}`);
         } catch (e: any) {
             // Fail closed: do NOT continue on a half-migrated schema.

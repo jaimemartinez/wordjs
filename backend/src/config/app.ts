@@ -5,6 +5,9 @@ export interface AppConfig {
     // Server
     port: number;
     host: string;
+    // Routable address other nodes (the gateway) use to reach THIS backend. Defaults to 127.0.0.1
+    // (single host); set per-node to the node's reachable IP/DNS name for a multi-node deployment.
+    advertiseHost: string;
     gatewayPort: number;
     siteUrl: string;
     frontendUrl: string;
@@ -177,6 +180,9 @@ if (!fileConfig.jwtSecret) {
 const config: AppConfig = {
     ...defaultConfig,
     ...fileConfig,
+
+    // Routable address the gateway uses to reach this backend node (multi-node). Single-host default.
+    advertiseHost: fileConfig.advertiseHost || '127.0.0.1',
 
     // Normalized SSL check
     ssl: {

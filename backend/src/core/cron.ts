@@ -157,9 +157,19 @@ async function nextScheduled(hook, args = []) {
 }
 
 /**
- * Run cron jobs due
+ * Run cron jobs due. Wrapped in a distributed leader lock so that with N backend nodes a given due
+ * event fires on exactly ONE node per tick — otherwise every node would run the same backup / ACME
+ * renewal / plugin job (duplicate backups, duplicate Let's Encrypt orders). On SQLite (single host)
+ * the lock is a no-op, so single-node behavior is unchanged.
  */
 async function runCron() {
+    const distLock = require('./dist-lock');
+    // Single-runner across nodes. The lease is HEARTBEAT-renewed for the whole run, so a long job
+    // (full backup, ACME renewal) is never preempted and can't double-run on another node.
+    await distLock.runAsLeader('wordjs:cron', { ttlMs: 90000, renewMs: 30000 }, () => runCronInner());
+}
+
+async function runCronInner() {
     const now = Date.now();
     const events = await getOption('cron', {});
 
