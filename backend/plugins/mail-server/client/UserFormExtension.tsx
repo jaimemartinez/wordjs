@@ -1,3 +1,6 @@
+// @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the
+// frontend tsc (react/deps resolve at bundle time, not in the frontend-only CI). Matches every other
+// plugin's client components (card-gallery, photo-carousel, video-gallery).
 "use client";
 
 import React, { useState, useEffect } from 'react';
