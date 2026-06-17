@@ -10,6 +10,7 @@
     "build": "next build",
     "start": "node scripts/start-frontend.js prod",
     "lint": "eslint .",
+    "test": "vitest run",
     "postinstall": "node scripts/patch-puck-actions.js",
     "generate-plugins": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js"
   },
@@ -53,6 +54,7 @@
     "eslint": "^9",
     "eslint-config-next": "16.1.1",
     "tailwindcss": "^4",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^2.1.9"
   }
 }
