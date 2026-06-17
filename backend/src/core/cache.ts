@@ -179,6 +179,13 @@ function subscribe(channel: string, handler: (message: string) => void): void {
     subscriber.subscribe(channel).catch((e) => console.warn('[Cache] subscribe failed:', e.message));
 }
 
+/** Quit all Redis connections (object-cache, subscriber, rate-limit). For graceful shutdown / tests. */
+async function closeAll() {
+    for (const c of [redis, subscriber, rateLimitClient]) {
+        try { if (c && typeof c.quit === 'function') await c.quit(); } catch { /* already closing */ }
+    }
+}
+
 module.exports = {
     get,
     set,
@@ -190,5 +197,6 @@ module.exports = {
     publish,
     subscribe,
     pubsubAvailable,
-    getClient
+    getClient,
+    closeAll
 };
