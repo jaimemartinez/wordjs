@@ -254,7 +254,47 @@ class CertManager {
     /**
      * Push Certificate to Gateway
      */
+    /**
+     * Install a renewed cert in MONOLITH/embedded mode (no gateway process to push to). Writes it to
+     * the files the monolith's resolveSSL() reads (so a restart serves it) and hot-reloads the running
+     * HTTPS server in-process via a reload hook the monolith installs (so no restart is needed).
+     */
+    async installCertEmbedded(keyContent, certContent) {
+        const gwDir = path.resolve(__dirname, '../../../gateway');
+        const importedDir = path.join(gwDir, 'ssl', 'live', 'imported');
+        fs.mkdirSync(importedDir, { recursive: true });
+        fs.writeFileSync(path.join(importedDir, 'privkey.pem'), keyContent);
+        fs.writeFileSync(path.join(importedDir, 'fullchain.pem'), certContent);
+
+        // Point gateway-config.json at the new cert so the next monolith boot's resolveSSL() serves it.
+        try {
+            const gwCfgPath = path.join(gwDir, 'gateway-config.json');
+            const gwCfg = fs.existsSync(gwCfgPath) ? JSON.parse(fs.readFileSync(gwCfgPath, 'utf8')) : {};
+            gwCfg.ssl = { ...(gwCfg.ssl || {}), key: './ssl/live/imported/privkey.pem', cert: './ssl/live/imported/fullchain.pem', enabled: true };
+            fs.writeFileSync(gwCfgPath, JSON.stringify(gwCfg, null, 2));
+        } catch (e: any) {
+            console.warn('[CertManager] embedded: could not update gateway-config.json:', e && e.message);
+        }
+
+        // Live hot-reload of the running monolith HTTPS server (no restart) if it exposed the hook.
+        try {
+            if (typeof (global as any).__WORDJS_RELOAD_TLS__ === 'function') {
+                (global as any).__WORDJS_RELOAD_TLS__(keyContent, certContent);
+                console.log('[CertManager] embedded: hot-reloaded monolith TLS in-process (setSecureContext).');
+            } else {
+                console.log('[CertManager] embedded: cert written — restart the monolith to serve it (no live-reload hook present).');
+            }
+        } catch (e: any) {
+            console.warn('[CertManager] embedded TLS reload failed:', e && e.message);
+        }
+        return { success: true, embedded: true };
+    }
+
     async pushCertToGateway(keyContent, certContent) {
+        // Monolith/embedded: there is no gateway on :3100 — install the cert in-process instead.
+        if (process.env.WORDJS_EMBEDDED === '1') {
+            return this.installCertEmbedded(keyContent, certContent);
+        }
         try {
             // Read backend config for mTLS
             let backendConfig: any = {};
@@ -536,14 +576,6 @@ class CertManager {
         };
 
         if (!acme.enabled && !force) return { skipped: true, reason: 'disabled' };
-
-        // Auto-renewal installs the cert via the gateway's internal mTLS API (127.0.0.1:3100). In
-        // monolith/embedded mode that process does not exist, so a renewed cert can neither be
-        // installed nor hot-reloaded — skip rather than repeatedly ordering certs we cannot deploy
-        // (which would otherwise burn Let's Encrypt rate limits for nothing). ACME is split-mode only.
-        if (process.env.WORDJS_EMBEDDED === '1' || process.env.WORDJS_MODE === 'mono') {
-            return record({ ok: false, skipped: true, reason: 'monolith_unsupported', error: 'ACME auto-renewal runs in split (gateway) mode only — the monolith has no gateway to install the certificate into.' });
-        }
 
         if (acme.challengeType === 'dns-01') {
             // DNS-01 cannot complete unattended without a DNS-provider write API (none exists here).

@@ -239,9 +239,19 @@ if (require.main === module) {
             adminPassword: 'password123',
             host: 'localhost'
         }).catch(err => console.error('❌ Setup failed:', err));
+    } else if (args.includes('--migrate')) {
+        // Apply pending schema migrations to the configured backend database (no server start).
+        // Delegates to the backend runner so it uses the backend's DB layer + config.
+        const { spawnSync } = require('child_process');
+        const r = spawnSync(process.execPath, ['scripts/migrate.js'], {
+            cwd: path.join(process.cwd(), 'backend'),
+            stdio: 'inherit'
+        });
+        process.exit(r.status == null ? 1 : r.status);
     } else {
         console.log('WordJS Orchestrator CLI');
-        console.log('Usage: node setup/index.js --install');
+        console.log('Usage: node setup/index.js --install   # generate mTLS PKI + config for the cluster');
+        console.log('       node setup/index.js --migrate   # apply pending DB schema migrations');
     }
 }
 

@@ -231,6 +231,24 @@ app.get('/healthz', (req, res) => {
     res.json({ status: 'ok', uptime: process.uptime(), pid: process.pid, timestamp: new Date().toISOString() });
 });
 
+// Prometheus metrics (default Node/process metrics + app gauges). DISABLED unless a scrape token is
+// configured (config.metrics.token), so metrics are never exposed publicly by default. Scrape with
+// `Authorization: Bearer <token>` (or ?token=). Root-level so it's CSRF-free and not rate-limited.
+app.get('/metrics', async (req, res) => {
+    const token = config.metrics && config.metrics.token;
+    if (!token) return res.status(404).end();
+    const provided = (req.get('authorization') || '').replace(/^Bearer\s+/i, '') || (req.query.token as string) || '';
+    const a = Buffer.from(String(provided)); const b = Buffer.from(String(token));
+    if (a.length !== b.length || !require('crypto').timingSafeEqual(a, b)) return res.status(401).end();
+    try {
+        const { metricsText, contentType } = require('./core/metrics');
+        res.set('Content-Type', contentType);
+        res.end(await metricsText());
+    } catch (e: any) {
+        res.status(500).end();
+    }
+});
+
 // Readiness — installed, fully booted, and the database answers. Returns 503 (not 200) when not
 // ready, so an orchestrator/load-balancer holds traffic until the instance can actually serve it.
 app.get('/readyz', async (req, res) => {
@@ -568,7 +586,7 @@ async function initialize() {
                     // Advertise a routable address so a gateway on another host can reach this node.
                     // Defaults to 127.0.0.1 (single host); set advertiseHost per-node for multi-node.
                     url: `${serverProtocol}://${config.advertiseHost || '127.0.0.1'}:${config.port}`,
-                    routes: ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz']
+                    routes: ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics']
                 }
             ];
 
