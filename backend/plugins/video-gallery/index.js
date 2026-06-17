@@ -138,6 +138,9 @@ exports.init = function (wordjs) {
         if (!gallery) return res.status(404).json({ error: 'Gallery not found' });
 
         const updated = { ...gallery, ...(req.body || {}), videos: gallery.videos }; // Protect videos from direct overwrite here
+        // Don't let the request body overwrite identity/created_at.
+        updated.id = req.params.id;
+        updated.created_at = gallery.created_at;
         await saveGallery(req.params.id, updated);
         res.json(updated);
     });
@@ -198,8 +201,9 @@ exports.init = function (wordjs) {
         const body = req.body || {};
         const updatedVideo = { ...gallery.videos[videoIndex], ...body };
 
-        // Retain ID and created_at
+        // Retain ID and created_at (don't let the body overwrite them).
         updatedVideo.id = videoId;
+        updatedVideo.created_at = gallery.videos[videoIndex].created_at;
 
         if (body.youtube_url && !body.thumbnail) {
             updatedVideo.thumbnail = extractThumbnail(body.youtube_url);
