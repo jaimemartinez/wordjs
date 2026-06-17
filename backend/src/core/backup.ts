@@ -87,6 +87,36 @@ async function createBackup() {
         await addDirectoryToZip(zip, backendRoot, root);
     }
 
+    // 4b. Physical database snapshot — a COMPLETE copy of the live DB (every table, incl.
+    //     analytics/notifications/plugin tables/schema_migrations that the logical export above does
+    //     NOT cover). The dir-walk excludes the live .db on purpose; we add a consistent snapshot here.
+    try {
+        const driver = config.dbDriver || 'sqlite-native';
+        if (driver === 'sqlite-native' || driver === 'sqlite-legacy') {
+            const dbModule = require('../config/database');
+            // Flush in-memory (legacy sql.js) state to its file, then checkpoint the WAL (native) so the
+            // .db file on disk is a consistent, complete snapshot before we copy it.
+            try { if (typeof dbModule.saveDatabase === 'function') dbModule.saveDatabase(); } catch { /* best-effort flush */ }
+            try {
+                const dbi = typeof dbModule.getDbAsync === 'function' ? dbModule.getDbAsync() : null;
+                if (dbi && typeof dbi.exec === 'function') await dbi.exec('PRAGMA wal_checkpoint(TRUNCATE)');
+            } catch { /* no WAL / legacy — fine */ }
+            const dbFile = path.resolve(
+                config.dbPath || (driver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db')
+            );
+            if (fs.existsSync(dbFile)) {
+                zip.addLocalFile(dbFile, 'database', 'wordjs.db');
+                console.log('   ✓ Added physical database snapshot (database/wordjs.db) to backup.');
+            }
+        } else if (driver === 'postgres') {
+            // Physical pg_dump is not bundled (needs the pg_dump binary); the logical export above is the
+            // portable backup for Postgres. (pg_dump snapshot = follow-up.)
+            console.log('   ℹ Postgres: physical snapshot skipped — logical export is the portable backup.');
+        }
+    } catch (e: any) {
+        console.warn('   ⚠️ Could not add physical DB snapshot (logical export still included):', e && e.message);
+    }
+
     // 5. Save Zip
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const filename = `backup-${timestamp}.zip`;
