@@ -74,7 +74,14 @@ exports.init = function (wordjs) {
     http.route('put', '/:id', { auth: true, admin: true }, async (req, res) => {
         const existing = await options.get(`card_gallery_${req.params.id}`, null);
         if (!existing) return res.status(404).json({ error: 'Gallery not found' });
-        const updated = { ...existing, ...(req.body || {}), updatedAt: new Date().toISOString() };
+        const body = req.body || {};
+        // Whitelist updatable fields so arbitrary keys can't be injected and createdAt is preserved.
+        const updated = { ...existing };
+        if (body.name !== undefined) updated.name = body.name;
+        if (body.cards !== undefined) updated.cards = body.cards;
+        if (body.location !== undefined) updated.location = body.location;
+        updated.createdAt = existing.createdAt;
+        updated.updatedAt = new Date().toISOString();
         delete updated.id;
         await options.set(`card_gallery_${req.params.id}`, updated);
         res.json({ success: true, id: req.params.id, ...updated });

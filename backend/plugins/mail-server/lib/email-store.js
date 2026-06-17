@@ -101,6 +101,18 @@ module.exports = function createEmailStore(db) {
             await migrate('delivery_attempts', 'INTEGER DEFAULT 0');
             await migrate('next_attempt_at', 'TEXT'); // ISO timestamp of next retry, nullable
             await migrate('last_error', 'TEXT');
+
+            // Indexes for the retry/scheduled queue sweeps and thread lookups.
+            const createIndex = async (name, table, cols) => {
+                try {
+                    await db.run(`CREATE INDEX IF NOT EXISTS ${name} ON ${table} (${cols})`);
+                } catch (e) {
+                    // Ignore if index already exists / race condition.
+                }
+            };
+            await createIndex('idx_received_emails_delivery', 'received_emails', 'delivery_status, next_attempt_at');
+            await createIndex('idx_received_emails_scheduled', 'received_emails', 'scheduled_at');
+            await createIndex('idx_received_emails_thread', 'received_emails', 'thread_id');
         },
 
         async create(data) {
@@ -172,24 +184,36 @@ module.exports = function createEmailStore(db) {
         async update(id, data) {
             const {
                 toAddress, ccAddress, bccAddress, subject, bodyText, bodyHtml, rawContent,
-                isSent, isDraft
+                isSent, isDraft, scheduledAt
             } = data;
 
             // Build dynamic query
             let fields = [];
             let params = [];
 
+            // Track whether a content field changed; only then do we bump date_received
+            // (so non-content updates like retry's toAddress rewrite don't re-sort the list).
+            let contentChanged = false;
+
             if (toAddress !== undefined) { fields.push("to_address = ?"); params.push(toAddress); }
-            if (ccAddress !== undefined) { fields.push("cc_address = ?"); params.push(ccAddress); }
-            if (bccAddress !== undefined) { fields.push("bcc_address = ?"); params.push(bccAddress); }
-            if (subject !== undefined) { fields.push("subject = ?"); params.push(subject); }
-            if (bodyText !== undefined) { fields.push("body_text = ?"); params.push(bodyText); }
-            if (bodyHtml !== undefined) { fields.push("body_html = ?"); params.push(bodyHtml); }
-            if (rawContent !== undefined) { fields.push("raw_content = ?"); params.push(rawContent); }
+            if (ccAddress !== undefined) { fields.push("cc_address = ?"); params.push(ccAddress); contentChanged = true; }
+            if (bccAddress !== undefined) { fields.push("bcc_address = ?"); params.push(bccAddress); contentChanged = true; }
+            if (subject !== undefined) { fields.push("subject = ?"); params.push(subject); contentChanged = true; }
+            if (bodyText !== undefined) { fields.push("body_text = ?"); params.push(bodyText); contentChanged = true; }
+            if (bodyHtml !== undefined) { fields.push("body_html = ?"); params.push(bodyHtml); contentChanged = true; }
+            if (rawContent !== undefined) { fields.push("raw_content = ?"); params.push(rawContent); contentChanged = true; }
             if (isSent !== undefined) { fields.push("is_sent = ?"); params.push(isSent); }
             if (isDraft !== undefined) { fields.push("is_draft = ?"); params.push(isDraft); }
+            if (scheduledAt !== undefined) { fields.push("scheduled_at = ?"); params.push(scheduledAt); }
 
-            fields.push("date_received = CURRENT_TIMESTAMP");
+            if (contentChanged) {
+                fields.push("date_received = CURRENT_TIMESTAMP");
+            }
+
+            // Nothing to update — avoid emitting invalid "SET  WHERE id = ?".
+            if (fields.length === 0) {
+                return await this.findById(id);
+            }
 
             params.push(id);
 
@@ -369,12 +393,14 @@ module.exports = function createEmailStore(db) {
         },
 
         async getPendingScheduled() {
-            // Get emails that are NOT sent, NOT drafts, NOT trash, but have a scheduled time <= NOW
+            // Get emails that are NOT sent, NOT drafts, NOT trash, but have a scheduled time <= NOW.
+            // scheduled_at is stored as ISO/UTC, so compare against an ISO/UTC bind param
+            // (mirrors getPendingRetries) instead of SQLite's space-format localtime.
             return await db.all(`
                 SELECT * FROM received_emails
                 WHERE is_sent = 0 AND is_draft = 0 AND is_trash = 0
-                AND scheduled_at IS NOT NULL AND scheduled_at <= DATETIME('now', 'localtime')
-            `);
+                AND scheduled_at IS NOT NULL AND scheduled_at <= ?
+            `, [new Date().toISOString()]);
         },
 
         // --- Outbound retry queue ---------------------------------------------
