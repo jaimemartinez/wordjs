@@ -71,8 +71,11 @@ async function updateOption(name, value, autoload = 'yes') {
             await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
         }
 
-        // Invalidate Cache
+        // Invalidate Cache (shared Redis del is cluster-wide). Also publish a cross-node signal so
+        // each node can refresh in-process state that isn't read through the option cache (e.g. the
+        // roles cache). No-op when Redis isn't configured (single node).
         await cache.del(`option:${name}`);
+        cache.publish('wordjs:option-changed', name);
 
         // Update Dynamic Cache State
         if (name === 'redis_cache_enabled') {
@@ -115,6 +118,7 @@ async function deleteOption(name) {
         const success = result.changes > 0;
         if (success) {
             await cache.del(`option:${name}`);
+            cache.publish('wordjs:option-changed', name);
         }
         return success;
     });
