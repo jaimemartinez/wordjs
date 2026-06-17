@@ -25,7 +25,6 @@ const TEMP_DIST = path.join(RELEASE_DIR, 'wordjs-package');
 // Files and folders to exclude from the release
 const IGNORE_PATTERNS = [
     'node_modules',
-    'documentation',
     '.git',
     '.github',
     '.gitignore',
@@ -55,6 +54,41 @@ const IGNORE_PATTERNS = [
     'build-production.ps1'
 ];
 
+const INSTALL_MD = `# WordJS — Install & Run (compiled release)
+
+This package is **pre-compiled** — you do NOT need to build anything. Install the runtime
+dependencies, then start. The database is created fresh during the install wizard; no data ships
+with this package.
+
+## Requirements
+- Node.js >= 18
+
+## 1. Install runtime dependencies (no build step)
+\`\`\`
+npm run release:install
+\`\`\`
+This installs production dependencies for the gateway, backend and frontend (prebuilt native
+binaries are downloaded — nothing is compiled from TypeScript).
+
+## 2. Start (pick one)
+\`\`\`
+npm run start:mono     # single process, one port (simplest)
+# or
+npm start              # three services: gateway + backend + frontend
+\`\`\`
+
+## 3. Finish setup in your browser
+Open the URL printed in the console (default https://localhost:3000). The first run shows the
+**install wizard**: choose your database (SQLite — zero-config — or PostgreSQL with a connection
+test), create your admin account, and you're in.
+
+## Notes
+- Secrets (JWT, gateway, DB password) are generated locally during install and stored in
+  \`backend/wordjs-config.json\` — never shipped, never committed.
+- For a public deployment, terminate TLS at a reverse proxy (Nginx/Caddy/Cloudflare) or use the
+  built-in HTTPS. See \`documentation/deployment.md\`.
+`;
+
 async function run() {
     console.log('🚀 WordJS Release Packager');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -75,6 +109,14 @@ async function run() {
             stdio: 'inherit'
         });
 
+        // 2b. Compile Backend (TypeScript -> dist) so the release runs WITHOUT compiling on the
+        //     user's machine. backend/server.js prefers dist/index.js when present.
+        console.log('\n🛠️ Compiling Backend (tsc -> dist)...');
+        execSync('npm run build', {
+            cwd: path.join(ROOT_DIR, 'backend'),
+            stdio: 'inherit'
+        });
+
         // 3. Build Plugins
         console.log('\n🔌 Building Plugin Bundles...');
         execSync('node scripts/build-plugin.js --all', {
@@ -85,6 +127,10 @@ async function run() {
         // 4. Copying Files
         console.log('\n📂 Copying files to package...');
         copyFiles(ROOT_DIR, TEMP_DIST);
+
+        // 4b. Write a self-contained INSTALL guide into the bundle.
+        console.log('\n📝 Writing INSTALL.md...');
+        fs.writeFileSync(path.join(TEMP_DIST, 'INSTALL.md'), INSTALL_MD);
 
         // 5. Creating ZIP
         console.log('\n📦 Creating final ZIP archive...');
