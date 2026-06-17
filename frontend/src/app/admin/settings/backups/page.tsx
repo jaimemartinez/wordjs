@@ -98,18 +98,6 @@ export default function BackupsPage() {
         }
     };
 
-    const handleSaveSchedule = (newSchedule: string) => {
-        setSchedule(newSchedule);
-    };
-
-    const handleSaveTime = (newTime: string) => {
-        setScheduleTime(newTime);
-    };
-
-    const handleSaveDay = (newDay: string) => {
-        setScheduleDay(newDay);
-    };
-
     const handleCreate = async () => {
         setCreating(true);
         try {

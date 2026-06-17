@@ -1,8 +1,6 @@
 import type { Metadata } from "next";
 import DashboardLayoutClient from "./DashboardLayoutClient";
 
-import { headers } from 'next/headers';
-
 // Admin is an authenticated, data-driven dashboard (Sidebar/pages use useSearchParams);
 // render it dynamically instead of static-prerendering, which would bail out on those hooks.
 export const dynamic = 'force-dynamic';
@@ -26,7 +24,7 @@ export async function generateMetadata(): Promise<Metadata> {
                 apple: icon,
             }
         };
-    } catch (e) {
+    } catch (_e) {
         return {
             title: "WordJS | Admin"
         };

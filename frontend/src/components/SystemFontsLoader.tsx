@@ -16,7 +16,7 @@ export function SystemFontsLoader() {
                 fonts.forEach((font: any) => {
                     let fontWeight = '400'; // Default Regular
                     let fontStyle = 'normal';
-                    let fontFamily = font.family;
+                    const fontFamily = font.family;
 
                     // Generic weight/style mapping
                     const variantLower = font.variant ? font.variant.toLowerCase() : '';

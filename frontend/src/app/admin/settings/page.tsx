@@ -6,7 +6,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import MediaPickerModal from "@/components/MediaPickerModal";
 import ModernSelect from "@/components/ModernSelect";
 import { useModal } from "@/contexts/ModalContext";
-import { PageHeader, Button } from "@/components/ui";
+import { PageHeader } from "@/components/ui";
 
 
 export default function SettingsPage() {

@@ -29,7 +29,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
             const data = await apiGet<AcmeConfig>('/system/certs/acme-config?t=' + Date.now());
             setCfg(data);
             setDomainsText((data.domains || []).join(', '));
-        } catch (e: any) {
+        } catch {
             setCfg({ enabled: false, email: '', domains: [], staging: false, renewBeforeDays: 30, challengeType: 'http-01', http01Port: null, lastRenewal: null, nextRun: null });
         } finally {
             setLoading(false);
@@ -126,7 +126,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     </div>
                     <div>
                         <h4 className="text-base font-bold text-gray-900 dark:text-white">Automatic renewal</h4>
-                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Renew the Let's Encrypt certificate automatically before it expires.</p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Renew the Let&apos;s Encrypt certificate automatically before it expires.</p>
                     </div>
                 </div>
                 <div className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${cfg.enabled ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-700'}`}>
@@ -145,7 +145,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                         placeholder="you@example.com"
                         className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all text-gray-800 dark:text-gray-200"
                     />
-                    <p className="text-xs text-gray-500 ml-1">Let's Encrypt expiry notices go here.</p>
+                    <p className="text-xs text-gray-500 ml-1">Let&apos;s Encrypt expiry notices go here.</p>
                 </div>
                 <div className="space-y-2">
                     <label className="text-sm font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Renew before expiry (days)</label>
@@ -166,14 +166,14 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                         placeholder="example.com, www.example.com"
                         className="w-full px-4 py-3 bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl focus:ring-4 focus:ring-amber-500/10 focus:border-amber-500 outline-none transition-all text-gray-800 dark:text-gray-200"
                     />
-                    <p className="text-xs text-gray-500 ml-1">Comma-separated. The first domain is the certificate's primary name.</p>
+                    <p className="text-xs text-gray-500 ml-1">Comma-separated. The first domain is the certificate&apos;s primary name.</p>
                 </div>
             </div>
 
             {/* Staging */}
             <label className="flex items-center gap-3 text-sm text-gray-700 dark:text-gray-300 cursor-pointer select-none">
                 <input type="checkbox" checked={cfg.staging} onChange={e => setCfg({ ...cfg, staging: e.target.checked })} className="w-4 h-4 accent-amber-500" />
-                Use Let's Encrypt <span className="font-semibold">staging</span> (for testing — issues untrusted certs, avoids rate limits)
+                Use Let&apos;s Encrypt <span className="font-semibold">staging</span> (for testing — issues untrusted certs, avoids rate limits)
             </label>
 
             {/* HTTP-01 reachability note */}
@@ -183,7 +183,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     Auto-renewal runs in the <span className="font-semibold">split (gateway) deployment</span> and uses the
                     <span className="font-semibold"> HTTP-01</span> challenge, so
                     <span className="font-mono"> http://&lt;domain&gt;/.well-known/acme-challenge/</span> must be publicly reachable on port 80.
-                    For a host serving HTTPS on 443, add <span className="font-mono">"acme": {'{'} "http01Port": 80 {'}'}</span> to
+                    For a host serving HTTPS on 443, add <span className="font-mono">&quot;acme&quot;: {'{'} &quot;http01Port&quot;: 80 {'}'}</span> to
                     <span className="font-mono"> backend/wordjs-config.json</span> (binds a redirect + challenge listener — restart the gateway to apply),
                     or front the site with a reverse proxy. Otherwise use the manual <span className="font-semibold">DNS</span> or <span className="font-semibold">custom upload</span> flows above.
                 </p>

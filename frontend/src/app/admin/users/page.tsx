@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
 import { usersApi, User } from "@/lib/api";
 import { useSearchParams } from "next/navigation";
 import { useI18n } from "@/contexts/I18nContext";

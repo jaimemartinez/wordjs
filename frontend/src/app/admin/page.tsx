@@ -21,25 +21,8 @@ interface ChartData {
 
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
-const weeklyData = [
-    { name: 'Mon', traffic: 4000, engagement: 2400 },
-    { name: 'Tue', traffic: 3000, engagement: 1398 },
-    { name: 'Wed', traffic: 2000, engagement: 9800 },
-    { name: 'Thu', traffic: 2780, engagement: 3908 },
-    { name: 'Fri', traffic: 1890, engagement: 4800 },
-    { name: 'Sat', traffic: 2390, engagement: 3800 },
-    { name: 'Sun', traffic: 3490, engagement: 4300 },
-];
-
-const monthlyData = [
-    { name: 'Week 1', traffic: 14000, engagement: 12400 },
-    { name: 'Week 2', traffic: 13000, engagement: 11398 },
-    { name: 'Week 3', traffic: 12000, engagement: 19800 },
-    { name: 'Week 4', traffic: 12780, engagement: 13908 },
-];
-
 // Premium Stat Card Component
-const StatCard = ({ label, value, icon, color, gradient }: { label: string, value: number, icon: string, color: string, gradient: string }) => (
+const StatCard = ({ label, value, icon, gradient }: { label: string, value: number, icon: string, color: string, gradient: string }) => (
     <div className="group relative overflow-hidden bg-white rounded-[40px] p-8 border-2 border-gray-50 shadow-xl shadow-gray-100/50 hover:shadow-2xl hover:shadow-blue-500/10 hover:-translate-y-2 transition-all duration-500">
         {/* Background Blob */}
         <div className={`absolute -right-10 -top-10 w-40 h-40 bg-gradient-to-br ${gradient} rounded-full blur-[60px] opacity-20 group-hover:opacity-40 transition-opacity duration-700`}></div>

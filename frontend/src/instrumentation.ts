@@ -90,7 +90,7 @@ export async function register() {
                     }
                 });
 
-                gatewayReq.on('error', (e: any) => {
+                gatewayReq.on('error', () => {
                     setTimeout(attempt, 5000);
                 });
 

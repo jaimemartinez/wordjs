@@ -91,7 +91,7 @@ export default function FooterSettingsPage() {
                 if (menuData && menuData.items) {
                     setPreviewMenu(menuData.items);
                 }
-            } catch (err) {
+            } catch {
                 // Ignore if no menu assigned
                 console.log("No footer menu assigned or error loading it.");
                 setPreviewMenu([]);
@@ -148,7 +148,7 @@ export default function FooterSettingsPage() {
         try {
             await settingsApi.update(payload);
             addToast(t('footer.admin.saveSuccess'), "success");
-        } catch (error) {
+        } catch {
             addToast(t('footer.admin.saveError'), "error");
         } finally {
             setSaving(false);

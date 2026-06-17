@@ -25,7 +25,6 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
     const [domain, setDomain] = useState(initialDomain || "");
     const [email, setEmail] = useState(initialEmail || "");
     const [method, setMethod] = useState<"http" | "dns" | "custom">("http");
-    const [staging, setStaging] = useState(false);
 
     // Custom Cert State
     const [keyContent, setKeyContent] = useState("");
@@ -33,7 +32,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
 
     // Certificate Info State
     const [certInfo, setCertInfo] = useState<CertInfo | null>(null);
-    const [sslEnabled, setSslEnabled] = useState(false);
+    const [, setSslEnabled] = useState(false);
     const [loading, setLoading] = useState(true);
 
     // State machine
@@ -214,7 +213,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                         />
                     </div>
                     <div className="space-y-2">
-                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Email <span className="text-gray-300 font-normal">(for Let's Encrypt)</span></label>
+                        <label className="text-xs font-bold text-gray-500 uppercase tracking-wide ml-1">Email <span className="text-gray-300 font-normal">(for Let&apos;s Encrypt)</span></label>
                         <input
                             type="email"
                             value={email}
