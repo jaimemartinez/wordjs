@@ -63,6 +63,41 @@ graph TB
 
 ---
 
+## 🚦 Run Modes (SPLIT vs MONOLITH)
+
+The **same codebase** runs two ways, and you can switch **at any time** with no migration. Both modes share the same `backend/wordjs-config.json`, the same database, the same `uploads/`, `themes/`, and `plugins/`, the same secrets, and the same public origin (`https://localhost:3000`). They are **mutually exclusive** — both bind the public port (default **3000**) — so only one runs at a time. In **both** modes plugins stay **isolated** in worker threads exactly as described in the Plugin System section.
+
+### SPLIT (default — 3 processes)
+
+The architecture diagrams above describe this mode: three processes behind the gateway.
+
+- **gateway** (`:3000`, public) — Node `cluster` reverse proxy.
+- **backend** (`:4000`) — Express REST API + plugins.
+- **frontend** (`:3001`) — Next.js.
+
+The gateway provides clustering, health-checks, load-balancing, an **mTLS** internal channel (see *Internal Security*), and SSE-aware proxying. Run with `npm run dev` (dev) or `npm start` (prod).
+
+**Choose SPLIT to** scale the services independently and get the gateway's clustering / health-checks / load-balancing.
+
+### MONOLITH (1 process, 1 port)
+
+A single process on one port (`:3000`) via the repo-root entrypoint **`monolith.js`**. It mounts the **backend Express app** (with its isolated worker-thread plugins) **and** the **Next.js request handler** *in-process* — no loopback proxy, no Node `cluster`, no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**:
+
+- `helmet`
+- `compression` (skipping SSE)
+- SEO rewrites — `/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `/api/v1/seo/robots.txt`
+- `X-Forwarded-Host` pinning for CSRF
+
+It serves **one HTTPS port**, reusing the gateway's certificate (with HTTP fallback). A **loopback-only HTTP listener** serves the frontend's server-side (SSR) API calls.
+
+Scripts: `npm run dev:mono` (dev — Next dev HMR + `ts-node` backend), `npm run build:mono` (compiles the backend to `dist/` + runs `next build`), `npm run start:mono` (prod — runs the compiled build).
+
+> **Internals:** `monolith.js` sets `WORDJS_EMBEDDED=1` (and `WORDJS_MODE=mono`); when embedded, backend `src/index.ts` skips its own self-listen and gateway self-register and instead exposes `initialize()` for the entrypoint to mount.
+
+**Choose MONOLITH for** the simplest single-artifact deploy — one VM/container, TLS via its built-in HTTPS or a single reverse proxy in front.
+
+---
+
 ## 🔄 Request Flow
 
 ```mermaid
