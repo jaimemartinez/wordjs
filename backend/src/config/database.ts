@@ -359,12 +359,61 @@ async function initializeSchema(db, isAsync = false) {
   console.log('✅ Database Schema verified.');
 }
 
+const { runSchemaMigrations } = require('../core/schema-migrations');
+
 async function initializeDatabase() {
   if (driverAsync) {
     await initializeSchema(driverAsync, true);
+    await runSchemaMigrations(driverAsync, true, driverName);
   } else {
     await initializeSchema(getDb(), false);
+    await runSchemaMigrations(getDb(), false, driverName);
   }
+  await checkDbDivergence();
+}
+
+// Boot guard for the per-driver-file footgun: each SQLite driver keeps its OWN data file
+// (sqlite-native → data/wordjs-native.db, sqlite-legacy → data/wordjs.db) and switching drivers is
+// meant to go through `npm run migrate`, which copies the data across. If dbDriver is flipped in the
+// config WITHOUT migrating, the new driver opens a FRESH (empty) file and the data looks lost — it's
+// actually safe in the other file. Detect that and shout, instead of silently serving an empty DB.
+async function checkDbDivergence() {
+  try {
+    if (!/^sqlite/.test(driverName)) return; // only SQLite has the dual-file shape
+    const fs = require('fs');
+    const dbi = driverAsync || getDb();
+    let activeUsers = 0;
+    try {
+      const r = await dbi.get('SELECT COUNT(*) AS c FROM users');
+      activeUsers = Number(r && (r.c ?? r.C)) || 0;
+    } catch { /* users table may not exist yet — treat as empty */ }
+    if (activeUsers > 0) return; // active DB has data — all good
+
+    const activePath = path.resolve(config.dbPath || './data/wordjs.db');
+    const candidates = ['./data/wordjs.db', './data/wordjs-native.db']
+      .map((p) => path.resolve(p))
+      .filter((p) => p !== activePath);
+    for (const f of candidates) {
+      if (!fs.existsSync(f)) continue;
+      let otherUsers = 0;
+      try {
+        const Database = require('better-sqlite3');
+        const other = new Database(f, { readonly: true, fileMustExist: true });
+        try { otherUsers = Number(other.prepare('SELECT COUNT(*) AS c FROM users').get().c) || 0; } catch { /* no users table */ }
+        other.close();
+      } catch { /* better-sqlite3 unavailable — best-effort skip */ }
+      if (otherUsers > 0) {
+        console.warn('');
+        console.warn('⚠️  ⚠️  DB DIVERGENCE DETECTED ⚠️  ⚠️');
+        console.warn(`   Active driver '${driverName}' is using an EMPTY database (${activePath}),`);
+        console.warn(`   but ${f} contains ${otherUsers} user(s) of real data.`);
+        console.warn(`   You likely switched dbDriver without migrating. To move the data:  npm run migrate`);
+        console.warn(`   (or restore the previous dbDriver/dbPath in backend/wordjs-config.json).`);
+        console.warn('');
+        return;
+      }
+    }
+  } catch { /* guard must never break boot */ }
 }
 
 // 3. Permission Enforcement
