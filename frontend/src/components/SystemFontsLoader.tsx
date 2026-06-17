@@ -56,8 +56,13 @@ export function SystemFontsLoader() {
                     styleEl.textContent = fontStyles.join('\n');
                 }
 
-            } catch (error) {
-                console.error("Failed to load system fonts:", error);
+            } catch (error: any) {
+                // During first-run setup the API legitimately returns "not installed";
+                // that's expected, so don't surface it as an error (it would trigger the
+                // dev error overlay on the install wizard).
+                if (!/not installed/i.test(error?.message || '')) {
+                    console.error("Failed to load system fonts:", error);
+                }
             }
         };
 
