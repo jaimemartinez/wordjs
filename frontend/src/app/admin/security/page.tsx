@@ -2,6 +2,7 @@
 
 import { useI18n } from "@/contexts/I18nContext";
 import SSLCertManager from "./SSLCertManager";
+import AutoRenewalPanel from "./AutoRenewalPanel";
 import { useEffect, useState } from "react";
 import { settingsApi } from "@/lib/api";
 
@@ -66,6 +67,19 @@ export default function SecurityPage() {
                                     adminEmail={adminEmail}
                                 />
                             </div>
+                        </div>
+                    </div>
+
+                    {/* Auto-Renewal (ACME) Section */}
+                    <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-amber-500 transition-all hover:shadow-amber-900/10">
+                        <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
+                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                                <i className="fa-solid fa-arrows-rotate text-amber-500 text-xl"></i>
+                                Automatic Certificate Renewal
+                            </h2>
+                        </div>
+                        <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
+                            <AutoRenewalPanel adminEmail={adminEmail} />
                         </div>
                     </div>
 

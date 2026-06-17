@@ -129,4 +129,98 @@ router.post('/config', async (req, res) => {
     }
 });
 
+/**
+ * GET /acme-config
+ * Current auto-renewal settings (no secrets) + last renewal outcome + next scheduled run.
+ */
+router.get('/acme-config', async (req, res) => {
+    try {
+        const config = require('../config/app');
+        const { getOption } = require('../core/options');
+        const { nextScheduled } = require('../core/cron');
+        const acme = config.acme || {};
+        const lastRenewal = await getOption('acme_last_renewal', null);
+        let nextRun: string | null = null;
+        try { const ts = await nextScheduled('wordjs_cert_renewal'); nextRun = ts ? new Date(ts).toISOString() : null; } catch { /* ignore */ }
+        res.json({
+            enabled: !!acme.enabled,
+            email: acme.email || '',
+            domains: acme.domains || [],
+            staging: !!acme.staging,
+            renewBeforeDays: acme.renewBeforeDays || 30,
+            challengeType: acme.challengeType || 'http-01',
+            http01Port: acme.http01Port || null,
+            lastRenewal,
+            nextRun
+        });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /acme-config
+ * Persist auto-renewal settings to wordjs-config.json and reflect them into the live config.
+ */
+router.post('/acme-config', async (req, res) => {
+    try {
+        const { enabled, email, domains, staging, renewBeforeDays, challengeType, http01Port } = req.body || {};
+
+        const domList: string[] = Array.isArray(domains)
+            ? domains.map((d: any) => String(d).trim()).filter(Boolean)
+            : [];
+
+        // Validate only when enabling — disabling should always succeed.
+        if (enabled) {
+            if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email))) {
+                return res.status(400).json({ error: 'A valid ACME account email is required to enable auto-renewal.' });
+            }
+            if (domList.length === 0) {
+                return res.status(400).json({ error: 'At least one domain is required to enable auto-renewal.' });
+            }
+        }
+
+        const newAcme: any = {
+            enabled: !!enabled,
+            email: email ? String(email).trim() : '',
+            domains: domList,
+            staging: !!staging,
+            renewBeforeDays: Number(renewBeforeDays) > 0 ? Number(renewBeforeDays) : 30,
+            challengeType: challengeType === 'dns-01' ? 'dns-01' : 'http-01'
+        };
+        if (http01Port) newAcme.http01Port = Number(http01Port);
+
+        const { saveConfig } = require('../core/configManager');
+        if (!saveConfig({ acme: newAcme })) {
+            return res.status(500).json({ error: 'Failed to write configuration.' });
+        }
+        // Reflect into the live singleton so the renewal job sees the change immediately.
+        const config = require('../config/app');
+        config.acme = newAcme;
+
+        // If enabling, kick a renewal check in the background (don't block the response).
+        if (newAcme.enabled) {
+            const certManager = require('../core/cert-manager');
+            setImmediate(() => certManager.renewIfDue().catch(() => { }));
+        }
+
+        res.json({ success: true, acme: newAcme });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+/**
+ * POST /renew-now
+ * Force an immediate renewal attempt (bypasses the not-due/disabled gates).
+ */
+router.post('/renew-now', async (req, res) => {
+    try {
+        const result = await certManager.renewIfDue({ force: true });
+        res.json(result);
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
 module.exports = router;

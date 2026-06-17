@@ -196,6 +196,36 @@ app.get('/health', async (req, res) => {
     });
 });
 
+// Orchestrator-grade liveness/readiness probes. Registered at ROOT (above the install guard, the
+// API rate limiter and CSRF, which are all scoped to config.api.prefix) so they are unauthenticated,
+// CSRF-free and never 503'd by the setup guard. Set true at the end of initialize().
+let appReady = false;
+
+// Liveness — the process is up and the event loop is responsive. Deliberately does NOT touch the DB.
+app.get('/healthz', (req, res) => {
+    res.json({ status: 'ok', uptime: process.uptime(), pid: process.pid, timestamp: new Date().toISOString() });
+});
+
+// Readiness — installed, fully booted, and the database answers. Returns 503 (not 200) when not
+// ready, so an orchestrator/load-balancer holds traffic until the instance can actually serve it.
+app.get('/readyz', async (req, res) => {
+    const checks: any = { installed: false, booted: appReady, db: 'unknown' };
+    try {
+        const { isInstalled } = require('./core/configManager');
+        checks.installed = isInstalled();
+        if (!checks.installed) return res.status(503).json({ status: 'setup_required', checks });
+        if (!appReady) return res.status(503).json({ status: 'starting', checks });
+        const SystemHealth = require('./core/system-health');
+        const db = await SystemHealth.checkDatabase();
+        checks.db = db.status === 'OK' ? 'ok' : 'error';
+        if (checks.db !== 'ok') return res.status(503).json({ status: 'not_ready', checks });
+        return res.json({ status: 'ready', checks });
+    } catch (e: any) {
+        checks.db = 'error';
+        return res.status(503).json({ status: 'not_ready', checks, error: e && e.message });
+    }
+});
+
 // Installation and Migration Guard Middleware
 app.use((req, res, next) => {
     // Bypass for static files, health check, and setup endpoints
@@ -487,7 +517,7 @@ async function initialize() {
                 {
                     name: 'backend',
                     url: `${serverProtocol}://127.0.0.1:${config.port}`,
-                    routes: ['/api', '/uploads', '/themes', '/plugins', '/.well-known']
+                    routes: ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz']
                 }
             ];
 
@@ -637,6 +667,9 @@ async function initialize() {
         console.log('');
     });
     }
+
+    // Boot complete (DB + plugins + theme engine ready, or setup-mode). /readyz flips to ready.
+    appReady = true;
 
     // Return the configured app so the monolith entrypoint can mount it in-process.
     return app;

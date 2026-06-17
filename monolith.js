@@ -51,7 +51,8 @@ const helmet = require('helmet');
 const compression = require('compression');
 
 // Requests with these path prefixes go to the backend Express app; everything else goes to Next.
-const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/health'];
+// (/healthz is answered directly in dispatch() for liveness; /readyz goes to the backend's deep check.)
+const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/health', '/readyz'];
 const isBackendPath = (url) => {
     const u = (url || '/').split('?')[0];
     return BACKEND_PREFIXES.some((p) => u === p || u.startsWith(p + '/'));
@@ -136,6 +137,11 @@ async function main() {
     const helmetMw = helmet({ contentSecurityPolicy: false });
     const compressionMw = compression({ filter: shouldCompress });
     const dispatch = (req, res) => {
+        // Liveness probe — answer directly so it works even if the backend app is wedged (gateway parity).
+        if ((req.url || '/').split('?')[0] === '/healthz') {
+            res.writeHead(200, { 'Content-Type': 'application/json' });
+            return res.end(JSON.stringify({ status: 'ok', role: 'monolith', pid: process.pid, timestamp: new Date().toISOString() }));
+        }
         // Pin forwarded headers so backend CSRF/origin sees the real public host (gateway parity).
         req.headers['x-forwarded-host'] = req.headers['host'] || '';
         req.headers['x-forwarded-proto'] = proto;
@@ -167,6 +173,31 @@ async function main() {
     http.createServer(backendApp).listen(LOOPBACK_PORT, '127.0.0.1', () => {
         console.log(`   ↳ internal SSR API: http://127.0.0.1:${LOOPBACK_PORT} (loopback only)`);
     });
+
+    // 6) Optional ACME HTTP-01 + HTTPS-redirect listener (opt-in via acme.http01Port in
+    //    wordjs-config.json). Let's Encrypt validates HTTP-01 on port 80, which the HTTPS public
+    //    listener does not bind. Serves challenge tokens from backend/public, redirects the rest.
+    const acmePort = Number((appConfig.acme && appConfig.acme.http01Port) || 0);
+    if (acmePort && ssl) {
+        const challengeBase = path.resolve(BACKEND, 'public', '.well-known', 'acme-challenge');
+        http.createServer((req, res) => {
+            try {
+                const reqPath = decodeURIComponent((req.url || '/').split('?')[0]);
+                if (reqPath.startsWith('/.well-known/acme-challenge/')) {
+                    const file = path.join(challengeBase, path.basename(reqPath));
+                    if (file.startsWith(challengeBase + path.sep) && fs.existsSync(file)) {
+                        res.writeHead(200, { 'Content-Type': 'text/plain' });
+                        return res.end(fs.readFileSync(file));
+                    }
+                    res.writeHead(404); return res.end('Not found');
+                }
+                const host = (req.headers.host || '').split(':')[0];
+                const suffix = PUBLIC_PORT === 443 ? '' : `:${PUBLIC_PORT}`;
+                res.writeHead(301, { Location: `https://${host}${suffix}${req.url}` });
+                res.end();
+            } catch (e) { try { res.writeHead(500); res.end(); } catch (_) { /* ignore */ } }
+        }).listen(acmePort, () => console.log(`   ↳ ACME HTTP-01 + HTTPS-redirect on :${acmePort}`));
+    }
 }
 
 main().catch((e) => { console.error('❌ Monolith failed to start:', e); process.exit(1); });
