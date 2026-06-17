@@ -40,8 +40,26 @@ class NotificationService {
             }
         });
 
-        this.registerTransport('sse', (notification) => {
+        this.registerTransport('sse', async (notification) => {
+            const cache = require('./cache');
+            // Multi-node: publish so EVERY node (including this one) delivers to its OWN local SSE
+            // clients via the cluster bus — a client connected to a different node still gets the push.
+            // Single node / Redis down: broadcast locally. The 'db' transport persists regardless, so a
+            // momentary live-push miss is always recoverable on reload.
+            if (cache.pubsubAvailable() && await cache.publish('wordjs:notify', notification)) return;
             this.broadcast(notification);
+        });
+    }
+
+    /**
+     * Subscribe to the cluster notification bus so a notification produced on ANY node is delivered
+     * to THIS node's local SSE clients. Call once at boot. No-op without Redis (single node).
+     */
+    initClusterBus() {
+        const cache = require('./cache');
+        cache.subscribe('wordjs:notify', (msg) => {
+            try { this.broadcast(JSON.parse(msg)); }
+            catch (e: any) { console.warn('[SSE] cluster bus parse error:', e && e.message); }
         });
     }
 
