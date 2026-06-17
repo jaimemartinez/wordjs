@@ -6,6 +6,12 @@
 > the checklist (rotate `jwtSecret` / `gatewaySecret` / `db.password`, set a strong `gatewaySecret`)
 > before exposing an instance to the internet. See [`documentation/security.md`](documentation/security.md)
 > for the deeper defenses reference.
+>
+> **Rotate if you cloned early.** A config backup file (`backend/wordjs-config.backup.json`) that contained
+> real secrets was previously committed. It has since been **purged from the entire git history**
+> (`git-filter-repo`) and is no longer present in any commit. However, anyone who cloned or forked the repo
+> **before** the purge still has those secrets in their local history — those operators **must** rotate
+> `jwtSecret`, `gatewaySecret`, and `db.password`.
 
 ## 🛡️ Security Features
 
@@ -29,6 +35,7 @@ WordJS is built with a "Security First" architecture.
 - **CORS**: In production, only configured origins (site / frontend / gateway) are allowed, instead of reflecting arbitrary origins with credentials.
 - **Gateway Management Auth**: The gateway management secret is accepted **header-only** (never in the query string), compared in constant time, and the shipped public default is rejected (management endpoints return 503 until a real secret is configured).
 - **Stored-XSS Hardening**: User-generated HTML is sanitized **isomorphically** — DOMPurify in the browser, `sanitize-html` on the server (SSR), both fail-closed. Built-in shortcode attribute values are escaped (`escAttr`/`escUrl`) before output.
+- **Token-Gated Metrics**: The Prometheus endpoint `GET /metrics` is **disabled (returns 404) unless a scrape token is configured** (`config.metrics.token` / `METRICS_TOKEN`); scrapes must present `Authorization: Bearer <token>`, compared in constant time (mismatch → 401). It is never exposed without a token.
 
 ### Plugin Sandbox (Isolated-Only)
 - **Worker Isolation**: Every plugin runs in a `worker_threads` isolate and reaches core ONLY through the permission-checked `wordjs` capability bridge — it never touches raw `fs` / `child_process` / `dbAsync` / secrets.

@@ -42,7 +42,7 @@ A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **ba
 
 ## 📋 Prerequisites
 
-- **Node.js:** v18 or higher.
+- **Node.js:** v18 or higher (CI builds and tests on Node 22).
 - **PM2:** (Recommended) A process manager for Node.js to keep your app alive.
   ```bash
   npm install -g pm2
@@ -176,11 +176,11 @@ WordJS is **MIT-licensed** consistently across every package (root, `backend`, `
 
 ## 🤖 Continuous Integration
 
-CI runs on every push and pull request via `.github/workflows/ci.yml`, with three parallel jobs:
+CI runs on every push and pull request via `.github/workflows/ci.yml`, on **Node 22**, with three parallel jobs:
 
-- **Backend:** strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → tests (`npm test`).
+- **Backend:** strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`).
 - **Gateway:** tests (`npm test`), including the proxy/mTLS integration test.
-- **Frontend:** lint (`npm run lint`) plus production build (`npm run build`).
+- **Frontend:** type check, lint (`npm run lint`), **unit tests** (`npm run test`, vitest — e.g. the XSS sanitizer), and production build (`npm run build`).
 
 > **Note:** Production runs the **compiled** backend — the `server.js` supervisor launches `node dist/index.js` when `dist/` exists, and only falls back to `ts-node` in development or when no build is present. Run `npm run build` before deploying.
 
