@@ -70,6 +70,12 @@ jobs:
       - name: Audit (block high/critical prod vulns)
         working-directory: frontend
         run: npm audit --omit=dev --audit-level=high
+      - name: Generate plugin registries (match the actually checked-out plugins)
+        # The committed registries can be generated on a machine that has restricted/local-only
+        # plugins (e.g. the gitignored conference-manager). Regenerate here so type-check, lint and
+        # build only reference plugins present in this checkout — otherwise tsc fails on a missing module.
+        working-directory: frontend
+        run: node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js
       - name: Type check
         working-directory: frontend
         run: npx tsc --noEmit
