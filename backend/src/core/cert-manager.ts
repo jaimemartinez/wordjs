@@ -491,6 +491,121 @@ class CertManager {
     }
 
     /**
+     * Days until a cert's validTo (negative if expired/unparseable/absent).
+     */
+    daysUntil(validTo): number {
+        if (!validTo) return -Infinity;
+        const t = new Date(validTo).getTime();
+        if (Number.isNaN(t)) return -Infinity;
+        return (t - Date.now()) / 86400000;
+    }
+
+    /**
+     * Read the notAfter of the cert we last obtained for a domain, straight from disk. This is the
+     * authoritative, gateway-independent record of the live cert's expiry — it works in split mode,
+     * survives a transient gateway outage, and does NOT depend on the gateway's (lossy, CN-only)
+     * issuer-type classification. Returns null when no parseable local cert exists.
+     */
+    readLocalCertValidTo(domain): string | null {
+        try {
+            const p = path.join(LIVE_DIR, domain, 'fullchain.pem');
+            if (fs.existsSync(p)) {
+                const x509 = new (require('crypto').X509Certificate)(fs.readFileSync(p));
+                return x509.validTo;
+            }
+        } catch { /* unparseable → treat as absent */ }
+        return null;
+    }
+
+    /**
+     * Auto-renewal entry point — invoked by the cron job (wordjs_cert_renewal) and the manual
+     * "renew now" route. Reads config.acme, skips unless the live cert is within renewBeforeDays of
+     * expiry (so we never hammer Let's Encrypt and hit its rate limits), then re-runs the existing
+     * HTTP-01 provisioning, which already pushes the new cert to the gateway and hot-reloads it.
+     * The outcome is recorded in the 'acme_last_renewal' option for the renewal-status endpoint.
+     */
+    async renewIfDue({ force = false } = {}): Promise<any> {
+        const config = require('../config/app');
+        const acme = config.acme || {};
+        const { getOption, updateOption } = require('./options');
+
+        const record = async (data) => {
+            try { await updateOption('acme_last_renewal', { at: Date.now(), ...data }); }
+            catch { /* options table may be unavailable pre-install */ }
+            return data;
+        };
+
+        if (!acme.enabled && !force) return { skipped: true, reason: 'disabled' };
+
+        // Auto-renewal installs the cert via the gateway's internal mTLS API (127.0.0.1:3100). In
+        // monolith/embedded mode that process does not exist, so a renewed cert can neither be
+        // installed nor hot-reloaded — skip rather than repeatedly ordering certs we cannot deploy
+        // (which would otherwise burn Let's Encrypt rate limits for nothing). ACME is split-mode only.
+        if (process.env.WORDJS_EMBEDDED === '1' || process.env.WORDJS_MODE === 'mono') {
+            return record({ ok: false, skipped: true, reason: 'monolith_unsupported', error: 'ACME auto-renewal runs in split (gateway) mode only — the monolith has no gateway to install the certificate into.' });
+        }
+
+        if (acme.challengeType === 'dns-01') {
+            // DNS-01 cannot complete unattended without a DNS-provider write API (none exists here).
+            return record({ ok: false, skipped: true, reason: 'dns-01-manual', error: 'DNS-01 auto-renewal needs manual TXT publishing — use the DNS flow in the admin UI.' });
+        }
+
+        // Resolve the primary domain to maintain (first configured domain, else the siteUrl host).
+        let domain = (Array.isArray(acme.domains) && acme.domains[0]) || '';
+        if (!domain && config.siteUrl) {
+            try { domain = new URL(config.siteUrl).hostname; } catch { /* ignore */ }
+        }
+        if (!domain) return record({ ok: false, error: 'No domain configured for ACME (set acme.domains or siteUrl).' });
+        if (!acme.email) return record({ ok: false, error: 'No ACME account email configured.' });
+
+        const threshold = Number(acme.renewBeforeDays) > 0 ? Number(acme.renewBeforeDays) : 30;
+
+        // Decide whether renewal is due from the cert's REMAINING VALIDITY — independent of the
+        // gateway's issuer-type classification (which only inspects the issuer CN and so never tags a
+        // real Let's Encrypt cert, whose "Let's Encrypt" string lives in the issuer O=). Prefer the
+        // locally-saved cert on disk; fall back to what the gateway reports. A non-finite result means
+        // there is no parseable cert yet → first issuance, which legitimately proceeds.
+        let validTo = this.readLocalCertValidTo(domain);
+        if (!validTo) {
+            try {
+                const cfg = await this.getConfig();
+                const t = cfg && cfg.certInfo && cfg.certInfo.type;
+                // Trust the gateway's reported expiry only for a REAL cert (Let's Encrypt or a
+                // custom-uploaded one). The gateway always carries a self-signed placeholder; counting
+                // its ~365-day validity here would make the gate permanently "not_due" and the cron
+                // would never obtain the FIRST real certificate.
+                if (t && t !== 'self-signed' && t !== 'none') validTo = (cfg.certInfo.validTo) || null;
+            } catch { /* gateway maybe unreachable */ }
+        }
+        const days = this.daysUntil(validTo);
+
+        if (!force && Number.isFinite(days) && days > threshold) {
+            return { skipped: true, reason: 'not_due', domain, daysRemaining: Math.round(days), validTo };
+        }
+
+        // Failure backoff: if a recent attempt for this domain failed, hold off until the cooldown
+        // elapses. Without this, a persistently-failing validation (e.g. port 80 unreachable) would
+        // re-order on every cron tick and could exhaust Let's Encrypt's failed-validation budget.
+        if (!force) {
+            const last = await getOption('acme_last_renewal', null);
+            const COOLDOWN_MS = 6 * 60 * 60 * 1000;
+            if (last && last.ok === false && last.domain === domain && (Date.now() - (last.at || 0)) < COOLDOWN_MS) {
+                return { skipped: true, reason: 'recent_failure_backoff', domain, lastError: last.error, retryInMs: COOLDOWN_MS - (Date.now() - (last.at || 0)) };
+            }
+        }
+
+        // Due (or forced, or no cert yet) → provision (provisionAutoHTTP saves locally + pushes to gateway).
+        try {
+            console.log(`[CertManager] Auto-renewal: provisioning '${domain}' (staging=${!!acme.staging}, force=${force}, daysRemaining=${Number.isFinite(days) ? Math.round(days) : 'n/a'})`);
+            await this.provisionAutoHTTP(domain, acme.email, !!acme.staging);
+            return record({ ok: true, domain, validTo: this.readLocalCertValidTo(domain) });
+        } catch (e) {
+            console.error('[CertManager] Auto-renewal failed:', e.message);
+            return record({ ok: false, domain, error: e.message });
+        }
+    }
+
+    /**
      * Ensure Gateway has a certificate (Self-Signed fallback)
      */
     async ensureGatewayCert() {

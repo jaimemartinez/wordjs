@@ -103,6 +103,56 @@ async function ensureSSLCerts(config) {
     }
 }
 
+// Optional: bind a plain-HTTP listener (default OFF) that answers ACME HTTP-01 challenges and
+// 301-redirects everything else to HTTPS. Enable by setting acme.http01Port (e.g. 80) in
+// gateway-config.json. Needed because Let's Encrypt validates HTTP-01 on port 80, which the HTTPS
+// gateway does not otherwise bind. Reads challenge tokens straight from the backend webroot (where
+// cert-manager writes them). Started in the primary only, so there is exactly one :80 listener.
+function maybeStartAcmeHttpListener() {
+    // The admin UI persists the acme block to the BACKEND config (backend/wordjs-config.json), not
+    // gateway-config.json — so consult it as the source of truth (matching monolith.js). Read once at
+    // boot; setting http01Port via the UI therefore needs a gateway restart to take effect.
+    let acme = config.acme || {};
+    if (!acme.http01Port) {
+        try {
+            const beCfgPath = path.resolve(__dirname, '../../backend/wordjs-config.json');
+            if (fs.existsSync(beCfgPath)) {
+                const beCfg = JSON.parse(fs.readFileSync(beCfgPath, 'utf8'));
+                if (beCfg.acme && beCfg.acme.http01Port) acme = beCfg.acme;
+            }
+        } catch (e) { /* ignore — listener stays off */ }
+    }
+    const port = Number(acme.http01Port || 0);
+    if (!port) return;
+    const http = require('http');
+    // Default webroot = the backend's public dir (../../backend/public relative to gateway/src).
+    const webroot = path.resolve(__dirname, '../../', acme.webroot || 'backend/public');
+    const challengeBase = path.join(webroot, '.well-known', 'acme-challenge');
+    const srv = http.createServer((req, res) => {
+        try {
+            const reqPath = decodeURIComponent((req.url || '/').split('?')[0]);
+            if (reqPath.startsWith('/.well-known/acme-challenge/')) {
+                const token = path.basename(reqPath); // strips any path-traversal segments
+                const file = path.join(challengeBase, token);
+                if (token && file.startsWith(challengeBase + path.sep) && fs.existsSync(file)) {
+                    res.writeHead(200, { 'Content-Type': 'text/plain' });
+                    return res.end(fs.readFileSync(file));
+                }
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                return res.end('Not found');
+            }
+            const host = (req.headers.host || '').split(':')[0];
+            const suffix = FINAL_PORT === 443 ? '' : `:${FINAL_PORT}`;
+            res.writeHead(301, { Location: `https://${host}${suffix}${req.url}` });
+            res.end();
+        } catch (e) {
+            try { res.writeHead(500); res.end(); } catch (_) { /* ignore */ }
+        }
+    });
+    srv.on('error', (e) => logger.error(`[Gateway] ACME HTTP-01 listener on :${port} failed: ${e.message}`));
+    srv.listen(port, () => logger.info(`[Gateway] ACME HTTP-01 + HTTPS-redirect listener on :${port}`));
+}
+
 if (cluster.isPrimary) {
     const numCPUs = os.cpus().length;
     logger.info(`[Gateway] Starting on port ${FINAL_PORT}...`);
@@ -116,6 +166,7 @@ if (cluster.isPrimary) {
         for (let i = 0; i < maxWorkers; i++) cluster.fork();
 
         startInternalServer();
+        maybeStartAcmeHttpListener();
     })();
 
     cluster.on('exit', (worker) => {
@@ -337,7 +388,11 @@ if (cluster.isPrimary) {
                                 serialNumber: x509.serialNumber,
                                 type: (x509.issuer === x509.subject) ? 'self-signed' : 'custom' // Simplified type check
                             };
-                            if (info.certInfo.issuer.includes("Let's Encrypt")) info.certInfo.type = 'letsencrypt';
+                            // Detect Let's Encrypt from the FULL issuer DN: real LE leaves carry
+                            // "Let's Encrypt" in the issuer O= (the CN is the intermediate, e.g. R10/E5),
+                            // and staging uses "(STAGING) Let's Encrypt". info.certInfo.issuer above is
+                            // the CN only, so test the raw x509.issuer here.
+                            if (/let'?s encrypt/i.test(x509.issuer) || /\(STAGING\)/i.test(x509.issuer)) info.certInfo.type = 'letsencrypt';
                         } catch (e) {
                             info.certInfo = { error: 'Failed to parse certificate', details: e.message };
                         }
@@ -567,6 +622,12 @@ if (cluster.isPrimary) {
         }
         return null;
     };
+
+    // Liveness probe — answered by the gateway itself (edge is up), independent of any backend.
+    // /readyz is intentionally NOT handled here so it proxies through to the backend's deep check.
+    app.get('/healthz', (req, res) => {
+        res.json({ status: 'ok', role: 'gateway', pid: process.pid, timestamp: new Date().toISOString() });
+    });
 
     // SEO Rewrites: Map root sitemap/robots to backend SEO endpoints
     app.get('/sitemap.xml', (req, res, next) => {
