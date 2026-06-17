@@ -9,6 +9,9 @@ const { v4: uuidv4 } = require('uuid');
 const { hooks } = require('./hooks');
 const { verifyPermission } = require('./plugin-context');
 
+// Unique per process — tags bus messages so a node skips re-broadcasting its OWN published echo.
+const NODE_ID = require('crypto').randomBytes(8).toString('hex');
+
 class NotificationService {
     transports: Map<string, { handler: Function; pluginSlug: string | null }>;
     clients: Set<any>;
@@ -41,25 +44,31 @@ class NotificationService {
         });
 
         this.registerTransport('sse', async (notification) => {
-            const cache = require('./cache');
-            // Multi-node: publish so EVERY node (including this one) delivers to its OWN local SSE
-            // clients via the cluster bus — a client connected to a different node still gets the push.
-            // Single node / Redis down: broadcast locally. The 'db' transport persists regardless, so a
-            // momentary live-push miss is always recoverable on reload.
-            if (cache.pubsubAvailable() && await cache.publish('wordjs:notify', notification)) return;
+            // ALWAYS deliver to THIS node's own SSE clients immediately — never depend on the bus
+            // round-trip for local delivery (the subscriber may be mid-(re)subscribe, and a 0-receiver
+            // publish still "succeeds"). Then, in multi-node, ALSO publish for OTHER nodes, tagged with
+            // this node's id so our own echo is skipped on receipt (no double delivery). The 'db'
+            // transport persists regardless, so a remote node that's briefly unsubscribed recovers on reload.
             this.broadcast(notification);
+            const cache = require('./cache');
+            if (cache.pubsubAvailable()) {
+                await cache.publish('wordjs:notify', { o: NODE_ID, n: notification });
+            }
         });
     }
 
     /**
-     * Subscribe to the cluster notification bus so a notification produced on ANY node is delivered
-     * to THIS node's local SSE clients. Call once at boot. No-op without Redis (single node).
+     * Subscribe to the cluster notification bus so a notification produced on ANOTHER node is
+     * delivered to THIS node's local SSE clients. Call once at boot. No-op without Redis (single node).
      */
     initClusterBus() {
         const cache = require('./cache');
         cache.subscribe('wordjs:notify', (msg) => {
-            try { this.broadcast(JSON.parse(msg)); }
-            catch (e: any) { console.warn('[SSE] cluster bus parse error:', e && e.message); }
+            try {
+                const parsed = JSON.parse(msg);
+                if (parsed && parsed.o === NODE_ID) return; // our own echo — already delivered locally
+                this.broadcast(parsed && parsed.n ? parsed.n : parsed);
+            } catch (e: any) { console.warn('[SSE] cluster bus parse error:', e && e.message); }
         });
     }
 

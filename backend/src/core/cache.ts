@@ -124,8 +124,27 @@ function redisConfigured(): boolean { return !!(config.redis && config.redis.ena
 /** True when cross-node pub/sub is usable (Redis configured AND the connection is up). */
 function pubsubAvailable(): boolean { return redisConfigured() && redisAvailable; }
 
-/** The raw ioredis client (or null) — used to build a shared rate-limit store. */
-function getClient(): any { return redisConfigured() ? redis : null; }
+// A DEDICATED client for the shared rate-limit store. NOT the object-cache client, whose
+// retryStrategy gives up after 3 attempts (fine for a cache that falls back to the DB, but it would
+// permanently brick the limiter store). This one self-heals (unbounded backoff) and fails fast per
+// request (no offline queue) so a Redis outage degrades quickly via the limiter's passOnStoreError.
+let rateLimitClient: any = null;
+function getClient(): any {
+    if (!redisConfigured()) return null;
+    if (!rateLimitClient) {
+        rateLimitClient = new Redis({
+            host: config.redis.host || '127.0.0.1',
+            port: config.redis.port || 6379,
+            password: config.redis.password || undefined,
+            db: config.redis.db || 0,
+            retryStrategy: (times) => Math.min(times * 200, 3000), // never gives up → self-heals
+            maxRetriesPerRequest: 1,
+            enableOfflineQueue: false
+        });
+        rateLimitClient.on('error', () => { /* degrade silently; the limiter's passOnStoreError handles it */ });
+    }
+    return rateLimitClient;
+}
 
 /** Publish a message to a channel. Returns false if Redis isn't available (caller stays in-process). */
 async function publish(channel: string, payload: any): Promise<boolean> {
