@@ -47,7 +47,12 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
 try {
     require(path.join(coreDir, 'io-guard'));
     require(path.join(coreDir, 'secure-require')).installSecureRequire();
-} catch (e) { /* guards are best-effort inside the worker */ }
+} catch (e) {
+    // FAIL CLOSED: if the in-isolate guards can't install, do NOT run the plugin with only the heap
+    // boundary — a missing guard re-opens fs/child_process/network from inside the worker. Abort.
+    try { parentPort.postMessage({ kind: 'fatal', error: `sandbox guard install failed: ${e && e.message}` }); } catch { /* parent gone */ }
+    process.exit(1);
+}
 const { runWithContext } = require(path.join(coreDir, 'plugin-context'));
 
 let _id = 0;

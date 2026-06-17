@@ -36,7 +36,7 @@ router.post('/track', async (req, res) => {
         await analytics.track({
             type: type || 'page_view',
             resource: resource || '/',
-            visitor_ip: req.ip, // Express IP
+            ip: req.ip, // Express IP — model param is `ip`; it salts+hashes it (was `visitor_ip`, ignored, so every row stored 0.0.0.0)
             user_id: req.user ? req.user.id : null, // If auth middleware ran (optional)
             metadata: metadata || {}
         });
