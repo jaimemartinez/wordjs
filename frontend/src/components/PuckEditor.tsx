@@ -1,6 +1,6 @@
 "use client";
 
-import { Puck, Config, Data, migrate, usePuck } from "@measured/puck";
+import { Puck, Config, Data, migrate } from "@measured/puck";
 import "@measured/puck/puck.css";
 import React, { useState, useEffect, useRef } from "react";
 import ModernSelect from "./ModernSelect";
@@ -36,16 +36,31 @@ export const EditorContext = React.createContext<{
 // Inline Text Component - Simple Textarea Swap
 const InlineText = ({ id, content, title, elementId, ...props }: any) => {
     const ctx = React.useContext(EditorContext);
-    // Use Puck's hook to get dispatch function
-    const { dispatch } = usePuck();
 
-    const isEditing = ctx?.activeEditorId === id;
+    // Distinguish Text (content) vs Heading (title) by which prop is DEFINED, not by truthiness —
+    // so an intentionally-emptied text body stays "" instead of falling back to the title.
+    const isTextBlock = content !== undefined;
+    const actualContent = (isTextBlock ? content : title) ?? "";
 
-    // Some components use 'title', some use 'content'. We handle both.
-    const actualContent = content || title || "";
+    // isEditing must be REACTIVE. The active-editor id lives in window globals (the Puck config is
+    // memoized/stable and can't close over React state), and the EditorContext value is only a
+    // snapshot taken when the stable root rendered — so reading ctx.activeEditorId is stale and the
+    // inline editor opens/closes unreliably. Subscribe to the 'puck-editor-change' event instead.
+    const readActiveId = (): string | null => {
+        if (typeof window === 'undefined') return null;
+        return (window as any).puckActiveEditorId ?? (window.parent as any)?.puckActiveEditorId ?? null;
+    };
+    const [activeId, setActiveId] = React.useState<string | null>(readActiveId);
+    React.useEffect(() => {
+        const handler = (e: any) => setActiveId(e?.detail ?? readActiveId());
+        window.addEventListener('puck-editor-change', handler as EventListener);
+        return () => window.removeEventListener('puck-editor-change', handler as EventListener);
+    }, []);
+    const isEditing = activeId === id;
+
     const [localContent, setLocalContent] = React.useState(actualContent);
 
-    // Sync localContent when content prop changes
+    // Sync localContent when content prop changes (but never while editing)
     React.useEffect(() => {
         if (!isEditing) {
             setLocalContent(actualContent);
@@ -63,34 +78,10 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
     }
 
     const handleSave = () => {
-        console.log('[InlineText] Saving via Puck Dispatch:', id);
-
-        // Use Puck's internal dispatch to update data reliably
-        // This ensures history, state, and UI are all synced
-        dispatch({
-            type: "setData",
-            data: (prev: Data) => {
-                const updateList = (list: any[]) => list.map(item => {
-                    if (item.props?.id === id || item._id === id || item.id === id) {
-                        const newProps = content !== undefined ? { content: localContent } : { title: localContent };
-                        return { ...item, props: { ...item.props, ...newProps } };
-                    }
-                    return item;
-                });
-
-                return {
-                    ...prev,
-                    content: updateList(prev.content || []),
-                    zones: Object.keys(prev.zones || {}).reduce((acc: any, key) => ({
-                        ...acc,
-                        [key]: updateList(prev.zones![key])
-                    }), {})
-                };
-            }
-        });
-
-        // Also call legacy updateComponent for good measure (if parent listens to onChange)
-        ctx.updateComponent(id, content !== undefined ? { content: localContent } : { title: localContent });
+        // Single write path: update the component through the parent data store (which controls
+        // <Puck/>). Now that <Puck onChange> mirrors every edit into that store, updateComponent
+        // reads fresh data — no stale clobber, no double dispatch, and onChange fires once.
+        ctx.updateComponent(id, isTextBlock ? { content: localContent } : { title: localContent });
         ctx.setActiveEditorId(null);
     };
 
@@ -684,7 +675,7 @@ export default function PuckEditor({
                     config={editorConfig}
                     data={data}
                     onPublish={(data) => onChange(data)}
-                    onChange={(newData) => { onChange(newData); }}
+                    onChange={(newData) => { setData(newData); onChange(newData); }}
                     overrides={overrides}
                     iframe={{ enabled: true }}
                 >
