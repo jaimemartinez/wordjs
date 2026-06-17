@@ -99,9 +99,9 @@ graph TD
     Backend --> Plugins{Isolated Plugins}
 ```
 
-- **[Gateway](gateway.js):** Clustered Node/Express reverse proxy. Handles routing,
-  load-balancing, health-check eviction, log rotation, an mTLS internal control channel,
-  and SSE-aware proxying.
+- **[Gateway](gateway/):** Clustered Node/Express reverse proxy (`gateway/src/index.js`).
+  Handles routing, load-balancing, health-check eviction, log rotation, an mTLS internal
+  control channel, and SSE-aware proxying.
 - **[Backend](backend/):** The core engine — content, users, roles, the plugin/theme
   system, mail, certificates, and the sandbox. Written in **TypeScript**; runs as compiled
   JS in production and via `ts-node` in development.
@@ -115,14 +115,18 @@ graph TD
 Guides live in [`documentation/`](documentation/):
 
 - 🏗️ **[Architecture Overview](documentation/architecture.md)**
+- 🛠️ **[Development & Build Guide](documentation/development.md)** — install, compiled build, strict typecheck, dev vs prod.
 - 🛰️ **[Gateway Guide](documentation/gateway.md)**
 - 🖥️ **[Frontend Guide](documentation/frontend.md)**
 - 🎨 **[Themes Guide](documentation/themes.md)**
-- 🔌 **[Plugin Tutorial](documentation/plugins.md)**
+- 🔌 **[Plugin Tutorial](documentation/plugins.md)** — build an isolated plugin against the `wordjs` bridge.
+- 🧩 **[Plugins Reference](documentation/plugins-reference.md)** — the bundled plugins and their trust tiers.
+- 🧱 **[Plugin Isolation](documentation/plugin-isolation-proposal.md)** — the worker sandbox + trust model (implemented).
 - ✉️ **[Mail Server Guide](documentation/mail-server.md)**
 - 🗄️ **[Database Guide](documentation/database.md)**
 - 🚀 **[Deployment Guide](documentation/deployment.md)**
 - 🔐 **[Security Policy](SECURITY.md)** — vulnerability reporting and active defenses.
+- 🛡️ **[Security Architecture](documentation/security.md)** — deeper defenses reference (sandbox, trust model, CSRF, JWT revocation).
 - 🔔 **[Notifications System](documentation/notifications.md)**
 - 🧭 **[Product Positioning](POSITIONING.md)** — where WordJS is headed and why.
 - 📡 **API reference**: Swagger/OpenAPI at `http://localhost:4000/api/v1/docs` (admin only).
@@ -166,8 +170,10 @@ no `ts-node` at runtime. In development it runs in-place via `ts-node`. From `ba
 | `npm test`          | Test suite (`node --test` via ts-node).                           |
 | `npm run lint`      | ESLint (flat config).                                             |
 | `npm run format`    | Prettier.                                                         |
-| `npm run migrate`   | Run database migrations.                                          |
-| `npm run seed`      | Seed default data.                                                |
+
+> The schema is created/verified automatically at boot (`initializeDatabase`); first-run
+> data seeding is handled by the setup CLI (`npm run setup` at the repo root), not a backend
+> script. Driver migration is the root `npm run migrate` (`setup/index.js --migrate`).
 
 > `strict` is **on**. Two sub-flags are deliberately staged: `noImplicitAny` (the remaining
 > implicit-any parameters, being annotated with real types incrementally) and
