@@ -185,43 +185,68 @@ if (cluster.isPrimary) {
     // Health Checks
     setInterval(async () => {
         let changed = false;
-        for (const [route, group] of registry.entries()) {
-            for (const url of Array.from(group.targets)) {
-                try {
-                    const start = Date.now();
-                    const isHttps = url.startsWith('https:');
-                    await axios.get(`${url}/health`, {
-                        timeout: 5000,
-                        httpsAgent: isHttps ? healthAgent : null,
-                        validateStatus: (status) => status < 500 // Accept 4xx as "alive" if path missing
-                    });
-                    if (!group.metrics) group.metrics = new Map();
-                    group.metrics.set(url, { status: 'Healthy', latency: Date.now() - start, failCount: 0 });
-                } catch (e) {
-                    if (!group.metrics) group.metrics = new Map();
-                    const m = group.metrics.get(url) || { failCount: 0 };
-                    m.status = 'Failing';
-                    m.failCount++;
-                    m.lastError = e.message;
 
-                    // Log the first failure to help debugging
-                    if (m.failCount === 1) {
-                        logger.warn(`[Gateway] Health Check Failed for ${group.name} (${url}): ${e.message}`);
-                    }
+        // Dedupe identical target URLs across routes: probe each distinct URL over the network only
+        // once per sweep, sharing the in-flight axios promise.
+        const inflight = new Map();
+        const probeUrl = (url) => {
+            if (!inflight.has(url)) {
+                const start = Date.now();
+                const isHttps = url.startsWith('https:');
+                inflight.set(url, axios.get(`${url}/health`, {
+                    timeout: 5000,
+                    httpsAgent: isHttps ? healthAgent : null,
+                    validateStatus: (status) => status < 500 // Accept 4xx as "alive" if path missing
+                }).then(() => ({ ok: true, latency: Date.now() - start }),
+                        (e) => ({ ok: false, error: e })));
+            }
+            return inflight.get(url);
+        };
 
-                    group.metrics.set(url, m);
-                    if (m.failCount >= 3) {
-                        logger.error(`[Gateway] Service ${group.name} at ${url} EXPIRED. Removing.`);
-                        group.targets.delete(url);
-                        if (group.metrics) group.metrics.delete(url);
-                        // Mirror handleRegistration cleanup: drop the route if it has no targets left,
-                        // otherwise getTarget would compute final[index % 0] === final[NaN] === undefined.
-                        if (group.targets.size === 0) registry.delete(route);
-                        changed = true;
-                    }
+        // Probe a single (route, url) target. Updates group.metrics in place and flips the shared
+        // `changed` flag on ANY status transition (Healthy<->Failing) or on eviction, so workers are
+        // re-broadcast promptly and stop selecting a target that just started failing.
+        const checkOne = async (route, group, url) => {
+            if (!group.metrics) group.metrics = new Map();
+            const prevStatus = group.metrics.get(url)?.status;
+            const result = await probeUrl(url);
+            if (result.ok) {
+                group.metrics.set(url, { status: 'Healthy', latency: result.latency, failCount: 0 });
+                if (prevStatus && prevStatus !== 'Healthy') changed = true;
+            } else {
+                const e = result.error;
+                const m = group.metrics.get(url) || { failCount: 0 };
+                m.status = 'Failing';
+                m.failCount++;
+                m.lastError = e.message;
+
+                // Log the first failure to help debugging
+                if (m.failCount === 1) {
+                    logger.warn(`[Gateway] Health Check Failed for ${group.name} (${url}): ${e.message}`);
+                }
+
+                group.metrics.set(url, m);
+                if (prevStatus !== 'Failing') changed = true;
+                if (m.failCount >= 3) {
+                    logger.error(`[Gateway] Service ${group.name} at ${url} EXPIRED. Removing.`);
+                    group.targets.delete(url);
+                    if (group.metrics) group.metrics.delete(url);
+                    // Mirror handleRegistration cleanup: drop the route if it has no targets left,
+                    // otherwise getTarget would compute final[index % 0] === final[NaN] === undefined.
+                    if (group.targets.size === 0) registry.delete(route);
+                    changed = true;
                 }
             }
-        }
+        };
+
+        // Run all probes CONCURRENTLY so the sweep takes ~one timeout instead of the sum of them.
+        // metrics are per-group, so every (route, url) pair must be checked — but a given URL is only
+        // probed over the network once per sweep: checkOne reuses the in-flight axios promise per URL.
+        const probes = [...registry.entries()].flatMap(([route, group]) =>
+            Array.from(group.targets).map(url => checkOne(route, group, url))
+        );
+        await Promise.all(probes);
+
         if (changed) { saveRegistry(); broadcastRegistry(); }
     }, 30000);
 
@@ -460,7 +485,7 @@ if (cluster.isPrimary) {
         try {
             if (fs.existsSync(REGISTRY_FILE)) {
                 const data = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8'));
-                workerRegistry = new Map(Object.entries(data).map(([k, v]) => [k, { ...v, targets: new Set(v.targets), index: 0 }]));
+                workerRegistry = new Map(Object.entries(data).map(([k, v]) => [k, { ...v, targets: new Set(v.targets), index: workerRegistry.get(k)?.index ?? 0 }]));
             }
         } catch (e) {
             console.error('[Gateway Worker] Failed to load worker registry:', e.message);
@@ -469,7 +494,7 @@ if (cluster.isPrimary) {
 
     process.on('message', (message) => {
         if (message.type === 'REGISTRY_UPDATE') {
-            workerRegistry = new Map(Object.entries(message.registry).map(([k, v]) => [k, { ...v, targets: new Set(v.targets), index: 0 }]));
+            workerRegistry = new Map(Object.entries(message.registry).map(([k, v]) => [k, { ...v, targets: new Set(v.targets), index: workerRegistry.get(k)?.index ?? 0 }]));
         }
     });
 
@@ -650,8 +675,12 @@ if (cluster.isPrimary) {
     server.on('upgrade', (req, socket, head) => {
         const target = getTarget(req.url);
         if (target) {
-            proxy.ws(req, socket, head, { target, agent: proxyAgent }, (err) => {
-                logger.error(`[Gateway] WebSocket Error [${target}]: ${err.message}`);
+            const isHttps = target.startsWith('https:');
+            proxy.ws(req, socket, head, { target, agent: isHttps ? proxyAgent : null, secure: false }, (err) => {
+                // Skip benign client-close noise (ECONNRESET/EPIPE), like the HTTP/SSE path; guard err deref.
+                if (err && err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
+                    logger.error(`[Gateway] WebSocket Error [${target}]: ${err && err.message}`);
+                }
                 socket.destroy();
             });
         } else {
