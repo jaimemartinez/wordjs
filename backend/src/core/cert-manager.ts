@@ -358,49 +358,6 @@ class CertManager {
     }
 
     /**
-     * Complete Challenge & Finalize
-     */
-    async finalize(orderUrl, challenge, authz) {
-        // 1. Verify Challenge
-        await this.client.verifyChallenge(authz, challenge);
-
-        // 2. Wait for Valid Status using the challenge struct
-        // Library helper: completeChallenge? 
-        // Actually `verifyChallenge` instructs ACME to verify. We then poll `waitForValidStatus`.
-        await this.client.completeChallenge(challenge);
-        await this.client.waitForValidStatus(challenge);
-
-        // 3. Finalize Order (CSR)
-        const [key, csr] = await acme.forge.createCsr({
-            commonName: authz.identifier.value,
-        });
-
-        // We might need to reload order to get latest object?
-        // acme-client's finalized function usually takes the order object.
-        // Let's re-fetch order if possible using URL? 
-        // Actually `client.finalizeOrder` takes the order object.
-        // We'll trust the user passed logic or we just re-get it if needed? 
-        // Simplifying: We rely on the `order` object being mostly just needed for its URL/finalize endpoint.
-        // But `client.finalizeOrder` expects the order object. 
-        // Just passing { url: orderUrl } might work if lib allows, otherwise we should persist full order?
-        // For now let's assume valid order object is reconstructed or kept in memory (Plugin Context would lose it).
-        // Better: re-fetch order by URL? Lib doesn't expose `getOrder(url)` explicitly easily.
-        // We will Require the frontend to pass the relevant Order Details back or we store in DB? 
-        // Storing in a robust way is best. But for this MVP, we can keep it in memory for the session? 
-        // No, User might close tab. 
-        // Let's assume passed `order` is sufficient.
-
-        // Wait, `createOrder` returns an object. We can serialize it to frontend and pass it back.
-
-        // NOTE: `finalizeOrder` requires the Order Object.
-        // We will perform a trick: create a dummy order object with the URL if the lib allows, or we just try.
-        // Actually, safer to just re-create a "fresh" order for the same domain? No, that makes a NEW flow.
-        // Correct Approach: The library `client.getAuthorizations` takes an order. 
-        // So likely `client.finalizeOrder` needs the order. 
-        // Let's rely on serialization.
-    }
-
-    /**
      * Install Custom Certificate
      * @param {string} keyContent Content of Private Key
      * @param {string} certContent Content of Certificate

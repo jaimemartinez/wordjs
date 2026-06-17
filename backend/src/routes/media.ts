@@ -146,7 +146,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
     });
 
-    const total = await Media.count();
+    const total = await Media.count({ search });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);

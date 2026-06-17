@@ -199,6 +199,15 @@ router.put('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const menuId = parseInt(req.params.id, 10);
     const { name, slug, description } = req.body;
 
+    const existing = await Menu.findById(menuId);
+    if (!existing) {
+        return res.status(404).json({
+            code: 'rest_menu_invalid',
+            message: 'Menu not found.',
+            data: { status: 404 }
+        });
+    }
+
     const menu = await Menu.update(menuId, { name, slug, description });
     res.json(menu.toJSON());
 }));
@@ -322,6 +331,16 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req, res) =
  */
 router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const itemId = parseInt(req.params.itemId, 10);
+
+    const existing = await MenuItem.findById(itemId);
+    if (!existing) {
+        return res.status(404).json({
+            code: 'rest_menu_item_invalid',
+            message: 'Menu item not found.',
+            data: { status: 404 }
+        });
+    }
+
     const item = await MenuItem.update(itemId, req.body);
     res.json(item.toJSON());
 }));

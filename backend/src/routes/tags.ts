@@ -58,10 +58,14 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         limit,
         offset,
         orderBy: orderby,
-        order: order.toUpperCase()
+        order: ['asc', 'desc'].includes(String(order).toLowerCase()) ? String(order).toUpperCase() : 'ASC'
     });
 
-    const total = await Term.count({ taxonomy: TAXONOMY, hideEmpty: hide_empty === 'true' });
+    const total = await Term.count({
+        taxonomy: TAXONOMY,
+        hideEmpty: hide_empty === 'true',
+        search
+    });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);

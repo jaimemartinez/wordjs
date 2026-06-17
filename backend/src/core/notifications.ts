@@ -196,8 +196,8 @@ class NotificationService {
      */
     async getNotifications(userId, limit = 50) {
         const unread = await dbAsync.all(
-            'SELECT * FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC',
-            [userId]
+            'SELECT * FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT ?',
+            [userId, limit]
         );
 
         const read = await dbAsync.all(

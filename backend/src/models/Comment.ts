@@ -256,7 +256,7 @@ class Comment {
      * Count comments
      */
     static async count(options: any = {}) {
-        const { postId, status, type = 'comment' } = options;
+        const { postId, status, parent, type = 'comment', search } = options;
 
         let sql = 'SELECT COUNT(*) as count FROM comments';
         const conditions: string[] = [];
@@ -272,9 +272,20 @@ class Comment {
             params.push(status);
         }
 
+        if (parent !== undefined) {
+            conditions.push('comment_parent = ?');
+            params.push(parent);
+        }
+
         if (type) {
             conditions.push('comment_type = ?');
             params.push(type);
+        }
+
+        if (search) {
+            conditions.push('(comment_author LIKE ? OR comment_content LIKE ? OR comment_author_email LIKE ?)');
+            const searchTerm = `%${search}%`;
+            params.push(searchTerm, searchTerm, searchTerm);
         }
 
         if (conditions.length > 0) {
@@ -363,8 +374,16 @@ class Comment {
         }
 
         if (data.status !== undefined) {
+            // Whitelist the stored comment_approved values. Unknown statuses would
+            // be counted as "approved" in getCounts() and drift the root total, so
+            // reject anything outside the known set.
+            const ALLOWED_STATUSES = ['1', '0', 'spam', 'trash'];
+            const status = String(data.status);
+            if (!ALLOWED_STATUSES.includes(status)) {
+                throw new Error(`Invalid comment status: ${data.status}`);
+            }
             updates.push('comment_approved = ?');
-            values.push(data.status);
+            values.push(status);
         }
 
         if (updates.length > 0) {
@@ -447,29 +466,36 @@ class Comment {
         const comment = await Comment.findById(commentId);
         if (!comment) return null;
 
-        const replies = await Comment.findAll({ parent: commentId });
+        // Fetch ALL comments for the post in ONE query, then assemble the tree in JS.
+        // This removes the per-reply N+1 and the old 2-level depth cap (arbitrary depth now).
+        const all = await Comment.findAll({
+            postId: comment.commentPostId,
+            limit: Number.MAX_SAFE_INTEGER,
+            order: 'ASC'
+        });
 
-        // Recursive fetch
-        const repliesWithChildren = await Promise.all(replies.map(async reply => {
-            // Note: inefficient recursion for deep threads, but simple for now
-            // To do: simpler recursion logic or just level 2?
-            // This replicates original logic but async
-            const children = await Comment.findAll({ parent: reply.commentId });
-            return {
-                ...reply.toJSON(),
-                replies: children.map(c => c.toJSON()) // Only one level deep in original code?
-                // Original: replies: Comment.findAll({ parent: commentId }).map(reply => ({
-                //    ...reply.toJSON(),
-                //    replies: Comment.findAll({ parent: reply.commentId }).map(r => r.toJSON())
-                // }))
-                // Yes, only 2 levels.
-            };
-        }));
+        // Build a node per comment (its toJSON + an empty replies array) and index by id.
+        const rootId = String(comment.commentId);
+        const nodeById: { [id: string]: any } = {};
+        for (const c of all) {
+            nodeById[String(c.commentId)] = { ...c.toJSON(), replies: [] };
+        }
+        // Ensure the root is present even if findAll filtered it out (e.g. status filter).
+        if (!nodeById[rootId]) {
+            nodeById[rootId] = { ...comment.toJSON(), replies: [] };
+        }
 
-        return {
-            ...comment.toJSON(),
-            replies: repliesWithChildren
-        };
+        // Link each child to its parent node (iterative; arbitrary depth).
+        for (const c of all) {
+            if (String(c.commentId) === rootId) continue; // root attaches to itself below
+            const parentId = c.commentParent != null ? String(c.commentParent) : null;
+            const parentNode = parentId ? nodeById[parentId] : null;
+            if (parentNode && parentId !== String(c.commentId)) {
+                parentNode.replies.push(nodeById[String(c.commentId)]);
+            }
+        }
+
+        return nodeById[rootId];
     }
 }
 

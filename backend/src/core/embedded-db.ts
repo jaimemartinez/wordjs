@@ -2,6 +2,9 @@ const path = require('path');
 const fs = require('fs');
 
 let pgServer: any = null;
+// Signal handlers must be registered ONCE, not on every startServer() call (which would leak a new
+// listener each restart and eventually warn/exceed the max-listeners limit). stopServer is idempotent.
+let signalHandlersRegistered = false;
 
 const DATA_DIR = path.resolve('./data/postgres-embed/data');
 const PID_FILE = path.join(DATA_DIR, 'postmaster.pid');
@@ -47,9 +50,12 @@ async function startServer() {
         // 🔐 SINCRONIZACIÓN AUTOMÁTICA
         await synchronizePassword(config.db.password);
 
-        // Handle graceful shutdown
-        process.on('SIGTERM', stopServer);
-        process.on('SIGINT', stopServer);
+        // Handle graceful shutdown (register once; stopServer is idempotent)
+        if (!signalHandlersRegistered) {
+            process.on('SIGTERM', stopServer);
+            process.on('SIGINT', stopServer);
+            signalHandlersRegistered = true;
+        }
 
         return true;
     } catch (e) {
@@ -101,19 +107,24 @@ async function synchronizePassword(targetPassword) {
 
                 // Switch to trust
                 if (fs.existsSync(HBA_FILE)) {
-                    let hba = fs.readFileSync(HBA_FILE, 'utf8');
-                    const originalHba = hba;
-                    hba = hba.replace(/password/g, 'trust').replace(/md5/g, 'trust');
-                    fs.writeFileSync(HBA_FILE, hba);
+                    const originalHba = fs.readFileSync(HBA_FILE, 'utf8');
+                    const trustHba = originalHba.replace(/password/g, 'trust').replace(/md5/g, 'trust');
 
-                    await pgServer.start();
-                    await trySync(undefined); // Connect without password
-                    await pgServer.stop();
-
-                    // Restore original HBA
-                    fs.writeFileSync(HBA_FILE, originalHba);
-                    await pgServer.start();
-                    console.log('✨ Embedded PG: Self-healing complete. Password synchronized securely.');
+                    // SECURITY: the 'trust' window must be closed even if a step inside it throws,
+                    // otherwise pg_hba.conf could be left in 'trust' permanently (any local connection
+                    // authenticates with no password). The finally always restores the original HBA and
+                    // brings the server back up with it.
+                    try {
+                        fs.writeFileSync(HBA_FILE, trustHba);
+                        await pgServer.start();
+                        await trySync(undefined); // Connect without password
+                        await pgServer.stop();
+                        console.log('✨ Embedded PG: Self-healing complete. Password synchronized securely.');
+                    } finally {
+                        // Restore original HBA, then restart with the restored (secure) HBA.
+                        fs.writeFileSync(HBA_FILE, originalHba);
+                        await pgServer.start();
+                    }
                 }
             } catch (recoveryErr) {
                 console.error('❌ Embedded PG: Self-healing failed:', recoveryErr.message);
