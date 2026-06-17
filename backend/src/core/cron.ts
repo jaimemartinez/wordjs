@@ -162,11 +162,14 @@ async function nextScheduled(hook, args = []) {
 async function runCron() {
     const now = Date.now();
     const events = await getOption('cron', {});
-    let updated = false;
 
     // Snapshot timestamps once so we don't iterate over reschedules created in this pass.
     const timestamps = Object.keys(events);
-    // Collect reschedules and apply them AFTER the loop to avoid mutating while iterating.
+    // Track the (timestamp,key) pairs we executed so we can delete them from the FRESH copy below,
+    // and collect reschedules to merge after the loop. We deliberately do NOT write back our stale
+    // in-memory `events`: a concurrent scheduleEvent() could land between our read and write and be
+    // lost. Instead we re-read fresh at the end and apply only our own deltas.
+    const executed: Array<{ timestamp: string; key: string }> = [];
     const reschedules: any[] = [];
 
     for (const timestamp of timestamps) {
@@ -189,33 +192,51 @@ async function runCron() {
                 console.error(`Cron error for ${event.hook}:`, error);
             }
 
-            // Reschedule if recurring (deferred until after the loop)
-            if (event.schedule && event.interval) {
-                const nextTime = now + event.interval;
-                reschedules.push({ nextTime: String(nextTime), key, event });
+            executed.push({ timestamp, key });
+
+            // Reschedule if recurring. Resolve the interval at RUN time from the live schedules map so
+            // custom schedules (registered via addSchedule after the event was stored) recur correctly.
+            if (event.schedule) {
+                const interval = schedules[event.schedule]?.interval;
+                if (interval) {
+                    const nextTime = now + interval;
+                    // Persist the resolved interval so downstream code relying on event.interval stays valid.
+                    reschedules.push({ nextTime: String(nextTime), key, event: { ...event, interval } });
+                } else if (event.schedule !== 'off') {
+                    // 'off' (interval 0) is intentionally non-recurring; anything else with an
+                    // unresolvable interval is a misconfiguration worth flagging.
+                    console.warn(`Cron: recurring event '${event.hook}' has schedule '${event.schedule}' but no resolvable interval — not rescheduled.`);
+                }
             }
-
-            // Remove executed event (or moved event)
-            delete events[timestamp][key];
-            updated = true;
-        }
-
-        if (Object.keys(events[timestamp]).length === 0) {
-            delete events[timestamp];
         }
     }
 
-    // Apply collected reschedules now that iteration is complete.
+    if (executed.length === 0 && reschedules.length === 0) {
+        return;
+    }
+
+    // Re-read a FRESH copy so concurrent scheduleEvent()/unscheduleEvent() writes aren't clobbered.
+    const fresh = await getOption('cron', {});
+
+    // Delete exactly the events we just executed.
+    for (const { timestamp, key } of executed) {
+        if (fresh[timestamp]) {
+            delete fresh[timestamp][key];
+            if (Object.keys(fresh[timestamp]).length === 0) {
+                delete fresh[timestamp];
+            }
+        }
+    }
+
+    // Merge our reschedules into the fresh copy.
     for (const { nextTime, key, event } of reschedules) {
-        if (!events[nextTime]) {
-            events[nextTime] = {};
+        if (!fresh[nextTime]) {
+            fresh[nextTime] = {};
         }
-        events[nextTime][key] = event;
+        fresh[nextTime][key] = event;
     }
 
-    if (updated) {
-        await updateOption('cron', events);
-    }
+    await updateOption('cron', fresh);
 }
 
 /**

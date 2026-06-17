@@ -235,11 +235,34 @@ class User {
 
         const rows = await dbAsync.all(sql, params);
 
-        const users = await Promise.all(rows.map(async row => {
-            const u = new User(row);
-            await u.loadMeta();
-            return u;
-        }));
+        const users = rows.map(row => new User(row));
+
+        // Batch-load meta in ONE query instead of loadMeta() per row (N+1).
+        const ids = users.map(u => u.id).filter(id => id != null);
+        if (ids.length > 0) {
+            const placeholders = ids.map(() => '?').join(',');
+            const metaRows = await dbAsync.all(
+                `SELECT user_id, meta_key, meta_value FROM user_meta WHERE user_id IN (${placeholders})`,
+                ids
+            );
+
+            // Group meta by user_id (mirrors loadMeta()'s per-user shape).
+            const metaByUser: { [id: string]: { [key: string]: any } } = {};
+            for (const mr of metaRows) {
+                if (!metaByUser[mr.user_id]) metaByUser[mr.user_id] = {};
+                metaByUser[mr.user_id][mr.meta_key] = mr.meta_value;
+            }
+
+            for (const u of users) {
+                const meta = metaByUser[u.id] || {};
+                u.meta = meta;
+                if (meta.role) u.role = meta.role;
+            }
+        } else {
+            for (const u of users) {
+                u.meta = {};
+            }
+        }
 
         return users;
     }

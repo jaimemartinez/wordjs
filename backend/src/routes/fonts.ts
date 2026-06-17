@@ -17,6 +17,15 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // Fonts directory
 const fontsDir = path.join(config.uploads.dir, 'fonts');
 
+// System fonts that are shown as "protected" in the listing and blocked from
+// deletion. Single source of truth so the GET classifier and DELETE guard
+// cannot diverge.
+const PROTECTED_FONTS = [
+    'oswald', 'roboto', 'lato', 'opensans', 'montserrat',
+    'poppins', 'lora', 'merriweather', 'playfairdisplay', 'nunito',
+    'raleway', 'kanit', 'ptserif'
+];
+
 // Ensure fonts directory exists
 if (!fs.existsSync(fontsDir)) {
     fs.mkdirSync(fontsDir, { recursive: true });
@@ -117,19 +126,13 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
                 // Normalize variant
                 if (!variant) variant = 'Regular';
 
-                const protectedFonts = [
-                    'oswald', 'roboto', 'lato', 'opensans', 'montserrat',
-                    'poppins', 'lora', 'playfairdisplay', 'nunito',
-                    'raleway', 'kanit'
-                ];
-
-                const isProtected = protectedFonts.some(p => file.toLowerCase().includes(p));
+                const isProtected = PROTECTED_FONTS.some(p => file.toLowerCase().includes(p));
 
                 // Fix: Ensure family consistency for protected fonts
                 let finalFamily = familyName;
                 if (isProtected) {
                     // Map filename parts to clean family names for specific system fonts if needed
-                    const pName = protectedFonts.find(p => file.toLowerCase().includes(p));
+                    const pName = PROTECTED_FONTS.find(p => file.toLowerCase().includes(p));
                     if (pName) {
                         // Capitalize first letter
                         finalFamily = pName.charAt(0).toUpperCase() + pName.slice(1);
@@ -192,13 +195,7 @@ router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(as
 
     if (fs.existsSync(filePath)) {
         // Check if font is protected
-        const protectedFonts = [
-            'oswald', 'roboto', 'lato', 'opensans', 'montserrat',
-            'poppins', 'merriweather', 'playfairdisplay', 'nunito',
-            'raleway', 'ptserif'
-        ];
-
-        if (protectedFonts.some(p => filename.toLowerCase().includes(p))) {
+        if (PROTECTED_FONTS.some(p => filename.toLowerCase().includes(p))) {
             return res.status(403).json({ error: 'System fonts cannot be deleted' });
         }
 

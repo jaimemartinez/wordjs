@@ -116,15 +116,16 @@ class Hooks {
     doActionSync(hook, ...args) {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
-        // SECURITY: run plugin callbacks inside their plugin context (like the async doAction)
-        // so the runtime sandbox applies. Previously sync hooks ran uncontexted = trusted.
-        const { runWithContext } = require('./plugin-context');
         for (const { callback, pluginSlug } of this.actions.get(hook)!) {
             if (pluginSlug) {
-                runWithContext(pluginSlug, () => callback(...args));
-            } else {
-                callback(...args);
+                // A plugin callback registered with a pluginSlug is an ISOLATE shim: it dispatches to a
+                // worker and returns a Promise. The sync path cannot await it, so running it here would
+                // either silently drop the result or, worse, partially apply it. Skip with a warning —
+                // callers needing plugin participation must use the async doAction().
+                console.warn(`[Hooks] doActionSync('${hook}'): skipping isolate plugin callback for '${pluginSlug}' (async-only; use doAction).`);
+                continue;
             }
+            callback(...args);
         }
     }
 
@@ -187,15 +188,16 @@ class Hooks {
     applyFiltersSync(hook, value, ...args) {
         this._emitMonitor('filter', hook, [value, ...args]);
         if (!this.filters.has(hook)) return value;
-        // SECURITY: run plugin filter callbacks inside their plugin context (like applyFilters).
-        const { runWithContext } = require('./plugin-context');
         let result = value;
         for (const { callback, pluginSlug } of this.filters.get(hook)!) {
             if (pluginSlug) {
-                result = runWithContext(pluginSlug, () => callback(result, ...args));
-            } else {
-                result = callback(result, ...args);
+                // Isolate shim: returns a Promise the sync path can't await. Assigning it to `result`
+                // would corrupt the value (a Promise, not the filtered value). Skip with a warning;
+                // sync filters only honor core (non-plugin) callbacks. Use applyFilters() for plugins.
+                console.warn(`[Hooks] applyFiltersSync('${hook}'): skipping isolate plugin callback for '${pluginSlug}' (async-only; use applyFilters).`);
+                continue;
             }
+            result = callback(result, ...args);
         }
         return result;
     }
@@ -209,10 +211,10 @@ class Hooks {
     }
 
     /**
-     * Get number of times action has been fired
-     * Equivalent to did_action() - simplified version
+     * Get the number of callbacks currently registered for an action hook.
+     * NOTE: this is the registered-handler count, NOT a "times fired" counter (no such counter exists).
      */
-    getActionCount(hook) {
+    getActionHandlerCount(hook) {
         return this.actions.has(hook) ? this.actions.get(hook)!.length : 0;
     }
     /**

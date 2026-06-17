@@ -35,6 +35,12 @@ class Post {
     // Optional pre-loaded meta (set by hydrateRelations to avoid N+1 in toJSON).
     // When undefined, toJSON falls back to a per-post DB query (identical behavior).
     _metaCache?: { [key: string]: any };
+    // Optional pre-loaded featured image (set by hydrateRelations to avoid the
+    // per-post findById + _wp_attached_file lookups in getFeaturedImage()/toJSON()).
+    // When undefined, those methods fall back to per-post queries (identical behavior).
+    // Shape: { post: Post|null, attachedFile: string|null } — null `post` means
+    // "resolved, no featured image".
+    _featuredImageCache?: { post: any; attachedFile: any } | undefined;
 
     constructor(data) {
         this.id = data.id;
@@ -119,6 +125,10 @@ class Post {
      * Get featured image
      */
     async getFeaturedImage() {
+        // Prefer pre-loaded featured image (hydrateRelations) to avoid an extra per-post query.
+        if (this._featuredImageCache !== undefined) {
+            return this._featuredImageCache.post;
+        }
         // Prefer pre-loaded meta (hydrateRelations) to avoid an extra per-post query.
         const thumbnailId = (this._metaCache !== undefined && '_thumbnail_id' in this._metaCache)
             ? this._metaCache['_thumbnail_id']
@@ -165,7 +175,10 @@ class Post {
             // Dynamic URL for featured image
             // We need to fetch the file path meta to construct it safely
             // Circular dependency risk if we require Media here, so we do it manually or assume standard path
-            const attachedFile = await Post.getMeta(featuredImage.id, '_wp_attached_file');
+            // Prefer the pre-loaded attached file (hydrateRelations) to avoid a per-post query.
+            const attachedFile = (this._featuredImageCache !== undefined)
+                ? this._featuredImageCache.attachedFile
+                : await Post.getMeta(featuredImage.id, '_wp_attached_file');
             let dynamicUrl = featuredImage.guid;
 
             if (attachedFile) {
@@ -373,32 +386,32 @@ class Post {
     }
 
     /**
-     * Query posts
-     * Equivalent to WP_Query
+     * Build the shared WHERE clause used by BOTH findAll() and count() so the two
+     * can never drift. Returns { joins, conditions, params }. The `alias` param
+     * controls column prefixing: pass 'p' when querying `posts p` (findAll), or ''
+     * for bare columns (count). The metaKey JOIN is only emitted when an alias is
+     * supplied (count() does not select rows, so it needs no meta join).
      */
-    static async findAll(options: any = {}) {
+    static buildWhere(options: any = {}, alias = 'p') {
         const {
             type = 'post',
             status = 'publish',
             author,
             search,
             parent,
-            limit = 10,
-            offset = 0,
-            orderBy = 'post_date',
-            order = 'DESC',
             includeStatuses = null,
             metaKey,
             metaValue
         } = options;
 
-        let sql = 'SELECT p.* FROM posts p';
+        const col = alias ? `${alias}.` : '';
+        const joins: string[] = [];
         const conditions: string[] = [];
         const params: any[] = [];
 
-        // Meta query join
-        if (metaKey) {
-            sql += ' JOIN post_meta pm ON p.id = pm.post_id';
+        // Meta query join (only meaningful when selecting rows via an alias)
+        if (metaKey && alias) {
+            joins.push(`JOIN post_meta pm ON ${alias}.id = pm.post_id`);
             conditions.push('pm.meta_key = ?');
             params.push(metaKey);
             if (metaValue !== undefined) {
@@ -410,45 +423,68 @@ class Post {
         // Post type
         if (type) {
             if (Array.isArray(type)) {
-                conditions.push(`p.post_type IN (${type.map(() => '?').join(',')})`);
+                conditions.push(`${col}post_type IN (${type.map(() => '?').join(',')})`);
                 params.push(...type);
             } else {
-                conditions.push('p.post_type = ?');
+                conditions.push(`${col}post_type = ?`);
                 params.push(type);
             }
         }
 
         // Post status
         if (includeStatuses) {
-            conditions.push(`p.post_status IN (${includeStatuses.map(() => '?').join(',')})`);
+            conditions.push(`${col}post_status IN (${includeStatuses.map(() => '?').join(',')})`);
             params.push(...includeStatuses);
         } else if (status) {
             if (Array.isArray(status)) {
-                conditions.push(`p.post_status IN (${status.map(() => '?').join(',')})`);
+                conditions.push(`${col}post_status IN (${status.map(() => '?').join(',')})`);
                 params.push(...status);
             } else {
-                conditions.push('p.post_status = ?');
+                conditions.push(`${col}post_status = ?`);
                 params.push(status);
             }
         }
 
         // Author
         if (author) {
-            conditions.push('p.author_id = ?');
+            conditions.push(`${col}author_id = ?`);
             params.push(author);
         }
 
         // Parent
         if (parent !== undefined) {
-            conditions.push('p.post_parent = ?');
+            conditions.push(`${col}post_parent = ?`);
             params.push(parent);
         }
 
         // Search
         if (search) {
-            conditions.push('(p.post_title LIKE ? OR p.post_content LIKE ?)');
+            conditions.push(`(${col}post_title LIKE ? OR ${col}post_content LIKE ?)`);
             const searchTerm = `%${search}%`;
             params.push(searchTerm, searchTerm);
+        }
+
+        return { joins, conditions, params };
+    }
+
+    /**
+     * Query posts
+     * Equivalent to WP_Query
+     */
+    static async findAll(options: any = {}) {
+        const {
+            limit = 10,
+            offset = 0,
+            orderBy = 'post_date',
+            order = 'DESC'
+        } = options;
+
+        let sql = 'SELECT p.* FROM posts p';
+
+        const { joins, conditions, params } = Post.buildWhere(options, 'p');
+
+        if (joins.length > 0) {
+            sql += ' ' + joins.join(' ');
         }
 
         if (conditions.length > 0) {
@@ -477,32 +513,11 @@ class Post {
      * Equivalent to wp_count_posts()
      */
     static async count(options: any = {}) {
-        const { type = 'post', status, author, search } = options;
-
+        // Reuse the exact same WHERE logic as findAll() so the two cannot drift.
+        // Use bare columns (no alias) since this is a single-table COUNT(*).
         let sql = 'SELECT COUNT(*) as count FROM posts';
-        const conditions: string[] = [];
-        const params: any[] = [];
 
-        if (type) {
-            conditions.push('post_type = ?');
-            params.push(type);
-        }
-
-        if (status) {
-            conditions.push('post_status = ?');
-            params.push(status);
-        }
-
-        if (author) {
-            conditions.push('author_id = ?');
-            params.push(author);
-        }
-
-        if (search) {
-            conditions.push('(post_title LIKE ? OR post_content LIKE ?)');
-            const searchTerm = `%${search}%`;
-            params.push(searchTerm, searchTerm);
-        }
+        const { conditions, params } = Post.buildWhere(options, '');
 
         if (conditions.length > 0) {
             sql += ' WHERE ' + conditions.join(' AND ');
@@ -794,6 +809,53 @@ class Post {
         for (const post of posts) {
             post._metaCache = metaById[post.id] || {};
         }
+
+        // Batch-hydrate featured images to eliminate the per-post N+1 in
+        // getFeaturedImage()/toJSON() (Post.findById + _wp_attached_file lookup each).
+        // Collect every distinct _thumbnail_id, fetch those attachment posts and
+        // their _wp_attached_file in two IN-queries, then stash per-post.
+        const thumbnailIds = [...new Set(
+            posts
+                .map(p => p._metaCache && p._metaCache['_thumbnail_id'])
+                .filter(id => id != null && id !== '')
+        )];
+
+        if (thumbnailIds.length > 0) {
+            const placeholders = thumbnailIds.map(() => '?').join(',');
+            const attachmentRows = await dbAsync.all(
+                `SELECT * FROM posts WHERE id IN (${placeholders})`,
+                thumbnailIds
+            );
+            const attachmentById = {};
+            for (const row of attachmentRows) {
+                attachmentById[row.id] = new Post(row);
+            }
+            // One IN-query for the attached-file meta of all attachments.
+            const attachmentMetaById = await Post.getAllMetaForIds(
+                attachmentRows.map(row => row.id)
+            );
+
+            for (const post of posts) {
+                const thumbnailId = post._metaCache && post._metaCache['_thumbnail_id'];
+                if (thumbnailId == null || thumbnailId === '') {
+                    // No featured image: cache the resolved "none" so getFeaturedImage skips DB.
+                    post._featuredImageCache = { post: null, attachedFile: null };
+                    continue;
+                }
+                const attachment = attachmentById[thumbnailId] || null;
+                const bucket = attachmentMetaById[thumbnailId] || {};
+                post._featuredImageCache = {
+                    post: attachment,
+                    attachedFile: bucket['_wp_attached_file'] != null ? bucket['_wp_attached_file'] : null
+                };
+            }
+        } else {
+            // No posts have a thumbnail: mark all as resolved-none to avoid per-post queries.
+            for (const post of posts) {
+                post._featuredImageCache = { post: null, attachedFile: null };
+            }
+        }
+
         return posts;
     }
 

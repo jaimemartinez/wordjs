@@ -240,6 +240,12 @@ function installRuntimeBlameHandlers() {
     process.on('unhandledRejection', (reason, promise) => {
         console.error('💥 Unhandled Rejection:', reason);
 
+        // ATTRIBUTION CAVEAT: a non-Error rejection (a thrown string, number, or plain object) carries
+        // NO stack from the original throw site. We synthesize an Error here, but its stack points at
+        // THIS handler (crash-guard), not at the plugin that rejected. extractPluginFromStack will then
+        // find no plugin frame and we cannot assign blame. So absence of blame here does NOT imply the
+        // fault was in core — it may be an unattributable plugin rejection. Plugins should reject with
+        // real Error objects to be blamed correctly.
         const error = reason instanceof Error ? reason : new Error(String(reason));
         const slug = extractPluginFromStack(error.stack);
 

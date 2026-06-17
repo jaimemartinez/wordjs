@@ -83,18 +83,23 @@ class Media {
             status: 'inherit'
         });
 
-        // Parallel format
-        return await Promise.all(posts.map(post => Media.formatAttachment(post)));
+        // Bulk-hydrate all post meta in ONE query, then format from each bucket
+        // (avoids 3 getMeta queries per attachment).
+        const metaById = await Post.getAllMetaForIds(posts.map(p => p.id));
+        return await Promise.all(posts.map(post => Media.formatAttachment(post, metaById[post.id] || {})));
     }
 
     /**
      * Format attachment post to media object
      */
-    static async formatAttachment(post) {
-        // Parallel meta fetch if possible, but getMeta is simple
-        const metadata = (await Post.getMeta(post.id, '_wp_attachment_metadata')) || {};
-        const attachedFile = (await Post.getMeta(post.id, '_wp_attached_file')) || '';
-        const alt = (await Post.getMeta(post.id, '_wp_attachment_image_alt')) || '';
+    static async formatAttachment(post, meta = null) {
+        // Read all three keys from ONE meta bucket. For list paths the caller passes
+        // a pre-hydrated bucket (Post.getAllMetaForIds); for single lookups we fetch
+        // all of this post's meta once instead of three sequential getMeta() queries.
+        const allMeta = meta || (await Post.getAllMeta(post.id));
+        const metadata = allMeta['_wp_attachment_metadata'] || {};
+        const attachedFile = allMeta['_wp_attached_file'] || '';
+        const alt = allMeta['_wp_attachment_image_alt'] || '';
 
         // DYNAMIC URL RESOLUTION:
         // The 'guid' field stores a relative path (e.g., /uploads/image.jpg)
@@ -210,16 +215,23 @@ class Media {
             status: 'inherit'
         });
 
-        return await Promise.all(posts.map(post => Media.formatAttachment(post)));
+        // Bulk-hydrate all post meta in ONE query, then format from each bucket
+        // (avoids 3 getMeta queries per attachment).
+        const metaById = await Post.getAllMetaForIds(posts.map(p => p.id));
+        return await Promise.all(posts.map(post => Media.formatAttachment(post, metaById[post.id] || {})));
     }
 
     /**
      * Count media
      */
     static async count(options = {}) {
+        // Mirror Media.findAll's WHERE exactly (it forces status: 'inherit' AFTER the
+        // spread) so the pager total matches the listed rows. Without this, Post.count
+        // defaults status to 'publish' and undercounts inherit-status attachments.
         return await Post.count({
             ...options,
-            type: 'attachment'
+            type: 'attachment',
+            status: 'inherit'
         });
     }
 

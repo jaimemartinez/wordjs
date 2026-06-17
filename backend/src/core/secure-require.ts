@@ -570,11 +570,20 @@ function installSecureRequire() {
         EventEmitter.prototype[m] = function (event, listener) {
             const slug = emCtx.getCurrentPlugin();
             if (slug && typeof listener === 'function') {
-                let wrapped = (listener as any).__wordjsWrapped;
+                // PER-SLUG cache: the SAME listener function may be registered by different plugins (or
+                // by the same plugin under different ALS contexts). A single cached closure would bind
+                // every registration to the FIRST plugin's slug, leaking one plugin's context into
+                // another's listener. Key the wrapper by slug on a Map stored on the listener.
+                let cache: Map<string, any> = (listener as any).__wordjsWrappedBySlug;
+                if (!cache) {
+                    cache = new Map();
+                    try { Object.defineProperty(listener, '__wordjsWrappedBySlug', { value: cache, configurable: true, enumerable: false }); }
+                    catch (e) { return orig.call(this, event, listener); }
+                }
+                let wrapped = cache.get(slug);
                 if (!wrapped) {
                     wrapped = function (this: any, ...a: any[]) { return emCtx.runWithContext(slug, () => listener.apply(this, a)); };
-                    try { Object.defineProperty(listener, '__wordjsWrapped', { value: wrapped, configurable: true, enumerable: false }); }
-                    catch (e) { return orig.call(this, event, listener); }
+                    cache.set(slug, wrapped);
                 }
                 return orig.call(this, event, wrapped);
             }
@@ -586,7 +595,14 @@ function installSecureRequire() {
         const orig = EventEmitter.prototype[m];
         if (typeof orig !== 'function') continue;
         EventEmitter.prototype[m] = function (event, listener) {
-            const w = listener && (listener as any).__wordjsWrapped;
+            const slug = emCtx.getCurrentPlugin();
+            const cache: Map<string, any> | undefined = listener && (listener as any).__wordjsWrappedBySlug;
+            // Prefer the wrapper for the CURRENT slug; fall back to the sole cached wrapper if there is
+            // exactly one (the common case where add and remove happen in the same plugin context).
+            let w: any;
+            if (cache) {
+                w = (slug && cache.get(slug)) || (cache.size === 1 ? cache.values().next().value : undefined);
+            }
             return orig.call(this, event, w || listener);
         };
     }

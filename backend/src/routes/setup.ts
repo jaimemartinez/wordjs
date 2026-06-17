@@ -105,10 +105,10 @@ router.post('/install', async (req, res) => {
 
             // Update options in DB
             const { updateOption } = require('../core/options');
-            updateOption('blogname', siteName);
-            updateOption('blogdescription', siteDescription);
-            updateOption('siteurl', siteUrl);
-            updateOption('home', frontendUrl);
+            await updateOption('blogname', siteName);
+            await updateOption('blogdescription', siteDescription);
+            await updateOption('siteurl', siteUrl);
+            await updateOption('home', frontendUrl);
 
             // SECURITY: Generate mTLS Certificates
             console.log('🔐 Setup: Generating mTLS certificates...');
@@ -279,8 +279,8 @@ router.post('/migrate', async (req, res) => {
         if (saveConfig(newConfig)) {
             // Update DB options
             const { updateOption } = require('../core/options');
-            updateOption('siteurl', newConfig.siteUrl);
-            updateOption('home', newConfig.frontendUrl);
+            await updateOption('siteurl', newConfig.siteUrl);
+            await updateOption('home', newConfig.frontendUrl);
 
             // SECURITY: Regenerate mTLS Certificates for new domain
             console.log('🔐 Migration: Regenerating mTLS certificates for new domain...');
