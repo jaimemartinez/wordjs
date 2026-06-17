@@ -4,17 +4,35 @@ WordJS uses a **CSS Variable-based theming system** that allows complete visual 
 
 ## Theme Structure
 
-Each theme is located in `backend/themes/{theme-slug}/` and requires:
+Each theme is located in `backend/themes/{theme-slug}/`. A theme can be as simple as a single `style.css`, or include the full server-side template set:
 
 ```
 themes/
 ├── my-theme/
-│   ├── style.css       # Required: Main stylesheet
-│   ├── screenshot.png  # Optional: Theme preview (400x300px)
-│   └── theme.json      # Optional: Theme metadata
+│   ├── style.css         # Main stylesheet (the file the Next.js frontend loads)
+│   ├── theme.json        # Optional: Theme metadata (name, version, description, author)
+│   ├── functions.js      # Optional: Theme logic/hooks, loaded by the backend theme engine
+│   ├── templates/        # Optional: Handlebars page templates (index.html, single.html, archive.html)
+│   ├── partials/         # Optional: Shared Handlebars partials (header.html, footer.html)
+│   └── screenshot.png    # Optional: Theme preview (also .jpg/.webp); none shipped today
 ```
 
+> **Two rendering paths.** WordJS ships *both* a backend Handlebars template engine
+> (`backend/src/core/themes.ts` + `theme-engine`, which consumes `templates/`, `partials/`,
+> and `functions.js`) **and** the React/Puck public site under `frontend/src/app/(public)/`.
+> The Next.js public site is the primary renderer; it does **not** use a theme's Handlebars
+> templates. What it *does* consume is the active theme's **`style.css`**, injected as a
+> `<link>` tag by `ThemeLoader` (see "Activating a Theme" below). So for styling the live
+> Next.js site, only `style.css` (and its CSS variables) matters; `templates/`/`partials/`/
+> `functions.js` belong to the backend template engine.
+>
+> Theme metadata is parsed from `theme.json` by `parseThemeMetadata()`; missing fields fall
+> back to defaults (name = slug, version = `1.0.0`). A `screenshot.{png,jpg,webp}`, if present,
+> is auto-detected and exposed in the theme picker.
+
 ## Available Themes
+
+There are **9 shipped themes**:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
@@ -26,6 +44,13 @@ themes/
 | **midnight-luxury** | Dark Premium       | Gold accents, serif fonts, elegant          |
 | **aurora-gradient** | Mesh Gradient      | Flowing gradients, purple/cyan/magenta      |
 | **neon-pulse**      | Tech Noir          | Neon glow, dark mode, rose accents          |
+| **vidaParaTodos**   | Corporate          | Clean professional blue; full template set  |
+
+> **`--wjs-` variable adoption.** All themes except **default** are built on the `--wjs-*`
+> variable system documented below (each defines 38–88 `--wjs-` declarations). The **default**
+> theme predates that convention and uses a smaller, legacy set (`--primary`, `--text`, `--bg`,
+> `--border`, …) — copy a `--wjs-` theme (e.g. `aurora-gradient`) as a starting point rather
+> than `default` if you want full variable coverage.
 
 ## CSS Variables Reference
 
@@ -170,7 +195,15 @@ Add a `screenshot.png` (400x300px recommended) for the theme picker.
 
 1. Go to **Admin → Themes**
 2. Click **Activate** on the desired theme
-3. The frontend will reload with the new theme
+3. The frontend picks up the new theme on the next load (or when you refocus the public tab)
+
+Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`, which writes
+the `template` and `stylesheet` options and re-initializes the backend theme engine. On the
+public site, `frontend/src/components/public/ThemeLoader.tsx` polls `themesApi.list()`, finds the
+active theme, and injects `<link rel="stylesheet" href="/themes/{slug}/style.css?v=…">`
+(id `wjs-theme-stylesheet`). It re-checks on `window` `focus`, so switching the theme in one tab
+applies in an open public tab when you return to it. A cache-buster query string forces a fresh
+stylesheet fetch.
 
 ## Theme Previews in Admin
 

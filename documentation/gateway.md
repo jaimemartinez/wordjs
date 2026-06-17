@@ -1,6 +1,6 @@
 # WordJS Gateway Documentation
 
-The **WordJS Gateway** (`gateway.js`) is an enterprise-grade entry point for the application. It acts as a high-availability reverse proxy, service registry, and health monitor.
+The **WordJS Gateway** (`gateway/src/index.js`) is an enterprise-grade entry point for the application. It acts as a high-availability reverse proxy, service registry, and health monitor. It is started by `node gateway/src/index.js` (the root `npm start`/`npm run dev` launch it alongside the backend and frontend via `concurrently`).
 
 ## Key Features
 
@@ -23,25 +23,30 @@ The **WordJS Gateway** (`gateway.js`) is an enterprise-grade entry point for the
 
 ## Configuration
 
-The gateway loads configuration from `backend/wordjs-config.json`.
+The gateway loads configuration from **`gateway/gateway-config.json`** (its own config file, separate from the backend's `wordjs-config.json`). The setup orchestrator (`setup/index.js`) writes the matching secret/ports into both.
 
-*   **Port:** Defaults to `3000` (configurable via `gatewayPort` in config).
-*   **Secret:** Uses `gatewaySecret` from `wordjs-config.json` for service authentication. If no secret is configured, the gateway warns loudly at startup and falls back to a **PUBLIC default** that must be replaced before production. The secret is never written to logs, even when passed via query string.
-*   **Env Vars:** The Gateway does **not** read `.env` files. Configuration must be in the JSON file.
+*   **Port:** Public port defaults to `3000` (`gatewayPort`).
+*   **Internal port:** The private mTLS control server listens on `gatewayInternalPort` (default = public port **+ 100**, i.e. `3100`).
+*   **Secret:** `gatewaySecret` authenticates the public `/gateway-status` dashboard. If no secret is configured, the gateway warns loudly at startup and falls back to a **PUBLIC default** (`secure-your-gateway-secret`) that must be replaced before production. The secret is never written to logs, even when passed via query string.
+*   **SSL:** Optional `ssl` block (`{ enabled, key, cert }`); if `ssl` is on but no key/cert is supplied, the gateway auto-generates a self-signed cert (`ssl-auto.crt` / `ssl-auto.key`).
+*   **mTLS:** Optional `mtls` block (`{ ca, key, cert }`) for the internal cluster certificates.
+*   **Env Vars:** The Gateway loads `.env` via `dotenv`, but operational config (secret, ports, ssl, mtls) lives in the JSON file.
 
 ## Proxy Module
 
 The proxy and upstream-agent construction live in `gateway/src/proxy-config.js`, imported by both the gateway and its tests:
 
-*   **`createProxyServer()`** — builds the `http-proxy` server with `{ xfwd: true, changeOrigin: true }`. With `changeOrigin`, the upstream receives the target's Host, while the original client Host is preserved as `X-Forwarded-Host` (which the backend's migration guard reads first).
+*   **`createProxyServer()`** — builds the `http-proxy` server with `{ xfwd: true, changeOrigin: true }`. With `changeOrigin`, the upstream receives the target's Host, while the gateway pins the **original client Host** into `X-Forwarded-Host`. The backend's CSRF check reads `X-Forwarded-Host` and requires an **exact origin match** against the configured site URL.
 *   **`createUpstreamAgent({ ca, key, cert })`** — builds the mTLS agent described under Security. Both the worker proxy agent and the primary health-check agent use it, so no internal call uses `rejectUnauthorized: false`.
 
 ## Service Registration
 
-Services register themselves dynamically on startup.
+Services register themselves dynamically on startup over the **internal mTLS control server** (not a public route). The endpoint is mutual-TLS only and gated by the client-certificate CN allow-list:
 
-**Endpoint:** `POST /register`
+**Endpoint:** `POST /register` (on `gatewayInternalPort`, default `3100`), requires a client cert with CN `backend` or `frontend`.
 **Body:** `{ "name": "service-name", "url": "http://...", "routes": ["/prefix"] }`
+
+A companion `GET /info` (CN `backend`) returns gateway port, SSL status, site URL, and active-certificate metadata. Because registration is mTLS-only, an attacker on the public port cannot inject rogue upstreams.
 
 ## Monitoring
 
@@ -49,7 +54,9 @@ Access the real-time status dashboard at:
 `http://localhost:3000/gateway-status?secret=<YOUR_SECRET>`
 
 ## Architecture
-The Primary process manages the global registry, health checks, and atomic persistence (`gateway-registry.json`), while Worker processes handle the heavy lifting of proxying and WebSocket upgrades.
+The Primary process manages the global registry, health checks, atomic persistence (`gateway/gateway-registry.json`), and the internal mTLS control server, while Worker processes (one per CPU core) handle the heavy lifting of proxying and WebSocket upgrades.
+
+> **Known follow-up:** a strict Content-Security-Policy is currently **disabled** in the gateway's Helmet config and is a documented hardening item. Operators must also set a strong `gatewaySecret` and provide real cluster/mTLS certificates before production.
 
 ## Testing
 

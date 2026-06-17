@@ -15,17 +15,21 @@ The backend follows a layered architecture inspired by WordPress but implemented
     *   `RateLimit`: DoS protection (API, Auth, Uploads).
     *   `MigrationGuard`: Validates `Host` header against `siteUrl`.
 4.  **Security Layers:**
-    *   `AST Scanner`: Static analysis of plugin code before load.
-    *   `Runtime Proxies`: Protective layer around `process.env` and sensitive APIs.
-5.  **Routing:** `backend/src/routes/index.js` dispatches to controllers.
+    *   `AST Scanner`: Static analysis (acorn, fail-closed) of plugin code at install time.
+    *   `Worker Isolation`: Every plugin runs in a `worker_threads` isolate and reaches the host only through the permission-checked `wordjs` capability bridge. Two server-side trust tiers (untrusted/sandboxed vs operator-trusted) gate DB scope, secret options, route mounting, and outbound network. See `documentation/plugins.md` / `documentation/security.md`.
+5.  **Routing:** `backend/src/routes/index.ts` dispatches to controllers.
 6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
 7.  **Response:** JSON response sent back.
 
 ### 1.2 Database Abstraction
-WordJS uses `sql.js` (SQLite) for a file-based database, ideal for "Zero Config".
-*   **Location:** `backend/data/wordjs.db`
-*   **Connection:** `backend/src/config/database.js`
-*   **Querying:** Uses `better-sqlite3` style prepared statements (`db.prepare(...)`).
+WordJS loads a database **driver** behind a common interface (`backend/src/drivers/interface.ts`: `connect/get/all/run/exec/close`). Drivers are selected by `db.driver` (in `wordjs-config.json`) via the DB manager in `backend/src/config/database.ts`.
+*   **Default:** `sqlite-native` (file-based SQLite via `better-sqlite3`), ideal for "Zero Config". File: `backend/data/wordjs-native.db`.
+*   **Automatic fallback:** `sqlite-legacy` (pure-JS WASM `sql.js`, file `backend/data/wordjs.db`) — used only when a SQLite driver fails to load (e.g. the native binary is missing). It reads the same SQLite file format.
+*   **PostgreSQL:** `postgres` driver (the `pg` client). Embedded Postgres is **opt-in** via `db.embedded: true` (the old `db.port == 5433` heuristic is deprecated); `embedded-postgres` is an optional dependency.
+*   **Adding a driver:** implement `DatabaseDriverInterface` and add a block to the conformance suite (`backend/src/tests/driver-conformance.test.ts`).
+*   **Querying:** Uses `better-sqlite3`-style prepared statements (`db.prepare(...)`) on the sync path, with an async driver layer for Postgres/native.
+
+See `documentation/database.md` for the full driver/engine story (and `/api/v1/db-migration/*` below for switching engines at runtime).
 
 ---
 
@@ -37,13 +41,16 @@ Authentication is handled via **JWT (JSON Web Tokens)**.
 1.  **Login:** `POST /api/v1/auth/login`
     *   Input: `username` (or `email`), `password`.
     *   Validation: `bcrypt` comparison.
-    *   Output: `token` (JWT), `user` object.
+    *   Output: `{ user }`. The JWT is set as an **HttpOnly cookie** (`wordjs_token`) — it is **not** returned in the JSON body.
+    *   Lockout: too many failed attempts for an account return `429 rest_account_locked` (per-account login lockout).
 2.  **Token Usage:**
-    *   Header: `Authorization: Bearer <token>`
-    *   Lifecycle: Expiration defaults to 7 days (configurable in `.env`).
+    *   Primary: the `wordjs_token` HttpOnly cookie is sent automatically by the browser.
+    *   Also accepted: `Authorization: Bearer <token>` header.
+    *   Lifecycle: Expiration defaults to 7 days (configurable in `.env`). Refresh via `POST /auth/refresh` (re-issues the cookie).
+3.  **Revocation:** JWTs are revoked via a per-user `token_valid_after` security epoch. `POST /auth/logout` and a password change bump it, immediately invalidating previously issued tokens.
 
 ### 2.2 Permissions Middleware (RBAC)
-Located in `backend/src/middleware/permissions.js`.
+Located in `backend/src/middleware/permissions.ts` (and `auth.ts`).
 
 | Middleware        | Description                            | Usage Example                                                            |
 | :---------------- | :------------------------------------- | :----------------------------------------------------------------------- |
@@ -137,15 +144,16 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 
 ### 6.1 Core Modules
 - **Authentication**: `/auth` - Login, Register, Session management.
-- **Content**: `/posts`, `/media`, `/categories`, `/tags`, `/comments`.
+- **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
 - **Users**: `/users`, `/roles` - Role-Based Access Control.
-- **System**: `/settings`, `/plugins`, `/themes`, `/health`, `/seo`.
+- **System**: `/settings`, `/plugins`, `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/system/certs`.
 - **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
+- **Data**: `/export`, `/export/wxr`, `/import`, `/backups`, `/db-migration` (engine migration & embedded Postgres).
 
-### 6.2 Authentication Flow (JWT)
-1. **Login**: POST `/auth/login` -> Returns `token`.
-2. **Authorize**: Send header `Authorization: Bearer <token>`.
-3. **Session**: Token expires in 7 days (default). Refresh via `/auth/refresh`.
+### 6.2.1 Authentication Flow (JWT)
+1. **Login**: `POST /auth/login` -> sets the `wordjs_token` HttpOnly cookie and returns `{ user }`.
+2. **Authorize**: the cookie is sent automatically; an `Authorization: Bearer <token>` header is also accepted.
+3. **Session**: Token expires in 7 days (default). Refresh via `POST /auth/refresh`; `POST /auth/logout` clears the cookie and revokes the token (`token_valid_after`).
 
 ### 6.2 Content & Taxonomy
 | Method   | Endpoint            | Auth  | Description                                      |
@@ -162,19 +170,28 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`    | `/media`            | JWT   | List library items                               |
 | `POST`   | `/media`            | Admin | Upload a new media file                          |
 
+> **Pagination:** `GET /posts` returns `X-WP-Total` and `X-WP-TotalPages` response headers. These now reflect the **filtered** list: `Post.count()` shares a `buildWhere()` with `findAll` (and defaults `status` to `publish`), so the totals match the rows actually returned.
+
 ### 6.3 System & Extensions
 | Method | Endpoint                  | Auth  | Description                           |
 | :----- | :------------------------ | :---- | :------------------------------------ |
 | `GET`  | `/settings`               | No    | Get public site settings (name, desc) |
 | `PUT`  | `/settings`               | Admin | Update site settings                  |
-| `GET`  | `/plugins`                | Admin | List all installed plugins            |
-| `POST` | `/plugins/upload`         | Admin | Install a plugin from ZIP             |
-| `POST` | `/plugins/:slug/activate` | Admin | Activate a plugin                     |
-| `GET`  | `/themes`                 | Admin | List available themes                 |
-| `POST` | `/themes/:slug/activate`  | Admin | Change active theme                   |
-| `GET`  | `/setup/status`           | No    | Check if site is installed            |
-| `POST` | `/setup/install`          | No    | Run the installation wizard           |
-| `GET`  | `/export`                 | Admin | Download a database backup            |
+| `GET`  | `/plugins`                  | Admin | List all installed plugins                          |
+| `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install)  |
+| `POST` | `/plugins/:slug/activate`   | Admin | Activate a plugin                                   |
+| `POST` | `/plugins/:slug/deactivate` | Admin | Deactivate a plugin                                 |
+| `POST` | `/plugins/:slug/trust`      | Admin | Toggle the privileged "trusted" tier (`{ trusted }`); hot-reloads the worker. First-party defaults return `409` |
+| `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin                                  |
+| `GET`  | `/themes`                   | Admin | List available themes                               |
+| `POST` | `/themes/:slug/activate`    | Admin | Change active theme                                 |
+| `GET`  | `/setup/status`             | No    | Check if site is installed                          |
+| `POST` | `/setup/install`            | No    | Run the installation wizard                         |
+| `GET`  | `/export`                   | Admin | Download a logical site export (JSON)               |
+| `GET`  | `/export/wxr`               | Admin | Export as WordPress WXR (XML)                       |
+| `POST` | `/import`                   | Admin | Import a site from JSON (file upload or `data`)     |
+
+> **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.js`, distinct from the logical `/export` above.
 
 ### 6.4 Analytics System 📊
 | Method | Endpoint           | Auth  | Description                        |
@@ -196,6 +213,29 @@ Base path: `/api/v1/system/certs`
 | `POST` | `/dns-finish`     | Admin | Complete DNS-01 challenge and save cert     |
 | `POST` | `/upload-custom`  | Admin | Upload custom `.pem` files                  |
 
+### 6.6 Database Admin / Engine Migration 🗄️
+Base path: `/api/v1/db-migration`. This is **core infrastructure** (formerly the `db-migration` plugin, now `backend/src/core/db-admin/`) — it manages the DB lifecycle and migrates content between engines (e.g. SQLite ↔ PostgreSQL). All routes require `authenticate` + the `manage_options` capability.
+
+| Method | Endpoint             | Auth          | Description                                            |
+| :----- | :------------------- | :------------ | :---------------------------------------------------- |
+| `GET`  | `/status`            | manage_options | Migration status + detected legacy DB files          |
+| `POST` | `/migrate`           | manage_options | Migrate site content to the target engine            |
+| `POST` | `/cleanup`           | manage_options | Remove leftover legacy DB files after a migration    |
+| `GET`  | `/embedded/status`   | manage_options | Embedded PostgreSQL server status                    |
+| `POST` | `/embedded/install`  | manage_options | Install the embedded PostgreSQL binaries (opt-in)    |
+| `POST` | `/embedded/start`    | manage_options | Start the embedded PostgreSQL server                 |
+| `POST` | `/embedded/stop`     | manage_options | Stop the embedded PostgreSQL server                  |
+
+### 6.7 Revisions 📝
+Base path: `/api/v1/revisions`. All routes require `authenticate`. Access is gated **per parent post**: the post owner (with `edit_posts` for mutating actions) or a user with `edit_others_posts`.
+
+| Method   | Endpoint                    | Auth                | Description                          |
+| :------- | :-------------------------- | :------------------ | :----------------------------------- |
+| `GET`    | `/post/:postId`             | owner / edit_others | List a post's revisions (paginated)  |
+| `GET`    | `/:id`                      | owner / edit_others | Get a single revision                |
+| `POST`   | `/:id/restore`              | owner+edit / edit_others | Restore a revision              |
+| `DELETE` | `/:id`                      | owner+edit / edit_others | Delete a revision               |
+| `GET`    | `/compare/:id1/:id2`        | owner / edit_others | Diff two revisions (both must be readable) |
 
 ---
 
