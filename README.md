@@ -108,6 +108,32 @@ graph TD
 - **[Frontend](frontend/):** The public site and the Next.js admin interface (including the
   Puck visual builder).
 
+### Run modes (split or monolith)
+
+The same codebase runs two ways, **switchable at any time** — both modes share the same
+`backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`, secrets, and
+the same public origin (`https://localhost:3000`), so there is no migration to switch. They
+are mutually exclusive (both bind the public port).
+
+- **Split (default) — three processes:** the gateway + backend + frontend shown above, started
+  together by `npm run dev` / `npm start`. The gateway adds Node `cluster`, health-checks, and
+  load-balancing — best when you want to scale services independently.
+- **Monolith — one process, one port:** everything runs in a single Node process on `:3000`
+  via [`monolith.js`](monolith.js) (`npm run dev:mono`, or
+  `npm run build:mono && npm run start:mono`). The backend (with its isolated plugins) and the
+  Next.js frontend are mounted **in-process** (no loopback proxy, no cluster, no gateway
+  service-registration); the gateway's still-needed cross-cutting concerns (TLS, security
+  headers, compression, SEO rewrites) are handled locally. Simplest to deploy (one process
+  behind a single reverse proxy or a small VM/container).
+
+```mermaid
+graph LR
+    subgraph Monolith["Monolith — one process :3000"]
+        Next[Next.js handler] & API[Backend Express + isolated plugins]
+    end
+    U((User)) --> Monolith
+```
+
 ---
 
 ## 📚 Documentation
@@ -135,8 +161,9 @@ Guides live in [`documentation/`](documentation/):
 
 ## 🚀 Getting Started
 
-> Requires Node.js (>= 18). WordJS runs three services (gateway, backend, frontend); the
-> dev scripts start them together.
+> Requires Node.js (>= 18). WordJS can run as **three services** (gateway, backend, frontend)
+> or as a **single-process monolith** — see [Run modes](#run-modes-split-or-monolith). The
+> scripts below start everything together either way.
 
 1. **Install dependencies** (root + sub-packages):
    ```bash
@@ -145,8 +172,13 @@ Guides live in [`documentation/`](documentation/):
 
 2. **Run in development:**
    ```bash
-   npm run dev
+   npm run dev        # split: gateway + backend + frontend
+   # or, everything in one process on one port:
+   npm run dev:mono   # monolith
    ```
+
+   For production, use `npm start` (split) or `npm run build:mono && npm run start:mono`
+   (monolith).
 
 3. **Access the panels:**
    - **Public site:** `http://localhost:3000`
