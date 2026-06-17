@@ -46,6 +46,7 @@ let classifier = null;    // bayes classifier
 let saveBayes = null;     // persists the classifier
 let transporter = null;
 let smtpServer = null;
+let queueInterval = null;  // scheduled/retry queue timer id (cleared on deactivate)
 
 // === User lookups via raw SQL on the `users` table (replaces core models/User) ===
 // Normalize raw rows so the rest of the code can keep using .userEmail / .username / .displayName.
@@ -342,8 +343,27 @@ async function initSMTPServer() {
                     if (isSpam) console.log(`[Security] Bayesian Filter marked message as SPAM`);
 
                     // 4. Processing
-                    const toAddresses = Array.isArray(parsed.to.value) ? parsed.to.value : [parsed.to.value];
+                    // parsed.to/from may be missing (Bcc-only / From-less mail). Guard the deref
+                    // and fall back to the SMTP envelope so we don't silently drop the message.
+                    let toAddresses = [];
+                    const parsedTo = parsed.to?.value;
+                    if (Array.isArray(parsedTo)) toAddresses = parsedTo;
+                    else if (parsedTo) toAddresses = [parsedTo];
+
+                    if (toAddresses.length === 0) {
+                        const envelopeRcpt = session?.envelope?.rcptTo || [];
+                        toAddresses = envelopeRcpt
+                            .map(r => (r && r.address ? { address: r.address } : null))
+                            .filter(Boolean);
+                    }
+
+                    const fromAddr = parsed.from?.value?.[0]?.address
+                        || session?.envelope?.mailFrom?.address
+                        || '';
+                    const fromName = parsed.from?.value?.[0]?.name || '';
+
                     for (const addr of toAddresses) {
+                        if (!addr || !addr.address) continue;
                         const [recName, recDomain] = addr.address.split('@');
 
                         let user = await User.findByEmail(addr.address);
@@ -354,8 +374,8 @@ async function initSMTPServer() {
                         if (user || catchAllRaw === '1') {
                             await Email.create({
                                 messageId: parsed.messageId,
-                                fromAddress: parsed.from.value[0].address,
-                                fromName: parsed.from.value[0].name,
+                                fromAddress: fromAddr,
+                                fromName: fromName,
                                 toAddress: user ? user.userEmail : addr.address,
                                 subject: (isSpam ? '[SPAM] ' : '') + parsed.subject,
                                 bodyText: parsed.text,
@@ -373,7 +393,7 @@ async function initSMTPServer() {
                                     user_id: user.id,
                                     type: isSpam ? 'alert' : 'email',
                                     title: isSpam ? 'Spam Detected' : 'New Inbound Email',
-                                    message: `From ${parsed.from.text}: "${parsed.subject}"`,
+                                    message: `From ${parsed.from?.text || fromAddr}: "${parsed.subject}"`,
                                     action_url: `/admin/plugin/emails`,
                                     transports: ['db', 'sse']
                                 });
@@ -874,8 +894,10 @@ exports.init = async function (bridge) {
     await initSMTPServer();
 
     // === BACKGROUND TASKS ===
-    // Process Scheduled Emails every minute
-    setInterval(async () => {
+    // Process Scheduled Emails every minute.
+    // Guard against double-start (re-activate) leaking a second timer.
+    if (queueInterval) clearInterval(queueInterval);
+    queueInterval = setInterval(async () => {
         try {
             const pending = await Email.getPendingScheduled();
             if (pending.length > 0) console.log(`[MailServer] Processing ${pending.length} scheduled emails...`);
@@ -954,6 +976,18 @@ exports.init = async function (bridge) {
             }
         } catch (e) {
             console.error('[MailServer] Retry queue error:', e);
+        }
+
+        // Sweep expired outbound-rate-limit windows so _outboundUsage doesn't grow unbounded.
+        try {
+            const now = Date.now();
+            for (const [uid, usage] of _outboundUsage) {
+                if (now - usage.windowStart > OUTBOUND_WINDOW_MS) {
+                    _outboundUsage.delete(uid);
+                }
+            }
+        } catch (e) {
+            console.error('[MailServer] Outbound usage sweep error:', e);
         }
     }, 60 * 1000);
 
@@ -1459,5 +1493,6 @@ exports.init = async function (bridge) {
 
 exports.deactivate = function () {
     try { if (smtpServer) smtpServer.close(); } catch (e) { /* ignore */ }
+    if (queueInterval) { clearInterval(queueInterval); queueInterval = null; }
     console.log('Mail Server plugin deactivated');
 };

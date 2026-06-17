@@ -140,6 +140,19 @@ exports.init = async function (wordjs) {
             'FOREIGN KEY (conference_id) REFERENCES conferences(id) ON DELETE CASCADE'
         ]);
 
+        // Indexes for the most common filtered/joined lookups (hotels list, assignment, occupancy).
+        const createIndex = async (name, table, cols) => {
+            try {
+                await db.run(`CREATE INDEX IF NOT EXISTS ${name} ON ${table} (${cols})`);
+            } catch (e) {
+                // Ignore if index already exists / unsupported.
+            }
+        };
+        await createIndex('idx_conf_inscriptions_conference', 'conference_inscriptions', 'conference_id');
+        await createIndex('idx_conf_inscriptions_room', 'conference_inscriptions', 'room_id');
+        await createIndex('idx_conf_rooms_hotel', 'conference_rooms', 'hotel_id');
+        await createIndex('idx_conf_hotels_conference', 'conference_hotels', 'conference_id');
+
         // Migration: Add missing columns to existing tables
         // Compatible with both SQLite and PostgreSQL
         try {
@@ -343,13 +356,24 @@ exports.init = async function (wordjs) {
 
         try {
             const hotels = await db.all('SELECT * FROM conference_hotels WHERE conference_id = ? ORDER BY name', [conference_id]);
+
+            // Single joined query with a correlated occupancy subquery (mirrors runAssignment),
+            // then group rooms under their hotel in JS — avoids the per-hotel + per-room N+1.
+            const rooms = await db.all(`
+                SELECT r.*,
+                (SELECT COUNT(*) FROM conference_inscriptions i WHERE i.room_id = r.id) as occupied
+                FROM conference_rooms r
+                JOIN conference_hotels h ON r.hotel_id = h.id
+                WHERE h.conference_id = ?
+            `, [conference_id]);
+
+            const roomsByHotel = new Map();
+            for (const r of rooms) {
+                if (!roomsByHotel.has(r.hotel_id)) roomsByHotel.set(r.hotel_id, []);
+                roomsByHotel.get(r.hotel_id).push(r);
+            }
             for (const h of hotels) {
-                const rooms = await db.all('SELECT * FROM conference_rooms WHERE hotel_id = ?', [h.id]);
-                h.rooms = rooms;
-                for (const r of rooms) {
-                    const occupants = await db.get('SELECT COUNT(*) as count FROM conference_inscriptions WHERE room_id = ?', [r.id]);
-                    r.occupied = occupants.count;
-                }
+                h.rooms = roomsByHotel.get(h.id) || [];
             }
             res.json(hotels);
         } catch (e) { res.status(500).json({ error: e.message }); }
@@ -700,11 +724,22 @@ exports.init = async function (wordjs) {
                 }
             });
 
+            const exclusiveFields = rules.filter(r => r.type === 'exclusive').map(r => r.config);
+
             for (const val in groups) {
                 const group = groups[val];
                 const needed = group.length;
 
-                // Find room for the whole group
+                // A group can only share a room if ALL members agree on every exclusive field.
+                // Otherwise co-placing them would violate an exclusive rule for some member —
+                // skip the group here and let Pass 2 assign them individually.
+                const groupAgrees = exclusiveFields.every(field => {
+                    const first = getFieldValue(group[0], field);
+                    return group.every(m => getFieldValue(m, field) === first);
+                });
+                if (!groupAgrees) continue;
+
+                // All members agree, so checking against any member (group[0]) is valid for the whole group.
                 const targetRoom = rooms.find(r =>
                     (r.capacity - r.occupied) >= needed && matchesExclusiveRules(r, group[0])
                 );
