@@ -112,11 +112,29 @@ const cookieParser = require('cookie-parser');
 app.use(cookieParser());
 
 // Rate Limiters
+// Multi-node: when Redis is configured, back the limiters with a SHARED Redis store so the cap is
+// enforced across ALL nodes (otherwise the effective global limit is N× the configured value, e.g.
+// brute-force protection weakens with each replica). Falls back to the in-process MemoryStore when
+// Redis isn't configured (single node).
+function limiterStore(prefix: string): any {
+    try {
+        const cache = require('./core/cache');
+        const client = cache.getClient();
+        if (!client) return undefined;
+        const { RedisStore } = require('rate-limit-redis');
+        return new RedisStore({ sendCommand: (...args: any[]) => client.call(...args), prefix });
+    } catch (e: any) {
+        console.warn('[rate-limit] Redis store unavailable, using in-memory:', e && e.message);
+        return undefined;
+    }
+}
+
 const apiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 1000, // Limit each IP to 1000 requests per 15 mins
     standardHeaders: true,
     legacyHeaders: false,
+    store: limiterStore('rl:api:'),
     message: { error: 'Too many requests, please try again later.' }
 });
 
@@ -125,6 +143,7 @@ const authLimiter = rateLimit({
     max: 10, // Limit each IP to 10 login attempts per hour
     standardHeaders: true,
     legacyHeaders: false,
+    store: limiterStore('rl:auth:'),
     message: { error: 'Too many login attempts, please try again later.' }
 });
 
@@ -133,6 +152,7 @@ const uploadLimiter = rateLimit({
     max: 50, // Limit each IP to 50 uploads per hour
     standardHeaders: true,
     legacyHeaders: false,
+    store: limiterStore('rl:upload:'),
     message: { error: 'Too many file uploads, please try again later.' }
 });
 
@@ -141,6 +161,7 @@ const setupLimiter = rateLimit({
     max: 20, // tight cap on the PUBLIC install / test-db endpoints (pre-config, unauthenticated)
     standardHeaders: true,
     legacyHeaders: false,
+    store: limiterStore('rl:setup:'),
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
@@ -451,6 +472,11 @@ async function initialize() {
         const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
         await initDefaultCronEvents();
         startCron();
+
+        // Multi-node coherence: refresh in-process caches (roles) on cross-node option changes, and
+        // join the cluster notification bus so SSE pushes reach clients on any node. No-op w/o Redis.
+        require('./core/coherence').initCoherence();
+        require('./core/notifications').initClusterBus();
 
         // Expose Cron API to Plugins via global.wordjs
         global.wordjs = global.wordjs || {};
