@@ -1,0 +1,412 @@
+@import url('https://fonts.googleapis.com/css2?family=Lora:wght@400;500;600;700&family=Raleway:wght@300;400;500;600;700&display=swap');
+
+/* =========================================
+   THEME: SAGE CALM (Wellness / Nature)
+   Concept: Organic greens, airy spacing, soft
+   rounded surfaces, gentle shadows. Lora serif
+   headings paired with airy Raleway body.
+   Light mode. Standardized V2.
+   ========================================= */
+
+:root {
+  /* --- COLOR PALETTE: Organic Sage --- */
+  --wjs-color-primary: #3B7A57;
+  /* Sage Green */
+  --wjs-color-primary-dark: #2E6044;
+  /* Deep Forest Green */
+
+  /* --- COLOR SEMANTICS --- */
+  --wjs-bg-canvas: #F4F7F2;
+  /* Soft Sage Cream */
+  --wjs-bg-surface: #FFFFFF;
+
+  --wjs-color-text-main: #25302A;
+  /* Deep Forest */
+  --wjs-color-text-muted: #6E7F73;
+  /* Muted Sage Gray */
+
+  --wjs-border-subtle: #DCE6DA;
+  /* Soft Sage Border */
+
+  /* --- NAVIGATION CONFIG --- */
+  --wjs-nav-font-family: 'Raleway', -apple-system, sans-serif;
+  --wjs-nav-font-size: 0.9375rem;
+  --wjs-nav-font-weight: 500;
+  --wjs-nav-text-transform: none;
+  --wjs-nav-letter-spacing: 0.02em;
+
+  --wjs-nav-color: #25302A;
+  --wjs-nav-color-hover: #3B7A57;
+  /* Sage on Hover */
+  --wjs-nav-transition: color 0.25s ease;
+
+  --wjs-logo-color: #25302A;
+
+  /* --- FOOTER CONFIG --- */
+  --wjs-footer-bg: #25302A;
+  /* Deep Forest Footer */
+  --wjs-footer-text-heading: #F4F7F2;
+  --wjs-footer-text-body: #B5C2B5;
+  --wjs-footer-text-hover: #7FB08A;
+  --wjs-footer-icon-bg: #34423A;
+  --wjs-footer-icon-color: #F4F7F2;
+
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Raleway', -apple-system, BlinkMacSystemFont, sans-serif;
+
+  /* --- DESIGN TOKENS (internal) --- */
+  --wjs-radius-sm: 10px;
+  --wjs-radius-md: 14px;
+  --wjs-radius-lg: 16px;
+  --wjs-shadow-sm: 0 2px 10px rgba(37, 48, 42, 0.06);
+  --wjs-shadow-md: 0 4px 18px rgba(37, 48, 42, 0.08);
+  --wjs-shadow-lg: 0 10px 32px rgba(37, 48, 42, 0.12);
+}
+
+/* =========================================
+   VISUAL OVERRIDES
+   ========================================= */
+
+body {
+  background-color: var(--wjs-bg-canvas) !important;
+  color: var(--wjs-color-text-main) !important;
+  font-family: var(--wjs-font-family-base) !important;
+  font-weight: 400 !important;
+  line-height: 1.7;
+  letter-spacing: 0.005em;
+}
+
+/* Header: Airy translucent sage bar */
+header {
+  background-color: rgba(244, 247, 242, 0.92) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+  box-shadow: var(--wjs-shadow-sm) !important;
+}
+
+header[class*='fixed'] {
+  background-color: rgba(244, 247, 242, 0.82) !important;
+  backdrop-filter: saturate(140%) blur(12px) !important;
+  -webkit-backdrop-filter: saturate(140%) blur(12px) !important;
+}
+
+/* Logo: Calm serif wordmark */
+.wjs-header-logo {
+  color: var(--wjs-logo-color) !important;
+  font-family: 'Lora', Georgia, serif !important;
+  font-weight: 600 !important;
+  font-size: 1.4rem !important;
+  letter-spacing: -0.01em;
+}
+
+/* Nav Links: Soft, gentle hover */
+.wjs-header-nav a {
+  font-family: var(--wjs-nav-font-family) !important;
+  font-size: var(--wjs-nav-font-size) !important;
+  font-weight: var(--wjs-nav-font-weight) !important;
+  color: var(--wjs-nav-color) !important;
+  text-transform: var(--wjs-nav-text-transform) !important;
+  letter-spacing: var(--wjs-nav-letter-spacing) !important;
+  transition: var(--wjs-nav-transition) !important;
+  text-decoration: none !important;
+}
+
+.wjs-header-nav a:hover {
+  color: var(--wjs-nav-color-hover) !important;
+}
+
+.wjs-header-nav a:focus-visible {
+  outline: 2px solid var(--wjs-color-primary) !important;
+  outline-offset: 4px !important;
+  border-radius: 6px !important;
+}
+
+/* Content: Graceful serif headings */
+h1,
+h2,
+h3 {
+  font-family: 'Lora', Georgia, serif !important;
+  font-weight: 600 !important;
+  color: var(--wjs-color-text-main) !important;
+  letter-spacing: -0.01em;
+  line-height: 1.25 !important;
+}
+
+/* Cards: Soft rounded surface with gentle shadow */
+.wp-block-card,
+article {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  box-shadow: var(--wjs-shadow-md) !important;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease !important;
+}
+
+.wp-block-card:hover,
+article:hover {
+  box-shadow: var(--wjs-shadow-lg) !important;
+  border-color: var(--wjs-color-primary) !important;
+}
+
+/* Footer: Deep forest, restful */
+footer {
+  background-color: var(--wjs-footer-bg) !important;
+  color: var(--wjs-footer-text-body) !important;
+  border-top: none !important;
+}
+
+footer h3,
+footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
+  font-family: 'Lora', Georgia, serif !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.005em;
+}
+
+footer a {
+  color: var(--wjs-footer-text-body) !important;
+  text-decoration: none !important;
+  transition: color 0.25s ease !important;
+}
+
+footer a:hover {
+  color: var(--wjs-footer-text-hover) !important;
+}
+
+/* Icons: Soft rounded chips */
+footer .w-10 {
+  background-color: var(--wjs-footer-icon-bg) !important;
+  color: var(--wjs-footer-icon-color) !important;
+  border-radius: var(--wjs-radius-md) !important;
+  transition: background-color 0.25s ease !important;
+}
+
+footer .w-10:hover {
+  background-color: var(--wjs-color-primary) !important;
+}
+
+/* =========================================
+   SAGE CALM: COMPONENT OVERRIDES
+   Wellness / Organic / Soft-rounded aesthetic
+   ========================================= */
+
+/* Accordion: Soft pillowed panels */
+.wp-block-accordion {
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  overflow: hidden !important;
+  box-shadow: var(--wjs-shadow-sm) !important;
+}
+
+.wp-block-accordion .accordion-item button {
+  background: var(--wjs-bg-surface) !important;
+  color: var(--wjs-color-text-main) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+  font-family: 'Raleway', sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+  transition: color 0.25s ease, background-color 0.25s ease !important;
+}
+
+.wp-block-accordion .accordion-item button:hover {
+  color: var(--wjs-color-primary) !important;
+  background: #F4F7F2 !important;
+}
+
+.wp-block-accordion .accordion-item button:focus-visible {
+  outline: 2px solid var(--wjs-color-primary) !important;
+  outline-offset: -2px !important;
+}
+
+.wp-block-accordion .accordion-item>div {
+  background: #FBFCFA !important;
+  color: var(--wjs-color-text-muted) !important;
+}
+
+/* Tabs: Gentle underline tabs */
+.wp-block-tabs>div:first-child {
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+}
+
+.wp-block-tabs button {
+  color: var(--wjs-color-text-muted) !important;
+  font-family: 'Raleway', sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+  border-radius: var(--wjs-radius-sm) var(--wjs-radius-sm) 0 0 !important;
+  transition: color 0.25s ease !important;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  color: var(--wjs-color-primary) !important;
+}
+
+.wp-block-tabs button:focus-visible {
+  outline: 2px solid var(--wjs-color-primary) !important;
+  outline-offset: 2px !important;
+}
+
+.wp-block-tabs>div:last-child {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-top: none !important;
+  border-radius: 0 0 var(--wjs-radius-lg) var(--wjs-radius-lg) !important;
+}
+
+/* Video: Soft framed embed */
+.wp-block-video-embed {
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  overflow: hidden !important;
+  box-shadow: var(--wjs-shadow-md) !important;
+}
+
+/* Audio: Calm player surface */
+.wp-block-audio-player {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  box-shadow: var(--wjs-shadow-sm) !important;
+}
+
+/* Pricing: Soft rounded cards */
+.wp-block-pricing>div {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  box-shadow: var(--wjs-shadow-md) !important;
+  transition: box-shadow 0.3s ease !important;
+}
+
+.wp-block-pricing>div:hover {
+  box-shadow: var(--wjs-shadow-lg) !important;
+}
+
+.wp-block-pricing>div h3 {
+  font-family: 'Lora', Georgia, serif !important;
+  letter-spacing: 0.005em;
+}
+
+/* Highlighted plan: Sage-filled, no layout shift */
+.wp-block-pricing>div[style*="scale(1.05)"] {
+  background: var(--wjs-color-primary) !important;
+  color: #F4F7F2 !important;
+  border: 1px solid var(--wjs-color-primary-dark) !important;
+  box-shadow: var(--wjs-shadow-lg) !important;
+}
+
+.wp-block-pricing>div[style*="scale(1.05)"] h3 {
+  color: #FFFFFF !important;
+}
+
+/* Testimonial: Quiet quote card */
+.wp-block-testimonial {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-left: 4px solid var(--wjs-color-primary) !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  box-shadow: var(--wjs-shadow-md) !important;
+}
+
+.wp-block-testimonial>div:first-child {
+  color: var(--wjs-color-primary) !important;
+  font-family: 'Lora', Georgia, serif !important;
+}
+
+/* CTA Banner: Sage gradient block */
+.wp-block-cta-banner {
+  background: linear-gradient(135deg, var(--wjs-color-primary) 0%, var(--wjs-color-primary-dark) 100%) !important;
+  border: none !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  box-shadow: var(--wjs-shadow-md) !important;
+}
+
+.wp-block-cta-banner h2 {
+  color: #FFFFFF !important;
+  letter-spacing: -0.005em;
+}
+
+.wp-block-cta-banner a {
+  background: #FFFFFF !important;
+  color: var(--wjs-color-primary-dark) !important;
+  font-family: 'Raleway', sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em;
+  border-radius: var(--wjs-radius-md) !important;
+  box-shadow: var(--wjs-shadow-sm) !important;
+  transition: box-shadow 0.25s ease, background-color 0.25s ease !important;
+}
+
+.wp-block-cta-banner a:hover {
+  background: #F4F7F2 !important;
+  box-shadow: var(--wjs-shadow-md) !important;
+}
+
+/* Posts Grid: Airy cards */
+.wp-block-posts-grid article {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-lg) !important;
+  box-shadow: var(--wjs-shadow-sm) !important;
+  transition: box-shadow 0.3s ease, border-color 0.3s ease !important;
+}
+
+.wp-block-posts-grid article:hover {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: var(--wjs-shadow-lg) !important;
+}
+
+/* Category Posts: Soft serif headlines */
+.wp-block-category-posts h3 {
+  font-family: 'Lora', Georgia, serif !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.005em;
+  border-bottom: 2px solid var(--wjs-color-primary) !important;
+  padding-bottom: 10px;
+}
+
+.wp-block-category-posts li {
+  border-color: var(--wjs-border-subtle) !important;
+}
+
+.wp-block-category-posts li a {
+  font-weight: 500 !important;
+  transition: color 0.25s ease !important;
+}
+
+.wp-block-category-posts li a:hover {
+  color: var(--wjs-color-primary) !important;
+}
+
+/* Search: Soft pill input */
+.wp-block-search input {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-md) !important;
+  color: var(--wjs-color-text-main) !important;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease !important;
+}
+
+.wp-block-search input::placeholder {
+  color: var(--wjs-color-text-muted) !important;
+}
+
+.wp-block-search input:focus {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 0 3px rgba(59, 122, 87, 0.18) !important;
+  outline: none !important;
+}
+
+.wp-block-search button {
+  background: var(--wjs-color-primary) !important;
+  color: #FFFFFF !important;
+  font-family: 'Raleway', sans-serif !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.02em;
+  border-radius: var(--wjs-radius-md) !important;
+  transition: background-color 0.25s ease !important;
+}
+
+.wp-block-search button:hover {
+  background: var(--wjs-color-primary-dark) !important;
+}
