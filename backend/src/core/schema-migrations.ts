@@ -29,7 +29,7 @@ type Migration = { id: string; up: (ctx: MigrationCtx) => Promise<void> };
 // the first real migration the moment one is added here). KEEP IN ORDER; never edit an applied id.
 const MIGRATIONS: Migration[] = [];
 
-async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string): Promise<void> {
+async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string, migrations: Migration[] = MIGRATIONS): Promise<void> {
     const isPostgres = driverName === 'postgres';
     // The async drivers return promises; the legacy sync driver returns values that `await` resolves
     // through — so a single awaited path works for both.
@@ -46,7 +46,7 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
 
     const appliedRows = (await all('SELECT id FROM schema_migrations')) || [];
     const applied = new Set(appliedRows.map((r: any) => r.id));
-    const pending = MIGRATIONS.filter((m) => !applied.has(m.id));
+    const pending = migrations.filter((m) => !applied.has(m.id));
 
     if (pending.length === 0) return;
 
