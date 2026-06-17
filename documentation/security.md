@@ -1,18 +1,31 @@
 # WordJS Security Architecture 🛡️
 
-WordJS implements a unique "Defense in Depth" security model for its plugin ecosystem, designed to protect the core system and sensitive data from malicious or poorly written extensions.
+WordJS implements a "Defense in Depth" security model for its plugin ecosystem, designed to protect the core system and sensitive data from malicious or poorly written extensions.
 
-## 1. The Three Pillars of Defense
+> **Status & honesty note.** WordJS is **pre-production** and primarily solo-maintained. The defenses
+> documented here are implemented and tested, but the project has **not** had an independent security
+> audit — one is **recommended before any production deployment**. `SECURITY.md` (repo root) is the
+> disclosure / reporting policy and realistic-posture summary; this document is the deeper defenses
+> reference. The plugin sandbox is the project's central thesis (see `POSITIONING.md`).
+
+## 1. The Pillars of Defense
+
+> **Isolated-only sandbox.** Every plugin now runs in a `worker_threads` **isolate** (separate V8 heap)
+> and reaches core ONLY through the permission-checked `wordjs` **capability bridge** — it never touches
+> the host's raw `fs` / `child_process` / `dbAsync` / secrets. The AST scanner (§1.1) and the runtime
+> guards (§1.2) are the *belt-and-suspenders* around that boundary, and they also protect the host
+> process itself and any first-party code that still runs in-process. See §8 for the trust model.
 
 ### 1.1 AST Static Analysis (Pre-Activation)
-Before a plugin is activated, its entire source code is parsed into an **Abstract Syntax Tree (AST)** using Acorn.
+Before a plugin is activated, its entire source code is parsed into an **Abstract Syntax Tree (AST)** using Acorn (`backend/src/core/plugins.ts → validatePluginPermissions`).
 
 *   **Logic:** Unlike simple regex checks, the AST scanner "understands" the code structure.
 *   **Detection:**
     *   **Obfuscation:** Detects dynamic property access like `global["ev" + "al"]()`.
     *   **Dangerous Functions:** Blocks `eval()`, `execSync()`, `spawn()`, etc.
     *   **Sensitive Globals:** Restricts access to `process` (except `.env`), `global`, `Buffer`, and `module`.
-    *   **Module Hijacking:** Blocks `require()` of sensitive Node.js modules like `child_process`, `net`, `http`, `vm`, etc.
+    *   **Module Hijacking:** Blocks `require()` of sensitive Node.js modules like `child_process`, `fs`, `http`/`https`, `net`, `dgram`, `dns`, `cluster`, `async_hooks`, `vm`, `worker_threads`, etc. (the `node:` prefix is normalized first).
+*   **Fail-closed:** If a plugin file cannot be parsed, it is treated as a **violation** (never waved through).
 *   **Enforcement:** Validation happens on every activation attempt and **on every server boot** (to prevent post-activation code poisoning).
 
 ### 1.2 Runtime Context Proxies
@@ -25,12 +38,16 @@ WordJS uses `AsyncLocalStorage` to track the execution context of every request.
     *   Secrets (DB passwords, JWT keys) are loaded directly from `wordjs-config.json` by the core and never exposed to `process.env`.
     *   Plugins attempting to access secrets will receive `undefined`.
 
-*   **Module Interception (Enterprise-Level):** WordJS intercepts `require()` calls at runtime using a secure module wrapper:
-    *   **`fs` Proxy:** All filesystem operations require `filesystem:read` or `filesystem:write` permissions. Plugins can freely access their own directory.
-    *   **`child_process` Proxy:** Shell execution is **ALWAYS blocked** for plugins. Any attempt to use `exec`, `spawn`, or `fork` is intercepted at the module level.
+*   **Module Interception (`secure-require.ts`):** WordJS patches both `Module.prototype.require` **and** the lower-level `Module._load` (so obfuscation paths like `require('module').constructor._load(...)` are caught too), returning secured replacements for sensitive modules:
+    *   **`fs` Proxy:** Filesystem operations require `filesystem:read` / `filesystem:write` permission. Plugins may access their own directory freely; link/symlink creation is denied outright (TOCTOU + escape vector); any `fs` function not classified as read or write is **deny-by-default**.
+    *   **`child_process` Proxy:** Shell execution is **blocked** for plugins — allowed only for an operator-trusted plugin that also declares `system:admin`.
+    *   **Network Trap (data-exfil / SSRF):** Inside an isolate the worker has full Node net access, so raw `net`/`tls`/`http`/`https`/`http2`/`dns`/`dgram` modules are **blocked for untrusted plugins** and allowed only for operator-trusted ones (e.g. mail-server's SMTP/MX delivery). The frontend-facing `fetch`/`WebSocket`/`EventSource` are trapped for untrusted plugins as well.
+    *   **Native-binding lockdown:** `process.binding`/`_linkedBinding` throw for plugin contexts and `.node` addons are refused (`process.dlopen` is intentionally left open for legitimate native addons).
     *   **Obfuscation-Immune:** Because enforcement happens at runtime (not just static analysis), even obfuscated code like `fs["read" + "FileSync"]()` is blocked.
 
-*   **API Sandboxing:** Core functions like `dbAsync` or `updateOption` verify the current plugin's permissions before executing. If a plugin lacks the required "capability" in its manifest, the call is blocked at runtime.
+*   **Secret & Core-Module Scrubbing:** A plugin that `require()`s a core module could capture the real `fs`/secrets it closed over. So untrusted plugins are **denied** sensitive core modules; `config/app` is handed back as a read-only Proxy with credential-like fields (`*secret*`, `*password*`, `*key*`, `*token*`, …) stripped; and the `config/database` `dbAsync` is replaced with a **table-scoped** view that refuses raw SQL touching core credential/role/option tables (`users`, `user_meta`, `options`, `roles`, `sessions`, …).
+
+*   **API Sandboxing (capability bridge):** The `wordjs` object passed to a plugin's `init(api)` (`backend/src/core/plugin-api.ts`) is the *only* sanctioned path to core. Every method enforces the plugin's manifest permissions (`verifyPermission`) **and** constrains arguments host-side: option-key allowlists, SQL table-scoping, and path confinement to the plugin's own dir + uploads. Operator-trusted plugins skip the option/table scoping (but still go through the bridge).
 
 ### 1.3 CrashGuard v2.0 (Anti-Boot Loop)
 WordJS includes a sophisticated system to prevent a single buggy or malicious plugin from taking down the entire server.
@@ -73,13 +90,14 @@ To fix this:
 
 ## 4. Current Limitations (Threat Model)
 
-WordJS provides a high level of isolation, but it is not a virtual machine.
-*   **Vulnerability Scoping:** The AST scanner currently focuses on the plugin's source code, not its `node_modules`. 
-*   **Resource Limits:** The system does not currently enforce strict CPU or RAM quotas for plugins (DoS protection).
-*   **Runtime Escapes:** Low-level escapes are now blocked at runtime — `Module._load` is intercepted like `Module.prototype.require`, and `process.binding`/`_linkedBinding` throw for plugin contexts. (`process.dlopen` is intentionally left open for legitimate native addons.)
-*   **CSRF:** Cross-site request protection is currently based on Origin/Referer header heuristics, not on per-request CSRF tokens. Token-based CSRF is future work.
+WordJS provides a high level of isolation, but it is not a virtual machine, and it has **not** had an independent security audit.
+*   **Vulnerability Scoping:** The AST scanner focuses on the plugin's own source code, not its `node_modules`.
+*   **Resource Limits:** Each isolate's memory is capped (`maxOldGenerationSizeMb: 256`), but there is **no hard CPU quota** — a plugin can still burn CPU (DoS).
+*   **Runtime Escapes:** Low-level escapes are blocked at runtime — `Module._load` is intercepted like `Module.prototype.require`, `process.binding`/`_linkedBinding` throw, `.node` native addons are refused, and deferred plugin code (`setTimeout`/`setInterval`, EventEmitter listeners) is re-anchored to the plugin context so it cannot shed its sandbox. (`process.dlopen` is intentionally left open for legitimate native addons.)
+*   **CSP disabled:** A strict Content Security Policy is **not** yet enabled at the gateway (`helmet({ contentSecurityPolicy: false })`); enabling it without breaking the admin UI is a documented follow-up.
+*   **CSRF:** Protection is **origin-based with exact matching** (Origin/Referer + a gateway-pinned `X-Forwarded-Host`, see §9), not per-request CSRF tokens. Token-based CSRF is future work.
 
-For ultra-high security environments, we recommend auditing third-party plugin dependencies before installation.
+For ultra-high security environments, audit third-party plugin dependencies before installation, run an independent security review, and complete the §7 production checklist (rotate all secrets, set a strong `gatewaySecret`).
 
 ---
 
@@ -96,12 +114,19 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
 |                     | `write` | Can modify site options via `updateOption()`.               |
 | **`filesystem`**    | `read`  | Read files (e.g., templates, assets) using `fs` or `path`.  |
 |                     | `write` | Write files to disk (Use cautiously).                       |
-| **`network`**       | `admin` | allows `require('http')`, `require('net')`, outbound calls. |
-| **`email`**         | `admin` | allows `nodemailer`, sending via SMTP.                      |
-| **`notifications`** | `send`  | Allows sending alerts to users via `notificationService`.   |
-| **`system`**        | `admin` | **DANGEROUS**: Allows `child_process`. The AST scan is skipped **only** for trusted first-party plugins (see note below). |
+| **`network`**       | `admin` | Outbound HTTP/sockets. **Untrusted plugins are blocked regardless of this manifest claim** (raw `net`/`http`/… and `fetch`/`WebSocket` are trapped); only operator-trusted plugins get real outbound network. |
+| **`email`**         | `admin` | Allows `wordjs.mail` / registering a mail provider. Sending via SMTP / raw sockets is reserved for operator-trusted plugins. |
+| **`notifications`** | `send`  | Allows sending alerts to users via `wordjs.notify`.         |
+| **`system`**        | `admin` | **DANGEROUS**: gates `child_process`, but only takes effect for an **operator-trusted** plugin (see note below). |
 
-> **`system:admin` is not self-granting.** Declaring `system:admin` in a manifest is **not** enough to skip the AST scanner — otherwise any uploaded plugin could self-declare it. The skip requires the plugin's slug to be listed in `config.trustedSystemPlugins`, which defaults to the first-party bundled plugins (`db-migration`, `conference-manager`). An uploaded third-party plugin that declares `system:admin` falls through to the full AST scan, so its `child_process`/`eval` usage is still caught.
+> **Manifest permissions are necessary, not sufficient, for privileged actions.** A manifest is
+> **self-declared by the plugin**, so it can never be the sole basis for a privileged capability.
+> The truly dangerous tiers — unscoped DB (core tables), secret options, raw sockets, `child_process`,
+> mail provider, absolute routes — additionally require the plugin to be **operator-trusted**:
+> its slug must be in `config.trustedSystemPlugins` (shipped defaults: `conference-manager`,
+> `mail-server`) **or** an admin must have flipped its trust toggle in the Plugins UI (persisted in the
+> `trusted_plugins` option). See §8. An uploaded third-party plugin that declares `system:admin`
+> still falls through to the full AST scan and is still denied `child_process` at runtime.
 
 ### Example Manifest declaration:
 
@@ -156,25 +181,36 @@ You can verify them by checking the file:
 
 The signing secret **never** falls back to a hardcoded/public constant. If no secret is configured (e.g. before setup completes), the backend uses a per-process ephemeral random secret so issued tokens cannot be forged — but those tokens reset on every restart. Complete setup so a persistent secret is written to `wordjs-config.json` for production. `jwt.verify` is also pinned to the `HS256` algorithm, and passwords are hashed with bcrypt at cost factor 12.
 
+**Session revocation & login throttling** (stateless JWT, so these add the server-side state JWTs lack):
+*   **Revocation:** Logout and password change stamp a per-user `token_valid_after` epoch; the auth middleware rejects any token whose `iat` predates it (including in `optionalAuth`, which treats a revoked token as anonymous). A stolen token stops working after logout / password reset rather than living until expiry.
+*   **Per-account lockout:** After **10** consecutive failed logins, an account is locked for **15 minutes** — this throttles a distributed/botnet attack that the per-IP rate limiter alone does not stop.
+
 ### Configuration (No Env Vars)
 
 WordJS does **not** use `.env` files. All security settings are in `wordjs-config.json`.
 
-| Setting         | Required | Description                          |
-| --------------- | -------- | ------------------------------------ |
-| `jwtSecret`     | ✅ Yes    | Token signing key (64+ random bytes) |
-| `nodeEnv`       | ✅ Yes    | Set to `production`                  |
-| `gatewaySecret` | ✅ Yes    | Gateway authentication               |
-| `db.password`   | If PG    | Database password                    |
+| Setting         | Required | Description                                                        |
+| --------------- | -------- | ------------------------------------------------------------------ |
+| `jwtSecret`     | ✅ Yes    | Token signing key (64+ random bytes). **Rotate before production.** |
+| `nodeEnv`       | ✅ Yes    | Set to `production`                                                 |
+| `gatewaySecret` | ✅ Yes    | Gateway management auth. **Must be strong and rotated** — the shipped public default is rejected, so management endpoints return 503 until you set a real one. |
+| `db.password`   | If PG    | Database password. **Rotate before production.**                   |
 
-### XSS Protection
+> **Operator action (required):** rotate `jwtSecret`, `gatewaySecret`, and `db.password` away from any
+> value that was ever committed or shared, and set a strong `gatewaySecret`. The installer generates
+> fresh secrets, but if you cloned/seeded a config you must rotate them yourself.
 
-All user-generated content is sanitized using **DOMPurify** before rendering:
+### XSS Protection (isomorphic)
+
+User-generated HTML is sanitized via a single `sanitizeHTML()` that works on **both** sides of the render (`frontend/src/lib/sanitize.ts`):
+
+*   **Browser:** DOMPurify with a strict tag/attribute allowlist (`on*` handlers and `<script>`/`<object>`/etc. are dropped).
+*   **Server (SSR):** `sanitize-html` with a mirrored allowlist, so the **initial** server-rendered HTML is already safe *before* hydration (returning raw HTML there used to be an XSS window). Both paths **fail closed** (strip all tags) if the sanitizer is unavailable.
 
 ```typescript
 import { sanitizeHTML } from '@/lib/sanitize';
 
-// Safe rendering
+// Safe rendering — same call works in SSR and in the browser.
 <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }} />
 ```
 
@@ -219,7 +255,43 @@ In particular, plugin dependency installation passes package names to `execFile`
 
 ---
 
-## 7. Security Headers
+## 8. Plugin Trust Model
+
+Trust is the dividing line between the sandboxed and the privileged tier. It is **server-side and never self-declarable** (`backend/src/core/plugin-trust.ts`).
+
+| | **Untrusted** (default) | **Operator-Trusted** |
+| :-- | :-- | :-- |
+| DB | own tables only; raw SQL on core tables refused | unscoped (incl. core tables) |
+| Options | non-secret keys only | secret-named keys allowed |
+| Routes | namespaced under `/api/v1/plugin/<slug>` | absolute paths |
+| Outbound network | **blocked** (`fetch`/sockets trapped) | raw sockets allowed |
+| Mail / `child_process` | denied | allowed (`system:admin` still required for shell) |
+
+**How a plugin becomes trusted (either path):**
+1. **Shipped default** — its slug is in `config.trustedSystemPlugins` (currently `conference-manager`, `mail-server`). These are always trusted and cannot be toggled off in the UI.
+2. **Admin toggle** — an authenticated admin flips the trust toggle in the Plugins UI (`POST /plugins/:slug/trust`). The grant is persisted in the `trusted_plugins` **option**, mirrored in memory so the bridge gates read it synchronously.
+
+**Hot-reload semantics:** toggling trust **reloads the plugin's worker** so its routes re-mount under the new tier and the host-capability gates re-evaluate — no server restart needed. Unload/reload performs a full teardown. A plugin can **never** declare its own trust; the toggle is admin-only, and an upload that squats the slug of a trusted system plugin is refused (409).
+
+> **Note:** `db-migration` is **no longer a plugin** — its functionality moved into core at
+> `backend/src/core/db-admin/`, so it is not in the trusted list. Any older doc referencing
+> `db-migration` as a trusted system plugin is stale.
+
+---
+
+## 9. CSRF & Host Trust (X-Forwarded-Host)
+
+State-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) are guarded by `csrfProtection` (`backend/src/middleware/auth.ts`):
+
+*   The check compares the request **Origin** (or Referer-derived origin) against an allowlist using **exact origin matching** via `URL` parsing — never `startsWith` (a prefix match would let `https://victim.com.evil.com` satisfy an allowed `https://victim.com`).
+*   Behind the gateway, `req.get('Host')` is the internal upstream (`127.0.0.1:PORT`), so the backend instead honors **`X-Forwarded-Host`**. The gateway **pins** that header to the real client-facing `Host` and strips any client-supplied value (`gateway/src/index.js`), so a remote attacker cannot forge it to satisfy the same-origin check.
+*   `/api/v1/setup/*` is exempt (origin not yet configured); pure API clients with no Origin/Referer are allowed (they must still present a valid JWT).
+
+This is origin-based protection, **not** per-request CSRF tokens — see §4.
+
+---
+
+## 10. Security Headers
 
 WordJS uses **Helmet.js** for security headers:
 
@@ -227,4 +299,8 @@ WordJS uses **Helmet.js** for security headers:
 - `X-Frame-Options: DENY`
 - `X-XSS-Protection: 1; mode=block`
 - `Strict-Transport-Security` (when behind HTTPS)
+
+> **CSP is currently disabled.** The gateway runs `helmet({ contentSecurityPolicy: false })`, so there
+> is **no** strict Content-Security-Policy yet. Enabling a useful CSP without breaking the admin UI is a
+> documented follow-up (see §4). Until then, treat CSP as not-in-place for your threat model.
 

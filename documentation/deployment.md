@@ -20,18 +20,26 @@ WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** 
 ```bash
 git clone <your-repo-url>
 cd wordjs
-npm install
-cd backend && npm install
-cd ../frontend && npm install
+# Installs root + backend + frontend + gateway + setup deps in one shot
+npm run install:all
 ```
 
-### 2. Build the Frontend
-The frontend must be compiled for production to ensure maximum speed.
+### 2. Build the Backend & Frontend
+Both the backend and the frontend are **compiled** for production.
+
 ```bash
+# Backend: strict typecheck + emit dist/ (prod runs node dist/index.js, no ts-node)
+cd backend
+npm run build      # tsc -p tsconfig.build.json (cleans dist/ first)
+cd ..
+
+# Frontend: Next.js production build
 cd frontend
 npm run build
 cd ..
 ```
+
+> The backend `server.js` supervisor automatically runs the compiled `dist/index.js` when it exists, and only falls back to `ts-node` when no build is present. Always run `npm run build` for production. See **[development.md](development.md)** for the full dev vs prod workflow.
 
 ### 3. Build Plugin Frontends (NEW)
 WordJS uses a hybrid system. In production, plugins load frontend code from pre-compiled bundles. You must compile them once before starting.
@@ -66,6 +74,10 @@ Example `backend/wordjs-config.json`:
 }
 ```
 
+> The **gateway has its own config file** at `gateway/gateway-config.json` (`gatewaySecret`, `gatewayPort`, `gatewayInternalPort`, `ssl`, `mtls`). The setup orchestrator (`npm run setup`) writes the matching secret into both files and generates the mTLS cluster CA + per-service certs. Keep the two `gatewaySecret` values in sync.
+
+> **Database choice:** SQLite is the zero-config default — the canonical driver is `sqlite-native` (better-sqlite3); `sqlite-legacy` (pure-JS WASM) is an automatic fallback. For Postgres set the `db` block to use the `postgres` driver (the `pg` client). **Embedded Postgres is opt-in** via `db.embedded: true` (the old `db.port == 5433` auto-start heuristic is deprecated, and `embedded-postgres` is now an optional dependency).
+
 ---
 
 ## 🏃 Run in Production
@@ -83,16 +95,18 @@ This allows you to restart individual services if needed.
 
 ```bash
 # Start Gateway
-pm2 start gateway.js --name "wordjs-gateway"
+pm2 start gateway/src/index.js --name "wordjs-gateway"
 
-# Start Backend (runs via ts-node — no separate build/dist step)
+# Start Backend (server.js supervisor runs the compiled dist/index.js)
 cd backend
 pm2 start npm --name "wordjs-backend" -- start
 
 # Start Frontend
 cd ../frontend
-pm2 start "npm run start -- -p 3001" --name "wordjs-frontend"
+pm2 start npm --name "wordjs-frontend" -- start
 ```
+
+> Make sure `cd backend && npm run build` has run first, otherwise the backend falls back to slower `ts-node`.
 
 ---
 
@@ -106,9 +120,19 @@ pm2 start "npm run start -- -p 3001" --name "wordjs-frontend"
 
 Before going live, confirm:
 
-1. [ ] **Real `gatewaySecret`** — do not ship the public default. If unset, the gateway warns at startup and falls back to a public secret that anyone could use against authenticated endpoints.
-2. [ ] **Real `jwtSecret`** — a cryptographically secure value, not a placeholder.
-3. [ ] **Proper mTLS certificates** — the gateway now verifies upstream (backend/frontend) certificates against the cluster CA and requires an allowed internal CN. Provide real certs rather than relying on insecure defaults.
+1. [ ] **Real `gatewaySecret`** — do not ship the public default. If unset, the gateway warns at startup and falls back to a public secret that anyone could use against authenticated endpoints. Rotate this away from any value committed during development, and keep `backend/wordjs-config.json` and `gateway/gateway-config.json` in sync.
+2. [ ] **Real `jwtSecret`** — a cryptographically secure value, not a placeholder. JWTs are revocable via `token_valid_after` (logout and password change invalidate older tokens).
+3. [ ] **Real `dbPassword`** — rotate any password committed during development.
+4. [ ] **Proper mTLS certificates** — the gateway verifies upstream (backend/frontend) certificates against the cluster CA and requires an allowed internal CN. Provide real certs rather than relying on insecure defaults.
+5. [ ] **CSP follow-up** — a strict Content-Security-Policy is still disabled in the gateway Helmet config; track this as a hardening item.
+
+> **Status:** WordJS is pre-production and primarily solo-maintained. An **independent security audit is recommended before production**. See `POSITIONING.md` for the sandbox-as-thesis product direction.
+
+---
+
+## 📄 Licensing
+
+WordJS is **MIT-licensed** consistently across every package (root, `backend`, `frontend`, `gateway`, `setup`), with the root `LICENSE` being MIT. Third-party / dual-licensed dependencies are documented in `THIRD-PARTY-NOTICES.md`. CI enforces a **license gate** that fails the build on network-copyleft licenses (`AGPL`, `SSPL`) in production dependencies, so the distribution stays cleanly MIT-compatible.
 
 ---
 
@@ -116,11 +140,11 @@ Before going live, confirm:
 
 CI runs on every push and pull request via `.github/workflows/ci.yml`, with three parallel jobs:
 
-- **Backend:** type check (`npx tsc --noEmit`) plus tests (`npm test`).
+- **Backend:** strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → tests (`npm test`).
 - **Gateway:** tests (`npm test`), including the proxy/mTLS integration test.
 - **Frontend:** lint (`npm run lint`) plus production build (`npm run build`).
 
-> **Note:** The backend runs via `ts-node` in-place (`npm start` → supervisor → `node -r ts-node/register src/index.ts`), so there is **no separate build/dist step** for the backend in deployment.
+> **Note:** Production runs the **compiled** backend — the `server.js` supervisor launches `node dist/index.js` when `dist/` exists, and only falls back to `ts-node` in development or when no build is present. Run `npm run build` before deploying.
 
 ---
 
@@ -129,9 +153,9 @@ CI runs on every push and pull request via `.github/workflows/ci.yml`, with thre
 To update the CMS:
 ```bash
 git pull
-npm install
-cd frontend && npm install && npm run build
-cd ../backend && npm install && node scripts/build-plugin.js --all
+npm run install:all
+cd frontend && npm run build
+cd ../backend && npm run build && node scripts/build-plugin.js --all
 pm2 restart all
 ```
 

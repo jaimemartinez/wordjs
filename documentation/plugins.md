@@ -7,9 +7,11 @@ This guide will teach you how to create a plugin for WordJS from scratch. WordJS
 ## 1. The Mental Model
 
 A WordJS plugin is simply a folder inside `backend/plugins/`.
-*   **Backend (`index.js`):** Runs on the server. Defines API routes and registers the plugin into the system.
-*   **Frontend (`client/`):** Runs in the user's browser. Defines the Admin interface and visual blocks for the editor.
-*   **Manifest (`manifest.json`):** The brain. Defines name, version, **npm dependencies**, and **frontend hooks**.
+*   **Backend (`index.js`):** Runs on the server **inside a `worker_threads` isolate** (a separate V8 heap). It cannot `require()` core modules directly — it reaches core ONLY through the `wordjs` capability bridge, which is passed to its `init(wordjs)` function. Defines API routes, hooks, shortcodes via `wordjs.*`.
+*   **Frontend (`client/`):** Runs in the user's browser. Defines the Admin interface and visual blocks for the editor. These are **build-time** React assets and are unaffected by isolation.
+*   **Manifest (`manifest.json`):** The brain. Defines name, version, **`"isolated": true`** (required — non-isolated plugins are rejected), permissions, **npm dependencies**, and **frontend hooks**.
+
+> **🔒 Isolated by default.** Every plugin runs sandboxed in a worker. There is no in-process execution path. Your backend code talks to core only via the injected `wordjs` bridge; every bridge call is permission-checked on the host. See **§9 (The `wordjs` Capability Bridge)** below and **[Plugin Isolation](plugin-isolation-proposal.md)**.
 
 ---
 
@@ -27,6 +29,7 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
   "version": "1.0.0",
   "description": "My first WordJS plugin",
   "author": "Your Name",
+  "isolated": true,
   "dependencies": {
       "uuid": "^10.0.0" 
   },
@@ -42,6 +45,10 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
   }
 }
 ```
+
+> **`"isolated": true` is mandatory.** A plugin without it is rejected at activation/boot
+> (`Plugin '<slug>' must declare "isolated": true and use the wordjs bridge — legacy in-process plugins
+> are no longer supported.`). Inside the isolate you must use the `wordjs` bridge instead of `require`ing core.
 
 > **🔥 Auto-Dependency Management:** 
 > WordJS reads the `dependencies` object. When you activate the plugin, the system **automatically installs** missing packages (`npm install`). When you deactivate it, if no other plugin needs them, it **garbage collects** them (`npm uninstall`). Zero manual work.
@@ -86,26 +93,21 @@ npx esbuild index.js --bundle --platform=node --outfile=dist/plugin.bundle.js
 > - Your plugin has many dependencies and you want faster activation
 
 ### Step 2: Backend Entry Point (`index.js`)
-Create `index.js`. You can now require your dependencies safely!
+Create `index.js`. Your `init` function receives the `wordjs` bridge — **use it instead of `require`ing
+core**. Inside the isolate there is no `express`, no `getApp()`, no direct `require('../../src/core/...')`.
 
 ```javascript
-exports.init = function () {
-    const express = require('express');
-    const router = express.Router();
-    const { v4: uuidv4 } = require('uuid'); // Safe to use!
-    const { registerAdminMenu } = require('../../src/core/adminMenu');
-    const { getApp } = require('../../src/core/appRegistry');
+exports.init = function (wordjs) {
+    const { http, adminMenu } = wordjs;
 
-    // 1. Define a simple API route
-    router.get('/message', (req, res) => {
-        res.json({ text: "Hello! Unique ID: " + uuidv4() });
+    // 1. Register a JSON API route. The host namespaces it under /api/v1/plugin/hello-world.
+    //    The handler runs inside the isolate with a mock (req, res) forwarded over RPC.
+    http.route('get', '/message', (req, res) => {
+        res.json({ text: "Hello from the isolate!" });
     });
 
-    // 2. Register the API
-    getApp().use('/api/v1/hello-world', router);
-
-    // 3. Add link to Sidebar
-    registerAdminMenu('hello-world', {
+    // 2. Add a link to the Sidebar (declarative — forwarded to core via the bridge)
+    adminMenu.add({
         href: '/admin/plugin/hello-world',
         label: 'Hello World',
         icon: 'fa-smile',
@@ -113,9 +115,14 @@ exports.init = function () {
         cap: 'manage_hello_world'
     });
 
-    console.log('Hello World plugin initialized!');
+    console.log('Hello World plugin initialized (via the wordjs bridge)!');
 };
 ```
+
+> **The route is namespaced.** An untrusted plugin's routes always mount under
+> `/api/v1/plugin/<slug>/...` (so the example above is reachable at `/api/v1/plugin/hello-world/message`).
+> Only **operator-trusted** plugins can keep an absolute path (`opts.absolute`). Fetch it from your admin
+> page using that namespaced URL.
 
 ### Step 3: Admin Page UI (`client/admin/page.tsx`)
 Create the folder structure `client/admin/` and add `page.tsx`:
@@ -131,7 +138,8 @@ export default function HelloWorldAdmin() {
     useEffect(() => {
         const fetchMsg = async () => {
             const token = localStorage.getItem("wordjs_token");
-            const res = await fetch('/api/v1/hello-world/message', {
+            // Untrusted-plugin routes are namespaced under /api/v1/plugin/<slug>/...
+            const res = await fetch('/api/v1/plugin/hello-world/message', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
             const data = await res.json();
@@ -288,11 +296,28 @@ When you activate a plugin, WordJS runs a **Static Analysis Scan**. It parses yo
 *   Obfuscated property access (e.g., `global["ev"+"al"]`).
 *   Unauthorized `require()` of sensitive Node modules.
 
-### 6.3 Sandbox Applies Everywhere
+### 6.3 The Isolate (where the sandbox actually lives)
 
-Your manifest permissions are enforced even for code that runs **detached** from the request — Express route handlers you register, synchronous hooks, timers (`setTimeout`/`setInterval`), and module top-level code. The runtime resolves the active plugin from the call stack when there is no async context, so there is no "escape hatch": `fs`/`child_process` stay restricted by your declared permissions in every execution path.
+Your backend runs in a `worker_threads` isolate with its **own V8 heap** — it cannot see the host's
+secrets, DB handle, or other plugins. It reaches core **only** through the `wordjs` bridge, and every
+bridge call is permission-checked on the host against your manifest. The host owns Express, the DB, the
+filesystem and secrets; the isolate gets serialized request/response data over RPC, never the live socket
+or DB handle.
 
-> **`system:admin` is not self-granting.** Declaring `system:admin` does **not** skip the AST scan. The skip is reserved for trusted first-party plugins listed in `config.trustedSystemPlugins` (currently `db-migration` and `conference-manager`). An uploaded third-party plugin that declares it still goes through the full scan.
+**Network egress (untrusted plugins):** you get **no outbound network**. The raw socket modules
+(`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied, and the globals `fetch` / `WebSocket` /
+`EventSource` are trapped (they throw). Only **operator-trusted** plugins get raw sockets (e.g. the mail
+server's SMTP/MX delivery).
+
+**Defense-in-depth inside the worker:** the same runtime guards (secure-require, io-guard) are installed
+inside the isolate too, so even after a hypothetical heap escape your `fs`/`child_process` stay restricted
+to your declared permissions in every execution path (route handlers, hooks, timers, module top-level).
+
+> ⚠️ A worker is a **heap / V8-isolate boundary, not an OS sandbox** — the worker still has a full Node
+> runtime, so capability denial relies on the in-worker guards above. See the residual-risk note in
+> **[Plugin Isolation](plugin-isolation-proposal.md)**.
+
+> **`system:admin` is not self-granting.** Declaring `system:admin` does **not** skip the AST scan. The skip is reserved for trusted plugins listed in `config.trustedSystemPlugins` (shipped defaults: `conference-manager` and `mail-server`) or granted trust by an admin via the Plugins UI. An uploaded third-party plugin that declares it still goes through the full scan. The scan also re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
 
 For a full list of security rules, see the **[Security Guide](security.md)**.
 
@@ -313,9 +338,10 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 ## 7. Developer Rules of Gold 🏆
 
 1.  **Auth First:** Never fetch data from the server without headers.
-2.  **Declare Dependencies:** Don't assume `nodemailer` or `uuid` exists in standard WordJS. **Declare it in manifest.json**.
-3.  **Relative Imports:** In `index.js`, use `../../src/...` to access Core.
-4.  **Unique Slugs:** Ensure your plugin folder name and slug are unique.
+2.  **Use the bridge, not `require`:** In `index.js`, accept `init(wordjs)` and call `wordjs.*`. You **cannot** `require('../../src/core/...')`, `express`, or core modules from inside the isolate — that path is gone.
+3.  **Declare `"isolated": true`:** It is mandatory; a plugin without it is rejected.
+4.  **Namespaced routes:** Your routes mount under `/api/v1/plugin/<slug>/...` — fetch them at that path.
+5.  **Unique Slugs:** Ensure your plugin folder name and slug are unique.
 
 ---
 
@@ -333,11 +359,10 @@ Always use unique paths (e.g., `/admin/plugin/my-plugin-media`) unless you inten
 The backend marks standard menus with `plugin: 'core'`. The frontend filters these out from the dynamic list.
 
 ### 8.2 Widgets API
-Plugins can register "Widgets" using the backend API. These widgets appear in the `Widgets` admin panel and can be assigned to sidebars.
+Core can register "Widgets" (they appear in the `Widgets` admin panel and can be assigned to sidebars):
 
 ```javascript
-const { registerWidget } = require('../../src/core/widgets');
-
+const { registerWidget } = require('../../src/core/widgets'); // core / non-isolated context only
 registerWidget('my_weather_widget', {
     name: 'Weather Widget',
     description: 'Shows local weather',
@@ -345,38 +370,85 @@ registerWidget('my_weather_widget', {
 });
 ```
 
+> ⚠️ **Not yet bridge-exposed.** `registerWidget` is NOT on the `wordjs` bridge, so an isolated plugin
+> cannot register a widget today (there is no `wordjs.widgets.*`). Expose data via a route + an admin
+> page instead, or open an issue to add a `widgets` bridge capability.
+
 ### 8.3 Sending Notifications 🔔
-Plugins can push real-time alerts to the Admin UI.
+Plugins push real-time alerts to the Admin UI via `wordjs.notify(n)` (`notifications:send` permission).
 See **[Notification System](notifications.md)** for full details.
 
 ### 8.4 Sending Emails 📧
-If the Mail Server plugin is active, you can send emails easily.
+If a mail provider plugin is active, send mail with `wordjs.mail(msg)` (`email:admin` permission).
 See **[Mail Server](mail-server.md)** for full details.
 
 ### 8.5 Hook System (Actions & Filters) 🪝
-WordJS exposes a global hook system similar to WordPress. You can plug into core events or modify data.
+WordJS exposes a hook system similar to WordPress. From an isolated plugin you register hooks through
+the bridge (`wordjs.hooks`); your callback lives in the isolate and the host installs a shim that calls
+back into it over RPC.
 
 **Using Actions (Do something):**
 ```javascript
-const { addAction } = require('../../src/core/hooks');
-
-addAction('init', () => {
-    console.log('System is ready!');
-});
+exports.init = function (wordjs) {
+    wordjs.hooks.addAction('init', () => {
+        console.log('System is ready!');
+    });
+};
 ```
 
 **Using Filters (Modify something):**
 ```javascript
-const { addFilter } = require('../../src/core/hooks');
-
-addFilter('the_content', (content) => {
-    return content + '<p>Modified by my plugin!</p>';
-});
+exports.init = function (wordjs) {
+    wordjs.hooks.addFilter('the_content', (content) => {
+        return content + '<p>Modified by my plugin!</p>';
+    });
+};
 ```
 
 **Debugging Hooks:**
 You can use the **Hooks Registry** in the Admin Panel (`/admin/hooks`) to:
 1.  **Inspect:** See exactly which hooks are registered and by whom.
 2.  **Live Monitor:** Watch events fire in real-time to debug timing issues.
+
+---
+
+## 9. The `wordjs` Capability Bridge (reference)
+
+`init(wordjs)` receives this object. Data methods are **async** (they cross the worker→host boundary).
+Every call is permission-checked on the host against your manifest.
+
+| Bridge call | Permission | Notes |
+| :--- | :--- | :--- |
+| `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) denied unless operator-trusted. |
+| `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Untrusted: SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. Trusted: unscoped. |
+| `wordjs.db.createTable(name, columns)` | `database:write` | Core table names blocked for untrusted plugins. |
+| `wordjs.db.getType()` | `database:read` | `'sqlite'` vs `'postgres'` — branch your DDL. |
+| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the isolate; host installs an RPC shim. |
+| `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path`. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`, `{ absolute: true }` (operator-trusted only). Handler gets a mock `(req,res)` over RPC. |
+| `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
+| `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your plugin dir + `uploads/` (realpath-checked). `manifest.json` is immutable. |
+| `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. |
+| `wordjs.provideMail(handler)` | `email:admin` | Become the host-wide mail sender. **Operator-trusted only.** |
+| `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
+| `wordjs.notify.registerTransport(name, handler)` | `notifications:send` | Register a notification transport. **Operator-trusted only.** |
+| `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
+| `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the isolate. |
+
+---
+
+## 10. Trust tiers & the admin trust toggle
+
+Every plugin is either **untrusted** (the default — sandboxed) or **operator-trusted** (privileged
+bridge grants: unscoped DB, secret options, absolute routes, multipart, `provideMail`,
+`notify.registerTransport`, raw sockets). **Trust is server-side and can never be self-declared in a
+manifest.** A plugin is trusted if EITHER:
+
+1.  it is a shipped first-party default in `config.trustedSystemPlugins` (`conference-manager`, `mail-server`), which can't be toggled off via the UI; OR
+2.  an admin flips its trust toggle in the **Plugins** admin page (`POST /plugins/:slug/trust`, persisted in the `trusted_plugins` option).
+
+Flipping the toggle **hot-reloads the plugin's worker** so its routes re-mount (namespaced ↔ absolute),
+its network policy re-resolves, and the bridge gates re-evaluate — no server restart. Granting trust is a
+real security decision: the UI warns that a trusted plugin can reach core data, secret options, and host
+capabilities. Only trust code you have audited.
 
 

@@ -11,12 +11,12 @@ The Frontend (`frontend/`) is a **Next.js** application serving both the public 
 ## Gateway Integration
 
 The frontend registers itself with the Gateway automatically on startup.
-This is handled in **`src/instrumentation.ts`**:
+This is handled in **`src/instrumentation.ts`** (`register()`, Node runtime only):
 
-1.  Next.js starts.
-2.  `register()` function is called.
-3.  Reads `backend/wordjs-config.json` to find the Gateway port and secret.
-4.  Sends a `POST` request to the Gateway to register routes (e.g., `/admin`, `/`).
+1.  Next.js starts and calls `register()`.
+2.  Reads config, preferring a local `wordjs-config.json` (distributed deploy) and falling back to `../backend/wordjs-config.json` (monolith) for the gateway host/ports, `gatewaySecret`, and `frontendUrl`.
+3.  If cluster mTLS certs are present (`certs/` locally or `../backend/certs`), it POSTs to the gateway's **internal** port over HTTPS with the client cert; otherwise it falls back to plain HTTP on the public gateway port.
+4.  Sends `POST /register` with its route prefixes: `/`, `/admin`, `/login`, `/install`, `/migration`, `/portal`, `/_next` (authenticated by `x-gateway-secret`). It retries every 5s until the gateway accepts.
 
 ## Visual Editing (Puck)
 
@@ -101,9 +101,9 @@ Form controls with consistent rounded styling and focus states.
 WordJS integrates **Puck** (by Measured) as its visual page builder.
 
 ### Configuration
-*   **Config File**: `src/components/puckConfig.tsx` defines the available components.
-*   **Editor Page**: `src/app/admin/pages/[id]/page.tsx` renders the editor interface.
-*   **Render Page**: `src/app/(public)/[...slug]/page.tsx` renders the published page using Puck's `<Render>` component.
+*   **Config File**: `src/components/puckConfig.tsx` defines the available components (and exports the `RichTextEditor`).
+*   **Editor Page**: `src/app/admin/pages/[id]/page.tsx` renders the editor interface (via `PuckEditor.tsx`).
+*   **Render Pages**: the published pages are rendered with Puck's `<Render>` component across the public routes — `src/app/(public)/page.tsx` (home), `src/app/(public)/[slug]/page.tsx`, `src/app/(public)/[slug]/[postSlug]/page.tsx`, and `src/app/(public)/pages/[slug]/page.tsx`. (There is no `[...slug]` catch-all route.)
 
 ### Available Components
 
@@ -167,9 +167,9 @@ All components include a `css` field that allows custom styling with:
 - And more...
 
 ### Registering Custom Blocks
-Plugins can inject custom blocks into Puck via the Frontend Registry system.
+Plugins can inject custom blocks into Puck via the frontend plugin registry.
 1. Define the block in your plugin's `client/puck/` folder.
-2. The system auto-generates a registry that merges core blocks with plugin blocks.
+2. The build auto-generates `src/lib/puckPluginRegistry.ts`, which exports `puckPluginComponents` — a map merged into the core Puck config so plugin blocks appear alongside the built-in ones.
 
 ---
 
@@ -208,3 +208,30 @@ The frontend includes a native tracking component that logs page views to the ba
     *   Debounces duplicate calls (e.g., from React Strict Mode).
 *   **Integration:**
     *   Mounted in `src/app/layout.tsx` (the Root Layout) so it runs on every page load (Frontend and Admin).
+
+---
+
+## Internationalization (i18n) 🌐
+
+The admin dashboard is fully translated. The public-facing site renders user content as authored and is not driven by this dictionary.
+
+*   **Supported languages:** Spanish (`es`), English (`en`), Portuguese (`pt`) — `type Language = 'es' | 'en' | 'pt'` in `src/lib/i18n.ts`.
+*   **Dictionary:** `src/lib/i18n.ts` holds the `translations` map and the `t(key, lang)` lookup. Resolution order: requested language → English fallback → the raw key (so a missing translation degrades gracefully instead of rendering blank).
+*   **Default & persistence:** the default is **Spanish** (`getStoredLanguage()` returns `'es'` during SSR and when nothing is stored). The user's choice is persisted in `localStorage` under `wordjs-lang`.
+*   **Context:** `I18nProvider` / `useI18n()` live in `src/contexts/I18nContext.tsx`. The provider initializes to the deterministic `'es'` default during SSR (to avoid hydration mismatch) and then applies the stored language on mount. It is mounted in `src/app/admin/DashboardLayoutClient.tsx`, so i18n is scoped to the admin area.
+*   **Usage:** `const { t, language, setLanguage } = useI18n();` then `t('nav.posts')`. The language switcher lives in `src/components/Sidebar.tsx` (and the Puck editor in `src/components/PuckEditor.tsx`).
+*   **Plugin translations:** plugins extend the dictionary via `registerTranslations({ es: {...}, en: {...}, pt: {...} })`; only the three supported languages are merged.
+
+## HTML Sanitization (isomorphic) 🛡️
+
+User-generated and Puck-rendered HTML is sanitized before it hits `dangerouslySetInnerHTML`. `src/lib/sanitize.ts` is **isomorphic** — it sanitizes on both the server (SSR) and the client so there is no pre-hydration XSS window.
+
+*   **Client (browser):** uses **DOMPurify** with an explicit tag/attribute allowlist (text formatting, headings, lists, links, media incl. `iframe` for video embeds, tables, read-only form elements, plus `style`). `on*` handlers and `<script>/<object>/<embed>/<base>/<meta>/<link>` are forbidden.
+*   **Server (SSR):** uses **`sanitize-html`** with `SERVER_SANITIZE_OPTIONS`, which mirrors the DOMPurify allowlist (schemes limited to `http/https/mailto/tel`, plus `data:` for `img`/`source`). If the library is unavailable it **fails closed** by stripping all tags via regex.
+*   **Exports:**
+    *   `sanitizeHTML(dirty)` — the default; safe HTML for rendering.
+    *   `sanitizeHTMLCustom(dirty, options)` — extra DOMPurify options on the client; falls back to the base server allowlist during SSR.
+    *   `stripHTML(dirty)` — text only (uses `sanitize-html` with an empty allowlist on the server, not a bypassable regex).
+    *   `hasDangerousContent(html)` — heuristic check for `<script>`, `javascript:`, inline `on*=`, `data:text/html`, etc.
+
+> Note: the backend has its own content-sanitization layer (`backend/src/core/formatting.ts`); the frontend `sanitize.ts` is the rendering-time defense in depth.

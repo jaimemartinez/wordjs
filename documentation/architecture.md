@@ -305,6 +305,15 @@ graph TB
     MainJS --> Cron
 ```
 
+### Isolated-only sandbox
+
+Plugin server code does **not** run in the host process. Every plugin executes in a `worker_threads` isolate and reaches the host only through the permission-checked `wordjs` capability bridge (`src/core/plugin-worker.js`). An acorn AST static scanner (fail-closed) runs at install. There are **two server-side trust tiers** (`src/core/plugin-trust.ts`), never self-declarable:
+
+- **untrusted** (default, sandboxed): own DB tables, non-secret options, namespaced routes, **no outbound network** (`fetch`/`WebSocket`/`EventSource` trapped, raw net modules blocked).
+- **operator-trusted** (privileged): unscoped DB, secret options, absolute routes, mail provider, raw sockets.
+
+Trust comes from `config.trustedSystemPlugins` (shipped defaults) or an admin toggle in the Plugins UI (persisted in the `trusted_plugins` option). Toggling trust **hot-reloads** the worker; unload/reload does a full teardown. The former `db-migration` plugin has moved into core at `src/core/db-admin/`.
+
 ---
 
 ## 🔐 Authentication Flow
@@ -455,12 +464,15 @@ wordjs/
 │   │   └── 📁 lib/             # Utilities
 │   └── package.json
 │
-├── 📁 backend/                  # Express.js Backend (TypeScript via ts-node)
-│   ├── 📁 src/                 # All .ts, run in-place (no dist build)
-│   │   ├── 📁 core/            # Core Modules
+├── 📁 backend/                  # Express.js Backend (TypeScript, compiled for prod)
+│   ├── 📁 src/                 # All .ts; `npm run build` emits dist/
+│   │   ├── 📁 core/            # Core Modules (incl. db-admin/, plugin-worker.js)
+│   │   ├── 📁 drivers/         # DB driver interface + implementations
 │   │   ├── 📁 routes/          # API Routes
 │   │   └── 📁 plugins/         # Plugin System (plugin code stays .js)
-│   ├── tsconfig.json           # ts-node config (commonjs, transpile-only)
+│   ├── dist/                   # Compiled output (npm run build) — prod entry
+│   ├── tsconfig.json           # strict typecheck config (commonjs)
+│   ├── tsconfig.build.json     # production build config (emits dist/)
 │   ├── 📁 themes/              # Theme Files
 │   │   ├── 📁 default/
 │   │   ├── 📁 neo-digital/
@@ -478,8 +490,16 @@ wordjs/
 │   ├── plugins.md
 │   └── architecture.md         # This file
 │
-├── gateway.js                   # Gateway Server
-├── package.json                 # Root Package
+├── 📁 gateway/                  # Cluster Gateway (reverse proxy + mTLS)
+│   ├── 📁 src/
+│   │   ├── index.js            # Gateway entry (Node cluster)
+│   │   └── proxy-config.js     # Proxy + mTLS upstream agent
+│   ├── gateway-config.json      # Gateway config (secret, ports, ssl, mtls)
+│   └── gateway-registry.json    # Persisted service registry + health
+│
+├── 📁 setup/                    # Setup/migration orchestrator + mTLS cert gen
+│   └── index.js
+├── package.json                 # Root Package (concurrently dev/prod runner)
 └── README.md                    # Project README
 ```
 
@@ -491,20 +511,23 @@ wordjs/
 | ----------- | ----------------- | -------- | ------------------------------------------- |
 | **Gateway** | Node.js Cluster   | **3000** | **Identity & Routing (Single Entry Point)** |
 | Frontend    | Next.js           | 3001     | SSR, Visual Editor                          |
-| Backend     | Express.js (TypeScript / ts-node) | 4000 | REST API, Plugins                  |
+| Backend     | Express.js (TypeScript, compiled) | 4000 | REST API, Plugins                  |
 | Database    | SQLite/PostgreSQL | -        | Data Storage                                |
+
+> For build/run commands and the dev vs prod workflow, see **[development.md](development.md)**.
 
 ---
 
-## 🟦 Backend Runtime (TypeScript via ts-node)
+## 🟦 Backend Runtime (TypeScript, compiled for production)
 
-The backend is written in **TypeScript** (`backend/src/**/*.ts`, ~88 files) and executed **in-place** by `ts-node` in CommonJS, transpile-only mode — there is **no compiled `dist/`** output. `__dirname` and dynamic plugin loading behave exactly as in the previous CommonJS setup.
+The backend is written in **TypeScript** (`backend/src/**/*.ts`). In **production it is compiled**: `npm run build` (`tsc -p tsconfig.build.json`, preceded by a `clean` of `dist/`) emits `dist/`, and the `server.js` supervisor runs `node dist/index.js`. `ts-node` is used **only** in development or as a convenience fallback when no `dist/` build exists.
 
-- **Config:** `backend/tsconfig.json` (`module: commonjs`, `moduleDetection: force`, `allowJs`, `strict: false`, `ignoreDeprecations`).
-- **Entry:** `npm start` runs the `server.js` supervisor, which spawns `node -r ts-node/register src/index.ts`; `npm run dev` uses `node --watch -r ts-node/register`.
-- **Type-checking is opt-in** (`npm run typecheck` → `tsc --noEmit`) and is **not** enforced at runtime. `strict` mode is not fully enabled yet.
-- **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`.
-- **Tooling:** ESLint (flat config `eslint.config.mjs`) + Prettier, a `node:test` suite (~111 tests, including supertest API integration tests in `src/tests/api.test.ts`), and a CI workflow at `.github/workflows/ci.yml`.
+- **Strict typecheck:** `backend/tsconfig.json` has `strict: true` (`strictNullChecks`, `strictFunctionTypes`, etc. enforced). Two sub-flags are deliberately staged off for now — `noImplicitAny` and `useUnknownInCatchVariables` — to be tightened file-by-file. `module: commonjs`, `moduleDetection: force`, `allowJs`.
+- **Entry / supervisor:** `npm start` runs the `server.js` supervisor. It checks for `backend/dist/index.js`: if present it spawns `node dist/index.js` (compiled); otherwise it falls back to `node -r ts-node/register src/index.ts`. `npm run dev` uses `node --watch -r ts-node/register src/index.ts`.
+- **In-tree `.js` files compiled via `allowJs`:** `src/core/db-admin/*` (the in-core DB migration/admin runner that used to be the `db-migration` plugin) and `src/core/plugin-worker.js` (the plugin isolate worker) are carried into `dist/` by `allowJs`.
+- **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/close`) plus implementations (`sqlite-native`, `sqlite-legacy`, `postgres`, embedded). Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
+- **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`. Plugins are excluded from the build.
+- **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs **strict typecheck → build → license gate (block AGPL/SSPL) → tests** for the backend, gateway tests, and frontend lint + build.
 
 ---
 
@@ -547,9 +570,9 @@ graph LR
         Frontend[Frontend]
     end
 
-    Backend -- "mTLS (backend.crt)" --> GatewayAPI
-    Frontend -- "mTLS (frontend.crt)" --> GatewayAPI
-    GatewayAPI -- "Trusts CA" --> Backend
+    Backend -- "mTLS (CN=backend)" --> GatewayAPI
+    Frontend -- "mTLS (CN=frontend)" --> GatewayAPI
+    GatewayAPI -- "Trusts cluster CA" --> Backend
 ```
 
-The **Gateway** (port 3100) serves as the control plane. The **Backend** uses this interface to push certificates and configuration updates, ensuring that sensitive keys are never exposed on public ports.
+The **Gateway** runs a private mTLS server on the internal port (`gatewayInternalPort`, default **3100** = public port + 100). Services register and fetch info here over mutual TLS: every internal request must present a client certificate that chains to the cluster CA **and** whose CN is on the allow-list (`backend`, `frontend`, `gateway`, `gateway-internal`). `POST /register` (CN `backend`/`frontend`) updates the routing registry; `GET /info` (CN `backend`) returns gateway/SSL/cert status. The cluster CA and per-service certs are generated by the **setup orchestrator** (`setup/index.js`), so sensitive keys never travel over the public port.
