@@ -1,0 +1,412 @@
+@import url('https://fonts.googleapis.com/css2?family=Libre+Bodoni:wght@400;500;600;700&family=Public+Sans:wght@300;400;500;600;700&display=swap');
+
+/* =========================================
+   THEME: SEPIA PRESS (Warm Editorial Magazine)
+   Concept: Print-like, light mode. Warm paper canvas,
+   refined Libre Bodoni headlines, Public Sans body,
+   brick/terracotta accent, hairline rules, squared
+   2px corners, near-flat soft shadows.
+   Standardized V2 — sets all --wjs-* vars + overrides
+   the full reference component set.
+   ========================================= */
+
+:root {
+  /* --- COLOR PALETTE: Brick / Terracotta accent --- */
+  --wjs-color-primary: #9a3328;
+  /* Brick / terracotta */
+  --wjs-color-primary-dark: #7a2820;
+  /* Deep brick */
+
+  /* --- COLOR SEMANTICS --- */
+  --wjs-bg-canvas: #faf8f3;
+  /* Warm paper */
+  --wjs-bg-surface: #ffffff;
+
+  --wjs-color-text-main: #211c17;
+  /* Ink */
+  --wjs-color-text-muted: #6f6358;
+  /* Warm muted brown */
+
+  --wjs-border-subtle: #e7decf;
+  /* Warm hairline */
+
+  /* --- NAVIGATION CONFIG --- */
+  --wjs-nav-font-family: 'Public Sans', system-ui, sans-serif;
+  --wjs-nav-font-size: 0.78rem;
+  --wjs-nav-font-weight: 600;
+  --wjs-nav-text-transform: uppercase;
+  --wjs-nav-letter-spacing: 0.18em;
+  /* Small-caps feel */
+
+  --wjs-nav-color: #211c17;
+  --wjs-nav-color-hover: #9a3328;
+  /* Terracotta on hover */
+  --wjs-nav-transition: color 0.2s ease;
+
+  --wjs-logo-color: #211c17;
+
+  /* --- FOOTER CONFIG --- */
+  --wjs-footer-bg: #2a231d;
+  /* Dark roasted brown */
+  --wjs-footer-text-heading: #faf8f3;
+  --wjs-footer-text-body: #c9bca9;
+  --wjs-footer-text-hover: #d98e5a;
+  /* Warm amber hover */
+  --wjs-footer-icon-bg: #3a322a;
+  --wjs-footer-icon-color: #faf8f3;
+
+  /* --- TYPOGRAPHY --- */
+  --wjs-font-family-base: 'Public Sans', system-ui, -apple-system, sans-serif;
+
+  /* --- THEME-LOCAL SCALES (editorial / print) --- */
+  --wjs-radius: 2px;
+  /* Squared corners */
+  --wjs-radius-pill: 2px;
+  --wjs-hairline: 1px solid var(--wjs-border-subtle);
+  --wjs-shadow-soft: 0 1px 2px rgba(33, 28, 23, 0.06);
+  --wjs-shadow-raised: 0 2px 8px rgba(33, 28, 23, 0.08);
+  --wjs-font-heading: 'Libre Bodoni', Georgia, 'Times New Roman', serif;
+}
+
+/* =========================================
+   VISUAL OVERRIDES
+   ========================================= */
+
+body {
+  background-color: var(--wjs-bg-canvas) !important;
+  color: var(--wjs-color-text-main) !important;
+  font-family: var(--wjs-font-family-base) !important;
+  font-weight: 400;
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* GLOBAL: Consistent squared radius scale */
+* {
+  border-radius: var(--wjs-radius) !important;
+}
+
+/* Header: Warm paper bar with hairline + terracotta keyline */
+header {
+  background-color: var(--wjs-bg-surface) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+  box-shadow: inset 0 -3px 0 var(--wjs-color-primary), var(--wjs-shadow-soft) !important;
+}
+
+header[class*='fixed'] {
+  background-color: rgba(255, 255, 255, 0.94) !important;
+  backdrop-filter: saturate(1.1) blur(8px) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+}
+
+/* Logo: Refined serif masthead */
+.wjs-header-logo {
+  color: var(--wjs-logo-color) !important;
+  font-family: var(--wjs-font-heading) !important;
+  font-weight: 700 !important;
+  font-size: 1.5rem !important;
+  letter-spacing: -0.01em;
+}
+
+/* Nav Links: Uppercase small-caps, spaced */
+.wjs-header-nav a {
+  font-family: var(--wjs-nav-font-family) !important;
+  font-size: var(--wjs-nav-font-size) !important;
+  font-weight: var(--wjs-nav-font-weight) !important;
+  color: var(--wjs-nav-color) !important;
+  text-transform: var(--wjs-nav-text-transform) !important;
+  letter-spacing: var(--wjs-nav-letter-spacing) !important;
+  transition: var(--wjs-nav-transition) !important;
+  text-decoration: none !important;
+  padding-bottom: 2px !important;
+  border-bottom: 1px solid transparent !important;
+}
+
+.wjs-header-nav a:hover {
+  color: var(--wjs-nav-color-hover) !important;
+  border-bottom-color: var(--wjs-color-primary) !important;
+}
+
+/* Content: Generous refined serif headlines */
+h1,
+h2,
+h3 {
+  font-family: var(--wjs-font-heading) !important;
+  font-weight: 600 !important;
+  color: var(--wjs-color-text-main) !important;
+  letter-spacing: -0.005em;
+  line-height: 1.15 !important;
+}
+
+h1 {
+  font-weight: 700 !important;
+}
+
+/* Editorial top rule above section headings */
+h2 {
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--wjs-border-subtle);
+}
+
+/* Subtle drop-cap on the leading article paragraph */
+article > p:first-of-type::first-letter {
+  font-family: var(--wjs-font-heading);
+  font-size: 3.1em;
+  line-height: 0.82;
+  font-weight: 700;
+  float: left;
+  margin: 0.05em 0.08em 0 0;
+  color: var(--wjs-color-primary);
+}
+
+/* Cards: Flat paper with hairline */
+.wp-block-card,
+article {
+  background: var(--wjs-bg-surface) !important;
+  border: var(--wjs-hairline) !important;
+  box-shadow: var(--wjs-shadow-soft) !important;
+}
+
+/* Footer: Dark roasted brown */
+footer {
+  background-color: var(--wjs-footer-bg) !important;
+  color: var(--wjs-footer-text-body) !important;
+  border-top: 3px solid var(--wjs-color-primary) !important;
+}
+
+footer h3,
+footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
+  font-family: var(--wjs-font-heading) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.01em;
+}
+
+footer a {
+  color: var(--wjs-footer-text-body) !important;
+  text-decoration: none !important;
+  transition: color 0.2s ease !important;
+}
+
+footer a:hover {
+  color: var(--wjs-footer-text-hover) !important;
+}
+
+/* Icons */
+footer .w-10 {
+  background-color: var(--wjs-footer-icon-bg) !important;
+  color: var(--wjs-footer-icon-color) !important;
+  transition: background-color 0.2s ease, color 0.2s ease !important;
+}
+
+footer .w-10:hover {
+  background-color: var(--wjs-color-primary) !important;
+  color: #faf8f3 !important;
+}
+
+/* =========================================
+   SEPIA PRESS: COMPONENT OVERRIDES
+   Print-like / editorial aesthetic
+   ========================================= */
+
+/* Accordion: Hairline-divided panels */
+.wp-block-accordion {
+  border: var(--wjs-hairline) !important;
+  background: var(--wjs-bg-surface) !important;
+  box-shadow: var(--wjs-shadow-soft) !important;
+  overflow: hidden;
+}
+
+.wp-block-accordion .accordion-item button {
+  background: var(--wjs-bg-surface) !important;
+  color: var(--wjs-color-text-main) !important;
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+  font-family: var(--wjs-nav-font-family) !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: color 0.2s ease, background-color 0.2s ease !important;
+}
+
+.wp-block-accordion .accordion-item button:hover {
+  color: var(--wjs-color-primary) !important;
+  background: #faf8f3 !important;
+}
+
+.wp-block-accordion .accordion-item > div {
+  background: #faf8f3 !important;
+  color: var(--wjs-color-text-muted) !important;
+}
+
+/* Tabs: Hairline underline tabs */
+.wp-block-tabs > div:first-child {
+  border-bottom: 1px solid var(--wjs-border-subtle) !important;
+}
+
+.wp-block-tabs button {
+  color: var(--wjs-color-text-muted) !important;
+  font-family: var(--wjs-nav-font-family) !important;
+  font-weight: 600 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  border-bottom: 2px solid transparent !important;
+  transition: color 0.2s ease, border-color 0.2s ease !important;
+}
+
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  color: var(--wjs-color-primary) !important;
+  border-bottom-color: var(--wjs-color-primary) !important;
+  outline: none !important;
+}
+
+.wp-block-tabs > div:last-child {
+  background: var(--wjs-bg-surface) !important;
+  border: var(--wjs-hairline) !important;
+  border-top: none !important;
+}
+
+/* Video: Framed print plate */
+.wp-block-video-embed {
+  border: 1px solid var(--wjs-color-text-main) !important;
+  box-shadow: var(--wjs-shadow-raised) !important;
+}
+
+/* Audio: Minimal paper player */
+.wp-block-audio-player {
+  background: var(--wjs-bg-surface) !important;
+  border: var(--wjs-hairline) !important;
+  box-shadow: var(--wjs-shadow-soft) !important;
+}
+
+/* Pricing: Flat paper cards */
+.wp-block-pricing > div {
+  background: var(--wjs-bg-surface) !important;
+  border: var(--wjs-hairline) !important;
+  box-shadow: var(--wjs-shadow-soft) !important;
+}
+
+.wp-block-pricing > div h3 {
+  font-family: var(--wjs-font-heading) !important;
+  letter-spacing: 0.005em;
+}
+
+/* Highlighted plan: terracotta block, no layout-shifting transform */
+.wp-block-pricing > div[style*="scale(1.05)"] {
+  background: var(--wjs-color-primary) !important;
+  color: #faf8f3 !important;
+  transform: none !important;
+  border: 1px solid var(--wjs-color-primary-dark) !important;
+  box-shadow: var(--wjs-shadow-raised) !important;
+}
+
+.wp-block-pricing > div[style*="scale(1.05)"] h3 {
+  color: #faf8f3 !important;
+}
+
+/* Testimonial: Pull-quote with terracotta margin rule */
+.wp-block-testimonial {
+  background: var(--wjs-bg-surface) !important;
+  border: var(--wjs-hairline) !important;
+  border-left: 4px solid var(--wjs-color-primary) !important;
+  box-shadow: var(--wjs-shadow-soft) !important;
+  font-family: var(--wjs-font-heading) !important;
+}
+
+.wp-block-testimonial > div:first-child {
+  color: var(--wjs-color-primary) !important;
+}
+
+/* CTA Banner: Terracotta block */
+.wp-block-cta-banner {
+  background: var(--wjs-color-primary) !important;
+  border: none !important;
+  box-shadow: var(--wjs-shadow-raised) !important;
+}
+
+.wp-block-cta-banner h2 {
+  font-family: var(--wjs-font-heading) !important;
+  color: #faf8f3 !important;
+  border-top: none !important;
+  padding-top: 0 !important;
+  letter-spacing: 0.005em;
+}
+
+.wp-block-cta-banner a {
+  background: #faf8f3 !important;
+  color: var(--wjs-color-primary-dark) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-family: var(--wjs-nav-font-family) !important;
+  font-weight: 600 !important;
+  transition: background-color 0.2s ease, color 0.2s ease !important;
+}
+
+.wp-block-cta-banner a:hover {
+  background: #211c17 !important;
+  color: #faf8f3 !important;
+}
+
+/* Posts Grid: Clean paper cards */
+.wp-block-posts-grid article {
+  background: var(--wjs-bg-surface) !important;
+  border: var(--wjs-hairline) !important;
+  box-shadow: var(--wjs-shadow-soft) !important;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
+}
+
+.wp-block-posts-grid article:hover {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: var(--wjs-shadow-raised) !important;
+}
+
+/* Category Posts: Editorial section headers */
+.wp-block-category-posts h3 {
+  font-family: var(--wjs-font-heading) !important;
+  font-weight: 600 !important;
+  letter-spacing: 0.005em;
+  border-bottom: 2px solid var(--wjs-color-primary);
+  padding-bottom: 8px;
+}
+
+.wp-block-category-posts li {
+  border-color: var(--wjs-border-subtle) !important;
+}
+
+.wp-block-category-posts li a {
+  font-weight: 500 !important;
+  transition: color 0.2s ease !important;
+}
+
+.wp-block-category-posts li a:hover {
+  color: var(--wjs-color-primary) !important;
+}
+
+/* Search: Hairline input + terracotta button */
+.wp-block-search input {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  color: var(--wjs-color-text-main) !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
+}
+
+.wp-block-search input:focus {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 0 3px rgba(154, 51, 40, 0.18) !important;
+  outline: none !important;
+}
+
+.wp-block-search button {
+  background: var(--wjs-color-primary) !important;
+  color: #faf8f3 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-family: var(--wjs-nav-font-family) !important;
+  font-weight: 600 !important;
+  transition: background-color 0.2s ease !important;
+}
+
+.wp-block-search button:hover {
+  background: var(--wjs-color-primary-dark) !important;
+}
