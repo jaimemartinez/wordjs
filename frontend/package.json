@@ -24,7 +24,7 @@
     "@editorjs/paragraph": "^2.11.7",
     "@editorjs/quote": "^2.7.6",
     "@measured/puck": "^0.20.2",
-    "@tailwindcss/typography": "^0.5.19",
+    "@tailwindcss/typography": "^0.5.20",
     "@tiptap/extension-color": "^3.15.3",
     "@tiptap/extension-image": "^3.15.3",
     "@tiptap/extension-link": "^3.15.3",
