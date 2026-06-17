@@ -6,6 +6,9 @@ const nextConfig: NextConfig = {
     root: require('path').resolve(__dirname, '..'),
   },
   async rewrites() {
+    // Monolith mode: the single-process server dispatches /api and /uploads to the backend in-process
+    // before Next sees them, so no proxy rewrite is needed (and there's no gateway port to target).
+    if (process.env.WORDJS_MODE === 'mono') return [];
     let backendUrl = 'http://localhost:3000';
     try {
       const fs = require('fs');
