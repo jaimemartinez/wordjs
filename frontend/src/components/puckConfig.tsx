@@ -386,9 +386,12 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 
     useEffect(() => {
         if (editorRef.current) {
-            // Prefer semantic tags (<b>, <i>) over inline styles
+            // Emit CSS styles (<span style="...">) instead of legacy elements: with styleWithCSS off,
+            // execCommand('foreColor')/('fontName') produce <font> tags, which sanitizeHTML strips on
+            // render (the allowlist has <span style> but NOT <font>) — so applied colors/fonts would
+            // silently vanish on save. CSS spans survive the sanitizer.
             try {
-                document.execCommand('styleWithCSS', false, 'false');
+                document.execCommand('styleWithCSS', false, 'true');
             } catch (e) { }
 
             // Auto-focus on mount
@@ -620,7 +623,6 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
                             onMouseDownCapture={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                console.log("[RichText] Cancel clicked");
                                 onCancel();
                             }}
                             className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-md text-xs font-semibold transition-all border border-gray-200"
@@ -634,7 +636,6 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
                             onMouseDownCapture={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                console.log("[RichText] Save clicked");
                                 onSave();
                             }}
                             className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-semibold shadow-sm flex items-center gap-1.5 transition-all"
@@ -746,9 +747,8 @@ const baseConfig = {
                             fontSize: `var(--wjs-${level}-size)`,
                             ...css
                         }}
-                    >
-                        {title}
-                    </Tag>
+                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(title || '') }}
+                    />
                 );
             },
         },
