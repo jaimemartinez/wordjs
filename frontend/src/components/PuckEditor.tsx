@@ -1,8 +1,9 @@
 "use client";
 
-import { Puck, Config, Data, migrate } from "@measured/puck";
+import { Puck, Config, Data, migrate, useGetPuck } from "@measured/puck";
 import "@measured/puck/puck.css";
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import ModernSelect from "./ModernSelect";
 import PublicLayout from "@/app/(public)/layout";
 import { puckConfig } from "./puckConfig";
@@ -42,10 +43,8 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
     const isTextBlock = content !== undefined;
     const actualContent = (isTextBlock ? content : title) ?? "";
 
-    // isEditing must be REACTIVE. The active-editor id lives in window globals (the Puck config is
-    // memoized/stable and can't close over React state), and the EditorContext value is only a
-    // snapshot taken when the stable root rendered — so reading ctx.activeEditorId is stale and the
-    // inline editor opens/closes unreliably. Subscribe to the 'puck-editor-change' event instead.
+    // isEditing is REACTIVE via the 'puck-editor-change' event (the active id lives in a window
+    // global because the Puck config is memoized/stable and can't close over React state).
     const readActiveId = (): string | null => {
         if (typeof window === 'undefined') return null;
         return (window as any).puckActiveEditorId ?? (window.parent as any)?.puckActiveEditorId ?? null;
@@ -59,13 +58,60 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
     const isEditing = activeId === id;
 
     const [localContent, setLocalContent] = React.useState(actualContent);
-
-    // Sync localContent when content prop changes (but never while editing)
     React.useEffect(() => {
-        if (!isEditing) {
-            setLocalContent(actualContent);
-        }
+        if (!isEditing) setLocalContent(actualContent);
     }, [actualContent, isEditing]);
+
+    const viewRef = React.useRef<HTMLDivElement>(null);
+    const editorContainerRef = React.useRef<HTMLDivElement>(null);
+
+    // OPEN via a NATIVE click listener. Puck's drag layer (dnd-kit) swallows React synthetic events
+    // on preview-rendered components, so a React onClick here never fires — a native addEventListener
+    // does. (Verified in-browser: native click fires, React onClick does not.)
+    React.useEffect(() => {
+        const el = viewRef.current;
+        if (!el || !ctx || !id) return;
+        const open = (e: Event) => {
+            e.preventDefault();
+            e.stopPropagation();
+            ctx.setActiveEditorId(id);
+        };
+        el.addEventListener('click', open);
+        return () => el.removeEventListener('click', open);
+    }, [id, ctx]);
+
+    // COMMIT (not discard) when the user mouses down anywhere outside the editor — including the top
+    // "GUARDAR CAMBIOS" button or another block. A full-screen backdrop used to sit over everything
+    // and *discard* on outside click, which both blocked the header and silently dropped edits (the
+    // "changes don't save" bug). A document-level capture listener instead reads the live DOM HTML,
+    // pushes it into Puck's store, and lets the click reach its real target. Also exposes a global
+    // flusher so the page-save handler can commit an open editor before persisting.
+    React.useEffect(() => {
+        if (!isEditing || !ctx || !id) return;
+        const commit = () => {
+            const el = editorContainerRef.current?.querySelector('[contenteditable="true"]') as HTMLElement | null;
+            if (!el) return;
+            ctx.updateComponent(id, isTextBlock ? { content: el.innerHTML } : { title: el.innerHTML });
+            ctx.setActiveEditorId(null);
+        };
+        (window as any).puckCommitActive = commit;
+        const onDocMouseDown = (e: Event) => {
+            const c = editorContainerRef.current;
+            // The editor portal lives in the PARENT doc; a click in the iframe is never "inside" it.
+            if (c && e.target instanceof Node && !c.contains(e.target)) commit();
+        };
+        // Listen on the parent doc (header, sidebar) AND the preview iframe's doc (other blocks,
+        // empty canvas) — clicks inside the iframe don't bubble to the parent.
+        document.addEventListener('mousedown', onDocMouseDown, true);
+        const viewDoc = viewRef.current?.ownerDocument;
+        const hasInnerDoc = viewDoc && viewDoc !== document;
+        if (hasInnerDoc) viewDoc!.addEventListener('mousedown', onDocMouseDown, true);
+        return () => {
+            document.removeEventListener('mousedown', onDocMouseDown, true);
+            if (hasInnerDoc) viewDoc!.removeEventListener('mousedown', onDocMouseDown, true);
+            if ((window as any).puckCommitActive === commit) (window as any).puckCommitActive = null;
+        };
+    }, [isEditing, id, isTextBlock, ctx]);
 
     if (!ctx || !id) {
         return (
@@ -77,68 +123,75 @@ const InlineText = ({ id, content, title, elementId, ...props }: any) => {
         );
     }
 
-    const handleSave = () => {
-        // Single write path: update the component through the parent data store (which controls
-        // <Puck/>). Now that <Puck onChange> mirrors every edit into that store, updateComponent
-        // reads fresh data — no stale clobber, no double dispatch, and onChange fires once.
-        ctx.updateComponent(id, isTextBlock ? { content: localContent } : { title: localContent });
+    const handleSave = (html: string) => {
+        // Persist the live HTML the editor hands back (read from the DOM at save time), not the
+        // onChange-tracked localContent — input events don't propagate out of the body portal.
+        ctx.updateComponent(id, isTextBlock ? { content: html } : { title: html });
+        ctx.setActiveEditorId(null);
+    };
+    const handleCancel = () => {
+        setLocalContent(actualContent);
         ctx.setActiveEditorId(null);
     };
 
-    if (isEditing) {
-        return (
+    return (
+        <>
+            {/* Always-mounted view. Raised z-index + pointer-events so the native click lands here —
+                inside Columns, Puck's DropZone overlay otherwise sits on top and swallows the click. */}
             <div
-                className="relative z-[99999] !overflow-visible !pointer-events-auto min-h-[100px] border-2 border-blue-400 rounded-xl p-1 bg-transparent inline-editor-container"
-                data-item-id={id}
-                onMouseDownCapture={(e) => {
-                    const target = e.target as HTMLElement;
-                    if (target.closest('.rich-text-editor-wrapper, .editor-action-buttons')) return;
-                    e.stopPropagation();
-                }}
-                onPointerDownCapture={(e) => {
-                    const target = e.target as HTMLElement;
-                    if (target.closest('.rich-text-editor-wrapper, .editor-action-buttons')) return;
-                    e.stopPropagation();
-                }}
-                onClickCapture={(e) => {
-                    const target = e.target as HTMLElement;
-                    if (target.closest('.rich-text-editor-wrapper, .editor-action-buttons')) return;
-                    e.stopPropagation();
-                }}
-                onKeyDown={(e) => {
-                    e.stopPropagation();
-                }}
+                ref={viewRef}
+                style={{ position: 'relative', zIndex: 20, pointerEvents: 'auto' }}
+                className="group min-h-[40px] px-1 -mx-1 border border-transparent hover:border-blue-200 hover:bg-blue-50/10 rounded-lg transition-all cursor-text inline-text-view"
             >
-                <RichTextEditor
-                    value={localContent}
-                    onChange={(val: string) => setLocalContent(val)}
-                    onSave={handleSave}
-                    onCancel={() => {
-                        setLocalContent(actualContent);
-                        ctx.setActiveEditorId(null);
-                    }}
-                    transparent={true}
+                <div
+                    id={elementId || undefined}
+                    className="prose max-w-none"
+                    dangerouslySetInnerHTML={{ __html: sanitizeHTML(isEditing ? localContent : actualContent) }}
                 />
             </div>
-        );
-    }
 
-    // View Mode: Show content clickable to edit
-    return (
-        <div
-            onClick={(e) => {
-                e.preventDefault();
-                e.stopPropagation();
-                ctx?.setActiveEditorId(id);
-            }}
-            className="relative group min-h-[40px] px-1 -mx-1 border border-transparent hover:border-blue-200 hover:bg-blue-50/10 rounded-lg transition-all cursor-text inline-text-view"
-        >
-            <div
-                id={elementId || undefined}
-                className="prose max-w-none"
-                dangerouslySetInnerHTML={{ __html: sanitizeHTML(actualContent) }}
-            />
-        </div>
+            {/* The editor is PORTALED to document.body — OUT of Puck's draggable/dnd subtree — so its
+                own React events (toolbar, typing→onChange, Save/Cancel) actually fire. Positioned over
+                the block via the rect captured on open. No full-screen backdrop: outside-clicks are
+                handled by the document listener above (which COMMITS, never discards), so the header
+                and the rest of the UI stay clickable while editing. */}
+            {isEditing && typeof document !== 'undefined' && createPortal(
+                <div
+                    ref={editorContainerRef}
+                    className="inline-editor-container"
+                    style={(() => {
+                        // Position over the block by reading the always-mounted view's live rect at
+                        // render time (reliable, unlike capturing into state on click which raced to
+                        // null for nested blocks). The view lives inside Puck's preview iframe, so its
+                        // rect is iframe-relative — add the iframe element's offset (frameElement is null
+                        // when iframe is disabled, so this also works without an iframe). The editor is
+                        // portaled to the PARENT body, so it's clamped to the parent window. Width is a
+                        // consistent comfortable size (NOT the block width) so the full toolbar fits.
+                        const r = viewRef.current?.getBoundingClientRect();
+                        const frameEl = (viewRef.current?.ownerDocument?.defaultView as any)?.frameElement as HTMLElement | null;
+                        const off = frameEl ? frameEl.getBoundingClientRect() : { top: 0, left: 0 };
+                        const width = Math.min(520, window.innerWidth - 32);
+                        return {
+                            position: 'fixed' as const,
+                            top: r ? Math.max(8, Math.min(off.top + r.top, window.innerHeight - 280)) : 96,
+                            left: r ? Math.max(8, Math.min(off.left + r.left, window.innerWidth - width - 16)) : 96,
+                            width,
+                            zIndex: 99999,
+                        };
+                    })()}
+                    onMouseDown={(e) => e.stopPropagation()}
+                >
+                    <RichTextEditor
+                        value={localContent}
+                        onChange={(val: string) => setLocalContent(val)}
+                        onSave={handleSave}
+                        onCancel={handleCancel}
+                        transparent={false}
+                    />
+                </div>,
+                document.body
+            )}
+        </>
     );
 };
 
@@ -374,24 +427,60 @@ export default function PuckEditor({
     }, [setActiveEditorId]);
 
     const updateComponent = React.useCallback((id: string, newProps: any) => {
-        const currentData = dataRef.current;
+        // Puck v0.20 nests child components inside SLOT props (e.g. a Columns block stores its
+        // children under props['col-0'], props['col-1'], …), not under the legacy `zones` map. So
+        // updating a component requires recursing through every prop that holds a component array —
+        // a flat scan of `content`/`zones` silently misses anything inside Columns/Cards/etc.
+        const isComponentArray = (val: any): boolean =>
+            Array.isArray(val) && val.length > 0 &&
+            val.some((v: any) => v && typeof v === 'object' && v.type && v.props);
 
-        const updateList = (list: any[]) => list.map(item => {
-            if (item.props?.id === id || item._id === id || item.id === id) {
-                return { ...item, props: { ...item.props, ...newProps } };
+        const updateItem = (item: any): any => {
+            if (!item || typeof item !== 'object') return item;
+            let nextProps = item.props;
+
+            // Recurse into slot props (arrays of child components).
+            if (item.props) {
+                for (const key in item.props) {
+                    const val = item.props[key];
+                    if (isComponentArray(val)) {
+                        const mapped = val.map(updateItem);
+                        if (mapped.some((m: any, i: number) => m !== val[i])) {
+                            if (nextProps === item.props) nextProps = { ...item.props };
+                            nextProps[key] = mapped;
+                        }
+                    }
+                }
             }
-            return item;
-        });
 
-        const newData = {
-            ...currentData,
-            content: updateList(currentData.content || []),
-            zones: Object.keys(currentData.zones || {}).reduce((acc: any, key) => ({
-                ...acc,
-                [key]: updateList(currentData.zones![key])
-            }), {})
+            // Apply the target update (matched by id) — merge into props, preserving id/others.
+            if (item.props?.id === id || item._id === id || item.id === id) {
+                nextProps = { ...nextProps, ...newProps };
+            }
+
+            return nextProps === item.props ? item : { ...item, props: nextProps };
         };
 
+        const transform = (prev: any) => ({
+            ...prev,
+            content: (prev.content || []).map(updateItem),
+            zones: Object.keys(prev.zones || {}).reduce((acc: any, key) => ({
+                ...acc,
+                [key]: (prev.zones[key] || []).map(updateItem)
+            }), {})
+        });
+
+        // `data` is NOT a controlled prop in Puck v0.20 — Puck owns its store after mount, so mutating
+        // our local mirror never reaches the rendered tree. Dispatch into Puck's store instead (the
+        // function form receives Puck's live data). Puck's onChange then syncs our mirror back.
+        const dispatch = (window as any).puckDispatch || (window.parent as any)?.puckDispatch;
+        if (dispatch) {
+            dispatch({ type: 'setData', data: transform });
+            return;
+        }
+
+        // Fallback before Puck has registered its dispatch (e.g. SSR / first paint).
+        const newData = transform(dataRef.current);
         setData(newData);
         onChange(newData);
     }, [onChange]);
@@ -401,6 +490,16 @@ export default function PuckEditor({
     const editorConfig = React.useMemo(() => {
         // Stable PuckRoot that uses Window/Events to stay synced
         const StablePuckRoot = ({ children }: { children: React.ReactNode }) => {
+            // Expose Puck's dispatch to updateComponent (which lives outside the Puck provider).
+            // useGetPuck() returns a stable getter and does NOT subscribe, so this root never
+            // re-renders on store changes — preserving the "stable root" guarantee above.
+            const getPuck = useGetPuck();
+            React.useEffect(() => {
+                (window as any).puckDispatch = getPuck().dispatch;
+                // Live store getter — authoritative at save time (Puck's onChange has a deep-equal
+                // guard that can leave the parent's mirrored ref stale).
+                (window as any).puckGetData = () => getPuck().appState.data;
+            }, [getPuck]);
             return (
                 <div id="puck-root-wrapper">
                     <OverlayBlocker />
@@ -516,7 +615,7 @@ export default function PuckEditor({
                     <button
                         type="button"
                         onClick={onSave}
-                        disabled={saving || !hasChanges}
+                        disabled={saving || (!hasChanges && !activeEditorId)}
                         className={`px-3 py-1.5 rounded-md text-sm transition-colors flex items-center gap-1.5 ${hasChanges
                             ? 'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white'
                             : 'bg-gray-300 text-gray-500 cursor-not-allowed'
@@ -775,7 +874,7 @@ export default function PuckEditor({
                                         <button
                                             type="button"
                                             onClick={onSave}
-                                            disabled={saving || !hasChanges}
+                                            disabled={saving || (!hasChanges && !activeEditorId)}
                                             className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${hasChanges
                                                 ? 'bg-gray-900 hover:bg-blue-600 text-white shadow-gray-200 hover:shadow-blue-500/30 hover:-translate-y-0.5'
                                                 : 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'

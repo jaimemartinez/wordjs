@@ -347,7 +347,7 @@ const ColumnDistributionControl = ({ value, onChange }: {
 export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, transparent = false }: {
     value: string;
     onChange: (html: string) => void;
-    onSave?: () => void;
+    onSave?: (html: string) => void;
     onCancel?: () => void;
     transparent?: boolean;
 }) => {
@@ -541,7 +541,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
         >
             {/* Modern Toolbar */}
             <div className={`
-                rich-text-toolbar flex flex-nowrap items-center gap-1 p-2 border-gray-100
+                rich-text-toolbar flex flex-wrap items-center gap-1 p-2 border-gray-100
                 ${transparent ? 'absolute -top-14 left-0 z-[100000] !pointer-events-auto bg-white backdrop-blur-md shadow-[0_10px_40px_-10px_rgba(0,0,0,0.3)] rounded-2xl border border-gray-100 w-max min-w-max whitespace-nowrap animate-in fade-in slide-in-from-bottom-2 duration-300' : 'bg-gray-50/50 border-b'}
             `}>
                 <div className="flex bg-white rounded-lg border border-gray-100 p-0.5 shadow-sm">
@@ -636,7 +636,11 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
                             onMouseDownCapture={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
-                                onSave();
+                                // Read the live DOM innerHTML at save time. onInput-driven state can be
+                                // stale (the editor is portaled out of React's root container, so input
+                                // events bubbling through document.body never reach React's delegated
+                                // listener), and preventDefault() above suppresses the onBlur flush.
+                                onSave(editorRef.current ? editorRef.current.innerHTML : value);
                             }}
                             className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-xs font-semibold shadow-sm flex items-center gap-1.5 transition-all"
                         >
