@@ -351,6 +351,20 @@ async function initialize() {
         // The driver manager automatically loads the correct driver from config
         const { init, initializeDatabase } = require('./config/database');
         await init();
+
+        // --- Multi-node boot guard ---------------------------------------------------------------
+        // Serialize the schema-migration + default-seeding section across replicas so concurrent
+        // boots can't double-apply migrations or create duplicate admin/category/option rows. The
+        // lease is heartbeat-renewed so a slow migration is never preempted mid-seed; if we can't get
+        // the lock (another node is initializing the shared DB) we FAIL CLOSED so the supervisor
+        // retries rather than seeding concurrently. No-op (always held) on SQLite (single host).
+        const distLock = require('./core/dist-lock');
+        await distLock.ensureLockTable();
+        const bootLock = await distLock.acquireBlocking('wordjs:boot', { ttlMs: 60000, renewMs: 20000, timeoutMs: 300000 });
+        if (!bootLock.held) {
+            throw new Error('Boot lock not acquired (another node is initializing the shared database); restarting to retry.');
+        }
+
         await initializeDatabase();
 
         // Initialize default options
@@ -422,6 +436,11 @@ async function initialize() {
         // Create default theme if none exist
         const { createDefaultTheme } = require('./core/themes');
         createDefaultTheme();
+
+        // Seeding done — release the boot guard (stops the heartbeat + frees the lease) so waiting
+        // nodes proceed; the rest of init (plugins, cron) is per-node. On a throw before here the
+        // process exits, its heartbeat timer dies with it, and the lease expires within ~ttl.
+        await bootLock.release();
 
         // Load active plugins
         console.log('🔌 Loading plugins...');
@@ -516,7 +535,9 @@ async function initialize() {
             const services = [
                 {
                     name: 'backend',
-                    url: `${serverProtocol}://127.0.0.1:${config.port}`,
+                    // Advertise a routable address so a gateway on another host can reach this node.
+                    // Defaults to 127.0.0.1 (single host); set advertiseHost per-node for multi-node.
+                    url: `${serverProtocol}://${config.advertiseHost || '127.0.0.1'}:${config.port}`,
                     routes: ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz']
                 }
             ];
