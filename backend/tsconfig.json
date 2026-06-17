@@ -8,11 +8,12 @@
     "types": ["node"],
     "allowJs": true,
     "checkJs": false,
-    // strict is ON. Two sub-flags are deliberately staged: noImplicitAny (the remaining ~1100
-    // implicit-any params, to be annotated with real types file-by-file — NOT blanket any) and
-    // useUnknownInCatchVariables (catch bindings stay any for now). strictNullChecks,
+    // strict is ON, but TWO sub-flags are deliberately OFF (be honest — this is a real gap, not
+    // "nearly done"): noImplicitAny is off — enabling it currently surfaces ~1,220 implicit-any sites
+    // still to annotate with real types (NOT blanket any), worked through incrementally; and
+    // useUnknownInCatchVariables is off (catch bindings stay any for now). strictNullChecks,
     // strictFunctionTypes, strictBindCallApply, strictPropertyInitialization, noImplicitThis and
-    // alwaysStrict are all enforced.
+    // alwaysStrict ARE all enforced.
     "strict": true,
     "noImplicitAny": false,
     "useUnknownInCatchVariables": false,

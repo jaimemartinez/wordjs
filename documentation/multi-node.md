@@ -44,7 +44,9 @@ working directory):
 - `backend/uploads/` — media + fonts (`config.uploads.dir`)
 - `backend/themes/` — installed themes
 - `backend/plugins/` — installed plugin code
-- `backend/backups/` — backup archives
+- `backend/backups/` — backup archives. After every backup only the newest `backup_retention` archives
+  are kept (default 7; set `0` to keep all), so scheduled backups on the shared volume cannot fill the
+  disk. Backups are still on-host — off-host/S3 storage remains on the roadmap.
 - `backend/public/` — **including `public/.well-known/acme-challenge/`** so an ACME HTTP-01 token
   written by the renewing node is visible to whichever node answers the validation request
 - `backend/ssl/` and `backend/data/ssl/` — issued certs + the ACME account key
@@ -104,7 +106,11 @@ the challenge must be reachable on port 80 — either:
 - front the site with a reverse proxy that forwards port 80 `/.well-known/acme-challenge/` to the
   gateway.
 
-ACME auto-renewal runs in split (gateway) mode only — see `documentation/deployment.md`.
+ACME auto-renewal works in **both** deployment modes — see `documentation/deployment.md`. In split
+(gateway) mode the cron leader pushes the renewed cert to the gateway over the internal mTLS channel; in
+embedded/monolith mode `cert-manager` installs it in-process (writes the cert files **and** hot-reloads
+the running HTTPS server via `setSecureContext`, no restart). Either way it needs the opt-in HTTP-01
+listener (`acme.http01Port`, e.g. 80) reachable so the challenge can be validated.
 
 ## Load balancer
 
@@ -113,6 +119,15 @@ Point your L4/L7 load balancer at the gateway. Health probes (added for orchestr
 - `GET /healthz` — liveness (always 200 while the process is up; answered by the gateway directly).
 - `GET /readyz` — readiness (200 only when installed, booted and the DB is reachable; 503 otherwise) —
   use this as the LB's "in rotation" check so traffic isn't sent to a node that's still migrating.
+
+### Metrics
+
+- `GET /metrics` — Prometheus scrape endpoint (default Node/process metrics plus a `wordjs_sse_clients`
+  gauge per node). It is **disabled (returns 404)** unless a scrape token is configured at
+  `config.metrics.token` (or the `METRICS_TOKEN` env), and is **never exposed without a token**. Scrape
+  with `Authorization: Bearer <token>`. The route is part of each backend's registered route group, so
+  the gateway round-robins to it like any other backend route (and it is served directly in monolith
+  mode); each node reports its own SSE client count.
 
 ## Known limitations
 

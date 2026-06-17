@@ -96,6 +96,12 @@ Scripts: `npm run dev:mono` (dev — Next dev HMR + `ts-node` backend), `npm run
 
 **Choose MONOLITH for** the simplest single-artifact deploy — one VM/container, TLS via its built-in HTTPS or a single reverse proxy in front.
 
+### Observability — `/metrics`
+
+The backend exposes a Prometheus endpoint at **`GET /metrics`** (`backend/src/core/metrics.ts`): the default Node/process metrics (CPU, RSS/heap, event-loop lag, GC, handles, prefixed `wordjs_`) plus app-level gauges including **`wordjs_sse_clients`** (active SSE clients on this node).
+
+It is **disabled by default** — without a configured scrape token the route returns **404**, so metrics are never exposed publicly by accident. Enable it by setting a token at `config.metrics.token` (or the `METRICS_TOKEN` env var) and scraping with an `Authorization: Bearer <token>` header. The endpoint is reachable through the public origin in **both** run modes — routed by the gateway in SPLIT mode and included in the backend prefixes in MONOLITH mode.
+
 ---
 
 ## 🔄 Request Flow
@@ -557,7 +563,7 @@ wordjs/
 
 The backend is written in **TypeScript** (`backend/src/**/*.ts`). In **production it is compiled**: `npm run build` (`tsc -p tsconfig.build.json`, preceded by a `clean` of `dist/`) emits `dist/`, and the `server.js` supervisor runs `node dist/index.js`. `ts-node` is used **only** in development or as a convenience fallback when no `dist/` build exists.
 
-- **Strict typecheck:** `backend/tsconfig.json` has `strict: true` (`strictNullChecks`, `strictFunctionTypes`, etc. enforced). Two sub-flags are deliberately staged off for now — `noImplicitAny` and `useUnknownInCatchVariables` — to be tightened file-by-file. `module: commonjs`, `moduleDetection: force`, `allowJs`.
+- **Strict typecheck:** `backend/tsconfig.json` has `strict: true`, so the strict core is enforced (`strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitThis`, `alwaysStrict`). Two sub-flags remain explicitly **OFF**: `noImplicitAny: false` and `useUnknownInCatchVariables: false`. These are not nearly done — enabling `noImplicitAny` today surfaces **~1,220 implicit-any sites** (mostly untyped parameters) that still need real annotations, so the flag stays off until those are worked through. `module: commonjs`, `moduleDetection: force`, `allowJs`.
 - **Entry / supervisor:** `npm start` runs the `server.js` supervisor. It checks for `backend/dist/index.js`: if present it spawns `node dist/index.js` (compiled); otherwise it falls back to `node -r ts-node/register src/index.ts`. `npm run dev` uses `node --watch -r ts-node/register src/index.ts`.
 - **In-tree `.js` files compiled via `allowJs`:** `src/core/db-admin/*` (the in-core DB migration/admin runner that used to be the `db-migration` plugin) and `src/core/plugin-worker.js` (the plugin isolate worker) are carried into `dist/` by `allowJs`.
 - **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/close`) plus implementations (`sqlite-native`, `sqlite-legacy`, `postgres`, embedded). Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
