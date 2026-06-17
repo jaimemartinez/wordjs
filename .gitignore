@@ -1,6 +1,6 @@
 # Dependencies
 **/node_modules/
-package-lock.json
+# package-lock.json is intentionally COMMITTED — reproducible builds + a meaningful npm audit / Dependabot gate.
 pnpm-lock.yaml
 yarn.lock
 
@@ -79,3 +79,7 @@ graphify-out/
 temp_*
 # Red-team scratch artifact left in the plugins dir (not a real plugin; test uses /tmp instead)
 backend/plugins/malicious.txt
+
+# Local editor backup scratch dirs (do not track)
+frontend/_backups/
+frontend/src/app/_backup/
