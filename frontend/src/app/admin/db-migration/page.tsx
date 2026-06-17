@@ -86,7 +86,7 @@ export default function DbMigrationPage() {
             try {
                 const data = await api<any>('/db-migration/status');
                 if (data.status) setMigrationProgress(data.status);
-            } catch (e) { }
+            } catch { }
         }, 500);
 
         const payload: any = { targetDriver: target };
@@ -109,7 +109,7 @@ export default function DbMigrationPage() {
                         clearInterval(poll);
                         window.location.reload();
                     }
-                } catch (e) { }
+                } catch { }
             }, 1000);
 
         } catch (e: any) {
@@ -519,7 +519,7 @@ function EmbeddedControls({ onReady }: { onReady: (creds: any) => void }) {
         try {
             const data = await api<any>('/db-migration/embedded/status');
             setStatus(data);
-        } catch (e) { }
+        } catch { }
     };
 
     useEffect(() => { fetchStatus(); }, []);
@@ -540,7 +540,7 @@ function EmbeddedControls({ onReady }: { onReady: (creds: any) => void }) {
                     dbName: 'wordjs'
                 });
             }
-        } catch (e) { }
+        } catch { }
         setLoading(false);
     };
 

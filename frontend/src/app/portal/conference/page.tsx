@@ -41,7 +41,7 @@ interface Inscription {
 function LocationPortalContent() {
     const { addToast } = useToast();
     // Auth State
-    const [token, setToken] = useState<string | null>(null);
+    const [, setToken] = useState<string | null>(null);
     const [myLocation, setMyLocation] = useState<Location | null>(null);
     const [step, setStep] = useState<'login' | 'dashboard'>('login');
     const [loading, setLoading] = useState(false);
@@ -104,7 +104,7 @@ function LocationPortalContent() {
                 // If not logged in, load the conferences for the login screen
                 loadConferences();
             }
-        } catch (e) {
+        } catch {
             loadConferences();
         } finally {
             setLoading(false);
@@ -183,7 +183,7 @@ function LocationPortalContent() {
             } else {
                 addToast(data.error || 'Login failed', 'error');
             }
-        } catch (e) {
+        } catch {
             addToast('Connection error', 'error');
         } finally {
             setLoading(false);
@@ -234,7 +234,7 @@ function LocationPortalContent() {
                 const err = await res.json();
                 addToast(err.error || 'Error', 'error');
             }
-        } catch (e) {
+        } catch {
             addToast('Connection error', 'error');
         } finally {
             setLoading(false);
@@ -271,7 +271,7 @@ function LocationPortalContent() {
                 const err = await res.json();
                 addToast(err.error || 'Error al procesar pagos', 'error');
             }
-        } catch (e) {
+        } catch {
             addToast('Error de conexión', 'error');
         } finally {
             setLoading(false);

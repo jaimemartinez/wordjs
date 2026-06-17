@@ -2,7 +2,6 @@
 
 import { useEffect, useRef } from 'react';
 import { usePathname, useSearchParams } from 'next/navigation';
-import { api } from '@/lib/api';
 
 export function AnalyticsTracker() {
     const pathname = usePathname();
@@ -32,7 +31,7 @@ export function AnalyticsTracker() {
                         resource: url
                     })
                 });
-            } catch (e) {
+            } catch {
                 // Ignore tracking errors
             }
         };

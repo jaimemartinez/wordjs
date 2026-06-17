@@ -2,7 +2,6 @@ import type { Metadata } from "next";
 import { Suspense } from "react";
 import { Inter } from "next/font/google";
 import "./globals.css";
-import { headers } from 'next/headers';
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
 import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
@@ -35,7 +34,7 @@ export async function generateMetadata(): Promise<Metadata> {
                 apple: icon,
             }
         };
-    } catch (e) {
+    } catch {
         return {
             title: "WordJS",
             description: "CMS",

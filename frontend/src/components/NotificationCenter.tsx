@@ -336,7 +336,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                     </div>
                                     <div className="absolute -inset-4 bg-blue-50/30 rounded-[48px] blur-2xl -z-0"></div>
                                 </div>
-                                <h4 className="text-xl font-black text-gray-900 mb-2">You're all set!</h4>
+                                <h4 className="text-xl font-black text-gray-900 mb-2">You&apos;re all set!</h4>
                                 <p className="text-sm text-gray-400 font-medium leading-relaxed italic">
                                     There are no new notifications to display right now. Check back later!
                                 </p>

@@ -20,7 +20,6 @@ export interface SEOData {
 }
 
 export default function SEOPanel({
-    postId,
     title,
     excerpt,
     slug,

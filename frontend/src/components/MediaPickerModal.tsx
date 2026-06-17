@@ -1,6 +1,5 @@
 "use client";
 
-import { useState } from "react";
 import { MediaItem } from "@/lib/api";
 import MediaLibrarySelector from "./MediaLibrarySelector";
 

@@ -7,7 +7,7 @@ import { useEffect, useState } from "react";
 import { settingsApi } from "@/lib/api";
 
 export default function SecurityPage() {
-    const { t } = useI18n();
+    useI18n();
     const [adminEmail, setAdminEmail] = useState("");
 
     useEffect(() => {
@@ -36,7 +36,7 @@ export default function SecurityPage() {
                         Security Center
                     </h1>
                     <p className="text-gray-600 dark:text-gray-300 text-lg max-w-2xl">
-                        Manage your site's SSL certificates, encryption protocols, and gateway configuration to ensure maximum security.
+                        Manage your site&apos;s SSL certificates, encryption protocols, and gateway configuration to ensure maximum security.
                     </p>
                 </div>
 
@@ -59,7 +59,7 @@ export default function SecurityPage() {
                                     <div>
                                         <h3 className="text-lg font-bold text-gray-900 dark:text-gray-100 mb-1">Certificate Management</h3>
                                         <p className="text-sm text-gray-600 dark:text-gray-400">
-                                            Provision a free Let's Encrypt certificate automatically, manually verify via DNS, or upload your own custom certificate files.
+                                            Provision a free Let&apos;s Encrypt certificate automatically, manually verify via DNS, or upload your own custom certificate files.
                                         </p>
                                     </div>
                                 </div>

@@ -3,13 +3,11 @@
 import { useEffect, useState, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, useParams } from "next/navigation";
-import { postsApi, Post, settingsApi } from "@/lib/api";
+import { postsApi, settingsApi } from "@/lib/api";
 import { pageConfig } from "@/components/puckConfig";
 import PuckEditor from "@/components/PuckEditor";
 import { Data } from "@measured/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
-import Header from "@/components/public/Header";
-import Footer from "@/components/public/Footer";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 
@@ -65,7 +63,7 @@ export default function PageEditorPage() {
             setLastSyncedTitle(title);
         }
     }, [title, slugManuallyEdited, lastSyncedTitle]);
-    const [activeTheme, setActiveTheme] = useState("default");
+    const [, setActiveTheme] = useState("default");
 
     useEffect(() => {
         // Load settings to get active theme

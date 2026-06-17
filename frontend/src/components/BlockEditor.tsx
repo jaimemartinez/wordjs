@@ -274,8 +274,7 @@ export default function BlockEditor({ initialContent, initialBlocks, onChange }:
             }
         }
 
-        let editor: EditorJS;
-        editor = new EditorJS({
+        const editor: EditorJS = new EditorJS({
             holder: holderId,
             data: data,
             placeholder: "Start writing your story...",
