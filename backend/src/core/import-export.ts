@@ -123,16 +123,24 @@ async function exportSite(options: Record<string, any> = {}) {
     // Export settings (Option access is sync in memory usually, but good to check if db needed)
     // Options are loaded into memory on startup usually, but let's assume getOption is sync as per require.
     if (includeSettings) {
+        // These getOption reads are independent — run them concurrently instead of sequentially.
+        const [
+            blogname, blogdescription, posts_per_page, date_format, time_format,
+            timezone_string, show_on_front, page_on_front, page_for_posts
+        ] = await Promise.all([
+            getOption('blogname'),
+            getOption('blogdescription'),
+            getOption('posts_per_page'),
+            getOption('date_format'),
+            getOption('time_format'),
+            getOption('timezone_string'),
+            getOption('show_on_front'),
+            getOption('page_on_front'),
+            getOption('page_for_posts')
+        ]);
         exportData.settings = {
-            blogname: await getOption('blogname'),
-            blogdescription: await getOption('blogdescription'),
-            posts_per_page: await getOption('posts_per_page'),
-            date_format: await getOption('date_format'),
-            time_format: await getOption('time_format'),
-            timezone_string: await getOption('timezone_string'),
-            show_on_front: await getOption('show_on_front'),
-            page_on_front: await getOption('page_on_front'),
-            page_for_posts: await getOption('page_for_posts')
+            blogname, blogdescription, posts_per_page, date_format, time_format,
+            timezone_string, show_on_front, page_on_front, page_for_posts
         };
     }
 
@@ -193,8 +201,24 @@ async function exportToFile(filepath, options = {}) {
 function validateImportData(data) {
     const dangerousKeys = ['__proto__', 'constructor', 'prototype'];
 
-    function checkObject(obj, path = '') {
+    // DoS guards: a deeply nested or enormous payload could blow the stack or pin the CPU.
+    const MAX_DEPTH = 32;
+    const MAX_NODES = 1_000_000;
+    const MAX_ARRAY_LENGTH = 1_000_000;
+    let visited = 0;
+
+    function checkObject(obj, path = '', depth = 0) {
         if (obj === null || typeof obj !== 'object') return;
+
+        if (depth > MAX_DEPTH) {
+            throw new Error(`Security: Import data nested too deeply (>${MAX_DEPTH}) at ${path}`);
+        }
+        if (++visited > MAX_NODES) {
+            throw new Error('Security: Import data has too many nodes (possible DoS)');
+        }
+        if (Array.isArray(obj) && obj.length > MAX_ARRAY_LENGTH) {
+            throw new Error(`Security: Array too large at ${path}`);
+        }
 
         for (const key of Object.keys(obj)) {
             // Block dangerous prototype pollution keys
@@ -209,12 +233,12 @@ function validateImportData(data) {
 
             // Recursively check nested objects
             if (typeof obj[key] === 'object' && obj[key] !== null) {
-                checkObject(obj[key], `${path}.${key}`);
+                checkObject(obj[key], `${path}.${key}`, depth + 1);
             }
         }
     }
 
-    checkObject(data, 'root');
+    checkObject(data, 'root', 0);
     return true;
 }
 

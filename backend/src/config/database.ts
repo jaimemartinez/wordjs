@@ -15,8 +15,15 @@ let driver: any = null;
 let driverAsync: any = null; // New Async Driver
 
 // Helper to load driver dynamically
-function loadDriver(overrideName: string | null = null) {
+async function loadDriver(overrideName: string | null = null) {
   const name = overrideName || config.dbDriver || 'sqlite-native';
+
+  // Close the prior async driver before swapping it out, so re-init (tests/migrations)
+  // doesn't leak the previous connection pool / file handle.
+  if (driverAsync && typeof driverAsync.close === 'function') {
+    try { await driverAsync.close(); } catch (e) { /* best-effort cleanup */ }
+  }
+
   driverName = name; // Update global state
 
   try {
@@ -62,14 +69,15 @@ function loadDriver(overrideName: string | null = null) {
   }
 }
 
-// Initial Load (Default)
+// Initial Load (Default). loadDriver is async to close any prior async driver before
+// swapping; the very first load has none, so this resolves synchronously in practice.
 loadDriver();
 
 // 2. Abstraction Proxies
 const init = async (options: any = {}) => {
   // Support dynamic driver switching (e.g. for Tests or Migrations)
   if (options.driver) {
-    loadDriver(options.driver);
+    await loadDriver(options.driver);
   }
 
   // Optionally start the EMBEDDED PostgreSQL server. This is OPT-IN: the 'postgres' driver connects
@@ -121,12 +129,12 @@ const saveDatabase = () => {
   }
 };
 
-const closeDatabase = () => {
+const closeDatabase = async () => {
   if (driver.close && typeof driver.close === 'function') {
     driver.close();
   }
   if (driverAsync) {
-    driverAsync.close();
+    await driverAsync.close();
   }
 }
 
@@ -339,7 +347,9 @@ async function initializeSchema(db, isAsync = false) {
     'CREATE INDEX IF NOT EXISTS idx_comments_post_approved ON comments (comment_post_id, comment_approved)',
     // options: getOption/updateOption/addOption/deleteOption lookup by option_name; getAutoloadedOptions by autoload
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_options_name ON options (option_name)',
-    'CREATE INDEX IF NOT EXISTS idx_options_autoload ON options (autoload)'
+    'CREATE INDEX IF NOT EXISTS idx_options_autoload ON options (autoload)',
+    // notifications: per-user listing filtered by is_read and ordered by created_at
+    'CREATE INDEX IF NOT EXISTS idx_notifications_user_read_created ON notifications (user_id, is_read, created_at)'
   ];
 
   for (const idx of indexes) {
@@ -398,27 +408,12 @@ const dbAsyncProxy = new Proxy({}, {
           verifyPermission('database', 'write');
         }
 
-        // Automatically normalize SQL queries (first argument is SQL string)
-        // This ensures ALL database operations use the same syntax globally
-        if (args.length > 0 && typeof args[0] === 'string') {
-          const sql = args[0];
-          const params = args.slice(1);
-
-          // For PostgreSQL: normalize placeholders ? -> $1, $2, etc.
-          // For SQLite: pass SQL as-is (already uses ? placeholders)
-          // The Postgres driver also normalizes internally, ensuring double safety
-          let normalizedSql = sql;
-          if (driverName === 'postgres') {
-            let paramIndex = 1;
-            normalizedSql = sql.replace(/\?/g, () => `$${paramIndex++}`);
-          }
-
-          // Execute with normalized SQL
-          // Standard SQL (SELECT, INSERT, UPDATE, DELETE, JOIN, LIMIT, OFFSET)
-          // works the same in both SQLite and PostgreSQL.
-          // The only difference is placeholders, which we normalize automatically.
-          return await db[prop].bind(db)(normalizedSql, ...params);
-        }
+        // Placeholder normalization (? -> $1, $2 for Postgres) is handled by the
+        // Postgres driver's normalizeSql (single source of truth). The proxy passes
+        // SQL through untouched so SQLite-style placeholders work everywhere and we
+        // never double-normalize. Standard SQL (SELECT/INSERT/UPDATE/DELETE/JOIN/
+        // LIMIT/OFFSET) works the same in both SQLite and PostgreSQL.
+        return await db[prop].bind(db)(...args);
 
         // Non-SQL operations (like close, connect, etc.) - pass through
         return await db[prop].bind(db)(...args);
@@ -520,7 +515,11 @@ async function clearDatabase(db: any = null) {
         if (driverName !== 'postgres') {
           try {
             await targetDb.run(`DELETE FROM sqlite_sequence WHERE name='${table}'`);
-          } catch (ignore) { }
+          } catch (seqErr) {
+            // sqlite_sequence only exists once an AUTOINCREMENT table has rows; ignore its
+            // absence, but surface real failures (e.g. a locked DB) instead of swallowing them.
+            if (!seqErr.message || !seqErr.message.includes('no such table')) throw seqErr;
+          }
         }
       } else {
         targetDb.exec(sql); // Sync legacy

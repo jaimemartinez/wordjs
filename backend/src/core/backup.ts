@@ -42,8 +42,12 @@ async function createBackup() {
     // 3. Add DB Dump
     zip.addFile('wordjs-content.json', Buffer.from(JSON.stringify(siteData, null, 2)));
 
-    // 4. Add Full System Files (Excluding dependencies and temp)
+    // 4. Add ONLY the content roots that restoreBackup() actually restores (uploads/, plugins/,
+    //    themes/). Walking the entire backend tree synchronously blocked the event loop and zipped
+    //    code/config that restore never extracts anyway. Use async fs (fs.promises) so the walk does
+    //    not block the event loop on large media libraries.
     const backendRoot = path.resolve(__dirname, '../../');
+    const CONTENT_ROOTS = ['uploads', 'plugins', 'themes'];
     const excludes = [
         'node_modules', 'backups', 'logs', 'os-tmp', '.git', '.DS_Store', 'wordjs-content.json',
         'postgres-embed',
@@ -51,9 +55,9 @@ async function createBackup() {
         'wordjs.db', 'wordjs.db-wal', 'wordjs.db-shm'
     ];
 
-    function addDirectoryToZip(zip, rootPath, relPath = '') {
+    async function addDirectoryToZip(zip, rootPath, relPath = '') {
         const fullPath = path.join(rootPath, relPath);
-        const files = fs.readdirSync(fullPath);
+        const files = await fs.promises.readdir(fullPath);
 
         for (const file of files) {
             if (excludes.includes(file)) continue;
@@ -62,17 +66,26 @@ async function createBackup() {
 
             const filePath = path.join(fullPath, file);
             const entryPath = relPath ? path.join(relPath, file) : file;
-            const stats = fs.statSync(filePath);
+            const stats = await fs.promises.stat(filePath);
 
             if (stats.isDirectory()) {
-                addDirectoryToZip(zip, rootPath, entryPath);
+                await addDirectoryToZip(zip, rootPath, entryPath);
             } else {
-                zip.addLocalFile(filePath, relPath);
+                const data = await fs.promises.readFile(filePath);
+                zip.addFile(entryPath.replace(/\\/g, '/'), data);
             }
         }
     }
 
-    addDirectoryToZip(zip, backendRoot);
+    for (const root of CONTENT_ROOTS) {
+        const rootDir = path.join(backendRoot, root);
+        try {
+            await fs.promises.access(rootDir);
+        } catch {
+            continue; // content root doesn't exist on this install — skip
+        }
+        await addDirectoryToZip(zip, backendRoot, root);
+    }
 
     // 5. Save Zip
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');

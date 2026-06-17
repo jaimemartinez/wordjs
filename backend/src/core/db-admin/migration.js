@@ -128,14 +128,15 @@ exports.runMigration = async (req, res) => {
         let tempTargetFile = null;
 
         // Simple retry helper for Windows file locking
-        const forceDelete = (f) => {
+        const forceDelete = async (f) => {
             if (!fs.existsSync(f)) return;
             try {
                 fs.unlinkSync(f);
             } catch (e) {
                 if (e.code === 'EBUSY' || e.code === 'EPERM') {
-                    const end = Date.now() + 1000; // Increased wait to 1s
-                    while (Date.now() < end) { }
+                    // Wait without busy-spinning the event loop (the lock is usually a transient
+                    // OneDrive/zombie-reader handle that clears on its own).
+                    await new Promise(r => setTimeout(r, 1000));
                     try { fs.unlinkSync(f); } catch (e2) { throw e; }
                 } else {
                     throw e;
@@ -152,9 +153,9 @@ exports.runMigration = async (req, res) => {
 
             try {
                 // Ensure temp is clean
-                forceDelete(tempTargetFile);
-                if (fs.existsSync(tempTargetFile + '-wal')) forceDelete(tempTargetFile + '-wal');
-                if (fs.existsSync(tempTargetFile + '-shm')) forceDelete(tempTargetFile + '-shm');
+                await forceDelete(tempTargetFile);
+                if (fs.existsSync(tempTargetFile + '-wal')) await forceDelete(tempTargetFile + '-wal');
+                if (fs.existsSync(tempTargetFile + '-shm')) await forceDelete(tempTargetFile + '-shm');
             } catch (e) {
                 console.error('❌ Failed to clean up temp files:', e.message);
                 throw new Error(`Temp file locked: ${e.message}`);
@@ -339,7 +340,7 @@ exports.runMigration = async (req, res) => {
         }
 
         // Close Source DB now that we are done reading
-        try { if (dbManager.closeDatabase) dbManager.closeDatabase(); } catch (e) { console.warn('Could not close source DB:', e.message); }
+        try { if (dbManager.closeDatabase) await dbManager.closeDatabase(); } catch (e) { console.warn('Could not close source DB:', e.message); }
 
         if (isPostgresTarget) {
             await targetDriverModule.exec("SET session_replication_role = 'origin';");
@@ -359,18 +360,18 @@ exports.runMigration = async (req, res) => {
             console.log('   Stats: Swapping temporary database to final location...');
             try {
                 // Inline retry delete
-                const retryDelete = (f) => {
+                const retryDelete = async (f) => {
                     if (!fs.existsSync(f)) return;
                     try { fs.unlinkSync(f); } catch (e) {
-                        const end = Date.now() + 1000;
-                        while (Date.now() < end) { }
+                        // Yield to the event loop for the lock to clear instead of busy-spinning.
+                        await new Promise(r => setTimeout(r, 1000));
                         fs.unlinkSync(f);
                     }
                 };
 
-                retryDelete(targetFile);
-                if (fs.existsSync(targetFile + '-wal')) retryDelete(targetFile + '-wal');
-                if (fs.existsSync(targetFile + '-shm')) retryDelete(targetFile + '-shm');
+                await retryDelete(targetFile);
+                if (fs.existsSync(targetFile + '-wal')) await retryDelete(targetFile + '-wal');
+                if (fs.existsSync(targetFile + '-shm')) await retryDelete(targetFile + '-shm');
 
                 fs.renameSync(tempTargetFile, targetFile);
             } catch (e) {

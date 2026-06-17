@@ -181,12 +181,21 @@ class Email {
         if (isSent !== undefined) { fields.push("is_sent = ?"); params.push(isSent); }
         if (isDraft !== undefined) { fields.push("is_draft = ?"); params.push(isDraft); }
 
-        fields.push("date_received = CURRENT_TIMESTAMP");
+        // Only bump date_received when actual content changed (subject/body/html);
+        // metadata-only updates (flags, addresses) must not reset the timestamp.
+        if (subject !== undefined || bodyText !== undefined || bodyHtml !== undefined) {
+            fields.push("date_received = CURRENT_TIMESTAMP");
+        }
+
+        // Nothing to update (e.g. only unknown keys provided): avoid invalid "SET" SQL.
+        if (fields.length === 0) {
+            return await this.findById(id);
+        }
 
         params.push(id);
 
         await dbAsync.run(`
-            UPDATE received_emails 
+            UPDATE received_emails
             SET ${fields.join(', ')}
             WHERE id = ?
         `, params);

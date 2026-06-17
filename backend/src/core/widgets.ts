@@ -3,6 +3,7 @@
  * Equivalent to wp-includes/widgets.php
  */
 
+const crypto = require('crypto');
 const { getOption, updateOption } = require('./options');
 const { doAction, applyFilters } = require('./hooks');
 
@@ -172,7 +173,8 @@ async function renderSidebar(sidebarId) {
  */
 async function addWidgetToSidebar(sidebarId, widgetId, settings = {}) {
     const widgets = await getSidebarWidgets(sidebarId);
-    const instanceId = Date.now().toString(36);
+    // Use a UUID, not Date.now().toString(36), which collides for two adds within the same millisecond.
+    const instanceId = crypto.randomUUID();
     const instanceKey = `${widgetId}-${instanceId}`;
 
     widgets.push(instanceKey);

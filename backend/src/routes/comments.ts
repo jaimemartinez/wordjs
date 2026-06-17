@@ -84,7 +84,9 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 
     const total = await Comment.count({
         postId: post ? parseInt(post, 10) : undefined,
-        status: commentStatus === 'any' ? undefined : commentStatus
+        status: commentStatus === 'any' ? undefined : commentStatus,
+        parent: parent !== undefined ? parseInt(parent, 10) : undefined,
+        search
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -354,7 +356,15 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
     if (force) {
         res.json({ deleted: true, previous: comment.toJSON() });
     } else {
-        res.json((await Comment.findById(commentId)).toJSON());
+        const fresh = await Comment.findById(commentId);
+        if (!fresh) {
+            return res.status(404).json({
+                code: 'rest_comment_invalid_id',
+                message: 'Invalid comment ID.',
+                data: { status: 404 }
+            });
+        }
+        res.json(fresh.toJSON());
     }
 }));
 

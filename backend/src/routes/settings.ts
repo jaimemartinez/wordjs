@@ -66,7 +66,6 @@ const ALL_SETTINGS = [
     'medium_size_w',
     'medium_size_h',
     'large_size_w',
-    'large_size_w',
     'large_size_h',
     'backup_schedule', // Backup Scheduler Frequency
     'backup_time',     // Backup Time of Day (HH:mm)
@@ -86,9 +85,9 @@ const ALL_SETTINGS = [
 router.get('/', asyncHandler(async (req, res) => {
     const settings = {};
 
-    for (const key of PUBLIC_SETTINGS) {
+    await Promise.all(PUBLIC_SETTINGS.map(async (key) => {
         settings[key] = await getOption(key);
-    }
+    }));
 
     res.json(settings);
 }));
@@ -110,9 +109,9 @@ router.get('/', asyncHandler(async (req, res) => {
 router.get('/all', authenticate, isAdmin, asyncHandler(async (req, res) => {
     const settings = {};
 
-    for (const key of ALL_SETTINGS) {
+    await Promise.all(ALL_SETTINGS.map(async (key) => {
         settings[key] = await getOption(key);
-    }
+    }));
 
     res.json(settings);
 }));

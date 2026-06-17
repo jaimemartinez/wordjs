@@ -88,11 +88,23 @@ class Term {
     /**
      * Generate unique slug
      */
-    static async generateUniqueSlug(slug) {
+    static async generateUniqueSlug(slug, excludeTermId = null) {
         let uniqueSlug = slug;
         let counter = 1;
 
-        while (await dbAsync.get('SELECT term_id FROM terms WHERE slug = ?', [uniqueSlug])) {
+        while (true) {
+            let query = 'SELECT term_id FROM terms WHERE slug = ?';
+            const params: any[] = [uniqueSlug];
+
+            // When editing a term, ignore its own row so its slug isn't bumped to -2.
+            if (excludeTermId != null) {
+                query += ' AND term_id != ?';
+                params.push(excludeTermId);
+            }
+
+            const existing = await dbAsync.get(query, params);
+            if (!existing) break;
+
             counter++;
             uniqueSlug = `${slug}-${counter}`;
         }
@@ -240,7 +252,7 @@ class Term {
                 values.push(data.name);
             }
             if (data.slug) {
-                const newSlug = await Term.generateUniqueSlug(sanitizeTitle(data.slug));
+                const newSlug = await Term.generateUniqueSlug(sanitizeTitle(data.slug), termId);
                 updates.push('slug = ?');
                 values.push(newSlug);
             }
@@ -298,19 +310,38 @@ class Term {
      * Count terms
      */
     static async count(options: any = {}) {
-        const { taxonomy, hideEmpty = false } = options;
+        const { taxonomy, parent, hideEmpty = false, search } = options;
 
-        let sql = 'SELECT COUNT(*) as count FROM term_taxonomy';
+        // Mirror Term.findAll's WHERE so the pager total matches the listed rows.
+        // Join terms only when a name search is requested (findAll filters on t.name).
+        let sql = search
+            ? 'SELECT COUNT(*) as count FROM term_taxonomy tt JOIN terms t ON t.term_id = tt.term_id'
+            : 'SELECT COUNT(*) as count FROM term_taxonomy tt';
         const conditions: string[] = [];
         const params: any[] = [];
 
         if (taxonomy) {
-            conditions.push('taxonomy = ?');
-            params.push(taxonomy);
+            if (Array.isArray(taxonomy)) {
+                conditions.push(`tt.taxonomy IN (${taxonomy.map(() => '?').join(',')})`);
+                params.push(...taxonomy);
+            } else {
+                conditions.push('tt.taxonomy = ?');
+                params.push(taxonomy);
+            }
+        }
+
+        if (parent !== undefined) {
+            conditions.push('tt.parent = ?');
+            params.push(parent);
         }
 
         if (hideEmpty) {
-            conditions.push('count > 0');
+            conditions.push('tt.count > 0');
+        }
+
+        if (search) {
+            conditions.push('t.name LIKE ?');
+            params.push(`%${search}%`);
         }
 
         if (conditions.length > 0) {

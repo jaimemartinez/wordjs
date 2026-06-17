@@ -33,7 +33,7 @@ router.get(['/', '/:slug', '/category/:slug', '/tag/:slug'], async (req, res, ne
                 posts: posts.map(p => ({
                     title: p.post_title,
                     slug: p.post_name,
-                    excerpt: p.post_excerpt || p.post_content.substring(0, 200) + '...',
+                    excerpt: p.post_excerpt || (p.post_content ? p.post_content.substring(0, 200) + '...' : ''),
                     author: p.author_name,
                     date: p.post_date
                 })),
@@ -60,8 +60,9 @@ router.get(['/', '/:slug', '/category/:slug', '/tag/:slug'], async (req, res, ne
         else {
             const post = await Post.findBySlug(slug);
 
-            if (!post) {
-                // Check if it's a special route or redirect?
+            if (!post || post.post_status !== 'publish') {
+                // Don't render non-published posts publicly (or unknown slugs);
+                // let other routes / 404 handling take over.
                 return next();
             }
 

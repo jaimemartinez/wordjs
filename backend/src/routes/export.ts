@@ -33,7 +33,7 @@ router.get('/export', authenticate, isAdmin, asyncHandler(async (req, res) => {
         includeMenus: req.query.menus !== 'false'
     };
 
-    const data = exportSite(options);
+    const data = await exportSite(options);
 
     res.setHeader('Content-Disposition', 'attachment; filename=wordjs-export.json');
     res.json(data);
@@ -44,7 +44,7 @@ router.get('/export', authenticate, isAdmin, asyncHandler(async (req, res) => {
  * Export site as WordPress WXR format
  */
 router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const wxr = exportToWXR();
+    const wxr = await exportToWXR();
 
     res.setHeader('Content-Type', 'application/xml');
     res.setHeader('Content-Disposition', 'attachment; filename=wordjs-export.xml');

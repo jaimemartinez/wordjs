@@ -66,13 +66,17 @@ class Analytics {
         // but assuming standard SQL for now or DB wrapper handles it.
         // Let's use JS processing for safety across drivers for now if specific date functions differ too much.
 
+        // Driver-agnostic cutoff: compute the boundary in JS and bind it, instead of
+        // SQLite-only datetime('now', ...) with string interpolation.
+        const cutoff = new Date(Date.now() - days * 86400000).toISOString();
+
         const result = await dbAsync.all(`
-            SELECT 
-                created_at, 
-                type 
-            FROM ${this.tableName} 
-            WHERE created_at > datetime('now', '-${days} days')
-        `);
+            SELECT
+                created_at,
+                type
+            FROM ${this.tableName}
+            WHERE created_at > ?
+        `, [cutoff]);
 
         // Process in JS to ensure format matches Recharts expectation
         // Group by Day

@@ -3,7 +3,10 @@
  * Equivalent to wp-includes/plugin.php (plugin loading)
  */
 
-const { execSync, execFileSync } = require('child_process');
+const { execSync, execFile } = require('child_process'); // execSync retained for parity; execFile used async below
+const { promisify } = require('util');
+// Async execFile so npm install/uninstall does NOT block the event loop on the request path.
+const execFileAsync = promisify(execFile);
 // npm is npm.cmd on Windows; execFile needs the exact binary name.
 const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const fs = require('fs');
@@ -73,8 +76,10 @@ async function checkDependencyConflicts(slug, manifest) {
     const activePlugins = await getActivePlugins();
     const plugins = scanPlugins();
 
-    // Build map of all dependencies from active plugins
-    const activeDependencies = new Map<string, { range: any; pluginSlug: any }>(); // dep -> { range, pluginSlug }
+    // Build map of all dependencies from active plugins. Multiple active plugins can require the same
+    // dependency, so keep an ARRAY of {range, pluginSlug} per dep — a Map keyed by dep with a single
+    // value would let the last writer silently overwrite (and hide) earlier conflicting requirements.
+    const activeDependencies = new Map<string, Array<{ range: any; pluginSlug: any }>>(); // dep -> [{ range, pluginSlug }]
 
     for (const activeSlug of activePlugins) {
         if (activeSlug === slug) continue; // Skip self
@@ -93,7 +98,8 @@ async function checkDependencyConflicts(slug, manifest) {
 
             if (activeManifest.dependencies) {
                 for (const [dep, range] of Object.entries(activeManifest.dependencies)) {
-                    activeDependencies.set(dep, { range, pluginSlug: activeSlug });
+                    if (!activeDependencies.has(dep)) activeDependencies.set(dep, []);
+                    activeDependencies.get(dep)!.push({ range, pluginSlug: activeSlug });
                 }
             }
         } catch (e) {
@@ -101,24 +107,26 @@ async function checkDependencyConflicts(slug, manifest) {
         }
     }
 
-    // Check each new dependency against existing ones
+    // Check each new dependency against ALL existing requirements for that dep. Flag a conflict if the
+    // new range fails to intersect ANY recorded range (each non-intersecting requirement is reported).
     for (const [dep, newRange] of Object.entries(manifest.dependencies)) {
-        if (!activeDependencies.has(dep)) continue;
+        const existingList = activeDependencies.get(dep);
+        if (!existingList) continue;
 
-        const existing = activeDependencies.get(dep)!;
-        const existingRange = existing.range;
+        for (const existing of existingList) {
+            const existingRange = existing.range;
 
-        // Check if ranges intersect (have at least one common version)
-        // We do this by checking if there's a version that satisfies both
-        const rangesIntersect = semverRangesIntersect(newRange, existingRange);
+            // Check if ranges intersect (have at least one common version)
+            const rangesIntersect = semverRangesIntersect(newRange, existingRange);
 
-        if (!rangesIntersect) {
-            conflicts.push({
-                dep,
-                newRange,
-                existingRange,
-                conflictPlugin: existing.pluginSlug
-            });
+            if (!rangesIntersect) {
+                conflicts.push({
+                    dep,
+                    newRange,
+                    existingRange,
+                    conflictPlugin: existing.pluginSlug
+                });
+            }
         }
     }
 
@@ -207,7 +215,7 @@ ${solutions}
  * @param {object} manifest - Plugin manifest
  * @param {string} pluginPath - Path to the plugin directory
  */
-function installPluginDependencies(slug, manifest, pluginPath = null) {
+async function installPluginDependencies(slug, manifest, pluginPath = null) {
     if (!manifest || !manifest.dependencies) return;
 
     // Skip bundled plugins - they have their own dependencies
@@ -237,9 +245,8 @@ function installPluginDependencies(slug, manifest, pluginPath = null) {
         console.log(`   ⏳ Installing dependencies... (server may restart)`);
         try {
             // SECURITY: execFile with an argument array (no shell) so dependency names from
-            // the plugin manifest cannot inject shell commands.
-            execFileSync(NPM_BIN, ['install', ...toInstall, '--save', '--ignore-scripts'], {
-                stdio: 'inherit',
+            // the plugin manifest cannot inject shell commands. Async so we don't block the event loop.
+            await execFileAsync(NPM_BIN, ['install', ...toInstall, '--save', '--ignore-scripts'], {
                 cwd: ROOT_DIR
             });
             console.log(`   ✅ Dependencies installed successfully.`);
@@ -301,7 +308,8 @@ async function prunePluginDependencies(slug, manifest) {
     if (toRemove.length > 0) {
         console.log(`♻️ Garbage Collector: Removing unused dependencies for ${slug}: ${toRemove.join(', ')}`);
         try {
-            execFileSync(NPM_BIN, ['uninstall', ...toRemove, '--save'], { stdio: 'inherit', cwd: ROOT_DIR });
+            // Async so pruning on the deactivate request path doesn't block the event loop.
+            await execFileAsync(NPM_BIN, ['uninstall', ...toRemove, '--save'], { cwd: ROOT_DIR });
             console.log(`   ✅ Dependencies removed successfully.`);
         } catch (e) {
             console.error(`   ⚠️ Failed to prune dependencies:`, e.message);
@@ -727,7 +735,7 @@ async function activatePlugin(slug) {
                 }
 
                 // 1c. Install dependencies (only if not bundled and no conflicts)
-                installPluginDependencies(slug, manifest, plugin.path);
+                await installPluginDependencies(slug, manifest, plugin.path);
             }
         } catch (e) {
             // CRITICAL: Must throw to stop execution if security block or other failure occurs
@@ -883,7 +891,7 @@ async function loadActivePlugins() {
                 // CRITICAL: Re-validate permissions on every boot to prevent code poisoning
                 validatePluginPermissions(slug, plugin.path, manifest);
 
-                installPluginDependencies(slug, manifest, plugin.path);
+                await installPluginDependencies(slug, manifest, plugin.path);
             } catch (e) {
                 console.error(`   ✗ Security Block for ${slug} on load:`, e.message);
                 // We don't load plugins that fail validation

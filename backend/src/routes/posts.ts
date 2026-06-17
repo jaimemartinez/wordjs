@@ -132,7 +132,13 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
     });
 
-    const total = await Post.count({ type, status: status === 'any' ? null : status });
+    const total = await Post.count({
+        type,
+        status: includeStatuses ? null : status,
+        includeStatuses,
+        author: author ? parseInt(author, 10) : undefined,
+        search
+    });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
@@ -294,7 +300,7 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) 
     // Save initial revision
     saveRevision(post.id).catch(err => console.error('Failed to save initial revision:', err));
 
-    res.status(201).json(await (await Post.findById(post.id)).toJSON());
+    res.status(201).json(await post.toJSON());
 }));
 
 /**
@@ -407,7 +413,15 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
     // Save revision after ALL updates (including meta) are done
     saveRevision(postId).catch(err => console.error('Failed to save revision:', err));
 
-    res.json(await (await Post.findById(postId)).toJSON());
+    const fresh = await Post.findById(postId);
+    if (!fresh) {
+        return res.status(404).json({
+            code: 'rest_post_invalid_id',
+            message: 'Invalid post ID.',
+            data: { status: 404 }
+        });
+    }
+    res.json(await fresh.toJSON());
 }));
 
 /**
@@ -468,7 +482,15 @@ router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
     if (force) {
         res.json({ deleted: true, previous: await post.toJSON() });
     } else {
-        res.json(await (await Post.findById(postId)).toJSON());
+        const fresh = await Post.findById(postId);
+        if (!fresh) {
+            return res.status(404).json({
+                code: 'rest_post_invalid_id',
+                message: 'Invalid post ID.',
+                data: { status: 404 }
+            });
+        }
+        res.json(await fresh.toJSON());
     }
 }));
 
