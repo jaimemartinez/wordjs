@@ -224,6 +224,19 @@ async function installPluginDependencies(slug, manifest, pluginPath = null) {
         return;
     }
 
+    // SECURITY: never auto-install packages that ship native builds or spawn servers — they execute
+    // outside the plugin sandbox, turning a manifest entry into host-level code execution. (Bundled
+    // plugins skipped above are operator-trusted and exempt.) Bundle these or install as an operator.
+    const BLOCKED_RUNTIME_DEPS = new Set([
+        'embedded-postgres', 'better-sqlite3', 'sqlite3', 'node-gyp', 'node-pre-gyp',
+        'node-sass', 'sharp', 'puppeteer', 'playwright', 'canvas', 'windows-build-tools'
+    ]);
+    for (const dep of Object.keys(manifest.dependencies)) {
+        if (BLOCKED_RUNTIME_DEPS.has(dep)) {
+            throw new Error(`Plugin '${slug}' declares dependency '${dep}', which cannot be auto-installed at runtime (native build / server process). Bundle it with the plugin or install it as an operator.`);
+        }
+    }
+
     let rootPkg: any = {};
     try {
         rootPkg = JSON.parse(fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'));

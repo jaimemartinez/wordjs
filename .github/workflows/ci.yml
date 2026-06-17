@@ -18,6 +18,9 @@ jobs:
       - name: Install dependencies
         working-directory: backend
         run: npm ci || npm install
+      - name: Audit (block high/critical prod vulns)
+        working-directory: backend
+        run: npm audit --omit=dev --audit-level=high
       - name: Type check (strict)
         working-directory: backend
         run: npx tsc --noEmit
@@ -44,6 +47,9 @@ jobs:
       - name: Install dependencies
         working-directory: gateway
         run: npm ci || npm install
+      - name: Audit (block high/critical prod vulns)
+        working-directory: gateway
+        run: npm audit --omit=dev --audit-level=high
       - name: Test
         working-directory: gateway
         run: npm test
@@ -61,6 +67,12 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci || npm install
+      - name: Audit (block high/critical prod vulns)
+        working-directory: frontend
+        run: npm audit --omit=dev --audit-level=high
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
       - name: Lint
         working-directory: frontend
         run: npm run lint

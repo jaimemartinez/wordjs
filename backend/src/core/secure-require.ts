@@ -532,6 +532,20 @@ function installSecureRequire() {
         }
     }
 
+    // 3b. Block process.dlopen for UNTRUSTED plugins. A native .node addon runs outside every
+    //     JS-level guard (require proxies, ALS context) — a direct sandbox escape. Operator-trusted
+    //     plugins may still load native addons (they are full-Node by design).
+    const origDlopen = (process as any).dlopen;
+    if (typeof origDlopen === 'function') {
+        (process as any).dlopen = function (...args) {
+            const pluginSlug = getEffectivePlugin();
+            if (pluginSlug && !trustedPlugins().has(pluginSlug)) {
+                throw createSecurityError(pluginSlug, 'process.dlopen', 'loading native addons is not permitted for untrusted plugins');
+            }
+            return origDlopen.apply(this, args);
+        };
+    }
+
     // 4. Anchor plugin-scheduled timers. Capture the effective plugin AT SCHEDULE time (its frame
     //    is on the stack then) and re-enter its context when the callback fires — so a plugin can't
     //    strip its sandbox by deferring fs/exec to a later tick where ALS + the stack frame are gone.
