@@ -14,6 +14,12 @@ require('dotenv').config();
 // Import configuration
 const config = require('./config/app');
 
+// When embedded in the single-process monolith (../monolith.js sets WORDJS_EMBEDDED=1), this module
+// is required to obtain the configured Express app and mounted in-process — it must NOT self-listen on
+// config.port nor self-register with the gateway. Split mode (run via backend/server.js → dist/index.js)
+// leaves WORDJS_EMBEDDED unset, so all behavior below is byte-for-byte unchanged.
+const EMBEDDED = process.env.WORDJS_EMBEDDED === '1';
+
 // SECURITY: Initialize IO Guard before anything else
 require('./core/io-guard');
 
@@ -411,7 +417,8 @@ async function initialize() {
     app.use(notFound);
     app.use(errorHandler);
 
-    // Start server
+    // Start server (skipped when embedded — the monolith owns the single listener)
+    if (!EMBEDDED) {
     const caPath = path.resolve(config.mtls.ca);
     const keyPath = path.resolve(config.mtls.key);
     const certPath = path.resolve(config.mtls.cert);
@@ -620,6 +627,10 @@ async function initialize() {
         console.log(`🏠 Public Site: ${config.site.frontendUrl}`);
         console.log('');
     });
+    }
+
+    // Return the configured app so the monolith entrypoint can mount it in-process.
+    return app;
 }
 
 // Handle uncaught exceptions
@@ -646,9 +657,9 @@ process.on('SIGINT', () => {
     process.exit(0);
 });
 
-// Start the application
-// Start the application
-initialize().catch((error) => {
+// Start the application — only when run directly (split mode via backend/server.js). When required by
+// the monolith (WORDJS_EMBEDDED=1), the entrypoint calls initialize() itself after mounting.
+if (require.main === module && !EMBEDDED) initialize().catch((error) => {
     console.error('❌ Failed to initialize:', error);
 
     // Auto-Fallback Logic
@@ -677,4 +688,7 @@ initialize().catch((error) => {
 });
 
 module.exports = app;
+// Expose the async initializer so the monolith entrypoint can boot DB + plugins + theme engine
+// without the self-listen/self-register block (which is guarded by EMBEDDED above).
+module.exports.initialize = initialize;
 

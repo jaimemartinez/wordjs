@@ -4,6 +4,11 @@ const getBaseUrl = () => {
         return '/api/v1';
     }
     // Server-side (SSR):
+    // Monolith mode: hit the in-process backend over its loopback HTTP listener (plain HTTP, so the
+    // public HTTPS self-signed cert never blocks server-side fetches).
+    if (process.env.WORDJS_MODE === 'mono') {
+        return `${process.env.WORDJS_MONO_ORIGIN || 'http://127.0.0.1:4000'}/api/v1`;
+    }
     let backendPort = 4000;
     try {
         // Dynamically require fs/path to avoid bundling issues on client
