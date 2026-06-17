@@ -70,6 +70,18 @@ export interface AppConfig {
         cert: string;
     };
 
+    // ACME / Let's Encrypt auto-renewal
+    acme: {
+        enabled: boolean;
+        email: string;
+        domains: string[];
+        staging: boolean;
+        renewBeforeDays: number;
+        challengeType: 'http-01' | 'dns-01';
+        // Opt-in plain-HTTP port for HTTP-01 validation + HTTPS redirect (e.g. 80). Off when unset.
+        http01Port?: number;
+    };
+
     // Redis
     redis: {
         enabled: boolean;
@@ -220,6 +232,17 @@ const config: AppConfig = {
         ca: fileConfig.mtls?.ca || './certs/cluster-ca.crt',
         key: fileConfig.mtls?.key || './certs/backend.key',
         cert: fileConfig.mtls?.cert || './certs/backend.crt'
+    },
+    // ACME auto-renewal (normalized; set any field under "acme" in wordjs-config.json).
+    // Always a well-formed object so the renewal job + routes can read it unconditionally.
+    acme: {
+        enabled: fileConfig.acme?.enabled === true,
+        email: fileConfig.acme?.email || '',
+        domains: Array.isArray(fileConfig.acme?.domains) ? fileConfig.acme.domains : [],
+        staging: fileConfig.acme?.staging === true,
+        renewBeforeDays: Number(fileConfig.acme?.renewBeforeDays) > 0 ? Number(fileConfig.acme.renewBeforeDays) : 30,
+        challengeType: fileConfig.acme?.challengeType === 'dns-01' ? 'dns-01' : 'http-01',
+        ...(fileConfig.acme?.http01Port ? { http01Port: Number(fileConfig.acme.http01Port) } : {})
     },
     // Redis Configuration
     redis: {

@@ -370,6 +370,13 @@ async function initDefaultCronEvents() {
                 await scheduleEvent(Date.now(), backupFreq, 'wordjs_scheduled_backup');
             }
         }
+
+        // Schedule TLS certificate auto-renewal check. Twice daily is the standard ACME cadence
+        // (certbot's default); the handler only renews when the cert is within its renewal window,
+        // so this cadence never risks Let's Encrypt rate limits.
+        if (!(await nextScheduled('wordjs_cert_renewal'))) {
+            await scheduleEvent(Date.now(), 'twicedaily', 'wordjs_cert_renewal');
+        }
     } catch (e) {
         console.error('Failed to init cron events:', e);
     }
@@ -390,7 +397,22 @@ async function initDefaultCronEvents() {
         }
     });
 
-    // 2. React to Option Updates
+    // 2b. TLS certificate auto-renewal (ACME / Let's Encrypt). Single backend process => runs once.
+    addAction('wordjs_cert_renewal', async () => {
+        try {
+            const certManager = require('./cert-manager');
+            const result = await certManager.renewIfDue();
+            if (result && result.ok) {
+                console.log(`⏰ ACME: certificate renewed for ${result.domain}`);
+            } else if (result && !result.skipped) {
+                console.warn(`⏰ ACME: renewal not completed: ${result.error || 'unknown error'}`);
+            }
+        } catch (e) {
+            console.error('ACME auto-renewal error:', e);
+        }
+    });
+
+    // 3. React to Option Updates
     addAction('updated_option', async (name, value) => {
         if (name === 'backup_schedule') {
             await rescheduleBackup(value);
