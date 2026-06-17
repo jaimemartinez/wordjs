@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import Link from "next/link";
@@ -27,7 +27,10 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
     const { addToast } = useToast();
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [isOpen, setIsOpen] = useState(false);
-    const [unreadCount, setUnreadCount] = useState(0);
+    const unreadCount = useMemo(
+        () => notifications.filter(n => n.is_read === 0).length,
+        [notifications]
+    );
     const [isRefreshing, setIsRefreshing] = useState(false);
     const eventSourceRef = useRef<EventSource | null>(null);
     const containerRef = useRef<HTMLDivElement>(null);
@@ -56,7 +59,6 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             if (res.ok) {
                 const data = await res.json();
                 setNotifications(data);
-                setUnreadCount(data.filter((n: Notification) => n.is_read === 0).length);
             }
         } catch (error) {
             console.error("Fetch notifications error:", error);
@@ -117,16 +119,17 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                 setNotifications(prev => {
                     const exists = prev.some(n => n.uuid === newNotification.uuid);
                     if (exists) return prev;
+
+                    // Side-effects only fire for genuinely new frames (avoid double-toast
+                    // on duplicate SSE deliveries).
+                    addToast(newNotification.title || "New Notification", "info");
+                    window.dispatchEvent(new CustomEvent('wordjs:notification', { detail: newNotification }));
+                    if ("vibrate" in navigator) {
+                        navigator.vibrate(100);
+                    }
+
                     return [newNotification, ...prev];
                 });
-                setUnreadCount(prev => prev + 1);
-                addToast(newNotification.title || "New Notification", "info");
-
-                window.dispatchEvent(new CustomEvent('wordjs:notification', { detail: newNotification }));
-
-                if ("vibrate" in navigator) {
-                    navigator.vibrate(100);
-                }
             };
 
             es.onerror = () => {
@@ -168,7 +171,6 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                 setNotifications(prev =>
                     prev.map(n => n.uuid === uuid ? { ...n, is_read: 1 } : n)
                 );
-                setUnreadCount(prev => Math.max(0, prev - 1));
             }
         } catch (error) {
             console.error("Mark as read error:", error);
@@ -183,7 +185,6 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             });
             if (res.ok) {
                 setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
-                setUnreadCount(0);
                 addToast("All notifications marked as read", "success");
             }
         } catch (error) {
@@ -201,8 +202,6 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             });
             if (res.ok) {
                 setNotifications(prev => prev.filter(n => n.uuid !== uuid));
-                const wasUnread = notifications.find(n => n.uuid === uuid)?.is_read === 0;
-                if (wasUnread) setUnreadCount(prev => Math.max(0, prev - 1));
             }
         } catch (error) {
             console.error("Delete notification error:", error);

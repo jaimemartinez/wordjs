@@ -26,12 +26,13 @@ function SearchResults() {
         setSearchedQuery(searchQuery);
 
         try {
-            // Search in posts
-            const postsResponse = await fetch(`/api/v1/posts?search=${encodeURIComponent(searchQuery)}&status=publish`);
-            const posts = postsResponse.ok ? await postsResponse.json() : [];
+            // Search posts and pages in parallel (the two requests are independent)
+            const [postsResponse, pagesResponse] = await Promise.all([
+                fetch(`/api/v1/posts?search=${encodeURIComponent(searchQuery)}&status=publish`),
+                fetch(`/api/v1/posts?type=page&search=${encodeURIComponent(searchQuery)}&status=publish`),
+            ]);
 
-            // Search in pages
-            const pagesResponse = await fetch(`/api/v1/posts?type=page&search=${encodeURIComponent(searchQuery)}&status=publish`);
+            const posts = postsResponse.ok ? await postsResponse.json() : [];
             const pages = pagesResponse.ok ? await pagesResponse.json() : [];
 
             // Combine results

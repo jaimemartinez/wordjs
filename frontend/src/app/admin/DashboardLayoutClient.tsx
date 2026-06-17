@@ -47,7 +47,6 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     }, [isCollapsed]);
 
     useEffect(() => {
-        console.log('DashboardLayoutContent State:', { isLoading, user, hasChildren: !!children });
         if (!isLoading) {
             if (!user) {
                 router.push("/login");
@@ -56,10 +55,14 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
                 logout(); // Logout if they managed to get a token but shouldn't be here
             }
         }
-    }, [user, isLoading, router, children]);
+    }, [user, isLoading, router, logout]);
 
     if (isLoading) {
-        return <div className="p-10 font-mono">DEBUG: Loading...</div>;
+        return (
+            <div className="flex h-screen items-center justify-center bg-gray-100">
+                <div className="animate-spin rounded-full h-12 w-12 border-4 border-blue-500 border-t-transparent"></div>
+            </div>
+        );
     }
 
     if (!user) return null;
