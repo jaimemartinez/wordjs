@@ -85,6 +85,11 @@ export interface AppConfig {
         http01Port?: number;
     };
 
+    // Prometheus metrics. /metrics is disabled unless `token` is set (avoids public metrics leak).
+    metrics: {
+        token: string;
+    };
+
     // Redis
     redis: {
         enabled: boolean;
@@ -249,6 +254,10 @@ const config: AppConfig = {
         renewBeforeDays: Number(fileConfig.acme?.renewBeforeDays) > 0 ? Number(fileConfig.acme.renewBeforeDays) : 30,
         challengeType: fileConfig.acme?.challengeType === 'dns-01' ? 'dns-01' : 'http-01',
         ...(fileConfig.acme?.http01Port ? { http01Port: Number(fileConfig.acme.http01Port) } : {})
+    },
+    // Prometheus metrics scrape token (empty = /metrics disabled / returns 404).
+    metrics: {
+        token: fileConfig.metrics?.token || process.env.METRICS_TOKEN || ''
     },
     // Redis Configuration
     redis: {

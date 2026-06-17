@@ -125,11 +125,40 @@ async function createBackup() {
     zip.writeZip(filepath);
 
     console.log(`✅ Backup created: ${filename}`);
+
+    // Enforce retention so scheduled/auto backups don't fill the disk unbounded.
+    try { await pruneBackups(); } catch (e: any) { console.warn('   ⚠️ Backup prune failed:', e && e.message); }
+
     return {
         filename,
         size: fs.statSync(filepath).size,
         date: new Date()
     };
+}
+
+/**
+ * Prune old backups, keeping the newest `keep` (by date). When `keep` is omitted it is read from the
+ * 'backup_retention' option (default 7); 0 or negative disables pruning (keep everything). This is the
+ * disk-exhaustion guard for scheduled backups, which previously grew without bound.
+ */
+async function pruneBackups(keep?: number) {
+    let n = keep;
+    if (n == null) {
+        const opt = await getOption('backup_retention', 7);
+        n = parseInt(String(opt), 10);
+        if (Number.isNaN(n)) n = 7;
+    }
+    if (!n || n <= 0) return { pruned: 0, kept: listBackups().length }; // 0 = unlimited
+
+    const all = listBackups(); // newest first
+    const toDelete = all.slice(n);
+    let pruned = 0;
+    for (const b of toDelete) {
+        try { fs.unlinkSync(path.join(BACKUPS_DIR, b.filename)); pruned++; }
+        catch (e: any) { console.warn(`   ⚠️ Could not prune backup ${b.filename}:`, e && e.message); }
+    }
+    if (pruned) console.log(`   🧹 Pruned ${pruned} old backup(s); kept newest ${n}.`);
+    return { pruned, kept: Math.min(all.length, n) };
 }
 
 /**
@@ -267,5 +296,6 @@ module.exports = {
     listBackups,
     deleteBackup,
     getBackupPath,
-    restoreBackup
+    restoreBackup,
+    pruneBackups
 };

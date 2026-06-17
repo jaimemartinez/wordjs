@@ -52,7 +52,7 @@ const compression = require('compression');
 
 // Requests with these path prefixes go to the backend Express app; everything else goes to Next.
 // (/healthz is answered directly in dispatch() for liveness; /readyz goes to the backend's deep check.)
-const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/health', '/readyz'];
+const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/health', '/readyz', '/metrics'];
 const isBackendPath = (url) => {
     const u = (url || '/').split('?')[0];
     return BACKEND_PREFIXES.some((p) => u === p || u.startsWith(p + '/'));
@@ -156,6 +156,14 @@ async function main() {
 
     const http = require('http');
     const server = ssl ? require('https').createServer(ssl, requestListener) : http.createServer(requestListener);
+    // Let ACME auto-renewal hot-swap the live TLS cert in-process (no restart). cert-manager calls
+    // this after writing a renewed cert in embedded mode. Only meaningful when serving HTTPS.
+    if (ssl) {
+        global.__WORDJS_RELOAD_TLS__ = (key, cert) => {
+            try { server.setSecureContext({ key, cert }); console.log('[monolith] TLS certificate hot-reloaded.'); }
+            catch (e) { console.warn('[monolith] TLS hot-reload failed:', e.message); }
+        };
+    }
     // Next dev HMR uses a WebSocket on the same server; backend serves no WS, so route upgrades to Next.
     server.on('upgrade', (req, socket, head) => {
         if (upgrade && !isBackendPath(req.url)) return upgrade(req, socket, head);
