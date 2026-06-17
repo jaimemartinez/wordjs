@@ -37,7 +37,7 @@
     "editorjs-html": "^4.0.5",
     "editorjs-text-color-plugin": "^2.0.4",
     "next": "^16.1.1",
-    "react": "^19.2.3",
+    "react": "^19.2.7",
     "react-dom": "^19.2.3",
     "react-dropzone": "^14.3.8",
     "react-icons": "^5.5.0",
