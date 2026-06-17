@@ -126,7 +126,12 @@ export default function PageEditorPage() {
         setSaving(true);
 
         try {
-            const root = puckDataRef.current.root as any;
+            // Flush any open inline editor (so its latest keystrokes land in Puck's store), then read
+            // the LIVE store rather than the mirrored ref — Puck's onChange has a deep-equal guard that
+            // can leave puckDataRef stale, which would persist pre-edit content ("changes don't save").
+            try { (window as any).puckCommitActive?.(); } catch { /* no open editor */ }
+            const liveData = ((window as any).puckGetData?.() ?? puckDataRef.current);
+            const root = liveData.root as any;
             const finalTitle = root?.props?.title || root?.title || title;
             const finalSlug = root?.props?.slug || root?.slug || slug;
 
@@ -143,7 +148,7 @@ export default function PageEditorPage() {
                 status,
                 type: "page",
                 meta: {
-                    _puck_data: puckDataRef.current
+                    _puck_data: liveData
                 }
             };
 
