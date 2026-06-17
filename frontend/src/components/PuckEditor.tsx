@@ -1,5 +1,11 @@
 "use client";
 
+/* eslint-disable react-hooks/refs --
+ * The inline editor positions its portaled container by reading the live getBoundingClientRect() of
+ * the always-mounted view AT RENDER TIME (see the note on the portal's `style` prop below). Capturing
+ * the rect into state on click raced to null for nested blocks, so reading the ref during render is
+ * the intentional, reliable approach here — not the stale-render hazard the rule guards against. */
+
 import { Puck, Config, Data, migrate, useGetPuck } from "@measured/puck";
 import "@measured/puck/puck.css";
 import React, { useState, useEffect, useRef } from "react";
