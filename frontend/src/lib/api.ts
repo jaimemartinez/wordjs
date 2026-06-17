@@ -512,3 +512,52 @@ export const backupsApi = {
 export const systemApi = {
     getStatus: () => apiGet<SystemStatus>("/health/details"),
 };
+
+// WordPress (WXR) import API
+export interface WxrAnalysis {
+    wxrVersion: string;
+    site: { title: string; link: string; description: string; baseUrl: string };
+    counts: {
+        authors: number; categories: number; tags: number; customTerms: number;
+        posts: number; pages: number; attachments: number; navItems: number; other: number; comments: number;
+    };
+}
+
+export interface ImportSummary {
+    site: { title: string; link: string };
+    authors: { created: number; matched: number };
+    terms: { categories: number; tags: number; custom: number };
+    posts: { created: number; skipped: number };
+    pages: { created: number; skipped: number };
+    attachments: { created: number; skipped: number };
+    comments: { created: number; skipped: number };
+    navItems: { skipped: number };
+    errors: string[];
+}
+
+export const importApi = {
+    analyze: (file: File) => {
+        const fd = new FormData();
+        fd.append("file", file);
+        return api<{ success: boolean; analysis: WxrAnalysis }>("/import/wordpress/analyze", {
+            method: "POST",
+            body: fd,
+            headers: {}, // let the browser set the multipart boundary
+        });
+    },
+    wordpress: (
+        file: File,
+        options: { defaultAuthorId?: number; importComments?: boolean; importAttachments?: boolean } = {}
+    ) => {
+        const fd = new FormData();
+        fd.append("file", file);
+        if (options.defaultAuthorId) fd.append("defaultAuthorId", String(options.defaultAuthorId));
+        fd.append("importComments", options.importComments === false ? "0" : "1");
+        fd.append("importAttachments", options.importAttachments ? "1" : "0");
+        return api<{ success: boolean; summary: ImportSummary }>("/import/wordpress", {
+            method: "POST",
+            body: fd,
+            headers: {},
+        });
+    },
+};
