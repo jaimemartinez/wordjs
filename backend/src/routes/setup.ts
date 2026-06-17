@@ -38,6 +38,45 @@ router.get('/status', (req, res) => {
     });
 });
 
+// Test a database connection BEFORE committing the install, so the wizard can validate Postgres
+// credentials. Isolated: uses a throwaway pg client and never switches the live driver. Always 200
+// with { ok, message|error } so the wizard can render the result inline.
+router.post('/test-db', async (req, res) => {
+    if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });
+    const { dbDriver = 'sqlite-native', db: dbConn } = req.body || {};
+    try {
+        if (dbDriver === 'postgres') {
+            if (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user) {
+                return res.json({ ok: false, error: 'host, database and user are required.' });
+            }
+            const { Client } = require('pg');
+            const client = new Client({
+                host: dbConn.host,
+                port: Number(dbConn.port) || 5432,
+                user: dbConn.user,
+                password: dbConn.password || '',
+                database: dbConn.database,
+                ssl: dbConn.ssl ? { rejectUnauthorized: false } : undefined,
+                connectionTimeoutMillis: 4000
+            });
+            await client.connect();
+            await client.query('SELECT 1');
+            await client.end();
+            return res.json({ ok: true, message: 'PostgreSQL connection successful.' });
+        }
+        if (dbDriver === 'sqlite-native' || dbDriver === 'sqlite-legacy') {
+            const fs = require('fs');
+            const dataDir = path.resolve('./data');
+            fs.mkdirSync(dataDir, { recursive: true });
+            fs.accessSync(dataDir, fs.constants.W_OK);
+            return res.json({ ok: true, message: 'SQLite data directory is writable.' });
+        }
+        return res.json({ ok: false, error: 'Invalid database driver.' });
+    } catch (e: any) {
+        return res.json({ ok: false, error: e && e.message ? e.message : 'Connection failed.' });
+    }
+});
+
 // Install endpoint
 router.post('/install', async (req, res) => {
     if (isInstalled()) {
@@ -49,8 +88,22 @@ router.post('/install', async (req, res) => {
         siteDescription,
         adminUser,
         adminEmail,
-        adminPassword
+        adminPassword,
+        dbDriver = 'sqlite-native',
+        db: dbConn // Postgres connection {host,port,user,password,database,ssl} when dbDriver==='postgres'
     } = req.body;
+
+    // --- Validation (this endpoint is public pre-config, so validate server-side too) ---
+    const fail = (msg: string) => res.status(400).json({ error: msg });
+    if (!siteName || !String(siteName).trim()) return fail('Site name is required.');
+    if (!adminUser || !/^[a-zA-Z0-9_.-]{3,}$/.test(String(adminUser))) return fail('Admin username must be at least 3 characters (letters, numbers, . _ -).');
+    if (!adminEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(adminEmail))) return fail('A valid admin email is required.');
+    if (!adminPassword || String(adminPassword).length < 10) return fail('Admin password must be at least 10 characters.');
+    const ALLOWED_DRIVERS = ['sqlite-native', 'sqlite-legacy', 'postgres'];
+    if (!ALLOWED_DRIVERS.includes(dbDriver)) return fail('Invalid database driver.');
+    if (dbDriver === 'postgres' && (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user)) {
+        return fail('PostgreSQL requires host, database, and user.');
+    }
 
     // Fix: Trust upstream Gateway protocol
     const protocol = req.get('x-forwarded-proto') || req.protocol;
@@ -89,7 +142,22 @@ router.post('/install', async (req, res) => {
         gatewayUrl: `${protocol}://${host}`, // Store full URL just in case
         gatewayHost: host.split(':')[0], // Store hostname for reference
         gatewaySecret: gatewaySecret,
-        jwtSecret: jwtSecret // Store in config for reference
+        jwtSecret: jwtSecret, // Store in config for reference
+        // Database selection (chosen in the installer). SQLite drivers use their own file; Postgres
+        // stores a connection object. The driver layer reads these from the live config.
+        dbDriver,
+        ...(dbDriver === 'postgres'
+            ? {
+                db: {
+                    host: dbConn.host,
+                    port: Number(dbConn.port) || 5432,
+                    user: dbConn.user,
+                    password: dbConn.password || '',
+                    database: dbConn.database,
+                    ssl: !!dbConn.ssl
+                }
+            }
+            : { dbPath: dbDriver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db' })
     };
 
     // Note: We no longer write to .env as per "Never Use Env Vars" policy.
@@ -98,9 +166,13 @@ router.post('/install', async (req, res) => {
     if (saveConfig(newConfig)) {
         try {
             // Initialize DB connection dynamically
-            console.log('📦 Setup: Initializing database...');
+            console.log(`📦 Setup: Initializing database (driver: ${dbDriver})...`);
+            // Reflect the just-saved config into the live config object so the driver layer reads the
+            // chosen dbDriver / dbPath / Postgres connection (require('../config/app') was loaded with
+            // the pre-install defaults).
+            Object.assign(config, newConfig);
             const { init, initializeDatabase } = require('../config/database');
-            await init();
+            await init({ driver: dbDriver });
             await initializeDatabase();
 
             // Update options in DB
@@ -202,6 +274,9 @@ router.post('/install', async (req, res) => {
                 await User.update(admin.id, { password: adminPassword, email: adminEmailDisplay, role: 'administrator' });
             }
 
+            // Persist the admin's email as the site admin_email option (was left at the default before).
+            await updateOption('admin_email', adminEmailDisplay);
+
             const { runCoreTests } = require('../core/plugin-test-runner');
             const testResults = await runCoreTests();
 
@@ -210,8 +285,30 @@ router.post('/install', async (req, res) => {
                 // We don't block installation, just warn
             }
 
+            // Auto-login: issue the admin's session cookie so the wizard lands straight in /admin.
+            let autoLoggedIn = false;
+            try {
+                const createdAdmin = await User.findByLogin(adminUser) || await User.findByEmail(adminEmailDisplay);
+                if (createdAdmin) {
+                    const { generateToken } = require('../middleware/auth');
+                    const token = generateToken(createdAdmin);
+                    res.cookie('wordjs_token', token, {
+                        httpOnly: true,
+                        secure: siteUrl.startsWith('https://'),
+                        sameSite: 'lax',
+                        maxAge: 7 * 24 * 60 * 60 * 1000,
+                        path: '/'
+                    });
+                    autoLoggedIn = true;
+                }
+            } catch (e: any) {
+                console.warn('Auto-login after install failed (user can log in manually):', e && e.message);
+            }
+
             res.json({
                 success: true,
+                autoLoggedIn,
+                redirectTo: autoLoggedIn ? '/admin' : '/login?installed=true',
                 tests: { total: testResults.tests, passed: testResults.passed, failed: testResults.failed }
             });
 

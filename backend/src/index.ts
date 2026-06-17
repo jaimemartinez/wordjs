@@ -136,6 +136,14 @@ const uploadLimiter = rateLimit({
     message: { error: 'Too many file uploads, please try again later.' }
 });
 
+const setupLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 min
+    max: 20, // tight cap on the PUBLIC install / test-db endpoints (pre-config, unauthenticated)
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many setup attempts, please try again later.' }
+});
+
 // Apply global API limiter
 app.use(config.api.prefix, apiLimiter);
 
@@ -146,6 +154,7 @@ app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to backups too
+app.use(`${config.api.prefix}/setup`, setupLimiter); // tight cap on the public install/test-db endpoints
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
