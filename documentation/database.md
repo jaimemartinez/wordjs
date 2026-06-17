@@ -22,6 +22,7 @@ Uses the `better-sqlite3` library, the fastest SQLite driver for Node.js. This i
 *   **Safety:** Atomic writes prevent database corruption during power outages.
 *   **Requirement:** Requires a native binary (prebuilt for most platforms; building from source needs C++ tools like `python`, `make`, `g++`).
 *   **Driver file:** `backend/src/drivers/sqlite-native-async.ts` (async, implements the interface). The older sync `sqlite-native.ts` wrapper still exists for compatibility.
+*   **Data file:** stores its database at `backend/data/wordjs-native.db` (default). This is a **different file** from the legacy driver — see [§1.7 SQLite Drivers Use Different Files](#17-sqlite-drivers-use-different-files).
 
 #### **PostgreSQL**
 Uses the `pg` client (connection **Pool**) via `backend/src/drivers/postgres.ts`.
@@ -32,7 +33,8 @@ Uses the `pg` client (connection **Pool**) via `backend/src/drivers/postgres.ts`
 #### **SQLite (Legacy - WASM Fallback)**
 Uses a pure JavaScript WASM build of SQLite (`sql.js`) via `backend/src/drivers/sqlite-legacy.ts`.
 *   **Use Case:** Restricted hosting environments (some shared hosting, strictly locked-down containers) where the native binary cannot load.
-*   **Trade-off:** Slower than Native for heavy writes, and it uses the older **synchronous** driver shape (the DB Manager adapts it). It reads/writes the **same SQLite file format**, so the fallback is transparent — the same `.db` file works under either SQLite driver.
+*   **Trade-off:** Slower than Native for heavy writes, and it uses the older **synchronous** driver shape (the DB Manager adapts it). It reads/writes the **same SQLite file format**.
+*   **Data file:** stores its database at `backend/data/wordjs.db` (the config default `dbPath`). Although the file *format* is identical to Native, the two SQLite drivers use **different files by default** — see [§1.7 SQLite Drivers Use Different Files](#17-sqlite-drivers-use-different-files).
 
 ### 1.2 The Driver Interface & Conformance Suite
 
@@ -112,11 +114,29 @@ To change the driver, edit `backend/wordjs-config.json`. The flat `db*` keys (`d
 ```json
 {
   "dbDriver": "sqlite-native",
-  "dbPath": "./data/wordjs.db"
+  "dbPath": "./data/wordjs-native.db"
 }
 ```
+> Each SQLite driver defaults to its **own** file (`sqlite-native` → `data/wordjs-native.db`, `sqlite-legacy` → `data/wordjs.db`). If you set `dbPath` explicitly, point it at the file for the driver you selected. See [§1.7](#17-sqlite-drivers-use-different-files).
 
 > **Secrets:** on boot the config layer auto-generates and persists a secure `jwtSecret` and `dbPassword` if the existing config still holds the insecure defaults. Operators should still review these.
+
+### 1.7 SQLite Drivers Use Different Files
+
+The two SQLite drivers do **not** share a data file by default — each maps to a distinct file under `backend/data/`:
+
+| `dbDriver`        | Library                | Default data file            |
+| :---------------- | :--------------------- | :--------------------------- |
+| `sqlite-native`   | `better-sqlite3`       | `backend/data/wordjs-native.db` |
+| `sqlite-legacy`   | `sql.js` (WASM)        | `backend/data/wordjs.db`     |
+
+PostgreSQL (via `pg`, or the opt-in `embedded-postgres` — beta) is a **separate engine** entirely, not a file under `data/`.
+
+> ⚠️ **Switching `dbDriver` points the app at a different file/engine.** Data written under one driver is **not** visible under another until it is migrated. Flipping `dbDriver` in `backend/wordjs-config.json` alone makes your existing data look **"missing"** — nothing is lost, the app is just reading a different file (or engine). The same applies when switching between SQLite and PostgreSQL.
+
+To actually move your data between drivers/engines, use the migration system rather than editing the config by hand: run **`npm run migrate`** from the repo root (or use the admin **DB Migration** route described in [§1.5](#15-live-data-migration)). For SQLite-to-SQLite (e.g. `sqlite-legacy` → `sqlite-native`) the tool performs an atomic file swap; the result is the data ending up in the new driver's file.
+
+> **Run modes:** both run modes (split services and the single-process monolith) use the **same configured database** — the run mode does not change which driver or file is used; only `dbDriver` (and `dbPath`) in `wordjs-config.json` does.
 
 ## 2. Schema Overview
 

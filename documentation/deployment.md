@@ -4,6 +4,42 @@ WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** 
 
 ---
 
+## 🧭 Deployment Modes: Split vs Monolith
+
+The **same codebase** runs two ways, and you can switch **at any time** — there is **no migration**. Both modes share the same `backend/wordjs-config.json`, the same database, the same `uploads`/`themes`/`plugins`, the same secrets, and the same public origin (default `https://localhost:3000`). They are **mutually exclusive** because both bind the public port (default `3000`), so run one or the other.
+
+In **both** modes, plugins run **isolated in worker threads** — that behavior is identical.
+
+### Split (default — 3 processes)
+
+The gateway (`:3000`, public) + backend (`:4000`) + frontend (`:3001`). The gateway is a Node `cluster` reverse-proxy that provides clustering, health-checks, load-balancing, an mTLS internal channel, and SSE-aware proxying.
+
+- **Dev:** `npm run dev`
+- **Prod:** `npm start`
+
+### Monolith (1 process, 1 port `:3000`)
+
+A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **backend Express app** (with its isolated worker-thread plugins) **and** the **Next.js request handler** **in-process** — no loopback proxy, no Node `cluster`, no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `.../robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port** reusing the gateway's certificate (HTTP fallback), plus a loopback-only HTTP listener for the frontend's server-side (SSR) API calls.
+
+- **Dev:** `npm run dev:mono` (Next dev HMR + `ts-node` backend)
+- **Build:** `npm run build:mono` (compiles backend to `dist/` + runs `next build`)
+- **Prod:** `npm run start:mono` (runs the compiled build)
+
+> **How it works internally:** `monolith.js` sets `WORDJS_EMBEDDED=1` (and `WORDJS_MODE=mono`); the backend's `src/index.ts` detects this, skips its own self-listen and gateway self-register, and exposes `initialize()` for in-process mounting.
+
+### Which one should I pick?
+
+| | **Monolith** | **Split** |
+|---|---|---|
+| **Best for** | Simplest single-artifact deploy: one VM/container | Scaling services independently |
+| **Processes / ports** | 1 process, 1 public port (`:3000`) | 3 processes (`:3000` / `:4000` / `:3001`) |
+| **TLS** | Built-in HTTPS, or a single reverse proxy in front | Reverse proxy / Cloudflare in front of the gateway |
+| **You get** | Minimal footprint, fewer moving parts | Gateway clustering, health-checks, load-balancing, mTLS internal channel |
+
+> Steps **1–4** below (clone, build, plugin frontends, configure) apply to both modes. The split-specific PM2 layout is in **[Run in Production](#-run-in-production)**; for monolith you run a single process (`npm run start:mono`, e.g. under PM2 as `pm2 start npm --name wordjs -- run start:mono`).
+
+---
+
 ## 📋 Prerequisites
 
 - **Node.js:** v18 or higher.
@@ -81,6 +117,8 @@ Example `backend/wordjs-config.json`:
 ---
 
 ## 🏃 Run in Production
+
+> **Monolith mode?** Skip the three-process layout below and run a single process: `npm run start:mono` (after `npm run build:mono`), e.g. `pm2 start npm --name wordjs -- run start:mono`. See **[Deployment Modes](#-deployment-modes-split-vs-monolith)**. The rest of this section covers the default **split** deployment.
 
 We recommend using **PM2** to manage the three components (Gateway, Backend, Frontend).
 

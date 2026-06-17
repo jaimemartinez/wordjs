@@ -1,6 +1,6 @@
 # Development & Build Guide 🛠️
 
-This guide covers installing dependencies, the **compiled production build**, the strict TypeScript typecheck, and how to run the three services in development versus production.
+This guide covers installing dependencies, the **compiled production build**, the strict TypeScript typecheck, and how to run the services in development versus production — in either the default **split** (gateway + backend + frontend) or the single-process **monolith** mode.
 
 For the production server/firewall/SSL story see **[deployment.md](deployment.md)**; for the gateway internals see **[gateway.md](gateway.md)**; for the high-level picture see **[architecture.md](architecture.md)**.
 
@@ -140,6 +140,38 @@ cd frontend && npm run dev
 For a production-style local run, `npm start` uses `concurrently` to bring up the gateway, backend, and frontend together. (See the troubleshooting note below.)
 
 > **Troubleshooting:** the root `start` / `prod:gateway` scripts invoke `node gateway.js`, but the gateway entry is actually `gateway/src/index.js`. If `npm start` fails to launch the gateway, start it directly with `node gateway/src/index.js` (matching the working `dev:gateway` script), or run each service in its own terminal.
+
+---
+
+## 🪺 Run modes: split vs monolith
+
+The **same codebase** runs two ways. The modes are **switchable at any time** — both share the same `backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`, secrets, and the same public origin (`https://localhost:3000`), so **there is no migration to switch**. They are **mutually exclusive** (both bind the public port, default 3000) — run one or the other, not both. **Plugins stay isolated (worker threads) in both modes.**
+
+| Mode         | Processes / ports                              | Dev               | Build             | Prod               |
+| ------------ | ---------------------------------------------- | ----------------- | ----------------- | ------------------ |
+| **Split** (default) | gateway `:3000` + backend `:4000` + frontend `:3001` | `npm run dev`     | per-service build | `npm start`        |
+| **Monolith** | one process, one port `:3000` (`monolith.js`)  | `npm run dev:mono`| `npm run build:mono` | `npm run start:mono` |
+
+### Split (default, 3 processes)
+
+The default. The **gateway** (`:3000` public, a Node `cluster` reverse-proxy) sits in front of the **backend** (`:4000`) and **frontend** (`:3001`), and provides clustering, health-checks, load-balancing, an mTLS internal channel, and SSE-aware proxying. Run it with `npm run dev` (dev) / `npm start` (prod) as covered above.
+
+### Monolith (1 process, 1 port)
+
+The repo-root entrypoint **`monolith.js`** mounts the backend Express app (**with** its isolated worker-thread plugins) **and** the Next.js request handler **in-process** — no loopback proxy, no Node `cluster`, and no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `…/robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port reusing the gateway's certificate** (HTTP fallback), plus a **loopback-only HTTP listener** for the frontend's server-side (SSR) API calls.
+
+```bash
+npm run dev:mono     # dev: Next dev HMR + ts-node backend
+npm run build:mono   # compiles backend to dist/ + runs next build
+npm run start:mono   # prod: runs the compiled build
+```
+
+Internally, the backend `src/index.ts` skips its self-listen and gateway self-register when embedded (`process.env.WORDJS_EMBEDDED='1'`, set by `monolith.js`) and instead exposes `initialize()`; `monolith.js` also sets `WORDJS_MODE='mono'`.
+
+### Which to choose
+
+- **Monolith** — the simplest single-artifact deploy: one VM/container, TLS via its built-in HTTPS or a single reverse proxy in front.
+- **Split** — scale the services independently and get the gateway's clustering, health-checks, and load-balancing.
 
 ---
 
