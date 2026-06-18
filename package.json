@@ -25,7 +25,7 @@
         "bundle-release": "node scripts/make-release.js"
     },
     "dependencies": {
-        "@types/react": "^19.2.8",
+        "@types/react": "^19.2.17",
         "@types/react-dom": "^19.2.3",
         "axios": "^1.13.2",
         "better-sqlite3": "^12.6.0",
@@ -38,7 +38,7 @@
         "helmet": "^8.1.0",
         "http-proxy": "^1.18.1",
         "morgan": "^1.10.1",
-        "react": "^19.2.3",
+        "react": "^19.2.7",
         "react-dom": "^19.2.3",
         "selfsigned": "^5.5.0",
         "uuid": "^13.0.0",
