@@ -241,16 +241,25 @@ router.post('/install', async (req, res) => {
                 return; // Exit if mTLS generation fails
             }
 
-            // SECURITY: Delegate cluster orchestration to autonomous Setup service
-            console.log('🏗️ Setup: Orchestrating cluster via standalone service...');
-            try {
-                const WordJSSetup = require('../../setup/index');
-                const orchestrator = new WordJSSetup(path.resolve(__dirname, '../../'));
-                await orchestrator.distribute(newConfig);
-                console.log('✅ Cluster artifacts distributed via autonomous Setup service');
-            } catch (err) {
-                console.error('❌ Failed to trigger autonomous setup:', err.message);
-                console.warn('⚠️ Manual distribution might be required: npm run setup');
+            // SECURITY: Delegate cluster orchestration to the autonomous Setup service.
+            // The monolith is a SINGLE process — there is no separate gateway/frontend to distribute
+            // certs/config to — so this cluster step is a no-op there. Skip it (this also avoids
+            // needing the root setup/ package, which the compiled monolith release doesn't ship deps for).
+            if (process.env.WORDJS_EMBEDDED === '1') {
+                console.log('ℹ️ Monolith (embedded) — skipping cluster artifact distribution (single process, not needed).');
+            } else {
+                console.log('🏗️ Setup: Orchestrating cluster via standalone service...');
+                try {
+                    // Three levels up from backend/{src,dist}/routes/ to reach the repo-root setup/ package
+                    // (the previous two-level path resolved to backend/setup, which does not exist).
+                    const WordJSSetup = require('../../../setup/index');
+                    const orchestrator = new WordJSSetup(path.resolve(__dirname, '../../../'));
+                    await orchestrator.distribute(newConfig);
+                    console.log('✅ Cluster artifacts distributed via autonomous Setup service');
+                } catch (err) {
+                    console.error('❌ Failed to trigger autonomous setup:', err.message);
+                    console.warn('⚠️ Manual distribution might be required: npm run setup');
+                }
             }
 
             // Initialize Roles & CMS items
