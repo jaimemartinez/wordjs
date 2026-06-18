@@ -216,8 +216,8 @@ const GalleryPicker = ({ value, onChange }: { value: string; onChange: (value: s
                 }
                 setLoading(false);
             })
-            .catch(err => {
-                console.error("Failed to load galleries:", err);
+            .catch(() => {
+                // Plugin inactive / route not mounted → empty picker. Expected 404, no Console Error.
                 setLoading(false);
             });
     }, []);
@@ -269,11 +269,12 @@ export default function CardGalleryPuck({ galleryId = "", elementId = "" }: Card
         }
 
         fetch(`/api/v1/plugin/card-gallery/${galleryId}`)
-            .then(res => res.json())
-            .then(data => {
-                setGallery(data);
-            })
-            .catch(err => console.error("Failed to load gallery:", err))
+            // Guard res.ok: raw fetch() does NOT reject on 404, so without this an inactive plugin's
+            // error JSON would be stored as the "gallery". On any non-2xx/failure, render the empty
+            // fallback quietly (expected when the plugin isn't loaded) — no red Console Error.
+            .then(res => (res.ok ? res.json() : null))
+            .then(data => setGallery(data || null))
+            .catch(() => setGallery(null))
             .finally(() => setLoading(false));
     }, [galleryId]);
 
