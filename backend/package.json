@@ -56,7 +56,7 @@
     "selfsigned": "^5.5.0",
     "semver": "^7.7.3",
     "sharp": "^0.34.5",
-    "slugify": "^1.6.6",
+    "slugify": "^1.6.9",
     "smtp-server": "^3.18.0",
     "spf-validator": "^0.2.0",
     "sql.js": "^1.10.0",
