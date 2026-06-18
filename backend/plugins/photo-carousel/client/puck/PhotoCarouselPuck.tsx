@@ -29,8 +29,10 @@ const CarouselPicker = ({ value, onChange }: { value: string; onChange: (value: 
                 }
                 setLoading(false);
             })
-            .catch(err => {
-                console.error("Failed to load carousels in Picker:", err);
+            .catch(() => {
+                // Plugin inactive / route not mounted → empty option list. This is an expected 404,
+                // not an error, so degrade quietly instead of logging a red Console Error.
+                setItems([]);
                 setLoading(false);
             });
     }, []);
@@ -108,7 +110,9 @@ export default function PhotoCarouselPuck({ carouselId, autoSlide = true, interv
                     setCarousels([]);
                 }
             })
-            .catch(err => console.error("Failed to load carousels", err))
+            // Plugin inactive / route not mounted → render the existing "No carousel" fallback quietly.
+            // This is an expected 404 on a public page, not a failure, so don't log a red Console Error.
+            .catch(() => setCarousels([]))
             .finally(() => setLoading(false));
     }, [carouselId]);
 

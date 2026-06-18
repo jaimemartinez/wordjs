@@ -963,8 +963,11 @@ const baseConfig = {
                 const gridTemplateColumns = widths.slice(0, columnCount).map((w: number) => `${w}%`).join(' ');
                 const styles = columnStyles || [];
 
-                // Generate unique ID for responsive styles
-                const gridId = `columns-grid-${Math.random().toString(36).substr(2, 9)}`;
+                // Stable, SSR-safe unique id for the responsive <style>. Math.random() produced a
+                // DIFFERENT id on the server vs the client, causing a hydration mismatch now that this
+                // content is server-rendered. React.useId() is guaranteed identical across both renders
+                // (colons stripped so it's a valid CSS class name).
+                const gridId = `columns-grid-${React.useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
 
                 return (
                     <>

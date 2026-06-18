@@ -305,13 +305,13 @@ export default function VideoGalleryPuck({ galleryId = "default", title = "Video
                 }
                 setVideos(vids);
             } else {
-                // Fallback attempt to legacy endpoint if gallery not found via ID?
-                // Probably better to just show empty or error
-                console.warn(`Gallery ${targetId} not found`);
+                // Gallery not found (plugin inactive/empty, or unknown id) — render the empty fallback
+                // quietly. Expected 404 on a public page, so no Console Error/warning noise.
                 setVideos([]);
             }
         } catch (err) {
-            console.error("Failed to load videos:", err);
+            // Plugin not mounted / network error → empty fallback quietly.
+            setVideos([]);
         } finally {
             setLoading(false);
         }

@@ -41,8 +41,10 @@ export default function ThemeLoader() {
         return <link rel="stylesheet" href="/themes/default/style.css" />;
     }
 
-    // Use relative path with cache buster
-    const cssUrl = `/themes/${activeTheme.slug}/style.css?v=${Date.now()}`;
+    // Use relative path with a STABLE cache buster (theme version/slug). Date.now() here is
+    // render-time non-determinism that would mismatch between server and client renders — keep it
+    // deterministic so the stylesheet href is identical across SSR and hydration.
+    const cssUrl = `/themes/${activeTheme.slug}/style.css?v=${activeTheme.version || activeTheme.slug}`;
 
     return (
         <link rel="stylesheet" href={cssUrl} id="wjs-theme-stylesheet" />
