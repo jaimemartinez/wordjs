@@ -8,7 +8,7 @@
  * crawler) and then hydrates for the interactive bits (carousels, comments). The old version fetched
  * inside useEffect, which only runs in the browser — hence the empty-skeleton SSR this replaces.
  */
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Render, Config } from "@measured/puck";
 import "@measured/puck/puck.css";
@@ -74,6 +74,14 @@ export default function PostContent({ post, settings, category, showComments }: 
         return () => { clearTimeout(timeoutId); dispose?.(); };
     }, [post.id]);
 
+    // Hydration-safe date: render a deterministic ISO date on the server + first client render (so the
+    // SSR markup matches), then localize to the visitor's locale after mount. toLocaleDateString() with
+    // no args uses the runtime locale/timezone, which differs between the Node server and the browser.
+    const [dateStr, setDateStr] = useState(() => (post.date ? String(post.date).slice(0, 10) : ""));
+    useEffect(() => {
+        if (post.date) setDateStr(new Date(post.date).toLocaleDateString());
+    }, [post.date]);
+
     const config: Config = post.type === 'page' ? pageConfig : postConfig;
 
     // Feed the post's stored meta (title/author/date) into Puck's root props.
@@ -83,7 +91,7 @@ export default function PostContent({ post, settings, category, showComments }: 
             ...post.meta._puck_data.root,
             title: post.meta._puck_data.root?.title || post.title,
             author: post.author?.displayName || "Admin",
-            date: post.date ? new Date(post.date).toLocaleDateString() : "",
+            date: dateStr,
         },
     } : null;
 
@@ -121,7 +129,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                                     <span>•</span>
                                 </>
                             )}
-                            <span>{post.date ? new Date(post.date).toLocaleDateString() : ''}</span>
+                            <span>{dateStr}</span>
                             <span>•</span>
                             <span>{post.author?.displayName || "Admin"}</span>
                         </div>
