@@ -16,7 +16,7 @@
         "build:mono": "cd backend && npm run build && cd ../frontend && npm run build",
         "start:mono": "node monolith.js prod",
         "dev:mono": "cd frontend && npm run predev && cd .. && node monolith.js dev",
-        "install:all": "npm install && cd backend && npm install && cd frontend && npm install && cd gateway && npm install && cd setup && npm install",
+        "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install && cd ../gateway && npm install && cd ../setup && npm install",
         "release:install": "npm install --omit=dev && cd gateway && npm install --omit=dev && cd ../backend && npm install --omit=dev && cd ../frontend && npm install --omit=dev",
         "install:gateway": "cd gateway && npm install",
         "install:setup": "cd setup && npm install",
