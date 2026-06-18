@@ -46,6 +46,6 @@
         "winston-daily-rotate-file": "^5.0.0"
     },
     "devDependencies": {
-        "concurrently": "^9.2.1"
+        "concurrently": "^10.0.3"
     }
 }
