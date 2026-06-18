@@ -1,0 +1,72 @@
+name: Release
+
+# Publishes a downloadable, pre-compiled WordJS bundle.
+#  - Push a tag like `v1.0.0`  -> builds the bundle AND publishes a GitHub Release with the ZIP asset.
+#  - Run manually (workflow_dispatch) -> builds the bundle and uploads it as a workflow artifact only
+#    (no Release), so you can test the packaging without cutting a release.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write # required to create the GitHub Release and upload assets
+
+jobs:
+  build-release:
+    name: Build & publish compiled bundle
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            backend/package-lock.json
+            frontend/package-lock.json
+            gateway/package-lock.json
+            setup/package-lock.json
+
+      # Dev dependencies are needed: make-release.js compiles the frontend (next build),
+      # the backend (tsc) and the plugin bundles before zipping.
+      - name: Install all workspaces
+        run: npm run install:all
+
+      - name: Build compiled release ZIP
+        run: npm run bundle-release
+
+      - name: Name the asset after the tag (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        run: cp release/wordjs-compiled-release.zip "release/wordjs-${GITHUB_REF_NAME}.zip"
+
+      # Always expose the build as a downloadable workflow artifact (useful for manual runs / debugging).
+      - name: Upload workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wordjs-compiled-release
+          path: release/wordjs-compiled-release.zip
+          if-no-files-found: error
+
+      # On a version tag, publish a GitHub Release and attach the versioned ZIP.
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/wordjs-${{ github.ref_name }}.zip
+          body: |
+            Pre-compiled WordJS bundle — download `wordjs-${{ github.ref_name }}.zip`, then:
+
+            ```
+            npm run release:install   # installs runtime deps only (no compilation)
+            npm run start:mono        # one process, one port  (or: npm start for the 3-service split)
+            ```
+
+            Finish setup in the browser (install wizard: pick SQLite or PostgreSQL, create your admin).
+            See `INSTALL.md` inside the bundle and `documentation/deployment.md` for details.
