@@ -369,6 +369,15 @@ async function initializeDatabase() {
     await initializeSchema(getDb(), false);
     await runSchemaMigrations(getDb(), false, driverName);
   }
+  // The analytics table is defined on the Analytics model (kept out of the core schema to avoid a
+  // boot race). Create it here so it exists after a FRESH INSTALL too — the install wizard's setup
+  // flow calls initializeDatabase() but never the app's initialize() (where Analytics.init() also
+  // runs), so without this a fresh deploy hits "no such table: wordjs_analytics" on every request.
+  try {
+    await require('../models/Analytics').init();
+  } catch (e) {
+    console.warn('[DB] Analytics table init skipped:', e.message);
+  }
   await checkDbDivergence();
 }
 
