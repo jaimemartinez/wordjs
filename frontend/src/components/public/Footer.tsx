@@ -85,6 +85,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
                         {settings.footer_text && (
                             <div
                                 className="text-[var(--wjs-color-text-footer-dim,gray)] max-w-sm whitespace-pre-line prose prose-invert prose-sm"
+                                suppressHydrationWarning
                                 dangerouslySetInnerHTML={{ __html: sanitizeHTML(settings.footer_text) }}
                             />
                         )}
@@ -136,6 +137,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
                 {settings.footer_copyright && (
                     <div
                         className="border-t border-[var(--wjs-border-subtle,rgb(31,41,55))] pt-8 text-center text-[var(--wjs-color-text-footer-dim,gray)] text-sm [&>a]:text-[var(--wjs-color-primary,blue)] [&>a:hover]:underline"
+                        suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(settings.footer_copyright) }}
                     />
                 )}
