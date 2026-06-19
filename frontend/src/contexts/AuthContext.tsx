@@ -90,8 +90,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (res.ok) {
                 const userData = await res.json();
                 setUser(userData);
-            } else if (res.status === 401 || res.status === 403) {
-                // Genuinely unauthenticated — clear the session.
+            } else if (res.status === 401) {
+                // Genuinely unauthenticated — clear the session. A 403 means authenticated-but-
+                // forbidden (not a session problem), so it must NOT clear the user / force logout.
                 setUser(null);
             }
             // On 5xx / other transient errors, keep the previous user to avoid a spurious logout.

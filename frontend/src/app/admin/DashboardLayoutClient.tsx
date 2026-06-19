@@ -9,7 +9,7 @@ import { UnsavedChangesProvider } from "@/contexts/UnsavedChangesContext";
 import { initPlugins } from "@/lib/plugins";
 
 function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
-    const { user, isLoading, logout } = useAuth();
+    const { user, isLoading, logout, can } = useAuth();
     const router = useRouter();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
@@ -50,12 +50,16 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
         if (!isLoading) {
             if (!user) {
                 router.push("/login");
-            } else if (user.capabilities && !user.capabilities.includes("access_admin_panel") && !user.capabilities.includes("*")) {
+            } else if (!can("access_admin_panel")) {
+                // Use the role-aware can() helper, NOT a raw user.capabilities check: an
+                // administrator can legitimately arrive with an empty capabilities array (the
+                // role→cap map may not be seeded), and can() returns true for the admin role. The
+                // old raw check logged admins straight back out ("login works, then kicked out").
                 console.warn("User does not have admin access");
                 logout(); // Logout if they managed to get a token but shouldn't be here
             }
         }
-    }, [user, isLoading, router, logout]);
+    }, [user, isLoading, router, logout, can]);
 
     if (isLoading) {
         return (
