@@ -40,6 +40,57 @@ A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **ba
 
 ---
 
+## 📦 Releases & Distribution
+
+WordJS ships **downloadable, pre-compiled bundles** so an operator can deploy without cloning the repo or building anything locally. If you just want to run WordJS, grab a release ZIP instead of following the from-source installation steps below.
+
+> **First release:** [v1.0.0](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
+
+### How a release is cut (maintainers)
+
+Push a version tag and the release pipeline does the rest:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+A `v*` tag triggers **`.github/workflows/release.yml`**, which runs `npm run install:all` then `npm run bundle-release` (root `scripts/make-release.js`). The packager:
+
+1. Builds the **frontend** (`next build` → `.next`).
+2. Compiles the **backend** to `dist/` (`tsc`), so the bundle runs without `ts-node`.
+3. Builds the **plugin frontend bundles** (`backend/scripts/build-plugin.js --all`).
+4. Writes a self-contained `INSTALL.md` and zips everything **except** `node_modules`, `.git`/`.github`, the `release/` folder, local config (`wordjs-config.json`), local DB (`database.sqlite`), local certs (`ssl-auto.crt`/`ssl-auto.key`), `.env`, logs, and debug/CLI scripts.
+
+The workflow then publishes a **GitHub Release** with `wordjs-<tag>.zip` attached (with auto-generated release notes). A manual **`workflow_dispatch`** run builds the same bundle but uploads it only as a **workflow artifact** — no Release is created — which is handy for testing the packaging.
+
+### What the bundle contains
+
+- **Pre-compiled** frontend (`.next`), backend (`dist/`), and plugin bundles — recipients **do not build or compile anything**.
+- **No secrets.** `jwtSecret`, `gatewaySecret`, and the DB password are **generated locally during install** and written to `backend/wordjs-config.json` — they never ship and are never committed.
+- **No data.** The database is created fresh by the install wizard; no `database.sqlite` is included.
+
+### How an operator deploys a release
+
+1. Download `wordjs-<tag>.zip` from the GitHub Release and unzip it.
+2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
+   ```bash
+   npm run release:install
+   ```
+3. Start in either mode:
+   ```bash
+   npm run start:mono     # single process, one port (simplest), default https://localhost:3000
+   # or
+   npm start              # 3-service split: gateway + backend + frontend
+   ```
+4. Finish in the **browser install wizard**: pick **SQLite** (zero-config) or **PostgreSQL**, then create your admin account. See `INSTALL.md` inside the bundle for the same steps.
+
+> **LAN / remote access & TLS.** In monolith mode the process binds **`0.0.0.0`** on the public port, so it is reachable from other machines. The backend's **Site-URL guard rejects host mismatches**, so set the site host / `siteUrl` (in the install wizard or `backend/wordjs-config.json`) to the **IP or domain you will actually use** — not `localhost`. For a public deployment, terminate **TLS at a reverse proxy** (Nginx/Caddy/Cloudflare) in front of the bundle, or use the built-in HTTPS.
+
+> The remaining sections describe installing **from source** (clone + build) and running under **PM2**. The release bundle skips the build steps — go straight from `npm run release:install` to `npm run start:mono` / `npm start`.
+
+---
+
 ## 📋 Prerequisites
 
 - **Node.js:** v18 or higher (CI builds and tests on Node 22).
@@ -117,6 +168,8 @@ Example `backend/wordjs-config.json`:
 ---
 
 ## 🏃 Run in Production
+
+> **Deploying a release bundle?** You can skip the build steps entirely — see **[Releases & Distribution](#-releases--distribution)**. After `npm run release:install`, run `npm run start:mono` (or `npm start`) and the PM2 patterns below apply unchanged.
 
 > **Monolith mode?** Skip the three-process layout below and run a single process: `npm run start:mono` (after `npm run build:mono`), e.g. `pm2 start npm --name wordjs -- run start:mono`. See **[Deployment Modes](#-deployment-modes-split-vs-monolith)**. The rest of this section covers the default **split** deployment.
 
