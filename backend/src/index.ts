@@ -297,47 +297,41 @@ app.use((req, res, next) => {
     // 2. Check for URL Mismatch (Migration needed)
     const currentConfig = getConfig();
     if (currentConfig && currentConfig.siteUrl) {
-        // Prioritize X-Forwarded-Host (from Next.js proxy or standard proxy) 
-        // fallback to standard Host header
-        const hostHeader = req.get('x-forwarded-host') || req.get('host');
+        // Prioritize X-Forwarded-Host (set by the monolith/Next proxy or a standard reverse
+        // proxy), fall back to the raw Host header.
+        const rawHostHeader = req.get('x-forwarded-host') || req.get('host') || '';
 
         try {
-            // Remove protocol and trailing slash to compare host:port
-            const configuredHost = currentConfig.siteUrl.replace(/^https?:\/\//, '').replace(/\/$/, '');
+            // Compare HOSTNAMES ONLY — strip protocol, any :port, path and trailing slash from
+            // both sides. Behind a TLS-terminating reverse proxy the public host carries no :port
+            // (e.g. example.com on 443) while siteUrl/upstream Host may still carry :3000;
+            // comparing host:port there falsely fired "migration_required" and locked admins out
+            // of the ENTIRE API on every request (login succeeded, the next call 409'd → the UI
+            // bounced to /migration). Hostnames still catch a genuine domain change, which is the
+            // only situation migration should trigger.
+            const hostnameOf = (v: string): string =>
+                String(v || '')
+                    .replace(/^https?:\/\//, '')
+                    .replace(/\/.*$/, '')
+                    .split(':')[0]
+                    .toLowerCase()
+                    .trim();
+            const configuredHost = hostnameOf(currentConfig.siteUrl);
+            const detectedHost = hostnameOf(rawHostHeader);
 
-            // Simple check: does the request host match what we think it is?
-            if (configuredHost !== hostHeader) {
-                // Allow direct localhost:3000 access for debugging/backend direct access
-                // ONLY if the Host header itself (not forwarded) is localhost:3000
-                // This prevents breaking direct backend access if needed, 
-                // but forces migration if accessing via Proxy/IP that mismatches.
-                // SECURITY: Only allow this bypass in development mode.
-                if (config.nodeEnv === 'development' && hostHeader === 'localhost:3000') {
-                    return next();
-                } else if (req.get('host') === 'localhost:3000' && hostHeader !== 'localhost:3000') {
-                    // This means it IS a proxy request (Next.js) and the forwarded host mismatches.
-                    // Fall through to error.
-                }
+            // Loopback is always allowed: direct backend access, the SSR loopback server, health
+            // probes and CLI tooling must never be bounced to /migration.
+            const isLoopback =
+                detectedHost === 'localhost' || detectedHost === '127.0.0.1' || detectedHost === '::1';
 
-                // IGNORE localhost:3000 access if we are just testing backend directly?
-                // Actually, for simplicity:
-                // If Config is A, and User visits B, redirect.
-                // Exception: if User visits localhost:3000 directly (Backend port), maybe allow it?
-                // But the user is on port 3001 (Frontend).
-                // Frontend sends X-Forwarded-Host: 192.168.x.x:3001
-                // Backend Config: localhost:3000
-                // Mismatch! -> 409 -> Frontend Redirect.
-
-                // One edge case: `hostHeader` might include port 3001. `configuredHost` might be 3000?
-                // `siteUrl` in config usually comes from the setup.
-
+            if (configuredHost && detectedHost && configuredHost !== detectedHost && !isLoopback) {
                 return res.status(409).json({
                     error: 'migration_required',
                     message: 'Site URL mismatch detected.',
                     redirect: '/migration',
                     details: {
                         configured: configuredHost,
-                        detected: hostHeader
+                        detected: detectedHost
                     }
                 });
             }
