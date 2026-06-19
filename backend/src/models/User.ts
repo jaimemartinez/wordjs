@@ -51,11 +51,19 @@ class User {
 
     getCapabilities() {
         const role = this.getRole();
+        // Administrators implicitly hold every capability ('*' wildcard / WP superadmin). The
+        // role→capabilities map is seeded from the wordjs_user_roles option and can be EMPTY on a
+        // fresh or imported install — which previously left an administrator with ZERO capabilities
+        // (403 on every can() gate, and an empty capabilities list sent to the frontend).
+        if (role === 'administrator') return ['*'];
         const roles = getRoles();
         return roles[role]?.capabilities || [];
     }
 
     can(capability) {
+        // Administrators bypass the capability lookup entirely (safety net, independent of whether
+        // the role→cap map got seeded).
+        if (this.getRole() === 'administrator') return true;
         const caps = this.getCapabilities();
         if (caps.includes('*')) return true;
         return caps.includes(capability);
@@ -310,10 +318,6 @@ class User {
     toJSON() {
         // Essential for frontend (camelCase)
         // AND legacy backend compatibility (snake_case)
-        const { getRoles } = require('../core/roles');
-        const roles = getRoles();
-        const roleObj = this.role ? roles[this.role] : undefined;
-
         // Never blanket-dump user_meta: a plugin or core flow may stash secrets there (API keys,
         // tokens, 2FA seeds, the token_valid_after epoch). Strip sensitive-looking keys before serializing.
         const SENSITIVE_META = /secret|token|pass|pwd|priv(ate)?|[_-]?key$|^key|api[_-]?key|credential|salt|hash|2fa|otp|recovery|seed/i;
@@ -331,7 +335,7 @@ class User {
             displayName: this.displayName, // Frontend expectation
             display_name: this.displayName, // Legacy expectation
             role: this.role || 'subscriber',
-            capabilities: roleObj ? roleObj.capabilities : [],
+            capabilities: this.getCapabilities(),
             meta: safeMeta
         };
     }
