@@ -29,7 +29,7 @@ function renderContent(htmlContent: string) {
     });
 
     if (!processed.includes(markerPrefix)) {
-        return <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(htmlContent) }} />;
+        return <div suppressHydrationWarning dangerouslySetInnerHTML={{ __html: sanitizeHTML(htmlContent) }} />;
     }
 
     const regex = new RegExp(`${markerPrefix}(\\d+)${markerPrefix}`, 'g');
@@ -48,7 +48,7 @@ function renderContent(htmlContent: string) {
             {parts.map((part, index) => (
                 <Fragment key={index}>
                     {typeof part === 'string' ? (
-                        <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(part) }} />
+                        <div suppressHydrationWarning dangerouslySetInnerHTML={{ __html: sanitizeHTML(part) }} />
                     ) : (
                         <PluginLoader slug={part.slug} />
                     )}
