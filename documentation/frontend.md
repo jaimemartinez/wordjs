@@ -5,7 +5,7 @@ The Frontend (`frontend/`) is a **Next.js** application serving both the public 
 ## Structure
 
 *   **App Router:** Uses the modern Next.js App Router (`src/app`).
-*   **Public Site:** `src/app/(public)/` - Renders blog posts, pages, and themes.
+*   **Public Site:** `src/app/(public)/` - Server-rendered blog posts, pages, search, and themes (see **Public Site Rendering (SSR)** below).
 *   **Admin Dashboard:** `src/app/admin/` - Management interface.
 
 ## Gateway Integration
@@ -30,6 +30,30 @@ WordJS uses **Puck** for its visual editor.
 *   **Public Access:** Accessed via Gateway on port `3000` (or `80`/`443` in prod).
 
 Ensure `NEXT_PUBLIC_API_URL` points to the Gateway URL, not direct backend port.
+
+
+## Public Site Rendering (SSR) 🌐
+
+The public site is **real server-side rendering (SSR)**, not client-only skeletons. Every route under `src/app/(public)/` — the home page (`page.tsx`), single posts (`[slug]/page.tsx`), category posts (`[slug]/[postSlug]/page.tsx`), static pages (`pages/[slug]/page.tsx`), and search (`search/page.tsx`) — is an **async React Server Component** that fetches its content **on the server**. The initial HTML sent to crawlers and the first paint already contain the real title and body.
+
+### Server data layer: `src/lib/server-api.ts`
+A **server-only** module (must never be imported from a `"use client"` file). It:
+
+*   **Resolves the backend base URL** for SSR fetches (`resolveServerBase()`): monolith uses the loopback origin (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); split mode reads the backend port from `wordjs-config.json` (default `4000`); `INTERNAL_API_URL` overrides both.
+*   **Deduplicates requests** — the content loaders (`getSettings`, `getPostBySlug`, `getPostById`, `getPosts`, `searchPosts`) are wrapped in React `cache()`, so `generateMetadata()` and the page body share a single request-scoped backend call instead of fetching the same post twice. Fetches use `cache: 'no-store'` (per-request, fresh content).
+*   **Forwards the public host** — `serverFetch()` relays the inbound `x-forwarded-host` / `x-forwarded-proto` to the backend. Because SSR fetches hit the loopback origin, without this the backend's host-based logic (the **Site-URL/migration guard**, **CSRF origin** check, **canonical/OpenGraph** URLs) would see `localhost:4000` instead of the public host and reject SSR requests (e.g. `409 migration_required`).
+*   **Builds SEO metadata** — `buildPostMetadata()` (title, description, canonical, OpenGraph/Twitter) and `htmlToText()` (tag-stripping excerpt builder for `<meta>` values). These are server-safe and do **not** call the `"use client"` sanitizer.
+
+### Content renderers (client components fed server-fetched props)
+The actual content markup lives in **client components** that receive the already-fetched `post` as a prop from the Server Component: `src/components/public/PostContent.tsx` (single post / page / category-post) and `src/components/public/HomeContent.tsx` (static home page). Because the data arrives as a prop (not via a browser-only `useEffect` fetch), these **render on the server during SSR** — real HTML body and sanitized content reach the crawler — and then **hydrate** the interactive bits (photo carousels, comments, locale-aware dates, plugin `[shortcode]` embeds).
+
+### SEO & behavior
+*   **`generateMetadata`** — each page exports it for a per-page `<title>` (the root layout applies a `%s | site` template; the home page uses `title.absolute` to avoid doubling), description, canonical, and OpenGraph/Twitter tags.
+*   **Real 404s** — when content is missing, pages call `notFound()` (a real HTTP 404), and their `generateMetadata` returns `robots: { index: false }`.
+*   **Search is no-JS** — `search/page.tsx` is a plain `<form action="/search" method="get">`, so it works with JavaScript disabled; it server-fetches results via `searchPosts()` and is marked `robots: { index: false }`.
+*   **`suppressHydrationWarning`** — sanitized-HTML blocks (`dangerouslySetInnerHTML`) carry `suppressHydrationWarning` because the server (`sanitize-html`) and client (DOMPurify) serialize styles slightly differently (see **HTML Sanitization** below).
+
+> **`sanitize.ts` is `"use client"`** — therefore `sanitizeHTML()` **cannot be called from a Server Component**. Sanitization happens inside the client renderers (`PostContent`/`HomeContent`), which still execute during SSR. For server-side metadata, use the plain-text `htmlToText()` from `server-api.ts` instead.
 
 
 ## Context Providers & State
@@ -103,7 +127,7 @@ WordJS integrates **Puck** (by Measured) as its visual page builder.
 ### Configuration
 *   **Config File**: `src/components/puckConfig.tsx` defines the available components (and exports the `RichTextEditor`).
 *   **Editor Page**: `src/app/admin/pages/[id]/page.tsx` renders the editor interface (via `PuckEditor.tsx`).
-*   **Render Pages**: the published pages are rendered with Puck's `<Render>` component across the public routes — `src/app/(public)/page.tsx` (home), `src/app/(public)/[slug]/page.tsx`, `src/app/(public)/[slug]/[postSlug]/page.tsx`, and `src/app/(public)/pages/[slug]/page.tsx`. (There is no `[...slug]` catch-all route.)
+*   **Render Pages**: the public routes — `src/app/(public)/page.tsx` (home), `src/app/(public)/[slug]/page.tsx`, `src/app/(public)/[slug]/[postSlug]/page.tsx`, and `src/app/(public)/pages/[slug]/page.tsx` — are **async Server Components** that fetch content server-side (see **Public Site Rendering (SSR)**) and hand it to the `PostContent`/`HomeContent` client renderers, which use Puck's `<Render>` component for Puck-authored layouts (and sanitized HTML for classic content). (There is no `[...slug]` catch-all route.)
 
 ### Available Components
 
@@ -225,6 +249,8 @@ The admin dashboard is fully translated. The public-facing site renders user con
 ## HTML Sanitization (isomorphic) 🛡️
 
 User-generated and Puck-rendered HTML is sanitized before it hits `dangerouslySetInnerHTML`. `src/lib/sanitize.ts` is **isomorphic** — it sanitizes on both the server (SSR) and the client so there is no pre-hydration XSS window.
+
+> The file is marked `"use client"`, so it executes during SSR only when invoked from a Client Component (e.g. `PostContent`/`HomeContent`) — it **cannot be imported into a Server Component**. Server Components that need plain text (SEO metadata) use `htmlToText()` from `src/lib/server-api.ts` instead. Because server (`sanitize-html`) and client (DOMPurify) serialize styles slightly differently, the rendered HTML blocks set `suppressHydrationWarning`.
 
 *   **Client (browser):** uses **DOMPurify** with an explicit tag/attribute allowlist (text formatting, headings, lists, links, media incl. `iframe` for video embeds, tables, read-only form elements, plus `style`). `on*` handlers and `<script>/<object>/<embed>/<base>/<meta>/<link>` are forbidden.
 *   **Server (SSR):** uses **`sanitize-html`** with `SERVER_SANITIZE_OPTIONS`, which mirrors the DOMPurify allowlist (schemes limited to `http/https/mailto/tel`, plus `data:` for `img`/`source`). If the library is unavailable it **fails closed** by stripping all tags via regex.
