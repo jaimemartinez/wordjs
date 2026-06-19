@@ -121,7 +121,10 @@ const defaultConfig = {
     siteUrl: 'http://localhost:3000',
     frontendUrl: 'http://localhost:3001',
     dbDriver: 'sqlite-native',
-    dbPath: './data/wordjs.db',
+    // dbPath is resolved below in the config literal (driver-aware). A single static default here
+    // (was './data/wordjs.db') disagreed with the native driver + the installer (which both use
+    // './data/wordjs-native.db'), so on a fresh install the admin could be created in one file and
+    // read from the empty twin on the next restart — surfacing as "invalid credentials".
     jwtSecret: 'wordjs-default-secret-change-me',
     ssl: { enabled: false },
     // SECURITY: only these (first-party, bundled) plugins may skip the AST scanner via a
@@ -185,6 +188,18 @@ if (!fileConfig.jwtSecret) {
 const config: AppConfig = {
     ...defaultConfig,
     ...fileConfig,
+
+    // Database file path. The native (better-sqlite3) and legacy (sql.js) drivers deliberately use
+    // DIFFERENT default filenames so switching drivers never silently clobbers the other's data
+    // (native→wordjs-native.db, legacy→wordjs.db) — and, critically, so the path used to CREATE the
+    // admin on first boot matches the path read on every later restart. If the file config doesn't
+    // pin dbPath, derive it from the chosen driver (the installer pins it explicitly anyway). A
+    // single static default used to land here and diverge from the native driver/installer.
+    dbPath:
+        fileConfig.dbPath ||
+        ((fileConfig.dbDriver || defaultConfig.dbDriver) === 'sqlite-legacy'
+            ? './data/wordjs.db'
+            : './data/wordjs-native.db'),
 
     // Routable address the gateway uses to reach this backend node (multi-node). Single-host default.
     advertiseHost: fileConfig.advertiseHost || '127.0.0.1',
