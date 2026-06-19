@@ -743,6 +743,7 @@ const baseConfig = {
                             fontSize: `var(--wjs-${level}-size)`,
                             ...css
                         }}
+                        suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(title || '') }}
                     />
                 );
@@ -777,6 +778,7 @@ const baseConfig = {
                         fontFamily: 'var(--wjs-font-family, inherit)',
                         ...css
                     }}
+                    suppressHydrationWarning
                     dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }}
                 />
             ),

@@ -24,6 +24,7 @@ export default function PublicSidebar({ id, onEmpty }: { id: string, onEmpty?: (
     return (
         <aside
             className="widget-area space-y-8"
+            suppressHydrationWarning
             dangerouslySetInnerHTML={{ __html: sanitizeHTML(html) }}
         />
     );

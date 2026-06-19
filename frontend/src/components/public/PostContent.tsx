@@ -113,6 +113,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                     <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
                     <div
                         className="prose prose-lg max-w-none mx-auto"
+                        suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />
                 </div>
@@ -139,6 +140,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                     </div>
                     <div
                         className="prose prose-lg prose-blue mx-auto bg-white p-8 rounded-2xl shadow-sm border border-gray-100"
+                        suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />
                 </article>
