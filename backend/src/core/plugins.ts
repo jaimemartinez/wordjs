@@ -369,9 +369,13 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
             const fullPath = path.join(dir, file);
             const stat = fs.statSync(fullPath);
             if (stat && stat.isDirectory()) {
-                // Skip node_modules, hidden files, and FRONTEND directories
+                // Skip node_modules, hidden files, and FRONTEND directories. `dist/` is the BUILT
+                // output of client/ (esbuild bundles like component.bundle.js) — it runs in the
+                // browser, NOT in the isolated worker, and bundling injects require.*/process.cwd from
+                // packed deps, which falsely trips the dangerous-call scan. The worker only loads the
+                // backend entry (index.js), so scanning dist/ is both wrong and a false-positive source.
                 if (!file.includes('node_modules') && !file.startsWith('.') &&
-                    !['client', 'frontend'].includes(file)) {
+                    !['client', 'frontend', 'dist'].includes(file)) {
                     results = results.concat(getFiles(fullPath));
                 }
             } else if (file.endsWith('.js') || file.endsWith('.ts') ||
