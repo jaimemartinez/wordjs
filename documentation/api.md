@@ -149,7 +149,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 - **System**: `/settings`, `/plugins`, `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8).
 - **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
-- **Data**: `/export`, `/export/wxr`, `/import`, `/backups`, `/db-migration` (engine migration & embedded Postgres).
+- **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration & embedded Postgres).
 
 ### 6.2.1 Authentication Flow (JWT)
 1. **Login**: `POST /auth/login` -> sets the `wordjs_token` HttpOnly cookie and returns `{ user }`.
@@ -248,6 +248,67 @@ A Prometheus scrape endpoint is served at the **root path** `GET /metrics` (`bac
 *   **Disabled by default:** the endpoint returns **`404`** unless a scrape token is configured at `config.metrics.token` (in `wordjs-config.json`) or via the `METRICS_TOKEN` env var. With no token, metrics are never exposed.
 *   **Auth:** scrape with `Authorization: Bearer <token>` (or `?token=<token>`); a missing/incorrect token returns `401` (constant-time compare). It is mounted at root level — CSRF-free and not rate-limited.
 *   **Routing:** exposed publicly through the gateway (in the backend's advertised route list) and in monolith mode (`BACKEND_PREFIXES`). Never reachable without the token regardless of mode.
+
+### 6.9 WordPress Import (WXR) 📥
+Base path: `/api/v1/import`. Migrates an existing WordPress site from its **WXR** export (the `Tools → Export → All content` `.xml` file). Routes are **admin-only** (`authenticate` + `isAdmin`). The export is uploaded as a **`multipart/form-data`** request with the file in the **`file`** field (`.xml` / `.wxr`, max 100MB). Implemented by `backend/src/core/wxr-import.ts` (`analyzeWxr`/`importWxr`) and `backend/src/routes/import.ts`. The admin UI lives at `/admin/import` (sidebar "Import").
+
+| Method | Endpoint                | Auth  | Description                                              |
+| :----- | :---------------------- | :---- | :------------------------------------------------------ |
+| `POST` | `/import/wordpress/analyze` | Admin | **Dry-run.** Parse the WXR and return entity counts; writes nothing |
+| `POST` | `/import/wordpress`         | Admin | **Run the import** (idempotent / re-runnable)           |
+
+**Run-time form options** (multipart fields alongside `file`, only read by `POST /import/wordpress`):
+
+| Field               | Default                          | Description                                                                 |
+| :------------------ | :------------------------------- | :-------------------------------------------------------------------------- |
+| `defaultAuthorId`   | the importing admin's user id    | Fallback author for items whose WP author can't be imported (positive integer; otherwise falls back to the caller) |
+| `importComments`    | enabled (`"0"` to disable)       | Import post comments (threaded; spam/pingbacks skipped)                     |
+| `importAttachments` | disabled (`"1"` to enable)       | Create attachment **post records only** — WXR ships URLs, not media binaries, so files are never downloaded |
+
+**What it maps:** `wp:author` → users (created with a random password — imported users must reset to log in — or matched by login/email), categories → `category` terms (with parent hierarchy), tags → `post_tag` terms, and items → posts/pages with post meta, term relationships, and comments. The import is **idempotent**: existing users/terms/posts are matched and reused rather than duplicated, and original publish dates are preserved. **Skipped entirely:** attachments (unless `importAttachments=1`, and even then only the records) and `nav_menu_item` entries.
+
+**`analyze` response** — counts only, nothing is written:
+```json
+{
+  "success": true,
+  "analysis": {
+    "wxrVersion": "1.2",
+    "site": { "title": "My Blog", "link": "https://old.example.com", "...": "..." },
+    "counts": {
+      "authors": 3,
+      "categories": 8,
+      "tags": 42,
+      "customTerms": 0,
+      "posts": 120,
+      "pages": 5,
+      "attachments": 60,
+      "navItems": 4,
+      "other": 0,
+      "comments": 310
+    }
+  }
+}
+```
+
+**`import` response** — a per-entity `created`/`skipped` (plus `matched` for authors) summary:
+```json
+{
+  "success": true,
+  "summary": {
+    "site": { "title": "My Blog", "link": "https://old.example.com" },
+    "authors": { "created": 2, "matched": 1 },
+    "terms":   { "categories": 8, "tags": 42, "custom": 0 },
+    "posts":   { "created": 118, "skipped": 2 },
+    "pages":   { "created": 5, "skipped": 0 },
+    "attachments": { "created": 0, "skipped": 60 },
+    "comments":    { "created": 305, "skipped": 5 },
+    "navItems":    { "skipped": 4 },
+    "errors": []
+  }
+}
+```
+
+**Errors:** a missing upload returns `400 no_file`; an unreadable upload `400 read_failed`; a file that doesn't parse as a valid WXR returns `400 invalid_wxr`. Non-fatal per-item problems during a run are collected (capped at 100) in the summary's `errors[]` array rather than aborting the import.
 
 ---
 

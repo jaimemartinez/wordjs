@@ -265,7 +265,7 @@ User feedback on content.
 | `user_id`              | INTEGER    | If registered    |
 
 ### 2.8 `wordjs_analytics`
-High-volume event logging table for the internal analytics engine. Unlike the tables above, this one is **not** part of the core schema in `config/database.ts` — it is created lazily by the `Analytics` model (`backend/src/models/Analytics.ts`) on first use, with an index on `created_at`.
+High-volume event logging table for the internal analytics engine. Its schema lives on the `Analytics` model (`backend/src/models/Analytics.ts`, `Analytics.init()`) rather than inline in `initializeSchema`, deliberately kept out of the core schema to avoid a boot race. It is, however, created during **`initializeDatabase()`** (`config/database.ts`) — right after the core schema and migrations run, `initializeDatabase()` calls `Analytics.init()` (`CREATE TABLE IF NOT EXISTS`, with an index on `created_at`). This guarantees the table exists after a **fresh install**: the install wizard's setup flow calls `initializeDatabase()` but never the app's `initialize()`, so without this a fresh deploy would hit `no such table: wordjs_analytics` on every request.
 
 | Column       | Type        | Description                                          |
 | :----------- | :---------- | :--------------------------------------------------- |
