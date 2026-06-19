@@ -9,6 +9,48 @@ const config = require('../config/app');
 
 const ROLES_OPTION_NAME = 'wordjs_user_roles';
 
+// Built-in WordPress-style roles. These are the source of truth when the stored wordjs_user_roles
+// option is empty/missing — which it was on every install, because options seeded it from the
+// hardcoded-empty config.roles, leaving every role (administrator included) with NO capabilities
+// and the admin Roles page showing nothing. config.roles, when an operator sets it, still wins.
+const DEFAULT_ROLES: Record<string, { name: string; capabilities: string[] }> = {
+    administrator: {
+        name: 'Administrator',
+        // '*' is the all-capabilities wildcard understood by User.can() / the frontend can() helper.
+        capabilities: ['*']
+    },
+    editor: {
+        name: 'Editor',
+        capabilities: [
+            'read', 'access_admin_panel', 'upload_files',
+            'edit_posts', 'edit_others_posts', 'edit_published_posts', 'publish_posts',
+            'delete_posts', 'delete_others_posts', 'delete_published_posts',
+            'edit_pages', 'edit_others_pages', 'edit_published_pages', 'publish_pages',
+            'delete_pages', 'delete_others_pages', 'delete_published_pages',
+            'manage_categories', 'moderate_comments'
+        ]
+    },
+    author: {
+        name: 'Author',
+        capabilities: [
+            'read', 'access_admin_panel', 'upload_files',
+            'edit_posts', 'edit_published_posts', 'publish_posts',
+            'delete_posts', 'delete_published_posts'
+        ]
+    },
+    contributor: {
+        name: 'Contributor',
+        capabilities: ['read', 'access_admin_panel', 'edit_posts', 'delete_posts']
+    },
+    subscriber: {
+        name: 'Subscriber',
+        capabilities: ['read', 'access_admin_panel']
+    }
+};
+
+// Deep clone so callers/mutations (updateRoleCapabilities, syncRoles) never alter the constant.
+const defaultRoles = (): Record<string, any> => JSON.parse(JSON.stringify(DEFAULT_ROLES));
+
 // Cache roles in memory for synchronous access (required by User.toJSON)
 let _rolesCache: Record<string, any> | null = null;
 
@@ -17,9 +59,18 @@ let _rolesCache: Record<string, any> | null = null;
  * Must be called on app startup
  */
 async function loadRoles() {
-    _rolesCache = await getOption(ROLES_OPTION_NAME);
-    if (!_rolesCache || Object.keys(_rolesCache).length === 0) {
-        _rolesCache = config.roles || {};
+    const stored = await getOption(ROLES_OPTION_NAME);
+    if (stored && Object.keys(stored).length > 0) {
+        _rolesCache = stored;
+    } else {
+        // Empty/missing option: fall back to the built-in defaults (operator config.roles overrides)
+        // and backfill the option so the roles are durable and visible to anything reading the DB.
+        _rolesCache = { ...defaultRoles(), ...(config.roles || {}) };
+        try {
+            await updateOption(ROLES_OPTION_NAME, _rolesCache);
+        } catch (e: any) {
+            console.warn('Could not persist default roles:', e?.message);
+        }
     }
     console.log(`DEBUG: Roles loaded into cache. Count: ${Object.keys(_rolesCache || {}).length}`);
     return _rolesCache;
@@ -29,10 +80,10 @@ async function loadRoles() {
  * Get all available roles (Synchronous from cache)
  */
 function getRoles() {
-    // If not loaded yet, fallback to config (safe for startup/tests)
+    // If not loaded yet, fall back to the built-in defaults merged with operator config (safe for
+    // startup/tests). Never return an empty map — that strips every user of their capabilities.
     if (!_rolesCache) {
-        // console.warn('Warning: getRoles() called before loadRoles(). Returning default config.');
-        return config.roles || {};
+        return { ...defaultRoles(), ...(config.roles || {}) };
     }
     return _rolesCache;
 }
@@ -132,21 +183,25 @@ async function syncRoles(configRoles) {
     const dbRoles = _rolesCache!; // Work on reference
     let changed = false;
 
-    // Check subscriber specifically for the new capability
-    if (dbRoles.subscriber && configRoles.subscriber) {
-        const dbCaps = dbRoles.subscriber.capabilities || [];
-        const configCaps = configRoles.subscriber.capabilities || [];
+    // Built-in defaults guarantee the core roles always exist; operator config.roles overrides them.
+    const effective = { ...defaultRoles(), ...(configRoles || {}) };
 
-        // If DB is missing access_admin_panel but Config has it, FORCE update
-        if (!dbCaps.includes('access_admin_panel') && configCaps.includes('access_admin_panel')) {
+    // Check subscriber specifically for the access_admin_panel capability
+    if (dbRoles.subscriber && effective.subscriber) {
+        const dbCaps = dbRoles.subscriber.capabilities || [];
+        const effCaps = effective.subscriber.capabilities || [];
+
+        // If DB is missing access_admin_panel but the effective definition has it, FORCE update
+        if (!dbCaps.includes('access_admin_panel') && effCaps.includes('access_admin_panel')) {
             console.log('🔄 Syncing Subscriber roles: Adding access_admin_panel');
-            dbRoles.subscriber.capabilities = configCaps;
+            dbRoles.subscriber.capabilities = effCaps;
             changed = true;
         }
     }
 
-    // General sync for missing roles
-    for (const [slug, role] of Object.entries(configRoles)) {
+    // General sync for missing roles (seeds the core roles on existing installs whose stored map
+    // predates them).
+    for (const [slug, role] of Object.entries(effective)) {
         if (!dbRoles[slug]) {
             console.log(`➕ Adding missing role: ${slug}`);
             dbRoles[slug] = role;
