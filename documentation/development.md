@@ -118,6 +118,15 @@ npm run test   # vitest run (unit tests, e.g. the XSS sanitizer in src/lib/__tes
 
 In **production** the frontend loads plugin UI from pre-compiled bundles via the Plugin API (no `next build` of plugin code required); in **development** it uses Next.js dynamic imports with HMR.
 
+### Public site: real SSR (Server Components)
+
+Every public route under `frontend/src/app/(public)/` (home `page.tsx`, post `[slug]/`, page `pages/[slug]/`, and `search/`) is an **async React Server Component** that fetches its content **on the server**, so the initial HTML sent to crawlers and the first paint already contain the real title/body — not the old client-only `useEffect` skeleton.
+
+- **Server-only data layer — `frontend/src/lib/server-api.ts`.** `serverFetch()` resolves the backend base URL the same way for both modes: monolith uses the in-process plain-HTTP loopback (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); split reads the backend port from `wordjs-config.json` (default 4000); `INTERNAL_API_URL` overrides both. Content loaders (`getPostBySlug`, `getPosts`, `getSettings`, …) are wrapped in React `cache()`, so `generateMetadata()` and the page body share **one** request-scoped backend call instead of fetching the same post twice. The module also exposes SEO helpers (`buildPostMetadata`, `htmlToText`) that are server-safe (no DOM). **Import it only from Server Components / `generateMetadata` — never from a `"use client"` file.**
+- **`x-forwarded-host` forwarding (gotcha).** SSR fetches hit the loopback origin, so `serverFetch` relays the inbound `x-forwarded-host` / `x-forwarded-proto` (read via `next/headers`) one more hop to the backend. Without this, the backend's host-based logic — the Site-URL/migration guard, the CSRF origin check, and canonical/OpenGraph/sitemap URLs — would see `localhost:4000` instead of the real public host and (e.g.) reject every SSR request with a `409 migration_required`.
+- **Content rendering stays in client components.** `frontend/src/components/public/PostContent.tsx` and `HomeContent.tsx` receive the already-fetched data as **props**: they SSR with that content, then hydrate the interactive bits (carousels, comments). This split is required because `frontend/src/lib/sanitize.ts` is a `"use client"` module — `sanitizeHTML` **cannot** be called from a Server Component. The sanitized-HTML blocks carry `suppressHydrationWarning` because server `sanitize-html` and client `DOMPurify` serialize style attributes slightly differently.
+- **Metadata & 404s.** Each page exports `generateMetadata` (title template, description, canonical, OpenGraph/Twitter). Missing content calls `notFound()` for a real HTTP 404. Search is a **no-JS GET form** (`action="/search" method="get"`).
+
 ---
 
 ## 🚀 Gateway
@@ -192,6 +201,27 @@ npm run migrate   # node setup/index.js --migrate
 
 ---
 
+## 📥 WordPress importer (WXR)
+
+To migrate an existing WordPress site, import its **WXR** export (the `Tools → Export` `.xml`). The importer maps WordPress entities onto WordJS models:
+
+| WordPress     | WordJS                                                            |
+| ------------- | ---------------------------------------------------------------- |
+| `wp:author`   | `users` (random password — must be reset; matched by login/email) |
+| `wp:category` | `terms` (taxonomy `category`, with parent hierarchy)             |
+| `wp:tag`      | `terms` (taxonomy `post_tag`)                                    |
+| `item`        | `posts`/`pages` (+ post meta, term relationships, threaded comments) |
+
+- **Core:** `backend/src/core/wxr-import.ts` exposes `parseWxr`, `analyzeWxr` (dry-run counts), and `importWxr`.
+- **Routes** (`backend/src/routes/import.ts`, admin-only, `multipart` field `file` = the `.xml`):
+  - `POST /api/v1/import/wordpress/analyze` — dry-run; parses and returns entity counts without writing anything.
+  - `POST /api/v1/import/wordpress` — runs the import. Form options: `defaultAuthorId` (defaults to the importing admin), `importComments` (`1`/`0`, default on), `importAttachments` (`1`/`0`, default off).
+- **Admin UI:** `/admin/import` (sidebar **Import** in `frontend/src/components/Sidebar.tsx`).
+
+Behaviour: **idempotent / re-runnable** — existing users (by login/email), terms (by slug+taxonomy) and posts (by slug+type) are matched and reused, not duplicated; the import is deliberately **not** wrapped in one DB transaction (it's resumable and per-item failures are collected, not fatal). Original publish dates are preserved, and classic-editor content gets a light `wpautop`. It **skips attachments** by default (the WXR carries only media URLs, not the binaries), spam/pingback comments, and `nav_menu_item` entries.
+
+---
+
 ## 🤖 CI
 
 `.github/workflows/ci.yml` runs three parallel jobs on every push/PR (Node 22):
@@ -201,3 +231,29 @@ npm run migrate   # node setup/index.js --migrate
 - **Frontend:** lint → **vitest** (`npm run test`) → production build.
 
 The license gate keeps the distribution MIT-clean by failing on network-copyleft (AGPL/SSPL) production dependencies.
+
+---
+
+## 📦 Building a downloadable release
+
+WordJS ships **pre-compiled** downloadable bundles so recipients never have to build. To produce one locally:
+
+```bash
+npm run install:all     # install every workspace (needs dev deps — the build compiles TS/Next)
+npm run bundle-release   # = node scripts/make-release.js
+```
+
+`scripts/make-release.js` builds the frontend (`next build` → `.next`), compiles the backend (`tsc` → `dist/`), bundles the plugins (`node scripts/build-plugin.js --all`), then zips **everything except** `node_modules`, secrets, and local config (`wordjs-config.json`, certs, DB, logs) into **`release/wordjs-compiled-release.zip`** (with a self-contained `INSTALL.md` written into the bundle).
+
+The recipient unzips, then — **no build step** — runs `npm run release:install` (installs runtime deps only, `--omit=dev`), starts with `npm run start:mono` (single process, default `https://localhost:3000`) or `npm start` (3-service split), and finishes in the browser install wizard (pick SQLite or PostgreSQL, create the admin). No secrets ship; they're generated locally at install.
+
+In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs the same `install:all` + `bundle-release` and publishes a GitHub Release with `wordjs-<tag>.zip` attached; `workflow_dispatch` builds the same bundle as a workflow artifact only (no Release).
+
+---
+
+## 🔭 Deferred dependency migrations
+
+Most dependency bumps are applied, but two larger migrations are **deferred and tracked as open PRs**, so don't be surprised that the tree is still on the older majors:
+
+- **Express 4 → 5** (backend + gateway).
+- **TypeScript 5 → 6** (frontend).

@@ -56,6 +56,18 @@ reachable only through a permission-checked capability bridge.
   (filesystem, network, database, settings, etc.) with human-readable reasons; the sandbox
   enforces them at runtime. Trust is **server-side and never self-declarable**.
 
+**Public site & SEO**
+- **Real server-side rendering.** The public routes (home, posts, pages, search) are async
+  React Server Components that fetch on the server (`frontend/src/lib/server-api.ts`), so the
+  initial HTML sent to crawlers and the first paint already contain the real title/body —
+  not the empty client-only skeletons they used to ship. Each page exports `generateMetadata`
+  (title template, description, canonical, OpenGraph/Twitter), missing content returns a real
+  HTTP **404** (`notFound()`), and search is a no-JS GET form. Content rendering lives in
+  client components fed the already-fetched data, so they SSR with content then hydrate
+  carousels/comments.
+- **SEO basics**: semantic HTML, meta tags, JSON-LD, per-page metadata, and gateway-served
+  `sitemap.xml` / `robots.txt`.
+
 **Authoring & content**
 - **Visual builder** via [Puck](https://puckeditor.com/) (drag-and-drop page editing).
 - **Hooks & filters** event system, with admin-side hook inspection.
@@ -66,12 +78,16 @@ reachable only through a permission-checked capability bridge.
 - **Import / export** for full site backup and restore, with **retention pruning** — after
   each backup only the newest N are kept (`backup_retention`, default 7; `0` keeps all) so
   scheduled backups can't fill the disk. Backups are on-host (off-host/S3 is roadmap).
+- **WordPress (WXR) importer** to migrate an existing WordPress site. Upload a `.xml` export
+  in **Admin → Import** to preview entity counts (dry-run analyze) and then import: WordPress
+  authors → users, categories/tags → terms, items → posts/pages (with meta, term
+  relationships, and threaded comments), preserving original publish dates. It is
+  **idempotent** (re-runnable; existing users/terms/posts are matched, not duplicated).
+  Attachments (WXR ships only URLs, not the media binaries) and nav menus are skipped.
 - **Built-in cron** for maintenance and plugin background jobs.
 - **Privacy-conscious analytics**: a lightweight first-party event log with **no cookies**
   and **daily-rotated, salted IP hashing** (you own the data). Aggregated stats are shown
   in the admin panel.
-- **SEO basics**: semantic HTML, meta tags, JSON-LD, and gateway-served `sitemap.xml` /
-  `robots.txt`.
 
 **Operations**
 - **Gateway** with Node `cluster` (one worker per CPU, automatic respawn on crash),
@@ -162,7 +178,8 @@ Guides live in [`documentation/`](documentation/):
 - 🧱 **[Plugin Isolation](documentation/plugin-isolation-proposal.md)** — the worker sandbox + trust model (implemented).
 - ✉️ **[Mail Server Guide](documentation/mail-server.md)**
 - 🗄️ **[Database Guide](documentation/database.md)**
-- 🚀 **[Deployment Guide](documentation/deployment.md)**
+- 📥 **[Migrating from WordPress](documentation/wordpress-import.md)** — import a WordPress WXR export (authors, terms, posts/pages, comments).
+- 🚀 **[Deployment Guide](documentation/deployment.md)** — incl. **Releases & distribution** (downloadable pre-compiled bundles).
 - 🔐 **[Security Policy](SECURITY.md)** — vulnerability reporting and active defenses.
 - 🛡️ **[Security Architecture](documentation/security.md)** — deeper defenses reference (sandbox, trust model, CSRF, JWT revocation).
 - 🔔 **[Notifications System](documentation/notifications.md)**
@@ -176,6 +193,32 @@ Guides live in [`documentation/`](documentation/):
 > Requires Node.js (>= 18). WordJS can run as **three services** (gateway, backend, frontend)
 > or as a **single-process monolith** — see [Run modes](#run-modes-split-or-monolith). The
 > scripts below start everything together either way.
+
+### Option A — download a pre-compiled release (no build step)
+
+The fastest way to run WordJS. The bundle is **pre-compiled** (frontend `.next`, backend
+`dist/`, and plugins are already built; no secrets are shipped — they're generated locally).
+
+1. Download `wordjs-<version>.zip` from the
+   [**Releases**](https://github.com/jaimemartinez/wordjs/releases) page and unzip it.
+2. **Install runtime dependencies only** (no compilation):
+   ```bash
+   npm run release:install
+   ```
+3. **Start it:**
+   ```bash
+   npm run start:mono   # one process, one port (default https://localhost:3000)
+   # or: npm start      # the 3-service split
+   ```
+4. Finish in the browser **install wizard**: pick SQLite or PostgreSQL and create your admin.
+
+> The monolith binds `0.0.0.0` on the public port; for LAN/remote access set the site
+> host/`siteUrl` to the IP/domain you'll use (the backend's Site-URL guard rejects host
+> mismatches). To **build** a release bundle yourself from source, run `npm run bundle-release`
+> (root `scripts/make-release.js`); pushing a `v*` git tag does this automatically and
+> publishes a GitHub Release.
+
+### Option B — run from source
 
 1. **Install dependencies** (root + sub-packages):
    ```bash
@@ -289,6 +332,11 @@ Planned, **not yet implemented**:
 - **🌐 Multi-site** — manage multiple domains/sites from one install.
 - **🛡️ OS-level plugin isolation** — `isolated-vm` / sandboxed child processes for the
   hosted tier.
+
+**In progress / deferred migrations** (tracked as open PRs):
+
+- **Express 5** for the backend and gateway (currently on Express 4).
+- **TypeScript 6** for the frontend (currently on TypeScript 5).
 
 ---
 
