@@ -69,7 +69,12 @@ reachable only through a permission-checked capability bridge.
   `sitemap.xml` / `robots.txt`.
 
 **Authoring & content**
-- **Visual builder** via [Puck](https://puckeditor.com/) (drag-and-drop page editing).
+- **Visual builder** via [Puck](https://puckeditor.com/) — drag-and-drop page editing with a
+  redesigned canvas: **in-place rich-text editing** (bold/italic/links, text color with a visual
+  picker and an **eyedropper**, **font family** from your installed fonts, size, and alignment),
+  a searchable block inserter with reusable **section patterns**, and a **device preview**
+  (desktop/tablet/mobile) that renders the canvas in an isolated iframe at the true device width,
+  so the responsive layout matches the live site exactly.
 - **Hooks & filters** event system, with admin-side hook inspection.
 - **Shortcodes** (WordPress-style) for dynamic content, including from plugins.
 - **Themes** with CSS-variable theming (13 first-party themes ship in-repo).
