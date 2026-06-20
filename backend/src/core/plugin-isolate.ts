@@ -87,6 +87,52 @@ function probeOsMemoryCap(): Promise<number | null> {
     return osCapProbe;
 }
 
+// --- PREVENTIVE kernel RSS cap via cgroup v2 (systemd-run --user --scope -p MemoryMax) -----------
+// rlimit can only bound VIRTUAL space (and V8's ~4 GB pointer-compression cage forces it loose — it
+// can't be set near a real working set), and the /proc RSS poll is REACTIVE (a fast off-heap loop can
+// spike the box within a poll window). A cgroup v2 `memory.max` is the only PREVENTIVE resident cap:
+// the kernel OOM-kills ONLY the offending child the instant its RESIDENT set exceeds budget, blast
+// radius contained to the child. `systemd-run --user --scope` applies it with NO root (man page: with
+// --scope the command runs as a DIRECT CHILD of systemd-run, inheriting the caller's fds + env, so the
+// IPC fd survives — confirmed by the probe's round-trip). Where systemd-run/user-cgroups aren't
+// available (Windows, macOS, non-systemd / no user manager, e.g. CI) this stays OFF and we fall back to
+// the fork + RLIMIT_AS + cross-platform RSS poll path — zero regression.
+let cgroupSeq = 0;
+let cgroupProbe: Promise<boolean> | undefined;
+function probeCgroupCap(): Promise<boolean> {
+    if (cgroupProbe) return cgroupProbe;
+    cgroupProbe = (async () => {
+        if (process.platform !== 'linux') return false;
+        const budget = 768 * 1024 * 1024;
+        const unit = `wjp-probe-${process.pid}.scope`;
+        // The probe child boots, confirms IPC works through --scope's fd inheritance (sends "ok" and
+        // stays alive), then we tear it down via the SAME path real teardown uses and require an exit —
+        // so cgroup mode activates ONLY if spawn + IPC + clean kill all work on THIS host.
+        const src = 'if(!process.send){process.exit(3)}process.send("ok");setInterval(function(){},1e9)';
+        return await new Promise<boolean>((res) => {
+            let proc: any, gotOk = false, done = false;
+            const finish = (v: boolean) => { if (!done) { done = true; res(v); } };
+            const overall = setTimeout(() => finish(false), 20000);
+            if ((overall as any).unref) (overall as any).unref();
+            try {
+                proc = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', unit,
+                    '-p', `MemoryMax=${budget}`, '-p', 'MemorySwapMax=0', '--', process.execPath, '-e', src],
+                    { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 18000 });
+            } catch { clearTimeout(overall); return res(false); }
+            proc.on('message', (m: any) => {
+                if (m === 'ok' && !gotOk) {
+                    gotOk = true;
+                    try { proc.kill('SIGKILL'); } catch { /* */ }
+                    try { spawn('systemctl', ['--user', 'kill', '--signal=SIGKILL', unit], { stdio: 'ignore' }); } catch { /* */ }
+                }
+            });
+            proc.on('error', () => { clearTimeout(overall); finish(false); });
+            proc.on('exit', () => { clearTimeout(overall); finish(gotOk); }); // exit AFTER ok ⇒ kill worked
+        });
+    })();
+    return cgroupProbe;
+}
+
 // Trust = shipped default OR operator-toggled (admin UI). See core/plugin-trust.
 function isTrustedPlugin(slug: string): boolean {
     try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
@@ -129,9 +175,10 @@ function callApi(api: any, method: string, args: any[]) {
 }
 
 async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
-    // Resolve the kernel-cap capability ONCE (cached) before building the child, so the spawn path is
-    // chosen synchronously inside the executor below.
-    const capKb = await probeOsMemoryCap();
+    // Resolve the memory-cap capabilities ONCE (cached) before building the child, so the spawn path is
+    // chosen synchronously inside the executor below. cgroup (preventive) is preferred over rlimit (loose).
+    const cgroupOk = await probeCgroupCap();
+    const capKb = cgroupOk ? null : await probeOsMemoryCap();
     return new Promise((resolve, reject) => {
         // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
@@ -151,12 +198,24 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // (re-resolved on reload via the trust toggle) so the child's network policy matches current
         // trust; config travels in argv[2] (no secrets); env is the same secret-free allowlist.
         const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) });
-        const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; rlimit/poll cap TOTAL memory
+        const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
+        const RSS_BUDGET_BYTES = 768 * 1024 * 1024;   // resident budget — cgroup memory.max AND the /proc poll
         // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
         // (and a raw JSON channel) would lose them — match the worker_threads postMessage fidelity.
         const IPC_STDIO: any = ['inherit', 'inherit', 'inherit', 'ipc']; // inherit stdio for plugin logs
         let child: any;
-        if (capKb) {
+        let cgroupUnit: string | null = null;
+        if (cgroupOk) {
+            // PREVENTIVE cgroup v2 cap: run the child in a transient scope with MemoryMax — the kernel
+            // OOM-kills it by construction at the resident budget (no poll race; blast radius = the child).
+            // --scope runs node as a direct child of systemd-run, inheriting the IPC fd (probe-verified);
+            // child.pid is systemd-run and the kernel is the cap, so the /proc poll is skipped below.
+            cgroupUnit = `wjp-${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${process.pid}-${++cgroupSeq}.scope`;
+            child = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', cgroupUnit,
+                '-p', `MemoryMax=${RSS_BUDGET_BYTES}`, '-p', 'MemorySwapMax=0', '--',
+                process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
+                { stdio: IPC_STDIO, serialization: 'advanced', env: workerEnv });
+        } else if (capKb) {
             // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
             // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
             // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
@@ -180,18 +239,21 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
         const worker: any = {
             postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
-            terminate: () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } },
+            terminate: () => {
+                try { child.kill('SIGKILL'); } catch { /* already gone */ }
+                // cgroup mode: child.pid is systemd-run; also kill the SCOPE so the node grandchild can't
+                // outlive it (scopes are manager-tracked, not tied to systemd-run's lifetime).
+                if (cgroupUnit) { try { spawn('systemctl', ['--user', 'kill', '--signal=SIGKILL', cgroupUnit], { stdio: 'ignore' }); } catch { /* */ } }
+            },
             on: child.on.bind(child),
             _child: child,
         };
         let settled = false; // load Promise settled (ready / init-error / early exit)
-        // Precise per-child RSS cap — the decisive defense for the off-heap (Buffer) OOM the in-child
-        // watchdog can't catch (a synchronous allocation loop blocks the child's own timer, never the
-        // host's). It runs on the HOST event loop and reads the child's OWN process rss, so it is immune
-        // to the child blocking its loop, and it covers EVERY platform (the kernel RLIMIT_AS above is a
-        // coarse virtual ceiling only, and on Windows/macOS there is no rlimit at all). A kernel cgroup
-        // MemoryMax / Windows Job Object is the stronger future primitive (see POSITIONING.md).
-        const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
+        // Reactive per-child RSS poll — the FALLBACK resident cap when the preventive cgroup cap isn't
+        // available (Windows, macOS, non-systemd). Runs on the HOST loop reading the child's OWN rss, so
+        // it's immune to the child blocking its own loop; covers Linux /proc, Windows tasklist, macOS ps.
+        // Skipped in cgroup mode (the kernel memory.max IS the cap, and child.pid there is systemd-run,
+        // not the node child). RSS_BUDGET_BYTES is defined above (shared with cgroup memory.max).
         let rssPoll: any = null;
         const killOverBudget = (rssBytes: number) => {
             if (rssBytes > RSS_BUDGET_BYTES) {
@@ -199,7 +261,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                 try { child.kill('SIGKILL'); } catch { /* gone */ }
             }
         };
-        if (process.platform === 'linux' && child.pid) {
+        if (!cgroupOk && process.platform === 'linux' && child.pid) {
             // Cheapest path: synchronous /proc read on the host loop (field 2 = resident pages).
             const fsmod = require('fs');
             const statmPath = `/proc/${child.pid}/statm`;
