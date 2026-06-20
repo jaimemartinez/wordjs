@@ -550,6 +550,17 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                 if (node.source && node.source.type === 'Literal') {
                     flagModuleLiteral(node.source.value, 'import');
                 }
+            },
+            // Aliasing/destructuring a sensitive global — `const p = process` or
+            // `const { getBuiltinModule } = process` — dodges the MemberExpression guard and reaches
+            // process.getBuiltinModule / process.binding / etc. Flag any binding initialized directly
+            // from a restricted global identifier. (The runtime wrap of getBuiltinModule is the primary
+            // defense; this is the static backstop.)
+            VariableDeclarator(node) {
+                if (node.init && node.init.type === 'Identifier' &&
+                    ['process', 'global', 'globalThis', 'require', 'module'].includes(node.init.name)) {
+                    dangerousCalls.add(`Aliasing restricted global '${node.init.name}' (obfuscation risk)`);
+                }
             }
         });
     }
