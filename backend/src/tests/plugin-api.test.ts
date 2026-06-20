@@ -66,3 +66,29 @@ test('bridge confines fs to the plugin dir + uploads', async () => {
         await assert.rejects(() => api.fs.write('manifest.json', 'x'), /immutable/);
     });
 });
+
+// Round-8 regression: the credentials SQLite DB sits under the data/ read zone, so a plugin holding
+// (self-declared) filesystem:read could read+parse it directly, bypassing the bridge DB scoping. The
+// io-guard global-fs backstop now blocks DB files (extension + sidecars) regardless of the zone.
+test('io-guard blocks plugin reads of the database file under data/', async () => {
+    const { isPathSafe } = require('../core/io-guard');
+    const root = path.resolve(__dirname, '../../');
+    await runWithContext(SLUG, async () => {
+        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db'), false), false);          // primary DB
+        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs-native.db'), false), false);   // native-driver DB
+        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db-wal'), false), false);      // WAL sidecar
+        assert.equal(isPathSafe(path.join(root, 'data', 'x.sqlite3'), false), false);          // any sqlite file
+        // but a non-DB file under data/ stays readable — we blocked the DB, not the whole zone
+        assert.equal(isPathSafe(path.join(root, 'data', 'plugin-notes.txt'), false), true);
+    });
+});
+
+// Round-8 regression: becoming the host-wide mail sender must require operator trust. An untrusted
+// plugin could reach wordjs.provideMail directly via a kind:'call' bridge message, bypassing the
+// trust gate on the register-mail-provider IPC handler — provideMail now re-checks trust itself.
+test('bridge provideMail is denied for untrusted plugins (trust gate at the method)', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        assert.throws(() => api.provideMail(() => ({})), /operator-trusted/);
+    });
+});
