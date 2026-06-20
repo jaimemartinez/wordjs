@@ -40,7 +40,10 @@ const PROTECTED_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privateke
 // migration/host guard. Off-limits (read AND write) to untrusted plugins.
 const PROTECTED_OPTION_NAMES = new Set([
     'wordjs_user_roles', 'user_roles', 'roles', 'active_plugins', 'default_role',
-    'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home'
+    'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home',
+    // 'trusted_plugins' drives the trust system — writing it self-promotes a plugin to the privileged
+    // tier on next boot (full sandbox escape). Off-limits to untrusted plugins.
+    'trusted_plugins', 'trusted_plugin', 'trustedsystemplugins'
 ]);
 const isProtectedOption = (key: string, slug: string): boolean =>
     !isTrustedPlugin(slug) &&
@@ -112,15 +115,15 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
 }
 
 // Confine a plugin-supplied relative path to its own dir or the uploads dir; realpath-checked.
-function resolvePluginPath(slug: string, relPath: string, mustExist: boolean): string {
+function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, allowUploads = true): string {
     const base = slug.startsWith('theme:') ? path.join(ROOT_DIR, 'themes', slug.slice(6)) : path.join(PLUGINS_DIR, slug);
     const candidate = path.resolve(base, String(relPath || ''));
     const real = (() => {
         try { return fs.realpathSync(candidate); } catch { return candidate; }
     })();
     const ok = (dir: string) => real === dir || real.startsWith(dir + path.sep);
-    if (!ok(base) && !ok(UPLOADS_DIR)) {
-        throw new Error(`🛡️ Plugin path denied: '${relPath}' is outside the plugin dir and uploads.`);
+    if (!ok(base) && !(allowUploads && ok(UPLOADS_DIR))) {
+        throw new Error(`🛡️ Plugin path denied: '${relPath}' is outside the plugin dir${allowUploads ? ' and uploads' : ''}.`);
     }
     if (mustExist && !fs.existsSync(real)) throw new Error(`File not found: ${relPath}`);
     return real;
@@ -246,7 +249,9 @@ function createPluginApi(slug: string) {
             },
             async write(relPath: string, data: any) {
                 verifyPermission('filesystem', 'write');
-                const target = resolvePluginPath(slug, relPath, false);
+                // Untrusted plugins write only inside their OWN dir — not the shared public uploads dir
+                // (where an .html/.svg could be served to other users). Trusted plugins keep uploads.
+                const target = resolvePluginPath(slug, relPath, false, isTrustedPlugin(slug));
                 if (path.basename(target).toLowerCase() === 'manifest.json') throw new Error('🛡️ manifest.json is immutable.');
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });
                 return fs.promises.writeFile(target, data);
