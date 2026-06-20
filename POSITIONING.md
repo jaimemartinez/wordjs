@@ -17,14 +17,18 @@ product**. We sell *safety of the plugin ecosystem*, not "WordPress, but JavaScr
 
 ## 2. What the sandbox actually guarantees today (grounded in the code)
 
-This section is deliberately honest. The differentiator is real, but it is a **worker/heap
-boundary, not OS-level isolation** — we must not oversell it.
+This section is deliberately honest. The differentiator is real: untrusted plugins now run in a
+**separate OS process** (kernel-enforced isolation), with the JS-level guards retained as
+defense-in-depth *inside* that process. We still don't oversell — the remaining hardening
+(syscall filtering, hard kernel memory caps, dropped privileges) is named below.
 
 **Architecture (implemented, in `main`, not a proposal):**
-- Every plugin must declare `"isolated": true` and runs in its **own `worker_threads` V8
-  isolate** (`plugin-isolate.ts` + `plugin-worker.js`). The legacy in-process execution path
-  was **removed** — `loadActivePlugins` / `activatePlugin` reject non-isolated plugins.
-  Cross-platform, no native deps.
+- Every plugin must declare `"isolated": true` and runs in its **own OS process**
+  (`child_process.fork`, `plugin-isolate.ts` + `plugin-worker.js`) — its own heap, event loop
+  and memory cap, so a crash, OOM, or heap escape is contained to the child *by the kernel*,
+  never the host. The legacy in-process execution path was **removed** — `loadActivePlugins` /
+  `activatePlugin` reject non-isolated plugins. Cross-platform, no native deps. (A
+  `worker_threads` transport remains as a fallback; the same guards run in either.)
 - The plugin reaches core **only** through the injected `wordjs` bridge (`plugin-api.ts`),
   RPC'd to the host and **permission-checked on the host side**, in the plugin's context. The
   host's heap — secrets, DB handle, other plugins — is never passed into the isolate
@@ -56,25 +60,31 @@ boundary, not OS-level isolation** — we must not oversell it.
   `_linkedBinding` blocked; `fs` / `child_process` proxied and path-confined;
   `setTimeout` / `setInterval` / EventEmitter listeners re-anchored to plugin context so a
   plugin can't strip its sandbox by deferring to a later tick.
-- **DoS containment**: isolate memory cap (256 MB), RPC timeouts, bounded in-flight bridge
-  calls, upload size limits.
+- **DoS containment**: process separation (a child OOM / crash / infinite loop cannot take
+  down the host — the host event loop is in a different process), a JS-heap cap
+  (`--max-old-space-size`), a host-side per-child **RSS cap** (Linux `/proc` poll → `SIGKILL`),
+  RPC timeouts with wedged-child recycling, bounded in-flight bridge calls, upload size limits.
 
 **Residual gaps (state these plainly — they shape the roadmap):**
-- It is a **heap / worker boundary, not OS-level isolation**. The worker still runs in the
-  *same process* with the *full Node API in its own thread*; `fs` / `child_process` are
-  protected by **JS-level proxies**, not by the kernel. A novel un-anchored entry point or a
-  missed proxy can in principle reopen RCE — the project's own proposal doc says this.
-- The capability boundary depends on `secure-require` / `io-guard` being installed correctly
-  inside the worker (best-effort) and on the AST scanner's pattern coverage.
-- True "by construction" isolation (capabilities simply *don't exist* in the isolate) needs
-  **`isolated-vm`** or **child-process + OS sandbox** (seccomp / containers / dropped uid /
-  cgroups) — same architecture, stronger primitive. **This is not yet built.**
-- The model has had several red-team passes; it has **not had an independent third-party
-  audit**.
+- It is now **OS process isolation**, but not yet *fully* locked down at the kernel surface.
+  The child runs with the full Node API and a normal OS uid; `fs` / `child_process` inside the
+  child are still narrowed by **JS-level proxies** (defense-in-depth), so a missed proxy could
+  let the child do — *within its own process* — more than its manifest declares. It can no
+  longer reach the host heap or crash the host, but it isn't yet capability-minimal at the
+  syscall level.
+- The per-child memory cap is a host-side `/proc` RSS poll on **Linux**; a kernel-enforced
+  **cgroup `MemoryMax` / `rlimit`** is the stronger primitive. On **Windows** the cap is
+  process-separation only (no hard limit — a runaway child hits the box, not the host).
+- The strongest remaining hardening — **syscall filtering (seccomp / landlock), dropped uid,
+  containers / cgroups** so the child's OS capabilities shrink "by construction" — is **not yet
+  built**; it now layers cleanly on top of the already-separate process.
+- The model has had several red-team passes (8 rounds) plus the OS-isolation pivot; it has
+  **not had an independent third-party audit**.
 
-**Honest one-liner for the sandbox:** *"Strong, defense-in-depth containment for untrusted
-plugins — materially better than any in-process plugin model on the market — with a clear,
-documented path to OS-level hardening."* We lead with that, not with "unbreakable."
+**Honest one-liner for the sandbox:** *"Untrusted plugins run in a separate OS process with
+defense-in-depth capability guards — materially stronger than any in-process plugin model on
+the market — with a clear, documented path to full kernel-level hardening (seccomp, cgroups,
+dropped privileges)."* We lead with that, not with "unbreakable."
 
 ---
 
@@ -152,14 +162,14 @@ A managed WordJS where **the sandbox is the headline feature**, not an implement
   marketplace; we guarantee untrusted plugins run sandboxed, can't egress, can't touch
   secrets or core tables.
 - **Per-tenant isolation** layered on top of per-plugin isolation: each tenant is its own
-  process / container (closing the same-process gap from §2 at the tenant boundary), and
-  within it every plugin is worker-isolated. Defense in depth: even a sandbox escape is
-  contained to one tenant.
+  container, and within it every plugin is already its own OS process. Defense in depth: even a
+  plugin escape is contained to one process, and even a process escape to one tenant.
 - **Operator controls as the value prop:** the trust toggle, capability visibility,
   per-plugin resource caps, crash isolation (a runaway plugin can't take the site down), and
   an audit of what every plugin is allowed to do.
-- **This is where the OS-level hardening lands first.** The hosted environment is where we
-  can run `isolated-vm` or child-process + seccomp / cgroups, so "by construction" isolation
+- **This is where the kernel-level hardening lands first.** Per-plugin OS-process isolation
+  ships in OSS; the hosted environment is where we add **seccomp / landlock, cgroup memory
+  caps, and dropped uid** on top of it, so "by construction" capability-minimal isolation
   becomes a real, sellable tier of the managed product before it's everywhere in OSS.
 
 ---
@@ -195,7 +205,7 @@ enlarges the trust surface:
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
 | **Ecosystem from zero** | The marketplace pitch needs plugins; we have a handful of first-party plugins and no third-party authors. A safe marketplace with nothing in it sells nothing. | Seed with high-quality first-party + a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
-| **OS-level isolation gap** | We claim "can't compromise" but it's a same-process worker boundary with JS-level guards. A novel escape is possible; a skeptical security buyer will probe this. | Ship `isolated-vm` / child-process + seccomp on the **hosted tier first**; message §2 honestly; never claim "unbreakable." |
+| **Kernel-surface hardening gap** | Plugins now run in a separate OS process (host-crash / heap-escape closed), but the child still has the full Node API + normal uid; capability-minimality at the syscall level isn't built yet. A skeptical security buyer will probe this. | Add seccomp / landlock + cgroup caps + dropped uid on the **hosted tier first**; message §2 honestly; never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
 | **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + untrusted-tier enforcement is the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
 | **License** *(resolved)* | A commercial marketplace + hosted offering needs a license that permits monetization. | **Done:** the project is now consistently **MIT** (no copyleft prod deps; see `THIRD-PARTY-NOTICES.md` + the CI license gate). Optionally revisit a source-available (BSL-style) license later if a hosted clone becomes a threat. |

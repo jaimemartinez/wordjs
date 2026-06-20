@@ -211,6 +211,10 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         const invokeNotifyTransport = (name: string, notification: any) => rpcSend(pendingTransport, { kind: 'invoke-notify-transport', name, notification });
 
         worker.on('message', async (msg: any) => {
+          // A malicious child can postMessage ANY object. An uncaught throw in a branch below would
+          // reject this async handler → unhandledRejection → host process crash (Node >= 15 default).
+          // Contain every message: log and drop a poison/malformed one instead of crashing the host.
+          try {
             if (msg.kind === 'ready') {
                 settled = true;
                 resolve({ worker, slug });
@@ -276,6 +280,14 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 rpcSettle(pendingInvoke, msg, msg.value);
             } else if (msg.kind === 'register-route') {
                 if (registrationRejected(registeredRoutes, MAX_ROUTES, 'routes')) return;
+                // msg.method is attacker-controlled (a malicious child sends any message): allowlist HTTP
+                // verbs so app[m] below can't invoke an ARBITRARY Express app method (use/set/engine/
+                // listen/…) or throw a TypeError on a non-method (which would crash the host handler).
+                const routeMethod = String(msg.method).toLowerCase();
+                if (!['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'all'].includes(routeMethod)) {
+                    console.warn(`[Isolate ${slug}] rejected route registration with invalid method '${routeMethod}'.`);
+                    return;
+                }
                 // Mount an Express route owned by the host; run the real auth middleware, then forward
                 // a serialized request to the isolate and write back its response descriptor.
                 const { getApp } = require('./appRegistry');
@@ -323,7 +335,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                         res.status(502).json({ error: 'Isolated plugin error', detail: String(e && e.message || e) });
                     }
                 };
-                const m = String(msg.method).toLowerCase();
+                const m = routeMethod; // validated against the HTTP-verb allowlist above
                 // Untrusted plugins are namespaced under /api/v1/plugin/<slug> (no route hijack).
                 // Operator-trusted plugins may opt into their ORIGINAL absolute path (opts.absolute)
                 // so a first-party plugin can isolate without rewriting its whole frontend's URLs.
@@ -369,6 +381,9 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'notify-transport-reply') {
                 rpcSettle(pendingTransport, msg, msg.value);
             }
+          } catch (e: any) {
+            console.error(`[Isolate ${slug}] dropped malformed/poison IPC message (kind=${msg && msg.kind}):`, e && e.message);
+          }
         });
 
         // Remove every host-side registration this plugin made. Idempotent (safe to call twice)
