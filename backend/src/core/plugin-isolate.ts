@@ -102,8 +102,24 @@ const RAW_HTML_HOOKS = new Set(['wordjs_head', 'wordjs_footer', 'wp_head', 'wp_f
 // plugin's route handler: `wordjs_token` is the HttpOnly auth JWT, plus defensive csrf/session names.
 const HOST_AUTH_COOKIE_RE = /^wordjs_token$|csrf|xsrf|session/i;
 
+// EXACT allowlist of bridge methods reachable via a kind:'call' IPC message. A malicious child sends
+// ANY method string and callApi walks it as a dotted path on the api object — so without this gate it
+// could reach registration methods (hooks.addAction/addFilter) DIRECTLY, bypassing the dedicated
+// register kinds' caps + RAW_HTML_HOOKS denylist + teardown tracking, or `provideMail` past its trust
+// gate, or a prototype-chain segment. Registration / mail-provider / notify-transport / route flow
+// ONLY through their own IPC kinds, so they are deliberately ABSENT here (default-deny). Keep in sync
+// with the callHost('…') calls in plugin-worker.js.
+const ALLOWED_BRIDGE_METHODS = new Set([
+    'options.get', 'options.set',
+    'db.all', 'db.get', 'db.run', 'db.createTable', 'db.getType',
+    'hooks.doAction',
+    'fs.read', 'fs.write',
+    'mail', 'notify',
+    'adminMenu.add', 'cron.schedule',
+]);
 // Navigate "options.get" / "mail" on the api object and call it with args.
 function callApi(api: any, method: string, args: any[]) {
+    if (!ALLOWED_BRIDGE_METHODS.has(String(method))) throw new Error(`Bridge method not permitted via call: ${method}`);
     const parts = String(method).split('.');
     let ctx: any = null;
     let fn: any = api;
@@ -304,7 +320,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // memory-capped on its own side, so this is the second bound). Cheap size check for string/
         // buffer replies; object replies are bounded by the worker's memory watchdog.
         const MAX_REPLY_BYTES = 32 * 1024 * 1024;
-        const replySize = (v: any): number => {
+        const replySize = (v: any, maxNodes = 5_000_000): number => {
             if (typeof v === 'string') return Buffer.byteLength(v);
             if (Buffer.isBuffer(v) || v instanceof Uint8Array) return (v as any).byteLength || (v as any).length || 0;
             if (v && typeof v === 'object') {
@@ -314,7 +330,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                 const stack: any[] = [v];
                 while (stack.length) {
                     const cur = stack.pop();
-                    if (++n > 5_000_000) return Number.MAX_SAFE_INTEGER; // pathological node count → over budget
+                    if (++n > maxNodes) return Number.MAX_SAFE_INTEGER; // pathological node count → over budget
                     if (typeof cur === 'string') bytes += cur.length;
                     else if (cur && typeof cur === 'object') { for (const k in cur) stack.push((cur as any)[k]); bytes += 16; }
                     else bytes += 8;
@@ -409,10 +425,11 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                     return;
                 }
                 callTokens -= 1;
-                // (#3) Bound INBOUND call-arg size — the reply guard covers only the outbound path. A huge
-                // msg.args could block the host loop / pressure the heap (and land oversized values in
-                // options/DB). Reject before doing any work, using the same bounded estimator.
-                if (replySize(msg.args) > MAX_REPLY_BYTES) {
+                // (#3/#2) Bound INBOUND call-arg size — the reply guard covers only the outbound path. Use
+                // a LOW node cap (legit bridge args are tiny): a cheap-to-send / expensive-to-walk payload
+                // (~5M one-char strings) would otherwise pin the host loop ~440ms inside this very check.
+                // 100k nodes bounds the walk to a few ms while still rejecting the flood as over-budget.
+                if (replySize(msg.args, 100_000) > MAX_REPLY_BYTES) {
                     worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: `Isolated plugin '${slug}' sent oversized bridge-call args` });
                     return;
                 }
@@ -517,7 +534,19 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                     };
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
-                        if (r.headers) res.set(r.headers);
+                        if (r.headers) {
+                            if (trusted) res.set(r.headers);
+                            else {
+                                // (#3) An untrusted plugin must not set response headers verbatim: Set-Cookie
+                                // would re-inject a host cookie (e.g. wordjs_token), bypassing the clamped
+                                // r.cookies path below, and CSP/HSTS/Location let it weaken host security or
+                                // open-redirect. Drop those; cookies must flow through the clamped path.
+                                const UNSAFE = new Set(['set-cookie', 'set-cookie2', 'content-security-policy', 'strict-transport-security', 'location']);
+                                const safe: any = {};
+                                for (const [k, v] of Object.entries(r.headers)) { if (!UNSAFE.has(String(k).toLowerCase())) safe[k] = v; }
+                                res.set(safe);
+                            }
+                        }
                         // Replay cookies the isolate set/cleared on the real response.
                         if (Array.isArray(r.cookies)) {
                             for (const c of r.cookies.slice(0, 20)) { // (#5) cap cookies per reply

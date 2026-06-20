@@ -59,6 +59,19 @@ test('bridge blocks SQL touching core tables (incl. regex-evasion bypasses)', as
     });
 });
 
+// Round-10 regression: Postgres `DELETE ... USING <table> ... RETURNING` reached non-denylisted tables
+// (other plugins' wjp_* tables) past the per-plugin prefix attribution, exfiltrating scalars via
+// RETURNING→lastID. USING is now attributed and RETURNING is rejected for untrusted SQL.
+test('bridge blocks the DELETE...USING...RETURNING cross-table bypass', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        const PFX = api.db.tablePrefix;
+        await assert.rejects(() => api.db.run(`DELETE FROM ${PFX}t USING wjp_other_secrets v WHERE ${PFX}t.id=v.id`), /not owned|off-limits/); // USING table now attributed
+        await assert.rejects(() => api.db.run(`DELETE FROM ${PFX}t WHERE id=1 RETURNING id`), /RETURNING/);                                    // exfil channel denied
+        await assert.rejects(() => api.db.run(`DELETE FROM ${PFX}t USING a, b WHERE 1=1`), /comma joins|not owned/);                            // comma list after USING
+    });
+});
+
 test('bridge confines fs to the plugin dir + uploads', async () => {
     await runWithContext(SLUG, async () => {
         const api = createPluginApi(SLUG);
