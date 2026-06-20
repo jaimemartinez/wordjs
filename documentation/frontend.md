@@ -68,11 +68,17 @@ The app uses React Contexts to manage global state:
 **Location:** `src/components/SystemFontsLoader.tsx`
 Injects font faces dynamically based on the site's configuration. It prevents FOUT (Flash of Unstyled Text) by loading fonts before the main content matches.
 
-### `RichTextEditor`
-**Location:** `src/components/puckConfig.tsx` (Exported)
-A custom WRSIWYG editor built for Puck.
-*   **Features:** Font picker, color palette, semantic HTML output.
-*   **Usage:** Used inside Puck's `Text` component but can be reused elsewhere.
+### `InlineTiptap` (in-place text editor)
+**Location:** `src/components/InlineTiptap.tsx`
+The in-place rich-text editor for Text/Heading blocks — edits the text **directly on the canvas**
+(Tiptap / ProseMirror) so it looks identical to the rendered block, with a floating toolbar.
+*   **Features:** bold / italic / underline / strikethrough, links, lists, **text color** (swatch
+    palette + visual picker + screen **eyedropper**), **font family** (from the fonts installed in
+    WordJS, via `/fonts`), **font size**, and **text alignment** (left/center/right/justify).
+*   **Usage:** opens via the per-block pencil action in Puck's overlay; saves continuously. Runs
+    inside the editor's iframe and is cross-frame aware (`editor.view.dom.ownerDocument`).
+*   **Note:** `puckConfig.tsx` still exports a legacy standalone `RichTextEditor`, no longer used
+    for inline editing.
 
 ## Navigation Components
 
@@ -127,6 +133,7 @@ WordJS integrates **Puck** (by Measured) as its visual page builder.
 ### Configuration
 *   **Config File**: `src/components/puckConfig.tsx` defines the available components (and exports the `RichTextEditor`).
 *   **Editor Page**: `src/app/admin/pages/[id]/page.tsx` renders the editor interface (via `PuckEditor.tsx`).
+*   **Canvas & responsive preview**: `PuckEditor.tsx` renders the canvas in Puck's **iframe** for true WYSIWYG (the page's own styles/fonts and the fixed header/scroll behave as on the live site). A device switcher (desktop/tablet/mobile) sizes the iframe to the device width via `PreviewFrame` — desktop is full-bleed, tablet/mobile use a scaled device frame — so the responsive breakpoints evaluate against the device width and match the live site. Text/heading blocks are edited in place by `InlineTiptap` (see above).
 *   **Render Pages**: the public routes — `src/app/(public)/page.tsx` (home), `src/app/(public)/[slug]/page.tsx`, `src/app/(public)/[slug]/[postSlug]/page.tsx`, and `src/app/(public)/pages/[slug]/page.tsx` — are **async Server Components** that fetch content server-side (see **Public Site Rendering (SSR)**) and hand it to the `PostContent`/`HomeContent` client renderers, which use Puck's `<Render>` component for Puck-authored layouts (and sanitized HTML for classic content). (There is no `[...slug]` catch-all route.)
 
 ### Available Components
