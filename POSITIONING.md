@@ -62,9 +62,11 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   plugin can't strip its sandbox by deferring to a later tick.
 - **DoS containment**: process separation (a child OOM / crash / infinite loop cannot take
   down the host — the host event loop is in a different process), a JS-heap cap
-  (`--max-old-space-size`), a **kernel `RLIMIT_AS` ceiling** (auto-probed, where the OS
-  supports it) plus a precise host-side per-child **RSS cap** (Linux `/proc` poll → `SIGKILL`),
-  RPC timeouts with wedged-child recycling, bounded in-flight bridge calls, upload size limits.
+  (`--max-old-space-size`), a **kernel `RLIMIT_AS` ceiling** (a loose virtual backstop, auto-probed
+  where the OS supports it) plus a precise host-side per-child **RSS cap** that runs on the host
+  loop and covers every platform (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL` over
+  budget), per-child bridge-call rate + message-rate caps, RPC timeouts with wedged-child
+  recycling, bounded in-flight calls, inbound/outbound payload caps, fs-write disk quota.
 
 **Residual gaps (state these plainly — they shape the roadmap):**
 - It is now **OS process isolation**, but not yet *fully* locked down at the kernel surface.
@@ -73,11 +75,14 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   let the child do — *within its own process* — more than its manifest declares. It can no
   longer reach the host heap or crash the host, but it isn't yet capability-minimal at the
   syscall level.
-- The per-child memory cap now layers a **kernel `RLIMIT_AS` ceiling** (a coarse virtual
-  backstop, auto-probed where the OS supports it and IPC survives the cap) under a precise
-  host-side `/proc` **RSS poll** (Linux). The remaining stronger primitive is a kernel **cgroup
-  `MemoryMax`** (RSS-based, no V8 virtual-cage caveat). On **Windows** the cap is
-  process-separation only (no hard limit — a runaway child hits the box, not the host).
+- The per-child memory cap combines a **kernel `RLIMIT_AS` ceiling** (only a *loose* virtual
+  backstop — V8's ~4 GB pointer-compression cage + the dev ts-node footprint make a box-tight
+  virtual cap infeasible without crashing real loads) with a precise host-side **RSS poll** across
+  all platforms (Linux `/proc`, Windows `tasklist`, macOS `ps`). The poll is *reactive* (kills
+  after over-budget is observed), so on a small-RAM box a fast synchronous off-heap loop could
+  still spike the box within a poll window. The decisive *preventive* resident cap — a kernel
+  **cgroup `MemoryMax`** (Linux) / **Job Object** (Windows) — is the documented next step; it
+  contains a child OOM by construction rather than reactively.
 - The strongest remaining hardening — **syscall filtering (seccomp / landlock), dropped uid,
   containers / cgroups** so the child's OS capabilities shrink "by construction" — is **not yet
   built**; it now layers cleanly on top of the already-separate process.
