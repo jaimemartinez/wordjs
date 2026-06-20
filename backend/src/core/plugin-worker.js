@@ -108,6 +108,24 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
     }
 }
 
+// Off-heap memory (Buffer / ArrayBuffer / native) is NOT bounded by the Worker's V8 resourceLimits
+// (maxOldGenerationSizeMb only caps the JS heap), so an untrusted plugin could allocate gigabytes and
+// OOM-crash the WHOLE host process. Watchdog: periodically check rss/external and self-terminate if
+// over budget (the host treats a worker exit as plugin death and tears it down cleanly).
+if (!global.__WORDJS_PLUGIN_TRUSTED__) {
+    const MEM_BUDGET_BYTES = 512 * 1024 * 1024; // 512 MB rss/external ceiling for an untrusted plugin
+    const memWatch = setInterval(() => {
+        try {
+            const m = process.memoryUsage();
+            if (m.rss > MEM_BUDGET_BYTES || (m.external || 0) > MEM_BUDGET_BYTES) {
+                try { parentPort.postMessage({ kind: 'fatal', error: `[sandbox] plugin '${slug}' exceeded memory budget (rss=${m.rss}, external=${m.external})` }); } catch { /* parent gone */ }
+                process.exit(1);
+            }
+        } catch { /* memoryUsage unavailable — ignore */ }
+    }, 2000);
+    if (memWatch.unref) memWatch.unref();
+}
+
 const { runWithContext } = require(path.join(coreDir, 'plugin-context'));
 
 let _id = 0;
@@ -138,6 +156,9 @@ const wordjs = {
     slug,
     options: { get: (k, d) => callHost('options.get', [k, d]), set: (k, v) => callHost('options.set', [k, v]) },
     db: {
+        // Per-plugin table prefix the plugin must use for its own tables (host enforces it). Mirrors
+        // the host-side createPluginApi.db.tablePrefix so an isolated plugin can build its table names.
+        tablePrefix: ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase(),
         all: (sql, p = []) => callHost('db.all', [sql, p]),
         get: (sql, p = []) => callHost('db.get', [sql, p]),
         run: (sql, p = []) => callHost('db.run', [sql, p]),

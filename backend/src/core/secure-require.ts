@@ -549,6 +549,23 @@ function installSecureRequire() {
         };
     }
 
+    // 3c. process.getBuiltinModule(id) (Node >=22.3) is a DIRECT C++-backed accessor that returns the
+    //     fully-formed builtin WITHOUT routing through Module._load / Module.prototype.require / the ESM
+    //     loader / process.binding — bypassing every other guard. Route it through the same module
+    //     policy for plugins: secure proxy for fs/child_process, inert blocked proxy for
+    //     worker_threads/vm/module/net/... Non-sensitive ids fall through to the real builtin.
+    const origGetBuiltin = (process as any).getBuiltinModule;
+    if (typeof origGetBuiltin === 'function') {
+        (process as any).getBuiltinModule = function (id: string) {
+            const pluginSlug = getEffectivePlugin();
+            if (pluginSlug) {
+                const secure = secureModuleFor(id);
+                if (secure !== undefined) return secure;
+            }
+            return origGetBuiltin.apply(this, arguments);
+        };
+    }
+
     // 4. Anchor plugin-scheduled timers. Capture the effective plugin AT SCHEDULE time (its frame
     //    is on the stack then) and re-enter its context when the callback fires — so a plugin can't
     //    strip its sandbox by deferring fs/exec to a later tick where ALS + the stack frame are gone.

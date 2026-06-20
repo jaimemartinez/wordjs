@@ -55,7 +55,7 @@ const PROTECTED_TABLES = new Set(['users', 'user_meta', 'usermeta', 'options', '
 // statements ('SELECT 1; DROP TABLE x'). Then require the statement to START with one of the caller's
 // allowed verbs (positive allowlist). Comments are stripped first so they can't act as whitespace to
 // evade. Trusted plugins skip this entirely (see callers).
-function assertSqlAllowed(sql: string, allowedVerbs: string[]) {
+function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: string) {
     const lower = String(sql || '')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')   // /* block comments */ (used as whitespace to evade)
         .replace(/--[^\n]*/g, ' ')           // -- line comments
@@ -78,10 +78,28 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[]) {
     if (allowedVerbs.length && !allowedVerbs.includes(verb)) {
         throw new Error(`🛡️ Plugin DB access denied: '${verb || '(empty)'}' statements are not permitted here.`);
     }
-    // Core-table denylist (defense in depth alongside the verb allowlist).
+    // Core-table denylist (defense in depth alongside the prefix allowlist below).
     for (const t of PROTECTED_TABLES) {
         if (new RegExp(`\\b${t}\\b`).test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
+        }
+    }
+    // Allow-by-PREFIX (default-deny): every table the query touches must be one the plugin OWNS
+    // (created via createTable under its wjp_<slug>_ prefix). This replaces the leaky denylist with
+    // default-deny — a plugin can't read another plugin's tables (e.g. mail-server's received_emails)
+    // or any core table, even one not in PROTECTED_TABLES.
+    if (tablePrefix) {
+        // Old-style comma joins (FROM a, b) can't be attributed table-by-table by this matcher —
+        // reject them for untrusted plugins (use explicit JOIN ... ON).
+        if (/\bfrom\s+["'`]?[a-z_][\w$.]*["'`]?\s*,/.test(lower)) {
+            throw new Error(`🛡️ Plugin DB access denied: comma joins are not permitted; use explicit JOIN.`);
+        }
+        const tableRe = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+["'`]?([a-z_][a-z0-9_$]*)/g;
+        let m;
+        while ((m = tableRe.exec(lower))) {
+            if (!m[1].startsWith(tablePrefix)) {
+                throw new Error(`🛡️ Plugin DB access denied: table '${m[1]}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
+            }
         }
     }
 }
@@ -105,6 +123,9 @@ function resolvePluginPath(slug: string, relPath: string, mustExist: boolean): s
  * Build the `wordjs` capability object for a plugin. `slug` is the plugin (or `theme:<slug>`).
  */
 function createPluginApi(slug: string) {
+    // Per-plugin table namespace (like WordPress $wpdb->prefix). Untrusted plugins may only create
+    // and query tables under this prefix (enforced in createTable + assertSqlAllowed).
+    const tablePrefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
     return {
         slug,
 
@@ -130,32 +151,41 @@ function createPluginApi(slug: string) {
         },
 
         db: {
+            // Per-plugin table prefix the plugin must use for its own tables (like $wpdb->prefix).
+            tablePrefix,
             // Read-only query (SELECT). Table-scoped away from core tables — UNLESS the plugin is
             // operator-trusted (config.trustedSystemPlugins, e.g. db-migration), which lifts the
             // scoping so it can touch core tables. The isolate is still the boundary; host-enforced.
             async all(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with']);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.all(sql, params);
             },
             async get(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with']);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.get(sql, params);
             },
             // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER). Scoped unless `database:admin`.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace']);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.run(sql, params);
             },
             // Create a table (driver-agnostic). Core-table names are blocked unless `database:admin`.
             async createTable(name: string, columns: string[]) {
                 verifyPermission('database', 'write');
-                if (!isTrustedPlugin(slug) && PROTECTED_TABLES.has(String(name).toLowerCase())) {
+                if (!isTrustedPlugin(slug)) {
+                    // Untrusted plugins may only create tables under their own prefix, so they can't
+                    // create/shadow core or other plugins' tables and assertSqlAllowed can attribute
+                    // their queries by prefix.
+                    if (!String(name).toLowerCase().startsWith(tablePrefix)) {
+                        throw new Error(`🛡️ Plugin tables must be named with the '${tablePrefix}' prefix (use wordjs.db.tablePrefix).`);
+                    }
+                } else if (PROTECTED_TABLES.has(String(name).toLowerCase())) {
                     throw new Error(`🛡️ Plugin DB access denied: '${name}' is a core table.`);
                 }
                 const { createPluginTable } = require('../config/database');

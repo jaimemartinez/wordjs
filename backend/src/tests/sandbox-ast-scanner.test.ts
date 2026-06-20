@@ -52,6 +52,14 @@ test('scanner blocks Function built via .constructor', () => {
     assert.throws(() => scan("module.exports.init = () => { (() => {}).constructor('return process')(); };"), /constructor|Function/i);
 });
 
+test('scanner blocks aliasing the process global (const p = process)', () => {
+    assert.throws(() => scan("module.exports.init = () => { const p = process; return p.pid; };"), /process|alias/i);
+});
+
+test('scanner blocks destructuring getBuiltinModule from process', () => {
+    assert.throws(() => scan("module.exports.init = () => { const { getBuiltinModule: g } = process; g('fs'); };"), /process|alias/i);
+});
+
 test('scanner still passes a clean plugin', () => {
     assert.ok(scan("module.exports.init = (wordjs) => { wordjs.hooks.addAction('x', () => 1); };"));
 });
