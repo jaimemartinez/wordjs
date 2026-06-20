@@ -111,6 +111,18 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
                 throw new Error(`🛡️ Plugin DB access denied: table '${tok}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
             }
         }
+        // INDEX DDL: CREATE [UNIQUE] INDEX <name> ON <table> (...) / DROP INDEX <name>. The generic
+        // table matcher above misses the `ON <table>` target and the index name, so scope them too.
+        if (/\bindex\b/.test(norm)) {
+            const onTbl = norm.match(/\bon\s+([^\s(;]+)/);
+            if (onTbl && (!/^[a-z_][a-z0-9_$.]*$/.test(onTbl[1]) || !onTbl[1].startsWith(tablePrefix))) {
+                throw new Error(`🛡️ Plugin DB access denied: index target '${onTbl[1]}' is not owned by this plugin.`);
+            }
+            const idxName = norm.match(/\b(?:create(?:\s+unique)?\s+index|drop\s+index)(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;]+)/);
+            if (idxName && (!/^[a-z_][a-z0-9_$.]*$/.test(idxName[1]) || !idxName[1].startsWith(tablePrefix))) {
+                throw new Error(`🛡️ Plugin DB access denied: index name '${idxName[1]}' must use the '${tablePrefix}' prefix.`);
+            }
+        }
     }
 }
 

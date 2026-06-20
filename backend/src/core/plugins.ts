@@ -655,18 +655,14 @@ function scanPlugins() {
                 continue;
             }
         }
-        // 2. Fallback to finding main file (Legacy)
+        // 2. Manifest-less (legacy) plugin. SECURITY: do NOT require() the entry on the HOST to read
+        //    metadata — that executes untrusted top-level code OUTSIDE the worker sandbox (host RCE on
+        //    plugin enumeration / GET /plugins). Use directory-name metadata only; real loading happens
+        //    later, sandboxed, in the worker. Plugins wanting proper metadata must ship a manifest.json.
         else {
             mainFile = findMainFile(pluginDir);
             if (!mainFile) continue;
-
-            try {
-                const pluginModule = require(mainFile);
-                metadata = pluginModule.metadata || {};
-            } catch (error) {
-                console.error(`Error loading plugin ${entry.name}:`, error.message);
-                continue;
-            }
+            // metadata stays {} → name falls back to entry.name below; nothing is executed here.
         }
 
         plugins.push(new Plugin({
