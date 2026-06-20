@@ -98,10 +98,19 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         // identifier OWNED by this plugin (prefixed); FAIL-CLOSED — an unattributable/non-prefixed token
         // is denied, not ignored.
         const norm = lower.replace(/[[\]"`]/g, ' ');
-        if (/\bfrom\s+[a-z_][\w$.]*\s*,/.test(norm)) {
+        // RETURNING is the scalar-exfil channel for a DELETE/UPDATE...USING that joins another table (and
+        // an untrusted plugin gets inserted ids via lastID anyway) — deny it outright for untrusted SQL.
+        if (/\breturning\b/.test(norm)) {
+            throw new Error(`🛡️ Plugin DB access denied: RETURNING is not permitted; use a separate SELECT.`);
+        }
+        // Comma lists after FROM or USING are implicit cross-joins that smuggle a second table past the
+        // single-token attribution below — require explicit JOIN instead.
+        if (/\b(?:from|using)\s+[a-z_][\w$.]*\s*,/.test(norm)) {
             throw new Error(`🛡️ Plugin DB access denied: comma joins are not permitted; use explicit JOIN.`);
         }
-        const tableRe = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+([^\s(;]+)/g;
+        // Include USING (Postgres DELETE ... USING <table>) in the table-introducing keywords, else a
+        // table referenced only there escapes the per-plugin prefix attribution.
+        const tableRe = /\b(?:from|join|into|update|using|table(?:\s+if\s+not\s+exists)?)\s+([^\s(;]+)/g;
         let m;
         while ((m = tableRe.exec(norm))) {
             const tok = m[1];
@@ -257,7 +266,9 @@ function createPluginApi(slug: string) {
         fs: {
             async read(relPath: string, encoding: BufferEncoding = 'utf8') {
                 verifyPermission('filesystem', 'read');
-                return fs.promises.readFile(resolvePluginPath(slug, relPath, true), encoding);
+                // Untrusted plugins read only inside their OWN dir — NOT the shared uploads dir (where
+                // another tenant's/plugin's files live). Mirror the write path's confinement.
+                return fs.promises.readFile(resolvePluginPath(slug, relPath, true, isTrustedPlugin(slug)), encoding);
             },
             async write(relPath: string, data: any) {
                 verifyPermission('filesystem', 'write');
