@@ -93,18 +93,41 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         const rpcSend = (map: Map<number, any>, message: any): Promise<any> => new Promise((res, rej) => {
             const id = ++invokeId;
             const timer = setTimeout(() => {
-                if (map.has(id)) { map.delete(id); rej(new Error(`Isolated plugin '${slug}' RPC timed out`)); }
+                if (map.has(id)) {
+                    map.delete(id);
+                    rej(new Error(`Isolated plugin '${slug}' RPC timed out`));
+                    // A handler that blew the timeout is wedged (hang / synchronous spin) — recycle the
+                    // worker so it can't keep leaking pending requests or pinning host timers/sockets.
+                    console.error(`[Isolate ${slug}] terminated: RPC timeout (wedged handler).`);
+                    try { worker.terminate(); } catch { /* already gone */ }
+                }
             }, RPC_TIMEOUT_MS);
             if ((timer as any).unref) (timer as any).unref();
             map.set(id, { res, rej, timer });
             worker.postMessage({ id, ...message });
         });
+        // Cap a single worker->host reply payload to protect the HOST heap (the worker is also
+        // memory-capped on its own side, so this is the second bound). Cheap size check for string/
+        // buffer replies; object replies are bounded by the worker's memory watchdog.
+        const MAX_REPLY_BYTES = 32 * 1024 * 1024;
+        const replySize = (v: any): number => {
+            if (typeof v === 'string') return Buffer.byteLength(v);
+            if (Buffer.isBuffer(v) || v instanceof Uint8Array) return (v as any).byteLength || (v as any).length || 0;
+            return 0;
+        };
         const rpcSettle = (map: Map<number, any>, msg: any, value: any) => {
             const p = map.get(msg.id);
             if (!p) return;
             map.delete(msg.id);
             clearTimeout(p.timer);
-            msg.ok ? p.res(value) : p.rej(new Error(msg.error));
+            if (!msg.ok) { p.rej(new Error(msg.error)); return; }
+            if (replySize(value) > MAX_REPLY_BYTES) {
+                console.error(`[Isolate ${slug}] terminated: oversized RPC reply.`);
+                try { worker.terminate(); } catch { /* already gone */ }
+                p.rej(new Error(`Isolated plugin '${slug}' returned an oversized reply`));
+                return;
+            }
+            p.res(value);
         };
 
         const pendingInvoke = new Map<number, any>();
