@@ -39,12 +39,20 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
         // execArgv allowlist.
         const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
+        // Pass an explicit, secret-free env ALLOWLIST instead of inheriting the full host environment:
+        // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
+        // (JWT_SECRET, DB creds, STRIPE_KEY, …) must never enter the worker's process.env. This is
+        // default-deny, unlike the in-worker name-pattern denylist (getProtectedEnv).
+        const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
+        const workerEnv: Record<string, string> = {};
+        for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
         const worker = new Worker(WORKER_FILE, {
             // isTrusted is resolved HERE (host) at spawn and re-resolved on every reload (the trust
             // toggle reloads the worker), so the worker's network policy always matches current trust.
             // It must come from the host: trustedPlugins()/options can't be read inside the worker.
             workerData: { slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) },
             execArgv,
+            env: workerEnv,
             resourceLimits: { maxOldGenerationSizeMb: 256 } // cap isolate memory (DoS containment)
         });
         const api = createPluginApi(slug);
@@ -52,7 +60,32 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't
         // flood the host with privileged RPCs (each runs a permission-checked bridge call here).
         let inflightCalls = 0;
+        let callBackpressureRejections = 0;
         const MAX_INFLIGHT_CALLS = 200;
+
+        // Registration caps: 'call' is bounded by MAX_INFLIGHT_CALLS, but the fire-and-forget
+        // register-* kinds (hooks/routes/shortcodes) were unbounded — a plugin could spam them to
+        // exhaust host memory (accumulated shims) and flood the event loop. Cap per kind, and hard-kill
+        // a worker that keeps spamming after being capped (event-loop-flood DoS).
+        const MAX_HOOKS = 500, MAX_ROUTES = 200, MAX_SHORTCODES = 200;
+        let registrationAttempts = 0;
+        let registrationCapWarned = false;
+        const registrationRejected = (arr: any[], max: number, kind: string): boolean => {
+            registrationAttempts++;
+            if (registrationAttempts > 10000) {
+                console.error(`[Isolate ${slug}] terminated: registration flood (${registrationAttempts} attempts).`);
+                try { worker.terminate(); } catch { /* already gone */ }
+                return true;
+            }
+            if (arr.length >= max) {
+                if (!registrationCapWarned) {
+                    registrationCapWarned = true;
+                    console.warn(`[Isolate ${slug}] registration cap reached (${kind} >= ${max}); ignoring further registrations (possible DoS).`);
+                }
+                return true;
+            }
+            return false;
+        };
 
         // Every host→worker RPC carries a hard timeout: a plugin that never replies (hang or DoS)
         // must not pin an HTTP request open or leak a pending entry forever. rpcSettle clears it.
@@ -103,6 +136,14 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
                 if (inflightCalls >= MAX_INFLIGHT_CALLS) {
+                    // Over-limit calls are cheap-rejected, but a worker that floods far faster than the
+                    // host can drain (thousands of calls while pinned at the limit) is hammering the
+                    // event loop — terminate it as abusive (DoS containment, like registrationRejected).
+                    if (++callBackpressureRejections > 50000) {
+                        console.error(`[Isolate ${slug}] terminated: bridge-call flood (${callBackpressureRejections} over-limit calls).`);
+                        try { worker.terminate(); } catch { /* already gone */ }
+                        return;
+                    }
                     worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: `Isolated plugin '${slug}' exceeded concurrent bridge-call limit` });
                     return;
                 }
@@ -116,6 +157,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     inflightCalls--;
                 }
             } else if (msg.kind === 'register') {
+                if (registrationRejected(registeredHooks, MAX_HOOKS, 'hooks')) return;
                 // Install a shim in the real hook system that calls back into the isolate.
                 const shim = (...args: any[]) => invokeWorker(msg.cbId, args);
                 registeredHooks.push({ hook: msg.hook, type: msg.hookType, shim });
@@ -126,6 +168,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'invoke-reply') {
                 rpcSettle(pendingInvoke, msg, msg.value);
             } else if (msg.kind === 'register-route') {
+                if (registrationRejected(registeredRoutes, MAX_ROUTES, 'routes')) return;
                 // Mount an Express route owned by the host; run the real auth middleware, then forward
                 // a serialized request to the isolate and write back its response descriptor.
                 const { getApp } = require('./appRegistry');
@@ -185,6 +228,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'route-reply') {
                 rpcSettle(pendingRoute, msg, msg.response);
             } else if (msg.kind === 'register-shortcode') {
+                if (registrationRejected(registeredShortcodes, MAX_SHORTCODES, 'shortcodes')) return;
                 // Register a shortcode shim that forwards {attrs,content,tag} to the isolate and
                 // resolves its HTML asynchronously (works with doShortcodeAsync).
                 const shim = (attrs: any, content: any, tag: any) =>

@@ -36,12 +36,38 @@ function getSchedules() {
     return { ...schedules };
 }
 
+// Bound the persistent 'cron' option blob so an untrusted plugin can't amplify storage/serialization
+// by scheduling unbounded events (or events with huge args). Per-plugin + global caps + args-size cap.
+const MAX_CRON_EVENTS_PER_PLUGIN = 200;
+const MAX_CRON_EVENTS_TOTAL = 5000;
+const MAX_CRON_ARGS_BYTES = 4096;
+function assertCronCapacity(events, pluginSlug, args) {
+    if (JSON.stringify(args || []).length > MAX_CRON_ARGS_BYTES) {
+        throw new Error('🛡️ Cron schedule denied: event args are too large.');
+    }
+    let total = 0, mine = 0;
+    for (const ts of Object.keys(events || {})) {
+        for (const k of Object.keys(events[ts] || {})) {
+            total++;
+            if (pluginSlug && events[ts][k] && events[ts][k].pluginSlug === pluginSlug) mine++;
+        }
+    }
+    if (total >= MAX_CRON_EVENTS_TOTAL) {
+        throw new Error('🛡️ Cron schedule denied: too many scheduled events on this site.');
+    }
+    if (pluginSlug && mine >= MAX_CRON_EVENTS_PER_PLUGIN) {
+        throw new Error(`🛡️ Cron schedule denied: plugin '${pluginSlug}' exceeded its scheduled-event cap (${MAX_CRON_EVENTS_PER_PLUGIN}).`);
+    }
+}
+
 /**
  * Schedule an event (Async)
  * Equivalent to wp_schedule_event()
  */
 async function scheduleEvent(timestamp, recurrence, hook, args = []) {
     const events = await getOption('cron', {});
+    const pluginSlug = getCurrentPlugin();
+    assertCronCapacity(events, pluginSlug, args);
 
     if (!events[timestamp]) {
         events[timestamp] = {};
@@ -54,7 +80,7 @@ async function scheduleEvent(timestamp, recurrence, hook, args = []) {
         schedule: recurrence,
         interval: schedules[recurrence]?.interval || 0,
         // Record the scheduling plugin so the fired event only runs ITS callbacks (not core hooks).
-        pluginSlug: getCurrentPlugin()
+        pluginSlug
     };
 
     await updateOption('cron', events);
@@ -67,6 +93,8 @@ async function scheduleEvent(timestamp, recurrence, hook, args = []) {
  */
 async function scheduleSingleEvent(timestamp, hook, args = []) {
     const events = await getOption('cron', {});
+    const pluginSlug = getCurrentPlugin();
+    assertCronCapacity(events, pluginSlug, args);
 
     if (!events[timestamp]) {
         events[timestamp] = {};
@@ -77,7 +105,7 @@ async function scheduleSingleEvent(timestamp, hook, args = []) {
         hook,
         args,
         schedule: false,
-        pluginSlug: getCurrentPlugin()
+        pluginSlug
     };
 
     await updateOption('cron', events);

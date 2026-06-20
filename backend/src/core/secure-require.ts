@@ -275,7 +275,10 @@ const originalRequire = Module.prototype.require;
 // Modules whose entire surface is unsafe for plugins (worker spawning, arbitrary code
 // compilation, internal Module machinery, debugger control). We return a Proxy that
 // resolves fine but throws on ANY use, so require() succeeds but the module is inert.
-const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events'];
+// NOTE: keep in sync with the ESM import() blocklist in plugin-worker.js (esmBlocked). 'cluster' is
+// critical: cluster.fork() spawns a host node process through plumbing it captured at load time —
+// it never re-enters the patched require/_load, so it bypasses the child_process proxy entirely.
+const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8'];
 
 // Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
 // (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and

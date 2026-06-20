@@ -34,22 +34,53 @@ const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
 // Deliberately broad (matches getProtectedEnv): the previous narrow list let an untrusted plugin
 // read options like `stripe_key`, `api_key`, `*_credential`, `encryption_key`, certs, etc.
 const PROTECTED_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privatekey|dkim|\bkey\b|[_-]key\b|key$|api[_-]?key|token|\bsalt\b|jwt|credential|encryption|signing|certificate|\.pem|access[_-]?key/i;
+// Security-critical option NAMES that PROTECTED_OPTION_RE misses (no secret-ish word) but control
+// authorization / site integrity. Writing 'wordjs_user_roles' rewrites the role->capability map =
+// full privilege escalation; 'active_plugins' enables/disables plugins; 'siteurl' can break the
+// migration/host guard. Off-limits (read AND write) to untrusted plugins.
+const PROTECTED_OPTION_NAMES = new Set([
+    'wordjs_user_roles', 'user_roles', 'roles', 'active_plugins', 'default_role',
+    'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home'
+]);
+const isProtectedOption = (key: string, slug: string): boolean =>
+    !isTrustedPlugin(slug) &&
+    (PROTECTED_OPTION_RE.test(String(key)) || PROTECTED_OPTION_NAMES.has(String(key).toLowerCase()));
+
 // Core DB tables a plugin may never touch (mirrors the dbAsync scoping in secure-require).
 const PROTECTED_TABLES = new Set(['users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions']);
 
-// Reject any SQL that references a core table. Regex *structural* parsing of SQL is bypassable
-// (comma joins `FROM a, users`, subqueries, and comment-as-whitespace `FROM/**/users` all slip a
-// table past a `FROM <table>` matcher). So strip comments, then deny if a protected table name
-// appears as a STANDALONE WORD anywhere in the statement — a conservative text denylist, not a
-// parse. Over-blocks queries that merely mention a core-table name (acceptable: an untrusted plugin
-// has no business naming core tables). Trusted plugins skip this entirely (see callers).
-function assertSqlAllowed(sql: string) {
-    const stripped = String(sql || '')
+// Constrain untrusted-plugin SQL. Beyond the core-table denylist, REJECT dangerous constructs that a
+// table-name denylist misses: ATTACH/DETACH (mounts arbitrary host files as a DB -> file read/write),
+// PRAGMA (info disclosure / settings), schema catalogs (enumerate/read core schema), and stacked
+// statements ('SELECT 1; DROP TABLE x'). Then require the statement to START with one of the caller's
+// allowed verbs (positive allowlist). Comments are stripped first so they can't act as whitespace to
+// evade. Trusted plugins skip this entirely (see callers).
+function assertSqlAllowed(sql: string, allowedVerbs: string[]) {
+    const lower = String(sql || '')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')   // /* block comments */ (used as whitespace to evade)
         .replace(/--[^\n]*/g, ' ')           // -- line comments
+        .trim()
         .toLowerCase();
+
+    if (/\battach\b/.test(lower) || /\bdetach\b/.test(lower) || /\bpragma\b/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: ATTACH/DETACH/PRAGMA are not permitted.`);
+    }
+    if (/\bsqlite_(master|schema|temp_master|temp_schema)\b/.test(lower) ||
+        /\binformation_schema\b/.test(lower) || /\bpg_catalog\b/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: querying the schema catalog is not permitted.`);
+    }
+    // Single statement only — strip a single trailing ';' then reject any remaining one.
+    if (lower.replace(/;\s*$/, '').includes(';')) {
+        throw new Error(`🛡️ Plugin DB access denied: multiple statements are not permitted.`);
+    }
+    // Positive leading-verb allowlist (e.g. read = SELECT/WITH; write = INSERT/UPDATE/DELETE/...).
+    const verb = (lower.match(/^([a-z]+)/) || [])[1] || '';
+    if (allowedVerbs.length && !allowedVerbs.includes(verb)) {
+        throw new Error(`🛡️ Plugin DB access denied: '${verb || '(empty)'}' statements are not permitted here.`);
+    }
+    // Core-table denylist (defense in depth alongside the verb allowlist).
     for (const t of PROTECTED_TABLES) {
-        if (new RegExp(`\\b${t}\\b`).test(stripped)) {
+        if (new RegExp(`\\b${t}\\b`).test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
         }
     }
@@ -82,7 +113,7 @@ function createPluginApi(slug: string) {
                 verifyPermission('settings', 'read');
                 // Secret-named options are off-limits UNLESS the plugin is operator-trusted
                 // (config.trustedSystemPlugins, e.g. mail-server reading its own DKIM private key).
-                if (PROTECTED_OPTION_RE.test(String(key)) && !isTrustedPlugin(slug)) {
+                if (isProtectedOption(key, slug)) {
                     throw new Error(`🛡️ Option '${key}' is not readable by plugins.`);
                 }
                 const { getOption } = require('./options');
@@ -90,7 +121,7 @@ function createPluginApi(slug: string) {
             },
             async set(key: string, value: any) {
                 verifyPermission('settings', 'write');
-                if (PROTECTED_OPTION_RE.test(String(key)) && !isTrustedPlugin(slug)) {
+                if (isProtectedOption(key, slug)) {
                     throw new Error(`🛡️ Option '${key}' is not writable by plugins.`);
                 }
                 const { updateOption } = require('./options');
@@ -104,20 +135,20 @@ function createPluginApi(slug: string) {
             // scoping so it can touch core tables. The isolate is still the boundary; host-enforced.
             async all(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with']);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.all(sql, params);
             },
             async get(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with']);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.get(sql, params);
             },
             // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER). Scoped unless `database:admin`.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace']);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.run(sql, params);
             },
@@ -148,8 +179,12 @@ function createPluginApi(slug: string) {
                 return addFilter(hook, cb, priority);
             },
             doAction(hook: string, ...args: any[]) {
-                const { doAction } = require('./hooks');
-                return doAction(hook, ...args);
+                const hooksMod = require('./hooks');
+                // Untrusted plugins may only fire their OWN registered callbacks (the same scoping cron
+                // uses), never arbitrary CORE / other-plugin action handlers — so a plugin can't trigger
+                // privileged core side effects with attacker-controlled args.
+                if (!isTrustedPlugin(slug)) return hooksMod.doActionForPlugin(hook, slug, ...args);
+                return hooksMod.doAction(hook, ...args);
             }
         },
 
