@@ -19,7 +19,9 @@
 // Mark this V8 isolate as a plugin worker BEFORE any core module loads, so core code (e.g.
 // config/app) can skip host-only, sandbox-blocked side-effects (reading/persisting
 // wordjs-config.json, secret generation) — the worker reaches all of that via the bridge instead.
-global.__WORDJS_ISOLATED__ = true;
+// Immutable (non-writable, non-configurable) so plugin code can't `delete`/reassign it to defeat the
+// guards — getEffectivePlugin()/secure-require key trust decisions on these worker globals.
+Object.defineProperty(global, '__WORDJS_ISOLATED__', { value: true, writable: false, configurable: false, enumerable: false });
 const { parentPort, workerData } = require('worker_threads');
 const path = require('path');
 
@@ -30,7 +32,8 @@ const { slug, entryFile, coreDir } = workerData;
 // reachable through the module loader, so a denylist there is useless against them — trap the globals
 // here. Trust is supplied by the HOST via workerData (re-resolved on every reload, since the trust
 // toggle reloads the worker); secure-require also reads __WORDJS_PLUGIN_TRUSTED__ for its net branch.
-global.__WORDJS_PLUGIN_TRUSTED__ = !!workerData.isTrusted;
+// Immutable: a plugin must not be able to self-promote to trusted (which would unlock raw sockets).
+Object.defineProperty(global, '__WORDJS_PLUGIN_TRUSTED__', { value: !!workerData.isTrusted, writable: false, configurable: false, enumerable: false });
 if (!global.__WORDJS_PLUGIN_TRUSTED__) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
@@ -290,7 +293,9 @@ parentPort.on('message', async (msg) => {
         // Promise.then callback) is still attributed to THIS plugin by getEffectivePlugin(), so the
         // runtime guards never treat it as unguarded "core". Set only NOW so the worker's own core
         // bootstrap above loaded its modules unproxied.
-        global.__WORDJS_PLUGIN_SLUG__ = slug;
+        // Immutable: this is the fail-closed attribution backstop — plugin code must not be able to
+        // `delete global.__WORDJS_PLUGIN_SLUG__` to make getEffectivePlugin() return null (= core).
+        Object.defineProperty(global, '__WORDJS_PLUGIN_SLUG__', { value: slug, writable: false, configurable: false, enumerable: false });
         // Require AND init the entry INSIDE the plugin context (ALS), so even the entry's top-level
         // code is sandboxed (previously require(entryFile) ran with an empty context).
         await runWithContext(slug, async () => {
