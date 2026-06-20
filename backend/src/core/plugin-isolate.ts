@@ -18,6 +18,30 @@ const { addShortcode, removeShortcode } = require('./shortcodes');
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
 
+// Host-side memory watchdog. A worker can allocate off-heap (Buffer/ArrayBuffer) in a tight SYNCHRONOUS
+// loop that blocks its OWN thread, so the in-worker watchdog never fires and the V8 resourceLimits
+// (heap-only) don't cover external memory. Workers share the host PROCESS rss/external, so a watchdog on
+// the HOST event loop (not blocked by the worker's sync loop) can observe the growth and terminate
+// isolated workers before the host OOM-crashes. (The decisive fix for off-heap caps is OS-level
+// isolation — child_process + cgroup/rlimit — tracked in POSITIONING.md.)
+const activeIsolateWorkers = new Set<any>();
+let hostMemWatch: any = null;
+function startHostMemoryWatch() {
+    if (hostMemWatch) return;
+    const EXTERNAL_BUDGET = 1024 * 1024 * 1024; // 1 GB external across all isolates (last-resort cap)
+    hostMemWatch = setInterval(() => {
+        try {
+            const m = process.memoryUsage();
+            if ((m.external || 0) > EXTERNAL_BUDGET && activeIsolateWorkers.size) {
+                console.error(`[Sandbox] host external memory ${m.external} over budget — terminating isolated workers (DoS containment).`);
+                for (const w of activeIsolateWorkers) { try { w.terminate(); } catch { /* gone */ } }
+                activeIsolateWorkers.clear();
+            }
+        } catch { /* ignore */ }
+    }, 1000);
+    if (hostMemWatch.unref) hostMemWatch.unref();
+}
+
 // Trust = shipped default OR operator-toggled (admin UI). See core/plugin-trust.
 function isTrustedPlugin(slug: string): boolean {
     try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
@@ -53,8 +77,11 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             workerData: { slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) },
             execArgv,
             env: workerEnv,
-            resourceLimits: { maxOldGenerationSizeMb: 256 } // cap isolate memory (DoS containment)
+            resourceLimits: { maxOldGenerationSizeMb: 256 } // cap isolate HEAP (off-heap: host watchdog)
         });
+        activeIsolateWorkers.add(worker);
+        startHostMemoryWatch();
+        worker.on('exit', () => activeIsolateWorkers.delete(worker));
         const api = createPluginApi(slug);
         let invokeId = 0;
         // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't
@@ -68,6 +95,8 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         // exhaust host memory (accumulated shims) and flood the event loop. Cap per kind, and hard-kill
         // a worker that keeps spamming after being capped (event-loop-flood DoS).
         const MAX_HOOKS = 500, MAX_ROUTES = 200, MAX_SHORTCODES = 200;
+        const MAX_PER_HOOK = 16; // cap callbacks on a SINGLE hook name (latency-amplification DoS)
+        const hookNameCounts = new Map<string, number>();
         let registrationAttempts = 0;
         let registrationCapWarned = false;
         const registrationRejected = (arr: any[], max: number, kind: string): boolean => {
@@ -196,6 +225,14 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 }
             } else if (msg.kind === 'register') {
                 if (registrationRejected(registeredHooks, MAX_HOOKS, 'hooks')) return;
+                // Cap callbacks PER hook NAME too: many shims on one core hook (e.g. the_content)
+                // amplify per-request latency even with the per-shim timeout below.
+                const hookCnt = (hookNameCounts.get(msg.hook) || 0) + 1;
+                hookNameCounts.set(msg.hook, hookCnt);
+                if (hookCnt > MAX_PER_HOOK) {
+                    console.warn(`[Isolate ${slug}] too many callbacks on hook '${msg.hook}' (cap ${MAX_PER_HOOK}) — ignoring further.`);
+                    return;
+                }
                 // Install a shim in the real hook system that calls back into the isolate. Cap the
                 // latency a plugin shim can inject into a CORE hook: race the worker call against a short
                 // timeout that falls back to the unchanged value (filters) / no-op (actions), so a slow
