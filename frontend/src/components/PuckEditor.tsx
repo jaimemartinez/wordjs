@@ -8,6 +8,7 @@
 
 import { Puck, Config, Data, migrate, useGetPuck } from "@measured/puck";
 import "@measured/puck/puck.css";
+import "./puck-theme.css";
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import ModernSelect from "./ModernSelect";
@@ -15,6 +16,9 @@ import PublicLayout from "@/app/(public)/layout";
 import { puckConfig } from "./puckConfig";
 import { RichTextEditor } from "./puckConfig";
 import RevisionsSidebar from "./RevisionsSidebar";
+import BlockInserter from "./BlockInserter";
+import { PATTERNS, insertPattern } from "@/lib/puckPatterns";
+import InlineTiptap from "./InlineTiptap";
 import { revisionsApi, Revision } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -63,61 +67,11 @@ const InlineText = ({ id, content, title, elementId }: any) => {
     }, []);
     const isEditing = activeId === id;
 
-    const [localContent, setLocalContent] = React.useState(actualContent);
-    React.useEffect(() => {
-        if (!isEditing) setLocalContent(actualContent);
-    }, [actualContent, isEditing]);
-
-    const viewRef = React.useRef<HTMLDivElement>(null);
-    const editorContainerRef = React.useRef<HTMLDivElement>(null);
-
-    // OPEN via a NATIVE click listener. Puck's drag layer (dnd-kit) swallows React synthetic events
-    // on preview-rendered components, so a React onClick here never fires — a native addEventListener
-    // does. (Verified in-browser: native click fires, React onClick does not.)
-    React.useEffect(() => {
-        const el = viewRef.current;
-        if (!el || !ctx || !id) return;
-        const open = (e: Event) => {
-            e.preventDefault();
-            e.stopPropagation();
-            ctx.setActiveEditorId(id);
-        };
-        el.addEventListener('click', open);
-        return () => el.removeEventListener('click', open);
-    }, [id, ctx]);
-
-    // COMMIT (not discard) when the user mouses down anywhere outside the editor — including the top
-    // "GUARDAR CAMBIOS" button or another block. A full-screen backdrop used to sit over everything
-    // and *discard* on outside click, which both blocked the header and silently dropped edits (the
-    // "changes don't save" bug). A document-level capture listener instead reads the live DOM HTML,
-    // pushes it into Puck's store, and lets the click reach its real target. Also exposes a global
-    // flusher so the page-save handler can commit an open editor before persisting.
-    React.useEffect(() => {
-        if (!isEditing || !ctx || !id) return;
-        const commit = () => {
-            const el = editorContainerRef.current?.querySelector('[contenteditable="true"]') as HTMLElement | null;
-            if (!el) return;
-            ctx.updateComponent(id, isTextBlock ? { content: el.innerHTML } : { title: el.innerHTML });
-            ctx.setActiveEditorId(null);
-        };
-        (window as any).puckCommitActive = commit;
-        const onDocMouseDown = (e: Event) => {
-            const c = editorContainerRef.current;
-            // The editor portal lives in the PARENT doc; a click in the iframe is never "inside" it.
-            if (c && e.target instanceof Node && !c.contains(e.target)) commit();
-        };
-        // Listen on the parent doc (header, sidebar) AND the preview iframe's doc (other blocks,
-        // empty canvas) — clicks inside the iframe don't bubble to the parent.
-        document.addEventListener('mousedown', onDocMouseDown, true);
-        const viewDoc = viewRef.current?.ownerDocument;
-        const hasInnerDoc = viewDoc && viewDoc !== document;
-        if (hasInnerDoc) viewDoc!.addEventListener('mousedown', onDocMouseDown, true);
-        return () => {
-            document.removeEventListener('mousedown', onDocMouseDown, true);
-            if (hasInnerDoc) viewDoc!.removeEventListener('mousedown', onDocMouseDown, true);
-            if ((window as any).puckCommitActive === commit) (window as any).puckCommitActive = null;
-        };
-    }, [isEditing, id, isTextBlock, ctx]);
+    // The inline editor opens ONLY via the per-block "Edit" (pencil) action in Puck's overlay
+    // (patch-puck-actions.js → window.puckSetActiveEditorId). A bare click on the text falls through
+    // to Puck (selects the block + shows its action bar), so editing is always intentional. The
+    // editing surface, commit-on-blur, and the window.puckCommitActive flusher are owned by the
+    // in-place <InlineTiptap/> below.
 
     if (!ctx || !id) {
         return (
@@ -129,74 +83,38 @@ const InlineText = ({ id, content, title, elementId }: any) => {
         );
     }
 
-    const handleSave = (html: string) => {
-        // Persist the live HTML the editor hands back (read from the DOM at save time), not the
-        // onChange-tracked localContent — input events don't propagate out of the body portal.
-        ctx.updateComponent(id, isTextBlock ? { content: html } : { title: html });
-        ctx.setActiveEditorId(null);
-    };
-    const handleCancel = () => {
-        setLocalContent(actualContent);
-        ctx.setActiveEditorId(null);
-    };
-
     return (
         <>
-            {/* Always-mounted view. Raised z-index + pointer-events so the native click lands here —
-                inside Columns, Puck's DropZone overlay otherwise sits on top and swallows the click. */}
+            {/* In-place editing: when active, the block's own element hosts the Tiptap editor (same
+                position, transparent background, real color) so it looks identical to the rendered
+                text. Otherwise it shows the sanitized static content. */}
             <div
-                ref={viewRef}
-                style={{ position: 'relative', zIndex: 20, pointerEvents: 'auto' }}
-                className="group min-h-[40px] px-1 -mx-1 border border-transparent hover:border-blue-200 hover:bg-blue-50/10 rounded-lg transition-all cursor-text inline-text-view"
+                style={{ position: 'relative', zIndex: isEditing ? 60 : 20, pointerEvents: 'auto' }}
+                className={`group min-h-[40px] px-1 -mx-1 rounded-lg transition-all inline-text-view ${
+                    isEditing
+                        ? 'ring-2 ring-editor-primary/40'
+                        : 'border border-transparent hover:border-blue-200 hover:bg-blue-50/10 cursor-pointer'
+                }`}
+                onMouseDown={isEditing ? (e) => e.stopPropagation() : undefined}
+                onPointerDown={isEditing ? (e) => e.stopPropagation() : undefined}
             >
-                <div
-                    id={elementId || undefined}
-                    className="prose max-w-none"
-                    dangerouslySetInnerHTML={{ __html: sanitizeHTML(isEditing ? localContent : actualContent) }}
-                />
+                {isEditing ? (
+                    <InlineTiptap
+                        html={actualContent}
+                        inline={!isTextBlock}
+                        elementId={elementId}
+                        onCommit={(html: string) => ctx.updateComponent(id, isTextBlock ? { content: html } : { title: html })}
+                        onClose={() => ctx.setActiveEditorId(null)}
+                    />
+                ) : (
+                    <div
+                        id={elementId || undefined}
+                        className="prose max-w-none"
+                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(actualContent) }}
+                    />
+                )}
             </div>
 
-            {/* The editor is PORTALED to document.body — OUT of Puck's draggable/dnd subtree — so its
-                own React events (toolbar, typing→onChange, Save/Cancel) actually fire. Positioned over
-                the block via the rect captured on open. No full-screen backdrop: outside-clicks are
-                handled by the document listener above (which COMMITS, never discards), so the header
-                and the rest of the UI stay clickable while editing. */}
-            {isEditing && typeof document !== 'undefined' && createPortal(
-                <div
-                    ref={editorContainerRef}
-                    className="inline-editor-container"
-                    style={(() => {
-                        // Position over the block by reading the always-mounted view's live rect at
-                        // render time (reliable, unlike capturing into state on click which raced to
-                        // null for nested blocks). The view lives inside Puck's preview iframe, so its
-                        // rect is iframe-relative — add the iframe element's offset (frameElement is null
-                        // when iframe is disabled, so this also works without an iframe). The editor is
-                        // portaled to the PARENT body, so it's clamped to the parent window. Width is a
-                        // consistent comfortable size (NOT the block width) so the full toolbar fits.
-                        const r = viewRef.current?.getBoundingClientRect();
-                        const frameEl = (viewRef.current?.ownerDocument?.defaultView as any)?.frameElement as HTMLElement | null;
-                        const off = frameEl ? frameEl.getBoundingClientRect() : { top: 0, left: 0 };
-                        const width = Math.min(520, window.innerWidth - 32);
-                        return {
-                            position: 'fixed' as const,
-                            top: r ? Math.max(8, Math.min(off.top + r.top, window.innerHeight - 280)) : 96,
-                            left: r ? Math.max(8, Math.min(off.left + r.left, window.innerWidth - width - 16)) : 96,
-                            width,
-                            zIndex: 99999,
-                        };
-                    })()}
-                    onMouseDown={(e) => e.stopPropagation()}
-                >
-                    <RichTextEditor
-                        value={localContent}
-                        onChange={(val: string) => setLocalContent(val)}
-                        onSave={handleSave}
-                        onCancel={handleCancel}
-                        transparent={false}
-                    />
-                </div>,
-                document.body
-            )}
         </>
     );
 };
@@ -213,11 +131,15 @@ const OverlayBlocker = () => {
             setActiveId(initialId);
         }
 
+        // The active-editor id is broadcast on the 'puck-editor-change' event with the id as the
+        // detail (NOT { activeId }). The old listener used the wrong event name + detail shape, so this
+        // blocker never activated — leaving Puck's overlay on top of the in-place editor, where it
+        // intercepted clicks (selecting the block / disrupting editing on every click).
         const handleUpdate = (e: any) => {
-            setActiveId(e.detail?.activeId || null);
+            setActiveId(e?.detail ?? (window as any).puckActiveEditorId ?? null);
         };
-        window.addEventListener('puckActiveEditorIdChanged', handleUpdate as any);
-        return () => window.removeEventListener('puckActiveEditorIdChanged', handleUpdate as any);
+        window.addEventListener('puck-editor-change', handleUpdate as any);
+        return () => window.removeEventListener('puck-editor-change', handleUpdate as any);
     }, []);
 
     React.useEffect(() => {
@@ -782,7 +704,12 @@ export default function PuckEditor({
                     onPublish={(data) => onChange(data)}
                     onChange={(newData) => { setData(newData); onChange(newData); }}
                     overrides={overrides}
-                    iframe={{ enabled: true }}
+                    /* NATIVE preview: render the canvas in the same document instead of an isolated
+                     * iframe. The iframe couldn't reliably load the app/theme stylesheets (blocks
+                     * rendered unstyled / "broke"); rendering natively inherits the real styles for
+                     * true WYSIWYG. The inline-editor machinery already supports no-iframe
+                     * (frameElement === null) and OverlayBlocker injects into the active document. */
+                    iframe={{ enabled: false }}
                 >
                     <div className="flex flex-col h-screen w-full overflow-hidden">
 
@@ -914,17 +841,7 @@ export default function PuckEditor({
 
                                 {/* Components Area */}
                                 <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar min-h-0 relative">
-                                    <div className="p-6 w-[360px]">
-                                        <div className="sticky top-0 bg-white z-10 py-3 -mt-2 mb-4 border-b border-gray-50">
-                                            <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest flex items-center gap-2">
-                                                <i className="fa-solid fa-shapes text-blue-500"></i>
-                                                {t('editor.panel.components')}
-                                            </h3>
-                                        </div>
-                                        <div className="puck-components-wrapper">
-                                            <Puck.Components />
-                                        </div>
-                                    </div>
+                                    <BlockInserter components={editorConfig.components} />
                                 </div>
 
                                 {/* Resizer Handle */}
@@ -959,13 +876,58 @@ export default function PuckEditor({
                                 <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
 
                                 <div
-                                    className="flex-1 h-full transition-all duration-500 shadow-2xl bg-white border-[8px] border-gray-900 rounded-[3rem] overflow-hidden relative z-10"
-                                    style={{ width: getViewportWidth() }}
+                                    className={`flex-1 h-full transition-all duration-500 bg-white overflow-hidden relative z-10 ${
+                                        viewport === 'desktop'
+                                            ? 'rounded-2xl shadow-xl ring-1 ring-black/5 border border-gray-200'
+                                            : 'shadow-2xl border-[10px] border-gray-900 rounded-[2.5rem]'
+                                    }`}
+                                    /* OUTER frame. transform:translateZ(0) makes it the containing block
+                                     * for the site's position:fixed Header (Header.tsx). Without an
+                                     * iframe, fixed would anchor to the window and render behind the
+                                     * editor chrome. overflow:hidden clips to the rounded frame. The page
+                                     * scrolls in the INNER container below — NOT here — so the fixed
+                                     * header stays pinned to this frame's top (like the live site) instead
+                                     * of scrolling away / being clipped. */
+                                    style={{ width: getViewportWidth(), maxWidth: '100%', transform: 'translateZ(0)' }}
                                 >
-                                    {/* Notch decoration */}
-                                    <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50 pointer-events-none"></div>
+                                    {/* Device notch — only in tablet/mobile preview, not on the flush desktop canvas */}
+                                    {viewport !== 'desktop' && (
+                                        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50 pointer-events-none"></div>
+                                    )}
 
-                                    <Puck.Preview />
+                                    {/* INNER scroller — page content scrolls here; the site's fixed
+                                        header stays pinned to the OUTER frame above (matches live). */}
+                                    <div className="h-full overflow-y-auto overflow-x-hidden custom-scrollbar">
+                                        <Puck.Preview />
+                                    </div>
+
+                                    {/* Empty-canvas onboarding — shown only when the page has no blocks.
+                                        pointer-events-none lets drag-drop pass through everywhere except
+                                        the pattern quick-pick buttons. */}
+                                    {(!data?.content || data.content.length === 0) && (
+                                        <div className="absolute inset-0 z-30 flex items-center justify-center p-6 pointer-events-none">
+                                            <div className="text-center max-w-sm bg-white/95 backdrop-blur rounded-2xl border border-gray-200 shadow-xl p-8 pointer-events-none">
+                                                <div className="w-16 h-16 mx-auto rounded-2xl bg-editor-primary/10 flex items-center justify-center text-editor-primary mb-4">
+                                                    <i className="fa-solid fa-wand-magic-sparkles text-2xl"></i>
+                                                </div>
+                                                <h3 className="text-lg font-bold text-gray-800 mb-1">Empieza tu página</h3>
+                                                <p className="text-sm text-gray-500 mb-5">Arrastra un bloque desde la izquierda, o inserta una plantilla para arrancar rápido.</p>
+                                                <div className="flex flex-wrap justify-center gap-2">
+                                                    {PATTERNS.slice(0, 3).map((p) => (
+                                                        <button
+                                                            key={p.id}
+                                                            type="button"
+                                                            onClick={() => insertPattern(p, editorConfig.components)}
+                                                            className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-50 hover:bg-editor-primary/10 border border-gray-200 hover:border-editor-primary text-xs font-semibold text-gray-700 hover:text-editor-primary transition"
+                                                        >
+                                                            <i className={`fa-solid ${p.icon}`}></i>
+                                                            {p.name}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 

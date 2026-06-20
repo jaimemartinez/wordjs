@@ -6,6 +6,7 @@ import { useRouter, useParams } from "next/navigation";
 import { postsApi, settingsApi } from "@/lib/api";
 import { pageConfig } from "@/components/puckConfig";
 import PuckEditor from "@/components/PuckEditor";
+import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
 import { Data } from "@measured/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
@@ -166,7 +167,7 @@ export default function PageEditorPage() {
     };
 
     if (isLoading) {
-        return <div className="p-8 text-center text-gray-500">{t('page.edit.loading')}</div>;
+        return <PuckEditorSkeleton />;
     }
 
     return (
