@@ -499,6 +499,28 @@ const dbAsyncProxy = new Proxy({}, {
 async function createPluginTable(tableName, columns) {
   const isPostgres = driverName === 'postgres';
 
+  // SECURITY: the table name and column strings are concatenated into DDL and run via exec(), which
+  // executes STACKED statements. An unvalidated column like 'id INT); INSERT INTO users (...) VALUES
+  // (...); CREATE TABLE z (a' would create an admin user / rewrite options. Validate the identifier
+  // and reject any statement-breaking or comment tokens BEFORE building the SQL.
+  const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+  if (typeof tableName !== 'string' || !IDENT_RE.test(tableName)) {
+    throw new Error(`🛡️ createTable: invalid table name '${tableName}' (must be a simple identifier).`);
+  }
+  if (!Array.isArray(columns) || columns.length === 0) {
+    throw new Error('createTable: columns must be a non-empty array of definitions.');
+  }
+  const BAD_COL = /;|--|\/\*|\*\//; // no statement break, no SQL comments
+  for (const col of columns) {
+    if (typeof col !== 'string' || BAD_COL.test(col)) {
+      throw new Error(`🛡️ createTable: invalid column definition (stacked statements / comments are not allowed).`);
+    }
+    const firstTok = col.trim().split(/\s+/)[0];
+    if (!IDENT_RE.test(firstTok)) {
+      throw new Error(`🛡️ createTable: invalid column name '${firstTok}' (must be a simple identifier).`);
+    }
+  }
+
   // Type mappings for compatibility
   const typeMap = {
     'INT_PK': isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT',
@@ -526,6 +548,11 @@ async function createPluginTable(tableName, columns) {
   });
 
   const sql = `CREATE TABLE IF NOT EXISTS ${tableName} (\n  ${mappedColumns.join(',\n  ')}\n)`;
+
+  // Defense in depth: the assembled DDL must be a SINGLE statement (no stacked queries reached exec).
+  if (sql.replace(/;\s*$/, '').includes(';')) {
+    throw new Error('🛡️ createTable: refusing to run multiple statements.');
+  }
 
   if (driverAsync) {
     await driverAsync.exec(sql);

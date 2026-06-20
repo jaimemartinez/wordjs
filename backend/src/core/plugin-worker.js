@@ -53,6 +53,61 @@ try {
     try { parentPort.postMessage({ kind: 'fatal', error: `sandbox guard install failed: ${e && e.message}` }); } catch { /* parent gone */ }
     process.exit(1);
 }
+
+// ESM dynamic import() guard. import('child_process') uses the V8/Node ESM loader, which does NOT go
+// through the CommonJS require proxy (secure-require) — so without this an untrusted plugin could
+// `await import('node:child_process')` and get the REAL module (host RCE). Install a module-resolution
+// hook that rejects sensitive builtins for untrusted plugins. FAIL CLOSED: if no hook API is available,
+// refuse to run rather than leave the import() hole open. (require('module')/('url') here resolve to the
+// real modules: secure-require is installed but no plugin slug is set yet, so its proxies are inactive.)
+if (!global.__WORDJS_PLUGIN_TRUSTED__) {
+    const esmBlocked = new Set([
+        'child_process', 'fs', 'fs/promises', 'net', 'tls', 'dgram', 'http', 'https', 'http2',
+        'dns', 'dns/promises', 'worker_threads', 'vm', 'module', 'inspector', 'repl', 'test',
+        'trace_events', 'cluster', 'async_hooks', 'v8'
+    ]);
+    let esmGuardInstalled = false;
+    try {
+        const nodeModule = require('module');
+        if (typeof nodeModule.registerHooks === 'function') {
+            // Node 22.15+/23.5+: synchronous, in-thread resolution hook.
+            nodeModule.registerHooks({
+                resolve(specifier, context, nextResolve) {
+                    const bare = String(specifier).replace(/^node:/, '');
+                    if (esmBlocked.has(bare)) {
+                        throw new Error(`[sandbox] import('${specifier}') is blocked for untrusted plugin '${slug}'`);
+                    }
+                    return nextResolve(specifier, context);
+                }
+            });
+            esmGuardInstalled = true;
+        } else if (typeof nodeModule.register === 'function') {
+            // Node 18.19+/20.6+: async off-thread hooks via a data: URL module (no extra file to ship).
+            const { pathToFileURL } = require('url');
+            const hookSrc =
+                'let blocked = new Set();\n' +
+                'export async function initialize(d){ blocked = new Set(d.blocked); }\n' +
+                'export async function resolve(spec, ctx, next){\n' +
+                '  const bare = String(spec).replace(/^node:/, "");\n' +
+                '  if (blocked.has(bare)) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for untrusted plugin");\n' +
+                '  return next(spec, ctx);\n' +
+                '}';
+            nodeModule.register(
+                'data:text/javascript,' + encodeURIComponent(hookSrc),
+                pathToFileURL(__filename).href,
+                { data: { blocked: [...esmBlocked] } }
+            );
+            esmGuardInstalled = true;
+        }
+    } catch {
+        esmGuardInstalled = false;
+    }
+    if (!esmGuardInstalled) {
+        try { parentPort.postMessage({ kind: 'fatal', error: 'sandbox ESM import() guard unavailable — Node >= 18.19 is required to safely run untrusted plugins' }); } catch { /* parent gone */ }
+        process.exit(1);
+    }
+}
+
 const { runWithContext } = require(path.join(coreDir, 'plugin-context'));
 
 let _id = 0;
@@ -209,10 +264,20 @@ parentPort.on('message', async (msg) => {
 // Load + initialize the plugin inside its context.
 (async () => {
     try {
-        const plugin = require(entryFile);
-        if (typeof plugin.init === 'function') {
-            await runWithContext(slug, () => plugin.init(wordjs));
-        }
+        // Fail-closed attribution: from here on, any code in this worker with no ALS context and no
+        // plugin stack frame (the entry's top-level, or a detached setImmediate/queueMicrotask/
+        // Promise.then callback) is still attributed to THIS plugin by getEffectivePlugin(), so the
+        // runtime guards never treat it as unguarded "core". Set only NOW so the worker's own core
+        // bootstrap above loaded its modules unproxied.
+        global.__WORDJS_PLUGIN_SLUG__ = slug;
+        // Require AND init the entry INSIDE the plugin context (ALS), so even the entry's top-level
+        // code is sandboxed (previously require(entryFile) ran with an empty context).
+        await runWithContext(slug, async () => {
+            const plugin = require(entryFile);
+            if (typeof plugin.init === 'function') {
+                await plugin.init(wordjs);
+            }
+        });
         parentPort.postMessage({ kind: 'ready' });
     } catch (e) {
         parentPort.postMessage({ kind: 'init-error', error: String(e && e.stack || e) });

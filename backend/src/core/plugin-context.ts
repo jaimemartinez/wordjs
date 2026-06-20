@@ -114,7 +114,19 @@ function getPluginFromStack(stack?: string): string | null {
  * guards (secure-require, permission checks) so detached plugin code cannot escape the sandbox.
  */
 function getEffectivePlugin(): string | null {
-    return getCurrentPlugin() || getPluginFromStack();
+    const ctx = getCurrentPlugin() || getPluginFromStack();
+    if (ctx) return ctx;
+    // FAIL-CLOSED inside an isolated plugin worker: the worker runs ONE plugin and contains NO
+    // legitimate "core" code (core lives on the host, reached only via the RPC bridge). So any code
+    // with no ALS context AND no plugin stack frame — the entry's top-level, or a detached callback
+    // (setImmediate / queueMicrotask / Promise.then, or one whose stack was deliberately stripped) —
+    // is STILL the worker's plugin and must stay sandboxed, never fall through to unguarded "core"
+    // access. On the MAIN thread, null genuinely means core, so we keep returning null there.
+    const g: any = (typeof global !== 'undefined') ? global : {};
+    if (g.__WORDJS_ISOLATED__ && typeof g.__WORDJS_PLUGIN_SLUG__ === 'string') {
+        return g.__WORDJS_PLUGIN_SLUG__;
+    }
+    return null;
 }
 
 /**
