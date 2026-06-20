@@ -1,14 +1,16 @@
 /**
- * WordJS - Isolated Plugin Host (worker_threads, cross-platform, no native deps)
+ * WordJS - Isolated Plugin Host (child_process, OS-level isolation, no native deps)
  *
- * Loads a plugin marked `"isolated": true` in a worker (separate V8 isolate). The plugin reaches
- * core ONLY via the `wordjs` bridge, whose calls are RPC'd here and run through createPluginApi()
- * (permission-checked, in the plugin's context). Hooks/filters the plugin registers become shims
- * in the real hook system that call back into the isolate. The host's heap (secrets, DB handle,
- * other plugins) is never exposed to the isolate. See documentation/plugin-isolation-proposal.md.
+ * Loads a plugin marked `"isolated": true` in a SEPARATE OS PROCESS (child_process.fork) — its own
+ * heap, event loop, and OS memory cap, so a crash, OOM, or heap escape is contained to the child and
+ * never reaches the host (a worker_thread, by contrast, shared the host heap/rss). The plugin reaches
+ * core ONLY via the `wordjs` bridge, whose calls are RPC'd here (over the IPC channel) and run through
+ * createPluginApi() (permission-checked, in the plugin's context). Hooks/filters the plugin registers
+ * become shims in the real hook system that call back into the isolate. The host's heap (secrets, DB
+ * handle, other plugins) is unreachable from the child. See documentation/plugin-isolation-proposal.md.
  */
 
-const { Worker } = require('worker_threads');
+const { fork } = require('child_process');
 const path = require('path');
 const { createPluginApi } = require('./plugin-api');
 const { runWithContext } = require('./plugin-context');
@@ -18,29 +20,9 @@ const { addShortcode, removeShortcode } = require('./shortcodes');
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
 
-// Host-side memory watchdog. A worker can allocate off-heap (Buffer/ArrayBuffer) in a tight SYNCHRONOUS
-// loop that blocks its OWN thread, so the in-worker watchdog never fires and the V8 resourceLimits
-// (heap-only) don't cover external memory. Workers share the host PROCESS rss/external, so a watchdog on
-// the HOST event loop (not blocked by the worker's sync loop) can observe the growth and terminate
-// isolated workers before the host OOM-crashes. (The decisive fix for off-heap caps is OS-level
-// isolation — child_process + cgroup/rlimit — tracked in POSITIONING.md.)
-const activeIsolateWorkers = new Set<any>();
-let hostMemWatch: any = null;
-function startHostMemoryWatch() {
-    if (hostMemWatch) return;
-    const EXTERNAL_BUDGET = 1024 * 1024 * 1024; // 1 GB external across all isolates (last-resort cap)
-    hostMemWatch = setInterval(() => {
-        try {
-            const m = process.memoryUsage();
-            if ((m.external || 0) > EXTERNAL_BUDGET && activeIsolateWorkers.size) {
-                console.error(`[Sandbox] host external memory ${m.external} over budget — terminating isolated workers (DoS containment).`);
-                for (const w of activeIsolateWorkers) { try { w.terminate(); } catch { /* gone */ } }
-                activeIsolateWorkers.clear();
-            }
-        } catch { /* ignore */ }
-    }, 1000);
-    if (hostMemWatch.unref) hostMemWatch.unref();
-}
+// (The former host-side memory watchdog is gone: with child_process each untrusted plugin runs in its
+// OWN OS process, so off-heap growth is the CHILD's rss — bounded per-child in loadIsolatedPlugin —
+// not the host's. A worker_thread shared the host rss and could OOM-crash it; a child cannot.)
 
 // Trust = shipped default OR operator-toggled (admin UI). See core/plugin-trust.
 function isTrustedPlugin(slug: string): boolean {
@@ -70,18 +52,51 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
         const workerEnv: Record<string, string> = {};
         for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
-        const worker = new Worker(WORKER_FILE, {
-            // isTrusted is resolved HERE (host) at spawn and re-resolved on every reload (the trust
-            // toggle reloads the worker), so the worker's network policy always matches current trust.
-            // It must come from the host: trustedPlugins()/options can't be read inside the worker.
-            workerData: { slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) },
-            execArgv,
+        // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS (child_process.fork), not a
+        // worker_thread. A worker shares the host process's heap+rss, so an off-heap (Buffer) OOM or a
+        // hard V8 crash in the worker takes down the HOST; a forked child has its OWN process + heap, so
+        // a crash, OOM, or heap escape is contained to the child and the host always survives. isTrusted
+        // is resolved HERE at spawn (re-resolved on reload via the trust toggle) so the child's network
+        // policy matches current trust; config travels in argv[2] (no secrets); env is the same
+        // secret-free allowlist; --max-old-space-size caps the JS heap, the host RSS poll caps total mem.
+        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) });
+        const child = fork(WORKER_FILE, [childCfg], {
+            execArgv: [...execArgv, '--max-old-space-size=256'],
             env: workerEnv,
-            resourceLimits: { maxOldGenerationSizeMb: 256 } // cap isolate HEAP (off-heap: host watchdog)
+            stdio: ['inherit', 'inherit', 'inherit', 'ipc'], // fork adds IPC; inherit stdio for plugin logs
+            // structured-clone IPC (preserves Buffer/Date/Map/etc.) — JSON (the fork default) would lose
+            // them, whereas the worker_threads postMessage path used structured clone. Keep fidelity.
+            serialization: 'advanced',
         });
-        activeIsolateWorkers.add(worker);
-        startHostMemoryWatch();
-        worker.on('exit', () => activeIsolateWorkers.delete(worker));
+        // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
+        const worker: any = {
+            postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
+            terminate: () => { try { child.kill('SIGKILL'); } catch { /* already gone */ } },
+            on: child.on.bind(child),
+            _child: child,
+        };
+        let settled = false; // load Promise settled (ready / init-error / early exit)
+        // Per-child memory cap on the HOST event loop — NOT blocked by the child's synchronous loops, and
+        // the child's memory is its OWN process rss. Linux: poll /proc/<pid>/statm and SIGKILL over budget;
+        // other platforms rely on the in-child watchdog + process separation (the host can't OOM either
+        // way). A kernel-enforced cgroup/rlimit cap is the stronger future option (see POSITIONING.md).
+        const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
+        let rssPoll: any = null;
+        if (process.platform === 'linux' && child.pid) {
+            const fsmod = require('fs');
+            const statmPath = `/proc/${child.pid}/statm`;
+            rssPoll = setInterval(() => {
+                try {
+                    const rssPages = parseInt(String(fsmod.readFileSync(statmPath, 'utf8')).split(' ')[1], 10) || 0;
+                    if (rssPages * 4096 > RSS_BUDGET_BYTES) {
+                        console.error(`[Isolate ${slug}] killed: child rss over budget (${rssPages * 4096} bytes).`);
+                        try { child.kill('SIGKILL'); } catch { /* gone */ }
+                    }
+                } catch { /* child gone / statm unavailable */ }
+            }, 500);
+            if (rssPoll.unref) rssPoll.unref();
+        }
+        child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); });
         const api = createPluginApi(slug);
         let invokeId = 0;
         // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't
@@ -197,8 +212,10 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
 
         worker.on('message', async (msg: any) => {
             if (msg.kind === 'ready') {
+                settled = true;
                 resolve({ worker, slug });
             } else if (msg.kind === 'init-error') {
+                settled = true;
                 reject(new Error(msg.error));
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
@@ -381,13 +398,16 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
         };
 
-        worker.on('error', (err: any) => { console.error(`[Isolate ${slug}] worker error:`, err.message); reject(err); });
+        worker.on('error', (err: any) => { console.error(`[Isolate ${slug}] child error:`, err && err.message); if (!settled) { settled = true; reject(err); } });
         worker.on('exit', (code: number) => {
-            // Only act if WE are still the registered isolate — on reload a fresh worker has already
-            // replaced us, and tearing down here would rip out the new worker's registrations.
+            // Only act if WE are still the registered isolate — on reload a fresh child has already
+            // replaced us, and tearing down here would rip out the new child's registrations.
             const cur = isolates.get(slug);
             if (cur && cur.worker === worker) { isolates.delete(slug); try { teardown(); } catch { /* */ } }
-            if (code !== 0) console.warn(`[Isolate ${slug}] worker exited with code ${code}`);
+            if (code !== 0) console.warn(`[Isolate ${slug}] child exited with code ${code}`);
+            // child_process: a crash DURING init emits 'exit' (not 'error'); reject the load Promise so it
+            // doesn't hang forever if the child died before sending 'ready' / 'init-error'.
+            if (!settled) { settled = true; reject(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`)); }
         });
 
         isolates.set(slug, { worker, teardown, entryFile });
