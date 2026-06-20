@@ -117,7 +117,7 @@ function probeCgroupCap(): Promise<boolean> {
         // stays alive), then we tear it down via the SAME path real teardown uses and require an exit —
         // so cgroup mode activates ONLY if spawn + IPC + clean kill all work on THIS host.
         const src = 'if(!process.send){process.exit(3)}process.send("ok");setInterval(function(){},1e9)';
-        return await new Promise<boolean>((res) => {
+        const ok = await new Promise<boolean>((res) => {
             let proc: any, gotOk = false, done = false;
             const finish = (v: boolean) => { if (!done) { done = true; res(v); } };
             const overall = setTimeout(() => finish(false), 20000);
@@ -137,6 +137,9 @@ function probeCgroupCap(): Promise<boolean> {
             proc.on('error', () => { clearTimeout(overall); finish(false); });
             proc.on('exit', () => { clearTimeout(overall); finish(gotOk); }); // exit AFTER ok ⇒ kill worked
         });
+        if (ok) console.log('[Sandbox] preventive cgroup memory cap ACTIVE (systemd-run --user --scope, MemoryMax=768 MB per child).');
+        else console.warn('[Sandbox] sandbox.useCgroupMemoryCap is set but the cgroup probe failed (no usable --user scope) — falling back to the RSS poll.');
+        return ok;
     })();
     return cgroupProbe;
 }
