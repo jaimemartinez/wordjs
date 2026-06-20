@@ -10,7 +10,7 @@
  * handle, other plugins) is unreachable from the child. See documentation/plugin-isolation-proposal.md.
  */
 
-const { fork } = require('child_process');
+const { fork, spawn } = require('child_process');
 const path = require('path');
 const { createPluginApi } = require('./plugin-api');
 const { runWithContext } = require('./plugin-context');
@@ -23,6 +23,56 @@ const isolates = new Map<string, any>();
 // (The former host-side memory watchdog is gone: with child_process each untrusted plugin runs in its
 // OWN OS process, so off-heap growth is the CHILD's rss — bounded per-child in loadIsolatedPlugin —
 // not the host's. A worker_thread shared the host rss and could OOM-crash it; a child cannot.)
+
+// --- KERNEL-ENFORCED memory cap (RLIMIT_AS via `ulimit -v`) ---------------------------------------
+// We prefer a KERNEL cap on the child's address space over a pure userspace poll: it holds even if the
+// host event loop is wedged, it is the only cap on platforms without /proc (e.g. macOS), and it bounds
+// off-heap (Buffer/ArrayBuffer) growth the V8 heap flag can't. The wrapper `sh -c 'ulimit -v N; exec
+// node …'` preserves the fork-style IPC channel — the inherited NODE_CHANNEL_FD + its fd survive the
+// shell's `exec`, so the exec'd node attaches IPC exactly as a forked child would. V8's pointer-
+// compression cage reserves a large VIRTUAL range (~4 GB) that RLIMIT_AS counts, so the cap must be
+// GENEROUS — it is a coarse virtual *backstop* (bounds pathological allocation; kernel-enforced even if
+// the host loop is wedged; the only cap on /proc-less platforms), NOT a tight RSS cap. The precise
+// resident cap stays the /proc poll below. We probe ASCENDING and cache the smallest limit that clears
+// the cage AND a working-set headroom so legit plugins aren't virtual-OOM'd (auto-tunes per platform).
+// Result (cached Promise): null = unavailable (→ plain fork + /proc poll), number = RLIMIT_AS in KiB.
+let osCapProbe: Promise<number | null> | undefined;
+function probeOsMemoryCap(): Promise<number | null> {
+    if (osCapProbe) return osCapProbe;
+    osCapProbe = (async () => {
+        if (process.platform === 'win32') return null; // no POSIX ulimit / RLIMIT_AS
+        let floorMb = 4096;
+        try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) floorMb = Math.max(2048, s.addressSpaceCapMb); } catch { /* default */ }
+        const candidatesMb = [floorMb, 6144, 8192, 16384].filter((v, i, a) => v >= floorMb && a.indexOf(v) === i).sort((a, b) => a - b);
+        // The probe child boots node UNDER the candidate RLIMIT_AS through the SAME shell wrapper the real
+        // load uses, and sends ONE IPC message. We accept a cap only if node both starts AND its IPC
+        // channel survives the shell `exec` (process.send works) — this self-validates the kernel cap +
+        // IPC-preservation on the ACTUAL host, so the path needs no per-platform assumptions and falls
+        // back cleanly to plain fork wherever it doesn't hold.
+        // Exit only AFTER the IPC write flushes (send callback) — exiting synchronously after send would
+        // drop the message and falsely fail the probe even where the cap works. Backstop self-exit so a
+        // stuck candidate fails fast rather than waiting out the outer spawn timeout.
+        const probeSrc = 'if(!process.send){process.exit(3)}process.send("ok",function(){process.exit(0)});setTimeout(function(){process.exit(4)},5000)';
+        for (const mb of candidatesMb) {
+            const kb = mb * 1024; // `ulimit -v` unit is KiB
+            const ok = await new Promise<boolean>((res) => {
+                let c: any, got = false, done = false;
+                const finish = (v: boolean) => { if (!done) { done = true; try { c && c.kill(); } catch { /* */ } res(v); } };
+                try {
+                    c = spawn('sh', ['-c', `ulimit -v ${kb} 2>/dev/null; exec "$0" -e "$1"`, process.execPath, probeSrc],
+                        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 10000 });
+                } catch { return res(false); }
+                c.on('message', (m: any) => { if (m === 'ok') got = true; });
+                c.on('error', () => finish(false));
+                c.on('exit', (code: number) => finish(got && code === 0));
+            });
+            if (ok) { console.log(`[Sandbox] kernel memory cap active: RLIMIT_AS ${mb} MB per isolated child.`); return kb; }
+        }
+        console.log('[Sandbox] kernel rlimit cap unavailable here; relying on /proc RSS poll + process separation.');
+        return null;
+    })();
+    return osCapProbe;
+}
 
 // Trust = shipped default OR operator-toggled (admin UI). See core/plugin-trust.
 function isTrustedPlugin(slug: string): boolean {
@@ -39,7 +89,10 @@ function callApi(api: any, method: string, args: any[]) {
     return fn.apply(ctx, args);
 }
 
-function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
+async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
+    // Resolve the kernel-cap capability ONCE (cached) before building the child, so the spawn path is
+    // chosen synchronously inside the executor below.
+    const capKb = await probeOsMemoryCap();
     return new Promise((resolve, reject) => {
         // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
@@ -52,22 +105,39 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
         const workerEnv: Record<string, string> = {};
         for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
-        // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS (child_process.fork), not a
-        // worker_thread. A worker shares the host process's heap+rss, so an off-heap (Buffer) OOM or a
-        // hard V8 crash in the worker takes down the HOST; a forked child has its OWN process + heap, so
-        // a crash, OOM, or heap escape is contained to the child and the host always survives. isTrusted
-        // is resolved HERE at spawn (re-resolved on reload via the trust toggle) so the child's network
-        // policy matches current trust; config travels in argv[2] (no secrets); env is the same
-        // secret-free allowlist; --max-old-space-size caps the JS heap, the host RSS poll caps total mem.
+        // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS, not a worker_thread. A worker
+        // shares the host process's heap+rss, so an off-heap (Buffer) OOM or a hard V8 crash in the worker
+        // takes down the HOST; a child has its OWN process + heap, so a crash, OOM, or heap escape is
+        // contained to the child and the host always survives. isTrusted is resolved HERE at spawn
+        // (re-resolved on reload via the trust toggle) so the child's network policy matches current
+        // trust; config travels in argv[2] (no secrets); env is the same secret-free allowlist.
         const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) });
-        const child = fork(WORKER_FILE, [childCfg], {
-            execArgv: [...execArgv, '--max-old-space-size=256'],
-            env: workerEnv,
-            stdio: ['inherit', 'inherit', 'inherit', 'ipc'], // fork adds IPC; inherit stdio for plugin logs
-            // structured-clone IPC (preserves Buffer/Date/Map/etc.) — JSON (the fork default) would lose
-            // them, whereas the worker_threads postMessage path used structured clone. Keep fidelity.
-            serialization: 'advanced',
-        });
+        const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; rlimit/poll cap TOTAL memory
+        // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
+        // (and a raw JSON channel) would lose them — match the worker_threads postMessage fidelity.
+        const IPC_STDIO: any = ['inherit', 'inherit', 'inherit', 'ipc']; // inherit stdio for plugin logs
+        let child: any;
+        if (capKb) {
+            // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
+            // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
+            // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
+            // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
+            const nodeArgv = [process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
+            child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
+                stdio: IPC_STDIO,
+                serialization: 'advanced',
+                env: workerEnv,
+            });
+        } else {
+            // No kernel cap available (Windows, or sh/rlimit absent): plain fork. Process separation still
+            // protects the host; the /proc RSS poll below caps memory where available.
+            child = fork(WORKER_FILE, [childCfg], {
+                execArgv: [...execArgv, HEAP_FLAG],
+                env: workerEnv,
+                stdio: IPC_STDIO,
+                serialization: 'advanced',
+            });
+        }
         // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
         const worker: any = {
             postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
@@ -76,10 +146,12 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             _child: child,
         };
         let settled = false; // load Promise settled (ready / init-error / early exit)
-        // Per-child memory cap on the HOST event loop — NOT blocked by the child's synchronous loops, and
-        // the child's memory is its OWN process rss. Linux: poll /proc/<pid>/statm and SIGKILL over budget;
-        // other platforms rely on the in-child watchdog + process separation (the host can't OOM either
-        // way). A kernel-enforced cgroup/rlimit cap is the stronger future option (see POSITIONING.md).
+        // Precise per-child RSS cap, layered UNDER the kernel RLIMIT_AS above (the rlimit is a coarse
+        // virtual ceiling that must clear V8's cage; this poll enforces the real resident-set budget).
+        // It runs on the HOST event loop — NOT blocked by the child's synchronous loops — and reads the
+        // child's OWN process rss. Linux: poll /proc/<pid>/statm and SIGKILL over budget; other platforms
+        // rely on the rlimit (if any) + in-child watchdog + process separation (the host can't OOM either
+        // way). A kernel cgroup MemoryMax is the stronger future RSS primitive (see POSITIONING.md).
         const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
         let rssPoll: any = null;
         if (process.platform === 'linux' && child.pid) {

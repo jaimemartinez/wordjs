@@ -62,7 +62,8 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   plugin can't strip its sandbox by deferring to a later tick.
 - **DoS containment**: process separation (a child OOM / crash / infinite loop cannot take
   down the host — the host event loop is in a different process), a JS-heap cap
-  (`--max-old-space-size`), a host-side per-child **RSS cap** (Linux `/proc` poll → `SIGKILL`),
+  (`--max-old-space-size`), a **kernel `RLIMIT_AS` ceiling** (auto-probed, where the OS
+  supports it) plus a precise host-side per-child **RSS cap** (Linux `/proc` poll → `SIGKILL`),
   RPC timeouts with wedged-child recycling, bounded in-flight bridge calls, upload size limits.
 
 **Residual gaps (state these plainly — they shape the roadmap):**
@@ -72,8 +73,10 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   let the child do — *within its own process* — more than its manifest declares. It can no
   longer reach the host heap or crash the host, but it isn't yet capability-minimal at the
   syscall level.
-- The per-child memory cap is a host-side `/proc` RSS poll on **Linux**; a kernel-enforced
-  **cgroup `MemoryMax` / `rlimit`** is the stronger primitive. On **Windows** the cap is
+- The per-child memory cap now layers a **kernel `RLIMIT_AS` ceiling** (a coarse virtual
+  backstop, auto-probed where the OS supports it and IPC survives the cap) under a precise
+  host-side `/proc` **RSS poll** (Linux). The remaining stronger primitive is a kernel **cgroup
+  `MemoryMax`** (RSS-based, no V8 virtual-cage caveat). On **Windows** the cap is
   process-separation only (no hard limit — a runaway child hits the box, not the host).
 - The strongest remaining hardening — **syscall filtering (seccomp / landlock), dropped uid,
   containers / cgroups** so the child's OS capabilities shrink "by construction" — is **not yet
