@@ -8,6 +8,16 @@
   --font-oswald: "Oswald", sans-serif;
   --color-brand-blue: #306E88;
   --color-brand-cyan: #00A9CE;
+
+  /* WordJS editor — creator palette (generates utilities: bg-editor-primary, text-editor-ink, …) */
+  --color-editor-primary: #2563eb;
+  --color-editor-primary-strong: #1d4ed8;
+  --color-editor-accent: #7c3aed;
+  --color-editor-ink: #0f172a;
+  --color-editor-dim: #64748b;
+  --color-editor-surface: #ffffff;
+  --color-editor-canvas: #f1f5f9;
+  --color-editor-line: #e2e8f0;
 }
 
 /* Sync main content transition with sidebar */
@@ -27,6 +37,34 @@
   }
 }
 
+/* WordJS editor chrome — radius, elevation & semantic surfaces.
+ * Distinct `--ed-*` namespace (NOT the theme/content `--wjs-*` tokens). A `.dark`
+ * ancestor flips these for the editor's dark mode. */
+:root {
+  --ed-radius-sm: 8px;
+  --ed-radius-md: 12px;
+  --ed-radius-lg: 16px;
+  --ed-radius-xl: 20px;
+  --ed-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --ed-shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --ed-shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.12);
+  --ed-surface: #ffffff;
+  --ed-surface-2: #f8fafc;
+  --ed-canvas: #f1f5f9;
+  --ed-line: #e2e8f0;
+  --ed-text: #0f172a;
+  --ed-text-dim: #64748b;
+}
+
+.dark {
+  --ed-surface: #0f172a;
+  --ed-surface-2: #1e293b;
+  --ed-canvas: #0b1220;
+  --ed-line: #334155;
+  --ed-text: #e2e8f0;
+  --ed-text-dim: #94a3b8;
+}
+
 
 html {
   scroll-behavior: smooth;
@@ -40,22 +78,24 @@ body {
   height: 100%;
 }
 
-/* Force Puck library wrapper AND its children to fill height */
+/* Puck composition mode + NATIVE preview (no iframe): the editor's own layout
+ * (the h-screen flex column inside <Puck>) drives sizing, so only make Puck's own
+ * wrapper fill the absolutely-positioned container. We must NOT force
+ * display:flex / flex-direction:column on deeper descendants — that was an
+ * iframe-era hack that, without the iframe, collapsed the natively-rendered page
+ * (hid its menu and killed scrolling). */
 .puck-container,
-.puck-container>div,
-.puck-container>div>div {
-  height: 100% !important;
-  display: flex !important;
-  flex-direction: column !important;
+.puck-container>div {
+  height: 100%;
 }
 
 iframe {
   height: 100% !important;
 }
 
-/* Custom Scrollbar for Sidebar */
+/* Custom Scrollbar for the (light) editor sidebar */
 .custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
+  width: 6px;
 }
 
 .custom-scrollbar::-webkit-scrollbar-track {
@@ -63,12 +103,12 @@ iframe {
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.1);
-  border-radius: 4px;
+  background-color: #cbd5e1;
+  border-radius: 8px;
 }
 
-.custom-scrollbar:hover::-webkit-scrollbar-thumb {
-  background-color: rgba(255, 255, 255, 0.2);
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
 }
 
 /* Modern Scrollbar for Light Areas */
@@ -194,21 +234,4 @@ iframe {
 
 .animate-in {
   animation: fade-in 0.4s ease-out, zoom-in 0.4s ease-out, slide-in-bottom 0.4s ease-out;
-}
-
-.custom-scrollbar::-webkit-scrollbar {
-  width: 4px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background: #e5e7eb;
-  border-radius: 10px;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #d1d5db;
 }
