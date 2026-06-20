@@ -16,21 +16,25 @@ export default function Header({ disableSticky = false }: HeaderProps) {
     const headerRef = useRef<HTMLElement>(null);
 
     useEffect(() => {
-        const handleScroll = () => {
-            // Use the window of the document where header is rendered (handles iframes)
-            const targetWindow = headerRef.current?.ownerDocument?.defaultView || window;
-            setIsScrolled(targetWindow.scrollY > 10);
+        // Only react to scroll when sticky (full page / editor preview).
+        if (disableSticky) return;
+        const targetWindow = headerRef.current?.ownerDocument?.defaultView || window;
+        const handleScroll = (e?: Event) => {
+            // The scroll container is the window on the live site, but inside the editor's NATIVE
+            // preview the canvas scrolls in an overflow:auto <div>. Scroll events don't bubble, so a
+            // capturing listener on the window catches BOTH; read the offset from whichever element
+            // actually scrolled (the div in the editor, document/window on the live site).
+            const target = e?.target as any;
+            let top = targetWindow.scrollY || 0;
+            if (target && target.nodeType === 1 && target !== targetWindow.document?.documentElement && typeof target.scrollTop === "number") {
+                top = target.scrollTop;
+            }
+            setIsScrolled(top > 10);
         };
-        // Only add scroll listener if sticky (full page)
-        if (!disableSticky) {
-            const targetWindow = headerRef.current?.ownerDocument?.defaultView || window;
-            targetWindow.addEventListener("scroll", handleScroll);
-
-            // Check initial scroll
-            handleScroll();
-
-            return () => targetWindow.removeEventListener("scroll", handleScroll);
-        }
+        // capture:true lets this window-level listener see scroll from nested scrollers too.
+        targetWindow.addEventListener("scroll", handleScroll, { capture: true, passive: true });
+        handleScroll();
+        return () => targetWindow.removeEventListener("scroll", handleScroll, { capture: true } as any);
     }, [disableSticky]);
 
     // Close mobile menu on resize to desktop
