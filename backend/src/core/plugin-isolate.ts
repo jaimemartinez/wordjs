@@ -18,6 +18,30 @@ const { addShortcode, removeShortcode } = require('./shortcodes');
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
 
+// Host-side memory watchdog. A worker can allocate off-heap (Buffer/ArrayBuffer) in a tight SYNCHRONOUS
+// loop that blocks its OWN thread, so the in-worker watchdog never fires and the V8 resourceLimits
+// (heap-only) don't cover external memory. Workers share the host PROCESS rss/external, so a watchdog on
+// the HOST event loop (not blocked by the worker's sync loop) can observe the growth and terminate
+// isolated workers before the host OOM-crashes. (The decisive fix for off-heap caps is OS-level
+// isolation — child_process + cgroup/rlimit — tracked in POSITIONING.md.)
+const activeIsolateWorkers = new Set<any>();
+let hostMemWatch: any = null;
+function startHostMemoryWatch() {
+    if (hostMemWatch) return;
+    const EXTERNAL_BUDGET = 1024 * 1024 * 1024; // 1 GB external across all isolates (last-resort cap)
+    hostMemWatch = setInterval(() => {
+        try {
+            const m = process.memoryUsage();
+            if ((m.external || 0) > EXTERNAL_BUDGET && activeIsolateWorkers.size) {
+                console.error(`[Sandbox] host external memory ${m.external} over budget — terminating isolated workers (DoS containment).`);
+                for (const w of activeIsolateWorkers) { try { w.terminate(); } catch { /* gone */ } }
+                activeIsolateWorkers.clear();
+            }
+        } catch { /* ignore */ }
+    }, 1000);
+    if (hostMemWatch.unref) hostMemWatch.unref();
+}
+
 // Trust = shipped default OR operator-toggled (admin UI). See core/plugin-trust.
 function isTrustedPlugin(slug: string): boolean {
     try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
@@ -39,20 +63,58 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
         // execArgv allowlist.
         const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
+        // Pass an explicit, secret-free env ALLOWLIST instead of inheriting the full host environment:
+        // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
+        // (JWT_SECRET, DB creds, STRIPE_KEY, …) must never enter the worker's process.env. This is
+        // default-deny, unlike the in-worker name-pattern denylist (getProtectedEnv).
+        const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
+        const workerEnv: Record<string, string> = {};
+        for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) workerEnv[k] = process.env[k] as string; }
         const worker = new Worker(WORKER_FILE, {
             // isTrusted is resolved HERE (host) at spawn and re-resolved on every reload (the trust
             // toggle reloads the worker), so the worker's network policy always matches current trust.
             // It must come from the host: trustedPlugins()/options can't be read inside the worker.
             workerData: { slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) },
             execArgv,
-            resourceLimits: { maxOldGenerationSizeMb: 256 } // cap isolate memory (DoS containment)
+            env: workerEnv,
+            resourceLimits: { maxOldGenerationSizeMb: 256 } // cap isolate HEAP (off-heap: host watchdog)
         });
+        activeIsolateWorkers.add(worker);
+        startHostMemoryWatch();
+        worker.on('exit', () => activeIsolateWorkers.delete(worker));
         const api = createPluginApi(slug);
         let invokeId = 0;
         // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't
         // flood the host with privileged RPCs (each runs a permission-checked bridge call here).
         let inflightCalls = 0;
+        let callBackpressureRejections = 0;
         const MAX_INFLIGHT_CALLS = 200;
+
+        // Registration caps: 'call' is bounded by MAX_INFLIGHT_CALLS, but the fire-and-forget
+        // register-* kinds (hooks/routes/shortcodes) were unbounded — a plugin could spam them to
+        // exhaust host memory (accumulated shims) and flood the event loop. Cap per kind, and hard-kill
+        // a worker that keeps spamming after being capped (event-loop-flood DoS).
+        const MAX_HOOKS = 500, MAX_ROUTES = 200, MAX_SHORTCODES = 200;
+        const MAX_PER_HOOK = 16; // cap callbacks on a SINGLE hook name (latency-amplification DoS)
+        const hookNameCounts = new Map<string, number>();
+        let registrationAttempts = 0;
+        let registrationCapWarned = false;
+        const registrationRejected = (arr: any[], max: number, kind: string): boolean => {
+            registrationAttempts++;
+            if (registrationAttempts > 10000) {
+                console.error(`[Isolate ${slug}] terminated: registration flood (${registrationAttempts} attempts).`);
+                try { worker.terminate(); } catch { /* already gone */ }
+                return true;
+            }
+            if (arr.length >= max) {
+                if (!registrationCapWarned) {
+                    registrationCapWarned = true;
+                    console.warn(`[Isolate ${slug}] registration cap reached (${kind} >= ${max}); ignoring further registrations (possible DoS).`);
+                }
+                return true;
+            }
+            return false;
+        };
 
         // Every host→worker RPC carries a hard timeout: a plugin that never replies (hang or DoS)
         // must not pin an HTTP request open or leak a pending entry forever. rpcSettle clears it.
@@ -60,18 +122,56 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         const rpcSend = (map: Map<number, any>, message: any): Promise<any> => new Promise((res, rej) => {
             const id = ++invokeId;
             const timer = setTimeout(() => {
-                if (map.has(id)) { map.delete(id); rej(new Error(`Isolated plugin '${slug}' RPC timed out`)); }
+                if (map.has(id)) {
+                    map.delete(id);
+                    rej(new Error(`Isolated plugin '${slug}' RPC timed out`));
+                    // A handler that blew the timeout is wedged (hang / synchronous spin) — recycle the
+                    // worker so it can't keep leaking pending requests or pinning host timers/sockets.
+                    console.error(`[Isolate ${slug}] terminated: RPC timeout (wedged handler).`);
+                    try { worker.terminate(); } catch { /* already gone */ }
+                }
             }, RPC_TIMEOUT_MS);
             if ((timer as any).unref) (timer as any).unref();
             map.set(id, { res, rej, timer });
             worker.postMessage({ id, ...message });
         });
+        // Cap a single worker->host reply payload to protect the HOST heap (the worker is also
+        // memory-capped on its own side, so this is the second bound). Cheap size check for string/
+        // buffer replies; object replies are bounded by the worker's memory watchdog.
+        const MAX_REPLY_BYTES = 32 * 1024 * 1024;
+        const replySize = (v: any): number => {
+            if (typeof v === 'string') return Buffer.byteLength(v);
+            if (Buffer.isBuffer(v) || v instanceof Uint8Array) return (v as any).byteLength || (v as any).length || 0;
+            if (v && typeof v === 'object') {
+                // Bounded structural estimate so a giant nested object/array reply ALSO trips the cap
+                // (it was already structured-cloned onto the host; we reject + recycle to stop repeats).
+                let bytes = 0, n = 0;
+                const stack: any[] = [v];
+                while (stack.length) {
+                    const cur = stack.pop();
+                    if (++n > 5_000_000) return Number.MAX_SAFE_INTEGER; // pathological node count → over budget
+                    if (typeof cur === 'string') bytes += cur.length;
+                    else if (cur && typeof cur === 'object') { for (const k in cur) stack.push((cur as any)[k]); bytes += 16; }
+                    else bytes += 8;
+                    if (bytes > MAX_REPLY_BYTES) return bytes;
+                }
+                return bytes;
+            }
+            return 0;
+        };
         const rpcSettle = (map: Map<number, any>, msg: any, value: any) => {
             const p = map.get(msg.id);
             if (!p) return;
             map.delete(msg.id);
             clearTimeout(p.timer);
-            msg.ok ? p.res(value) : p.rej(new Error(msg.error));
+            if (!msg.ok) { p.rej(new Error(msg.error)); return; }
+            if (replySize(value) > MAX_REPLY_BYTES) {
+                console.error(`[Isolate ${slug}] terminated: oversized RPC reply.`);
+                try { worker.terminate(); } catch { /* already gone */ }
+                p.rej(new Error(`Isolated plugin '${slug}' returned an oversized reply`));
+                return;
+            }
+            p.res(value);
         };
 
         const pendingInvoke = new Map<number, any>();
@@ -103,6 +203,14 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
                 if (inflightCalls >= MAX_INFLIGHT_CALLS) {
+                    // Over-limit calls are cheap-rejected, but a worker that floods far faster than the
+                    // host can drain (thousands of calls while pinned at the limit) is hammering the
+                    // event loop — terminate it as abusive (DoS containment, like registrationRejected).
+                    if (++callBackpressureRejections > 50000) {
+                        console.error(`[Isolate ${slug}] terminated: bridge-call flood (${callBackpressureRejections} over-limit calls).`);
+                        try { worker.terminate(); } catch { /* already gone */ }
+                        return;
+                    }
                     worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: `Isolated plugin '${slug}' exceeded concurrent bridge-call limit` });
                     return;
                 }
@@ -116,8 +224,32 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                     inflightCalls--;
                 }
             } else if (msg.kind === 'register') {
-                // Install a shim in the real hook system that calls back into the isolate.
-                const shim = (...args: any[]) => invokeWorker(msg.cbId, args);
+                if (registrationRejected(registeredHooks, MAX_HOOKS, 'hooks')) return;
+                // Cap callbacks PER hook NAME too: many shims on one core hook (e.g. the_content)
+                // amplify per-request latency even with the per-shim timeout below.
+                const hookCnt = (hookNameCounts.get(msg.hook) || 0) + 1;
+                hookNameCounts.set(msg.hook, hookCnt);
+                if (hookCnt > MAX_PER_HOOK) {
+                    console.warn(`[Isolate ${slug}] too many callbacks on hook '${msg.hook}' (cap ${MAX_PER_HOOK}) — ignoring further.`);
+                    return;
+                }
+                // Install a shim in the real hook system that calls back into the isolate. Cap the
+                // latency a plugin shim can inject into a CORE hook: race the worker call against a short
+                // timeout that falls back to the unchanged value (filters) / no-op (actions), so a slow
+                // or hung plugin can't add up to RPC_TIMEOUT_MS (30s) to every request that fires the
+                // hook. The underlying RPC still times out and recycles the wedged worker separately.
+                const HOOK_SHIM_TIMEOUT_MS = 2000;
+                const shim = (...args: any[]) => {
+                    let t: any;
+                    const fallback = new Promise((resolve) => {
+                        t = setTimeout(() => resolve(args[0]), HOOK_SHIM_TIMEOUT_MS);
+                        if (t.unref) t.unref();
+                    });
+                    return Promise.race([
+                        invokeWorker(msg.cbId, args).then((v) => { clearTimeout(t); return v; }, () => { clearTimeout(t); return args[0]; }),
+                        fallback,
+                    ]);
+                };
                 registeredHooks.push({ hook: msg.hook, type: msg.hookType, shim });
                 runWithContext(slug, () => {
                     if (msg.hookType === 'filter') hooks.addFilter(msg.hook, shim, msg.priority);
@@ -126,6 +258,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'invoke-reply') {
                 rpcSettle(pendingInvoke, msg, msg.value);
             } else if (msg.kind === 'register-route') {
+                if (registrationRejected(registeredRoutes, MAX_ROUTES, 'routes')) return;
                 // Mount an Express route owned by the host; run the real auth middleware, then forward
                 // a serialized request to the isolate and write back its response descriptor.
                 const { getApp } = require('./appRegistry');
@@ -185,6 +318,7 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
             } else if (msg.kind === 'route-reply') {
                 rpcSettle(pendingRoute, msg, msg.response);
             } else if (msg.kind === 'register-shortcode') {
+                if (registrationRejected(registeredShortcodes, MAX_SHORTCODES, 'shortcodes')) return;
                 // Register a shortcode shim that forwards {attrs,content,tag} to the isolate and
                 // resolves its HTML asynchronously (works with doShortcodeAsync).
                 const shim = (attrs: any, content: any, tag: any) =>

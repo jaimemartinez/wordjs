@@ -160,12 +160,26 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         // and extractAllTo(..., true) would even overwrite the bundled one — would hand uploaded code
         // the privileged bridge tier (core DB, secret options, absolute routes, mail provider).
         const intendedSlug = (rootDirs.size === 1 ? Array.from(rootDirs)[0] : zipName) as string;
+        // Canonicalize for comparison: trust is keyed on slug, but a case-insensitive / Unicode-variant
+        // filesystem (Windows, macOS) lets 'Mail-Server' overwrite the bundled 'mail-server' dir and
+        // inherit its trust. Compare case-insensitively after NFC normalization.
+        const canonSlug = String(intendedSlug).normalize('NFC').toLowerCase();
         let trustedSlugs: string[] = [];
         try { trustedSlugs = require('../config/app').trustedSystemPlugins || []; } catch { /* */ }
-        if (trustedSlugs.includes(intendedSlug)) {
+        if (trustedSlugs.some(s => String(s).normalize('NFC').toLowerCase() === canonSlug)) {
             fs.unlinkSync(zipPath);
             return res.status(409).json({ error: `Refused: '${intendedSlug}' is a reserved trusted system plugin and cannot be uploaded or overwritten.` });
         }
+        // Refuse a different-cased / Unicode-variant name that collides with an EXISTING plugin dir
+        // (re-uploading the SAME exact name is still allowed = a normal update; a squat that only
+        // differs by case/normalization is rejected so it can't clobber another plugin by path).
+        try {
+            const clash = fs.readdirSync(PLUGINS_DIR).find(d => d !== intendedSlug && d.normalize('NFC').toLowerCase() === canonSlug);
+            if (clash) {
+                fs.unlinkSync(zipPath);
+                return res.status(409).json({ error: `Refused: name collides with existing plugin '${clash}' (case/Unicode squat).` });
+            }
+        } catch { /* PLUGINS_DIR missing — nothing to clobber */ }
 
         if (rootDirs.size === 1) {
             // Extract as is
