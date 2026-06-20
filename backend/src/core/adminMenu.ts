@@ -5,6 +5,11 @@
 
 const adminMenuItems = new Map();
 
+// Cap admin-menu items per plugin: the dedupe below is by `href`, which an untrusted plugin fully
+// controls and can vary infinitely to grow this host-side Map unboundedly (memory DoS). 'core' (host
+// code) is exempt. Generous enough for any legitimate plugin's menu.
+const MAX_ADMIN_MENU_ITEMS = 50;
+
 /**
  * Register an admin menu item
  * @param {string} pluginSlug - The plugin slug (used to remove menu when deactivated)
@@ -19,6 +24,11 @@ function registerAdminMenu(pluginSlug, item) {
 
     // Check if this exact href is already registered for this plugin
     const existingItems = adminMenuItems.get(pluginSlug);
+    // Bound per-plugin accumulation (the href dedupe below is attacker-defeatable). 'core' is host code.
+    if (pluginSlug !== 'core' && existingItems.length >= MAX_ADMIN_MENU_ITEMS) {
+        console.warn(`[Security] admin-menu cap reached for plugin '${pluginSlug}' (${MAX_ADMIN_MENU_ITEMS}); ignoring further items.`);
+        return;
+    }
     const alreadyExists = existingItems.some(existing => existing.href === item.href);
 
     if (!alreadyExists) {

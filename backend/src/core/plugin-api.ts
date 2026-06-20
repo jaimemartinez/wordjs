@@ -265,6 +265,29 @@ function createPluginApi(slug: string) {
                 // (where an .html/.svg could be served to other users). Trusted plugins keep uploads.
                 const target = resolvePluginPath(slug, relPath, false, isTrustedPlugin(slug));
                 if (path.basename(target).toLowerCase() === 'manifest.json') throw new Error('🛡️ manifest.json is immutable.');
+                // (#6) Bound disk use so a write-permitted plugin can't fill the host disk: reject an
+                // oversized single write, and keep the plugin's OWN-dir footprint under a quota so repeated
+                // small writes can't either. (Trusted writes to shared uploads keep only the per-write cap.)
+                const SINGLE_WRITE_MAX = 16 * 1024 * 1024, PLUGIN_DISK_QUOTA = 100 * 1024 * 1024;
+                let writeBytes: number;
+                try { writeBytes = Buffer.byteLength(data); } catch { writeBytes = Buffer.byteLength(String(data ?? '')); }
+                if (writeBytes > SINGLE_WRITE_MAX) throw new Error(`🛡️ write too large (${writeBytes} > ${SINGLE_WRITE_MAX} bytes).`);
+                const baseDir = resolvePluginPath(slug, '.', false, false);
+                if (target === baseDir || target.startsWith(baseDir + path.sep)) {
+                    const du = async (dir: string, cap: number): Promise<number> => {
+                        let total = 0; let entries: any[];
+                        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return 0; }
+                        for (const e of entries) {
+                            const p = path.join(dir, e.name);
+                            try { total += e.isDirectory() ? await du(p, cap - total) : (await fs.promises.stat(p)).size; } catch { /* skip */ }
+                            if (total >= cap) break; // early-exit once over budget
+                        }
+                        return total;
+                    };
+                    let existing = 0; try { existing = (await fs.promises.stat(target)).size; } catch { /* new file */ }
+                    const used = await du(baseDir, PLUGIN_DISK_QUOTA + writeBytes);
+                    if (used - existing + writeBytes > PLUGIN_DISK_QUOTA) throw new Error(`🛡️ plugin disk quota exceeded (${PLUGIN_DISK_QUOTA} bytes).`);
+                }
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });
                 return fs.promises.writeFile(target, data);
             }

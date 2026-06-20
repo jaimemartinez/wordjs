@@ -42,9 +42,14 @@ function probeOsMemoryCap(): Promise<number | null> {
     if (osCapProbe) return osCapProbe;
     osCapProbe = (async () => {
         if (process.platform === 'win32') return null; // no POSIX ulimit / RLIMIT_AS
-        let capMb = 16384; // generous virtual ceiling; bounds only pathological allocation (RSS poll is precise)
-        try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) capMb = Math.max(8192, s.addressSpaceCapMb); } catch { /* default */ }
-        const candidatesMb = [capMb, Math.round(capMb * 1.5), capMb * 2]; // escalate if the floor won't boot here
+        // Box-sized PREVENTIVE virtual cap: keep it only modestly above the legitimate footprint (V8's
+        // ~4 GB pointer-compression cage + headroom) so RLIMIT_AS fails mmap synchronously near a real
+        // working set. A 16 GB ceiling sat far above typical box RAM, letting a fast off-heap loop OOM
+        // the BOX before the (reactive) RSS poll could tick; ~6 GB bounds usable off-heap to ~2 GB on
+        // Linux/macOS. The probe escalates if the floor can't boot (e.g. ts-node's compiler in dev).
+        let capMb = 6144;
+        try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) capMb = Math.max(5120, s.addressSpaceCapMb); } catch { /* default */ }
+        const candidatesMb = [capMb, 8192, 12288]; // escalate if the floor won't boot on this host
         // Probe with the SAME execArgv the real child uses (ts-node in dev) so the validated cap reflects
         // the real startup footprint (cage + ts-node compiler), not a bare `node` that under-counts it.
         const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
@@ -89,6 +94,10 @@ function isTrustedPlugin(slug: string): boolean {
 // shimming one of these is a stored-XSS primitive (incl. the admin UI), so it is denied for untrusted
 // plugins — operator-trusted first-party plugins keep the capability.
 const RAW_HTML_HOOKS = new Set(['wordjs_head', 'wordjs_footer', 'wp_head', 'wp_footer']);
+
+// Host auth/session cookies that must never be forwarded to (or overwritten by) an untrusted isolated
+// plugin's route handler: `wordjs_token` is the HttpOnly auth JWT, plus defensive csrf/session names.
+const HOST_AUTH_COOKIE_RE = /^wordjs_token$|csrf|xsrf|session/i;
 
 // Navigate "options.get" / "mail" on the api object and call it with args.
 function callApi(api: any, method: string, args: any[]) {
@@ -180,7 +189,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                     const rssPages = parseInt(String(fsmod.readFileSync(statmPath, 'utf8')).split(' ')[1], 10) || 0;
                     killOverBudget(rssPages * 4096);
                 } catch { /* child gone / statm unavailable */ }
-            }, 500);
+            }, 250);
             if (rssPoll.unref) rssPoll.unref();
         } else if ((process.platform === 'win32' || process.platform === 'darwin') && child.pid) {
             // No /proc: ask the OS for the child's rss on the HOST loop (tasklist on Windows, ps on
@@ -397,6 +406,13 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                     return;
                 }
                 callTokens -= 1;
+                // (#3) Bound INBOUND call-arg size — the reply guard covers only the outbound path. A huge
+                // msg.args could block the host loop / pressure the heap (and land oversized values in
+                // options/DB). Reject before doing any work, using the same bounded estimator.
+                if (replySize(msg.args) > MAX_REPLY_BYTES) {
+                    worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: `Isolated plugin '${slug}' sent oversized bridge-call args` });
+                    return;
+                }
                 inflightCalls++;
                 try {
                     const value = await runWithContext(slug, () => callApi(api, msg.method, msg.args));
@@ -478,10 +494,19 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                         mw.push(up.single(String(msg.opts.multipart)));
                     } catch (e: any) { console.warn(`[Isolate ${slug}] multipart unavailable:`, e && e.message); }
                 }
+                const cookieNs = `wjp_${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}_`;
                 const finalHandler = async (req: any, res: any) => {
+                    // (#2) Never hand the host's HttpOnly auth JWT (wordjs_token) to an UNTRUSTED plugin's
+                    // handler — the authenticated identity is already provided via reqData.user, so the raw
+                    // token is not needed. Strip auth/session cookies before forwarding; trusted (first-
+                    // party) plugins get the full jar.
+                    const trusted = isTrustedPlugin(slug);
+                    const fwdCookies = trusted
+                        ? (req.cookies || {})
+                        : Object.fromEntries(Object.entries(req.cookies || {}).filter(([k]) => !HOST_AUTH_COOKIE_RE.test(k)));
                     const reqData = {
                         method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
-                        cookies: req.cookies || {},
+                        cookies: fwdCookies,
                         headers: { 'x-portal-token': req.headers['x-portal-token'] }, // selected non-sensitive headers
                         // Saved-upload metadata (multer) — the isolate gets the path/name, not the stream.
                         file: req.file ? { path: req.file.path, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size, filename: req.file.filename } : undefined,
@@ -492,9 +517,24 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                         if (r.headers) res.set(r.headers);
                         // Replay cookies the isolate set/cleared on the real response.
                         if (Array.isArray(r.cookies)) {
-                            for (const c of r.cookies) {
-                                if (c.clear) res.clearCookie(c.name, c.options || {});
-                                else res.cookie(c.name, c.value, c.options || {});
+                            for (const c of r.cookies.slice(0, 20)) { // (#5) cap cookies per reply
+                                let name = String(c.name || '');
+                                let options = c.options || {};
+                                if (!trusted) {
+                                    // (#5) Untrusted plugins may set cookies ONLY in their own namespace and
+                                    // scope: never overwrite a host cookie (wordjs_token/session), never widen
+                                    // scope via `domain`, and never escape their route path; clamp lifetime.
+                                    if (HOST_AUTH_COOKIE_RE.test(name)) { console.warn(`[Isolate ${slug}] dropped cookie '${name}' (would shadow a host cookie).`); continue; }
+                                    if (!name.startsWith(cookieNs)) name = cookieNs + name;
+                                    options = { ...options };
+                                    delete options.domain;
+                                    options.path = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}`;
+                                    const MAX_AGE = 7 * 24 * 3600 * 1000;
+                                    if (typeof options.maxAge === 'number' && options.maxAge > MAX_AGE) options.maxAge = MAX_AGE;
+                                    delete options.expires; // prefer clamped maxAge over an arbitrary far-future expiry
+                                }
+                                if (c.clear) res.clearCookie(name, options);
+                                else res.cookie(name, c.value, options);
                             }
                         }
                         res.status(r.status || 200);
