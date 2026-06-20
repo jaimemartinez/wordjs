@@ -16,6 +16,122 @@ import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { sanitizeHTML } from "@/lib/sanitize";
 
+// Viewport switcher + responsive preview frame. The canvas renders in an iframe (#preview-frame; see
+// <Puck iframe>) that fills its container, so we drive responsiveness by sizing the container to the
+// chosen DEVICE width — the iframe follows and its own viewport drives the page's Tailwind md:/lg:
+// breakpoints, matching the live site. (Puck's built-in viewport/zoom is NOT applied by <Puck.Preview>
+// in composition mode, so we size + scale-to-fit ourselves; see PreviewFrame.)
+type ViewportKey = "desktop" | "tablet" | "mobile";
+const VIEWPORT_WIDTH: Record<ViewportKey, number> = { desktop: 1280, tablet: 768, mobile: 375 };
+const EDITOR_VIEWPORTS: { key: ViewportKey; icon: string }[] = [
+    { key: "desktop", icon: "desktop" },
+    { key: "tablet", icon: "tablet-screen-button" },
+    { key: "mobile", icon: "mobile-screen-button" },
+];
+
+function ViewportControls({ value, onChange }: { value: ViewportKey; onChange: (v: ViewportKey) => void }) {
+    return (
+        <div className="hidden lg:flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100 absolute left-1/2 -translate-x-1/2">
+            {EDITOR_VIEWPORTS.map((v) => (
+                <button
+                    key={v.key}
+                    title={v.key}
+                    onClick={() => onChange(v.key)}
+                    className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${
+                        value === v.key ? "bg-white shadow-md text-blue-600 scale-105" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                    }`}
+                >
+                    <i className={`fa-solid fa-${v.icon}`}></i>
+                </button>
+            ))}
+        </div>
+    );
+}
+
+// Renders the canvas iframe (#preview-frame) per viewport: DESKTOP fills the whole preview area (full
+// width + height, like a normal editing canvas — no frame); MOBILE/TABLET render at their true device
+// width inside a scaled device frame. The iframe fills its box, so its own viewport drives the page's
+// responsive CSS — making the preview match the live site at each breakpoint.
+function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?: React.ReactNode }) {
+    const areaRef = React.useRef<HTMLDivElement>(null);
+    const [area, setArea] = React.useState({ w: 0, h: 0 });
+    React.useEffect(() => {
+        const el = areaRef.current;
+        if (!el) return;
+        const measure = () => setArea({ w: el.clientWidth, h: el.clientHeight });
+        measure();
+        const ro = new ResizeObserver(measure);
+        ro.observe(el);
+        return () => ro.disconnect();
+    }, []);
+    // The page scrolls INSIDE the iframe, so its scrollbar is the browser default (chunky on Windows,
+    // and out of place inside the phone/tablet bezel). Inject a thin, subtle scrollbar into the iframe
+    // document. Polls until the iframe (#preview-frame) is mounted, then injects once.
+    React.useEffect(() => {
+        const STYLE_ID = "wjs-preview-scrollbar";
+        const css =
+            "::-webkit-scrollbar{width:9px;height:9px}" +
+            "::-webkit-scrollbar-track{background:transparent}" +
+            "::-webkit-scrollbar-thumb{background:rgba(100,116,139,.3);border-radius:9px}" +
+            "::-webkit-scrollbar-thumb:hover{background:rgba(100,116,139,.55)}" +
+            "html{scrollbar-width:thin;scrollbar-color:rgba(100,116,139,.3) transparent}";
+        let done = false;
+        const tick = () => {
+            const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
+            const doc = iframe?.contentDocument;
+            if (!doc?.head) return;
+            if (!doc.getElementById(STYLE_ID)) {
+                const s = doc.createElement("style");
+                s.id = STYLE_ID;
+                s.textContent = css;
+                doc.head.appendChild(s);
+            }
+            done = true;
+        };
+        tick();
+        const t = setInterval(() => (done ? clearInterval(t) : tick()), 400);
+        const stop = setTimeout(() => clearInterval(t), 10000);
+        return () => {
+            clearInterval(t);
+            clearTimeout(stop);
+        };
+    }, []);
+    const isDesktop = viewport === "desktop";
+    // Desktop fills the ENTIRE preview area (full width + height, like a normal editing canvas, no frame).
+    // Mobile/tablet render at their true device width inside a scaled device frame so they never overflow.
+    const PAD = isDesktop ? 0 : 24;
+    const availW = Math.max(320, area.w - PAD * 2);
+    const availH = Math.max(320, area.h - PAD * 2);
+    const frameW = isDesktop ? availW : VIEWPORT_WIDTH[viewport];
+    const scale = Math.min(1, availW / frameW); // desktop = 1 (no scaling)
+    const innerH = availH / scale; // inner height so that, once scaled, it exactly fills the area height
+    return (
+        <div ref={areaRef} className="flex-1 relative overflow-hidden bg-gray-100/50 h-full min-h-0">
+            {/* Dotted background — only around the device frame; desktop is full-bleed */}
+            {!isDesktop && (
+                <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: "radial-gradient(#cbd5e1 1px, transparent 1px)", backgroundSize: "24px 24px" }}></div>
+            )}
+            {/* OUTER box = on-screen (scaled) footprint so it centers cleanly; INNER box = true device
+                width, scaled into it. The iframe (Puck.Preview) fills the inner box, so its viewport
+                equals the device width. Puck.Preview stays in one DOM position across viewports so the
+                iframe never reloads when switching. */}
+            <div className="absolute inset-0 flex items-start justify-center" style={{ padding: PAD }}>
+                <div
+                    className={`relative z-10 bg-white overflow-hidden shrink-0 ${isDesktop ? "" : "rounded-[2rem] ring-[7px] ring-gray-900 shadow-2xl"}`}
+                    style={{ width: frameW * scale, height: availH }}
+                >
+                    <div className="absolute top-0 left-0 origin-top-left" style={{ width: frameW, height: innerH, transform: scale === 1 ? "none" : `scale(${scale})` }}>
+                        <div className="w-full h-full">
+                            <Puck.Preview />
+                        </div>
+                    </div>
+                </div>
+            </div>
+            {children}
+        </div>
+    );
+}
+
 interface PuckEditorProps {
     initialData?: Data;
     onChange: (data: Data) => void;
@@ -557,17 +673,6 @@ export default function PuckEditor({
         },
     }), [onStatusChange, status, onCancel, onSave, saving, hasChanges, activeEditorId]);
 
-    // Viewport State
-    const [viewport, setViewport] = useState('desktop');
-
-    const getViewportWidth = () => {
-        switch (viewport) {
-            case 'mobile': return '375px';
-            case 'tablet': return '768px';
-            case 'desktop': return '100%';
-            default: return '100%';
-        }
-    };
 
 
 
@@ -577,6 +682,7 @@ export default function PuckEditor({
     const [showProperties, setShowProperties] = useState(true);
     const [showRevisions, setShowRevisions] = useState(false);
     const [isUiLoaded, setIsUiLoaded] = useState(false);
+    const [viewport, setViewport] = useState<ViewportKey>("desktop");
 
     const handleRestore = async (revision: Revision) => {
         if (!pageId) return;
@@ -696,12 +802,13 @@ export default function PuckEditor({
                     onPublish={(data) => onChange(data)}
                     onChange={(newData) => { setData(newData); onChange(newData); }}
                     overrides={overrides}
-                    /* NATIVE preview: render the canvas in the same document instead of an isolated
-                     * iframe. The iframe couldn't reliably load the app/theme stylesheets (blocks
-                     * rendered unstyled / "broke"); rendering natively inherits the real styles for
-                     * true WYSIWYG. The inline-editor machinery already supports no-iframe
-                     * (frameElement === null) and OverlayBlocker injects into the active document. */
-                    iframe={{ enabled: false }}
+                    /* IFRAME preview: render the canvas in an isolated iframe so the page's responsive
+                     * Tailwind breakpoints (md:/lg:) evaluate against the DEVICE width (the viewport
+                     * frame below sets the iframe width), not the editor window — making mobile/tablet
+                     * preview match the live site. Puck 0.20 (AutoFrame) copies the parent's stylesheets
+                     * into the iframe, and the inline editor is already cross-frame aware
+                     * (editor.view.dom.ownerDocument; events dispatched to iframe.contentWindow). */
+                    iframe={{ enabled: true }}
                 >
                     <div className="flex flex-col h-screen w-full overflow-hidden">
 
@@ -742,21 +849,7 @@ export default function PuckEditor({
                             </div>
 
                             {/* Center: Viewport Controls */}
-                            <div className="hidden lg:flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100 absolute left-1/2 -translate-x-1/2">
-                                {[
-                                    { mode: 'desktop', icon: 'desktop' },
-                                    { mode: 'tablet', icon: 'tablet-screen-button' },
-                                    { mode: 'mobile', icon: 'mobile-screen-button' }
-                                ].map((v) => (
-                                    <button
-                                        key={v.mode}
-                                        onClick={() => setViewport(v.mode)}
-                                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${viewport === v.mode ? 'bg-white shadow-md text-blue-600 scale-105' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-                                    >
-                                        <i className={`fa-solid fa-${v.icon}`}></i>
-                                    </button>
-                                ))}
-                            </div>
+                            <ViewportControls value={viewport} onChange={setViewport} />
 
                             {/* Right: Actions */}
                             <div className="flex items-center gap-4">
@@ -862,66 +955,38 @@ export default function PuckEditor({
                                 </div>
                             </div>
 
-                            {/* MAIN PREVIEW AREA */}
-                            <div className="flex-1 relative overflow-hidden bg-gray-100/50 h-full min-h-0 flex flex-col items-center p-4 md:py-10 md:px-12">
-                                {/* Dotted Background Pattern */}
-                                <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
-
-                                <div
-                                    className={`flex-1 h-full transition-all duration-500 bg-white overflow-hidden relative z-10 ${
-                                        viewport === 'desktop'
-                                            ? 'rounded-2xl shadow-xl ring-1 ring-black/5 border border-gray-200'
-                                            : 'shadow-2xl border-[10px] border-gray-900 rounded-[2.5rem]'
-                                    }`}
-                                    /* OUTER frame. transform:translateZ(0) makes it the containing block
-                                     * for the site's position:fixed Header (Header.tsx). Without an
-                                     * iframe, fixed would anchor to the window and render behind the
-                                     * editor chrome. overflow:hidden clips to the rounded frame. The page
-                                     * scrolls in the INNER container below — NOT here — so the fixed
-                                     * header stays pinned to this frame's top (like the live site) instead
-                                     * of scrolling away / being clipped. */
-                                    style={{ width: getViewportWidth(), maxWidth: '100%', transform: 'translateZ(0)' }}
-                                >
-                                    {/* Device notch — only in tablet/mobile preview, not on the flush desktop canvas */}
-                                    {viewport !== 'desktop' && (
-                                        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-32 h-6 bg-gray-900 rounded-b-2xl z-50 pointer-events-none"></div>
-                                    )}
-
-                                    {/* INNER scroller — page content scrolls here; the site's fixed
-                                        header stays pinned to the OUTER frame above (matches live). */}
-                                    <div className="h-full overflow-y-auto overflow-x-hidden custom-scrollbar">
-                                        <Puck.Preview />
-                                    </div>
-
-                                    {/* Empty-canvas onboarding — shown only when the page has no blocks.
-                                        pointer-events-none lets drag-drop pass through everywhere except
-                                        the pattern quick-pick buttons. */}
-                                    {(!data?.content || data.content.length === 0) && (
-                                        <div className="absolute inset-0 z-30 flex items-center justify-center p-6 pointer-events-none">
-                                            <div className="text-center max-w-sm bg-white/95 backdrop-blur rounded-2xl border border-gray-200 shadow-xl p-8 pointer-events-none">
-                                                <div className="w-16 h-16 mx-auto rounded-2xl bg-editor-primary/10 flex items-center justify-center text-editor-primary mb-4">
-                                                    <i className="fa-solid fa-wand-magic-sparkles text-2xl"></i>
-                                                </div>
-                                                <h3 className="text-lg font-bold text-gray-800 mb-1">Empieza tu página</h3>
-                                                <p className="text-sm text-gray-500 mb-5">Arrastra un bloque desde la izquierda, o inserta una plantilla para arrancar rápido.</p>
-                                                <div className="flex flex-wrap justify-center gap-2">
-                                                    {PATTERNS.slice(0, 3).map((p) => (
-                                                        <button
-                                                            key={p.id}
-                                                            type="button"
-                                                            onClick={() => insertPattern(p, editorConfig.components)}
-                                                            className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-50 hover:bg-editor-primary/10 border border-gray-200 hover:border-editor-primary text-xs font-semibold text-gray-700 hover:text-editor-primary transition"
-                                                        >
-                                                            <i className={`fa-solid ${p.icon}`}></i>
-                                                            {p.name}
-                                                        </button>
-                                                    ))}
-                                                </div>
+                            {/* MAIN PREVIEW AREA — the canvas iframe is sized to the chosen device width
+                                and scaled to fit (see PreviewFrame), so mobile/tablet match the live site
+                                and desktop never overflows into a horizontal scrollbar. */}
+                            <PreviewFrame viewport={viewport}>
+                                {/* Empty-canvas onboarding — shown only when the page has no blocks.
+                                    pointer-events-none lets drag-drop pass through everywhere except
+                                    the pattern quick-pick buttons. */}
+                                {(!data?.content || data.content.length === 0) && (
+                                    <div className="absolute inset-0 z-30 flex items-center justify-center p-6 pointer-events-none">
+                                        <div className="text-center max-w-sm bg-white/95 backdrop-blur rounded-2xl border border-gray-200 shadow-xl p-8 pointer-events-none">
+                                            <div className="w-16 h-16 mx-auto rounded-2xl bg-editor-primary/10 flex items-center justify-center text-editor-primary mb-4">
+                                                <i className="fa-solid fa-wand-magic-sparkles text-2xl"></i>
+                                            </div>
+                                            <h3 className="text-lg font-bold text-gray-800 mb-1">Empieza tu página</h3>
+                                            <p className="text-sm text-gray-500 mb-5">Arrastra un bloque desde la izquierda, o inserta una plantilla para arrancar rápido.</p>
+                                            <div className="flex flex-wrap justify-center gap-2">
+                                                {PATTERNS.slice(0, 3).map((p) => (
+                                                    <button
+                                                        key={p.id}
+                                                        type="button"
+                                                        onClick={() => insertPattern(p, editorConfig.components)}
+                                                        className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-50 hover:bg-editor-primary/10 border border-gray-200 hover:border-editor-primary text-xs font-semibold text-gray-700 hover:text-editor-primary transition"
+                                                    >
+                                                        <i className={`fa-solid ${p.icon}`}></i>
+                                                        {p.name}
+                                                    </button>
+                                                ))}
                                             </div>
                                         </div>
-                                    )}
-                                </div>
-                            </div>
+                                    </div>
+                                )}
+                            </PreviewFrame>
 
                             {/* Floating Properties Panel handled by state, rendered here for z-index context if needed */}
                             {showProperties && <FloatingPropertiesPanel />}
