@@ -33,17 +33,21 @@ const isolates = new Map<string, any>();
 // compression cage reserves a large VIRTUAL range (~4 GB) that RLIMIT_AS counts, so the cap must be
 // GENEROUS — it is a coarse virtual *backstop* (bounds pathological allocation; kernel-enforced even if
 // the host loop is wedged; the only cap on /proc-less platforms), NOT a tight RSS cap. The precise
-// resident cap stays the /proc poll below. We probe ASCENDING and cache the smallest limit that clears
-// the cage AND a working-set headroom so legit plugins aren't virtual-OOM'd (auto-tunes per platform).
+// resident cap stays the /proc poll below. We use a GENEROUS fixed ceiling (virtual space is cheap to
+// reserve) validated by a probe that boots node with the REAL execArgv (so the cap reflects the actual
+// child's footprint — cage + ts-node — not a bare `node` that under-counts it and false-kills loads).
 // Result (cached Promise): null = unavailable (→ plain fork + /proc poll), number = RLIMIT_AS in KiB.
 let osCapProbe: Promise<number | null> | undefined;
 function probeOsMemoryCap(): Promise<number | null> {
     if (osCapProbe) return osCapProbe;
     osCapProbe = (async () => {
         if (process.platform === 'win32') return null; // no POSIX ulimit / RLIMIT_AS
-        let floorMb = 4096;
-        try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) floorMb = Math.max(2048, s.addressSpaceCapMb); } catch { /* default */ }
-        const candidatesMb = [floorMb, 6144, 8192, 16384].filter((v, i, a) => v >= floorMb && a.indexOf(v) === i).sort((a, b) => a - b);
+        let capMb = 16384; // generous virtual ceiling; bounds only pathological allocation (RSS poll is precise)
+        try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) capMb = Math.max(8192, s.addressSpaceCapMb); } catch { /* default */ }
+        const candidatesMb = [capMb, Math.round(capMb * 1.5), capMb * 2]; // escalate if the floor won't boot here
+        // Probe with the SAME execArgv the real child uses (ts-node in dev) so the validated cap reflects
+        // the real startup footprint (cage + ts-node compiler), not a bare `node` that under-counts it.
+        const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
         // The probe child boots node UNDER the candidate RLIMIT_AS through the SAME shell wrapper the real
         // load uses, and sends ONE IPC message. We accept a cap only if node both starts AND its IPC
         // channel survives the shell `exec` (process.send works) — this self-validates the kernel cap +
@@ -52,15 +56,16 @@ function probeOsMemoryCap(): Promise<number | null> {
         // Exit only AFTER the IPC write flushes (send callback) — exiting synchronously after send would
         // drop the message and falsely fail the probe even where the cap works. Backstop self-exit so a
         // stuck candidate fails fast rather than waiting out the outer spawn timeout.
-        const probeSrc = 'if(!process.send){process.exit(3)}process.send("ok",function(){process.exit(0)});setTimeout(function(){process.exit(4)},5000)';
+        const probeSrc = 'if(!process.send){process.exit(3)}process.send("ok",function(){process.exit(0)});setTimeout(function(){process.exit(4)},8000)';
         for (const mb of candidatesMb) {
             const kb = mb * 1024; // `ulimit -v` unit is KiB
             const ok = await new Promise<boolean>((res) => {
                 let c: any, got = false, done = false;
                 const finish = (v: boolean) => { if (!done) { done = true; try { c && c.kill(); } catch { /* */ } res(v); } };
                 try {
-                    c = spawn('sh', ['-c', `ulimit -v ${kb} 2>/dev/null; exec "$0" -e "$1"`, process.execPath, probeSrc],
-                        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 10000 });
+                    // Same `exec "$@"` wrapper the real load uses; $0 = label, $@ = [node, …execArgv, -e, src].
+                    c = spawn('sh', ['-c', `ulimit -v ${kb} 2>/dev/null; exec "$@"`, 'wjs-probe', process.execPath, ...execArgv, '-e', probeSrc],
+                        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 20000 });
                 } catch { return res(false); }
                 c.on('message', (m: any) => { if (m === 'ok') got = true; });
                 c.on('error', () => finish(false));
