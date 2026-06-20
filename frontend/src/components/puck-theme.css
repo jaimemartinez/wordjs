@@ -1,0 +1,63 @@
+/* WordJS — Puck chrome theming.
+ *
+ * Overrides Puck's CSS custom properties (its stable theming API) so the built-in
+ * palette (<Puck.Components/>), outline tree (<Puck.Outline/>) and field renderer
+ * (<Puck.Fields/>) match the WordJS creator design system instead of clashing with
+ * the hand-built shell. Imported AFTER "@measured/puck/puck.css" in PuckEditor.tsx
+ * so these definitions win the cascade. Only loaded on editor routes.
+ */
+
+:root {
+  /* Accent ramp — Puck calls it "azure" and uses azure-05 as the primary accent
+   * (selected outlines, focus rings, primary buttons). Remap the ramp to the WordJS
+   * creator blue, anchored on #2563EB at the accent step. */
+  --puck-color-azure-01: #172554;
+  --puck-color-azure-02: #1e3a8a;
+  --puck-color-azure-03: #1e40af;
+  --puck-color-azure-04: #1d4ed8;
+  --puck-color-azure-05: #2563eb; /* primary accent */
+  --puck-color-azure-06: #3b82f6;
+  --puck-color-azure-07: #60a5fa;
+  --puck-color-azure-08: #93c5fd;
+  --puck-color-azure-09: #bfdbfe;
+  --puck-color-azure-10: #dbeafe;
+  --puck-color-azure-11: #eff6ff;
+  --puck-color-azure-12: #f8fafc;
+
+  /* Use the app's system UI font stack instead of Puck's bundled Inter so the
+   * editor internals read as one product with the admin shell. */
+  --puck-font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    Helvetica, Arial, sans-serif;
+}
+
+/* In-place inline text editor (Tiptap): Puck sets pointer-events:none on a component's rendered
+ * content so its own drag overlay captures clicks. That also makes the contenteditable unclickable,
+ * so the editor could never be focused/selected (clicks landed on the wrapper, the toolbar never
+ * showed, and it looked like editing "closed"). Re-enable pointer events on the active editor's
+ * contenteditable. The legacy OverlayBlocker only re-enabled `.inline-editor-container`, which the
+ * Tiptap editor doesn't use — this targets it directly. */
+.inline-text-view [contenteditable="true"],
+.inline-text-view [contenteditable="true"] *,
+.wjs-bubble-menu,
+.wjs-bubble-menu * {
+  pointer-events: auto !important;
+}
+
+/* Custom color picker (react-colorful) sized to fit the toolbar's color popover. */
+.wjs-colorful .react-colorful {
+  width: 100%;
+  height: 148px;
+}
+.wjs-colorful .react-colorful__saturation {
+  border-radius: 8px 8px 0 0;
+}
+.wjs-colorful .react-colorful__last-control {
+  border-radius: 0 0 8px 8px;
+}
+.wjs-colorful .react-colorful__hue {
+  height: 16px;
+}
+.wjs-colorful .react-colorful__pointer {
+  width: 16px;
+  height: 16px;
+}

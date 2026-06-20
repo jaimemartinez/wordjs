@@ -343,16 +343,20 @@ const ColumnDistributionControl = ({ value, onChange }: {
 };
 
 // Memoized Rich Text Editor - prevents re-renders when parent state changes
-export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, transparent = false }: {
+export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, transparent = false, surfaceBg, surfaceColor }: {
     value: string;
     onChange: (html: string) => void;
     onSave?: (html: string) => void;
     onCancel?: () => void;
     transparent?: boolean;
+    // Real backdrop + text color of the block on the canvas, so the editable area is WYSIWYG
+    // (e.g. white text edits on a dark surface, not white-on-white). Read by InlineText.
+    surfaceBg?: string;
+    surfaceColor?: string;
 }) => {
     const editorRef = React.useRef<HTMLDivElement>(null);
     const savedSelectionRef = React.useRef<Range | null>(null);
-    const [editorBg] = React.useState(transparent ? 'transparent' : '#ffffff');
+    const editorBg = surfaceBg || (transparent ? 'transparent' : '#ffffff');
     const [availableFonts, setAvailableFonts] = React.useState<any[]>([]);
 
     useEffect(() => {
@@ -649,7 +653,7 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
                 contentEditable
                 suppressContentEditableWarning
                 className="rich-text-content p-4 min-h-[160px] max-h-[400px] overflow-y-auto focus:outline-none text-gray-700 leading-relaxed text-sm selection:bg-blue-100 transition-colors duration-200 !select-text cursor-text"
-                style={{ backgroundColor: transparent ? 'transparent' : editorBg }}
+                style={{ backgroundColor: editorBg, color: surfaceColor }}
                 onSelect={() => {
                     saveSelection();
                     updateFontSizeFromSelection();
