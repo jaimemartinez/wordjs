@@ -1,6 +1,6 @@
 {
     "name": "wordjs-gateway",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "license": "MIT",
     "description": "Dynamic Service Gateway for WordJS",
     "main": "gateway/src/index.js",
