@@ -42,14 +42,17 @@ function probeOsMemoryCap(): Promise<number | null> {
     if (osCapProbe) return osCapProbe;
     osCapProbe = (async () => {
         if (process.platform === 'win32') return null; // no POSIX ulimit / RLIMIT_AS
-        // Box-sized PREVENTIVE virtual cap: keep it only modestly above the legitimate footprint (V8's
-        // ~4 GB pointer-compression cage + headroom) so RLIMIT_AS fails mmap synchronously near a real
-        // working set. A 16 GB ceiling sat far above typical box RAM, letting a fast off-heap loop OOM
-        // the BOX before the (reactive) RSS poll could tick; ~6 GB bounds usable off-heap to ~2 GB on
-        // Linux/macOS. The probe escalates if the floor can't boot (e.g. ts-node's compiler in dev).
-        let capMb = 6144;
-        try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) capMb = Math.max(5120, s.addressSpaceCapMb); } catch { /* default */ }
-        const candidatesMb = [capMb, 8192, 12288]; // escalate if the floor won't boot on this host
+        // RLIMIT_AS can only be a LOOSE virtual backstop, not a box-tight cap: V8 reserves a ~4 GB
+        // pointer-compression cage, and the legit child footprint (in dev, ts-node's compiler + the full
+        // core .ts compile) needs many GB of virtual space — a tighter ceiling crashes real plugin loads
+        // (verified: a 6 GB cap killed ts-node children mid-load). So this bounds only PATHOLOGICAL
+        // allocation; the PRECISE resident cap is the /proc RSS poll below (768 MB, 250 ms), and the
+        // decisive PREVENTIVE resident cap for small-RAM boxes + Windows is a kernel cgroup MemoryMax /
+        // Job Object (roadmap, see POSITIONING.md). Operators on a compiled (non-ts-node) prod build with
+        // ample RAM headroom may tighten it via sandbox.addressSpaceCapMb.
+        let capMb = 16384;
+        try { const s = require('../config/app').sandbox; if (s && s.addressSpaceCapMb) capMb = Math.max(6144, s.addressSpaceCapMb); } catch { /* default */ }
+        const candidatesMb = [capMb, Math.round(capMb * 1.5), capMb * 2]; // escalate if the floor won't boot here
         // Probe with the SAME execArgv the real child uses (ts-node in dev) so the validated cap reflects
         // the real startup footprint (cage + ts-node compiler), not a bare `node` that under-counts it.
         const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
