@@ -84,6 +84,12 @@ function isTrustedPlugin(slug: string): boolean {
     try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
 }
 
+// Hooks whose filter return value is emitted as RAW, UNESCAPED HTML into every server-rendered page
+// (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). An untrusted plugin
+// shimming one of these is a stored-XSS primitive (incl. the admin UI), so it is denied for untrusted
+// plugins — operator-trusted first-party plugins keep the capability.
+const RAW_HTML_HOOKS = new Set(['wordjs_head', 'wordjs_footer', 'wp_head', 'wp_footer']);
+
 // Navigate "options.get" / "mail" on the api object and call it with args.
 function callApi(api: any, method: string, args: any[]) {
     const parts = String(method).split('.');
@@ -151,26 +157,68 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             _child: child,
         };
         let settled = false; // load Promise settled (ready / init-error / early exit)
-        // Precise per-child RSS cap, layered UNDER the kernel RLIMIT_AS above (the rlimit is a coarse
-        // virtual ceiling that must clear V8's cage; this poll enforces the real resident-set budget).
-        // It runs on the HOST event loop — NOT blocked by the child's synchronous loops — and reads the
-        // child's OWN process rss. Linux: poll /proc/<pid>/statm and SIGKILL over budget; other platforms
-        // rely on the rlimit (if any) + in-child watchdog + process separation (the host can't OOM either
-        // way). A kernel cgroup MemoryMax is the stronger future RSS primitive (see POSITIONING.md).
+        // Precise per-child RSS cap — the decisive defense for the off-heap (Buffer) OOM the in-child
+        // watchdog can't catch (a synchronous allocation loop blocks the child's own timer, never the
+        // host's). It runs on the HOST event loop and reads the child's OWN process rss, so it is immune
+        // to the child blocking its loop, and it covers EVERY platform (the kernel RLIMIT_AS above is a
+        // coarse virtual ceiling only, and on Windows/macOS there is no rlimit at all). A kernel cgroup
+        // MemoryMax / Windows Job Object is the stronger future primitive (see POSITIONING.md).
         const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
         let rssPoll: any = null;
+        const killOverBudget = (rssBytes: number) => {
+            if (rssBytes > RSS_BUDGET_BYTES) {
+                console.error(`[Isolate ${slug}] killed: child rss over budget (${rssBytes} bytes).`);
+                try { child.kill('SIGKILL'); } catch { /* gone */ }
+            }
+        };
         if (process.platform === 'linux' && child.pid) {
+            // Cheapest path: synchronous /proc read on the host loop (field 2 = resident pages).
             const fsmod = require('fs');
             const statmPath = `/proc/${child.pid}/statm`;
             rssPoll = setInterval(() => {
                 try {
                     const rssPages = parseInt(String(fsmod.readFileSync(statmPath, 'utf8')).split(' ')[1], 10) || 0;
-                    if (rssPages * 4096 > RSS_BUDGET_BYTES) {
-                        console.error(`[Isolate ${slug}] killed: child rss over budget (${rssPages * 4096} bytes).`);
-                        try { child.kill('SIGKILL'); } catch { /* gone */ }
-                    }
+                    killOverBudget(rssPages * 4096);
                 } catch { /* child gone / statm unavailable */ }
             }, 500);
+            if (rssPoll.unref) rssPoll.unref();
+        } else if ((process.platform === 'win32' || process.platform === 'darwin') && child.pid) {
+            // No /proc: ask the OS for the child's rss on the HOST loop (tasklist on Windows, ps on
+            // macOS). Heavier (spawns a query), so poll less often and never overlap queries. Best-effort
+            // — an unparsed result just skips that tick (falls back to process separation), never throws.
+            let busy = false;
+            rssPoll = setInterval(() => {
+                if (busy || !child.pid) return;
+                busy = true;
+                let proc: any;
+                try {
+                    proc = (process.platform === 'win32')
+                        ? spawn('tasklist', ['/FI', `PID eq ${child.pid}`, '/NH', '/FO', 'CSV'], { windowsHide: true })
+                        : spawn('ps', ['-o', 'rss=', '-p', String(child.pid)]);
+                } catch { busy = false; return; }
+                let out = '';
+                try { proc.stdout.on('data', (d: any) => { out += d.toString(); }); } catch { /* */ }
+                proc.on('error', () => { busy = false; });
+                proc.on('close', () => {
+                    busy = false;
+                    try {
+                        let rssBytes = -1;
+                        if (process.platform === 'win32') {
+                            // CSV row: …,"<mem> KB" — locale-formatted KiB (e.g. "56.724 KB" / "56,724 K").
+                            // Take the LAST quoted field, strip ALL non-digits (separators + unit) -> KiB.
+                            const fields = out.match(/"[^"]*"/g);
+                            if (fields && fields.length) {
+                                const digits = fields[fields.length - 1].replace(/\D/g, "");
+                                if (digits) rssBytes = parseInt(digits, 10) * 1024;
+                            }
+                        } else {
+                            const kb = parseInt(out.trim(), 10); // ps -o rss= → KiB
+                            if (!isNaN(kb)) rssBytes = kb * 1024;
+                        }
+                        if (rssBytes >= 0) killOverBudget(rssBytes);
+                    } catch { /* unparseable → skip this tick */ }
+                });
+            }, 1000);
             if (rssPoll.unref) rssPoll.unref();
         }
         child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); });
@@ -181,6 +229,19 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         let inflightCalls = 0;
         let callBackpressureRejections = 0;
         const MAX_INFLIGHT_CALLS = 200;
+
+        // Inbound IPC message-rate guard (#5): a malicious child can spam ANY message kind — including
+        // spoofed invoke-reply/route-reply with unknown ids (rpcSettle no-ops) or unrecognized kinds —
+        // none of which the call/registration flood guards count, yet each still wakes + runs this host
+        // handler. Bound messages per sliding window and recycle a flooding child (host event-loop DoS).
+        const MSG_WINDOW_MS = 1000, MAX_MSGS_PER_WINDOW = 20000;
+        let msgWindowStart = Date.now(), msgWindowCount = 0;
+        // Bridge-call RATE guard (#6): concurrency is capped (MAX_INFLIGHT_CALLS) but a child can still
+        // sustain a high call rate within that limit, pinning the host's shared DB handle. Token bucket:
+        // burst up to CALL_BUCKET_MAX, refilled CALL_REFILL_PER_SEC; over-budget calls are rejected and
+        // counted toward the existing flood-kill. (Per-QUERY cost/timeout is a separate driver-level item.)
+        const CALL_BUCKET_MAX = 2000, CALL_REFILL_PER_SEC = 1000;
+        let callTokens = CALL_BUCKET_MAX, callBucketTs = Date.now();
 
         // Registration caps: 'call' is bounded by MAX_INFLIGHT_CALLS, but the fire-and-forget
         // register-* kinds (hooks/routes/shortcodes) were unbounded — a plugin could spam them to
@@ -292,6 +353,15 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
           // reject this async handler → unhandledRejection → host process crash (Node >= 15 default).
           // Contain every message: log and drop a poison/malformed one instead of crashing the host.
           try {
+            // (#5) Global inbound-message rate cap — counts EVERY message (incl. spoofed replies and
+            // unknown kinds the per-kind guards skip) so a child can't saturate the host loop with them.
+            const _now = Date.now();
+            if (_now - msgWindowStart > MSG_WINDOW_MS) { msgWindowStart = _now; msgWindowCount = 0; }
+            if (++msgWindowCount > MAX_MSGS_PER_WINDOW) {
+                console.error(`[Isolate ${slug}] terminated: IPC message-rate flood (${msgWindowCount} in ${MSG_WINDOW_MS}ms).`);
+                try { worker.terminate(); } catch { /* already gone */ }
+                return;
+            }
             if (msg.kind === 'ready') {
                 settled = true;
                 resolve({ worker, slug });
@@ -312,6 +382,21 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                     worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: `Isolated plugin '${slug}' exceeded concurrent bridge-call limit` });
                     return;
                 }
+                // (#6) Rate-limit calls (token bucket) ON TOP OF the concurrency cap, so a sustained high
+                // call rate can't pin the host's shared DB handle even while under MAX_INFLIGHT_CALLS.
+                const _cnow = Date.now();
+                callTokens = Math.min(CALL_BUCKET_MAX, callTokens + ((_cnow - callBucketTs) / 1000) * CALL_REFILL_PER_SEC);
+                callBucketTs = _cnow;
+                if (callTokens < 1) {
+                    if (++callBackpressureRejections > 50000) {
+                        console.error(`[Isolate ${slug}] terminated: bridge-call flood (sustained rate).`);
+                        try { worker.terminate(); } catch { /* already gone */ }
+                        return;
+                    }
+                    worker.postMessage({ kind: 'reply', id: msg.id, ok: false, error: `Isolated plugin '${slug}' exceeded bridge-call rate limit` });
+                    return;
+                }
+                callTokens -= 1;
                 inflightCalls++;
                 try {
                     const value = await runWithContext(slug, () => callApi(api, msg.method, msg.args));
@@ -323,6 +408,12 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                 }
             } else if (msg.kind === 'register') {
                 if (registrationRejected(registeredHooks, MAX_HOOKS, 'hooks')) return;
+                // (#3) Untrusted plugins may not shim raw-HTML output hooks (stored-XSS into every SSR
+                // page, incl. admin). Trusted first-party plugins keep the capability.
+                if (!isTrustedPlugin(slug) && RAW_HTML_HOOKS.has(msg.hook)) {
+                    console.warn(`[Isolate ${slug}] denied: untrusted plugin may not shim raw-HTML hook '${msg.hook}' (XSS risk).`);
+                    return;
+                }
                 // Cap callbacks PER hook NAME too: many shims on one core hook (e.g. the_content)
                 // amplify per-request latency even with the per-shim timeout below.
                 const hookCnt = (hookNameCounts.get(msg.hook) || 0) + 1;

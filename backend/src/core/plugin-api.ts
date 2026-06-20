@@ -281,7 +281,13 @@ function createPluginApi(slug: string) {
         // backs wordjs.mail / global.wordjs_send_mail. In-process this sets the global directly;
         // for isolated providers the worker bridge wires a shim that RPCs the provider's worker.
         provideMail(handler: (msg: any) => any) {
+            // Becoming the host-wide mail sender can intercept ALL outbound mail, so it is restricted
+            // to operator-trusted plugins — mirror the register-mail-provider IPC handler. An untrusted
+            // child can reach this method directly via a kind:'call' bridge message, bypassing that
+            // handler's gate, so the trust check MUST be re-enforced here (not just at registration).
+            if (!isTrustedPlugin(slug)) throw new Error('provideMail is restricted to operator-trusted plugins');
             verifyPermission('email', 'admin');
+            if (typeof handler !== 'function') throw new Error('provideMail requires a function');
             (global as any).wordjs_send_mail = handler;
         },
 
