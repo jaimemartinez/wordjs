@@ -4,8 +4,10 @@ import React from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
-import { TextStyle, Color, FontSize } from "@tiptap/extension-text-style";
+import { TextStyle, Color, FontSize, FontFamily } from "@tiptap/extension-text-style";
+import TextAlign from "@tiptap/extension-text-align";
 import { HexColorPicker } from "react-colorful";
+import { apiGet } from "@/lib/api";
 
 /**
  * InlineTiptap — in-place rich-text editing for a Text/Heading block.
@@ -44,6 +46,106 @@ const TEXT_COLORS: { name: string; value: string }[] = [
  * color picker + a remove-color action, in the editor's own UI (replaces the bare native <input
  * type="color"> that opened the OS picker). Module-level so it keeps its open state across renders.
  */
+// Installed WordJS fonts (from /fonts — the same source SystemFontsLoader uses to inject @font-face).
+// Cached module-side so opening the editor doesn't refetch; deduped to unique families and sorted.
+let FONT_FAMILY_CACHE: string[] | null = null;
+function useInstalledFonts(): string[] {
+    const [fonts, setFonts] = React.useState<string[]>(FONT_FAMILY_CACHE || []);
+    React.useEffect(() => {
+        if (FONT_FAMILY_CACHE) return;
+        let alive = true;
+        apiGet<any[]>("/fonts")
+            .then((list) => {
+                const fams = Array.from(new Set((list || []).map((f) => f?.family).filter(Boolean))).sort();
+                FONT_FAMILY_CACHE = fams;
+                if (alive) setFonts(fams);
+            })
+            .catch(() => {});
+        return () => {
+            alive = false;
+        };
+    }, []);
+    return fonts;
+}
+
+// Font-family picker listing the fonts installed in WordJS. Applies via the FontFamily mark; the
+// @font-face rules already exist in the iframe (copied from the parent by Puck's AutoFrame), so each
+// option previews in its own font and the canvas renders it. Hidden when no fonts are installed.
+function FontFamilyControl({ editor }: { editor: any }) {
+    const fonts = useInstalledFonts();
+    const [open, setOpen] = React.useState(false);
+    const ref = React.useRef<HTMLDivElement>(null);
+    const current: string = (editor.getAttributes("textStyle").fontFamily as string) || "";
+    const currentName = current.replace(/['"]/g, "");
+    React.useEffect(() => {
+        if (!open) return;
+        const doc = ref.current?.ownerDocument || document;
+        const onDoc = (e: MouseEvent) => {
+            if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+        };
+        doc.addEventListener("mousedown", onDoc, true);
+        return () => doc.removeEventListener("mousedown", onDoc, true);
+    }, [open]);
+    if (fonts.length === 0) return null;
+    const apply = (f: string) => {
+        editor.chain().focus().setFontFamily(f).run();
+        setOpen(false);
+    };
+    const clear = () => {
+        editor.chain().focus().unsetFontFamily().run();
+        setOpen(false);
+    };
+    return (
+        <div ref={ref} className="relative">
+            <button
+                type="button"
+                title="Fuente"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setOpen((o) => !o)}
+                className={`h-8 px-2 rounded-md flex items-center gap-1.5 max-w-[130px] transition ${
+                    open ? "bg-white/15 text-white" : "text-gray-200 hover:bg-white/10"
+                }`}
+            >
+                <i className="fa-solid fa-font text-[11px]"></i>
+                <span className="text-[11px] truncate" style={{ fontFamily: current || undefined }}>
+                    {currentName || "Fuente"}
+                </span>
+                <i className="fa-solid fa-chevron-down text-[8px] opacity-70"></i>
+            </button>
+            {open && (
+                <div
+                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[100001] w-[210px] max-h-[280px] overflow-y-auto rounded-xl bg-white shadow-2xl border border-gray-200 p-1.5"
+                    onMouseDown={(e) => e.preventDefault()}
+                >
+                    <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={clear}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[12px] ${!current ? "bg-editor-primary/10 text-editor-primary" : "text-gray-500 hover:bg-gray-100"}`}
+                    >
+                        Predeterminada
+                    </button>
+                    {fonts.map((f) => (
+                        <button
+                            key={f}
+                            type="button"
+                            title={f}
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => apply(f)}
+                            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[13px] truncate ${
+                                currentName === f ? "bg-editor-primary/10 text-editor-primary" : "text-gray-700 hover:bg-gray-100"
+                            }`}
+                            style={{ fontFamily: `'${f}'` }}
+                        >
+                            {f}
+                        </button>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+}
+
 const FONT_SIZES = [12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 80];
 
 // Font-size stepper for the toolbar: − [current px] +. Reads the active textStyle fontSize, falling
@@ -128,6 +230,23 @@ function ColorButton({ editor }: { editor: any }) {
     const setColor = (c: string) => editor.chain().focus().setColor(c).run();
     const removeColor = () => { editor.chain().focus().unsetColor().run(); close(); };
 
+    // Eyedropper — sample any pixel on screen (including the page preview) and apply it to the text.
+    // Chromium-only (EyeDropper API); the button is hidden where unsupported. Capture + restore the
+    // selection so the color lands on the text that was selected before the picker stole focus.
+    const eyeDropperSupported = typeof window !== "undefined" && "EyeDropper" in window;
+    const pickFromScreen = async () => {
+        const { from, to } = editor.state.selection;
+        try {
+            const result = await new (window as any).EyeDropper().open();
+            if (result?.sRGBHex) {
+                editor.chain().focus().setTextSelection({ from, to }).setColor(result.sRGBHex).run();
+            }
+        } catch {
+            /* user pressed Esc / cancelled — ignore */
+        }
+        close();
+    };
+
     return (
         <div ref={ref} className="relative">
             <button
@@ -169,6 +288,17 @@ function ColorButton({ editor }: { editor: any }) {
                                 })}
                             </div>
                             <div className="flex items-center gap-1.5 mt-2.5 pt-2.5 border-t border-gray-100">
+                                {eyeDropperSupported && (
+                                    <button
+                                        type="button"
+                                        title="Cuentagotas — muestrear un color de la página"
+                                        onMouseDown={(e) => e.preventDefault()}
+                                        onClick={pickFromScreen}
+                                        className="px-2.5 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 text-[11px] font-semibold text-gray-600"
+                                    >
+                                        <i className="fa-solid fa-eye-dropper text-[10px]"></i>
+                                    </button>
+                                )}
                                 <button
                                     type="button"
                                     title="Color personalizado"
@@ -176,7 +306,7 @@ function ColorButton({ editor }: { editor: any }) {
                                     onClick={() => setCustom(true)}
                                     className="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 text-[11px] font-semibold text-gray-600"
                                 >
-                                    <i className="fa-solid fa-eye-dropper text-[10px]"></i>
+                                    <i className="fa-solid fa-sliders text-[10px]"></i>
                                     Personalizado
                                 </button>
                                 <button
@@ -291,6 +421,8 @@ export default function InlineTiptap({
             TextStyle,
             Color,
             FontSize,
+            FontFamily,
+            TextAlign.configure({ types: ["paragraph"] }),
         ],
         content: html || "",
         autofocus: "end",
@@ -417,7 +549,13 @@ export default function InlineTiptap({
                 />
                 <ColorButton editor={editor} />
                 <Sep />
+                <FontFamilyControl editor={editor} />
                 <FontSizeControl editor={editor} />
+                <Sep />
+                <Btn title="Alinear a la izquierda" icon="fa-align-left" active={editor.isActive({ textAlign: "left" })} onCmd={() => editor.chain().focus().setTextAlign("left").run()} />
+                <Btn title="Centrar" icon="fa-align-center" active={editor.isActive({ textAlign: "center" })} onCmd={() => editor.chain().focus().setTextAlign("center").run()} />
+                <Btn title="Alinear a la derecha" icon="fa-align-right" active={editor.isActive({ textAlign: "right" })} onCmd={() => editor.chain().focus().setTextAlign("right").run()} />
+                <Btn title="Justificar" icon="fa-align-justify" active={editor.isActive({ textAlign: "justify" })} onCmd={() => editor.chain().focus().setTextAlign("justify").run()} />
                 {!inline && (
                     <>
                         <Sep />
