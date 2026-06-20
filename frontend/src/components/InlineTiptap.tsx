@@ -253,11 +253,16 @@ export default function InlineTiptap({
     onClose: () => void;
 }) {
     const inlineRef = React.useRef(inline);
-    inlineRef.current = inline;
     const onCommitRef = React.useRef(onCommit);
-    onCommitRef.current = onCommit;
     const onCloseRef = React.useRef(onClose);
-    onCloseRef.current = onClose;
+    // Keep the latest props in refs for the editor's event handlers/timers without re-creating the
+    // editor. Sync in an effect (runs after render, not during it) so the react-hooks "refs" rule
+    // is satisfied — writing refs during render is flagged as unsafe.
+    React.useEffect(() => {
+        inlineRef.current = inline;
+        onCommitRef.current = onCommit;
+        onCloseRef.current = onClose;
+    });
     const debTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const save = React.useCallback((raw: string) => {
