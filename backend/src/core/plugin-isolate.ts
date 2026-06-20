@@ -103,6 +103,14 @@ function probeCgroupCap(): Promise<boolean> {
     if (cgroupProbe) return cgroupProbe;
     cgroupProbe = (async () => {
         if (process.platform !== 'linux') return false;
+        // OPT-IN: auto-detecting cgroup/systemd support across environments is unreliable — a host or CI
+        // runner can have `systemd-run` yet no usable `--user` bus ("Failed to connect to bus"), so
+        // auto-enabling it breaks those hosts. Require the operator to turn it on explicitly (on a
+        // systemd Linux host they know supports user scopes); the probe below STILL validates it works
+        // before activating, and any failure falls back to the fork + RLIMIT_AS + RSS-poll path.
+        let enabled = false;
+        try { const s = require('../config/app').sandbox; enabled = !!(s && s.useCgroupMemoryCap); } catch { /* default off */ }
+        if (!enabled) return false;
         const budget = 768 * 1024 * 1024;
         const unit = `wjp-probe-${process.pid}.scope`;
         // The probe child boots, confirms IPC works through --scope's fd inheritance (sends "ok" and

@@ -62,8 +62,8 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   plugin can't strip its sandbox by deferring to a later tick.
 - **DoS containment**: process separation (a child OOM / crash / infinite loop cannot take
   down the host — the host event loop is in a different process), a JS-heap cap
-  (`--max-old-space-size`), a **preventive cgroup `MemoryMax`** per child on systemd Linux
-  (`systemd-run --user --scope`, probe-gated) with a host-side **RSS poll** fallback elsewhere
+  (`--max-old-space-size`), an opt-in **preventive cgroup `MemoryMax`** per child on systemd Linux
+  (`systemd-run --user --scope`, probe-gated) with a host-side **RSS poll** default/fallback elsewhere
   (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL`) and a loose `RLIMIT_AS` backstop,
   per-child bridge-call rate + message-rate caps, RPC timeouts with wedged-child recycling, bounded
   in-flight calls, inbound/outbound payload caps, fs-write disk quota.
@@ -75,9 +75,10 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   let the child do — *within its own process* — more than its manifest declares. It can no
   longer reach the host heap or crash the host, but it isn't yet capability-minimal at the
   syscall level.
-- The per-child memory cap is layered: (a) **preventive** — on systemd Linux each child runs in a
-  transient **cgroup v2 scope with `MemoryMax`** (`systemd-run --user --scope`, no root, probe-gated
-  so it only activates where spawn+IPC+teardown verify), so the kernel OOM-kills *only* the offending
+- The per-child memory cap is layered: (a) **preventive** — on systemd Linux each child can run in a
+  transient **cgroup v2 scope with `MemoryMax`** (`systemd-run --user --scope`, no root; operator
+  opt-in via `sandbox.useCgroupMemoryCap` and additionally probe-gated so it only activates where
+  spawn+IPC+teardown verify on that host), so the kernel OOM-kills *only* the offending
   child by construction the instant its resident set exceeds budget; (b) **reactive fallback** where
   cgroups aren't available (Windows, macOS, non-systemd) — a host-side **RSS poll** (Linux `/proc`,
   Windows `tasklist`, macOS `ps`); (c) a loose **`RLIMIT_AS`** virtual backstop (V8's ~4 GB cage makes
