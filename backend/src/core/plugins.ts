@@ -347,6 +347,23 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
         return permissions.some(p => p.scope === scope && (p.access === access || p.access === 'admin'));
     };
 
+    // Sensitive Node builtins. Reached via require(), dynamic import(), or static import — all three
+    // must be policed here. Dynamic import() in particular bypasses the CommonJS require proxy at
+    // runtime (different module loader), so catching it statically is the primary defense; the worker's
+    // ESM resolve hook is the runtime backstop.
+    const SENSITIVE_MODULES = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads', 'module', 'inspector', 'v8', 'repl'];
+    const flagModuleLiteral = (rawValue, kindLabel: string) => {
+        const moduleName = String(rawValue).replace(/^node:/, '');
+        if (!SENSITIVE_MODULES.includes(moduleName)) return;
+        if (moduleName === 'dns' || moduleName === 'net') {
+            if (!hasDeclared('network', 'admin') && !hasDeclared('email', 'admin')) {
+                missingPermissions.add(`Network/System access (${kindLabel}('${moduleName}'))`);
+            }
+        } else if (moduleName !== 'fs') {
+            dangerousCalls.add(`${kindLabel}('${moduleName}')`);
+        }
+    };
+
     // SYSTEM BYPASS: declaring system:admin in a manifest is NOT enough to skip the AST scan —
     // any uploaded plugin could self-declare it. The skip requires explicit operator trust via
     // config.trustedSystemPlugins (defaults to the first-party bundled plugins). Untrusted plugins
@@ -423,19 +440,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                     if (name === 'require' && node.arguments.length > 0) {
                         const arg = node.arguments[0];
                         if (arg.type === 'Literal') {
-                            // Strip a leading 'node:' prefix so require('node:child_process')
-                            // is detected the same as require('child_process').
-                            const moduleName = String(arg.value).replace(/^node:/, '');
-                            const sensitiveModules = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads'];
-                            if (sensitiveModules.includes(moduleName)) {
-                                if (moduleName === 'dns' || moduleName === 'net') {
-                                    if (!hasDeclared('network', 'admin') && !hasDeclared('email', 'admin')) {
-                                        missingPermissions.add(`Network/System access (require('${moduleName}'))`);
-                                    }
-                                } else if (moduleName !== 'fs') {
-                                    dangerousCalls.add(`require('${moduleName}')`);
-                                }
-                            }
+                            flagModuleLiteral(arg.value, 'require');
                         } else {
                             dangerousCalls.add(`Dynamic require detected (obfuscation risk)`);
                         }
@@ -472,6 +477,14 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
 
                 if (['eval', 'Function', 'exec', 'execSync', 'spawn', 'fork'].includes(name)) {
                     dangerousCalls.add(name);
+                }
+
+                // Function constructor reached indirectly, e.g. (()=>{}).constructor('code')() or
+                // [].constructor.constructor('code') — builds executable code at runtime, bypassing the
+                // literal eval/Function name check above.
+                if (node.callee.type === 'MemberExpression' && node.callee.property &&
+                    node.callee.property.type === 'Identifier' && node.callee.property.name === 'constructor') {
+                    dangerousCalls.add(`Function constructor via .constructor (obfuscation risk)`);
                 }
             },
             MemberExpression(node, ancestors) {
@@ -519,6 +532,34 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                 if (/eval|exec|dbAsync|updateOption/.test(text)) {
                     // Only flag if it looks like it might be used for execution
                     // This is conservative
+                }
+            },
+            // Dynamic import('child_process') — parses as ImportExpression (NOT a CallExpression), so it
+            // was previously invisible to the walk and bypassed the require proxy at runtime. Treat it
+            // exactly like require(); flag non-literal specifiers as obfuscation (catches import('child'+'_process')).
+            ImportExpression(node) {
+                const arg = node.source;
+                if (arg && arg.type === 'Literal') {
+                    flagModuleLiteral(arg.value, 'import');
+                } else {
+                    dangerousCalls.add(`Dynamic import() detected (obfuscation risk)`);
+                }
+            },
+            // Static `import x from 'child_process'` — hoisted and runs before any runtime guard.
+            ImportDeclaration(node) {
+                if (node.source && node.source.type === 'Literal') {
+                    flagModuleLiteral(node.source.value, 'import');
+                }
+            },
+            // Aliasing/destructuring a sensitive global — `const p = process` or
+            // `const { getBuiltinModule } = process` — dodges the MemberExpression guard and reaches
+            // process.getBuiltinModule / process.binding / etc. Flag any binding initialized directly
+            // from a restricted global identifier. (The runtime wrap of getBuiltinModule is the primary
+            // defense; this is the static backstop.)
+            VariableDeclarator(node) {
+                if (node.init && node.init.type === 'Identifier' &&
+                    ['process', 'global', 'globalThis', 'require', 'module'].includes(node.init.name)) {
+                    dangerousCalls.add(`Aliasing restricted global '${node.init.name}' (obfuscation risk)`);
                 }
             }
         });
@@ -614,18 +655,14 @@ function scanPlugins() {
                 continue;
             }
         }
-        // 2. Fallback to finding main file (Legacy)
+        // 2. Manifest-less (legacy) plugin. SECURITY: do NOT require() the entry on the HOST to read
+        //    metadata — that executes untrusted top-level code OUTSIDE the worker sandbox (host RCE on
+        //    plugin enumeration / GET /plugins). Use directory-name metadata only; real loading happens
+        //    later, sandboxed, in the worker. Plugins wanting proper metadata must ship a manifest.json.
         else {
             mainFile = findMainFile(pluginDir);
             if (!mainFile) continue;
-
-            try {
-                const pluginModule = require(mainFile);
-                metadata = pluginModule.metadata || {};
-            } catch (error) {
-                console.error(`Error loading plugin ${entry.name}:`, error.message);
-                continue;
-            }
+            // metadata stays {} → name falls back to entry.name below; nothing is executed here.
         }
 
         plugins.push(new Plugin({

@@ -19,7 +19,9 @@
 // Mark this V8 isolate as a plugin worker BEFORE any core module loads, so core code (e.g.
 // config/app) can skip host-only, sandbox-blocked side-effects (reading/persisting
 // wordjs-config.json, secret generation) — the worker reaches all of that via the bridge instead.
-global.__WORDJS_ISOLATED__ = true;
+// Immutable (non-writable, non-configurable) so plugin code can't `delete`/reassign it to defeat the
+// guards — getEffectivePlugin()/secure-require key trust decisions on these worker globals.
+Object.defineProperty(global, '__WORDJS_ISOLATED__', { value: true, writable: false, configurable: false, enumerable: false });
 const { parentPort, workerData } = require('worker_threads');
 const path = require('path');
 
@@ -30,7 +32,8 @@ const { slug, entryFile, coreDir } = workerData;
 // reachable through the module loader, so a denylist there is useless against them — trap the globals
 // here. Trust is supplied by the HOST via workerData (re-resolved on every reload, since the trust
 // toggle reloads the worker); secure-require also reads __WORDJS_PLUGIN_TRUSTED__ for its net branch.
-global.__WORDJS_PLUGIN_TRUSTED__ = !!workerData.isTrusted;
+// Immutable: a plugin must not be able to self-promote to trusted (which would unlock raw sockets).
+Object.defineProperty(global, '__WORDJS_PLUGIN_TRUSTED__', { value: !!workerData.isTrusted, writable: false, configurable: false, enumerable: false });
 if (!global.__WORDJS_PLUGIN_TRUSTED__) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
@@ -53,6 +56,80 @@ try {
     try { parentPort.postMessage({ kind: 'fatal', error: `sandbox guard install failed: ${e && e.message}` }); } catch { /* parent gone */ }
     process.exit(1);
 }
+
+// ESM dynamic import() guard. import('child_process') uses the V8/Node ESM loader, which does NOT go
+// through the CommonJS require proxy (secure-require) — so without this an untrusted plugin could
+// `await import('node:child_process')` and get the REAL module (host RCE). Install a module-resolution
+// hook that rejects sensitive builtins for untrusted plugins. FAIL CLOSED: if no hook API is available,
+// refuse to run rather than leave the import() hole open. (require('module')/('url') here resolve to the
+// real modules: secure-require is installed but no plugin slug is set yet, so its proxies are inactive.)
+if (!global.__WORDJS_PLUGIN_TRUSTED__) {
+    const esmBlocked = new Set([
+        'child_process', 'fs', 'fs/promises', 'net', 'tls', 'dgram', 'http', 'https', 'http2',
+        'dns', 'dns/promises', 'worker_threads', 'vm', 'module', 'inspector', 'repl', 'test',
+        'trace_events', 'cluster', 'async_hooks', 'v8'
+    ]);
+    let esmGuardInstalled = false;
+    try {
+        const nodeModule = require('module');
+        if (typeof nodeModule.registerHooks === 'function') {
+            // Node 22.15+/23.5+: synchronous, in-thread resolution hook.
+            nodeModule.registerHooks({
+                resolve(specifier, context, nextResolve) {
+                    const bare = String(specifier).replace(/^node:/, '');
+                    // Match the first path segment too, so submodules (inspector/promises, dns/promises) are caught.
+                    if (esmBlocked.has(bare) || esmBlocked.has(bare.split('/')[0])) {
+                        throw new Error(`[sandbox] import('${specifier}') is blocked for untrusted plugin '${slug}'`);
+                    }
+                    return nextResolve(specifier, context);
+                }
+            });
+            esmGuardInstalled = true;
+        } else if (typeof nodeModule.register === 'function') {
+            // Node 18.19+/20.6+: async off-thread hooks via a data: URL module (no extra file to ship).
+            const { pathToFileURL } = require('url');
+            const hookSrc =
+                'let blocked = new Set();\n' +
+                'export async function initialize(d){ blocked = new Set(d.blocked); }\n' +
+                'export async function resolve(spec, ctx, next){\n' +
+                '  const bare = String(spec).replace(/^node:/, "");\n' +
+                '  if (blocked.has(bare) || blocked.has(bare.split("/")[0])) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for untrusted plugin");\n' +
+                '  return next(spec, ctx);\n' +
+                '}';
+            nodeModule.register(
+                'data:text/javascript,' + encodeURIComponent(hookSrc),
+                pathToFileURL(__filename).href,
+                { data: { blocked: [...esmBlocked] } }
+            );
+            esmGuardInstalled = true;
+        }
+    } catch {
+        esmGuardInstalled = false;
+    }
+    if (!esmGuardInstalled) {
+        try { parentPort.postMessage({ kind: 'fatal', error: 'sandbox ESM import() guard unavailable — Node >= 18.19 is required to safely run untrusted plugins' }); } catch { /* parent gone */ }
+        process.exit(1);
+    }
+}
+
+// Off-heap memory (Buffer / ArrayBuffer / native) is NOT bounded by the Worker's V8 resourceLimits
+// (maxOldGenerationSizeMb only caps the JS heap), so an untrusted plugin could allocate gigabytes and
+// OOM-crash the WHOLE host process. Watchdog: periodically check rss/external and self-terminate if
+// over budget (the host treats a worker exit as plugin death and tears it down cleanly).
+if (!global.__WORDJS_PLUGIN_TRUSTED__) {
+    const MEM_BUDGET_BYTES = 512 * 1024 * 1024; // 512 MB rss/external ceiling for an untrusted plugin
+    const memWatch = setInterval(() => {
+        try {
+            const m = process.memoryUsage();
+            if (m.rss > MEM_BUDGET_BYTES || (m.external || 0) > MEM_BUDGET_BYTES) {
+                try { parentPort.postMessage({ kind: 'fatal', error: `[sandbox] plugin '${slug}' exceeded memory budget (rss=${m.rss}, external=${m.external})` }); } catch { /* parent gone */ }
+                process.exit(1);
+            }
+        } catch { /* memoryUsage unavailable — ignore */ }
+    }, 2000);
+    if (memWatch.unref) memWatch.unref();
+}
+
 const { runWithContext } = require(path.join(coreDir, 'plugin-context'));
 
 let _id = 0;
@@ -83,6 +160,9 @@ const wordjs = {
     slug,
     options: { get: (k, d) => callHost('options.get', [k, d]), set: (k, v) => callHost('options.set', [k, v]) },
     db: {
+        // Per-plugin table prefix the plugin must use for its own tables (host enforces it). Mirrors
+        // the host-side createPluginApi.db.tablePrefix so an isolated plugin can build its table names.
+        tablePrefix: ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase(),
         all: (sql, p = []) => callHost('db.all', [sql, p]),
         get: (sql, p = []) => callHost('db.get', [sql, p]),
         run: (sql, p = []) => callHost('db.run', [sql, p]),
@@ -135,6 +215,19 @@ const wordjs = {
     }
 };
 
+// Bound a reply payload BEFORE postMessage so a huge object/array can't be structured-cloned onto the
+// HOST heap (the host-side cap runs only AFTER the clone). Cheap bounded node-count walk.
+function replyTooLarge(v) {
+    let n = 0;
+    const stack = [v];
+    while (stack.length) {
+        const cur = stack.pop();
+        if (++n > 2000000) return true;
+        if (cur && typeof cur === 'object') { for (const k in cur) stack.push(cur[k]); }
+    }
+    return false;
+}
+
 parentPort.on('message', async (msg) => {
     if (msg.kind === 'reply') {
         const p = pending.get(msg.id);
@@ -146,6 +239,7 @@ parentPort.on('message', async (msg) => {
         const cb = callbacks.get(msg.cbId);
         try {
             const value = cb ? await cb(...msg.args) : (msg.args[0]);
+            if (replyTooLarge(value)) { parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: false, error: 'reply payload too large' }); return; }
             parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: true, value });
         } catch (e) {
             parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
@@ -157,6 +251,7 @@ parentPort.on('message', async (msg) => {
         let settled = false;
         const reply = (status, body, headers, cookies) => {
             if (settled) return; settled = true;
+            if (replyTooLarge(body)) { parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: false, error: 'response body too large' }); return; }
             parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers, cookies } });
         };
         const res = {
@@ -209,10 +304,22 @@ parentPort.on('message', async (msg) => {
 // Load + initialize the plugin inside its context.
 (async () => {
     try {
-        const plugin = require(entryFile);
-        if (typeof plugin.init === 'function') {
-            await runWithContext(slug, () => plugin.init(wordjs));
-        }
+        // Fail-closed attribution: from here on, any code in this worker with no ALS context and no
+        // plugin stack frame (the entry's top-level, or a detached setImmediate/queueMicrotask/
+        // Promise.then callback) is still attributed to THIS plugin by getEffectivePlugin(), so the
+        // runtime guards never treat it as unguarded "core". Set only NOW so the worker's own core
+        // bootstrap above loaded its modules unproxied.
+        // Immutable: this is the fail-closed attribution backstop — plugin code must not be able to
+        // `delete global.__WORDJS_PLUGIN_SLUG__` to make getEffectivePlugin() return null (= core).
+        Object.defineProperty(global, '__WORDJS_PLUGIN_SLUG__', { value: slug, writable: false, configurable: false, enumerable: false });
+        // Require AND init the entry INSIDE the plugin context (ALS), so even the entry's top-level
+        // code is sandboxed (previously require(entryFile) ran with an empty context).
+        await runWithContext(slug, async () => {
+            const plugin = require(entryFile);
+            if (typeof plugin.init === 'function') {
+                await plugin.init(wordjs);
+            }
+        });
         parentPort.postMessage({ kind: 'ready' });
     } catch (e) {
         parentPort.postMessage({ kind: 'init-error', error: String(e && e.stack || e) });

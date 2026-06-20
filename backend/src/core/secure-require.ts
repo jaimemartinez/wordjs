@@ -275,7 +275,10 @@ const originalRequire = Module.prototype.require;
 // Modules whose entire surface is unsafe for plugins (worker spawning, arbitrary code
 // compilation, internal Module machinery, debugger control). We return a Proxy that
 // resolves fine but throws on ANY use, so require() succeeds but the module is inert.
-const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events'];
+// NOTE: keep in sync with the ESM import() blocklist in plugin-worker.js (esmBlocked). 'cluster' is
+// critical: cluster.fork() spawns a host node process through plumbing it captured at load time —
+// it never re-enters the patched require/_load, so it bypasses the child_process proxy entirely.
+const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8'];
 
 // Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
 // (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and
@@ -297,16 +300,19 @@ function createBlockedModuleProxy(pluginSlug, norm) {
 }
 
 function secureModuleFor(id) {
-    // Normalize the 'node:' prefix first so require('node:child_process') is proxied too.
+    // Normalize the 'node:' prefix, then match on the FIRST PATH SEGMENT so SUBMODULES of a blocked
+    // builtin are caught too — e.g. require('inspector/promises') (its Session.connectToMainThread() is
+    // a worker->host escape) or 'dns/promises'. Exact-string matching missed these.
     const norm = String(id).replace(/^node:/, '');
-    const isNet = NETWORK_MODULES.has(norm);
-    if (norm !== 'fs' && norm !== 'child_process' && norm !== 'fs/promises'
-        && !BLOCKED_PLUGIN_MODULES.includes(norm) && !isNet) return undefined;
+    const base = norm.split('/')[0];
+    const isNet = NETWORK_MODULES.has(norm) || NETWORK_MODULES.has(base);
+    const isBlocked = BLOCKED_PLUGIN_MODULES.includes(norm) || BLOCKED_PLUGIN_MODULES.includes(base);
+    if (base !== 'fs' && base !== 'child_process' && !isBlocked && !isNet) return undefined;
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return undefined;
-    if (norm === 'fs') return secureFs;
-    if (norm === 'child_process') return secureChildProcess;
     if (norm === 'fs/promises') return createSecureFsPromises();
+    if (base === 'fs') return secureFs;
+    if (base === 'child_process') return secureChildProcess;
     if (isNet) {
         // Trusted plugins (e.g. mail-server's SMTP/MX delivery) keep raw sockets; untrusted are denied.
         // Inside a worker, trust is supplied by the bootstrap (workerData → __WORDJS_PLUGIN_TRUSTED__)
@@ -545,6 +551,55 @@ function installSecureRequire() {
             return origDlopen.apply(this, args);
         };
     }
+
+    // 3c. process.getBuiltinModule(id) (Node >=22.3) is a DIRECT C++-backed accessor that returns the
+    //     fully-formed builtin WITHOUT routing through Module._load / Module.prototype.require / the ESM
+    //     loader / process.binding — bypassing every other guard. Route it through the same module
+    //     policy for plugins: secure proxy for fs/child_process, inert blocked proxy for
+    //     worker_threads/vm/module/net/... Non-sensitive ids fall through to the real builtin.
+    const origGetBuiltin = (process as any).getBuiltinModule;
+    if (typeof origGetBuiltin === 'function') {
+        (process as any).getBuiltinModule = function (id: string) {
+            const pluginSlug = getEffectivePlugin();
+            if (pluginSlug) {
+                const secure = secureModuleFor(id);
+                if (secure !== undefined) return secure;
+            }
+            return origGetBuiltin.apply(this, arguments);
+        };
+    }
+
+    // 3d. Host-lifecycle / privilege process methods. process.kill/abort can crash the WHOLE host
+    //     process from a worker (workers share the host PID), and chdir/umask/setuid/setgid change host
+    //     process state — DoS / containment bypass. Throw for any plugin context.
+    const PROC_BLOCKED = ['kill', 'abort', 'exit', 'chdir', 'umask', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups', 'initgroups', '_kill'];
+    for (const m of PROC_BLOCKED) {
+        const orig = (process as any)[m];
+        if (typeof orig === 'function') {
+            (process as any)[m] = function (...args) {
+                const pluginSlug = getEffectivePlugin();
+                if (pluginSlug) {
+                    throw createSecurityError(pluginSlug, `process.${m}`, 'host process control is not permitted in the plugin sandbox');
+                }
+                return orig.apply(this, args);
+            };
+        }
+    }
+    // 3e. process.report.writeReport() writes a diagnostic JSON to an arbitrary host path (file write +
+    //     worker-state/secret disclosure), bypassing io-guard. Block it for plugin context.
+    try {
+        const rep = (process as any).report;
+        if (rep && typeof rep.writeReport === 'function') {
+            const origWriteReport = rep.writeReport.bind(rep);
+            rep.writeReport = function (...args) {
+                const pluginSlug = getEffectivePlugin();
+                if (pluginSlug) {
+                    throw createSecurityError(pluginSlug, 'process.report.writeReport', 'is not permitted in the plugin sandbox');
+                }
+                return origWriteReport(...args);
+            };
+        }
+    } catch { /* process.report unavailable */ }
 
     // 4. Anchor plugin-scheduled timers. Capture the effective plugin AT SCHEDULE time (its frame
     //    is on the stack then) and re-enter its context when the callback fires — so a plugin can't

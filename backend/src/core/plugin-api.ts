@@ -34,37 +34,108 @@ const UPLOADS_DIR = path.join(ROOT_DIR, 'uploads');
 // Deliberately broad (matches getProtectedEnv): the previous narrow list let an untrusted plugin
 // read options like `stripe_key`, `api_key`, `*_credential`, `encryption_key`, certs, etc.
 const PROTECTED_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privatekey|dkim|\bkey\b|[_-]key\b|key$|api[_-]?key|token|\bsalt\b|jwt|credential|encryption|signing|certificate|\.pem|access[_-]?key/i;
+// Security-critical option NAMES that PROTECTED_OPTION_RE misses (no secret-ish word) but control
+// authorization / site integrity. Writing 'wordjs_user_roles' rewrites the role->capability map =
+// full privilege escalation; 'active_plugins' enables/disables plugins; 'siteurl' can break the
+// migration/host guard. Off-limits (read AND write) to untrusted plugins.
+const PROTECTED_OPTION_NAMES = new Set([
+    'wordjs_user_roles', 'user_roles', 'roles', 'active_plugins', 'default_role',
+    'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home',
+    // 'trusted_plugins' drives the trust system — writing it self-promotes a plugin to the privileged
+    // tier on next boot (full sandbox escape). Off-limits to untrusted plugins.
+    'trusted_plugins', 'trusted_plugin', 'trustedsystemplugins'
+]);
+const isProtectedOption = (key: string, slug: string): boolean =>
+    !isTrustedPlugin(slug) &&
+    (PROTECTED_OPTION_RE.test(String(key)) || PROTECTED_OPTION_NAMES.has(String(key).toLowerCase()));
+
 // Core DB tables a plugin may never touch (mirrors the dbAsync scoping in secure-require).
 const PROTECTED_TABLES = new Set(['users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions']);
 
-// Reject any SQL that references a core table. Regex *structural* parsing of SQL is bypassable
-// (comma joins `FROM a, users`, subqueries, and comment-as-whitespace `FROM/**/users` all slip a
-// table past a `FROM <table>` matcher). So strip comments, then deny if a protected table name
-// appears as a STANDALONE WORD anywhere in the statement — a conservative text denylist, not a
-// parse. Over-blocks queries that merely mention a core-table name (acceptable: an untrusted plugin
-// has no business naming core tables). Trusted plugins skip this entirely (see callers).
-function assertSqlAllowed(sql: string) {
-    const stripped = String(sql || '')
+// Constrain untrusted-plugin SQL. Beyond the core-table denylist, REJECT dangerous constructs that a
+// table-name denylist misses: ATTACH/DETACH (mounts arbitrary host files as a DB -> file read/write),
+// PRAGMA (info disclosure / settings), schema catalogs (enumerate/read core schema), and stacked
+// statements ('SELECT 1; DROP TABLE x'). Then require the statement to START with one of the caller's
+// allowed verbs (positive allowlist). Comments are stripped first so they can't act as whitespace to
+// evade. Trusted plugins skip this entirely (see callers).
+function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: string) {
+    const lower = String(sql || '')
         .replace(/\/\*[\s\S]*?\*\//g, ' ')   // /* block comments */ (used as whitespace to evade)
         .replace(/--[^\n]*/g, ' ')           // -- line comments
+        .trim()
         .toLowerCase();
+
+    if (/\battach\b/.test(lower) || /\bdetach\b/.test(lower) || /\bpragma\b/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: ATTACH/DETACH/PRAGMA are not permitted.`);
+    }
+    if (/\bsqlite_(master|schema|temp_master|temp_schema)\b/.test(lower) ||
+        /\binformation_schema\b/.test(lower) || /\bpg_catalog\b/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: querying the schema catalog is not permitted.`);
+    }
+    // Single statement only — strip a single trailing ';' then reject any remaining one.
+    if (lower.replace(/;\s*$/, '').includes(';')) {
+        throw new Error(`🛡️ Plugin DB access denied: multiple statements are not permitted.`);
+    }
+    // Positive leading-verb allowlist (e.g. read = SELECT/WITH; write = INSERT/UPDATE/DELETE/...).
+    const verb = (lower.match(/^([a-z]+)/) || [])[1] || '';
+    if (allowedVerbs.length && !allowedVerbs.includes(verb)) {
+        throw new Error(`🛡️ Plugin DB access denied: '${verb || '(empty)'}' statements are not permitted here.`);
+    }
+    // Core-table denylist (defense in depth alongside the prefix allowlist below).
     for (const t of PROTECTED_TABLES) {
-        if (new RegExp(`\\b${t}\\b`).test(stripped)) {
+        if (new RegExp(`\\b${t}\\b`).test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
+        }
+    }
+    // Allow-by-PREFIX (default-deny): every table the query touches must be one the plugin OWNS
+    // (created via createTable under its wjp_<slug>_ prefix). This replaces the leaky denylist with
+    // default-deny — a plugin can't read another plugin's tables (e.g. mail-server's received_emails)
+    // or any core table, even one not in PROTECTED_TABLES.
+    if (tablePrefix) {
+        // Normalize SQL identifier delimiters — SQLite [brackets], plus "double" and `back` quotes — to
+        // spaces so a delimiter-quoted name like [posts] / "posts" can't slip past attribution. (Leave
+        // ' string literals alone.) Then every table-introducing keyword must be followed by a table
+        // identifier OWNED by this plugin (prefixed); FAIL-CLOSED — an unattributable/non-prefixed token
+        // is denied, not ignored.
+        const norm = lower.replace(/[[\]"`]/g, ' ');
+        if (/\bfrom\s+[a-z_][\w$.]*\s*,/.test(norm)) {
+            throw new Error(`🛡️ Plugin DB access denied: comma joins are not permitted; use explicit JOIN.`);
+        }
+        const tableRe = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+([^\s(;]+)/g;
+        let m;
+        while ((m = tableRe.exec(norm))) {
+            const tok = m[1];
+            // A subquery `FROM (SELECT ...)` puts '(' right after the keyword → no token captured here;
+            // its inner FROM is matched separately. Any captured token must be a prefixed identifier.
+            if (!/^[a-z_][a-z0-9_$.]*$/.test(tok) || !tok.startsWith(tablePrefix)) {
+                throw new Error(`🛡️ Plugin DB access denied: table '${tok}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
+            }
+        }
+        // INDEX DDL: CREATE [UNIQUE] INDEX <name> ON <table> (...) / DROP INDEX <name>. The generic
+        // table matcher above misses the `ON <table>` target and the index name, so scope them too.
+        if (/\bindex\b/.test(norm)) {
+            const onTbl = norm.match(/\bon\s+([^\s(;]+)/);
+            if (onTbl && (!/^[a-z_][a-z0-9_$.]*$/.test(onTbl[1]) || !onTbl[1].startsWith(tablePrefix))) {
+                throw new Error(`🛡️ Plugin DB access denied: index target '${onTbl[1]}' is not owned by this plugin.`);
+            }
+            const idxName = norm.match(/\b(?:create(?:\s+unique)?\s+index|drop\s+index)(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;]+)/);
+            if (idxName && (!/^[a-z_][a-z0-9_$.]*$/.test(idxName[1]) || !idxName[1].startsWith(tablePrefix))) {
+                throw new Error(`🛡️ Plugin DB access denied: index name '${idxName[1]}' must use the '${tablePrefix}' prefix.`);
+            }
         }
     }
 }
 
 // Confine a plugin-supplied relative path to its own dir or the uploads dir; realpath-checked.
-function resolvePluginPath(slug: string, relPath: string, mustExist: boolean): string {
+function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, allowUploads = true): string {
     const base = slug.startsWith('theme:') ? path.join(ROOT_DIR, 'themes', slug.slice(6)) : path.join(PLUGINS_DIR, slug);
     const candidate = path.resolve(base, String(relPath || ''));
     const real = (() => {
         try { return fs.realpathSync(candidate); } catch { return candidate; }
     })();
     const ok = (dir: string) => real === dir || real.startsWith(dir + path.sep);
-    if (!ok(base) && !ok(UPLOADS_DIR)) {
-        throw new Error(`🛡️ Plugin path denied: '${relPath}' is outside the plugin dir and uploads.`);
+    if (!ok(base) && !(allowUploads && ok(UPLOADS_DIR))) {
+        throw new Error(`🛡️ Plugin path denied: '${relPath}' is outside the plugin dir${allowUploads ? ' and uploads' : ''}.`);
     }
     if (mustExist && !fs.existsSync(real)) throw new Error(`File not found: ${relPath}`);
     return real;
@@ -74,6 +145,9 @@ function resolvePluginPath(slug: string, relPath: string, mustExist: boolean): s
  * Build the `wordjs` capability object for a plugin. `slug` is the plugin (or `theme:<slug>`).
  */
 function createPluginApi(slug: string) {
+    // Per-plugin table namespace (like WordPress $wpdb->prefix). Untrusted plugins may only create
+    // and query tables under this prefix (enforced in createTable + assertSqlAllowed).
+    const tablePrefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
     return {
         slug,
 
@@ -82,7 +156,7 @@ function createPluginApi(slug: string) {
                 verifyPermission('settings', 'read');
                 // Secret-named options are off-limits UNLESS the plugin is operator-trusted
                 // (config.trustedSystemPlugins, e.g. mail-server reading its own DKIM private key).
-                if (PROTECTED_OPTION_RE.test(String(key)) && !isTrustedPlugin(slug)) {
+                if (isProtectedOption(key, slug)) {
                     throw new Error(`🛡️ Option '${key}' is not readable by plugins.`);
                 }
                 const { getOption } = require('./options');
@@ -90,7 +164,7 @@ function createPluginApi(slug: string) {
             },
             async set(key: string, value: any) {
                 verifyPermission('settings', 'write');
-                if (PROTECTED_OPTION_RE.test(String(key)) && !isTrustedPlugin(slug)) {
+                if (isProtectedOption(key, slug)) {
                     throw new Error(`🛡️ Option '${key}' is not writable by plugins.`);
                 }
                 const { updateOption } = require('./options');
@@ -99,32 +173,41 @@ function createPluginApi(slug: string) {
         },
 
         db: {
+            // Per-plugin table prefix the plugin must use for its own tables (like $wpdb->prefix).
+            tablePrefix,
             // Read-only query (SELECT). Table-scoped away from core tables — UNLESS the plugin is
             // operator-trusted (config.trustedSystemPlugins, e.g. db-migration), which lifts the
             // scoping so it can touch core tables. The isolate is still the boundary; host-enforced.
             async all(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.all(sql, params);
             },
             async get(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.get(sql, params);
             },
             // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER). Scoped unless `database:admin`.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql);
+                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.run(sql, params);
             },
             // Create a table (driver-agnostic). Core-table names are blocked unless `database:admin`.
             async createTable(name: string, columns: string[]) {
                 verifyPermission('database', 'write');
-                if (!isTrustedPlugin(slug) && PROTECTED_TABLES.has(String(name).toLowerCase())) {
+                if (!isTrustedPlugin(slug)) {
+                    // Untrusted plugins may only create tables under their own prefix, so they can't
+                    // create/shadow core or other plugins' tables and assertSqlAllowed can attribute
+                    // their queries by prefix.
+                    if (!String(name).toLowerCase().startsWith(tablePrefix)) {
+                        throw new Error(`🛡️ Plugin tables must be named with the '${tablePrefix}' prefix (use wordjs.db.tablePrefix).`);
+                    }
+                } else if (PROTECTED_TABLES.has(String(name).toLowerCase())) {
                     throw new Error(`🛡️ Plugin DB access denied: '${name}' is a core table.`);
                 }
                 const { createPluginTable } = require('../config/database');
@@ -148,8 +231,12 @@ function createPluginApi(slug: string) {
                 return addFilter(hook, cb, priority);
             },
             doAction(hook: string, ...args: any[]) {
-                const { doAction } = require('./hooks');
-                return doAction(hook, ...args);
+                const hooksMod = require('./hooks');
+                // Untrusted plugins may only fire their OWN registered callbacks (the same scoping cron
+                // uses), never arbitrary CORE / other-plugin action handlers — so a plugin can't trigger
+                // privileged core side effects with attacker-controlled args.
+                if (!isTrustedPlugin(slug)) return hooksMod.doActionForPlugin(hook, slug, ...args);
+                return hooksMod.doAction(hook, ...args);
             }
         },
 
@@ -174,7 +261,9 @@ function createPluginApi(slug: string) {
             },
             async write(relPath: string, data: any) {
                 verifyPermission('filesystem', 'write');
-                const target = resolvePluginPath(slug, relPath, false);
+                // Untrusted plugins write only inside their OWN dir — not the shared public uploads dir
+                // (where an .html/.svg could be served to other users). Trusted plugins keep uploads.
+                const target = resolvePluginPath(slug, relPath, false, isTrustedPlugin(slug));
                 if (path.basename(target).toLowerCase() === 'manifest.json') throw new Error('🛡️ manifest.json is immutable.');
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });
                 return fs.promises.writeFile(target, data);

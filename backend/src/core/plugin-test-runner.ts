@@ -9,6 +9,16 @@ const fs = require('fs');
 
 const PLUGINS_DIR = path.resolve('./plugins');
 
+// Secret-free env allowlist for spawned test processes — never leak host secrets (JWT_SECRET, DB
+// creds, etc.) into a child node process running plugin/test code.
+const SAFE_ENV_KEYS = ['NODE_ENV', 'TZ', 'LANG', 'LC_ALL', 'PATH', 'SystemRoot', 'windir', 'TEMP', 'TMP', 'TMPDIR', 'HOMEDRIVE', 'HOMEPATH', 'PATHEXT', 'NUMBER_OF_PROCESSORS', 'OS', 'COMSPEC'];
+function safeTestEnv() {
+    const e: Record<string, string> = {};
+    for (const k of SAFE_ENV_KEYS) { if (process.env[k] !== undefined) e[k] = process.env[k] as string; }
+    e.NODE_ENV = 'test';
+    return e;
+}
+
 /**
  * Run tests for a specific plugin
  * @param {string} slug - Plugin slug
@@ -17,6 +27,16 @@ const PLUGINS_DIR = path.resolve('./plugins');
 async function runPluginTests(slug) {
     const pluginPath = path.join(PLUGINS_DIR, slug);
     const testsDir = path.join(pluginPath, 'tests');
+
+    // SECURITY: a plugin's test files are arbitrary code; `node --test` runs them on the HOST, OUTSIDE
+    // the worker sandbox. For UNTRUSTED plugins that is a host-RCE vector at activation time, so we do
+    // NOT execute them — untrusted plugins are sandboxed at load time in the worker instead. Only
+    // operator-trusted plugins (full-Node by design) get the pre-activation test run.
+    let trusted = false;
+    try { trusted = require('./plugin-trust').isTrusted(slug); } catch { /* default: untrusted */ }
+    if (!trusted) {
+        return { success: true, tests: 0, passed: 0, failed: 0, output: 'Skipped: pre-activation tests are not executed for untrusted plugins (they are sandboxed at load time).', skipped: true };
+    }
 
     // Check if tests directory exists
     if (!fs.existsSync(testsDir)) {
@@ -55,7 +75,7 @@ async function runPluginTests(slug) {
         const child = spawn('node', args, {
             cwd: pluginPath,
             stdio: 'pipe',
-            env: { ...process.env, NODE_ENV: 'test' }
+            env: safeTestEnv()  // secret-free allowlist (no host secrets leak into the test process)
         });
 
         let output = '';
