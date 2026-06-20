@@ -89,16 +89,23 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     // default-deny — a plugin can't read another plugin's tables (e.g. mail-server's received_emails)
     // or any core table, even one not in PROTECTED_TABLES.
     if (tablePrefix) {
-        // Old-style comma joins (FROM a, b) can't be attributed table-by-table by this matcher —
-        // reject them for untrusted plugins (use explicit JOIN ... ON).
-        if (/\bfrom\s+["'`]?[a-z_][\w$.]*["'`]?\s*,/.test(lower)) {
+        // Normalize SQL identifier delimiters — SQLite [brackets], plus "double" and `back` quotes — to
+        // spaces so a delimiter-quoted name like [posts] / "posts" can't slip past attribution. (Leave
+        // ' string literals alone.) Then every table-introducing keyword must be followed by a table
+        // identifier OWNED by this plugin (prefixed); FAIL-CLOSED — an unattributable/non-prefixed token
+        // is denied, not ignored.
+        const norm = lower.replace(/[[\]"`]/g, ' ');
+        if (/\bfrom\s+[a-z_][\w$.]*\s*,/.test(norm)) {
             throw new Error(`🛡️ Plugin DB access denied: comma joins are not permitted; use explicit JOIN.`);
         }
-        const tableRe = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+["'`]?([a-z_][a-z0-9_$]*)/g;
+        const tableRe = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+([^\s(;]+)/g;
         let m;
-        while ((m = tableRe.exec(lower))) {
-            if (!m[1].startsWith(tablePrefix)) {
-                throw new Error(`🛡️ Plugin DB access denied: table '${m[1]}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
+        while ((m = tableRe.exec(norm))) {
+            const tok = m[1];
+            // A subquery `FROM (SELECT ...)` puts '(' right after the keyword → no token captured here;
+            // its inner FROM is matched separately. Any captured token must be a prefixed identifier.
+            if (!/^[a-z_][a-z0-9_$.]*$/.test(tok) || !tok.startsWith(tablePrefix)) {
+                throw new Error(`🛡️ Plugin DB access denied: table '${tok}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
             }
         }
     }

@@ -566,6 +566,38 @@ function installSecureRequire() {
         };
     }
 
+    // 3d. Host-lifecycle / privilege process methods. process.kill/abort can crash the WHOLE host
+    //     process from a worker (workers share the host PID), and chdir/umask/setuid/setgid change host
+    //     process state — DoS / containment bypass. Throw for any plugin context.
+    const PROC_BLOCKED = ['kill', 'abort', 'exit', 'chdir', 'umask', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups', 'initgroups', '_kill'];
+    for (const m of PROC_BLOCKED) {
+        const orig = (process as any)[m];
+        if (typeof orig === 'function') {
+            (process as any)[m] = function (...args) {
+                const pluginSlug = getEffectivePlugin();
+                if (pluginSlug) {
+                    throw createSecurityError(pluginSlug, `process.${m}`, 'host process control is not permitted in the plugin sandbox');
+                }
+                return orig.apply(this, args);
+            };
+        }
+    }
+    // 3e. process.report.writeReport() writes a diagnostic JSON to an arbitrary host path (file write +
+    //     worker-state/secret disclosure), bypassing io-guard. Block it for plugin context.
+    try {
+        const rep = (process as any).report;
+        if (rep && typeof rep.writeReport === 'function') {
+            const origWriteReport = rep.writeReport.bind(rep);
+            rep.writeReport = function (...args) {
+                const pluginSlug = getEffectivePlugin();
+                if (pluginSlug) {
+                    throw createSecurityError(pluginSlug, 'process.report.writeReport', 'is not permitted in the plugin sandbox');
+                }
+                return origWriteReport(...args);
+            };
+        }
+    } catch { /* process.report unavailable */ }
+
     // 4. Anchor plugin-scheduled timers. Capture the effective plugin AT SCHEDULE time (its frame
     //    is on the stack then) and re-enter its context when the callback fires — so a plugin can't
     //    strip its sandbox by deferring fs/exec to a later tick where ALS + the stack frame are gone.

@@ -113,6 +113,21 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
         const replySize = (v: any): number => {
             if (typeof v === 'string') return Buffer.byteLength(v);
             if (Buffer.isBuffer(v) || v instanceof Uint8Array) return (v as any).byteLength || (v as any).length || 0;
+            if (v && typeof v === 'object') {
+                // Bounded structural estimate so a giant nested object/array reply ALSO trips the cap
+                // (it was already structured-cloned onto the host; we reject + recycle to stop repeats).
+                let bytes = 0, n = 0;
+                const stack: any[] = [v];
+                while (stack.length) {
+                    const cur = stack.pop();
+                    if (++n > 5_000_000) return Number.MAX_SAFE_INTEGER; // pathological node count → over budget
+                    if (typeof cur === 'string') bytes += cur.length;
+                    else if (cur && typeof cur === 'object') { for (const k in cur) stack.push((cur as any)[k]); bytes += 16; }
+                    else bytes += 8;
+                    if (bytes > MAX_REPLY_BYTES) return bytes;
+                }
+                return bytes;
+            }
             return 0;
         };
         const rpcSettle = (map: Map<number, any>, msg: any, value: any) => {
@@ -181,8 +196,23 @@ function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
                 }
             } else if (msg.kind === 'register') {
                 if (registrationRejected(registeredHooks, MAX_HOOKS, 'hooks')) return;
-                // Install a shim in the real hook system that calls back into the isolate.
-                const shim = (...args: any[]) => invokeWorker(msg.cbId, args);
+                // Install a shim in the real hook system that calls back into the isolate. Cap the
+                // latency a plugin shim can inject into a CORE hook: race the worker call against a short
+                // timeout that falls back to the unchanged value (filters) / no-op (actions), so a slow
+                // or hung plugin can't add up to RPC_TIMEOUT_MS (30s) to every request that fires the
+                // hook. The underlying RPC still times out and recycles the wedged worker separately.
+                const HOOK_SHIM_TIMEOUT_MS = 2000;
+                const shim = (...args: any[]) => {
+                    let t: any;
+                    const fallback = new Promise((resolve) => {
+                        t = setTimeout(() => resolve(args[0]), HOOK_SHIM_TIMEOUT_MS);
+                        if (t.unref) t.unref();
+                    });
+                    return Promise.race([
+                        invokeWorker(msg.cbId, args).then((v) => { clearTimeout(t); return v; }, () => { clearTimeout(t); return args[0]; }),
+                        fallback,
+                    ]);
+                };
                 registeredHooks.push({ hook: msg.hook, type: msg.hookType, shim });
                 runWithContext(slug, () => {
                     if (msg.hookType === 'filter') hooks.addFilter(msg.hook, shim, msg.priority);
