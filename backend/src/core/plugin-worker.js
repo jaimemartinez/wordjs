@@ -77,7 +77,8 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
             nodeModule.registerHooks({
                 resolve(specifier, context, nextResolve) {
                     const bare = String(specifier).replace(/^node:/, '');
-                    if (esmBlocked.has(bare)) {
+                    // Match the first path segment too, so submodules (inspector/promises, dns/promises) are caught.
+                    if (esmBlocked.has(bare) || esmBlocked.has(bare.split('/')[0])) {
                         throw new Error(`[sandbox] import('${specifier}') is blocked for untrusted plugin '${slug}'`);
                     }
                     return nextResolve(specifier, context);
@@ -92,7 +93,7 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
                 'export async function initialize(d){ blocked = new Set(d.blocked); }\n' +
                 'export async function resolve(spec, ctx, next){\n' +
                 '  const bare = String(spec).replace(/^node:/, "");\n' +
-                '  if (blocked.has(bare)) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for untrusted plugin");\n' +
+                '  if (blocked.has(bare) || blocked.has(bare.split("/")[0])) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for untrusted plugin");\n' +
                 '  return next(spec, ctx);\n' +
                 '}';
             nodeModule.register(
@@ -214,6 +215,19 @@ const wordjs = {
     }
 };
 
+// Bound a reply payload BEFORE postMessage so a huge object/array can't be structured-cloned onto the
+// HOST heap (the host-side cap runs only AFTER the clone). Cheap bounded node-count walk.
+function replyTooLarge(v) {
+    let n = 0;
+    const stack = [v];
+    while (stack.length) {
+        const cur = stack.pop();
+        if (++n > 2000000) return true;
+        if (cur && typeof cur === 'object') { for (const k in cur) stack.push(cur[k]); }
+    }
+    return false;
+}
+
 parentPort.on('message', async (msg) => {
     if (msg.kind === 'reply') {
         const p = pending.get(msg.id);
@@ -225,6 +239,7 @@ parentPort.on('message', async (msg) => {
         const cb = callbacks.get(msg.cbId);
         try {
             const value = cb ? await cb(...msg.args) : (msg.args[0]);
+            if (replyTooLarge(value)) { parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: false, error: 'reply payload too large' }); return; }
             parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: true, value });
         } catch (e) {
             parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
@@ -236,6 +251,7 @@ parentPort.on('message', async (msg) => {
         let settled = false;
         const reply = (status, body, headers, cookies) => {
             if (settled) return; settled = true;
+            if (replyTooLarge(body)) { parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: false, error: 'response body too large' }); return; }
             parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers, cookies } });
         };
         const res = {

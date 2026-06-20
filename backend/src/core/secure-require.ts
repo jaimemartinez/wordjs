@@ -300,16 +300,19 @@ function createBlockedModuleProxy(pluginSlug, norm) {
 }
 
 function secureModuleFor(id) {
-    // Normalize the 'node:' prefix first so require('node:child_process') is proxied too.
+    // Normalize the 'node:' prefix, then match on the FIRST PATH SEGMENT so SUBMODULES of a blocked
+    // builtin are caught too — e.g. require('inspector/promises') (its Session.connectToMainThread() is
+    // a worker->host escape) or 'dns/promises'. Exact-string matching missed these.
     const norm = String(id).replace(/^node:/, '');
-    const isNet = NETWORK_MODULES.has(norm);
-    if (norm !== 'fs' && norm !== 'child_process' && norm !== 'fs/promises'
-        && !BLOCKED_PLUGIN_MODULES.includes(norm) && !isNet) return undefined;
+    const base = norm.split('/')[0];
+    const isNet = NETWORK_MODULES.has(norm) || NETWORK_MODULES.has(base);
+    const isBlocked = BLOCKED_PLUGIN_MODULES.includes(norm) || BLOCKED_PLUGIN_MODULES.includes(base);
+    if (base !== 'fs' && base !== 'child_process' && !isBlocked && !isNet) return undefined;
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return undefined;
-    if (norm === 'fs') return secureFs;
-    if (norm === 'child_process') return secureChildProcess;
     if (norm === 'fs/promises') return createSecureFsPromises();
+    if (base === 'fs') return secureFs;
+    if (base === 'child_process') return secureChildProcess;
     if (isNet) {
         // Trusted plugins (e.g. mail-server's SMTP/MX delivery) keep raw sockets; untrusted are denied.
         // Inside a worker, trust is supplied by the bootstrap (workerData → __WORDJS_PLUGIN_TRUSTED__)
