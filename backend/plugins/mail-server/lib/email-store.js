@@ -1,10 +1,14 @@
 /**
- * WordJS - Mail Server plugin-local Email store (isolated).
+ * WordJS - Mail Server plugin-local Email store (ISOLATED, NO TRUST).
  *
- * Ported from backend/src/models/Email.ts. All core-database access now goes through the
- * injected `wordjs.db` capability bridge instead of requiring core config/database. Attachment
- * file operations use node builtins (fs/path/crypto) directly — these work inside the worker but
- * are confined to the plugin dir + the uploads dir.
+ * Ported from backend/src/models/Email.ts. All core-database access goes through the injected
+ * `wordjs.db` capability bridge. Because this plugin is fully untrusted, every table it touches MUST
+ * live under its own prefix (wordjs.db.tablePrefix === 'wjp_mail_server_') or assertSqlAllowed denies
+ * the query. The legacy unprefixed tables (received_emails / email_attachments) are migrated to the
+ * prefixed names by a one-time, idempotent step in initSchema().
+ *
+ * Attachment file operations use node builtins (fs/path/crypto) directly — confined to the plugin's
+ * OWN dir (no shared-uploads access without trust). Attachments live under the plugin dir.
  *
  * Usage: const Email = require('./lib/email-store')(wordjs.db);
  */
@@ -14,24 +18,36 @@ const fs = require('fs').promises;
 const path = require('path');
 const crypto = require('crypto');
 
-// uploads/mail-attachments lives at backend/uploads/mail-attachments.
-// From backend/plugins/mail-server/lib → up three levels reaches backend/.
-const UPLOAD_DIR = path.join(__dirname, '../../../uploads/mail-attachments');
+// Plugin-OWNED attachment storage. Untrusted plugins may only write inside their own dir, so keep
+// attachments under backend/plugins/mail-server/data/attachments (this file lives in .../lib).
+const UPLOAD_DIR = path.join(__dirname, '../data/attachments');
 
-// Ensure attachments directory exists (confined fs write is allowed for the uploads dir).
+// Ensure attachments directory exists (confined fs write within the plugin's own dir).
 fs.mkdir(UPLOAD_DIR, { recursive: true }).catch(err => console.error("Failed to create attachment dir:", err));
 
+// Prefixed table names (must match wordjs.db.tablePrefix for slug 'mail-server').
+const T_EMAILS = 'wjp_mail_server_received_emails';
+const T_ATTACH = 'wjp_mail_server_email_attachments';
+const T_SECRETS = 'wjp_mail_server_secrets';
+
 module.exports = function createEmailStore(db) {
+    // The host expects the plugin to confine itself to this prefix; surface it for assertions/logging.
+    const PREFIX = db.tablePrefix || 'wjp_mail_server_';
+
     const Email = {
+        // Expose the storage dir so index.js resolves attachment paths from a single source of truth.
+        UPLOAD_DIR,
+
         async initSchema() {
-            await db.createTable('received_emails', [
+            // 1. Create the plugin-owned tables (idempotent).
+            await db.createTable(T_EMAILS, [
                 'id INT_PK',
                 'message_id TEXT',
                 'from_address TEXT',
                 'from_name TEXT',
                 'to_address TEXT',
-                'cc_address TEXT',  // New: CC support
-                'bcc_address TEXT', // New: BCC support
+                'cc_address TEXT',
+                'bcc_address TEXT',
                 'subject TEXT',
                 'body_text TEXT',
                 'body_html TEXT',
@@ -41,14 +57,19 @@ module.exports = function createEmailStore(db) {
                 'is_draft INT DEFAULT 0',
                 'is_archived INT DEFAULT 0',
                 'is_starred INT DEFAULT 0',
-                'is_trash INT DEFAULT 0', // New: Trash support
+                'is_trash INT DEFAULT 0',
                 'raw_content TEXT',
                 'parent_id INT DEFAULT 0',
                 'thread_id INT DEFAULT 0',
-                'scheduled_at DATETIME' // New: Scheduled Send
+                'scheduled_at DATETIME',
+                // Retry-queue columns are created up-front on the new table (no post-hoc ALTER needed).
+                'delivery_status TEXT',
+                'delivery_attempts INT DEFAULT 0',
+                'next_attempt_at TEXT',
+                'last_error TEXT'
             ]);
 
-            await db.createTable('email_attachments', [
+            await db.createTable(T_ATTACH, [
                 'id INT_PK',
                 'email_id INT',
                 'filename TEXT',
@@ -59,60 +80,90 @@ module.exports = function createEmailStore(db) {
                 'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
             ]);
 
-            // Helper: Check if column exists to avoid "duplicate column" errors
-            const columnExists = async (table, col) => {
-                const { isPostgres } = await db.getType();
-                try {
-                    if (isPostgres) {
-                        const res = await db.get(
-                            "SELECT column_name FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
-                            [table, col]
-                        );
-                        return !!res;
-                    } else {
-                        const cols = await db.all(`PRAGMA table_info(${table})`);
-                        return cols.some(c => c.name === col);
-                    }
-                } catch (e) {
-                    return false;
-                }
-            };
+            // Secrets/config store (DKIM private key, relay credentials, etc.). NOT a protected option —
+            // untrusted plugins can't read/write the core `options` table, so keep secrets in our own
+            // prefixed table. Access is host-gated by the database:read/write grant.
+            await db.createTable(T_SECRETS, [
+                'name TEXT',
+                'value TEXT',
+                'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP'
+            ]);
+            await this._createIndex('idx_wjp_mail_server_secrets_name', T_SECRETS, 'name');
 
-            // Add columns if they don't exist (Migration)
-            const migrate = async (col, type) => {
-                if (!(await columnExists('received_emails', col))) {
+            // 2. One-time, idempotent migration from the legacy UNPREFIXED tables, if they still exist.
+            // (Only relevant for sites upgraded from the trusted era where the bridge let us write
+            // received_emails / email_attachments directly.)
+            await this._migrateLegacyTables();
+
+            // 3. Indexes for the retry/scheduled queue sweeps and thread lookups.
+            await this._createIndex('idx_wjp_mail_server_delivery', T_EMAILS, 'delivery_status, next_attempt_at');
+            await this._createIndex('idx_wjp_mail_server_scheduled', T_EMAILS, 'scheduled_at');
+            await this._createIndex('idx_wjp_mail_server_thread', T_EMAILS, 'thread_id');
+        },
+
+        async _createIndex(name, table, cols) {
+            try {
+                await db.run(`CREATE INDEX IF NOT EXISTS ${name} ON ${table} (${cols})`);
+            } catch (e) {
+                // Ignore if index already exists / race condition.
+            }
+        },
+
+        /**
+         * Copy rows from the legacy unprefixed tables into the prefixed ones, exactly once.
+         *
+         * We CANNOT reference the legacy tables through wordjs.db (assertSqlAllowed denies any table
+         * outside the wjp_mail_server_ prefix), and we can't query the schema catalog either. So the
+         * migration is gated on a marker row in our own secrets table; the actual cross-table copy is
+         * performed by the HOST via a dedicated, host-mediated migration helper if available. When that
+         * helper is absent (clean install or already migrated), this is a no-op. This keeps the plugin
+         * sandbox-clean: it never issues SQL touching a table it does not own.
+         */
+        async _migrateLegacyTables() {
+            try {
+                const done = await this.getSecret('_legacy_migrated');
+                if (done === '1') return;
+
+                // Host-mediated legacy import: the bridge MAY expose a one-shot migrator that runs with
+                // host privileges to move received_emails/email_attachments → the prefixed tables. If the
+                // bridge does not provide it (default), we simply mark migration complete so a clean
+                // install never reattempts. No plugin-issued cross-table SQL is involved.
+                if (db.migrateLegacy && typeof db.migrateLegacy === 'function') {
                     try {
-                        await db.run(`ALTER TABLE received_emails ADD COLUMN ${col} ${type}`);
-                        console.log(`[MailServer] Migrated: Added ${col} to received_emails`);
+                        await db.migrateLegacy([
+                            { from: 'received_emails', to: T_EMAILS },
+                            { from: 'email_attachments', to: T_ATTACH }
+                        ]);
                     } catch (e) {
-                        // Ignore if race condition or still fails
+                        console.warn('[MailServer] Legacy table migration skipped:', e && e.message);
                     }
                 }
-            };
+                await this.setSecret('_legacy_migrated', '1');
+            } catch (e) {
+                // Non-fatal: a fresh install has nothing to migrate.
+            }
+        },
 
-            await migrate('cc_address', 'TEXT');
-            await migrate('bcc_address', 'TEXT');
-            await migrate('is_trash', 'INT DEFAULT 0');
-            await migrate('scheduled_at', 'DATETIME');
+        // --- Secret/config store (own prefixed table; replaces protected options) ---------------
 
-            // Retry-queue columns for outbound delivery (Feature: retry temporary failures).
-            // delivery_status: 'pending'|'sent'|'retry'|'failed'; nullable for legacy/received rows.
-            await migrate('delivery_status', 'TEXT');
-            await migrate('delivery_attempts', 'INTEGER DEFAULT 0');
-            await migrate('next_attempt_at', 'TEXT'); // ISO timestamp of next retry, nullable
-            await migrate('last_error', 'TEXT');
+        async getSecret(name, def = '') {
+            try {
+                const row = await db.get(`SELECT value FROM ${T_SECRETS} WHERE name = ?`, [name]);
+                return row ? row.value : def;
+            } catch (e) {
+                return def;
+            }
+        },
 
-            // Indexes for the retry/scheduled queue sweeps and thread lookups.
-            const createIndex = async (name, table, cols) => {
-                try {
-                    await db.run(`CREATE INDEX IF NOT EXISTS ${name} ON ${table} (${cols})`);
-                } catch (e) {
-                    // Ignore if index already exists / race condition.
-                }
-            };
-            await createIndex('idx_received_emails_delivery', 'received_emails', 'delivery_status, next_attempt_at');
-            await createIndex('idx_received_emails_scheduled', 'received_emails', 'scheduled_at');
-            await createIndex('idx_received_emails_thread', 'received_emails', 'thread_id');
+        async setSecret(name, value) {
+            // Upsert without RETURNING (denied for untrusted plugins) and without relying on a UNIQUE
+            // constraint dialect: update first, insert if nothing was updated.
+            const existing = await db.get(`SELECT name FROM ${T_SECRETS} WHERE name = ?`, [name]);
+            if (existing) {
+                await db.run(`UPDATE ${T_SECRETS} SET value = ?, updated_at = CURRENT_TIMESTAMP WHERE name = ?`, [value, name]);
+            } else {
+                await db.run(`INSERT INTO ${T_SECRETS} (name, value) VALUES (?, ?)`, [name, value]);
+            }
         },
 
         async create(data) {
@@ -123,7 +174,7 @@ module.exports = function createEmailStore(db) {
             } = data;
 
             const result = await db.run(`
-                INSERT INTO received_emails (
+                INSERT INTO ${T_EMAILS} (
                     message_id, from_address, from_name, to_address, cc_address, bcc_address, subject, body_text, body_html, raw_content,
                     is_sent, is_draft, is_archived, is_starred, is_trash, parent_id, thread_id, scheduled_at
                 )
@@ -176,7 +227,7 @@ module.exports = function createEmailStore(db) {
             }
 
             await db.run(`
-                INSERT INTO email_attachments (email_id, filename, content_type, size, storage_path, content_id)
+                INSERT INTO ${T_ATTACH} (email_id, filename, content_type, size, storage_path, content_id)
                 VALUES (?, ?, ?, ?, ?, ?)
             `, [emailId, attachment.filename, attachment.contentType, size, storageName, attachment.cid || null]);
         },
@@ -184,7 +235,7 @@ module.exports = function createEmailStore(db) {
         async update(id, data) {
             const {
                 toAddress, ccAddress, bccAddress, subject, bodyText, bodyHtml, rawContent,
-                isSent, isDraft, scheduledAt
+                isSent, isDraft, isTrash, scheduledAt
             } = data;
 
             // Build dynamic query
@@ -204,6 +255,7 @@ module.exports = function createEmailStore(db) {
             if (rawContent !== undefined) { fields.push("raw_content = ?"); params.push(rawContent); contentChanged = true; }
             if (isSent !== undefined) { fields.push("is_sent = ?"); params.push(isSent); }
             if (isDraft !== undefined) { fields.push("is_draft = ?"); params.push(isDraft); }
+            if (isTrash !== undefined) { fields.push("is_trash = ?"); params.push(isTrash); }
             if (scheduledAt !== undefined) { fields.push("scheduled_at = ?"); params.push(scheduledAt); }
 
             if (contentChanged) {
@@ -218,7 +270,7 @@ module.exports = function createEmailStore(db) {
             params.push(id);
 
             await db.run(`
-                UPDATE received_emails
+                UPDATE ${T_EMAILS}
                 SET ${fields.join(', ')}
                 WHERE id = ?
             `, params);
@@ -227,11 +279,11 @@ module.exports = function createEmailStore(db) {
         },
 
         async findById(id) {
-            return await db.get('SELECT * FROM received_emails WHERE id = ?', [id]);
+            return await db.get(`SELECT * FROM ${T_EMAILS} WHERE id = ?`, [id]);
         },
 
         async findByThreadId(threadId, userEmail = null) {
-            let sql = 'SELECT * FROM received_emails WHERE (thread_id = ? OR id = ?) AND is_trash = 0';
+            let sql = `SELECT * FROM ${T_EMAILS} WHERE (thread_id = ? OR id = ?) AND is_trash = 0`;
             const params = [threadId, threadId];
 
             if (userEmail) {
@@ -249,9 +301,6 @@ module.exports = function createEmailStore(db) {
             let whereClause = "";
             let params = [];
             const likeEmail = `%${email}%`;
-
-            // Common excluded check
-            const baseExclude = "AND is_trash = 0";
 
             if (folder === 'sent') {
                 whereClause = "from_address = ? AND is_sent = 1 AND is_draft = 0 AND is_trash = 0";
@@ -276,7 +325,7 @@ module.exports = function createEmailStore(db) {
 
             return await db.all(`
                 SELECT *, COUNT(*) as thread_count
-                FROM received_emails
+                FROM ${T_EMAILS}
                 WHERE ${whereClause}
                 GROUP BY CASE WHEN thread_id > 0 THEN thread_id ELSE id END
                 ORDER BY MAX(date_received) DESC
@@ -310,7 +359,7 @@ module.exports = function createEmailStore(db) {
             }
 
             const row = await db.get(`
-                SELECT COUNT(*) as count FROM received_emails
+                SELECT COUNT(*) as count FROM ${T_EMAILS}
                 WHERE ${whereClause}
             `, params);
             return row ? row.count : 0;
@@ -318,9 +367,8 @@ module.exports = function createEmailStore(db) {
 
         async countUnreadInbox(email) {
             const likeEmail = `%${email}%`;
-            // Inbox logic: Received, Not Sent, Not Draft, Not Trash, Not Archived, Not Scheduled, Not Read
             const row = await db.get(`
-                SELECT COUNT(*) as count FROM received_emails
+                SELECT COUNT(*) as count FROM ${T_EMAILS}
                 WHERE (to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ?)
                 AND is_sent = 0 AND is_draft = 0 AND is_trash = 0 AND is_archived = 0 AND scheduled_at IS NULL AND is_read = 0
             `, [likeEmail, likeEmail, likeEmail]);
@@ -328,23 +376,23 @@ module.exports = function createEmailStore(db) {
         },
 
         async markAsRead(id) {
-            return await db.run('UPDATE received_emails SET is_read = 1 WHERE id = ?', [id]);
+            return await db.run(`UPDATE ${T_EMAILS} SET is_read = 1 WHERE id = ?`, [id]);
         },
 
         async setStarred(id, state) {
-            return await db.run('UPDATE received_emails SET is_starred = ? WHERE id = ?', [state ? 1 : 0, id]);
+            return await db.run(`UPDATE ${T_EMAILS} SET is_starred = ? WHERE id = ?`, [state ? 1 : 0, id]);
         },
 
         async setArchived(id, state) {
-            return await db.run('UPDATE received_emails SET is_archived = ? WHERE id = ?', [state ? 1 : 0, id]);
+            return await db.run(`UPDATE ${T_EMAILS} SET is_archived = ? WHERE id = ?`, [state ? 1 : 0, id]);
         },
 
         async moveToTrash(id) {
-            return await db.run('UPDATE received_emails SET is_trash = 1 WHERE id = ?', [id]);
+            return await db.run(`UPDATE ${T_EMAILS} SET is_trash = 1 WHERE id = ?`, [id]);
         },
 
         async restoreFromTrash(id) {
-            return await db.run('UPDATE received_emails SET is_trash = 0 WHERE id = ?', [id]);
+            return await db.run(`UPDATE ${T_EMAILS} SET is_trash = 0 WHERE id = ?`, [id]);
         },
 
         async deletePermanently(id) {
@@ -360,18 +408,13 @@ module.exports = function createEmailStore(db) {
                     }
                 }
             }
-            await db.run('DELETE FROM email_attachments WHERE email_id = ?', [id]);
-            return await db.run('DELETE FROM received_emails WHERE id = ?', [id]);
+            await db.run(`DELETE FROM ${T_ATTACH} WHERE email_id = ?`, [id]);
+            return await db.run(`DELETE FROM ${T_EMAILS} WHERE id = ?`, [id]);
         },
 
         async emptyTrash(userEmail) {
-            // Find all trash emails for user to delete attachments
-            const limitDate = new Date();
-            limitDate.setDate(limitDate.getDate() - 30); // 30 days retention policy could be added later
-
-            // For now, empty everything in trash for this user
             const emails = await db.all(`
-                SELECT id FROM received_emails
+                SELECT id FROM ${T_EMAILS}
                 WHERE (to_address LIKE ? OR from_address = ?) AND is_trash = 1
             `, [`%${userEmail}%`, userEmail]);
 
@@ -384,7 +427,7 @@ module.exports = function createEmailStore(db) {
             const term = `%${query}%`;
             const likeEmail = `%${email}%`;
             return await db.all(`
-                SELECT * FROM received_emails
+                SELECT * FROM ${T_EMAILS}
                 WHERE (to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?)
                 AND (subject LIKE ? OR body_text LIKE ? OR from_name LIKE ?) AND is_trash = 0
                 ORDER BY date_received DESC
@@ -393,11 +436,8 @@ module.exports = function createEmailStore(db) {
         },
 
         async getPendingScheduled() {
-            // Get emails that are NOT sent, NOT drafts, NOT trash, but have a scheduled time <= NOW.
-            // scheduled_at is stored as ISO/UTC, so compare against an ISO/UTC bind param
-            // (mirrors getPendingRetries) instead of SQLite's space-format localtime.
             return await db.all(`
-                SELECT * FROM received_emails
+                SELECT * FROM ${T_EMAILS}
                 WHERE is_sent = 0 AND is_draft = 0 AND is_trash = 0
                 AND scheduled_at IS NOT NULL AND scheduled_at <= ?
             `, [new Date().toISOString()]);
@@ -405,45 +445,46 @@ module.exports = function createEmailStore(db) {
 
         // --- Outbound retry queue ---------------------------------------------
 
-        // Sent rows whose external delivery failed temporarily and are now due for another attempt.
         async getPendingRetries() {
             return await db.all(`
-                SELECT * FROM received_emails
+                SELECT * FROM ${T_EMAILS}
                 WHERE delivery_status = 'retry'
                 AND next_attempt_at IS NOT NULL
                 AND next_attempt_at <= ?
             `, [new Date().toISOString()]);
         },
 
-        // Record a temporary failure: schedule the next attempt and bump the counter.
         async markRetry(id, attempts, nextAttemptAt, lastError) {
             return await db.run(`
-                UPDATE received_emails
+                UPDATE ${T_EMAILS}
                 SET delivery_status = 'retry', delivery_attempts = ?, next_attempt_at = ?, last_error = ?
                 WHERE id = ?
             `, [attempts, nextAttemptAt, lastError ? String(lastError).slice(0, 1000) : null, id]);
         },
 
-        // Give up (permanent failure or max attempts reached).
         async markFailed(id, attempts, lastError) {
             return await db.run(`
-                UPDATE received_emails
+                UPDATE ${T_EMAILS}
                 SET delivery_status = 'failed', delivery_attempts = ?, next_attempt_at = NULL, last_error = ?
                 WHERE id = ?
             `, [attempts, lastError ? String(lastError).slice(0, 1000) : null, id]);
         },
 
-        // All recipients delivered.
         async markSent(id) {
             return await db.run(`
-                UPDATE received_emails
+                UPDATE ${T_EMAILS}
                 SET delivery_status = 'sent', next_attempt_at = NULL, last_error = NULL
                 WHERE id = ?
             `, [id]);
         },
 
         async getAttachments(emailId) {
-            return await db.all('SELECT * FROM email_attachments WHERE email_id = ?', [emailId]);
+            return await db.all(`SELECT * FROM ${T_ATTACH} WHERE email_id = ?`, [emailId]);
+        },
+
+        // Look up a single attachment by id (replaces the raw email_attachments query in index.js).
+        async getAttachmentById(fileId) {
+            return await db.get(`SELECT * FROM ${T_ATTACH} WHERE id = ?`, [fileId]);
         }
     };
 

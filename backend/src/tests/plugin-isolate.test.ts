@@ -63,9 +63,9 @@ test('isolated plugin async shortcode expands via doShortcodeAsync over RPC', as
 });
 
 test('untrusted isolated plugin cannot reach the network (global fetch + raw sockets are blocked)', async () => {
-    // The test plugin is not operator-trusted, so workerData.isTrusted=false: secure-require blocks
-    // the net module AND the worker bootstrap traps the binding-backed global fetch (which the module
-    // denylist can't reach). Both must be blocked, or an untrusted plugin can exfiltrate / SSRF.
+    // The test plugin has NOT been granted the `network` capability (cfg.network=false): secure-require
+    // blocks the net module AND the worker bootstrap traps the binding-backed global fetch (which the
+    // module denylist can't reach). Both must be blocked, or a plugin can exfiltrate / SSRF.
     const r = await request(app).get(`/api/v1/plugin/${SLUG}/netcheck`);
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.fetchBlocked, true, 'global fetch must be trapped for an untrusted plugin');

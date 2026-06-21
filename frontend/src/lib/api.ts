@@ -156,8 +156,6 @@ export interface Plugin {
     description: string;
     version: string;
     active: boolean;
-    trusted?: boolean;          // currently granted the privileged tier
-    trustedShipped?: boolean;   // first-party default — trust is locked on, not toggleable
     permissions?: {
         scope: string;
         access: string;
@@ -283,7 +281,6 @@ export const pluginsApi = {
     list: () => apiGet<Plugin[]>("/plugins"),
     activate: (slug: string) => apiPost(`/plugins/${slug}/activate`, {}),
     deactivate: (slug: string) => apiPost(`/plugins/${slug}/deactivate`, {}),
-    setTrust: (slug: string, trusted: boolean) => apiPost<{ success: boolean; trusted: boolean; message: string }>(`/plugins/${slug}/trust`, { trusted }),
 
     // Android-style per-permission grants (default-deny). `granted` = the "scope:access" tokens the admin
     // approves; `network` = grant outbound network to an untrusted plugin.

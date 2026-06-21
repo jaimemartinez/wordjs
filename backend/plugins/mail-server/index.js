@@ -1,20 +1,23 @@
 /**
- * WordJS - Mail Server plugin (ISOLATED, operator-trusted).
+ * WordJS - Mail Server plugin (ISOLATED, NO TRUST — Android-style grants only).
  *
- * Runs in a worker via the capability bridge. ALL behavior is preserved (SMTP server, MX delivery,
- * DKIM, SPF, spam filter, retry queue, scheduled send, attachments) — only the core-access layer was
- * swapped to `wordjs`:
- *   - core models/Email          -> ./lib/email-store(wordjs.db)
- *   - core models/User           -> raw SQL on the `users` table via wordjs.db
- *   - core options get/update    -> wordjs.options.get/set
- *   - core config/app.site.url   -> stored option 'siteurl' (read via wordjs.options)
- *   - express router             -> wordjs.http.route(..., { absolute:true })
- *   - notificationService        -> wordjs.notify / wordjs.notify.registerTransport
+ * Runs in a child_process isolate via the capability bridge. NO plugin bypasses the sandbox; this
+ * plugin works purely from the permissions its manifest REQUESTS and an admin GRANTS (default-deny):
+ *   - core models/Email          -> ./lib/email-store(wordjs.db)  (own wjp_mail_server_* tables)
+ *   - core models/User           -> wordjs.users.{findByEmail,findByLogin,findById,search}
+ *                                   (SAFE projection only — never user_pass)
+ *   - site URL / domain / admin   -> wordjs.site.{url,domain,adminEmail}  (grant settings:read)
+ *   - non-secret options          -> wordjs.options.get/set              (grant settings:read/write)
+ *   - SECRETS (DKIM key, relay)   -> Email.getSecret/setSecret in wjp_mail_server_secrets (NOT a
+ *                                   protected option, which is unreachable without trust)
+ *   - express router             -> wordjs.http.route(...)  → /api/v1/plugin/mail-server/*
+ *   - notifications              -> wordjs.notify / wordjs.notify.registerTransport (notifications:*)
  *   - registerAdminMenu          -> wordjs.adminMenu.add
- *   - global.wordjs_send_mail    -> wordjs.provideMail(sendMail)
+ *   - global.wordjs_send_mail    -> wordjs.provideMail(sendMail)  (grant email:provider)
  *
- * node builtins (net/dns/tls/crypto/os/path) and npm deps (nodemailer/smtp-server/mailparser/
- * spf-validator/dnsbl/bayes) are required normally — they are NOT blocked inside the worker.
+ * Outbound DNS/NET/TLS (MX resolution, direct/relay delivery, inbound SMTP listen) require the
+ * 'network' grant — without it net/tls/dns are blocked inside the isolate and delivery degrades
+ * gracefully (errors are caught per-recipient). node builtins (crypto/os/path/fs-to-own-dir) work.
  */
 const nodemailer = require('nodemailer');
 const { SMTPServer } = require('smtp-server');
@@ -27,8 +30,9 @@ const fs = require('fs');
 const os = require('os');
 const crypto = require('crypto');
 
-// Define Attachment storage path (backend/uploads/mail-attachments)
-const UPLOAD_DIR = path.join(__dirname, '../../uploads/mail-attachments');
+// Attachment storage lives in the plugin's OWN dir (untrusted plugins can't write shared uploads).
+// The single source of truth is Email.UPLOAD_DIR (set in email-store); mirror it here for path joins.
+const UPLOAD_DIR = path.join(__dirname, 'data/attachments');
 
 exports.metadata = {
     name: 'Mail Server',
@@ -48,50 +52,26 @@ let transporter = null;
 let smtpServer = null;
 let queueInterval = null;  // scheduled/retry queue timer id (cleared on deactivate)
 
-// === User lookups via raw SQL on the `users` table (replaces core models/User) ===
-// Normalize raw rows so the rest of the code can keep using .userEmail / .username / .displayName.
-function mapUser(row) {
-    if (!row) return null;
-    return {
-        id: row.id,
-        userLogin: row.user_login,
-        username: row.user_login,
-        userEmail: row.user_email,
-        displayName: row.display_name,
-        role: row.role
-    };
-}
-
+// === User lookups via the SAFE host bridge (grant: users:read) ===
+// wordjs.users.* returns a PROJECTION {id,userLogin,username,userEmail,displayName,role} — never
+// user_pass. The field names already match what the rest of this file expects (mapUser-compatible),
+// so no normalization is needed here. The host writes the underlying query (core User model).
 const User = {
-    async findByEmail(email) {
-        const row = await wordjs.db.get('SELECT * FROM users WHERE LOWER(user_email) = LOWER(?)', [email]);
-        return mapUser(row);
-    },
-    async findByLogin(login) {
-        const row = await wordjs.db.get('SELECT * FROM users WHERE user_login = ?', [login]);
-        return mapUser(row);
-    },
-    async findById(id) {
-        const row = await wordjs.db.get('SELECT * FROM users WHERE id = ?', [id]);
-        return mapUser(row);
-    },
+    findByEmail: (email) => wordjs.users.findByEmail(email),
+    findByLogin: (login) => wordjs.users.findByLogin(login),
+    findById: (id) => wordjs.users.findById(id),
     async findAll({ search, limit } = {}) {
-        const term = `%${search || ''}%`;
-        const lim = limit || 50;
-        const rows = await wordjs.db.all(
-            'SELECT * FROM users WHERE (user_login LIKE ? OR display_name LIKE ? OR user_email LIKE ?) LIMIT ?',
-            [term, term, term, lim]
-        );
-        return (rows || []).map(mapUser);
+        return await wordjs.users.search(search || '', limit || 50);
     }
 };
 
-// Resolve the site URL from options (replaces core config/app.site.url).
+// Resolve the site URL/domain from the SAFE site bridge (grant: settings:read). Replaces the now-
+// blocked protected-option reads of siteurl/home (untrusted plugins can't read protected options).
 async function getSiteUrl() {
-    return await getOption('siteurl', await getOption('home', 'http://localhost'));
+    try { return await wordjs.site.url(); } catch (e) { return 'http://localhost'; }
 }
 async function getSiteDomain() {
-    try { return new URL(await getSiteUrl()).hostname; } catch (e) { return 'localhost'; }
+    try { return await wordjs.site.domain(); } catch (e) { return 'localhost'; }
 }
 
 /**
@@ -860,14 +840,41 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
     throw err;
 }
 
+// Option keys that the host treats as PROTECTED (secret/security-critical) and therefore blocks via
+// wordjs.options for an untrusted plugin. We persist these in our OWN wjp_mail_server_secrets table
+// instead (host-gated by database:read/write). The matcher mirrors the host's PROTECTED_OPTION_RE plus
+// admin_email so every call site can keep using getOption/updateOption transparently.
+//   - relay creds           → mail_user, mail_pass (kept in the secrets table, not options)
+//   - 'dkim' / 'key' / etc. → mail_security_dkim_private_key, mail_security_dkim_domain/selector/enabled
+const SECRET_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privatekey|dkim|\bkey\b|[_-]key\b|key$|api[_-]?key|token|\bsalt\b|jwt|credential|encryption|signing|certificate|\.pem|access[_-]?key/i;
+// Relay credentials don't match the secret-word regex but are sensitive — keep them in the secrets table too.
+const SECRET_OPTION_NAMES = new Set(['mail_user', 'mail_pass']);
+const isSecretOption = (key) => SECRET_OPTION_RE.test(String(key)) || SECRET_OPTION_NAMES.has(String(key).toLowerCase());
+
 exports.init = async function (bridge) {
     wordjs = bridge;
-    getOption = (key, def) => wordjs.options.get(key, def);
-    updateOption = (key, value) => wordjs.options.set(key, value);
     Email = require('./lib/email-store')(wordjs.db);
 
-    // Security Data Directory (confined fs writes within uploads dir are allowed)
-    const SEC_DATA_DIR = path.join(__dirname, '../../uploads/mail-server-data');
+    // getOption/updateOption transparently route secret/security-critical keys to the plugin's own
+    // secrets table (the host blocks those via the generic options bridge) and everything else to
+    // wordjs.options. admin_email is also protected by the host → served from the site bridge.
+    getOption = async (key, def) => {
+        if (String(key).toLowerCase() === 'admin_email') {
+            try { return (await wordjs.site.adminEmail()) || def; } catch (e) { return def; }
+        }
+        if (isSecretOption(key)) return await Email.getSecret(key, def === undefined ? '' : def);
+        return await wordjs.options.get(key, def);
+    };
+    updateOption = async (key, value) => {
+        if (isSecretOption(key)) return await Email.setSecret(key, value);
+        return await wordjs.options.set(key, value);
+    };
+
+    // Schema first so the secrets table exists before getOption/updateOption touch it.
+    await Email.initSchema();
+
+    // Security Data Directory — the plugin's OWN dir (untrusted plugins can't write shared uploads).
+    const SEC_DATA_DIR = path.join(__dirname, 'data');
     try { fs.mkdirSync(SEC_DATA_DIR, { recursive: true }); } catch (e) { }
 
     // Initialize Bayes
@@ -888,8 +895,7 @@ exports.init = async function (bridge) {
         }
     };
 
-    // Initialize
-    await Email.initSchema();
+    // Initialize (schema already created above so the secrets table is ready)
     await initTransporter();
     await initSMTPServer();
 
@@ -991,14 +997,15 @@ exports.init = async function (bridge) {
         }
     }, 60 * 1000);
 
-    // === API ROUTES (host keeps the original /api/v1/mail-server/* paths via opts.absolute) ===
-    const ROUTE_BASE = '/api/v1/mail-server';
+    // === API ROUTES — namespaced by the host under /api/v1/plugin/mail-server/* ===
+    // No 'absolute' bypass exists anymore: wordjs.http.route prefixes /api/v1/plugin/<slug>, so we pass
+    // only the sub-path. The plugin's frontend (client/) calls api('/plugin/mail-server/...').
     const route = (method, sub, opts, handler) => {
         if (typeof opts === 'function') { handler = opts; opts = {}; }
-        wordjs.http.route(method, ROUTE_BASE + sub, Object.assign({ absolute: true }, opts), handler);
+        wordjs.http.route(method, sub, opts, handler);
     };
 
-    // GET /api/v1/mail-server/emails/search
+    // GET /api/v1/plugin/mail-server/emails/search
     route('get', '/emails/search', { auth: true }, async (req, res) => {
         const query = req.query.q || '';
         if (query.length < 2) return res.json({ emails: [] });
@@ -1012,7 +1019,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    // GET /api/v1/mail-server/emails
+    // GET /api/v1/plugin/mail-server/emails
     route('get', '/emails', { auth: true }, async (req, res) => {
         const folder = req.query.folder || 'inbox'; // 'inbox', 'sent', 'trash', 'archive', 'starred', 'drafts'
         const limit = parseInt(req.query.limit || '50', 10);
@@ -1024,7 +1031,7 @@ exports.init = async function (bridge) {
         res.json({ emails, total });
     });
 
-    // GET /api/v1/mail-server/stats
+    // GET /api/v1/plugin/mail-server/stats
     route('get', '/stats', { auth: true }, async (req, res) => {
         try {
             const unread = await Email.countUnreadInbox(req.user.userEmail);
@@ -1034,7 +1041,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    // GET /api/v1/mail-server/emails/:id
+    // GET /api/v1/plugin/mail-server/emails/:id
     route('get', '/emails/:id', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
@@ -1057,7 +1064,7 @@ exports.init = async function (bridge) {
         res.json({ ...email, attachments });
     });
 
-    // DELETE /api/v1/mail-server/emails/:id - Move to Trash (Soft Delete)
+    // DELETE /api/v1/plugin/mail-server/emails/:id - Move to Trash (Soft Delete)
     route('delete', '/emails/:id', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
@@ -1076,7 +1083,7 @@ exports.init = async function (bridge) {
         res.json({ success: true, message: 'Moved to trash' });
     });
 
-    // PUT /api/v1/mail-server/emails/:id/restore - Restore from Trash
+    // PUT /api/v1/plugin/mail-server/emails/:id/restore - Restore from Trash
     route('put', '/emails/:id/restore', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
@@ -1089,13 +1096,13 @@ exports.init = async function (bridge) {
         res.json({ success: true, message: 'Restored from trash' });
     });
 
-    // DELETE /api/v1/mail-server/trash/empty - Empty Trash
+    // DELETE /api/v1/plugin/mail-server/trash/empty - Empty Trash
     route('delete', '/trash/empty', { auth: true }, async (req, res) => {
         await Email.emptyTrash(req.user.userEmail);
         res.json({ success: true, message: 'Trash emptied' });
     });
 
-    // PUT /api/v1/mail-server/emails/:id/star
+    // PUT /api/v1/plugin/mail-server/emails/:id/star
     route('put', '/emails/:id/star', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
@@ -1105,7 +1112,7 @@ exports.init = async function (bridge) {
         res.json({ success: true });
     });
 
-    // PUT /api/v1/mail-server/emails/:id/archive
+    // PUT /api/v1/plugin/mail-server/emails/:id/archive
     route('put', '/emails/:id/archive', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
@@ -1115,7 +1122,7 @@ exports.init = async function (bridge) {
         res.json({ success: true });
     });
 
-    // POST /api/v1/mail-server/classification/train
+    // POST /api/v1/plugin/mail-server/classification/train
     route('post', '/classification/train', { auth: true }, async (req, res) => {
         try {
             const { id, category } = req.body; // category: 'spam' or 'ham'
@@ -1143,7 +1150,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    // POST /api/v1/mail-server/drafts
+    // POST /api/v1/plugin/mail-server/drafts
     route('post', '/drafts', { auth: true }, async (req, res) => {
         const { id, to, cc, bcc, subject, body, isHtml = true, replyToId, attachments } = req.body;
 
@@ -1190,7 +1197,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    // POST /api/v1/mail-server/send
+    // POST /api/v1/plugin/mail-server/send
     route('post', '/send', { auth: true }, async (req, res) => {
         const { to, cc, bcc, subject, body, isHtml = true, replyToId, id, attachments, scheduledAt } = req.body;
         if (!to || !subject || !body) {
@@ -1279,7 +1286,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    // GET /api/v1/mail-server/users/search
+    // GET /api/v1/plugin/mail-server/users/search
     route('get', '/users/search', { auth: true }, async (req, res) => {
         const query = req.query.q || '';
         if (query.length < 2) return res.json([]);
@@ -1294,7 +1301,7 @@ exports.init = async function (bridge) {
         })));
     });
 
-    // GET /api/v1/mail-server/settings
+    // GET /api/v1/plugin/mail-server/settings
     route('get', '/settings', { auth: true, admin: true }, async (req, res) => {
         res.json({
             mail_from_email: await getOption('mail_from_email', ''),
@@ -1312,7 +1319,7 @@ exports.init = async function (bridge) {
         });
     });
 
-    // POST /api/v1/mail-server/settings
+    // POST /api/v1/plugin/mail-server/settings
     route('post', '/settings', { auth: true, admin: true }, async (req, res) => {
         const fields = [
             'mail_from_email', 'mail_from_name',
@@ -1330,7 +1337,7 @@ exports.init = async function (bridge) {
         res.json({ success: true, message: 'Server settings updated' });
     });
 
-    // POST /api/v1/mail-server/test  — send a real test message (pass {to} to test EXTERNAL delivery)
+    // POST /api/v1/plugin/mail-server/test  — send a real test message (pass {to} to test EXTERNAL delivery)
     route('post', '/test', { auth: true, admin: true }, async (req, res) => {
         try {
             const to = (req.body && req.body.to) || req.user.userEmail;
@@ -1355,7 +1362,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    // GET /api/v1/mail-server/security/dns-records — records to publish for deliverability
+    // GET /api/v1/plugin/mail-server/security/dns-records — records to publish for deliverability
     route('get', '/security/dns-records', { auth: true, admin: true }, async (req, res) => {
         const priv = await getOption('mail_security_dkim_private_key', '');
         let domain = await getOption('mail_security_dkim_domain', '');
@@ -1375,7 +1382,7 @@ exports.init = async function (bridge) {
         });
     });
 
-    // POST /api/v1/mail-server/security/dkim/generate — create a DKIM keypair + return DNS records
+    // POST /api/v1/plugin/mail-server/security/dkim/generate — create a DKIM keypair + return DNS records
     route('post', '/security/dkim/generate', { auth: true, admin: true }, async (req, res) => {
         try {
             const selector = String((req.body && req.body.selector) || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default';
@@ -1407,12 +1414,12 @@ exports.init = async function (bridge) {
         }
     });
 
-    // GET /api/v1/mail-server/attachments/:fileId
+    // GET /api/v1/plugin/mail-server/attachments/:fileId
     route('get', '/attachments/:fileId', { auth: true }, async (req, res) => {
         const fileId = req.params.fileId;
 
         try {
-            const attachment = await wordjs.db.get('SELECT * FROM email_attachments WHERE id = ?', [fileId]);
+            const attachment = await Email.getAttachmentById(fileId);
 
             if (!attachment) return res.status(404).json({ error: 'File not found' });
 
@@ -1441,7 +1448,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    // POST /api/v1/mail-server/upload/attachment
+    // POST /api/v1/plugin/mail-server/upload/attachment
     // Host parses the multipart upload (multer) and forwards req.file metadata to this handler.
     route('post', '/upload/attachment', { auth: true, multipart: 'file' }, (req, res) => {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });

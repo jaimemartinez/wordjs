@@ -5,9 +5,8 @@ import { pluginsApi, Plugin } from "@/lib/api";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaShieldAlt, FaSlidersH, FaGlobe } from "react-icons/fa";
+import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaGlobe } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
-import { useModal } from "@/contexts/ModalContext";
 
 export default function PluginsPage() {
     const { t } = useI18n();
@@ -36,7 +35,6 @@ export default function PluginsPage() {
         Array.from(new Set((plugin.permissions || []).map(permToken)));
 
     const { addToast } = useToast();
-    const { confirm } = useModal();
 
     useEffect(() => {
         loadPlugins();
@@ -68,28 +66,6 @@ export default function PluginsPage() {
             addToast("Failed to update permissions: " + (error.message || "Unknown error"), "error");
         } finally {
             setSavingPerms(false);
-        }
-    };
-
-    // Grant/revoke the privileged "trusted" tier. Granting shows a hard warning (it lets the plugin
-    // read all data incl. secrets + use host capabilities); the server is the source of truth.
-    const toggleTrust = async (plugin: Plugin) => {
-        if (plugin.trustedShipped) return; // first-party default: locked on
-        const granting = !plugin.trusted;
-        if (granting) {
-            const ok = await confirm(
-                `Trusting "${plugin.name}" lets it read ALL data — including users and secret settings — touch core tables, and use host capabilities (it bypasses the plugin sandbox). Only trust plugins whose code you have reviewed. Continue?`,
-                "Grant full trust?",
-                true
-            );
-            if (!ok) return;
-        }
-        try {
-            await pluginsApi.setTrust(plugin.slug, granting);
-            loadPlugins();
-            addToast(granting ? `"${plugin.name}" is now trusted` : `Trust revoked for "${plugin.name}"`, "success");
-        } catch (error: any) {
-            addToast("Failed to change trust: " + (error.message || "Unknown error"), "error");
         }
     };
 
@@ -341,13 +317,7 @@ export default function PluginsPage() {
                             </div>
                         </div>
                         <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
-                            {permsModalPlugin.trusted ? (
-                                <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100 text-indigo-700 text-sm mb-4">
-                                    <FaShieldAlt className="inline mr-2" /> This plugin is <strong>Trusted</strong> — it already has full access, so per-permission grants don&apos;t apply. Revoke trust to sandbox it.
-                                </div>
-                            ) : (
-                                <p className="mb-4 text-gray-600 text-sm leading-relaxed">Grant only what this plugin needs. Anything left off is <strong>denied</strong> (default-deny) — the plugin can use a capability only if it both requested it and you grant it here.</p>
-                            )}
+                            <p className="mb-4 text-gray-600 text-sm leading-relaxed">Grant only what this plugin needs. Anything left off is <strong>denied</strong> (default-deny) — the plugin can use a capability only if it both requested it and you grant it here.</p>
 
                             <div className="space-y-2 mb-4">
                                 {declaredTokens(permsModalPlugin).length === 0 ? (
@@ -358,9 +328,8 @@ export default function PluginsPage() {
                                     return (
                                         <div key={token} className={`rounded-xl border transition-colors ${on ? (isNet ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200') : 'bg-gray-50 border-gray-100'}`}>
                                             <button
-                                                disabled={permsModalPlugin.trusted}
                                                 onClick={() => toggleGrant(token)}
-                                                className="w-full flex items-center justify-between p-3 text-left disabled:opacity-50"
+                                                className="w-full flex items-center justify-between p-3 text-left"
                                             >
                                                 <span className="flex items-center gap-2 font-mono text-sm text-gray-800">
                                                     {isNet && <FaGlobe className="text-amber-500" />}{token}
@@ -377,7 +346,7 @@ export default function PluginsPage() {
                         </div>
                         <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-gray-100 mt-2">
                             <button onClick={() => setPermsModalPlugin(null)} className="px-5 py-2.5 text-gray-600 hover:text-gray-900 font-medium hover:bg-gray-100 rounded-xl transition-all">Cancel</button>
-                            <button onClick={savePermissions} disabled={savingPerms || permsModalPlugin.trusted} className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 disabled:opacity-50 shadow-lg hover:shadow-blue-500/30 transition-all">
+                            <button onClick={savePermissions} disabled={savingPerms} className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 disabled:opacity-50 shadow-lg hover:shadow-blue-500/30 transition-all">
                                 {savingPerms ? 'Saving…' : 'Save permissions'}
                             </button>
                         </div>
@@ -499,28 +468,13 @@ export default function PluginsPage() {
                                         <span className="text-xs font-bold text-gray-400 uppercase tracking-wider bg-gray-50 px-2 py-1 rounded-md">
                                             v{plugin.version}
                                         </span>
-                                        {plugin.trustedShipped ? (
-                                            <span title="First-party system plugin — always trusted" className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md bg-indigo-50 text-indigo-600 border border-indigo-100 flex items-center gap-1">
-                                                <FaShieldAlt /> System
-                                            </span>
-                                        ) : (
-                                            <button
-                                                onClick={() => toggleTrust(plugin)}
-                                                title={plugin.trusted ? 'Trusted — full host access. Click to sandbox.' : 'Sandboxed. Click to grant full trust.'}
-                                                className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border flex items-center gap-1 transition-colors ${plugin.trusted ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100' : 'bg-gray-50 text-gray-400 border-gray-100 hover:bg-gray-100'}`}
-                                            >
-                                                <FaShieldAlt /> {plugin.trusted ? 'Trusted' : 'Sandboxed'}
-                                            </button>
-                                        )}
-                                        {!plugin.trustedShipped && (
-                                            <button
-                                                onClick={() => openPermissions(plugin)}
-                                                title="Manage what this plugin can access (per-permission grants)"
-                                                className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border flex items-center gap-1 transition-colors bg-gray-50 text-gray-500 border-gray-100 hover:bg-blue-50 hover:text-blue-600"
-                                            >
-                                                <FaSlidersH /> Permissions
-                                            </button>
-                                        )}
+                                        <button
+                                            onClick={() => openPermissions(plugin)}
+                                            title="Manage what this plugin can access (per-permission grants)"
+                                            className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border flex items-center gap-1 transition-colors bg-gray-50 text-gray-500 border-gray-100 hover:bg-blue-50 hover:text-blue-600"
+                                        >
+                                            <FaSlidersH /> Permissions
+                                        </button>
                                     </div>
 
                                     <button
