@@ -5,7 +5,7 @@ import { pluginsApi, Plugin } from "@/lib/api";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaShieldAlt } from "react-icons/fa";
+import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaShieldAlt, FaSlidersH, FaGlobe } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import { useModal } from "@/contexts/ModalContext";
 
@@ -23,12 +23,48 @@ export default function PluginsPage() {
     const [password, setPassword] = useState("");
     const [deleteError, setDeleteError] = useState("");
 
+    // Android-style per-permission grants (default-deny). The admin toggles each requested capability.
+    const [permsModalPlugin, setPermsModalPlugin] = useState<Plugin | null>(null);
+    const [grantDraft, setGrantDraft] = useState<Set<string>>(new Set());
+    const [networkDraft, setNetworkDraft] = useState(false);
+    const [savingPerms, setSavingPerms] = useState(false);
+
     const { addToast } = useToast();
     const { confirm } = useModal();
 
     useEffect(() => {
         loadPlugins();
     }, []);
+
+    const openPermissions = (plugin: Plugin) => {
+        const granted = new Set(plugin.grantedPermissions || []);
+        setNetworkDraft(granted.has('network'));
+        granted.delete('network');
+        setGrantDraft(granted);
+        setPermsModalPlugin(plugin);
+    };
+    const toggleGrant = (token: string) => {
+        setGrantDraft(prev => {
+            const next = new Set(prev);
+            if (next.has(token)) next.delete(token); else next.add(token);
+            return next;
+        });
+    };
+    const savePermissions = async () => {
+        if (!permsModalPlugin) return;
+        setSavingPerms(true);
+        try {
+            const res = await pluginsApi.setPermissions(permsModalPlugin.slug, Array.from(grantDraft), networkDraft);
+            setPermsModalPlugin(null);
+            loadPlugins();
+            refreshMenus();
+            addToast(res.message || `Permissions updated for "${permsModalPlugin.name}"`, "success");
+        } catch (error: any) {
+            addToast("Failed to update permissions: " + (error.message || "Unknown error"), "error");
+        } finally {
+            setSavingPerms(false);
+        }
+    };
 
     // Grant/revoke the privileged "trusted" tier. Granting shows a hard warning (it lets the plugin
     // read all data incl. secrets + use host capabilities); the server is the source of truth.
@@ -286,6 +322,70 @@ export default function PluginsPage() {
                 </div>
             )}
 
+            {/* Manage Permissions Modal — Android-style per-permission grants (default-deny) */}
+            {permsModalPlugin && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-white/20 max-h-[85vh] flex flex-col">
+                        <div className="p-8 pb-4 flex-shrink-0">
+                            <div className="flex items-center gap-4 text-blue-600">
+                                <div className="w-12 h-12 rounded-full bg-blue-100 flex items-center justify-center flex-shrink-0"><FaSlidersH className="text-xl" /></div>
+                                <div>
+                                    <h3 className="text-xl font-bold text-gray-900">Permissions</h3>
+                                    <p className="text-sm text-gray-500">{permsModalPlugin.name}</p>
+                                </div>
+                            </div>
+                        </div>
+                        <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
+                            {permsModalPlugin.trusted ? (
+                                <div className="p-4 bg-indigo-50 rounded-xl border border-indigo-100 text-indigo-700 text-sm mb-4">
+                                    <FaShieldAlt className="inline mr-2" /> This plugin is <strong>Trusted</strong> — it already has full access, so per-permission grants don&apos;t apply. Revoke trust to sandbox it.
+                                </div>
+                            ) : (
+                                <p className="mb-4 text-gray-600 text-sm leading-relaxed">Grant only what this plugin needs. Anything left off is <strong>denied</strong> (default-deny) — the plugin can use a capability only if it both requested it and you grant it here.</p>
+                            )}
+
+                            <div className="space-y-2 mb-4">
+                                {(permsModalPlugin.requestedPermissions || []).length === 0 ? (
+                                    <div className="p-4 bg-gray-50 rounded-xl text-gray-400 text-sm text-center">This plugin requests no bridge permissions.</div>
+                                ) : (permsModalPlugin.requestedPermissions || []).map((token) => {
+                                    const on = grantDraft.has(token);
+                                    return (
+                                        <button
+                                            key={token}
+                                            disabled={permsModalPlugin.trusted}
+                                            onClick={() => toggleGrant(token)}
+                                            className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors text-left disabled:opacity-50 ${on ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}`}
+                                        >
+                                            <span className="font-mono text-sm text-gray-800">{token}</span>
+                                            <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${on ? 'bg-green-500' : 'bg-gray-300'}`}>
+                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+                                            </span>
+                                        </button>
+                                    );
+                                })}
+                            </div>
+
+                            {/* Network is grantable independently of the manifest (with a warning). */}
+                            <div className={`p-3 rounded-xl border mb-2 ${networkDraft ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'}`}>
+                                <button disabled={permsModalPlugin.trusted} onClick={() => setNetworkDraft((v) => !v)} className="w-full flex items-center justify-between text-left disabled:opacity-50">
+                                    <span className="flex items-center gap-2 font-semibold text-sm text-gray-800"><FaGlobe className="text-amber-500" /> Network access</span>
+                                    <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${networkDraft ? 'bg-amber-500' : 'bg-gray-300'}`}>
+                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${networkDraft ? 'translate-x-6' : 'translate-x-1'}`} />
+                                    </span>
+                                </button>
+                                {networkDraft && <p className="text-xs text-amber-700 mt-2">⚠️ Lets this plugin make outbound connections (fetch / raw sockets) — an exfiltration risk. Only enable it for plugins you trust to send data out.</p>}
+                            </div>
+                        </div>
+                        <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-gray-100 mt-2">
+                            <button onClick={() => setPermsModalPlugin(null)} className="px-5 py-2.5 text-gray-600 hover:text-gray-900 font-medium hover:bg-gray-100 rounded-xl transition-all">Cancel</button>
+                            <button onClick={savePermissions} disabled={savingPerms || permsModalPlugin.trusted} className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 disabled:opacity-50 shadow-lg hover:shadow-blue-500/30 transition-all">
+                                {savingPerms ? 'Saving…' : 'Save permissions'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
             {/* Header */}
             <div className="relative z-10">
                 <PageHeader
@@ -411,6 +511,15 @@ export default function PluginsPage() {
                                                 className={`text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border flex items-center gap-1 transition-colors ${plugin.trusted ? 'bg-indigo-50 text-indigo-600 border-indigo-100 hover:bg-indigo-100' : 'bg-gray-50 text-gray-400 border-gray-100 hover:bg-gray-100'}`}
                                             >
                                                 <FaShieldAlt /> {plugin.trusted ? 'Trusted' : 'Sandboxed'}
+                                            </button>
+                                        )}
+                                        {!plugin.trustedShipped && (
+                                            <button
+                                                onClick={() => openPermissions(plugin)}
+                                                title="Manage what this plugin can access (per-permission grants)"
+                                                className="text-[10px] font-bold uppercase tracking-wider px-2 py-1 rounded-md border flex items-center gap-1 transition-colors bg-gray-50 text-gray-500 border-gray-100 hover:bg-blue-50 hover:text-blue-600"
+                                            >
+                                                <FaSlidersH /> Permissions
                                             </button>
                                         )}
                                     </div>

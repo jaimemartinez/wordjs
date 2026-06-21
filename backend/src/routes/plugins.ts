@@ -294,10 +294,24 @@ router.get('/active', asyncHandler(async (req, res) => {
 router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // Await getAllPlugins()
     const plugins = await getAllPlugins();
-    // Annotate each with its trust state so the admin UI can render the toggle.
-    // `trusted` = currently privileged; `trustedShipped` = first-party default (toggle locked on).
+    // Annotate each with its trust state + requested/granted permissions so the admin UI can render the
+    // per-permission switches. `trusted` = currently privileged; `trustedShipped` = first-party default
+    // (toggle locked on). `requestedPermissions` = what the manifest asks for ("scope:access"), the set
+    // of switches to show; `grantedPermissions` = what the admin has granted (+ "network").
     const { isTrusted, isShippedTrusted } = require('../core/plugin-trust');
-    res.json(plugins.map((p: any) => ({ ...p, trusted: isTrusted(p.slug), trustedShipped: isShippedTrusted(p.slug) })));
+    const { getGrants } = require('../core/plugin-permissions');
+    res.json(plugins.map((p: any) => {
+        const requested = Array.from(new Set((p.permissions || [])
+            .map((perm: any) => (perm && perm.scope) ? `${perm.scope}:${perm.access || 'read'}` : null)
+            .filter(Boolean)));
+        return {
+            ...p,
+            trusted: isTrusted(p.slug),
+            trustedShipped: isShippedTrusted(p.slug),
+            requestedPermissions: requested,
+            grantedPermissions: getGrants(p.slug),
+        };
+    }));
 }));
 
 /**
@@ -374,6 +388,51 @@ router.post('/:slug/trust', authenticate, isAdmin, asyncHandler(async (req, res)
         message: trusted
             ? `Plugin '${slug}' is now TRUSTED — it can reach core data, secret options and host capabilities.${reloaded ? ' Its worker was reloaded, so the change is fully in effect.' : ' Restart the server (or reactivate the plugin) to fully apply.'}`
             : `Trust revoked for '${slug}' — it is sandboxed again.${reloaded ? ' Its worker was reloaded.' : ''}`
+    });
+}));
+
+/**
+ * @swagger
+ * /plugins/{slug}/permissions:
+ *   post:
+ *     summary: Set the per-permission grants for a plugin (admin) — Android-style, default-deny
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ */
+router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req, res) => {
+    if (!validateSlug(req.params.slug)) {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+    const slug = req.params.slug;
+    const { setGrants, getGrants } = require('../core/plugin-permissions');
+
+    // Body: { granted: ["scope:access", ...], network: boolean }. The admin's granted set is the source
+    // of truth (default-deny). We don't constrain to the manifest here — hasPermission already requires
+    // BOTH the manifest declaration AND the grant, so granting an undeclared scope simply has no effect.
+    const body = req.body || {};
+    const tokens: string[] = Array.isArray(body.granted) ? body.granted.map((t: any) => String(t)) : [];
+    if (body.network) tokens.push('network');
+    await setGrants(slug, tokens);
+
+    // Re-spawn the isolate so the NETWORK grant (passed in cfg → __WORDJS_PLUGIN_NETWORK__) takes effect.
+    // Bridge-scope grants are read live per call on the host, but reloading keeps everything consistent.
+    // Best-effort: the grant is already persisted, so a reload hiccup must not fail the change.
+    let reloaded = false;
+    try {
+        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
+    } catch (e: any) {
+        console.warn(`[Permissions] reload of '${slug}' after grant change failed:`, e && e.message);
+    }
+
+    const granted = getGrants(slug);
+    res.json({
+        success: true,
+        slug,
+        granted,
+        network: granted.includes('network'),
+        reloaded,
+        message: `Permissions updated for '${slug}' (${granted.length} granted).${reloaded ? ' Isolate reloaded — changes are in effect.' : ' Reactivate the plugin to fully apply.'}`,
     });
 }));
 

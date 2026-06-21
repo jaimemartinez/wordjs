@@ -415,6 +415,28 @@ async function initialize() {
         // Load the operator-toggled plugin trust set (admin UI) so the bridge gates see it.
         await require('./core/plugin-trust').loadTrusted();
 
+        // Load the per-plugin permission grants (Android-style, default-deny). Then a one-time,
+        // non-breaking backfill: grandfather the manifest-declared permissions of plugins that are
+        // ALREADY ACTIVE (and have no grant record yet) so flipping to default-deny doesn't break a
+        // running site — new activations stay default-deny. Best-effort; never blocks boot.
+        try {
+            await require('./core/plugin-permissions').loadGrants();
+            const { getActivePlugins, getAllPlugins } = require('./core/plugins');
+            const active: string[] = await getActivePlugins();
+            const all: any[] = await getAllPlugins();
+            const entries = all
+                .filter((p: any) => active.includes(p.slug))
+                .map((p: any) => ({
+                    slug: p.slug,
+                    requested: Array.from(new Set((p.permissions || [])
+                        .map((perm: any) => (perm && perm.scope) ? `${perm.scope}:${perm.access || 'read'}` : null)
+                        .filter(Boolean))) as string[],
+                }));
+            await require('./core/plugin-permissions').backfillActive(entries);
+        } catch (e: any) {
+            console.warn('[PluginPermissions] load/backfill skipped:', e && e.message);
+        }
+
         // Initialize Analytics Table
         await require('./models/Analytics').init();
 

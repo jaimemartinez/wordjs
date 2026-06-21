@@ -314,14 +314,16 @@ function secureModuleFor(id) {
     if (base === 'fs') return secureFs;
     if (base === 'child_process') return secureChildProcess;
     if (isNet) {
-        // Trusted plugins (e.g. mail-server's SMTP/MX delivery) keep raw sockets; untrusted are denied.
-        // Inside a worker, trust is supplied by the bootstrap (workerData → __WORDJS_PLUGIN_TRUSTED__)
-        // because trustedPlugins() can't read config there and would be empty — which previously broke
-        // the trusted mail-server. On the main thread, fall back to trustedPlugins().
-        const netTrusted = (typeof global !== 'undefined' && (global as any).__WORDJS_ISOLATED__)
-            ? !!(global as any).__WORDJS_PLUGIN_TRUSTED__
-            : trustedPlugins().has(pluginSlug);
-        if (netTrusted) return undefined;
+        // Raw sockets are allowed if the plugin is TRUSTED (e.g. mail-server's SMTP/MX delivery) OR an
+        // admin granted it the Network permission. Inside the isolate both come from the bootstrap
+        // (cfg → __WORDJS_PLUGIN_TRUSTED__ / __WORDJS_PLUGIN_NETWORK__) because the DB/config isn't
+        // reachable there; on the main thread, fall back to trustedPlugins()/plugin-permissions.
+        const isolated = (typeof global !== 'undefined' && (global as any).__WORDJS_ISOLATED__);
+        const netTrusted = isolated ? !!(global as any).__WORDJS_PLUGIN_TRUSTED__ : trustedPlugins().has(pluginSlug);
+        let netGranted = false;
+        if (isolated) netGranted = !!(global as any).__WORDJS_PLUGIN_NETWORK__;
+        else { try { netGranted = require('./plugin-permissions').isNetworkGranted(pluginSlug); } catch { netGranted = false; } }
+        if (netTrusted || netGranted) return undefined;
         return createBlockedModuleProxy(pluginSlug, norm);
     }
     // worker_threads / vm / module / inspector
