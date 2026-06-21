@@ -26,6 +26,35 @@ function isUniqueViolation(err: any): boolean {
     return /UNIQUE constraint failed/i.test(msg) || /duplicate key value/i.test(msg);
 }
 
+/**
+ * Validate a role string against the known roles allow-list before it is written to user_meta.
+ * Mass-assigning an arbitrary role is dangerous: getCapabilities()/can() short-circuit to ['*'] for
+ * the literal 'administrator', and an unknown role silently strips all capabilities. Reject anything
+ * not present in the seeded roles map (single choke point used by create() and update()).
+ */
+function assertValidRole(role: string): void {
+    if (role === undefined || role === null) return;
+    const roles = getRoles() || {};
+    if (!Object.prototype.hasOwnProperty.call(roles, role)) {
+        throw new Error(`Invalid role: ${role}`);
+    }
+}
+
+/**
+ * Canonicalize an email for storage and comparison.
+ *
+ * The DB unique index is on SQLite/Postgres LOWER(user_email), but SQLite's LOWER() folds ASCII A-Z
+ * ONLY — so confusable case variants like 'Ä@x.com' / 'ä@x.com' (or the Turkish dotless-i, ß, etc.)
+ * are treated as DISTINCT and both can be stored, defeating email-as-identity uniqueness. JS
+ * String.prototype.toLowerCase() performs a FULL Unicode case fold, so we normalize at the app layer
+ * (NFC to also collapse equivalent composed/decomposed forms) before every store and lookup. With the
+ * stored value already fully lowercased, the LOWER()-based index/queries then only have ASCII left to
+ * fold and uniqueness holds across engines and scripts.
+ */
+function normalizeEmail(email: any): string {
+    return String(email == null ? '' : email).trim().normalize('NFC').toLowerCase();
+}
+
 class User {
     id?: number;
     userLogin?: string;
@@ -94,11 +123,18 @@ class User {
             throw new Error('Username, email, and password are required');
         }
 
+        // Reject any role not in the known roles allow-list (prevents role mass-assignment / bogus role).
+        assertValidRole(role);
+
+        // Canonicalize the email (full-Unicode lowercase + NFC) so confusable-case variants collide
+        // and uniqueness holds even where the DB's ASCII-only LOWER() would not. Store the canonical form.
+        const normalizedEmail = normalizeEmail(email);
+
         // Check if exists
         const existingUser = await User.findByLogin(username);
         if (existingUser) throw new Error('Username already exists');
 
-        const existingEmail = await User.findByEmail(email);
+        const existingEmail = await User.findByEmail(normalizedEmail);
         if (existingEmail) throw new Error('Email already exists');
 
         // Hash password
@@ -113,7 +149,7 @@ class User {
             result = await dbAsync.run(`
                 INSERT INTO users (user_login, user_pass, user_email, display_name, user_registered)
                 VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id
-            `, [username, hashedPassword, email, displayName || username]);
+            `, [username, hashedPassword, normalizedEmail, displayName || username]);
         } catch (e: any) {
             if (isUniqueViolation(e)) {
                 throw new Error('Username or email already exists');
@@ -155,7 +191,11 @@ class User {
     }
 
     static async findByEmail(email) {
-        const row = await dbAsync.get('SELECT * FROM users WHERE LOWER(user_email) = LOWER(?)', [email]);
+        // Compare against the JS-canonicalized form (full Unicode fold) — the bound value is already
+        // lowercased, so the column's LOWER() only has to ASCII-fold legacy mixed-case rows. This
+        // matches non-ASCII confusable variants that SQLite's ASCII-only LOWER() alone would miss.
+        const normalized = normalizeEmail(email);
+        const row = await dbAsync.get('SELECT * FROM users WHERE LOWER(user_email) = ?', [normalized]);
         if (!row) return null;
 
         const user = new User(row);
@@ -198,9 +238,12 @@ class User {
             // user could set their email to collide with another account → identity confusion/takeover).
             const email = String(data.email).trim();
             if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Invalid email format');
-            const existing = await User.findByEmail(email);
+            // Canonicalize (full-Unicode lowercase + NFC) so confusable-case variants collide and we
+            // store/compare the same form everywhere; the unique index then holds for non-ASCII too.
+            const normalizedEmail = normalizeEmail(email);
+            const existing = await User.findByEmail(normalizedEmail);
             if (existing && String(existing.id) !== String(id)) throw new Error('Email already in use');
-            updates.push('user_email = ?'); values.push(email);
+            updates.push('user_email = ?'); values.push(normalizedEmail);
         }
         if (data.displayName) { updates.push('display_name = ?'); values.push(data.displayName); }
         if (data.url !== undefined) { updates.push('user_url = ?'); values.push(data.url); }
@@ -224,6 +267,8 @@ class User {
 
         // Update meta if provided
         if (data.role) {
+            // Reject any role not in the known roles allow-list (prevents role mass-assignment).
+            assertValidRole(data.role);
             await User.updateMeta(id, 'role', data.role);
         }
 

@@ -11,6 +11,7 @@ const { can, ownerOrCan } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { saveRevision } = require('../core/revisions');
 const sanitizeHtml = require('sanitize-html');
+const { escUrl } = require('../core/formatting');
 
 // Sanitization Config
 const sanitize = (html) => {
@@ -25,6 +26,55 @@ const sanitize = (html) => {
         allowedIframeHostnames: ['www.youtube.com', 'player.vimeo.com']
     });
 };
+
+// Field names within a Puck component's `props` that may carry rich HTML and are rendered through a
+// dangerouslySetInnerHTML/innerHTML path on the public site → sanitize their HTML.
+const PUCK_HTML_FIELDS = new Set(['content', 'html', 'text', 'title', 'heading', 'description', 'caption', 'body']);
+// Field names that hold a URL and are rendered into src/href → restrict to safe schemes (http/https/
+// mailto/tel; empty string for anything else, e.g. javascript:).
+const PUCK_URL_FIELDS = new Set(['url', 'src', 'href', 'link', 'image', 'icon', 'poster']);
+
+/**
+ * Sanitize untrusted meta on write. The Puck tree (_puck_data) is stored verbatim and trusted at many
+ * independent public render sites; a single block that pipes a field into innerHTML without escaping is
+ * author-privilege stored XSS. Walk the structure and sanitize ONLY string leaves (preserving the JSON
+ * shape): HTML-bearing fields via the post-body sanitizer, URL-bearing fields via an allow-list of
+ * schemes. Non-HTML/URL strings are left untouched.
+ */
+function sanitizePuckTree(node: any, keyHint: string | null = null) {
+    if (Array.isArray(node)) {
+        return node.map((item) => sanitizePuckTree(item, keyHint));
+    }
+    if (node && typeof node === 'object') {
+        const out: any = Array.isArray(node) ? [] : {};
+        for (const [k, v] of Object.entries(node)) {
+            out[k] = sanitizePuckTree(v, k);
+        }
+        return out;
+    }
+    if (typeof node === 'string' && keyHint) {
+        const lower = String(keyHint).toLowerCase();
+        if (PUCK_URL_FIELDS.has(lower)) {
+            // escUrl returns '' for disallowed schemes (e.g. javascript:, data:).
+            return escUrl(node);
+        }
+        if (PUCK_HTML_FIELDS.has(lower)) {
+            return sanitize(node);
+        }
+    }
+    return node;
+}
+
+/**
+ * Sanitize a single meta value before persisting. Currently targets _puck_data (the serialized Puck
+ * page tree) which is rendered as HTML on the public site; structured JSON shape is preserved.
+ */
+function sanitizeMetaValue(key, value) {
+    if (key === '_puck_data' && value && typeof value === 'object') {
+        return sanitizePuckTree(value);
+    }
+    return value;
+}
 
 /**
  * @swagger
@@ -111,19 +161,38 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 
     // Determine which statuses to show
     let includeStatuses: string[] | null = null;
+    // SECURITY (BOLA): the per-post GET enforces an author/edit_others_posts gate on non-published
+    // posts; the LIST path must do the same or it leaks every user's drafts/pending/private content.
+    // A privileged caller (edit_others_posts / read_private_posts) may see others' unpublished posts;
+    // an unprivileged logged-in user may only see THEIR OWN non-published posts, so we force the author
+    // filter to their id whenever non-publish statuses are requested.
+    let authorFilter = author ? parseInt(author, 10) : undefined;
+    let effectiveStatus = status;
     if (req.user) {
+        const isPrivileged = req.user.can('edit_others_posts') || req.user.can('read_private_posts');
         // Logged in users can see their own drafts
         if (status === 'any') {
             includeStatuses = ['publish', 'draft', 'pending', 'private'];
+            if (!isPrivileged) {
+                // Scope the unpublished content to the requesting user only.
+                authorFilter = req.user.id;
+            }
+        } else if (status !== 'publish' && !isPrivileged) {
+            // Asking for a specific non-publish status (draft/pending/private) without privilege:
+            // only the caller's own posts of that status may be returned.
+            authorFilter = req.user.id;
         }
+    } else if (status !== 'publish') {
+        // Anonymous callers may only ever list published content, regardless of requested status.
+        effectiveStatus = 'publish';
     }
 
     // Use findAllWithRelations to batch-load post meta (avoids N+1 in the list path).
     const posts = await Post.findAllWithRelations({
         type,
-        status: includeStatuses ? null : status,
+        status: includeStatuses ? null : effectiveStatus,
         includeStatuses,
-        author: author ? parseInt(author, 10) : undefined,
+        author: authorFilter,
         search,
         limit,
         offset,
@@ -134,9 +203,9 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
 
     const total = await Post.count({
         type,
-        status: includeStatuses ? null : status,
+        status: includeStatuses ? null : effectiveStatus,
         includeStatuses,
-        author: author ? parseInt(author, 10) : undefined,
+        author: authorFilter,
         search
     });
     const totalPages = Math.ceil(total / limit);
@@ -293,7 +362,9 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) 
     // Set meta
     if (meta && typeof meta === 'object') {
         for (const [key, value] of Object.entries(meta)) {
-            await Post.updateMeta(post.id, key, value);
+            // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) so a malicious block can't
+            // store XSS that the public site later renders.
+            await Post.updateMeta(post.id, key, sanitizeMetaValue(key, value));
         }
     }
 
@@ -406,7 +477,8 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
     // Update meta
     if (meta && typeof meta === 'object') {
         for (const [key, value] of Object.entries(meta)) {
-            await Post.updateMeta(postId, key, value);
+            // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) on write — see sanitizeMetaValue.
+            await Post.updateMeta(postId, key, sanitizeMetaValue(key, value));
         }
     }
 
@@ -535,11 +607,13 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req, res) => {
         });
     }
 
-    await Post.updateMeta(postId, key, value);
+    // SECURITY: sanitize HTML/URL-bearing meta (e.g. _puck_data) on write — see sanitizeMetaValue.
+    const safeValue = sanitizeMetaValue(key, value);
+    await Post.updateMeta(postId, key, safeValue);
 
     res.json({
         key,
-        value,
+        value: safeValue,
         post_id: postId
     });
 }));
@@ -558,6 +632,19 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req, res) => {
             message: 'Invalid post ID.',
             data: { status: 404 }
         });
+    }
+
+    // SECURITY (IDOR): mirror the single-post read gate. Without this, anyone could read the full meta
+    // map (SEO drafts, internal notes, plugin-stashed data, _wp_trash_meta_status, etc.) of draft/
+    // private/pending/trashed posts, or other users' content.
+    if (post.postStatus !== 'publish') {
+        if (!req.user || (post.authorId !== req.user.id && !req.user.can('edit_others_posts'))) {
+            return res.status(404).json({
+                code: 'rest_post_invalid_id',
+                message: 'Invalid post ID.',
+                data: { status: 404 }
+            });
+        }
     }
 
     res.json(await Post.getAllMeta(postId));
