@@ -148,11 +148,21 @@ function getClient(): any {
 
 /** Publish a message to a channel. Returns false if Redis isn't available (caller stays in-process). */
 async function publish(channel: string, payload: any): Promise<boolean> {
-    if (!redis || !redisAvailable) return false;
+    if (!redis || !redisAvailable) {
+        // Only warn when Redis is CONFIGURED (multi-node expected) but currently down: a missed
+        // publish means cross-node coherence is degraded (e.g. a role revocation won't reach other
+        // nodes until their TTL fallback re-reads). Single-node installs (Redis not configured) skip
+        // pub/sub by design — no warning there to avoid log spam.
+        if (redisConfigured()) {
+            console.warn(`[Cache] publish('${channel}') skipped: Redis unavailable — cross-node coherence DEGRADED until reconnect (state self-heals within the roles-cache TTL).`);
+        }
+        return false;
+    }
     try {
         await redis.publish(channel, typeof payload === 'string' ? payload : JSON.stringify(payload));
         return true;
-    } catch (e) {
+    } catch (e: any) {
+        console.warn(`[Cache] publish('${channel}') failed: ${e && e.message} — cross-node coherence DEGRADED for this event.`);
         return false;
     }
 }
