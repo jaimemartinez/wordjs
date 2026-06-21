@@ -1,3 +1,4 @@
+// @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 "use client";
 
 import React, { createContext, useContext, useState, useEffect } from 'react';
