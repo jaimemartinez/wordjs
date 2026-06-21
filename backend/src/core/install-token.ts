@@ -50,8 +50,15 @@ let installToken: string | null = null;
 function generateInstallToken(): string {
     if (installToken) return installToken;
     // Operator override (e.g. headless/CI). Trimmed; ignored if blank so we fall back to a random token.
+    // Entropy floor (DEPLOY-INSTALLTOKEN-06): a short/guessable operator value (e.g. "1", "test") would
+    // reduce the pre-install takeover gate to a brute-forceable secret. Require >= 16 chars; otherwise
+    // ignore the env value and fall back to the random token, warning the operator.
+    const MIN_ENV_TOKEN_LEN = 16;
     const envTok = String(process.env.WORDJS_INSTALL_TOKEN || '').trim();
-    const tok: string = envTok || crypto.randomBytes(24).toString('hex');
+    if (envTok && envTok.length < MIN_ENV_TOKEN_LEN) {
+        console.warn(`[install-token] WORDJS_INSTALL_TOKEN is too short (< ${MIN_ENV_TOKEN_LEN} chars); ignoring it and generating a random token instead.`);
+    }
+    const tok: string = (envTok.length >= MIN_ENV_TOKEN_LEN ? envTok : crypto.randomBytes(24).toString('hex'));
     installToken = tok;
 
     // Mirror to a 0600 file in the data dir for headless retrieval. Best-effort: a failure here must

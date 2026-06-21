@@ -937,16 +937,32 @@ async function loadActivePlugins() {
             return active.filter(s => s !== culpritSlug);
         });
 
-        // Also notify via persistent admin notice
-        const notices = await getOption('admin_notices', []);
-        notices.push({
-            id: `crash-${culpritSlug}-${Date.now()}`,
-            type: 'error',
-            message: `🚨 <b>Critical Error:</b> The plugin <strong>${culpritSlug}</strong> caused ${crashInfo.strikes} consecutive crashes during startup and has been automatically disabled for your safety. Please check the logs or contact the plugin author.`,
-            dismissible: true,
-            timestamp: Date.now()
-        });
-        await updateOption('admin_notices', notices);
+        // Also notify via persistent admin notice. This is a read-modify-write of the WHOLE notices
+        // array, so two replicas recovering from a crash concurrently could clobber each other's append
+        // and silently drop one notice. Serialize the read+push+write under a dist-lock (same pattern as
+        // withActivePluginsLock). BEST-EFFORT: the crash path must never throw, so swallow any lock /
+        // option error — losing an admin notice is acceptable; wedging crash recovery is not.
+        try {
+            const { acquireBlocking } = require('./dist-lock');
+            const lock = await acquireBlocking('wordjs:admin-notices', { ttlMs: 15000, timeoutMs: 15000 });
+            if (lock.held) {
+                try {
+                    const notices = await getOption('admin_notices', []);
+                    notices.push({
+                        id: `crash-${culpritSlug}-${Date.now()}`,
+                        type: 'error',
+                        message: `🚨 <b>Critical Error:</b> The plugin <strong>${culpritSlug}</strong> caused ${crashInfo.strikes} consecutive crashes during startup and has been automatically disabled for your safety. Please check the logs or contact the plugin author.`,
+                        dismissible: true,
+                        timestamp: Date.now()
+                    });
+                    await updateOption('admin_notices', notices);
+                } finally {
+                    await lock.release();
+                }
+            }
+        } catch (e: any) {
+            console.error('[CrashGuard] Failed to record admin notice:', e && e.message);
+        }
 
         // Update local list for THIS run
         const index = activePlugins.indexOf(culpritSlug);
