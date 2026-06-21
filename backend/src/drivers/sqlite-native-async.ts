@@ -13,11 +13,15 @@ const config = require('../config/app');
 class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     db: any;
     dbPath: string;
+    // Promise-chain mutex: serializes transaction() so two overlapping callers can never interleave
+    // their BEGIN/COMMIT on the single shared better-sqlite3 connection. See transaction() below.
+    _txChain: Promise<any>;
 
     constructor() {
         super();
         this.db = null;
         this.dbPath = path.resolve(config.dbPath || './data/wordjs-native.db');
+        this._txChain = Promise.resolve();
     }
 
     async connect() {
@@ -89,10 +93,26 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
      * NOTE: better-sqlite3 itself is synchronous; we keep the async/Promise surface for interface
      * parity with the Postgres driver. Do not nest transaction() calls (SQLite has no nested BEGIN).
      *
+     * CONCURRENCY: the callback is async and may `await` between BEGIN and COMMIT, which yields the
+     * event loop. With a single shared connection that would let a second transaction() issue its own
+     * BEGIN inside the first (SQLite throws "cannot start a transaction within a transaction") AND let
+     * an interleaved write land inside the wrong transaction scope. We therefore SERIALIZE transaction()
+     * via a per-driver promise-chain mutex (_txChain): each call waits for the previous to fully settle
+     * (commit/rollback) before its own BEGIN runs, so transactions execute strictly one-at-a-time.
+     *
      * @param {(tx: {get,all,run,exec}) => Promise<any>} fn
      * @returns {Promise<any>} the value returned by fn
      */
     async transaction(fn) {
+        // Queue this transaction behind any in-flight one. We chain off a settled-no-matter-what tail
+        // (catch swallows the PREVIOUS tx's error for chaining only) so one failed tx never blocks the
+        // queue; the caller still receives their own tx's result/error via `run`.
+        const run = this._txChain.then(() => this._runTransaction(fn), () => this._runTransaction(fn));
+        this._txChain = run.catch(() => { });
+        return run;
+    }
+
+    async _runTransaction(fn) {
         const tx = {
             get: async (sql, params = []) => this.db.prepare(sql).get(...params),
             all: async (sql, params = []) => this.db.prepare(sql).all(...params),
