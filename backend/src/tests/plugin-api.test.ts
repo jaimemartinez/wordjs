@@ -57,9 +57,29 @@ test('bridge blocks SQL touching core tables (incl. regex-evasion bypasses)', as
         await assert.rejects(() => api.db.all('SELECT * FROM users'), /off-limits/);
         await assert.rejects(() => api.db.run("UPDATE user_meta SET meta_value='administrator'"), /off-limits/);
         // Evasions that slipped past the old `FROM <table>` matcher:
-        await assert.rejects(() => api.db.all('SELECT * FROM plugin_t, users'), /off-limits/);   // comma join
+        await assert.rejects(() => api.db.all('SELECT * FROM plugin_t, users'), /off-limits|comma join/i);   // comma join (blocked as a comma join; core table never attaches)
         await assert.rejects(() => api.db.all('SELECT * FROM/**/users'), /off-limits/);            // comment-as-whitespace
         await assert.rejects(() => api.db.all("SELECT option_value FROM options WHERE option_name='jwt_secret'"), /off-limits/); // secret exfil via options table
+    });
+});
+
+// Regression: a plugin's OWN table may have a COLUMN named like a core table (conference-manager's
+// `fields` table has an `options` column). Writing it must NOT trip the core-table denylist — the
+// denylist only matches an actual table REFERENCE, not a column in an INSERT list / UPDATE SET.
+test('bridge allows a column named like a core table in the plugin OWN table (no denylist false-positive)', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        const PFX = api.db.tablePrefix;
+        for (const sql of [
+            `INSERT INTO ${PFX}fields (conference_id, name, options, status, type) VALUES (1, 'x', 'a|b', 'on', 'text')`,
+            `UPDATE ${PFX}fields SET options = 'a|b', status = 'on', type = 'text' WHERE id = 1`,
+        ]) {
+            let err: any = null;
+            try { await api.db.run(sql); } catch (e) { err = e; }
+            // It may fail on a real DB error (e.g. no such table in the test DB), but it must NOT be the
+            // scoping denial — that proves the SQL passed the prefix/denylist gate.
+            assert.ok(!err || !/off-limits/.test(String(err.message)), `column named like a core table must not trip the denylist: ${err && err.message}`);
+        }
     });
 });
 
