@@ -91,6 +91,36 @@ class DatabaseWrapper {
         return this.prepare(sql).run(...params);
     }
 
+    /**
+     * Atomic transaction for the pure-JS (sql.js) fallback driver. sql.js is a single in-memory
+     * database, so BEGIN/COMMIT/ROLLBACK around fn is atomic. `tx` mirrors the get/all/run surface
+     * of the async drivers so callers (e.g. dbAsync.transaction) work identically on the fallback.
+     * Kept async for interface parity even though sql.js is synchronous.
+     */
+    async transaction(fn) {
+        const tx = {
+            get: async (sql, params = []) => this.get(sql, params),
+            all: async (sql, params = []) => this.all(sql, params),
+            run: async (sql, params = []) => this.run(sql, params),
+            exec: async (sql) => { this.exec(sql); }
+        };
+
+        this.sqlDb.run('BEGIN');
+        try {
+            const result = await fn(tx);
+            this.sqlDb.run('COMMIT');
+            save(); // persist the committed state to disk (StatementWrapper.run saves per-write too)
+            return result;
+        } catch (err) {
+            try {
+                this.sqlDb.run('ROLLBACK');
+            } catch (rbErr: any) {
+                console.error('❌ SQLite (legacy) ROLLBACK failed:', rbErr && rbErr.message);
+            }
+            throw err;
+        }
+    }
+
     pragma(pragma) {
         this.sqlDb.run(`PRAGMA ${pragma};`);
     }

@@ -136,6 +136,74 @@ class PostgresDriver extends DatabaseDriverInterface {
         }
     }
 
+    /**
+     * Run a real, atomic transaction on a SINGLE pooled connection.
+     *
+     * The per-statement get/all/run/exec methods above each grab a DIFFERENT connection from the
+     * pool, so issuing BEGIN/COMMIT as separate statements is NOT atomic (they can land on different
+     * backends and interleave with other queries). This pins ONE client for the whole unit of work:
+     * BEGIN → fn(tx) → COMMIT, with ROLLBACK on any throw, and the client always released.
+     *
+     * `tx` exposes get/all/run bound to that single client, using the SAME SQL normalization
+     * (normalizeSql, RETURNING auto-injection, lastID/changes shape) as the top-level methods so
+     * callers write identical SQLite-style SQL inside and outside a transaction.
+     *
+     * @param {(tx: {get,all,run,exec}) => Promise<any>} fn
+     * @returns {Promise<any>} the value returned by fn
+     */
+    async transaction(fn) {
+        const client = await this.pool.connect();
+
+        const tx = {
+            get: async (sql, params = []) => {
+                const res = await client.query(this.normalizeSql(sql), params);
+                return res.rows[0];
+            },
+            all: async (sql, params = []) => {
+                const res = await client.query(this.normalizeSql(sql), params);
+                return res.rows;
+            },
+            run: async (sql, params = []) => {
+                let normalizedSql = this.normalizeSql(sql);
+                // Mirror run(): auto-inject RETURNING * for INSERTs lacking it, so lastID works.
+                if (/^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
+                    normalizedSql += ' RETURNING *';
+                }
+                const res = await client.query(normalizedSql, params);
+                let lastID: any = 0;
+                if (res.rows && res.rows.length > 0) {
+                    const firstRow = res.rows[0];
+                    if (firstRow.id) lastID = firstRow.id;
+                    else if (firstRow.ID) lastID = firstRow.ID;
+                    else {
+                        const values = Object.values(firstRow);
+                        if (values.length > 0) lastID = values[0];
+                    }
+                }
+                return { lastID, changes: res.rowCount };
+            },
+            exec: async (sql) => {
+                await client.query(sql);
+            }
+        };
+
+        try {
+            await client.query('BEGIN');
+            const result = await fn(tx);
+            await client.query('COMMIT');
+            return result;
+        } catch (err) {
+            try {
+                await client.query('ROLLBACK');
+            } catch (rbErr: any) {
+                console.error('❌ Postgres ROLLBACK failed:', rbErr && rbErr.message);
+            }
+            throw err;
+        } finally {
+            client.release();
+        }
+    }
+
     async getTables() {
         try {
             const res = await this.pool.query(

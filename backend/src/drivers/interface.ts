@@ -52,6 +52,16 @@ class DatabaseDriverInterface {
     }
 
     /**
+     * Run an atomic transaction. The callback receives a `tx` with get/all/run/exec bound to a
+     * SINGLE underlying connection; BEGIN/COMMIT wrap the callback and any throw triggers ROLLBACK.
+     * @param {(tx: { get: Function, all: Function, run: Function, exec: Function }) => Promise<any>} fn
+     * @returns {Promise<any>} the value returned by fn
+     */
+    async transaction(fn) {
+        throw new Error('transaction() not implemented');
+    }
+
+    /**
      * Close the database connection
      * @returns {Promise<void>}
      */
