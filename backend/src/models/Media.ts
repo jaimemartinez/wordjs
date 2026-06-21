@@ -285,6 +285,54 @@ class Media {
         const allowed = Object.values(Media.getAllowedMimeTypes());
         return allowed.includes(mimeType);
     }
+
+    /**
+     * Resolve the canonical, SAFE stored file extension for a given MIME type.
+     *
+     * SECURITY: The stored extension MUST be derived from the validated MIME type (the
+     * allowlist below is the single source of truth) rather than from the client-supplied
+     * filename — otherwise a "foo.php"/"foo.html" originalname could be persisted verbatim
+     * and later served as executable/active content. Returns null when the MIME has no
+     * mapped extension (caller must reject the upload) or when the resolved extension is on
+     * the dangerous list.
+     *
+     * @param {string} mimeType
+     * @returns {string|null} extension WITHOUT a leading dot (e.g. 'jpg'), or null
+     */
+    static getExtensionForMime(mimeType) {
+        const map = Media.getAllowedMimeTypes();
+        for (const [extKey, mime] of Object.entries(map)) {
+            if (mime === mimeType) {
+                // Keys may be alternation groups like 'jpg|jpeg|jpe' — take the first form.
+                const ext = extKey.split('|')[0].toLowerCase();
+                if (Media.isDangerousExtension(ext)) return null;
+                return ext;
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Extensions that must NEVER be persisted/served regardless of the declared MIME type
+     * (active/executable content or XML that browsers may render in a dangerous context).
+     * Note: 'svg' is intentionally NOT here — SVGs follow the admin-only + sanitization path
+     * in the upload route; blocking them outright would break that allowed flow.
+     *
+     * @param {string} ext extension with or without a leading dot
+     * @returns {boolean}
+     */
+    static isDangerousExtension(ext) {
+        if (!ext) return false;
+        const clean = String(ext).replace(/^\./, '').toLowerCase();
+        const blocked = new Set([
+            'html', 'htm', 'xhtml', 'shtml', 'shtm',
+            'js', 'mjs', 'cjs',
+            'xml',
+            'php', 'phtml', 'php3', 'php4', 'php5', 'phar',
+            'htaccess'
+        ]);
+        return blocked.has(clean);
+    }
 }
 
 module.exports = Media;
