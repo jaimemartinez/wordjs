@@ -41,6 +41,9 @@ export default function InstallPage() {
     // Step 1: Site
     const [siteName, setSiteName] = useState("");
     const [siteDescription, setSiteDescription] = useState("Just another WordJS site");
+    // One-time install token printed to the server console/logs while WordJS is not yet installed —
+    // authorizes the pre-install setup endpoints so a network-exposed instance can't be hijacked first.
+    const [installToken, setInstallToken] = useState("");
 
     // Step 2: Database
     const [dbDriver, setDbDriver] = useState<DbDriver>('sqlite-native');
@@ -77,7 +80,7 @@ export default function InstallPage() {
     const testConnection = async () => {
         setDbTest({ status: 'testing', message: '' });
         try {
-            const res = await apiPost<{ ok: boolean; message?: string; error?: string }>('/setup/test-db', { dbDriver, db: pgConn() });
+            const res = await apiPost<{ ok: boolean; message?: string; error?: string }>('/setup/test-db', { dbDriver, db: pgConn(), installToken });
             setDbTest(res.ok ? { status: 'ok', message: res.message || 'Connection successful.' } : { status: 'fail', message: res.error || 'Connection failed.' });
         } catch (e: any) {
             setDbTest({ status: 'fail', message: e.message || 'Connection failed.' });
@@ -109,7 +112,8 @@ export default function InstallPage() {
                 adminPassword,
                 dbDriver,
                 ...(dbDriver === 'postgres' ? { db: pgConn() } : {}),
-                frontendUrl: siteUrl || window.location.origin
+                frontendUrl: siteUrl || window.location.origin,
+                installToken
             });
             if (stageTimer.current) clearInterval(stageTimer.current);
             // Auto-login sets an HttpOnly cookie on the response, so redirectTo can be /admin.
@@ -191,9 +195,14 @@ export default function InstallPage() {
                                         <label className={labelCls}>Tagline</label>
                                         <input type="text" className={inputCls} value={siteDescription} onChange={(e) => setSiteDescription(e.target.value)} placeholder="Just another WordJS site" />
                                     </div>
+                                    <div className="group">
+                                        <label className={labelCls}>Install Token</label>
+                                        <input type="text" required className={inputCls} value={installToken} onChange={(e) => setInstallToken(e.target.value.trim())} placeholder="Paste the token from your server console" autoComplete="off" spellCheck={false} />
+                                        <p className="text-xs text-gray-500 mt-1">For security, WordJS prints a one-time <span className="font-semibold">install token</span> to the server console/logs while it is not yet installed. Paste it here to authorize setup.</p>
+                                    </div>
                                     {siteUrl && <p className="text-xs text-gray-500">This site will be installed at <span className="font-mono font-semibold">{siteUrl}</span></p>}
                                     <div className="pt-4">
-                                        <button type="button" onClick={() => setStep(2)} disabled={!siteName.trim()}
+                                        <button type="button" onClick={() => setStep(2)} disabled={!siteName.trim() || !installToken.trim()}
                                             className="w-full flex items-center justify-center bg-gray-900 text-white py-3.5 px-6 rounded-lg font-semibold hover:bg-gray-800 focus:ring-4 focus:ring-gray-300 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg hover:shadow-xl transform hover:-translate-y-0.5">
                                             Next Step <FaArrowRight className="ml-2" aria-hidden="true" />
                                         </button>

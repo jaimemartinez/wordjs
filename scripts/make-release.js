@@ -54,6 +54,15 @@ const IGNORE_PATTERNS = [
     'build-production.ps1'
 ];
 
+// SECURITY: never ship local databases, private keys or TLS material in a release. These are matched
+// PRECISELY (not naive substring) so we don't accidentally drop legitimate source like
+// backend/dist/routes/certs.js: directory entries match a whole PATH SEGMENT, and extension entries
+// match the file SUFFIX. Skips data/ + backend/data/, certs/ + backend/certs/, any */ssl/* dir, and
+// any *.db / *.sqlite / *.sqlite3 / *.key / *.pem file. Secrets are generated locally during install,
+// never bundled.
+const SECRET_DIR_SEGMENTS = ['data', 'certs', 'ssl'];
+const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.key', '.pem'];
+
 const INSTALL_MD = `# WordJS — Install & Run (compiled release)
 
 This package is **pre-compiled** — you do NOT need to build anything. Install the runtime
@@ -191,6 +200,13 @@ function shouldIgnore(filePath) {
     for (const pattern of IGNORE_PATTERNS) {
         if (relativePath.includes(pattern)) return true;
     }
+
+    // SECURITY: drop databases / private keys / TLS material — matched precisely so we never strip
+    // legitimate source (e.g. routes/certs.js) that merely contains one of these words.
+    const segments = relativePath.split('/');
+    if (segments.some(seg => SECRET_DIR_SEGMENTS.includes(seg))) return true;
+    const lowerBase = basename.toLowerCase();
+    if (SECRET_EXTENSIONS.some(ext => lowerBase.endsWith(ext))) return true;
 
     return false;
 }

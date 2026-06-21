@@ -83,9 +83,15 @@ app.use(cors({
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
 
-        // In development, allow localhost ports
+        // In development, relax CORS — but ONLY for localhost/127.0.0.1/[::1] origins. Because
+        // credentials:true is set, reflecting an ARBITRARY origin would let any website make
+        // credentialed requests against a dev instance (account takeover); never do that, even in dev.
         if (config.nodeEnv === 'development') {
-            return callback(null, true);
+            let host = '';
+            try { host = new URL(origin).hostname.toLowerCase(); } catch { host = ''; }
+            const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
+            if (isLocal) return callback(null, true);
+            return callback(new Error('Not allowed by CORS'));
         }
 
         // In production, check against allowed domains. Because credentials:true is set,
@@ -104,7 +110,7 @@ app.use(cors({
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token']
 }));
 
 // Cookie Parser (for HttpOnly auth cookies)
@@ -193,7 +199,25 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Serve static files
 // Serve static files (Deny dotfiles like .git, .env)
-app.use('/uploads', express.static(path.resolve(config.uploads.dir), { dotfiles: 'deny' }));
+// SECURITY: uploaded files are user-controlled, so an attacker could upload an .html/.svg and have it
+// execute as a same-origin document (stored XSS) when viewed. Set X-Content-Type-Options: nosniff on
+// everything, and force NON-image files to download as an opaque attachment (application/octet-stream
+// + Content-Disposition: attachment) so they can never run as a document in this origin. Images keep
+// their inline Content-Type so the admin/media UI can still display them.
+// SVG is deliberately EXCLUDED: it is an image but can carry inline <script>, so it must download
+// rather than render inline. Raster image types stay inline so the admin/media UI can display them.
+const INLINE_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif']);
+app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
+    dotfiles: 'deny',
+    setHeaders: (res, filePath) => {
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        const ext = path.extname(filePath).toLowerCase();
+        if (!INLINE_IMAGE_EXTS.has(ext)) {
+            res.setHeader('Content-Type', 'application/octet-stream');
+            res.setHeader('Content-Disposition', 'attachment');
+        }
+    }
+}));
 // app.use('/admin', express.static(path.resolve('./admin'))); // Removed legacy admin
 app.use('/themes', express.static(path.resolve('./themes'), { dotfiles: 'deny' }));
 app.use('/plugins', express.static(path.resolve('./plugins'), { dotfiles: 'deny' }));
@@ -530,6 +554,12 @@ async function initialize() {
     } else {
         console.log('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
         console.log('   Waiting for interactive installation via Frontend...');
+
+        // SECURITY: mint + print the one-time install token. The pre-install setup endpoints
+        // (/setup/install, /setup/test-db) require it, so a not-yet-installed instance can't be
+        // taken over by whoever reaches it first. Held in memory only; a fresh token is minted on
+        // each boot while the instance remains uninstalled.
+        require('./core/install-token').generateInstallToken();
     }
 
     // Register 404 and error handlers AFTER plugins (so plugin routes work)

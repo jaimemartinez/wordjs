@@ -3,6 +3,21 @@ const router = express.Router();
 const { getConfig, saveConfig, isInstalled } = require('../core/configManager');
 const config = require('../config/app');
 const path = require('path');
+const { verifyInstallToken } = require('../core/install-token');
+
+// Gate for the PRE-INSTALL endpoints (/install, /test-db). These run before the instance is
+// configured, so they are unauthenticated and exempt from CSRF — require the one-time install token
+// (printed to the server console at boot) to stop a pre-install takeover. Constant-time compared in
+// verifyInstallToken(). Accepts the token via the `x-install-token` header or an `installToken` body
+// field so the installer UX stays simple (operator copies it from the logs).
+function requireInstallToken(req: any, res: any): boolean {
+    const provided = req.get('x-install-token') || (req.body && req.body.installToken);
+    if (!verifyInstallToken(provided)) {
+        res.status(403).json({ error: 'Invalid or missing install token. Check the server console for the install token.' });
+        return false;
+    }
+    return true;
+}
 
 // Check installation status
 router.get('/status', (req, res) => {
@@ -43,6 +58,7 @@ router.get('/status', (req, res) => {
 // with { ok, message|error } so the wizard can render the result inline.
 router.post('/test-db', async (req, res) => {
     if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });
+    if (!requireInstallToken(req, res)) return;
     const { dbDriver = 'sqlite-native', db: dbConn } = req.body || {};
     try {
         if (dbDriver === 'postgres') {
@@ -82,6 +98,7 @@ router.post('/install', async (req, res) => {
     if (isInstalled()) {
         return res.status(400).json({ error: 'Already installed' });
     }
+    if (!requireInstallToken(req, res)) return;
 
     const {
         siteName,
