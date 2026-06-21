@@ -66,7 +66,8 @@ router.get('/', authenticate, async (req, res) => {
  */
 router.post('/:uuid/read', authenticate, async (req, res) => {
     try {
-        await notificationService.markAsRead(req.params.uuid);
+        const ok = await notificationService.markAsRead(req.params.uuid, req.user.id);
+        if (!ok) return res.status(404).json({ error: 'Notification not found' });
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
@@ -90,7 +91,8 @@ router.post('/read-all', authenticate, async (req, res) => {
  */
 router.delete('/:uuid', authenticate, async (req, res) => {
     try {
-        await notificationService.deleteNotification(req.params.uuid);
+        const ok = await notificationService.deleteNotification(req.params.uuid, req.user.id);
+        if (!ok) return res.status(404).json({ error: 'Notification not found' });
         res.json({ success: true });
     } catch (e) {
         res.status(500).json({ error: e.message });
