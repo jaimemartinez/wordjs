@@ -87,28 +87,41 @@ test('bridge confines fs to the plugin dir + uploads', async () => {
 // Round-8 regression: the credentials SQLite DB sits under the data/ read zone, so a plugin holding
 // (self-declared) filesystem:read could read+parse it directly, bypassing the bridge DB scoping. The
 // io-guard global-fs backstop now blocks DB files (extension + sidecars) regardless of the zone.
-test('io-guard blocks plugin reads of the database file under data/', async () => {
+test('io-guard blocks plugin reads of the database file under data/ (in the child)', async () => {
     const { isPathSafe } = require('../core/io-guard');
     const root = path.resolve(__dirname, '../../');
-    await runWithContext(SLUG, async () => {
-        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db'), false), false);          // primary DB
-        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs-native.db'), false), false);   // native-driver DB
-        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db-wal'), false), false);      // WAL sidecar
-        assert.equal(isPathSafe(path.join(root, 'data', 'x.sqlite3'), false), false);          // any sqlite file
-        // but a non-DB file under data/ stays readable — we blocked the DB, not the whole zone
-        assert.equal(isPathSafe(path.join(root, 'data', 'plugin-notes.txt'), false), true);
-    });
+    const g: any = global; const prev = g.__WORDJS_ISOLATED__;
+    g.__WORDJS_ISOLATED__ = true; // the DB-file block is child-only (the host driver needs DB access)
+    try {
+        await runWithContext(SLUG, async () => {
+            assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db'), false), false);          // primary DB
+            assert.equal(isPathSafe(path.join(root, 'data', 'wordjs-native.db'), false), false);   // native-driver DB
+            assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db-wal'), false), false);      // WAL sidecar
+            assert.equal(isPathSafe(path.join(root, 'data', 'x.sqlite3'), false), false);          // any sqlite file
+            // but a non-DB file under data/ stays readable — we blocked the DB, not the whole zone
+            assert.equal(isPathSafe(path.join(root, 'data', 'plugin-notes.txt'), false), true);
+        });
+    } finally { if (prev === undefined) delete g.__WORDJS_ISOLATED__; else g.__WORDJS_ISOLATED__ = prev; }
 });
 
-// No trust tier: EVERY plugin is uniformly confined by io-guard — even a bundled plugin like
-// mail-server cannot read the raw DB file or secret files (it uses scoped bridge access instead).
-test('io-guard confines every plugin (no trusted exemption)', async () => {
+// No trust tier: io-guard confines plugin CODE (which runs in the isolated child) from reading the raw
+// DB file — but on the HOST the bridge runs callApi in the plugin's context, and the host DB driver
+// must still be allowed to open data/wordjs.db for the plugin's scoped queries. So the DB-file block is
+// child-only; the host driver is allowed (data/ safe zone). Regression for the activation EACCES bug.
+test('io-guard: DB file blocked in the child, allowed for the host bridge driver', async () => {
     const { isPathSafe } = require('../core/io-guard');
     const root = path.resolve(__dirname, '../../');
-    await runWithContext('mail-server', async () => {
-        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db'), false), false); // DB file blocked for all
-        assert.equal(isPathSafe(path.join(root, '.env'), false), false);              // secret file blocked for all
-    });
+    const dbFile = path.join(root, 'data', 'wordjs.db');
+    const g: any = global; const prev = g.__WORDJS_ISOLATED__;
+    try {
+        await runWithContext('mail-server', async () => {
+            delete g.__WORDJS_ISOLATED__;                                    // HOST (bridge driver context)
+            assert.equal(isPathSafe(dbFile, false), true);                  // host DB driver → allowed
+            g.__WORDJS_ISOLATED__ = true;                                   // isolated CHILD (plugin code)
+            assert.equal(isPathSafe(dbFile, false), false);                 // plugin reading raw DB → blocked
+            assert.equal(isPathSafe(path.join(root, '.env'), false), false); // secret file → blocked
+        });
+    } finally { if (prev === undefined) delete g.__WORDJS_ISOLATED__; else g.__WORDJS_ISOLATED__ = prev; }
 });
 
 // provideMail (becoming the host-wide mail sender) requires the explicit `email:provider` grant —
