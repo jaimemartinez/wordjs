@@ -175,7 +175,19 @@ function isPathSafe(targetPath, isWrite = false) {
     // keeps working — without re-opening cross-plugin reads of source/data/secrets.
     if (!isAllowed && !isWrite) {
         const base = path.basename(resolved);
-        if (base === 'package.json' || resolved.split(path.sep).includes('node_modules')) isAllowed = true;
+        if (base === 'package.json' || resolved.split(path.sep).includes('node_modules')) {
+            // ...but NEVER inside a SIBLING plugin's dir. Module resolution only reads the plugin's OWN
+            // tree + shared ancestors (plugins/package.json, backend/, root node_modules) — never a sibling
+            // plugin's package.json/node_modules — so deny those to keep cross-plugin reads closed. (IO-1)
+            const pluginsRoot = path.join(ROOT_DIR, 'plugins');
+            let underSibling = false;
+            if (resolved.startsWith(pluginsRoot + path.sep)) {
+                const after = resolved.slice(pluginsRoot.length + 1);
+                const firstSeg = after.split(path.sep)[0];
+                if (after.includes(path.sep) && firstSeg && firstSeg !== pluginSlug) underSibling = true;
+            }
+            if (!underSibling) isAllowed = true;
+        }
     }
 
     if (!isAllowed) {

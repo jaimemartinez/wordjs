@@ -520,7 +520,11 @@ async function initialize() {
 
         if (categoryCount === 0) {
             console.log('📁 Creating default category...');
-            Term.create({
+            // Await so the insert completes INSIDE the boot-lock critical section (matching the awaited
+            // User.create above). On Postgres multi-node the boot lock serializes default seeding; if the
+            // lease were released (line below) before this insert committed, a second node could pass its
+            // own categoryCount check and create a duplicate 'Uncategorized' (no UNIQUE backstop). (DATA-03)
+            await Term.create({
                 name: 'Uncategorized',
                 taxonomy: 'category',
                 slug: 'uncategorized',

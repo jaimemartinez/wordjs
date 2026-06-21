@@ -25,6 +25,24 @@ const User = require('../models/User');
 const Term = require('../models/Term');
 const Comment = require('../models/Comment');
 const { dbAsync } = require('../config/database');
+const { sanitizeMetaValue } = require('./sanitize-meta');
+
+/**
+ * Sanitize an imported postmeta value through the SAME sanitizer the posts routes use, so a crafted
+ * WXR file can't smuggle stored XSS via _puck_data (a Puck block with a javascript: URL / unescaped
+ * HTML field). WXR carries meta values as STRINGS; _puck_data is a serialized JSON object, so we parse
+ * it, run sanitizeMetaValue over the structured tree, then re-stringify for storage. If it isn't valid
+ * JSON (or sanitizing yields nothing usable), fall back to the raw string so import stays non-fatal and
+ * non-_puck_data meta is preserved verbatim (sanitizeMetaValue is a no-op for other keys anyway).
+ */
+function sanitizeImportedMeta(key: string, rawValue: string): string {
+    if (key !== '_puck_data') return rawValue;
+    let parsed: any;
+    try { parsed = JSON.parse(rawValue); } catch { return rawValue; }
+    if (!parsed || typeof parsed !== 'object') return rawValue;
+    const sanitized = sanitizeMetaValue(key, parsed);
+    try { return JSON.stringify(sanitized); } catch { return rawValue; }
+}
 
 // ---------------------------------------------------------------------------
 // XML helpers
@@ -345,7 +363,7 @@ async function importWxr(xml: string, options: ImportOptions): Promise<ImportSum
             for (const pm of toArray(item['wp:postmeta'])) {
                 const key = text(pm['wp:meta_key']).trim();
                 if (!key || SKIP_META.has(key)) continue;
-                try { await Post.updateMeta(post.id, key, text(pm['wp:meta_value'])); }
+                try { await Post.updateMeta(post.id, key, sanitizeImportedMeta(key, text(pm['wp:meta_value']))); }
                 catch { /* non-fatal */ }
             }
 

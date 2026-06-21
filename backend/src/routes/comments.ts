@@ -346,10 +346,16 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req, 
 
     const { author, author_email, author_url, content, status } = req.body;
 
+    // SECURITY: enforce the SAME http(s)-only constraint the guest-create path applies via
+    // safeAuthorUrl, so an edit_comments user can't set a `javascript:`/`data:` comment_author_url that
+    // bypasses guest validation. Only transform when the field was actually provided — leaving it
+    // undefined preserves Comment.update's "field omitted → stored value unchanged" behavior.
+    const safeUrl = author_url === undefined ? undefined : safeAuthorUrl(author_url);
+
     const updated = await Comment.update(commentId, {
         author,
         authorEmail: author_email,
-        authorUrl: author_url,
+        authorUrl: safeUrl,
         content,
         status
     });

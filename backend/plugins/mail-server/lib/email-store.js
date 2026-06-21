@@ -64,6 +64,9 @@ function loadRootKey() {
     const key = crypto.randomBytes(32);
     try {
         fsSync.writeFileSync(KEY_FILE, key.toString('hex'), { mode: 0o600 });
+        // writeFileSync's `mode` is IGNORED when the file already exists, so enforce 0600 explicitly
+        // (mirrors cert-manager.ts / gateway / cert-upload). No-op / throws on Windows → swallowed.
+        try { fsSync.chmodSync(KEY_FILE, 0o600); } catch (e) { /* unsupported on some FS / Windows */ }
     } catch (e) {
         console.error('[MailServer] Failed to persist encryption key file:', e.message);
     }
@@ -402,18 +405,18 @@ module.exports = function createEmailStore(db) {
         },
 
         async findByThreadId(threadId, userEmail = null) {
-            let sql = `SELECT * FROM ${T_EMAILS} WHERE (thread_id = ? OR id = ?) AND is_trash = 0`;
-            const params = [threadId, threadId];
+            const sql = `SELECT * FROM ${T_EMAILS} WHERE (thread_id = ? OR id = ?) AND is_trash = 0 ORDER BY date_received ASC`;
+            const rows = await db.all(sql, [threadId, threadId]);
 
+            // SECURITY (over-disclosure): an unanchored `LIKE %email%` membership test matched thread
+            // rows addressed to a SUBSTRING of the requester's address (e.g. bob@x.com vs bbob@x.com).
+            // Filter the returned rows through the exact-token membership check (canUserAccess) so only
+            // messages the user is actually a party to (sender or to/cc/bcc recipient) are returned.
             if (userEmail) {
-                sql += ' AND ((to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) OR (from_address = ? AND is_sent = 1))';
-                const likeEmail = `%${userEmail}%`;
-                params.push(likeEmail, likeEmail, likeEmail, userEmail, userEmail);
+                return rows.filter(row => this.canUserAccess(row, userEmail));
             }
 
-            sql += ' ORDER BY date_received ASC';
-
-            return await db.all(sql, params);
+            return rows;
         },
 
         async findAllByUser(email, folder = 'inbox', limit = 50, offset = 0) {
