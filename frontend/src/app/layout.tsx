@@ -24,24 +24,34 @@ export async function generateMetadata(): Promise<Metadata> {
         icons: { icon, apple: icon },
     };
 
-    // metadataBase makes the relative canonical/OpenGraph URLs (e.g. "/my-post") resolve to absolute
-    // URLs in the rendered <head>, which crawlers and social unfurlers require. Prefer the real
-    // request host (the domain the visitor/crawler actually used), then a configured site URL; only
-    // then fall back to Next's localhost default.
-    let base: URL | undefined;
+    // metadataBase absolutizes the relative canonical/OpenGraph URLs (e.g. "/my-post") in the
+    // rendered <head>, which crawlers and social unfurlers require. The request Host /
+    // X-Forwarded-Host header is fully client-controllable, so trusting it raw lets an attacker
+    // rewrite every canonical/og:url to their own domain (SEO/phishing poisoning). Anchor the base
+    // to the CONFIGURED site URL, and only honor the request host when its hostname matches that
+    // configured origin (an allowlist), so legit multi-host/proxy setups still get correct URLs.
+    const configuredUrl = settings?.siteurl || settings?.home || settings?.site_url;
+    let configuredBase: URL | undefined;
+    if (configuredUrl && /^https?:\/\//i.test(configuredUrl)) {
+        try { configuredBase = new URL(configuredUrl); } catch { /* ignore malformed URL */ }
+    }
+
+    let base: URL | undefined = configuredBase;
     try {
         const { headers } = await import("next/headers");
         const h = await headers();
         const host = h.get("x-forwarded-host") || h.get("host");
         const proto = h.get("x-forwarded-proto") || "https";
-        if (host) base = new URL(`${proto}://${host}`);
-    } catch { /* not in a request scope */ }
-    if (!base) {
-        const siteUrl = settings?.siteurl || settings?.home || settings?.site_url;
-        if (siteUrl && /^https?:\/\//i.test(siteUrl)) {
-            try { base = new URL(siteUrl); } catch { /* ignore malformed URL */ }
+        // Allowlist = the configured site hostname (compared case-insensitively, port-stripped).
+        // Only when no site URL is configured do we fall back to the raw request host.
+        if (host) {
+            const reqHostname = host.split(":")[0].toLowerCase();
+            const allowedHostname = configuredBase?.hostname.toLowerCase();
+            if (!allowedHostname || reqHostname === allowedHostname) {
+                try { base = new URL(`${proto}://${host}`); } catch { /* keep configured base */ }
+            }
         }
-    }
+    } catch { /* not in a request scope — keep the configured base */ }
     if (base) meta.metadataBase = base;
     return meta;
 }

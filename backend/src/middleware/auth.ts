@@ -230,10 +230,26 @@ function csrfProtection(req, res, next) {
         }
     }
 
-    // Allow if no Origin/Referer (server-to-server, API clients)
-    // These must have valid JWT anyway
+    // No Origin AND no Referer.
+    // Previously this failed OPEN ('server-to-server, API clients must have valid JWT anyway'), but the
+    // JWT also rides in the HttpOnly wordjs_token cookie the browser attaches automatically — so a
+    // header-less request could drive a cookie-authenticated state change with no anti-CSRF signal
+    // (AUTH-A2). Only the Authorization-header (Bearer) path is a genuine non-browser API caller that
+    // cannot be CSRF'd via an ambient cookie. So: allow header-less requests ONLY when they carry a
+    // Bearer token (not the cookie); otherwise require a positive same-origin signal and reject.
     if (!origin && !referer) {
-        return next();
+        const authHeader = req.get('Authorization') || '';
+        const isBearer = authHeader.startsWith('Bearer ')
+            && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined';
+        if (isBearer) {
+            return next();
+        }
+        console.warn(`[CSRF] Blocked header-less cookie request to ${req.path}`);
+        return res.status(403).json({
+            code: 'rest_csrf_invalid',
+            message: 'Cross-site request blocked.',
+            data: { status: 403 }
+        });
     }
 
     // Allow configured CORS origins. `host` comes from X-Forwarded-Host, which the gateway now pins

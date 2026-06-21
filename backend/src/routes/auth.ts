@@ -13,25 +13,89 @@ const config = require('../config/app');
 
 // Per-account login lockout: the per-IP rate limiter is defeated by a botnet/proxy pool targeting a
 // single account, and there was no account-level throttle. Lock an account for a cooldown after N
-// consecutive failures (in-memory; the backend runs single-process behind the gateway).
+// consecutive failures.
+//
+// Multi-node (AUTH-A3): an in-process-only counter weakens to N× on a multi-replica deployment (an
+// attacker spreading attempts across R replicas gets R×10 attempts) and is wiped by a node restart.
+// So when Redis is configured we back the counter with the SHARED rate-limit client (the same
+// cache.getClient() the IP limiters use), keyed by the normalized username, with the lock TTL in
+// Redis. The in-memory Map remains the single-node path and the always-on fallback: any Redis error
+// (or no client configured) degrades to in-process exactly as before — a Redis outage NEVER blocks
+// login. Mirrors limiterStore()'s passOnStoreError philosophy.
 const LOGIN_MAX_FAILS = 10;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const _loginFails = new Map(); // key -> { count, firstFailAt, lockedUntil }
 const _loginKey = (u) => String(u || '').trim().toLowerCase();
-function isLoginLocked(u) {
-    const e = _loginFails.get(_loginKey(u));
+
+// Lazily-resolved shared store client (null on single-node or if Redis isn't configured).
+function _lockStore() {
+    try {
+        const cache = require('../core/cache');
+        return cache.getClient() || null;
+    } catch {
+        return null;
+    }
+}
+const _failsRedisKey = (key) => `wjlock:fails:${key}`;
+const _lockedRedisKey = (key) => `wjlock:locked:${key}`;
+
+function _isLoginLockedMem(key) {
+    const e = _loginFails.get(key);
     return !!(e && e.lockedUntil && e.lockedUntil > Date.now());
 }
-function recordLoginFail(u) {
+
+async function isLoginLocked(u) {
+    const key = _loginKey(u);
+    const client = _lockStore();
+    if (client) {
+        try {
+            const locked = await client.get(_lockedRedisKey(key));
+            return !!locked;
+        } catch {
+            // Redis hiccup → fall through to the in-memory view (fail-safe: still throttles single node).
+        }
+    }
+    return _isLoginLockedMem(key);
+}
+
+async function recordLoginFail(u) {
     const key = _loginKey(u);
     const now = Date.now();
+    const client = _lockStore();
+    if (client) {
+        try {
+            const failKey = _failsRedisKey(key);
+            const lockTtlSec = Math.ceil(LOGIN_LOCK_MS / 1000);
+            const count = await client.incr(failKey);
+            // (Re)set the sliding-window expiry on the counter each failure.
+            await client.expire(failKey, lockTtlSec);
+            if (count >= LOGIN_MAX_FAILS) {
+                await client.set(_lockedRedisKey(key), '1', 'PX', LOGIN_LOCK_MS);
+            }
+            return;
+        } catch {
+            // Redis hiccup → record in-memory instead so this node still throttles.
+        }
+    }
     let e = _loginFails.get(key);
     if (!e || (now - e.firstFailAt) > LOGIN_LOCK_MS) e = { count: 0, firstFailAt: now, lockedUntil: 0 };
     e.count++;
     if (e.count >= LOGIN_MAX_FAILS) e.lockedUntil = now + LOGIN_LOCK_MS;
     _loginFails.set(key, e);
 }
-const clearLoginFails = (u) => _loginFails.delete(_loginKey(u));
+
+async function clearLoginFails(u) {
+    const key = _loginKey(u);
+    const client = _lockStore();
+    if (client) {
+        try {
+            await client.del(_failsRedisKey(key), _lockedRedisKey(key));
+        } catch {
+            // ignore — clearing is best-effort; the TTL will expire the keys anyway.
+        }
+    }
+    _loginFails.delete(key);
+}
 
 // Cookie configuration for secure HttpOnly tokens
 // Detect if site uses HTTPS from config
@@ -196,7 +260,7 @@ router.post('/login', asyncHandler(async (req, res) => {
         });
     }
 
-    if (isLoginLocked(username)) {
+    if (await isLoginLocked(username)) {
         return res.status(429).json({
             code: 'rest_account_locked',
             message: 'Account temporarily locked due to too many failed attempts. Try again later.',
@@ -206,13 +270,13 @@ router.post('/login', asyncHandler(async (req, res) => {
 
     try {
         const user = await User.authenticate(username, password);
-        clearLoginFails(username);
+        await clearLoginFails(username);
         const token = generateToken(user);
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
 
         res.json({ user: user.toJSON() });
     } catch (error) {
-        recordLoginFail(username);
+        await recordLoginFail(username);
         return res.status(401).json({
             code: 'rest_invalid_credentials',
             message: 'Invalid username or password.',

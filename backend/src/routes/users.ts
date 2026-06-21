@@ -309,6 +309,27 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
                 data: { status: 403 }
             });
         }
+        // SECURITY (privilege amplification / AUTH-A1): guarding only the LITERAL 'administrator' role
+        // string is insufficient — an admin can create a CUSTOM role whose capabilities include '*'
+        // (all-caps) or admin-tier caps the delegate lacks. A non-administrator promote_users delegate
+        // assigning such a role would mint a fully-privileged account without ever holding admin. So,
+        // unless the caller is an administrator, refuse to assign any role that grants MORE than the
+        // caller themselves holds: reject '*' (omnipotent) and reject any capability the caller does
+        // not have. (Administrators are unrestricted; legit assignment of lesser roles still works.)
+        if (req.user.getRole() !== 'administrator') {
+            const targetCaps: string[] = (roles[role] && roles[role].capabilities) || [];
+            const callerCaps: string[] = (req.user.getCapabilities && req.user.getCapabilities()) || [];
+            const callerHasAll = callerCaps.includes('*');
+            const grantsWildcard = targetCaps.includes('*');
+            const amplifies = grantsWildcard || (!callerHasAll && targetCaps.some((c) => !callerCaps.includes(c)));
+            if (amplifies) {
+                return res.status(403).json({
+                    code: 'rest_forbidden',
+                    message: 'You cannot assign a role with capabilities beyond your own.',
+                    data: { status: 403 }
+                });
+            }
+        }
         updateData.role = role;
     }
 

@@ -118,6 +118,14 @@ class DatabaseWrapper {
      * interleave BEGIN/COMMIT on the single shared connection.
      */
     async transaction(fn) {
+        // Re-entrancy guard: a transaction() invoked from INSIDE another transaction()'s callback would
+        // chain off the OUTER tx's still-pending tail (which can't settle until this inner call resolves)
+        // → circular wait that permanently wedges txChain and every future transaction(). sql.js has no
+        // nested BEGIN anyway, so fail FAST and synchronously instead of silently deadlocking. The module
+        // `inTransaction` flag is already true between BEGIN and COMMIT/ROLLBACK (see _runTransaction).
+        if (inTransaction) {
+            throw new Error('nested transaction() is not supported');
+        }
         const run = txChain.then(() => this._runTransaction(fn), () => this._runTransaction(fn));
         txChain = run.catch(() => { });
         return run;

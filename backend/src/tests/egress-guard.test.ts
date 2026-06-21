@@ -83,6 +83,17 @@ test('guarded http.request with NO host is blocked (defaults to localhost)', asy
     });
 });
 
+test('TOCTOU: a host/path getter is read ONCE (snapshot) and frozen — no benign-then-malicious bypass', () => {
+    const guarded = eg.getGuardedModule('net');
+    // host getter returning a PRIVATE IP on the first (only) read → blocked; getter must not be re-read.
+    let reads = 0;
+    const opts: any = { port: 80, get host() { reads++; return reads === 1 ? '10.0.0.1' : '8.8.8.8'; } };
+    assert.throws(() => { const s = guarded.connect(opts); if (s) s.destroy(); }, /egress/i, 'private value from the snapshot is blocked');
+    assert.strictEqual(reads, 1, 'host getter must be read exactly once (snapshot), never re-read by Node');
+    // path getter (IPC/unix-socket) → blocked regardless of a later benign read.
+    assert.throws(() => { const s = guarded.connect({ port: 80, get path() { return '/var/run/docker.sock'; } } as any); if (s) s.destroy(); }, /blocked|egress/i, 'IPC path via getter blocked');
+});
+
 test('assertUrlAllowedSync blocks ws:// to a private IP literal', () => {
     assert.throws(() => eg.assertUrlAllowedSync('ws://169.254.169.254/'), /egress/i);
     assert.throws(() => eg.assertUrlAllowedSync('wss://10.0.0.1:8080/x'), /egress/i);

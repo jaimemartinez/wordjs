@@ -90,35 +90,21 @@ async function initTransporter() {
         return;
     }
 
-    // SECURITY (M2-SSRF parity): the relay/smarthost host is operator-configured, but the direct-MX
-    // path validates+pins its target while this path did not. Apply the same public-host validation
-    // and IP-pinning here so a relay pointed at 127.0.0.1 / 169.254.169.254 / RFC1918 (or a hostname
-    // that DNS-rebinds at nodemailer's connect-time re-resolution) is refused. We connect to the
-    // already-validated public IP and carry the original hostname as the TLS servername so cert
-    // verification still matches. Fails CLOSED: on validation failure no transporter is configured.
-    let pinnedHost;
-    try {
-        const publicAddrs = await assertPublicHost(host);
-        pinnedHost = publicAddrs[0]; // first validated public A/AAAA — all returned addrs were checked
-    } catch (error) {
-        console.error(`   ✗ Refusing relay configuration: ${error.message}`);
-        transporter = null;
-        return;
-    }
-
+    // The relay/smarthost is OPERATOR-configured (admin-only setting) and may LEGITIMATELY be an INTERNAL
+    // host (a LAN smarthost / corporate MTA). Unlike the attacker-controlled direct-MX recipient domain,
+    // it is therefore NOT subject to the public-only SSRF pin — that wrongly refused internal smarthosts
+    // (MAIL-RELAY-SSRF). Pass the configured hostname straight to nodemailer (which resolves + uses it for
+    // SNI/cert match).
+    const requireRelayTls = (await getOption('mail_relay_require_tls', '1')) !== '0';
     transporter = nodemailer.createTransport({
-        host: pinnedHost,        // already-validated public IP — no second resolution at connect time
+        host,
         port,
         secure,
-        // SECURITY (STARTTLS downgrade): the relay is an operator-configured smarthost that must be
-        // reachable over TLS. nodemailer's STARTTLS is opportunistic by default, so an on-path attacker
-        // could strip the STARTTLS advertisement and capture the relay credentials in plaintext. Force
-        // STARTTLS (abort if unavailable) for the non-implicit-TLS case. When secure:true (465) TLS is
-        // already implicit, so requireTLS is unnecessary there.
-        requireTLS: !secure,
-        auth: { user, pass },
-        // Keep certificate verification against the configured hostname (SNI + altname match).
-        tls: { servername: host }
+        // STARTTLS downgrade protection: force STARTTLS on the non-implicit-TLS path so an on-path attacker
+        // can't strip it and capture the relay creds. An operator with a TLS-less INTERNAL smarthost can
+        // opt out via the mail_relay_require_tls='0' setting (REG-2). secure:true (465) is implicit TLS.
+        requireTLS: requireRelayTls && !secure,
+        auth: { user, pass }
     });
 
     try {

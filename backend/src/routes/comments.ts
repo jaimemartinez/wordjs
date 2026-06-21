@@ -281,6 +281,21 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
         url = safeAuthorUrl(url);
     }
 
+    // SECURITY (VAL-01): a reply must point at a real parent comment on the SAME post. Without this an
+    // attacker can thread a reply under an unrelated post's comment (thread spoofing / cross-post linking)
+    // or reference a non-existent id. Top-level comments (no parent) are still allowed.
+    const parentId = parent ? parseInt(parent, 10) : 0;
+    if (parentId) {
+        const parentComment = await Comment.findById(parentId);
+        if (!parentComment || parentComment.commentPostId !== parseInt(postId, 10)) {
+            return res.status(400).json({
+                code: 'rest_comment_invalid_parent',
+                message: 'Invalid parent comment.',
+                data: { status: 400 }
+            });
+        }
+    }
+
     // Determine initial status
     let status = '0'; // pending
     if (req.user && req.user.can('moderate_comments')) {
@@ -295,7 +310,7 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
         authorIp: req.ip,
         content,
         status,
-        parent: parent ? parseInt(parent, 10) : 0,
+        parent: parentId,
         userId,
         agent: req.get('User-Agent') || ''
     });
