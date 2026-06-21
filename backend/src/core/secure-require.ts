@@ -10,6 +10,10 @@ const { getEffectivePlugin, hasPermission } = require('./plugin-context');
 const originalFs = require('fs');
 const originalChildProcess = require('child_process');
 const path = require('path');
+// Loaded EAGERLY here (at module init, before any plugin is on the stack / before installSecureRequire
+// patches require) so egress-guard captures the REAL net/tls/dns/... modules, not our proxies. It hands
+// back network builtins wrapped with a public-only egress filter for network-granted plugins.
+const egressGuard = require('./egress-guard');
 
 // ============================================
 // Security Configuration
@@ -315,7 +319,16 @@ function secureModuleFor(id) {
         let netGranted = false;
         if (isolated) netGranted = !!(global as any).__WORDJS_PLUGIN_NETWORK__;
         else { try { netGranted = require('./plugin-permissions').isNetworkGranted(pluginSlug); } catch { netGranted = false; } }
-        if (netGranted) return undefined;
+        if (netGranted) {
+            // Network is granted — but confine egress to PUBLIC destinations (block loopback / private /
+            // link-local / 169.254.169.254 metadata) so the grant isn't a full SSRF + exfil surface.
+            // getGuardedModule returns the wrapped builtin, or undefined for dns (resolution is fine; the
+            // connect is the sink) → fall through to the real module. Fail CLOSED if the guard errors.
+            try {
+                const guarded = egressGuard.getGuardedModule(base);
+                return guarded !== undefined ? guarded : undefined;
+            } catch { return createBlockedModuleProxy(pluginSlug, norm); }
+        }
         return createBlockedModuleProxy(pluginSlug, norm);
     }
     // worker_threads / vm / module / inspector
