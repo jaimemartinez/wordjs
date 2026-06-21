@@ -235,6 +235,90 @@ function ipInCidr(ip, cidr) {
 }
 
 /**
+ * SECURITY (M2-SSRF): is this resolved IP a private/internal/special-use address we must NOT connect
+ * to for outbound mail delivery? Blocks loopback, RFC1918, link-local (incl. cloud metadata
+ * 169.254.169.254), CGNAT, ULA, ::1, IPv4-mapped IPv6 of any of the above, and the unspecified addr.
+ * Used to defend MX delivery against being aimed at the host's own internal network. Fails CLOSED:
+ * an unparseable/unknown address is treated as blocked.
+ */
+function isBlockedIp(ip) {
+    if (!ip || typeof ip !== 'string') return true;
+    let addr = ip.trim();
+    // Normalize IPv4-mapped IPv6 (::ffff:10.0.0.1 / ::ffff:a00:1) down to its IPv4 form so the v4
+    // CIDR checks below catch private ranges smuggled through a v6 literal.
+    const mapped = addr.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i);
+    if (mapped) addr = mapped[1];
+
+    if (net.isIPv4(addr)) {
+        const V4_BLOCKED = [
+            '0.0.0.0/8',       // "this host" / unspecified
+            '10.0.0.0/8',      // RFC1918
+            '100.64.0.0/10',   // CGNAT (RFC6598)
+            '127.0.0.0/8',     // loopback
+            '169.254.0.0/16',  // link-local (incl. 169.254.169.254 cloud metadata)
+            '172.16.0.0/12',   // RFC1918
+            '192.168.0.0/16',  // RFC1918
+        ];
+        return V4_BLOCKED.some(cidr => ipInCidr(addr, cidr));
+    }
+    if (net.isIPv6(addr)) {
+        // Exact specials first.
+        if (addr === '::1') return true;          // loopback
+        if (addr === '::') return true;           // unspecified
+        const V6_BLOCKED = [
+            '::1/128',         // loopback
+            '::/128',          // unspecified
+            'fc00::/7',        // ULA (unique local)
+            'fe80::/10',       // link-local
+        ];
+        return V6_BLOCKED.some(cidr => ipInCidr(addr, cidr));
+    }
+    // Not a parseable IP literal — fail closed.
+    return true;
+}
+
+/**
+ * SECURITY (M2-SSRF): resolve a hostname to its A/AAAA addresses and reject if ANY of them is an
+ * internal/private/special address. Returns the list of (public) IPs on success; throws otherwise.
+ * Used before opening an SMTP connection to an MX host so MX/fallback delivery can't be aimed at the
+ * host's own loopback/LAN/cloud-metadata endpoint. Fails CLOSED on resolution failure.
+ */
+async function assertPublicHost(host) {
+    // A bare IP literal as the MX host is checked directly.
+    if (net.isIP(host)) {
+        if (isBlockedIp(host)) throw new Error(`Refusing delivery to internal/private address: ${host}`);
+        return [host];
+    }
+    let addrs = [];
+    try {
+        const v4 = await dns.resolve4(host).catch(() => []);
+        const v6 = await dns.resolve6(host).catch(() => []);
+        addrs = [...v4, ...v6];
+    } catch (e) {
+        throw new Error(`DNS resolution failed for ${host}: ${e.message}`);
+    }
+    if (addrs.length === 0) throw new Error(`Could not resolve ${host} to any address`);
+    for (const a of addrs) {
+        if (isBlockedIp(a)) throw new Error(`Refusing delivery: ${host} resolves to internal/private address ${a}`);
+    }
+    return addrs;
+}
+
+/**
+ * Is this inbound SMTP session a TRUSTED (non-external) sender that bypasses DNSBL/SPF gating?
+ * Trusted = loopback connection (our own relay/local injection) or an authenticated session
+ * (AUTH is currently disabled, but guard for forward-compatibility). Everything else is "external"
+ * and is subject to fail-closed reputation/SPF checks.
+ */
+function isTrustedSmtpSession(session) {
+    if (!session) return false;
+    const ip = session.remoteAddress;
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return true;
+    if (session.user) return true; // authenticated (if AUTH is ever enabled)
+    return false;
+}
+
+/**
  * Initialize the Inbound SMTP Server
  */
 async function initSMTPServer() {
@@ -256,57 +340,84 @@ async function initSMTPServer() {
         maxClients: 50,
         socketTimeout: 60 * 1000, // drop idle/slow-loris connections after 60s
 
-        // 1. DNSBL Protection (Connection Level)
+        // 1. DNSBL Protection (Connection Level) — default ON, FAIL CLOSED for external senders.
         onConnect(session, callback) {
-            if (session.remoteAddress === '127.0.0.1' || session.remoteAddress === '::1') return callback();
+            // Loopback / authenticated senders are trusted (this is our own relay path).
+            if (isTrustedSmtpSession(session)) return callback();
 
-            getOption('mail_security_dnsbl_enabled', '0').then(enabled => {
-                if (enabled !== '1') return callback();
+            // Default ON: only an explicit operator override ('0') disables the check.
+            getOption('mail_security_dnsbl_enabled', '1').then(enabled => {
+                if (enabled === '0') return callback();
 
                 const dnsbl = require('dnsbl');
                 dnsbl.lookup(session.remoteAddress, 'zen.spamhaus.org').then(listed => {
                     if (listed) {
-                        console.warn(`[Security] IP ${session.remoteAddress} blocked by DNSBL`);
-                        return callback(new Error('Connection rejected by DNSBL'));
+                        console.warn(`[Security][DNSBL] IP ${session.remoteAddress} blocked by DNSBL — rejecting`);
+                        return callback(new Error('554 Connection rejected: your IP is listed on a DNS blocklist'));
                     }
                     callback();
-                }).catch(() => callback()); // Fail open on error
+                }).catch((e) => {
+                    // FAIL CLOSED: a DNSBL lookup error must not silently admit an unverified external IP.
+                    console.warn(`[Security][DNSBL] lookup error for ${session.remoteAddress}: ${e.message} — rejecting (fail closed)`);
+                    callback(new Error('451 Temporary failure: unable to verify sender reputation, try again later'));
+                });
+            }).catch((e) => {
+                // The option lookup itself failed — fail closed for the external sender.
+                console.warn(`[Security][DNSBL] option lookup error: ${e.message} — rejecting (fail closed)`);
+                callback(new Error('451 Temporary failure, try again later'));
             });
         },
 
         // 2. SPF Protection — real check against the connecting IP and MAIL FROM domain.
+        // Default ON, FAIL CLOSED for external senders: reject on explicit SPF fail/softfail or on a
+        // lookup error. 'pass'/'neutral'/'none' (no SPF record) are accepted to avoid false rejects.
         onMailFrom(address, session, callback) {
-            getOption('mail_security_spf_enabled', '0').then(async (enabled) => {
-                if (enabled !== '1') return callback();
+            // Loopback / authenticated senders are our own relay path — never SPF-gate them.
+            if (isTrustedSmtpSession(session)) return callback();
+
+            // Default ON: only an explicit operator override ('0') disables the check.
+            getOption('mail_security_spf_enabled', '1').then(async (enabled) => {
+                if (enabled === '0') return callback();
 
                 const ip = session.remoteAddress;
                 const mailFrom = (address && address.address) || '';
                 const domain = mailFrom.split('@')[1] || '';
 
-                // Fail OPEN on any problem: no domain, validator error, or DNS timeout → tag 'none', accept.
+                // FAIL CLOSED: a DNS/validator error during evaluation must reject, not silently admit.
                 let result = 'none';
+                let evalError = false;
                 try {
                     if (domain) result = await evaluateSPF(domain, ip);
                 } catch (e) {
-                    console.warn(`[Security][SPF] evaluation error for ${domain} (${ip}): ${e.message} — failing open`);
-                    result = 'none';
+                    console.warn(`[Security][SPF] evaluation error for ${domain} (${ip}): ${e.message} — rejecting (fail closed)`);
+                    evalError = true;
                 }
 
                 // Set the Received-SPF header for downstream storage (RFC 7208 §9.1 shape).
                 session.spfheader = `Received-SPF: ${result} (wordjs: ${domain || 'unknown'} via ${ip})`;
                 session.spfResult = result;
 
-                // Optionally reject hard failures, but only if explicitly enabled (default: just tag).
-                if (result === 'fail') {
-                    const rejectRaw = await getOption('mail_security_spf_reject', '0');
-                    if (rejectRaw === '1') {
-                        console.warn(`[Security][SPF] Rejecting ${mailFrom} from ${ip} (hard SPF fail)`);
+                if (evalError) {
+                    return callback(new Error('451 Temporary failure: unable to verify SPF for ' + (domain || 'sender') + ', try again later'));
+                }
+
+                // Reject explicit SPF failures by default. Operator can downgrade to tag-only with
+                // mail_security_spf_reject='0' (override) if they prefer to accept and rely on tagging.
+                if (result === 'fail' || result === 'softfail') {
+                    const rejectRaw = await getOption('mail_security_spf_reject', '1');
+                    if (rejectRaw !== '0') {
+                        console.warn(`[Security][SPF] Rejecting ${mailFrom} from ${ip} (SPF ${result})`);
                         return callback(new Error('550 SPF check failed: sending IP not authorized for ' + domain));
                     }
-                    console.warn(`[Security][SPF] SPF fail for ${mailFrom} from ${ip} — tagged only (reject disabled)`);
+                    console.warn(`[Security][SPF] SPF ${result} for ${mailFrom} from ${ip} — tagged only (reject overridden off)`);
                 }
+                // 'pass' / 'neutral' / 'none' (domains without an SPF record) are accepted.
                 callback();
-            }).catch(() => callback()); // Fail open if the option lookup itself throws.
+            }).catch((e) => {
+                // The option lookup itself failed — fail closed for the external sender.
+                console.warn(`[Security][SPF] option lookup error: ${e.message} — rejecting (fail closed)`);
+                callback(new Error('451 Temporary failure, try again later'));
+            });
         },
 
         onData(stream, session, callback) {
@@ -431,6 +542,8 @@ function isValidEmail(email) {
     if (!email || typeof email !== 'string') return false;
     // Block extremely long addresses (DoS prevention)
     if (email.length > 254) return false;
+    // SECURITY (M4): reject any CR/LF outright — a newline in a recipient is a header-injection vector.
+    if (/[\r\n]/.test(email)) return false;
     // Block multiple @ symbols (CVE-2025-13033 prevention)
     if ((email.match(/@/g) || []).length !== 1) return false;
     // Block quoted local parts with @ (CVE-2025-13033)
@@ -438,9 +551,19 @@ function isValidEmail(email) {
         const localPart = email.split('@')[0];
         if (localPart.includes('@')) return false;
     }
-    // Standard RFC 5322 simplified validation
-    // Allow "localhost" for internal mail
-    const emailRegex = /^[^\s@]+@([^\s@]+\.[^\s@]+|localhost)$/;
+
+    // SECURITY (M2-SSRF): reject IP-literal and localhost recipient domains. A recipient like
+    // user@127.0.0.1, user@[::1], or user@localhost would aim direct delivery at the host's own
+    // network. Internal WordJS users are matched by login/email separately, so legitimate mail never
+    // needs an IP/localhost domain here.
+    const domain = email.split('@')[1] || '';
+    // Strip optional [ ] around address literals (RFC 5321 domain-literal form).
+    const bareDomain = domain.replace(/^\[/, '').replace(/\]$/, '');
+    if (bareDomain.toLowerCase() === 'localhost') return false;
+    if (net.isIP(bareDomain)) return false; // any IPv4/IPv6 literal as the domain
+
+    // Standard RFC 5322 simplified validation. A real (FQDN) domain must contain a dot.
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
 }
 
@@ -450,22 +573,27 @@ function isValidEmail(email) {
 async function sendMail(data) {
     console.log(`[MailServer] sendMail called. Subject: "${data.subject}"`);
 
-    // SECURITY: Validate recipient email (CVE-2025-14874)
-    // We validate the primary 'to' if it's a string, or loop if array
+    // Normalize all recipient lists up-front so we can validate EVERY address (M4).
     const toAttendees = Array.isArray(data.to) ? data.to : [data.to];
-    for (const email of toAttendees) {
+    const ccAttendees = data.cc ? (Array.isArray(data.cc) ? data.cc : [data.cc]) : [];
+    const bccAttendees = data.bcc ? (Array.isArray(data.bcc) ? data.bcc : [data.bcc]) : [];
+
+    // SECURITY (M4 / CVE-2025-14874): validate EVERY recipient (to, cc AND bcc) — not just the primary
+    // 'to'. An attacker-supplied cc/bcc with a CRLF or malformed address could otherwise smuggle header
+    // injection or be misdirected. Empty cc/bcc slots are tolerated (filtered), but any present-but-
+    // invalid address rejects the whole send.
+    for (const email of [...toAttendees, ...ccAttendees, ...bccAttendees]) {
+        if (email === undefined || email === null || email === '') continue;
         if (!isValidEmail(email)) throw new Error(`Invalid recipient email address format: ${email}`);
     }
 
-    // SECURITY (H7): strip CR/LF from header-bound fields to prevent email-header injection. A newline
-    // in subject/fromName could smuggle extra headers (e.g. Bcc:) into the outbound message. Recipients
-    // are validated above; this defends the remaining user-controlled header fields at the source.
+    // SECURITY (H7/M4): strip CR/LF from header-bound fields to prevent email-header injection. A newline
+    // in subject/fromName/fromEmail could smuggle extra headers (e.g. Bcc:) into the outbound message.
+    // Recipients are validated above; this defends the remaining user-controlled header fields at source.
     const stripCRLF = (v) => (typeof v === 'string' ? v.replace(/[\r\n]+/g, ' ').trim() : v);
     if (data.subject !== undefined) data.subject = stripCRLF(data.subject);
     if (data.fromName !== undefined) data.fromName = stripCRLF(data.fromName);
-
-    const ccAttendees = data.cc ? (Array.isArray(data.cc) ? data.cc : [data.cc]) : [];
-    const bccAttendees = data.bcc ? (Array.isArray(data.bcc) ? data.bcc : [data.bcc]) : [];
+    if (data.fromEmail !== undefined) data.fromEmail = stripCRLF(data.fromEmail);
 
     // Combine for distinct processing
     const allRecipients = [...toAttendees, ...ccAttendees, ...bccAttendees];
@@ -477,8 +605,8 @@ async function sendMail(data) {
     const defaultEmail = await getOption('admin_email', 'noreply@wordjs.com');
     const defaultName = await getOption('blogname', 'WordJS');
 
-    const fromEmail = data.fromEmail || await getOption('mail_from_email', defaultEmail);
-    // stripCRLF the final fromName too (covers the admin-configured mail_from_name fallback).
+    // stripCRLF the resolved fromEmail/fromName too (covers the admin-configured option fallbacks).
+    const fromEmail = stripCRLF(data.fromEmail || await getOption('mail_from_email', defaultEmail));
     const fromName = stripCRLF(data.fromName || await getOption('mail_from_name', defaultName));
     const parentId = data.parentId || 0;
     const threadId = data.threadId || 0;
@@ -797,21 +925,33 @@ function buildDnsRecords(domain, selector, publicKeyPem) {
  */
 async function deliverDirect(recipient, mail, dkimOptions, heloName) {
     const domain = recipient.split('@')[1];
+
+    // SECURITY (M2-SSRF): the recipient domain itself must not be an IP literal / localhost. isValidEmail
+    // already rejects these at the sendMail boundary, but defend in depth here since deliverDirect is the
+    // actual network sink.
+    const bareDomain = String(domain || '').replace(/^\[/, '').replace(/\]$/, '');
+    if (!bareDomain || bareDomain.toLowerCase() === 'localhost' || net.isIP(bareDomain)) {
+        const err = new Error(`Direct delivery to ${recipient} refused: invalid or internal recipient domain`);
+        err.permanent = true;
+        throw err;
+    }
+
     const mxRecords = await resolveMX(domain);
     if (mxRecords.length === 0) mxRecords.push({ exchange: domain, priority: 0 });
 
-    let lastErr = null;
-    let permanent = false;
-    for (const mx of mxRecords) {
+    // Build the actual SMTP connection to ONE host with a given TLS verification mode.
+    const sendVia = async (host, rejectUnauthorized) => {
         const transport = nodemailer.createTransport({
-            host: mx.exchange,
+            host,
             port: 25,
             secure: false,
             name: heloName,               // EHLO/HELO hostname (must match rDNS)
             connectionTimeout: 20000,
             greetingTimeout: 15000,
             socketTimeout: 30000,
-            tls: { rejectUnauthorized: false } // remote MX certs vary; STARTTLS still used when offered
+            // M2-TLS: verify the STARTTLS cert by default; the caller downgrades+logs only on a
+            // verification failure for this specific host.
+            tls: { rejectUnauthorized, servername: host }
         });
         try {
             const info = await transport.sendMail({
@@ -825,14 +965,59 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 attachments: mail.attachments,
                 dkim: dkimOptions
             });
+            return info;
+        } finally {
+            try { transport.close(); } catch (e2) { /* ignore */ }
+        }
+    };
+
+    // A TLS verification failure surfaces as a cert error (self-signed / hostname mismatch / expiry).
+    const isTlsVerifyError = (e) => {
+        const code = e && e.code ? String(e.code) : '';
+        const msg = (e && e.message ? e.message : '').toLowerCase();
+        return /^(ERR_TLS_CERT_ALTNAME_INVALID|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|ERR_TLS_)/i.test(code)
+            || msg.includes('certificate') || msg.includes('self signed') || msg.includes('self-signed')
+            || msg.includes('altname') || msg.includes('tls');
+    };
+
+    let lastErr = null;
+    let permanent = false;
+    for (const mx of mxRecords) {
+        // SECURITY (M2-SSRF): resolve this MX host and reject if it points at an internal/private IP
+        // (loopback/RFC1918/link-local incl. cloud metadata/CGNAT/ULA). Skip to the next MX on a
+        // blocked/unresolvable host rather than connecting.
+        try {
+            await assertPublicHost(mx.exchange);
+        } catch (e) {
+            lastErr = e;
+            console.warn(`[MailServer][SSRF] Skipping MX ${mx.exchange} for ${recipient}: ${e.message}`);
+            continue;
+        }
+
+        try {
+            // M2-TLS: try with full certificate verification first.
+            const info = await sendVia(mx.exchange, true);
             return { ok: true, mx: mx.exchange, response: info.response };
         } catch (e) {
+            // On a TLS *verification* failure (and only that), retry THIS host once with verification
+            // disabled, logging the downgrade explicitly. Other failures fall through to the next MX.
+            if (isTlsVerifyError(e)) {
+                console.warn(`[MailServer][TLS] STARTTLS verification FAILED for ${mx.exchange} (${e.message}) — retrying with verification DISABLED (downgraded, opportunistic encryption only).`);
+                try {
+                    const info = await sendVia(mx.exchange, false);
+                    return { ok: true, mx: mx.exchange, response: info.response, tlsDowngraded: true };
+                } catch (e2) {
+                    lastErr = e2;
+                    const code = e2.responseCode || 0;
+                    permanent = code >= 500 && code < 600;
+                    if (permanent) break;
+                    continue;
+                }
+            }
             lastErr = e;
             const code = e.responseCode || 0;
             permanent = code >= 500 && code < 600;
             if (permanent) break; // a hard 5xx reject won't differ on another MX
-        } finally {
-            try { transport.close(); } catch (e2) { /* ignore */ }
         }
     }
     const err = new Error(`Direct delivery to ${recipient} failed: ${lastErr ? lastErr.message : 'no MX reachable'}`);
@@ -1319,9 +1504,10 @@ exports.init = async function (bridge) {
             mail_security_dkim_domain: await getOption('mail_security_dkim_domain', ''),
             mail_security_dkim_selector: await getOption('mail_security_dkim_selector', 'default'),
             mail_security_dkim_enabled: (await getOption('mail_security_dkim_private_key', '')) ? '1' : '0',
-            mail_security_dnsbl_enabled: await getOption('mail_security_dnsbl_enabled', '0'),
-            mail_security_spf_enabled: await getOption('mail_security_spf_enabled', '0'),
-            mail_security_spf_reject: await getOption('mail_security_spf_reject', '0')
+            // Defaults reflect the SAFE posture (H12): DNSBL + SPF default ON, SPF reject default ON.
+            mail_security_dnsbl_enabled: await getOption('mail_security_dnsbl_enabled', '1'),
+            mail_security_spf_enabled: await getOption('mail_security_spf_enabled', '1'),
+            mail_security_spf_reject: await getOption('mail_security_spf_reject', '1')
             // NOTE: the DKIM private key is never returned (secret).
         });
     });

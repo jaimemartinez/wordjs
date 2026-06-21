@@ -11,6 +11,21 @@ const { getRoles } = require('../core/roles');
 
 const SALT_ROUNDS = 12;
 
+/**
+ * True when a DB error is a UNIQUE-constraint violation, across drivers:
+ *   - SQLite (better-sqlite3 / sql.js): code 'SQLITE_CONSTRAINT_UNIQUE' or message
+ *     'UNIQUE constraint failed: ...'
+ *   - Postgres (pg): SQLSTATE '23505' (unique_violation)
+ */
+function isUniqueViolation(err: any): boolean {
+    if (!err) return false;
+    const code = err.code;
+    if (code === '23505') return true; // Postgres unique_violation
+    if (typeof code === 'string' && code.startsWith('SQLITE_CONSTRAINT')) return true;
+    const msg = String(err.message || '');
+    return /UNIQUE constraint failed/i.test(msg) || /duplicate key value/i.test(msg);
+}
+
 class User {
     id?: number;
     userLogin?: string;
@@ -89,11 +104,22 @@ class User {
         // Hash password
         const hashedPassword = await bcrypt.hash(password, SALT_ROUNDS);
 
-        // Insert User
-        const result = await dbAsync.run(`
-            INSERT INTO users (user_login, user_pass, user_email, display_name, user_registered)
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id
-        `, [username, hashedPassword, email, displayName || username]);
+        // Insert User. The findByLogin/findByEmail checks above leave a TOCTOU window — two concurrent
+        // signups can both pass the check and reach here. The unique indexes (idx_users_login /
+        // idx_users_email) make the DB reject the loser; translate that into the SAME "already exists"
+        // error as the pre-check so callers see consistent behavior instead of a raw DB error.
+        let result;
+        try {
+            result = await dbAsync.run(`
+                INSERT INTO users (user_login, user_pass, user_email, display_name, user_registered)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) RETURNING id
+            `, [username, hashedPassword, email, displayName || username]);
+        } catch (e: any) {
+            if (isUniqueViolation(e)) {
+                throw new Error('Username or email already exists');
+            }
+            throw e;
+        }
 
         const userId = result.lastID;
 

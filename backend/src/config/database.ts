@@ -356,6 +356,32 @@ async function initializeSchema(db, isAsync = false) {
     await exec(idx);
   }
 
+  // UNIQUE constraints — close the TOCTOU window where a check-then-insert race (or two concurrent
+  // requests) can create duplicate logins/emails/slugs. These match the existing app lookups:
+  //   - user_login: case-SENSITIVE (User.findByLogin uses exact match) → plain unique index.
+  //   - user_email: case-INSENSITIVE (User.findByEmail / update use LOWER(user_email)) → unique on
+  //     LOWER(user_email) so 'A@x' and 'a@x' can't both exist (an expression index; supported by
+  //     SQLite ≥3.9 and Postgres).
+  //   - posts(post_name, post_type): PARTIAL on post_name <> '' — many drafts/auto-drafts legitimately
+  //     carry an empty post_name, so we only enforce uniqueness for real slugs (Post.create always
+  //     fills post_name via generateUniqueSlug). Partial unique indexes work on both engines.
+  // On FRESH installs these always succeed (no data yet). Existing installs get them via
+  // schema-migrations (which dedupes/defensively guards first).
+  const uniqueIndexes = [
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users (user_login)',
+    'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))',
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_name_type ON posts (post_name, post_type) WHERE post_name <> ''"
+  ];
+  for (const idx of uniqueIndexes) {
+    try {
+      await exec(idx);
+    } catch (e: any) {
+      // Should not happen on a fresh schema, but never let a unique-index hiccup abort boot — the
+      // schema-migration path will retry/dedupe on existing data. Log loudly so it's visible.
+      console.warn(`⚠️  Could not create unique index (continuing): ${e && e.message}`);
+    }
+  }
+
   console.log('✅ Database Schema verified.');
 }
 
@@ -461,8 +487,10 @@ const dbAsyncProxy = new Proxy({}, {
     // If prop is a function on the driver, wrap it with automatic normalization
     if (typeof db[prop] === 'function') {
       return async (...args) => {
-        // Double check for write operations
-        if (['run', 'exec', 'save'].includes(prop as string)) {
+        // Double check for write operations. transaction() wraps writes, so it requires write
+        // permission too (the tx.run/tx.exec calls inside go straight to the pinned connection and
+        // are not re-checked through this proxy — the transaction-level check covers them).
+        if (['run', 'exec', 'save', 'transaction'].includes(prop as string)) {
           verifyPermission('database', 'write');
         }
 

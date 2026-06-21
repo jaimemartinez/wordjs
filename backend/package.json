@@ -5,7 +5,7 @@
   "main": "src/index.ts",
   "scripts": {
     "start": "node server.js",
-    "dev": "node --watch -r ts-node/register src/index.ts",
+    "dev": "node --watch -r ./scripts/dev-env.js -r ts-node/register src/index.ts",
     "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\"",
     "prebuild": "npm run clean",
     "build": "tsc -p tsconfig.build.json",

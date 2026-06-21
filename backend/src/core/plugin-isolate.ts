@@ -206,6 +206,14 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
         // execArgv allowlist.
         const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
+        // OPT-IN V8 hard block on runtime code generation (eval / new Function(string)). The AST scanner
+        // catches eval/Function statically at install, but cannot stop a runtime-constructed
+        // eval-equivalent or downloaded-then-eval'd code; this closes that at the engine level. OFF by
+        // default (some plugin deps legitimately use Function()), and NEVER under ts-node (dev needs
+        // codegen to compile TS). Enable via config.sandbox.blockCodeGen for maximum hardening.
+        let blockCodeGen = false;
+        try { blockCodeGen = !!((require('../config/app').config || {}).sandbox || {}).blockCodeGen; } catch { /* config unavailable */ }
+        if (!__filename.endsWith('.ts') && blockCodeGen) execArgv.push('--disallow-code-generation-from-strings');
         // Pass an explicit, secret-free env ALLOWLIST instead of inheriting the full host environment:
         // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
         // (JWT_SECRET, DB creds, STRIPE_KEY, …) must never enter the worker's process.env. This is
