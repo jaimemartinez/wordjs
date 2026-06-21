@@ -23,11 +23,17 @@ export default function PluginsPage() {
     const [password, setPassword] = useState("");
     const [deleteError, setDeleteError] = useState("");
 
-    // Android-style per-permission grants (default-deny). The admin toggles each requested capability.
+    // Android-style per-permission grants (default-deny). The admin toggles each DECLARED capability.
     const [permsModalPlugin, setPermsModalPlugin] = useState<Plugin | null>(null);
     const [grantDraft, setGrantDraft] = useState<Set<string>>(new Set());
-    const [networkDraft, setNetworkDraft] = useState(false);
     const [savingPerms, setSavingPerms] = useState(false);
+
+    // The togglable capabilities are EXACTLY what the plugin declares in its manifest (nothing more).
+    // A network permission normalizes to the single "network" token (it has no read/write access level).
+    const permToken = (p: { scope: string; access?: string }) =>
+        p.scope === 'network' ? 'network' : `${p.scope}:${p.access || 'read'}`;
+    const declaredTokens = (plugin: Plugin) =>
+        Array.from(new Set((plugin.permissions || []).map(permToken)));
 
     const { addToast } = useToast();
     const { confirm } = useModal();
@@ -37,10 +43,9 @@ export default function PluginsPage() {
     }, []);
 
     const openPermissions = (plugin: Plugin) => {
-        const granted = new Set(plugin.grantedPermissions || []);
-        setNetworkDraft(granted.has('network'));
-        granted.delete('network');
-        setGrantDraft(granted);
+        // Only keep grants that the plugin actually declares (drop any stale grant for a removed perm).
+        const declared = new Set(declaredTokens(plugin));
+        setGrantDraft(new Set((plugin.grantedPermissions || []).filter(t => declared.has(t))));
         setPermsModalPlugin(plugin);
     };
     const toggleGrant = (token: string) => {
@@ -54,7 +59,7 @@ export default function PluginsPage() {
         if (!permsModalPlugin) return;
         setSavingPerms(true);
         try {
-            const res = await pluginsApi.setPermissions(permsModalPlugin.slug, Array.from(grantDraft), networkDraft);
+            const res = await pluginsApi.setPermissions(permsModalPlugin.slug, Array.from(grantDraft), grantDraft.has('network'));
             setPermsModalPlugin(null);
             loadPlugins();
             refreshMenus();
@@ -345,35 +350,29 @@ export default function PluginsPage() {
                             )}
 
                             <div className="space-y-2 mb-4">
-                                {(permsModalPlugin.requestedPermissions || []).length === 0 ? (
-                                    <div className="p-4 bg-gray-50 rounded-xl text-gray-400 text-sm text-center">This plugin requests no bridge permissions.</div>
-                                ) : (permsModalPlugin.requestedPermissions || []).map((token) => {
+                                {declaredTokens(permsModalPlugin).length === 0 ? (
+                                    <div className="p-4 bg-gray-50 rounded-xl text-gray-400 text-sm text-center">This plugin declares no permissions — it can&apos;t access anything beyond its own sandbox.</div>
+                                ) : declaredTokens(permsModalPlugin).map((token) => {
                                     const on = grantDraft.has(token);
+                                    const isNet = token === 'network';
                                     return (
-                                        <button
-                                            key={token}
-                                            disabled={permsModalPlugin.trusted}
-                                            onClick={() => toggleGrant(token)}
-                                            className={`w-full flex items-center justify-between p-3 rounded-xl border transition-colors text-left disabled:opacity-50 ${on ? 'bg-green-50 border-green-200' : 'bg-gray-50 border-gray-100'}`}
-                                        >
-                                            <span className="font-mono text-sm text-gray-800">{token}</span>
-                                            <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${on ? 'bg-green-500' : 'bg-gray-300'}`}>
-                                                <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${on ? 'translate-x-6' : 'translate-x-1'}`} />
-                                            </span>
-                                        </button>
+                                        <div key={token} className={`rounded-xl border transition-colors ${on ? (isNet ? 'bg-amber-50 border-amber-200' : 'bg-green-50 border-green-200') : 'bg-gray-50 border-gray-100'}`}>
+                                            <button
+                                                disabled={permsModalPlugin.trusted}
+                                                onClick={() => toggleGrant(token)}
+                                                className="w-full flex items-center justify-between p-3 text-left disabled:opacity-50"
+                                            >
+                                                <span className="flex items-center gap-2 font-mono text-sm text-gray-800">
+                                                    {isNet && <FaGlobe className="text-amber-500" />}{token}
+                                                </span>
+                                                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${on ? (isNet ? 'bg-amber-500' : 'bg-green-500') : 'bg-gray-300'}`}>
+                                                    <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${on ? 'translate-x-6' : 'translate-x-1'}`} />
+                                                </span>
+                                            </button>
+                                            {isNet && on && <p className="text-xs text-amber-700 px-3 pb-2">⚠️ Outbound network (fetch / raw sockets) — an exfiltration risk. Grant only if you trust this plugin to send data out.</p>}
+                                        </div>
                                     );
                                 })}
-                            </div>
-
-                            {/* Network is grantable independently of the manifest (with a warning). */}
-                            <div className={`p-3 rounded-xl border mb-2 ${networkDraft ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-100'}`}>
-                                <button disabled={permsModalPlugin.trusted} onClick={() => setNetworkDraft((v) => !v)} className="w-full flex items-center justify-between text-left disabled:opacity-50">
-                                    <span className="flex items-center gap-2 font-semibold text-sm text-gray-800"><FaGlobe className="text-amber-500" /> Network access</span>
-                                    <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${networkDraft ? 'bg-amber-500' : 'bg-gray-300'}`}>
-                                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${networkDraft ? 'translate-x-6' : 'translate-x-1'}`} />
-                                    </span>
-                                </button>
-                                {networkDraft && <p className="text-xs text-amber-700 mt-2">⚠️ Lets this plugin make outbound connections (fetch / raw sockets) — an exfiltration risk. Only enable it for plugins you trust to send data out.</p>}
                             </div>
                         </div>
                         <div className="p-8 pt-6 flex justify-end gap-3 flex-shrink-0 border-t border-gray-100 mt-2">
