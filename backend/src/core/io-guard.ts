@@ -99,19 +99,24 @@ function isPathSafe(targetPath, isWrite = false) {
         return false;
     }
 
-    // SECURITY: the live database files hold EVERY credential, session token, and secret-named
-    // option. They sit under the data/ read zone, so block them explicitly — independent of the
-    // zone — by db-ish extension + SQLite sidecars (covers renamed DBs that keep the extension) and
-    // by the operator-configured dbPath. A plugin reaches scoped rows through the bridge
-    // (assertSqlAllowed / PROTECTED_TABLES); it must never read the raw DB file and parse it itself.
-    if (/\.(db|sqlite|sqlite3)(-wal|-shm|-journal)?$/i.test(filename)) {
-        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access a database file: ${resolved}`);
-        return false;
-    }
-    const cfgDbPaths = getConfiguredDbPaths();
-    if (cfgDbPaths.some(db => resolved === db || resolved.startsWith(db + '-'))) {
-        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access the configured database file: ${resolved}`);
-        return false;
+    // SECURITY: the live database files hold EVERY credential, session token, and secret-named option,
+    // so plugin code must never open + parse the raw DB file. Enforce this ONLY in the isolated CHILD,
+    // where plugin code actually runs. On the HOST the only fs access under a plugin's context is the
+    // BRIDGE's own DB driver doing legitimate scoped work — callApi runs inside runWithContext(slug), so
+    // getEffectivePlugin() returns the slug while the host driver opens data/wordjs.db. That file lives
+    // in the data/ safe zone (allowed below); a plugin still can't reach it raw (its bridge fs.read is
+    // confined to its own dir). Blocking it on the host would wrongly break every plugin's DB access.
+    const g: any = (typeof global !== 'undefined') ? global : {};
+    if (g.__WORDJS_ISOLATED__) {
+        if (/\.(db|sqlite|sqlite3)(-wal|-shm|-journal)?$/i.test(filename)) {
+            console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access a database file: ${resolved}`);
+            return false;
+        }
+        const cfgDbPaths = getConfiguredDbPaths();
+        if (cfgDbPaths.some(db => resolved === db || resolved.startsWith(db + '-'))) {
+            console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access the configured database file: ${resolved}`);
+            return false;
+        }
     }
 
     // SECURITY: a plugin must NOT rewrite any manifest.json at runtime — permissions are read
