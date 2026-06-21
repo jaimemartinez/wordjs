@@ -96,6 +96,20 @@ test('io-guard blocks plugin reads of the database file under data/', async () =
     });
 });
 
+// Regression: operator-trusted plugins are full-Node by design, so io-guard must EXEMPT them from the
+// DB-file/secret blocks (otherwise trusted first-party plugins like mail-server can't open the DB and
+// fail to activate). Untrusted plugins (above) stay confined.
+test('io-guard exempts operator-trusted plugins (DB + secret files allowed)', async () => {
+    const { isPathSafe } = require('../core/io-guard');
+    const { isTrusted } = require('../core/plugin-trust');
+    const root = path.resolve(__dirname, '../../');
+    assert.ok(isTrusted('mail-server'), 'mail-server is shipped-trusted in config.trustedSystemPlugins');
+    await runWithContext('mail-server', async () => {
+        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db'), false), true); // trusted → DB allowed
+        assert.equal(isPathSafe(path.join(root, '.env'), false), true);              // trusted → not confined
+    });
+});
+
 // Round-8 regression: becoming the host-wide mail sender must require operator trust. An untrusted
 // plugin could reach wordjs.provideMail directly via a kind:'call' bridge message, bypassing the
 // trust gate on the register-mail-provider IPC handler — provideMail now re-checks trust itself.
