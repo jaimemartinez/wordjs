@@ -72,7 +72,7 @@ When `embedded: true` is not set, the `postgres` driver simply connects to whate
 
 WordJS includes a **Zero Data Loss** migration tool for switching drivers without losing users or posts.
 
-> **This is core infrastructure, not a plugin.** Database migration manages the DB lifecycle and (for embedded PG) spawns server processes via `child_process` — work that must happen in the host process and cannot run in an isolated plugin worker. It was formerly the `db-migration` *plugin*; it now lives in core at `backend/src/core/db-admin/` and is wired in at boot.
+> **This is core infrastructure, not a plugin.** Database migration manages the DB lifecycle and (for embedded PG) spawns server processes via `child_process` — work that must happen in the host process and cannot run in an isolated plugin. (Isolated plugins run in a separate OS process via `child_process.fork` with no host-heap access and a scoped bridge, so they have neither the DB handle nor the privileges this needs.) It was formerly the `db-migration` *plugin*; it now lives in core at `backend/src/core/db-admin/` and is wired in at boot.
 
 1. Go to the **DB Migration** entry in the admin sidebar (route `/admin/db-migration`). It is a native admin route, always available — it is not tied to plugin activation.
 2. Select your target engine (e.g., switch from SQLite to Postgres).
@@ -155,8 +155,8 @@ erDiagram
     users ||--o{ posts : writes
     users ||--o{ comments : writes
     posts ||--o{ comments : has
-    posts ||--o{ postmeta : has
-    users ||--o{ usermeta : has
+    posts ||--o{ post_meta : has
+    users ||--o{ user_meta : has
     posts }|--|{ term_relationships : belongs_to
     term_relationships }|--|| term_taxonomy : links
     term_taxonomy ||--|| terms : defines
@@ -165,6 +165,8 @@ erDiagram
 ---
 
 ## 2. Core Tables
+
+> **Naming note:** the tables below follow WordPress conventions, but the **actual** schema (`initializeSchema` in `backend/src/config/database.ts`) uses lowercase, snake_case identifiers: the primary keys are `id` (not `ID`), meta/relationship tables are `post_meta` / `user_meta` / `comment_meta` / `term_relationships` (with underscores), and the comment columns are `comment_id` / `comment_post_id`. Column names in the tables below are illustrative of the WordPress mapping.
 
 ### 2.1 `users`
 Stores user authentication and profile data.
@@ -180,7 +182,7 @@ Stores user authentication and profile data.
 | `user_activation_key` | VARCHAR    | For password resets |
 | `display_name`        | VARCHAR    | Public display name |
 
-### 2.2 `usermeta`
+### 2.2 `user_meta`
 Key-value store for user preferences and extra fields.
 
 | Column       | Type       | Description |
@@ -210,7 +212,7 @@ The central content table. Used for posts, pages, attachments, revisions, and me
 | `post_type`      | VARCHAR    | `post`, `page`, `attachment`... |
 | `post_mime_type` | VARCHAR    | For attachments                 |
 
-### 2.4 `postmeta`
+### 2.4 `post_meta`
 Extensible fields for posts (e.g. template settings, SEO data).
 
 | Column       | Type       | Description |
@@ -300,9 +302,11 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 | `idx_posts_name`               | `posts (post_name)`                        |
 | `idx_posts_parent`             | `posts (post_parent)`                      |
 | `idx_comments_post_approved`   | `comments (comment_post_id, comment_approved)` |
+| `idx_options_name` (UNIQUE)    | `options (option_name)`                    |
 | `idx_options_autoload`         | `options (autoload)`                       |
+| `idx_notifications_user_read_created` | `notifications (user_id, is_read, created_at)` |
 
-> `options.option_name` is additionally enforced as **unique** at the column level.
+> `options.option_name` uniqueness is enforced by the **`idx_options_name` UNIQUE index** (created alongside the others), not by an inline column constraint.
 
 ### Batched Meta Loading (N+1 avoidance)
 

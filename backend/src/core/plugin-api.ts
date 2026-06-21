@@ -98,10 +98,19 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         // identifier OWNED by this plugin (prefixed); FAIL-CLOSED — an unattributable/non-prefixed token
         // is denied, not ignored.
         const norm = lower.replace(/[[\]"`]/g, ' ');
-        if (/\bfrom\s+[a-z_][\w$.]*\s*,/.test(norm)) {
+        // RETURNING is the scalar-exfil channel for a DELETE/UPDATE...USING that joins another table (and
+        // an untrusted plugin gets inserted ids via lastID anyway) — deny it outright for untrusted SQL.
+        if (/\breturning\b/.test(norm)) {
+            throw new Error(`🛡️ Plugin DB access denied: RETURNING is not permitted; use a separate SELECT.`);
+        }
+        // Comma lists after FROM or USING are implicit cross-joins that smuggle a second table past the
+        // single-token attribution below — require explicit JOIN instead.
+        if (/\b(?:from|using)\s+[a-z_][\w$.]*\s*,/.test(norm)) {
             throw new Error(`🛡️ Plugin DB access denied: comma joins are not permitted; use explicit JOIN.`);
         }
-        const tableRe = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+([^\s(;]+)/g;
+        // Include USING (Postgres DELETE ... USING <table>) in the table-introducing keywords, else a
+        // table referenced only there escapes the per-plugin prefix attribution.
+        const tableRe = /\b(?:from|join|into|update|using|table(?:\s+if\s+not\s+exists)?)\s+([^\s(;]+)/g;
         let m;
         while ((m = tableRe.exec(norm))) {
             const tok = m[1];
@@ -257,7 +266,9 @@ function createPluginApi(slug: string) {
         fs: {
             async read(relPath: string, encoding: BufferEncoding = 'utf8') {
                 verifyPermission('filesystem', 'read');
-                return fs.promises.readFile(resolvePluginPath(slug, relPath, true), encoding);
+                // Untrusted plugins read only inside their OWN dir — NOT the shared uploads dir (where
+                // another tenant's/plugin's files live). Mirror the write path's confinement.
+                return fs.promises.readFile(resolvePluginPath(slug, relPath, true, isTrustedPlugin(slug)), encoding);
             },
             async write(relPath: string, data: any) {
                 verifyPermission('filesystem', 'write');
@@ -265,6 +276,29 @@ function createPluginApi(slug: string) {
                 // (where an .html/.svg could be served to other users). Trusted plugins keep uploads.
                 const target = resolvePluginPath(slug, relPath, false, isTrustedPlugin(slug));
                 if (path.basename(target).toLowerCase() === 'manifest.json') throw new Error('🛡️ manifest.json is immutable.');
+                // (#6) Bound disk use so a write-permitted plugin can't fill the host disk: reject an
+                // oversized single write, and keep the plugin's OWN-dir footprint under a quota so repeated
+                // small writes can't either. (Trusted writes to shared uploads keep only the per-write cap.)
+                const SINGLE_WRITE_MAX = 16 * 1024 * 1024, PLUGIN_DISK_QUOTA = 100 * 1024 * 1024;
+                let writeBytes: number;
+                try { writeBytes = Buffer.byteLength(data); } catch { writeBytes = Buffer.byteLength(String(data ?? '')); }
+                if (writeBytes > SINGLE_WRITE_MAX) throw new Error(`🛡️ write too large (${writeBytes} > ${SINGLE_WRITE_MAX} bytes).`);
+                const baseDir = resolvePluginPath(slug, '.', false, false);
+                if (target === baseDir || target.startsWith(baseDir + path.sep)) {
+                    const du = async (dir: string, cap: number): Promise<number> => {
+                        let total = 0; let entries: any[];
+                        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return 0; }
+                        for (const e of entries) {
+                            const p = path.join(dir, e.name);
+                            try { total += e.isDirectory() ? await du(p, cap - total) : (await fs.promises.stat(p)).size; } catch { /* skip */ }
+                            if (total >= cap) break; // early-exit once over budget
+                        }
+                        return total;
+                    };
+                    let existing = 0; try { existing = (await fs.promises.stat(target)).size; } catch { /* new file */ }
+                    const used = await du(baseDir, PLUGIN_DISK_QUOTA + writeBytes);
+                    if (used - existing + writeBytes > PLUGIN_DISK_QUOTA) throw new Error(`🛡️ plugin disk quota exceeded (${PLUGIN_DISK_QUOTA} bytes).`);
+                }
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });
                 return fs.promises.writeFile(target, data);
             }
@@ -281,7 +315,13 @@ function createPluginApi(slug: string) {
         // backs wordjs.mail / global.wordjs_send_mail. In-process this sets the global directly;
         // for isolated providers the worker bridge wires a shim that RPCs the provider's worker.
         provideMail(handler: (msg: any) => any) {
+            // Becoming the host-wide mail sender can intercept ALL outbound mail, so it is restricted
+            // to operator-trusted plugins — mirror the register-mail-provider IPC handler. An untrusted
+            // child can reach this method directly via a kind:'call' bridge message, bypassing that
+            // handler's gate, so the trust check MUST be re-enforced here (not just at registration).
+            if (!isTrustedPlugin(slug)) throw new Error('provideMail is restricted to operator-trusted plugins');
             verifyPermission('email', 'admin');
+            if (typeof handler !== 'function') throw new Error('provideMail requires a function');
             (global as any).wordjs_send_mail = handler;
         },
 
