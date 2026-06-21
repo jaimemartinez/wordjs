@@ -364,19 +364,8 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
         }
     };
 
-    // SYSTEM BYPASS: declaring system:admin in a manifest is NOT enough to skip the AST scan —
-    // any uploaded plugin could self-declare it. The skip requires explicit operator trust via
-    // config.trustedSystemPlugins (defaults to the first-party bundled plugins). Untrusted plugins
-    // that declare system:admin fall through to the full scan (so their child_process/eval use is caught).
-    if (hasDeclared('system', 'admin')) {
-        let trusted: string[] = [];
-        try { trusted = require('../config/app').trustedSystemPlugins || []; } catch { /* ignore */ }
-        if (trusted.includes(slug)) {
-            console.log(`🛡️ Security: Trusted plugin '${slug}' granted SYSTEM access (AST scan skipped).`);
-            return true;
-        }
-        console.warn(`[Security] Plugin '${slug}' declares system:admin but is NOT in config.trustedSystemPlugins — running full AST scan (self-granted system access denied).`);
-    }
+    // No plugin may skip the AST scan: there is no trust tier, and declaring system:admin grants
+    // nothing. EVERY plugin runs the full scan (so its child_process/eval/native use is caught).
 
     function getFiles(dir): string[] {
         let results: string[] = [];

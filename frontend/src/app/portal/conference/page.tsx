@@ -40,8 +40,14 @@ interface Inscription {
 
 function LocationPortalContent() {
     const { addToast } = useToast();
-    // Auth State
-    const [, setToken] = useState<string | null>(null);
+    // Auth State. The portal session is an HttpOnly, host-namespaced + path-scoped cookie
+    // (wjp_conference_manager_wordjs_portal_token) set by the login route. We also keep the token in
+    // state and send it as the `x-portal-token` header on authenticated calls — a belt-and-braces
+    // fallback the backend accepts in case the namespaced cookie isn't carried.
+    const [token, setToken] = useState<string | null>(null);
+    // Authenticated requests forward the token via header when available (cookie is the primary path).
+    const portalAuthHeaders = (extra: Record<string, string> = {}): Record<string, string> =>
+        token ? { ...extra, 'x-portal-token': token } : extra;
     const [myLocation, setMyLocation] = useState<Location | null>(null);
     const [step, setStep] = useState<'login' | 'dashboard'>('login');
     const [loading, setLoading] = useState(false);
@@ -92,8 +98,9 @@ function LocationPortalContent() {
     const verifyToken = async () => {
         setLoading(true);
         try {
-            const res = await fetch('/api/v1/conference/portal/me', {
-                credentials: 'include'
+            const res = await fetch('/api/v1/plugin/conference-manager/portal/me', {
+                credentials: 'include',
+                headers: portalAuthHeaders()
             });
             if (res.ok) {
                 const data = await res.json();
@@ -113,7 +120,7 @@ function LocationPortalContent() {
 
     const loadConferences = async () => {
         try {
-            const res = await fetch('/api/v1/conference/public/list');
+            const res = await fetch('/api/v1/plugin/conference-manager/public/list');
             if (res.ok) {
                 const data = await res.json();
                 setConferences(data);
@@ -141,11 +148,11 @@ function LocationPortalContent() {
 
     const loadLocations = async (confId: string) => {
         try {
-            const res = await fetch(`/api/v1/conference/public/locations?conference_id=${confId}`);
+            const res = await fetch(`/api/v1/plugin/conference-manager/public/locations?conference_id=${confId}`);
             if (res.ok) {
                 setLocations(await res.json());
                 // Also load fields
-                const fieldsRes = await fetch(`/api/v1/conference/public/fields?conference_id=${confId}`);
+                const fieldsRes = await fetch(`/api/v1/plugin/conference-manager/public/fields?conference_id=${confId}`);
                 if (fieldsRes.ok) {
                     const fieldsData = await fieldsRes.json();
                     setFields(fieldsData);
@@ -168,7 +175,7 @@ function LocationPortalContent() {
         e.preventDefault();
         setLoading(true);
         try {
-            const res = await fetch('/api/v1/conference/portal/login', {
+            const res = await fetch('/api/v1/plugin/conference-manager/portal/login', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ location_id: selectedLocation, code }),
@@ -201,8 +208,9 @@ function LocationPortalContent() {
 
     const loadInscriptions = async () => {
         try {
-            const res = await fetch('/api/v1/conference/portal/inscriptions', {
-                credentials: 'include'
+            const res = await fetch('/api/v1/plugin/conference-manager/portal/inscriptions', {
+                credentials: 'include',
+                headers: portalAuthHeaders()
             });
             if (res.ok) setInscriptions(await res.json());
         } catch (e) { console.error(e); }
@@ -212,11 +220,9 @@ function LocationPortalContent() {
         e.preventDefault();
         setLoading(true);
         try {
-            const res = await fetch('/api/v1/conference/portal/inscriptions', {
+            const res = await fetch('/api/v1/plugin/conference-manager/portal/inscriptions', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify(formData),
                 credentials: 'include'
             });
@@ -246,11 +252,9 @@ function LocationPortalContent() {
         if (selectedIds.length === 0) return;
         setLoading(true);
         try {
-            const res = await fetch('/api/v1/conference/portal/payments/bulk', {
+            const res = await fetch('/api/v1/plugin/conference-manager/portal/payments/bulk', {
                 method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
+                headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     inscription_ids: selectedIds,
                     amount_per_person: Number(paymentForm.amount_per_person),

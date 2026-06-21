@@ -1,7 +1,7 @@
 /**
  * Tests for the Android-style per-plugin permission grants (core/plugin-permissions.ts +
  * plugin-context.hasPermission). Model: a capability is allowed only if the manifest DECLARES it AND
- * an admin GRANTED it (default-deny); operator-trusted plugins bypass grants entirely.
+ * an admin GRANTED it (default-deny). There is no trust tier — every plugin is gated the same way.
  */
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
@@ -67,13 +67,17 @@ test('network grant: off by default, on after granting', () => {
     assert.equal(perms.isNetworkGranted(SLUG), true);
 });
 
-test('operator-trusted plugins bypass grants (declared perm works with no grant)', async () => {
-    const { isTrusted } = require('../core/plugin-trust');
-    assert.ok(isTrusted('mail-server'), 'mail-server is shipped-trusted');
+// No trust tier: even a bundled plugin (mail-server) gets NOTHING without an explicit grant — there
+// is no bypass. It only gains a capability once an admin grants it (and the manifest declares it).
+test('no trust tier: even a bundled plugin needs grants (no bypass)', async () => {
     perms._setGrantsInMemory('mail-server', []); // no grants
     await runWithContext('mail-server', async () => {
-        // mail-server's real manifest declares database/email/etc.; trust bypasses the grant requirement.
-        assert.equal(hasPermission('database', 'read'), true);
-        assert.equal(hasPermission('email', 'admin'), true);
+        assert.equal(hasPermission('database', 'read'), false);
+        assert.equal(hasPermission('email', 'admin'), false);
+    });
+    perms._setGrantsInMemory('mail-server', ['database:read']);
+    await runWithContext('mail-server', async () => {
+        assert.equal(hasPermission('database', 'read'), true);  // granted now
+        assert.equal(hasPermission('email', 'admin'), false);   // still not granted
     });
 });

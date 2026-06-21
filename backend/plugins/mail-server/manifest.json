@@ -1,7 +1,7 @@
 {
     "id": "mail-server",
     "name": "Mail Server",
-    "version": "1.0.0",
+    "version": "2.0.0",
     "description": "Manage SMTP settings and send automated emails",
     "author": "WordJS",
     "isolated": true,
@@ -23,39 +23,71 @@
     },
     "permissions": [
         {
-            "scope": "database",
-            "access": "admin",
-            "reason": "Privileged: unscoped reads/writes on users, received_emails and email_attachments via the trusted bridge."
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read non-secret site info (URL/domain/admin email) via the safe site bridge to resolve sender identity and local delivery domain."
         },
         {
             "scope": "settings",
-            "access": "admin",
-            "reason": "Privileged: read/write SMTP, global email and secret-named options (e.g. DKIM private key)."
+            "access": "write",
+            "reason": "Persist non-secret SMTP/display settings (from name/email, HELO host, security toggles) via the options bridge."
+        },
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read the plugin's own wjp_mail_server_* tables (mailboxes, attachments, secrets)."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create and write the plugin's own wjp_mail_server_* tables (mailboxes, attachments, secrets)."
         },
         {
             "scope": "email",
             "access": "admin",
-            "reason": "Required for MX resolution (DNS), direct SMTP delivery (NET) and providing the host-wide send function."
+            "reason": "Admin-only mail operations (settings, DKIM key generation, delivery tests)."
+        },
+        {
+            "scope": "email",
+            "access": "provider",
+            "reason": "Register this plugin as the host-wide outbound mail provider (wordjs.provideMail)."
         },
         {
             "scope": "notifications",
             "access": "send",
-            "reason": "Required to alert users about new inbound emails in real-time and register the email transport."
+            "reason": "Alert users in real-time about new inbound/internal emails and delivery failures."
+        },
+        {
+            "scope": "notifications",
+            "access": "provider",
+            "reason": "Register an 'email' notification transport so other plugins can deliver notifications by email."
         },
         {
             "scope": "filesystem",
             "access": "read",
-            "reason": "Required to read email attachments and check paths under uploads/mail-attachments."
+            "reason": "Read email attachments and the Bayes classifier from the plugin's own directory."
         },
         {
             "scope": "filesystem",
             "access": "write",
-            "reason": "Required to save email attachments under uploads/mail-attachments."
+            "reason": "Store email attachments and persist the Bayes classifier in the plugin's own directory."
+        },
+        {
+            "scope": "users",
+            "access": "read",
+            "reason": "Resolve local recipients/senders via the safe users projection (never password hashes) for internal delivery and notifications."
+        },
+        {
+            "scope": "network",
+            "reason": "Resolve MX records (DNS) and deliver mail directly to remote MTAs / a configured relay (NET/TLS) and run the inbound SMTP listener."
         }
     ],
     "dependencies": {
         "nodemailer": "^7.0.12",
         "smtp-server": "^3.18.0",
-        "mailparser": "^3.9.1"
+        "mailparser": "^3.9.1",
+        "spf-validator": "^1.0.0",
+        "dnsbl": "^3.0.0",
+        "bayes": "^1.0.0"
     }
 }

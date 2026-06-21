@@ -1,0 +1,39 @@
+{
+    "id": "conference-manager",
+    "name": "Conference Manager",
+    "version": "2.0.0",
+    "description": "Manage conference inscriptions, payments, and lodging assignments.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "conference-manager"
+        }
+    },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Required to list conferences, hotels, rooms, and inscriptions (own prefixed tables only)."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Required to create/update conferences, hotels, rooms, and inscriptions (own prefixed tables only)."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Required to register the conference manager API endpoints under /api/v1/plugin/conference-manager/*."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Required to add the conference manager to the admin sidebar."
+        }
+    ]
+}

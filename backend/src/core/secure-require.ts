@@ -228,20 +228,14 @@ function createSecureChildProcess() {
                 return originalMethod;
             }
 
-            // Check if this is a blocked method
+            // Check if this is a blocked method. HARD-BLOCKED for ALL plugins — no trust tier or
+            // permission unlocks shell execution / process spawning from a plugin.
             if (CHILD_PROCESS_BLOCKED.includes(prop)) {
-                return function (...args) {
-                    // Allow only if the plugin declares system:admin AND is an operator-trusted
-                    // plugin (trustedSystemPlugins) — a self-declared/self-rewritten manifest is not enough.
-                    if (hasPermission('system', 'admin') && trustedPlugins().has(pluginSlug)) {
-                        console.warn(`⚠️ Plugin '${pluginSlug}' executing shell command with SYSTEM permission: ${prop}`);
-                        return originalMethod.apply(target, args);
-                    }
-
+                return function () {
                     throw createSecurityError(
                         pluginSlug,
                         `child_process.${prop}`,
-                        'Shell execution is blocked for plugins. Request system:admin permission if absolutely necessary.'
+                        'Shell execution / process spawning is blocked for plugins.'
                     );
                 };
             }
@@ -282,8 +276,8 @@ const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', '
 
 // Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
 // (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and
-// allow ONLY operator-trusted plugins (e.g. mail-server's SMTP/MX delivery) — an untrusted uploaded
-// plugin gets no outbound sockets. NOT self-declarable.
+// allow ONLY when an admin granted the Network permission — a plugin gets no outbound sockets
+// otherwise. NOT self-declarable.
 const NETWORK_MODULES = new Set(['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']);
 
 function createBlockedModuleProxy(pluginSlug, norm) {
@@ -314,16 +308,14 @@ function secureModuleFor(id) {
     if (base === 'fs') return secureFs;
     if (base === 'child_process') return secureChildProcess;
     if (isNet) {
-        // Raw sockets are allowed if the plugin is TRUSTED (e.g. mail-server's SMTP/MX delivery) OR an
-        // admin granted it the Network permission. Inside the isolate both come from the bootstrap
-        // (cfg → __WORDJS_PLUGIN_TRUSTED__ / __WORDJS_PLUGIN_NETWORK__) because the DB/config isn't
-        // reachable there; on the main thread, fall back to trustedPlugins()/plugin-permissions.
+        // Raw sockets are allowed ONLY when an admin granted the Network permission. Inside the isolate
+        // the grant comes from the bootstrap (cfg → __WORDJS_PLUGIN_NETWORK__) because the DB/config
+        // isn't reachable there; on the main thread, fall back to plugin-permissions.
         const isolated = (typeof global !== 'undefined' && (global as any).__WORDJS_ISOLATED__);
-        const netTrusted = isolated ? !!(global as any).__WORDJS_PLUGIN_TRUSTED__ : trustedPlugins().has(pluginSlug);
         let netGranted = false;
         if (isolated) netGranted = !!(global as any).__WORDJS_PLUGIN_NETWORK__;
         else { try { netGranted = require('./plugin-permissions').isNetworkGranted(pluginSlug); } catch { netGranted = false; } }
-        if (netTrusted || netGranted) return undefined;
+        if (netGranted) return undefined;
         return createBlockedModuleProxy(pluginSlug, norm);
     }
     // worker_threads / vm / module / inspector
@@ -335,7 +327,7 @@ function secureModuleFor(id) {
 // ============================================
 // A plugin that loads a core module which itself holds raw fs/child_process or secrets can
 // escape the proxies entirely (the core module captured the real modules at load time, before
-// any plugin was on the stack). So untrusted plugins are DENIED these core modules, and
+// any plugin was on the stack). So plugins are DENIED these core modules, and
 // config/app is handed back with secrets redacted. Plugin-API modules (options, hooks,
 // appRegistry, adminMenu, shortcodes, widgets, middleware/*, config/database) are NOT blocked.
 const CORE_DIR = __dirname;
@@ -366,23 +358,6 @@ function requirerSlug(filename: string): string | null {
         return 'theme:' + real.slice(REAL_THEMES_DIR.length + 1).split(path.sep)[0];
     }
     return null;
-}
-
-let _trusted: Set<string> | null = null;
-function trustedPlugins(): Set<string> {
-    if (!_trusted) {
-        try {
-            // Inside an isolated plugin worker the trusted-core-module check is moot: the plugin
-            // reaches core ONLY through the `wordjs` bridge (RPC), never by require()ing core modules.
-            // Loading config/app here would also run its wordjs-config.json read + secret-persist +
-            // env reads INSIDE the sandbox (blocked, noisy). Skip it — treat as empty trusted set.
-            const { isMainThread } = originalRequire.call(module, 'worker_threads');
-            if (!isMainThread) { _trusted = new Set(); return _trusted; }
-            _trusted = new Set((originalRequire.call(module, '../config/app').trustedSystemPlugins) || []);
-        }
-        catch { _trusted = new Set(); }
-    }
-    return _trusted;
 }
 
 let _secureConfig: any = null;
@@ -420,7 +395,7 @@ const CONFIG_DB = path.join(CORE_DIR, '../config', 'database');
 // Core tables holding credentials / roles / secrets. Plugins get a SCOPED dbAsync that refuses
 // raw SQL touching these, so `database` permission can't be abused to read password hashes
 // (users), self-escalate (user_meta role), or steal stored secrets (options). Plugins use their
-// OWN tables (and the getOption/User APIs) for legitimate needs; trusted plugins are unrestricted.
+// OWN tables (and the getOption/User APIs) for legitimate needs; this applies to every plugin.
 const PROTECTED_CORE_TABLES = new Set([
     'users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions'
 ]);
@@ -482,7 +457,7 @@ function corePolicyFor(request, mod): any {
     const requirer = mod && mod.filename;
     if (!requirer) return undefined;
     const slug = requirerSlug(requirer);
-    if (!slug || trustedPlugins().has(slug)) return undefined; // core + trusted plugins unrestricted
+    if (!slug) return undefined; // core (non-plugin requirer) is unrestricted; plugins are policed uniformly
     let resolved: string;
     try { resolved = Module._resolveFilename(request, mod); } catch { return undefined; }
     const noExt = resolved.replace(/\.[cm]?[jt]s$/, '');
@@ -540,15 +515,14 @@ function installSecureRequire() {
         }
     }
 
-    // 3b. Block process.dlopen for UNTRUSTED plugins. A native .node addon runs outside every
-    //     JS-level guard (require proxies, ALS context) — a direct sandbox escape. Operator-trusted
-    //     plugins may still load native addons (they are full-Node by design).
+    // 3b. Block process.dlopen for ALL plugins. A native .node addon runs outside every JS-level guard
+    //     (require proxies, ALS context) — a direct sandbox escape. No trust tier unlocks it.
     const origDlopen = (process as any).dlopen;
     if (typeof origDlopen === 'function') {
         (process as any).dlopen = function (...args) {
             const pluginSlug = getEffectivePlugin();
-            if (pluginSlug && !trustedPlugins().has(pluginSlug)) {
-                throw createSecurityError(pluginSlug, 'process.dlopen', 'loading native addons is not permitted for untrusted plugins');
+            if (pluginSlug) {
+                throw createSecurityError(pluginSlug, 'process.dlopen', 'loading native addons is not permitted for plugins');
             }
             return origDlopen.apply(this, args);
         };

@@ -18,12 +18,21 @@ const path = require('path');
 const fs = require('fs');
 const { verifyPermission } = require('./plugin-context');
 
-// Privileged capabilities (touch core DB tables, read/write secret-named options, provide mail) are
-// gated on the OPERATOR-MAINTAINED trusted allowlist (config.trustedSystemPlugins) — NOT on a
-// manifest permission, which a plugin self-declares and is therefore untrustworthy for this. An
-// uploaded plugin can ask for `database:admin` all it wants; it still can't reach `users`/`options`.
-function isTrustedPlugin(slug: string): boolean {
-    try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
+// NO plugin bypasses the sandbox anymore — there is no "trusted" tier. Every capability is gated by an
+// admin GRANT (Android-style, default-deny). Privileged things that used to need trust are now either a
+// SAFE host-mediated bridge (users projection, site info, mail provider) gated by a grant, or removed.
+// Safe projection for the `users` bridge — NEVER includes user_pass / tokens / meta. Accepts either a
+// core User instance (camelCase) or a raw row (snake_case).
+function projectUser(u: any): any {
+    if (!u) return null;
+    return {
+        id: u.id,
+        userLogin: u.userLogin || u.user_login,
+        username: u.userLogin || u.user_login,
+        userEmail: u.userEmail || u.user_email,
+        displayName: u.displayName || u.display_name,
+        role: u.role,
+    };
 }
 
 const ROOT_DIR = path.resolve(__dirname, '../../');
@@ -45,8 +54,9 @@ const PROTECTED_OPTION_NAMES = new Set([
     // tier on next boot (full sandbox escape). Off-limits to untrusted plugins.
     'trusted_plugins', 'trusted_plugin', 'trustedsystemplugins'
 ]);
-const isProtectedOption = (key: string, slug: string): boolean =>
-    !isTrustedPlugin(slug) &&
+// Protected for EVERY plugin now (no trusted bypass). Secret/security-critical options are never
+// readable/writable through the generic options bridge; safe non-secret reads go via the `site` bridge.
+const isProtectedOption = (key: string, _slug?: string): boolean =>
     (PROTECTED_OPTION_RE.test(String(key)) || PROTECTED_OPTION_NAMES.has(String(key).toLowerCase()));
 
 // Core DB tables a plugin may never touch (mirrors the dbAsync scoping in secure-require).
@@ -163,8 +173,8 @@ function createPluginApi(slug: string) {
         options: {
             async get(key: string, def: any = null) {
                 verifyPermission('settings', 'read');
-                // Secret-named options are off-limits UNLESS the plugin is operator-trusted
-                // (config.trustedSystemPlugins, e.g. mail-server reading its own DKIM private key).
+                // Secret-named options are off-limits to EVERY plugin (no trusted bypass). A plugin
+                // keeps its own secrets in its own wjp_<slug>_ table; non-secret site info via `site`.
                 if (isProtectedOption(key, slug)) {
                     throw new Error(`🛡️ Option '${key}' is not readable by plugins.`);
                 }
@@ -184,40 +194,34 @@ function createPluginApi(slug: string) {
         db: {
             // Per-plugin table prefix the plugin must use for its own tables (like $wpdb->prefix).
             tablePrefix,
-            // Read-only query (SELECT). Table-scoped away from core tables — UNLESS the plugin is
-            // operator-trusted (config.trustedSystemPlugins, e.g. db-migration), which lifts the
-            // scoping so it can touch core tables. The isolate is still the boundary; host-enforced.
+            // Read-only query (SELECT) — ALWAYS scoped to the plugin's own wjp_<slug>_ tables (no
+            // trusted bypass exists anymore); core tables (users/options/…) are unreachable. For user
+            // lookups use the safe `users` bridge (projection only, never user_pass).
             async all(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
+                assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.all(sql, params);
             },
             async get(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
+                assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.get(sql, params);
             },
-            // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER). Scoped unless `database:admin`.
+            // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER) — always scoped to own tables.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
-                if (!isTrustedPlugin(slug)) assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix);
+                assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.run(sql, params);
             },
-            // Create a table (driver-agnostic). Core-table names are blocked unless `database:admin`.
+            // Create a table — ALWAYS under the plugin's own prefix (no trusted bypass), so it can't
+            // create or shadow core / other plugins' tables.
             async createTable(name: string, columns: string[]) {
                 verifyPermission('database', 'write');
-                if (!isTrustedPlugin(slug)) {
-                    // Untrusted plugins may only create tables under their own prefix, so they can't
-                    // create/shadow core or other plugins' tables and assertSqlAllowed can attribute
-                    // their queries by prefix.
-                    if (!String(name).toLowerCase().startsWith(tablePrefix)) {
-                        throw new Error(`🛡️ Plugin tables must be named with the '${tablePrefix}' prefix (use wordjs.db.tablePrefix).`);
-                    }
-                } else if (PROTECTED_TABLES.has(String(name).toLowerCase())) {
-                    throw new Error(`🛡️ Plugin DB access denied: '${name}' is a core table.`);
+                if (!String(name).toLowerCase().startsWith(tablePrefix)) {
+                    throw new Error(`🛡️ Plugin tables must be named with the '${tablePrefix}' prefix (use wordjs.db.tablePrefix).`);
                 }
                 const { createPluginTable } = require('../config/database');
                 return createPluginTable(name, columns);
@@ -241,17 +245,38 @@ function createPluginApi(slug: string) {
             },
             doAction(hook: string, ...args: any[]) {
                 const hooksMod = require('./hooks');
-                // Untrusted plugins may only fire their OWN registered callbacks (the same scoping cron
-                // uses), never arbitrary CORE / other-plugin action handlers — so a plugin can't trigger
-                // privileged core side effects with attacker-controlled args.
-                if (!isTrustedPlugin(slug)) return hooksMod.doActionForPlugin(hook, slug, ...args);
-                return hooksMod.doAction(hook, ...args);
+                // A plugin may fire ONLY its OWN registered callbacks (no trusted bypass) — never
+                // arbitrary core / other-plugin action handlers with attacker-controlled args.
+                return hooksMod.doActionForPlugin(hook, slug, ...args);
             }
+        },
+
+        // Safe, read-only USER lookups (grant: users:read) — returns a PROJECTION only
+        // (id/login/email/displayName/role), NEVER user_pass / tokens / meta. Replaces a plugin doing
+        // raw `SELECT * FROM users` (which leaked password hashes). The host writes the query (core User
+        // model); the plugin passes only a key/term.
+        users: {
+            async findByEmail(email: string) { verifyPermission('users', 'read'); return projectUser(await require('../models/User').findByEmail(email)); },
+            async findByLogin(login: string) { verifyPermission('users', 'read'); return projectUser(await require('../models/User').findByLogin(login)); },
+            async findById(id: any) { verifyPermission('users', 'read'); return projectUser(await require('../models/User').findById(id)); },
+            async search(term: string, limit = 50) {
+                verifyPermission('users', 'read');
+                const list = await require('../models/User').findAll({ search: String(term || ''), limit: Math.min(Number(limit) || 50, 200) });
+                return (Array.isArray(list) ? list : []).map(projectUser);
+            },
+        },
+
+        // Non-secret site info (grant: settings:read). Avoids needing the (blocked) protected-option
+        // reads of siteurl/home/admin_email; never exposes secrets.
+        site: {
+            async url() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('siteurl', await getOption('home', 'http://localhost')); },
+            async domain() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); try { return new URL(await getOption('siteurl', await getOption('home', 'http://localhost'))).hostname; } catch { return 'localhost'; } },
+            async adminEmail() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('admin_email', ''); },
         },
 
         http: {
             // Register an Express route. Handlers run anchored in the plugin context (appRegistry
-            // wraps the Router/app methods). Path is namespaced under the plugin to avoid collisions.
+            // wraps the Router/app methods). Path is ALWAYS namespaced under the plugin (no absolute bypass).
             route(method: string, routePath: string, ...handlers: any[]) {
                 const { getApp } = require('./appRegistry');
                 const app = getApp();
@@ -266,15 +291,15 @@ function createPluginApi(slug: string) {
         fs: {
             async read(relPath: string, encoding: BufferEncoding = 'utf8') {
                 verifyPermission('filesystem', 'read');
-                // Untrusted plugins read only inside their OWN dir — NOT the shared uploads dir (where
-                // another tenant's/plugin's files live). Mirror the write path's confinement.
-                return fs.promises.readFile(resolvePluginPath(slug, relPath, true, isTrustedPlugin(slug)), encoding);
+                // Every plugin reads only inside its OWN dir — never the shared uploads dir (no trusted
+                // bypass). Raw fs to a SAFE zone is governed separately by io-guard.
+                return fs.promises.readFile(resolvePluginPath(slug, relPath, true, false), encoding);
             },
             async write(relPath: string, data: any) {
                 verifyPermission('filesystem', 'write');
-                // Untrusted plugins write only inside their OWN dir — not the shared public uploads dir
-                // (where an .html/.svg could be served to other users). Trusted plugins keep uploads.
-                const target = resolvePluginPath(slug, relPath, false, isTrustedPlugin(slug));
+                // Every plugin writes only inside its OWN dir — never the shared public uploads dir
+                // (where an .html/.svg could be served to other users). No trusted bypass.
+                const target = resolvePluginPath(slug, relPath, false, false);
                 if (path.basename(target).toLowerCase() === 'manifest.json') throw new Error('🛡️ manifest.json is immutable.');
                 // (#6) Bound disk use so a write-permitted plugin can't fill the host disk: reject an
                 // oversized single write, and keep the plugin's OWN-dir footprint under a quota so repeated
@@ -315,12 +340,10 @@ function createPluginApi(slug: string) {
         // backs wordjs.mail / global.wordjs_send_mail. In-process this sets the global directly;
         // for isolated providers the worker bridge wires a shim that RPCs the provider's worker.
         provideMail(handler: (msg: any) => any) {
-            // Becoming the host-wide mail sender can intercept ALL outbound mail, so it is restricted
-            // to operator-trusted plugins — mirror the register-mail-provider IPC handler. An untrusted
-            // child can reach this method directly via a kind:'call' bridge message, bypassing that
-            // handler's gate, so the trust check MUST be re-enforced here (not just at registration).
-            if (!isTrustedPlugin(slug)) throw new Error('provideMail is restricted to operator-trusted plugins');
-            verifyPermission('email', 'admin');
+            // Becoming the host-wide mail sender intercepts ALL outbound mail, so it requires the
+            // explicit `email:provider` grant (admin-approved, with a loud UI warning). No trusted
+            // bypass — re-checked here AND at the register-mail-provider IPC handler.
+            verifyPermission('email', 'provider');
             if (typeof handler !== 'function') throw new Error('provideMail requires a function');
             (global as any).wordjs_send_mail = handler;
         },

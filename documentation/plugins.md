@@ -119,9 +119,9 @@ exports.init = function (wordjs) {
 };
 ```
 
-> **The route is namespaced.** An untrusted plugin's routes always mount under
+> **The route is namespaced.** Every plugin's routes always mount under
 > `/api/v1/plugin/<slug>/...` (so the example above is reachable at `/api/v1/plugin/hello-world/message`).
-> Only **operator-trusted** plugins can keep an absolute path (`opts.absolute`). Fetch it from your admin
+> There is no absolute-path escape — that was removed with the trusted tier. Fetch it from your admin
 > page using that namespaced URL.
 
 ### Step 3: Admin Page UI (`client/admin/page.tsx`)
@@ -138,7 +138,7 @@ export default function HelloWorldAdmin() {
     useEffect(() => {
         const fetchMsg = async () => {
             const token = localStorage.getItem("wordjs_token");
-            // Untrusted-plugin routes are namespaced under /api/v1/plugin/<slug>/...
+            // Plugin routes are namespaced under /api/v1/plugin/<slug>/...
             const res = await fetch('/api/v1/plugin/hello-world/message', {
                 headers: { 'Authorization': `Bearer ${token}` }
             });
@@ -314,10 +314,11 @@ only); (b) a **reactive** host-side RSS poll on every platform (Linux `/proc`, W
 backstop (`config.sandbox.addressSpaceCapMb`, default 16384 MB) plus `--max-old-space-size=256` for the
 JS heap.
 
-**Network egress (untrusted plugins):** you get **no outbound network**. The raw socket modules
+**Network egress:** by default you get **no outbound network**. The raw socket modules
 (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied, and the globals `fetch` / `WebSocket` /
-`EventSource` are trapped (they throw). Only **operator-trusted** plugins get raw sockets (e.g. the mail
-server's SMTP/MX delivery).
+`EventSource` are trapped (they throw). Outbound access opens **only** when an admin grants your plugin
+the **`network`** capability (declare `scope: "network"` in your manifest; the grant carries an
+exfiltration warning). This is the only network path — there is no trusted tier that bypasses it.
 
 **Defense-in-depth inside the child:** the same runtime guards (secure-require, io-guard) are installed
 inside the child process too, so even after a hypothetical escape your `fs`/`child_process` stay
@@ -330,7 +331,7 @@ native addons, and an ESM resolution hook fails closed for the same builtins.
 > *preventive* memory cap on Windows needs a Job Object that is not built yet (Windows relies on the
 > reactive RSS poll). See **[Plugin Isolation](plugin-isolation-proposal.md)**.
 
-> **`system:admin` is not self-granting.** Declaring `system:admin` does **not** skip the AST scan. The skip is reserved for trusted plugins listed in `config.trustedSystemPlugins` (shipped defaults: `conference-manager` and `mail-server`) or granted trust by an admin via the Plugins UI. An uploaded third-party plugin that declares it still goes through the full scan. The scan also re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
+> **The AST scan runs on every plugin — there is no skip.** With the trusted tier removed, no plugin is exempt from the scan, and `system:admin` no longer exists as a scan-skip. The scan re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
 
 For a full list of security rules, see the **[Security Guide](security.md)**.
 
@@ -392,7 +393,7 @@ Plugins push real-time alerts to the Admin UI via `wordjs.notify(n)` (`notificat
 See **[Notification System](notifications.md)** for full details.
 
 ### 10.4 Sending Emails 📧
-If a mail provider plugin is active, send mail with `wordjs.mail(msg)` (`email:admin` permission).
+If a mail provider plugin is active, send mail with `wordjs.mail(msg)` (`email:provider` permission).
 See **[Mail Server](mail-server.md)** for full details.
 
 ### 10.5 Hook System (Actions & Filters) 🪝
@@ -432,36 +433,49 @@ Every call is permission-checked on the host against your manifest.
 
 | Bridge call | Permission | Notes |
 | :--- | :--- | :--- |
-| `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) denied unless operator-trusted. |
-| `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Untrusted: SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. Trusted: unscoped. |
-| `wordjs.db.createTable(name, columns)` | `database:write` | Core table names blocked for untrusted plugins. |
+| `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
+| `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. |
+| `wordjs.db.createTable(name, columns)` | `database:write` | Always creates a `wjp_<slug>_`-prefixed table; core table names blocked. |
 | `wordjs.db.getType()` | `database:read` | `'sqlite'` vs `'postgres'` — branch your DDL. |
-| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. |
-| `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path`. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`, `{ absolute: true }` (operator-trusted only). Handler gets a mock `(req,res)` over RPC. |
+| `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. |
+| `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
+| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. |
+| `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your plugin dir + `uploads/` (realpath-checked). `manifest.json` is immutable. |
-| `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. |
-| `wordjs.provideMail(handler)` | `email:admin` | Become the host-wide mail sender. **Operator-trusted only.** |
+| `wordjs.mail(msg)` | `email:provider` | Sends via the active mail provider. |
+| `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant). |
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
-| `wordjs.notify.registerTransport(name, handler)` | `notifications:send` | Register a notification transport. **Operator-trusted only.** |
+| `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
 | `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process. |
 
 ---
 
-## 12. Trust tiers & the admin trust toggle
+## 12. Per-plugin capability grants (Android-style)
 
-Every plugin is either **untrusted** (the default — sandboxed) or **operator-trusted** (privileged
-bridge grants: unscoped DB, secret options, absolute routes, multipart, `provideMail`,
-`notify.registerTransport`, raw sockets). **Trust is server-side and can never be self-declared in a
-manifest.** A plugin is trusted if EITHER:
+There is **one** plugin model and **no trust tier**: every plugin is sandboxed, and each capability is
+**admin-granted per plugin** with **default-deny**. Your `manifest.json` only *requests* a capability;
+an admin *grants* each one in the **Plugins** admin page (`/admin/plugins`,
+`POST /plugins/:slug/permissions`, persisted in the `plugin_grants` option). A bridge call works only if
+the capability is BOTH declared in the manifest AND granted.
 
-1.  it is a shipped first-party default in `config.trustedSystemPlugins` (`conference-manager`, `mail-server`), which can't be toggled off via the UI; OR
-2.  an admin flips its trust toggle in the **Plugins** admin page (`POST /plugins/:slug/trust`, persisted in the `trusted_plugins` option).
+**Grantable capabilities:** `database` (read/write — own tables only), `settings` (read/write — non-secret
+options), `filesystem` (read/write — own dir), `users:read` (the safe user projection), `email:provider`,
+`notifications:provider` / `notifications:send`, and **`network`** (outbound access, opt-in, with an
+exfiltration warning — declare `scope: "network"`).
 
-Flipping the toggle **hot-reloads the plugin's child process** so its routes re-mount (namespaced ↔ absolute),
-its network policy re-resolves, and the bridge gates re-evaluate — no server restart. Granting trust is a
-real security decision: the UI warns that a trusted plugin can reach core data, secret options, and host
-capabilities. Only trust code you have audited.
+First-party plugins (`mail-server`, `conference-manager`, the galleries, …) are **pre-granted** the
+capabilities they declare for a working out-of-box experience, but they are **not privileged** — they run
+in the same sandbox under the same checks as anything you upload.
+
+Changing a plugin's grants **hot-reloads its child process** so the bridge gates re-evaluate and a
+`network` change takes effect — no server restart. Granting a higher-risk capability (`network`,
+`email:provider`, `notifications:provider`) is a real security decision: the UI warns accordingly. Only
+grant capabilities to code you have audited.
+
+> **Removed for good:** there is no shell/`child_process`, native addons, unscoped/core-table DB,
+> secret-named options, absolute routes, raw cookie/header control, raw-HTML hooks, or "trusted" tier —
+> no plugin can obtain any of these by any grant.
 
 

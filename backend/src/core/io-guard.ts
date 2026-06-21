@@ -67,16 +67,8 @@ function isPathSafe(targetPath, isWrite = false) {
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return true; // Core code is trusted
 
-    // OPERATOR-TRUSTED plugins (config.trustedSystemPlugins / admin trust toggle) are full-Node by
-    // design — like core, they are NOT confined by io-guard. This mirrors the bridge, where trusted
-    // plugins already get unscoped DB + secret options. Without this, the DB-file/secret blocks below
-    // wrongly reject trusted first-party plugins (e.g. mail-server, conference-manager) that
-    // legitimately open the database / their own data files. Untrusted plugins stay sandboxed below.
-    // In the child the authoritative trust is the host-resolved global (set from cfg.isTrusted, which
-    // includes the admin toggle); on the host (main-thread plugin context) fall back to plugin-trust.
-    const g: any = (typeof global !== 'undefined') ? global : {};
-    if (g.__WORDJS_ISOLATED__ && g.__WORDJS_PLUGIN_TRUSTED__ === true) return true;
-    try { if (require('./plugin-trust').isTrusted(pluginSlug)) return true; } catch { /* treat as untrusted */ }
+    // No plugin is exempt: EVERY plugin is uniformly confined by io-guard (no trust tier). Plugins
+    // reach scoped DB rows / their own data via the bridge; the raw DB file + secret files stay blocked.
 
     // Normalize Windows extended-length / UNC prefixes (\\?\C:\... or \\?\UNC\...) that
     // require.resolve / realpath can produce, otherwise the safe-zone startsWith() checks

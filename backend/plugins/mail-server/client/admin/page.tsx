@@ -141,7 +141,7 @@ export default function MailServerAdmin() {
 
     const loadStats = async () => {
         try {
-            const data = await api('/mail-server/stats') as any;
+            const data = await api('/plugin/mail-server/stats') as any;
             if (data && typeof data.unread === 'number') setInboxCount(data.unread);
         } catch (e) { }
     };
@@ -151,13 +151,13 @@ export default function MailServerAdmin() {
         loadStats();
         try {
             if (folder === 'settings') {
-                const data = await api('/mail-server/settings');
+                const data = await api('/plugin/mail-server/settings');
                 setSettings(prev => ({ ...prev, ...(data as any) }));
                 loadDnsRecords();
             } else {
                 const endpoint = query
-                    ? `/mail-server/emails/search?q=${query}`
-                    : `/mail-server/emails?folder=${folder}`;
+                    ? `/plugin/mail-server/emails/search?q=${query}`
+                    : `/plugin/mail-server/emails?folder=${folder}`;
 
                 const res = await api(endpoint) as any;
                 setEmails(res.emails || []);
@@ -182,7 +182,7 @@ export default function MailServerAdmin() {
             if (newMail.to.length >= 2 && !newMail.to.includes('@')) {
                 setSearching(true);
                 try {
-                    const data = await api(`/mail-server/users/search?q=${newMail.to}`) as any;
+                    const data = await api(`/plugin/mail-server/users/search?q=${newMail.to}`) as any;
                     setSuggestions(Array.isArray(data) ? data : []);
                 } catch (error) {
                     console.error("Search failed:", error);
@@ -222,7 +222,7 @@ export default function MailServerAdmin() {
         const timer = setTimeout(async () => {
             setSaveStatus('saving');
             try {
-                const res = await api('/mail-server/drafts', {
+                const res = await api('/plugin/mail-server/drafts', {
                     method: 'POST',
                     body: {
                         ...newMail,
@@ -256,7 +256,7 @@ export default function MailServerAdmin() {
         if (!await confirm("Are you sure you want to discard this draft?", "Discard Draft", true)) return;
         if (draftId) {
             try {
-                await api(`/mail-server/emails/${draftId}`, { method: 'DELETE' });
+                await api(`/plugin/mail-server/emails/${draftId}`, { method: 'DELETE' });
                 if (folder === 'drafts' || folder === 'trash') loadData();
                 loadStats();
                 setMessage({ type: 'success', text: 'Draft discarded' });
@@ -273,7 +273,7 @@ export default function MailServerAdmin() {
         setSending(true);
         setMessage(null);
         try {
-            await api('/mail-server/send', {
+            await api('/plugin/mail-server/send', {
                 method: 'POST',
                 body: {
                     ...newMail,
@@ -305,7 +305,7 @@ export default function MailServerAdmin() {
         e.preventDefault();
         setSaving(true);
         try {
-            await api('/mail-server/settings', {
+            await api('/plugin/mail-server/settings', {
                 method: 'POST',
                 body: settings
             });
@@ -320,7 +320,7 @@ export default function MailServerAdmin() {
     const loadDnsRecords = async () => {
         setDnsLoading(true);
         try {
-            const data = await api('/mail-server/security/dns-records') as DnsInfo;
+            const data = await api('/plugin/mail-server/security/dns-records') as DnsInfo;
             setDnsInfo(data);
         } catch (error) {
             console.error('Failed to load DNS records:', error);
@@ -338,7 +338,7 @@ export default function MailServerAdmin() {
         setGeneratingDkim(true);
         setMessage(null);
         try {
-            await api('/mail-server/security/dkim/generate', { method: 'POST', body: { domain, selector } });
+            await api('/plugin/mail-server/security/dkim/generate', { method: 'POST', body: { domain, selector } });
             setMessage({ type: 'success', text: 'DKIM key generated. Publish the new DNS record below.' });
             await loadDnsRecords();
         } catch (error: any) {
@@ -353,7 +353,7 @@ export default function MailServerAdmin() {
         setTestResult(null);
         setMessage(null);
         try {
-            const res = await api('/mail-server/test', { method: 'POST', body: { to: testTo || undefined } }) as TestResult;
+            const res = await api('/plugin/mail-server/test', { method: 'POST', body: { to: testTo || undefined } }) as TestResult;
             setTestResult(res);
         } catch (error: any) {
             setTestResult({ success: false, to: testTo, message: error.message || 'Test request failed', delivered: [], failed: [] });
@@ -397,7 +397,7 @@ export default function MailServerAdmin() {
     const emptyTrash = async () => {
         if (!await confirm('Are you sure you want to permanently delete all items in Trash?', 'Empty Trash', true)) return;
         try {
-            await api('/mail-server/trash/empty', { method: 'DELETE' });
+            await api('/plugin/mail-server/trash/empty', { method: 'DELETE' });
             setEmails([]);
             setSelectedEmail(null);
             setMessage({ type: 'success', text: 'Trash emptied' });
@@ -409,7 +409,7 @@ export default function MailServerAdmin() {
     const handleRestore = async (email: Email, e?: React.MouseEvent) => {
         if (e) e.stopPropagation();
         try {
-            await api(`/mail-server/emails/${email.id}/restore`, { method: 'PUT' });
+            await api(`/plugin/mail-server/emails/${email.id}/restore`, { method: 'PUT' });
             setEmails(emails.filter(e => e.id !== email.id));
             if (selectedEmail?.id === email.id) setSelectedEmail(null);
             setMessage({ type: 'success', text: 'Conversation restored' });
@@ -423,7 +423,7 @@ export default function MailServerAdmin() {
         const isPermanent = folder === 'trash';
         if (!await confirm(isPermanent ? 'Delete this conversation permanently?' : 'Move to trash?', isPermanent ? 'Delete Forever' : 'Move to Trash', isPermanent)) return;
         try {
-            await api(`/mail-server/emails/${id}`, { method: 'DELETE' });
+            await api(`/plugin/mail-server/emails/${id}`, { method: 'DELETE' });
             setEmails(emails.filter(e => e.id !== id));
             if (selectedEmail?.id === id) setSelectedEmail(null);
             loadStats();
@@ -448,7 +448,7 @@ export default function MailServerAdmin() {
         }
 
         try {
-            await api(`/mail-server/emails/${email.id}/archive`, {
+            await api(`/plugin/mail-server/emails/${email.id}/archive`, {
                 method: 'PUT',
                 body: { archived: newState }
             });
@@ -467,7 +467,7 @@ export default function MailServerAdmin() {
         if (selectedEmail?.id === email.id) setSelectedEmail({ ...selectedEmail, is_starred: newState ? 1 : 0 });
 
         try {
-            await api(`/mail-server/emails/${email.id}/star`, {
+            await api(`/plugin/mail-server/emails/${email.id}/star`, {
                 method: 'PUT',
                 body: { starred: newState }
             });
@@ -497,7 +497,7 @@ export default function MailServerAdmin() {
 
         setSelectedEmail(email);
         try {
-            const fullEmail = await api(`/mail-server/emails/${email.id}`) as any;
+            const fullEmail = await api(`/plugin/mail-server/emails/${email.id}`) as any;
             setSelectedEmail(fullEmail);
             setEmails(emails.map(e => e.id === email.id ? { ...e, is_read: 1 } : e));
 
@@ -1044,7 +1044,7 @@ export default function MailServerAdmin() {
                                                         formData.append('file', file);
 
                                                         try {
-                                                            const data = await apiPost<any>('/mail-server/upload/attachment', formData);
+                                                            const data = await apiPost<any>('/plugin/mail-server/upload/attachment', formData);
                                                             setNewMail(prev => ({
                                                                 ...prev,
                                                                 attachments: [...(prev.attachments || []), data.file]

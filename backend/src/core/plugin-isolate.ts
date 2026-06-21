@@ -144,9 +144,11 @@ function probeCgroupCap(): Promise<boolean> {
     return cgroupProbe;
 }
 
-// Trust = shipped default OR operator-toggled (admin UI). See core/plugin-trust.
-function isTrustedPlugin(slug: string): boolean {
-    try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
+// Per-plugin permission grant check (Android-style, default-deny). No plugin bypasses the sandbox:
+// host-level capabilities (mail provider, notify transport, raw-HTML hooks are denied to all) are
+// gated on an explicit admin grant for the requested scope:access. See core/plugin-permissions.
+function isGrantedFor(slug: string, scope: string, access: string): boolean {
+    try { return require('./plugin-permissions').isGranted(slug, scope, access); } catch { return false; }
 }
 
 // Network is OFF for untrusted plugins unless an admin granted it (plugin-permissions). The child can't
@@ -157,12 +159,12 @@ function isNetworkGrantedFor(slug: string): boolean {
 }
 
 // Hooks whose filter return value is emitted as RAW, UNESCAPED HTML into every server-rendered page
-// (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). An untrusted plugin
-// shimming one of these is a stored-XSS primitive (incl. the admin UI), so it is denied for untrusted
-// plugins — operator-trusted first-party plugins keep the capability.
+// (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). A plugin shimming one of
+// these is a stored-XSS primitive (incl. the admin UI), so it is denied for EVERY plugin — no plugin
+// gets raw-HTML output hooks.
 const RAW_HTML_HOOKS = new Set(['wordjs_head', 'wordjs_footer', 'wp_head', 'wp_footer']);
 
-// Host auth/session cookies that must never be forwarded to (or overwritten by) an untrusted isolated
+// Host auth/session cookies that must never be forwarded to (or overwritten by) an isolated
 // plugin's route handler: `wordjs_token` is the HttpOnly auth JWT, plus defensive csrf/session names.
 const HOST_AUTH_COOKIE_RE = /^wordjs_token$|csrf|xsrf|session/i;
 
@@ -180,6 +182,8 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'fs.read', 'fs.write',
     'mail', 'notify',
     'adminMenu.add', 'cron.schedule',
+    'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
+    'site.url', 'site.domain', 'site.adminEmail',
 ]);
 // Navigate "options.get" / "mail" on the api object and call it with args.
 function callApi(api: any, method: string, args: any[]) {
@@ -212,10 +216,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // OS-ISOLATION: run the untrusted plugin in a SEPARATE OS PROCESS, not a worker_thread. A worker
         // shares the host process's heap+rss, so an off-heap (Buffer) OOM or a hard V8 crash in the worker
         // takes down the HOST; a child has its OWN process + heap, so a crash, OOM, or heap escape is
-        // contained to the child and the host always survives. isTrusted is resolved HERE at spawn
-        // (re-resolved on reload via the trust toggle) so the child's network policy matches current
-        // trust; config travels in argv[2] (no secrets); env is the same secret-free allowlist.
-        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug), network: isNetworkGrantedFor(slug) });
+        // contained to the child and the host always survives. The network grant is resolved HERE at
+        // spawn (re-resolved on reload) so the child's network policy matches the current admin grant;
+        // config travels in argv[2] (no secrets); env is the same secret-free allowlist.
+        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: isNetworkGrantedFor(slug) });
         const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
         const RSS_BUDGET_BYTES = 768 * 1024 * 1024;   // resident budget — cgroup memory.max AND the /proc poll
         // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
@@ -524,10 +528,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                 }
             } else if (msg.kind === 'register') {
                 if (registrationRejected(registeredHooks, MAX_HOOKS, 'hooks')) return;
-                // (#3) Untrusted plugins may not shim raw-HTML output hooks (stored-XSS into every SSR
-                // page, incl. admin). Trusted first-party plugins keep the capability.
-                if (!isTrustedPlugin(slug) && RAW_HTML_HOOKS.has(msg.hook)) {
-                    console.warn(`[Isolate ${slug}] denied: untrusted plugin may not shim raw-HTML hook '${msg.hook}' (XSS risk).`);
+                // (#3) No plugin may shim raw-HTML output hooks (stored-XSS into every SSR page, incl.
+                // admin). Denied for ALL plugins — no trust tier exists to exempt anyone.
+                if (RAW_HTML_HOOKS.has(msg.hook)) {
+                    console.warn(`[Isolate ${slug}] denied: plugin may not shim raw-HTML hook '${msg.hook}' (XSS risk).`);
                     return;
                 }
                 // Cap callbacks PER hook NAME too: many shims on one core hook (e.g. the_content)
@@ -596,14 +600,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                 }
                 const cookieNs = `wjp_${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}_`;
                 const finalHandler = async (req: any, res: any) => {
-                    // (#2) Never hand the host's HttpOnly auth JWT (wordjs_token) to an UNTRUSTED plugin's
-                    // handler — the authenticated identity is already provided via reqData.user, so the raw
-                    // token is not needed. Strip auth/session cookies before forwarding; trusted (first-
-                    // party) plugins get the full jar.
-                    const trusted = isTrustedPlugin(slug);
-                    const fwdCookies = trusted
-                        ? (req.cookies || {})
-                        : Object.fromEntries(Object.entries(req.cookies || {}).filter(([k]) => !HOST_AUTH_COOKIE_RE.test(k)));
+                    // (#2) Never hand the host's HttpOnly auth JWT (wordjs_token) to a plugin's handler —
+                    // the authenticated identity is already provided via reqData.user, so the raw token is
+                    // not needed. ALWAYS strip auth/session cookies before forwarding (no trust exemption).
+                    const fwdCookies = Object.fromEntries(Object.entries(req.cookies || {}).filter(([k]) => !HOST_AUTH_COOKIE_RE.test(k)));
                     const reqData = {
                         method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
                         cookies: fwdCookies,
@@ -615,36 +615,32 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
                         if (r.headers) {
-                            if (trusted) res.set(r.headers);
-                            else {
-                                // (#3) An untrusted plugin must not set response headers verbatim: Set-Cookie
-                                // would re-inject a host cookie (e.g. wordjs_token), bypassing the clamped
-                                // r.cookies path below, and CSP/HSTS/Location let it weaken host security or
-                                // open-redirect. Drop those; cookies must flow through the clamped path.
-                                const UNSAFE = new Set(['set-cookie', 'set-cookie2', 'content-security-policy', 'strict-transport-security', 'location']);
-                                const safe: any = {};
-                                for (const [k, v] of Object.entries(r.headers)) { if (!UNSAFE.has(String(k).toLowerCase())) safe[k] = v; }
-                                res.set(safe);
-                            }
+                            // (#3) A plugin must not set response headers verbatim: Set-Cookie would
+                            // re-inject a host cookie (e.g. wordjs_token), bypassing the clamped r.cookies
+                            // path below, and CSP/HSTS/Location let it weaken host security or open-redirect.
+                            // ALWAYS drop those (no trust exemption); cookies must flow through the clamped path.
+                            const UNSAFE = new Set(['set-cookie', 'set-cookie2', 'content-security-policy', 'strict-transport-security', 'location']);
+                            const safe: any = {};
+                            for (const [k, v] of Object.entries(r.headers)) { if (!UNSAFE.has(String(k).toLowerCase())) safe[k] = v; }
+                            res.set(safe);
                         }
                         // Replay cookies the isolate set/cleared on the real response.
                         if (Array.isArray(r.cookies)) {
                             for (const c of r.cookies.slice(0, 20)) { // (#5) cap cookies per reply
                                 let name = String(c.name || '');
                                 let options = c.options || {};
-                                if (!trusted) {
-                                    // (#5) Untrusted plugins may set cookies ONLY in their own namespace and
-                                    // scope: never overwrite a host cookie (wordjs_token/session), never widen
-                                    // scope via `domain`, and never escape their route path; clamp lifetime.
-                                    if (HOST_AUTH_COOKIE_RE.test(name)) { console.warn(`[Isolate ${slug}] dropped cookie '${name}' (would shadow a host cookie).`); continue; }
-                                    if (!name.startsWith(cookieNs)) name = cookieNs + name;
-                                    options = { ...options };
-                                    delete options.domain;
-                                    options.path = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}`;
-                                    const MAX_AGE = 7 * 24 * 3600 * 1000;
-                                    if (typeof options.maxAge === 'number' && options.maxAge > MAX_AGE) options.maxAge = MAX_AGE;
-                                    delete options.expires; // prefer clamped maxAge over an arbitrary far-future expiry
-                                }
+                                // (#5) Plugins may set cookies ONLY in their own namespace and scope: never
+                                // overwrite a host cookie (wordjs_token/session), never widen scope via
+                                // `domain`, and never escape their route path; clamp lifetime. Applied to ALL
+                                // plugins (no trust exemption).
+                                if (HOST_AUTH_COOKIE_RE.test(name)) { console.warn(`[Isolate ${slug}] dropped cookie '${name}' (would shadow a host cookie).`); continue; }
+                                if (!name.startsWith(cookieNs)) name = cookieNs + name;
+                                options = { ...options };
+                                delete options.domain;
+                                options.path = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}`;
+                                const MAX_AGE = 7 * 24 * 3600 * 1000;
+                                if (typeof options.maxAge === 'number' && options.maxAge > MAX_AGE) options.maxAge = MAX_AGE;
+                                delete options.expires; // prefer clamped maxAge over an arbitrary far-future expiry
                                 if (c.clear) res.clearCookie(name, options);
                                 else res.cookie(name, c.value, options);
                             }
@@ -656,12 +652,9 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                     }
                 };
                 const m = routeMethod; // validated against the HTTP-verb allowlist above
-                // Untrusted plugins are namespaced under /api/v1/plugin/<slug> (no route hijack).
-                // Operator-trusted plugins may opt into their ORIGINAL absolute path (opts.absolute)
-                // so a first-party plugin can isolate without rewriting its whole frontend's URLs.
-                const full = (msg.opts && msg.opts.absolute && isTrustedPlugin(slug))
-                    ? msg.routePath
-                    : `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
+                // ALL plugins are namespaced under /api/v1/plugin/<slug> (no route hijack). No trust tier
+                // exists to opt into an absolute path — every plugin's routes are confined to its namespace.
+                const full = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
                 runWithContext(slug, () => app[m](full, ...mw, finalHandler));
                 registeredRoutes.push({ m, full });
             } else if (msg.kind === 'route-reply') {
@@ -677,26 +670,25 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             } else if (msg.kind === 'shortcode-reply') {
                 rpcSettle(pendingShortcode, msg, msg.value);
             } else if (msg.kind === 'register-mail-provider') {
-                // Becoming the host-wide mail sender is host-level hijack potential, so it is
-                // restricted to operator-trusted plugins (config.trustedSystemPlugins) — an untrusted
-                // uploaded plugin cannot intercept everyone's outbound mail.
-                if (isTrustedPlugin(slug)) {
+                // Becoming the host-wide mail sender is host-level hijack potential, so it requires an
+                // explicit admin grant of the email:provider capability (Android-style, default-deny).
+                if (isGrantedFor(slug, 'email', 'provider')) {
                     (global as any).wordjs_send_mail = (mailMsg: any) => invokeMail(mailMsg);
                     providedMail = true;
                 } else {
-                    console.warn(`[Isolate ${slug}] provideMail denied: only operator-trusted plugins may register the host mail sender.`);
+                    console.warn(`[Isolate ${slug}] provideMail denied: the email:provider permission is not granted (grant it in /admin/plugins).`);
                 }
             } else if (msg.kind === 'mail-reply') {
                 rpcSettle(pendingMail, msg, msg.value);
             } else if (msg.kind === 'register-notify-transport') {
-                // Registering a core notification transport can intercept dispatched notifications,
-                // so it is likewise restricted to operator-trusted plugins.
-                if (isTrustedPlugin(slug)) {
+                // Registering a core notification transport can intercept dispatched notifications, so it
+                // requires an explicit admin grant of the notifications:provider capability (default-deny).
+                if (isGrantedFor(slug, 'notifications', 'provider')) {
                     try {
                         require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification));
                     } catch (e: any) { console.warn(`[Isolate ${slug}] notify transport register failed:`, e && e.message); }
                 } else {
-                    console.warn(`[Isolate ${slug}] notify.registerTransport denied: only operator-trusted plugins may register a notification transport.`);
+                    console.warn(`[Isolate ${slug}] notify.registerTransport denied: the notifications:provider permission is not granted (grant it in /admin/plugins).`);
                 }
             } else if (msg.kind === 'notify-transport-reply') {
                 rpcSettle(pendingTransport, msg, msg.value);
@@ -758,9 +750,9 @@ function unloadIsolatedPlugin(slug: string) {
     }
 }
 
-// Tear the plugin down and start it again, reusing the entry file from the original load. Used by
-// the trust toggle so a now-trusted/untrusted plugin re-registers its routes (namespaced ↔ absolute)
-// and re-evaluates host-capability gates without a full server restart. No-op if not loaded.
+// Tear the plugin down and start it again, reusing the entry file from the original load. Used when a
+// plugin's permission grants change so it re-registers its routes and re-evaluates host-capability
+// gates (mail/notify providers, network) without a full server restart. No-op if not loaded.
 async function reloadIsolatedPlugin(slug: string): Promise<any> {
     const h = isolates.get(slug);
     if (!h || !h.entryFile) return null;

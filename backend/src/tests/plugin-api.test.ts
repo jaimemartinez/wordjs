@@ -100,26 +100,22 @@ test('io-guard blocks plugin reads of the database file under data/', async () =
     });
 });
 
-// Regression: operator-trusted plugins are full-Node by design, so io-guard must EXEMPT them from the
-// DB-file/secret blocks (otherwise trusted first-party plugins like mail-server can't open the DB and
-// fail to activate). Untrusted plugins (above) stay confined.
-test('io-guard exempts operator-trusted plugins (DB + secret files allowed)', async () => {
+// No trust tier: EVERY plugin is uniformly confined by io-guard — even a bundled plugin like
+// mail-server cannot read the raw DB file or secret files (it uses scoped bridge access instead).
+test('io-guard confines every plugin (no trusted exemption)', async () => {
     const { isPathSafe } = require('../core/io-guard');
-    const { isTrusted } = require('../core/plugin-trust');
     const root = path.resolve(__dirname, '../../');
-    assert.ok(isTrusted('mail-server'), 'mail-server is shipped-trusted in config.trustedSystemPlugins');
     await runWithContext('mail-server', async () => {
-        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db'), false), true); // trusted → DB allowed
-        assert.equal(isPathSafe(path.join(root, '.env'), false), true);              // trusted → not confined
+        assert.equal(isPathSafe(path.join(root, 'data', 'wordjs.db'), false), false); // DB file blocked for all
+        assert.equal(isPathSafe(path.join(root, '.env'), false), false);              // secret file blocked for all
     });
 });
 
-// Round-8 regression: becoming the host-wide mail sender must require operator trust. An untrusted
-// plugin could reach wordjs.provideMail directly via a kind:'call' bridge message, bypassing the
-// trust gate on the register-mail-provider IPC handler — provideMail now re-checks trust itself.
-test('bridge provideMail is denied for untrusted plugins (trust gate at the method)', async () => {
+// provideMail (becoming the host-wide mail sender) requires the explicit `email:provider` grant —
+// there is no trusted bypass. The test plugin neither declares nor is granted it, so it's denied.
+test('bridge provideMail requires the email:provider grant (no bypass)', async () => {
     await runWithContext(SLUG, async () => {
         const api = createPluginApi(SLUG);
-        assert.throws(() => api.provideMail(() => ({})), /operator-trusted/);
+        assert.throws(() => api.provideMail(() => ({})), /permission|provider|denied|Security Block/i);
     });
 });
