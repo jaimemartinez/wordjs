@@ -940,18 +940,24 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
     if (mxRecords.length === 0) mxRecords.push({ exchange: domain, priority: 0 });
 
     // Build the actual SMTP connection to ONE host with a given TLS verification mode.
-    const sendVia = async (host, rejectUnauthorized) => {
+    // SECURITY (M2 DNS-rebinding/TOCTOU): connect the socket to `pinnedIp` — the public IP that
+    // assertPublicHost already resolved AND validated for `serverName` — instead of the hostname. This
+    // stops nodemailer from doing a SECOND, attacker-controlled resolution at connect time, closing the
+    // TTL=0 rebinding window where authoritative DNS hands a public IP to the validator and
+    // 127.0.0.1 / 169.254.169.254 to the live connection. `servername` keeps the REAL MX hostname so
+    // STARTTLS certificate validation and SNI still target the host, not the bare IP.
+    const sendVia = async (pinnedIp, serverName, rejectUnauthorized) => {
         const transport = nodemailer.createTransport({
-            host,
+            host: pinnedIp,               // already-validated public IP — no second resolution
             port: 25,
             secure: false,
             name: heloName,               // EHLO/HELO hostname (must match rDNS)
             connectionTimeout: 20000,
             greetingTimeout: 15000,
             socketTimeout: 30000,
-            // M2-TLS: verify the STARTTLS cert by default; the caller downgrades+logs only on a
-            // verification failure for this specific host.
-            tls: { rejectUnauthorized, servername: host }
+            // M2-TLS: verify the STARTTLS cert by default against the real MX hostname (serverName),
+            // not the pinned IP; the caller downgrades+logs only on a verification failure for this host.
+            tls: { rejectUnauthorized, servername: serverName }
         });
         try {
             const info = await transport.sendMail({
@@ -985,9 +991,13 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
     for (const mx of mxRecords) {
         // SECURITY (M2-SSRF): resolve this MX host and reject if it points at an internal/private IP
         // (loopback/RFC1918/link-local incl. cloud metadata/CGNAT/ULA). Skip to the next MX on a
-        // blocked/unresolvable host rather than connecting.
+        // blocked/unresolvable host rather than connecting. PIN the validated address: we connect the
+        // socket to this exact IP below (not the hostname) so there is no second, attacker-controlled
+        // DNS resolution at connect time (M2 DNS-rebinding/TOCTOU defense).
+        let pinnedIp;
         try {
-            await assertPublicHost(mx.exchange);
+            const publicAddrs = await assertPublicHost(mx.exchange);
+            pinnedIp = publicAddrs[0]; // first validated public A/AAAA — all returned addrs were checked
         } catch (e) {
             lastErr = e;
             console.warn(`[MailServer][SSRF] Skipping MX ${mx.exchange} for ${recipient}: ${e.message}`);
@@ -995,8 +1005,9 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
         }
 
         try {
-            // M2-TLS: try with full certificate verification first.
-            const info = await sendVia(mx.exchange, true);
+            // M2-TLS: try with full certificate verification first. Connect to the pinned IP, verify the
+            // cert against the real MX hostname (mx.exchange) via servername.
+            const info = await sendVia(pinnedIp, mx.exchange, true);
             return { ok: true, mx: mx.exchange, response: info.response };
         } catch (e) {
             // On a TLS *verification* failure (and only that), retry THIS host once with verification
@@ -1004,7 +1015,7 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
             if (isTlsVerifyError(e)) {
                 console.warn(`[MailServer][TLS] STARTTLS verification FAILED for ${mx.exchange} (${e.message}) — retrying with verification DISABLED (downgraded, opportunistic encryption only).`);
                 try {
-                    const info = await sendVia(mx.exchange, false);
+                    const info = await sendVia(pinnedIp, mx.exchange, false);
                     return { ok: true, mx: mx.exchange, response: info.response, tlsDowngraded: true };
                 } catch (e2) {
                     lastErr = e2;
