@@ -514,8 +514,13 @@ if (cluster.isPrimary) {
                 };
 
                 const gatewayInternalPort = config.gatewayInternalPort || 3100;
-                https.createServer(internalOptions, internalApp).listen(gatewayInternalPort, '0.0.0.0', () => {
-                    logger.info(`[Gateway] [Internal] 🛡️ SECURE mTLS Internal Server on port ${gatewayInternalPort}`);
+                // SECURITY: the internal control plane (cert-upload / config-update / worker-restart) is
+                // only reached by the local backend, so bind loopback by default rather than every
+                // interface. Multi-node deployments may set gatewayInternalBind to a specific
+                // cluster/advertise interface; do NOT default to 0.0.0.0.
+                const gatewayInternalBind = config.gatewayInternalBind || '127.0.0.1';
+                https.createServer(internalOptions, internalApp).listen(gatewayInternalPort, gatewayInternalBind, () => {
+                    logger.info(`[Gateway] [Internal] 🛡️ SECURE mTLS Internal Server on ${gatewayInternalBind}:${gatewayInternalPort}`);
                 });
             } catch (e) { logger.error(`[Gateway] [Internal] Error: ${e.message}`); }
         } else {

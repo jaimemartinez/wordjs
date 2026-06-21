@@ -118,7 +118,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
         });
     }
 
-    setRole(slug, { name, capabilities });
+    await setRole(slug, { name, capabilities });
     res.status(201).json(getRole(slug));
 }));
 
@@ -155,7 +155,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => 
         });
     }
 
-    const removed = removeRole(slug);
+    const removed = await removeRole(slug);
     if (!removed) {
         return res.status(404).json({
             code: 'rest_role_invalid_id',

@@ -133,14 +133,17 @@ function isPathSafe(targetPath, isWrite = false) {
         return false;
     }
 
-    // Common Safe Zones for Reading
+    // Common Safe Zones for Reading. NOTE: the whole `plugins/` tree is intentionally NOT here — a
+    // plugin reading a SIBLING plugin's files is cross-plugin data/secret exfiltration (e.g. another
+    // plugin's encryption-key file). A plugin reads its OWN dir via the per-plugin `ownDir` allowance
+    // below; require() of its own files + deps still resolve via node_modules/src. themes/ stays (shared
+    // display assets, no secrets).
     const SAFE_READ_DIRS = [
         path.join(ROOT_DIR, 'uploads'),
         path.join(ROOT_DIR, 'data'),
         path.join(ROOT_DIR, 'themes'),
         path.join(ROOT_DIR, 'logs'),
         path.join(ROOT_DIR, 'os-tmp'),
-        path.join(ROOT_DIR, 'plugins'),
         path.join(ROOT_DIR, 'node_modules'), // Allow plugins to require dependencies
         path.join(ROOT_DIR, 'src') // Allow plugins to require core modules (careful)
     ];
@@ -163,7 +166,17 @@ function isPathSafe(targetPath, isWrite = false) {
     const dirsToCheck = (isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS).concat([ownDir]);
     // Exact-match or trailing-separator prefix so safe dir 'foo' does not also whitelist
     // a sibling 'foo-bar' that merely shares a string prefix.
-    const isAllowed = dirsToCheck.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));
+    let isAllowed = dirsToCheck.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));
+
+    // Module-resolution metadata is NOT a secret, and Node reads it from ancestors of the plugin entry
+    // (incl. the shared plugins/ parent) + dependency trees. Since plugins/ is intentionally NOT a broad
+    // read safe-zone (that would expose another plugin's private files like an encryption key), allow
+    // READS of any package.json and anything under a node_modules/ dir so require()/import resolution
+    // keeps working — without re-opening cross-plugin reads of source/data/secrets.
+    if (!isAllowed && !isWrite) {
+        const base = path.basename(resolved);
+        if (base === 'package.json' || resolved.split(path.sep).includes('node_modules')) isAllowed = true;
+    }
 
     if (!isAllowed) {
         console.warn(`[Security Block] Plugin '${pluginSlug}' tried to ${isWrite ? 'WRITE' : 'READ'} outside safe zones: ${resolved}`);

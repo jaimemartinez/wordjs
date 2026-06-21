@@ -11,6 +11,26 @@ const { getOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { stripTags, escUrl } = require('../core/formatting');
+
+// Permissive but bounded email shape check (matches the User model's update() validator).
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+/**
+ * Validate a guest-supplied author URL: only http/https are permitted, and the value must be a
+ * well-formed absolute URL. escUrl returns '' for anything else (javascript:, data:, mailto:, etc.).
+ */
+function safeAuthorUrl(raw) {
+    if (!raw) return '';
+    const cleaned = escUrl(String(raw).trim());
+    if (!cleaned) return '';
+    try {
+        const proto = new URL(cleaned).protocol;
+        return (proto === 'http:' || proto === 'https:') ? cleaned : '';
+    } catch {
+        return '';
+    }
+}
 
 /**
  * @swagger
@@ -238,6 +258,27 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
                 data: { status: 400 }
             });
         }
+
+        // SECURITY: guest author fields are persisted and later rendered. Treat the display name as
+        // plain text (strip any markup), validate the email shape, and restrict author_url to
+        // http(s) so a value like `javascript:...` can never become a clickable comment-author link.
+        author = stripTags(String(author)).trim();
+        if (!author) {
+            return res.status(400).json({
+                code: 'rest_missing_param',
+                message: 'Author name is required.',
+                data: { status: 400 }
+            });
+        }
+        email = String(email).trim();
+        if (!EMAIL_RE.test(email)) {
+            return res.status(400).json({
+                code: 'rest_invalid_param',
+                message: 'A valid author email is required.',
+                data: { status: 400 }
+            });
+        }
+        url = safeAuthorUrl(url);
     }
 
     // Determine initial status

@@ -7,6 +7,23 @@ const DatabaseDriverInterface = require('./interface');
 const { Pool } = require('pg');
 const config = require('../config/app');
 
+/**
+ * Derive lastID from an INSERT ... RETURNING * result set, but ONLY from a genuine `id`/`ID` column.
+ * Tables without an `id` column (post_meta=meta_id, options=option_id, term_relationships=composite PK)
+ * must NOT report their first arbitrary column (e.g. meta_id/option_id/object_id) as `lastID` — callers
+ * that treat lastID as a logical posts/users id would otherwise get a wrong value. Mirrors
+ * better-sqlite3's lastInsertRowid, which is only meaningful for rowid (id-bearing) inserts; returns 0
+ * for composite/no-id inserts so callers must use `changes`/explicit RETURNING instead.
+ */
+function extractLastId(rows: any[]): any {
+    if (rows && rows.length > 0) {
+        const firstRow = rows[0];
+        if (firstRow.id !== undefined && firstRow.id !== null) return firstRow.id;
+        if (firstRow.ID !== undefined && firstRow.ID !== null) return firstRow.ID;
+    }
+    return 0;
+}
+
 class PostgresDriver extends DatabaseDriverInterface {
     pool: any;
     config: any;
@@ -95,30 +112,22 @@ class PostgresDriver extends DatabaseDriverInterface {
             // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             let normalizedSql = this.normalizeSql(sql);
 
-            // AUTO-INJECT 'RETURNING id' for INSERTs if missing
-            // This makes the driver fully compatible with SQLite-style models
+            // AUTO-INJECT 'RETURNING *' for INSERTs if missing so we can surface the generated id for
+            // SQLite-style models. We keep RETURNING * (not RETURNING id) because not every table has
+            // an `id` column (post_meta=meta_id, options=option_id, term_relationships=composite PK),
+            // and RETURNING id would raise "column id does not exist" on those.
             if (/^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
                 normalizedSql += ' RETURNING *';
             }
 
             const res = await this.pool.query(normalizedSql, params);
 
-            let lastID: any = 0;
-            // Extract ID if returned
-            if (res.rows && res.rows.length > 0) {
-                const firstRow = res.rows[0];
-                // Check common ID column names
-                if (firstRow.id) lastID = firstRow.id;
-                else if (firstRow.ID) lastID = firstRow.ID;
-                else {
-                    // Fallback: take first value
-                    const values = Object.values(firstRow);
-                    if (values.length > 0) lastID = values[0];
-                }
-            }
-
             return {
-                lastID: lastID,
+                // lastID is meaningful ONLY for inserts into an `id`/serial table (mirrors
+                // better-sqlite3's lastInsertRowid semantics). Do NOT fabricate it from an arbitrary
+                // first column — that mis-reported option_id/meta_id/object_id as a logical id for
+                // composite/no-id tables. Leave it 0 when there is no real id column.
+                lastID: extractLastId(res.rows),
                 changes: res.rowCount
             };
         } catch (err) {
@@ -170,17 +179,8 @@ class PostgresDriver extends DatabaseDriverInterface {
                     normalizedSql += ' RETURNING *';
                 }
                 const res = await client.query(normalizedSql, params);
-                let lastID: any = 0;
-                if (res.rows && res.rows.length > 0) {
-                    const firstRow = res.rows[0];
-                    if (firstRow.id) lastID = firstRow.id;
-                    else if (firstRow.ID) lastID = firstRow.ID;
-                    else {
-                        const values = Object.values(firstRow);
-                        if (values.length > 0) lastID = values[0];
-                    }
-                }
-                return { lastID, changes: res.rowCount };
+                // Same id-only attribution as run() — never fabricate lastID from an arbitrary column.
+                return { lastID: extractLastId(res.rows), changes: res.rowCount };
             },
             exec: async (sql) => {
                 await client.query(sql);

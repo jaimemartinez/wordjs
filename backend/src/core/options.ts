@@ -62,14 +62,16 @@ async function updateOption(name, value, autoload = 'yes') {
     return runWithContext(null, async () => {
         const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
-        // Check strict existence first
-        const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
-
-        if (existing) {
-            await dbAsync.run('UPDATE options SET option_value = ?, autoload = ? WHERE option_name = ?', [serialized, autoload, name]);
-        } else {
-            await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
-        }
+        // Atomic UPSERT instead of SELECT-then-(UPDATE|INSERT): the old check-then-write raced the
+        // options(option_name) UNIQUE index — two concurrent first-writes both saw no row, both
+        // INSERTed, and the loser surfaced a raw UNIQUE violation / 500. ON CONFLICT collapses both
+        // paths into one atomic statement. Supported by SQLite ≥3.24 and Postgres; the legacy sql.js
+        // driver strips RETURNING but honors ON CONFLICT.
+        await dbAsync.run(
+            `INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)
+             ON CONFLICT (option_name) DO UPDATE SET option_value = excluded.option_value, autoload = excluded.autoload`,
+            [name, serialized, autoload]
+        );
 
         // Invalidate Cache (shared Redis del is cluster-wide). Also publish a cross-node signal so
         // each node can refresh in-process state that isn't read through the option cache (e.g. the
@@ -97,12 +99,16 @@ async function addOption(name, value, autoload = 'yes') {
     verifyPermission('settings', 'write');
 
     return runWithContext(null, async () => {
-        const existing = await dbAsync.get('SELECT option_id FROM options WHERE option_name = ?', [name]);
-        if (existing) return false;
-
         const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
-        await dbAsync.run('INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)', [name, serialized, autoload]);
-        return true;
+        // Atomic insert-if-absent: ON CONFLICT DO NOTHING avoids the check-then-insert race against the
+        // options(option_name) UNIQUE index (two concurrent first-writes / two nodes seeding the same
+        // default). changes/rowCount === 0 means the row already existed (no insert happened).
+        const result = await dbAsync.run(
+            `INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, ?)
+             ON CONFLICT (option_name) DO NOTHING`,
+            [name, serialized, autoload]
+        );
+        return !!(result && (result.changes || 0) > 0);
     });
 }
 

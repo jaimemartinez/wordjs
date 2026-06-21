@@ -287,38 +287,43 @@ async function importSite(data, options: Record<string, any> = {}) {
                     idMap.users[user.id] = existing.id;
                     results.users.skipped++;
                 } else if (existing && updateExisting) {
-                    // Update user
+                    // Update user.
+                    // SECURITY: NEVER apply an attacker-supplied password (or hash) from import input —
+                    // a crafted export could otherwise overwrite an existing account's credentials with
+                    // a known value. Update profile fields only; leave the password untouched.
                     await User.update(existing.id, {
                         email: user.email,
-                        displayName: user.displayName,
-                        // Update password only if provided (compatibility with old exports)
-                        password: user.password
+                        displayName: user.displayName
                     });
-                    // Set role if capability
+                    // Set role if capability (User.update validates the role allow-list)
                     if (user.role) {
-                        await User.updateMeta(existing.id, 'role', user.role);
+                        await User.update(existing.id, { role: user.role });
                     }
 
                     idMap.users[user.id] = existing.id;
                     results.users.updated++;
                 } else {
-                    // Create User
-                    // Workaround: Create with dummy password, then direct update password hash
+                    // Create User.
+                    // SECURITY: do NOT trust user.password from the import (pre-hashed credentials in a
+                    // crafted export become a working login). Mirror the WXR importer: assign a random
+                    // password so imported accounts must go through password reset to log in. We also do
+                    // NOT write user_pass from the import at all.
+                    const crypto = require('crypto');
                     const newUser = await User.create({
                         username: user.username,
                         email: user.email,
-                        password: 'temp_password_to_be_replaced',
+                        password: crypto.randomBytes(24).toString('hex'),
                         displayName: user.displayName,
-                        role: user.role // User.create handles role meta insertion
+                        role: user.role // User.create validates the role allow-list + handles role meta
                     });
 
-                    // Direct overwrite of password hash and other fields
+                    // Restore non-credential metadata only (registration date / status). user_pass is
+                    // intentionally left as the freshly-hashed random password set by User.create.
                     // Note: We need to use the same db connection as User context, which is global dbAsync.
-                    // Since importSite is running in the context where dbAsync is configured (even if patched), this works.
                     const { dbAsync } = require('../config/database');
                     await dbAsync.run(
-                        'UPDATE users SET user_pass = ?, user_registered = ?, user_status = ? WHERE id = ?',
-                        [user.password || '', user.registered || new Date().toISOString(), user.status || 0, newUser.id]
+                        'UPDATE users SET user_registered = ?, user_status = ? WHERE id = ?',
+                        [user.registered || new Date().toISOString(), user.status || 0, newUser.id]
                     );
 
                     // Refetch to ensure minimal consistency if needed, but we have id

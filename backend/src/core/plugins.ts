@@ -709,6 +709,40 @@ async function isPluginActive(slug) {
     return active.includes(slug);
 }
 
+/**
+ * Atomically read-modify-write the `active_plugins` array.
+ *
+ * activate/deactivate/CrashGuard each did `read → mutate array → updateOption(whole array)`, a
+ * non-atomic read-modify-write of the WHOLE list. Two concurrent admin actions (or an activation
+ * racing CrashGuard's boot-time disable) both read the same base array and both overwrite it, so one
+ * change is silently LOST. We serialize ONLY the option read+write under the existing distributed
+ * lock ('wordjs:active-plugins'). On Postgres/multi-node this is a real cross-node mutex; on SQLite
+ * acquireBlocking is a no-op-held (single host) and the now-atomic updateOption UPSERT keeps it
+ * correct. The lock is scoped to JUST the read+write (NOT worker start/stop) to avoid any deadlock or
+ * holding the lease across slow plugin I/O.
+ *
+ * `mutator(active)` returns the new array (or undefined to leave it unchanged).
+ */
+async function withActivePluginsLock(mutator: (active: string[]) => string[] | undefined | Promise<string[] | undefined>) {
+    const { acquireBlocking } = require('./dist-lock');
+    const lock = await acquireBlocking('wordjs:active-plugins', { ttlMs: 15000, timeoutMs: 15000 });
+    if (!lock.held) {
+        // Could not win the lease within the timeout — fail closed rather than do a non-atomic write
+        // that could clobber another node's concurrent change.
+        throw new Error('Could not acquire active_plugins lock (another node/operation holds it)');
+    }
+    try {
+        const active = await getActivePlugins();
+        const next = await mutator(Array.isArray(active) ? active : []);
+        if (next !== undefined) {
+            await updateOption('active_plugins', next);
+        }
+        return next;
+    } finally {
+        await lock.release();
+    }
+}
+
 const { getApp } = require('./appRegistry');
 
 // ...
@@ -826,10 +860,11 @@ async function activatePlugin(slug) {
         // Reorder middleware to ensure plugin routes work
         fixMiddlewareOrder();
 
-        // Add to active plugins
-        const active = await getActivePlugins();
-        active.push(slug);
-        await updateOption('active_plugins', active);
+        // Add to active plugins (atomic read-modify-write under the dist-lock — see helper).
+        await withActivePluginsLock((active) => {
+            if (active.includes(slug)) return undefined; // already present, no write needed
+            return [...active, slug];
+        });
 
         await doAction('activated_plugin', slug);
 
@@ -867,13 +902,11 @@ async function deactivatePlugin(slug) {
     // Terminate the plugin's worker — that IS deactivation for the isolated model.
     try { unloadIsolatedPlugin(slug); } catch (e) { /* worker may already be gone */ }
 
-    // Remove from active plugins
-    const active = await getActivePlugins();
-    const index = active.indexOf(slug);
-    if (index > -1) {
-        active.splice(index, 1);
-        await updateOption('active_plugins', active);
-    }
+    // Remove from active plugins (atomic read-modify-write under the dist-lock — see helper).
+    await withActivePluginsLock((active) => {
+        if (!active.includes(slug)) return undefined; // already absent, no write needed
+        return active.filter(s => s !== slug);
+    });
 
     await doAction('deactivated_plugin', slug);
 
@@ -897,9 +930,12 @@ async function loadActivePlugins() {
         console.error(`🚨 CRASH DETECTED: Plugin '${culpritSlug}' has ${crashInfo.strikes} strikes.`);
         console.error(`🛡️  CrashGuard: Automatically disabling '${culpritSlug}' to prevent boot loop.`);
 
-        // Remove from active plugins list
-        const newActive = activePlugins.filter(s => s !== culpritSlug);
-        await updateOption('active_plugins', newActive);
+        // Remove from active plugins list (atomic read-modify-write under the dist-lock so a
+        // concurrent activation on another node can't resurrect the crasher by clobbering this write).
+        await withActivePluginsLock((active) => {
+            if (!active.includes(culpritSlug)) return undefined;
+            return active.filter(s => s !== culpritSlug);
+        });
 
         // Also notify via persistent admin notice
         const notices = await getOption('admin_notices', []);

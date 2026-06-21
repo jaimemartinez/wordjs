@@ -38,6 +38,7 @@ const IGNORE_PATTERNS = [
     'desktop.ini',
     'database.sqlite', // Local DB
     'wordjs-config.json', // Local config
+    'gateway-config.json', // SECURITY: gateway-config.json holds the live gatewaySecret — never ship it
     'gateway-registry.json', // Gateway state
     '.env',
     'brain',
@@ -207,6 +208,11 @@ function shouldIgnore(filePath) {
     if (segments.some(seg => SECRET_DIR_SEGMENTS.includes(seg))) return true;
     const lowerBase = basename.toLowerCase();
     if (SECRET_EXTENSIONS.some(ext => lowerBase.endsWith(ext))) return true;
+
+    // SECURITY: drop any *-config.json (e.g. gateway-config.json, wordjs-config.json) that may hold
+    // secrets such as the gatewaySecret. Anchored to a leading separator so legitimate build configs
+    // (tsconfig.json, next.config.json, jest.config.json, package.json) are NOT matched.
+    if (/(^|-)config\.json$/.test(lowerBase)) return true;
 
     return false;
 }

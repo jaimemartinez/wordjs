@@ -147,7 +147,31 @@ function guardNet(mod: any): any {
         connect: (...args: any[]) => secureConnect(mod.connect, mod, args),
         createConnection: (...args: any[]) => secureConnect(mod.createConnection, mod, args),
         Socket: GuardedSocket,
+        Stream: GuardedSocket, // `net.Stream` is a legacy alias of the real Socket — guard it identically
     });
+}
+
+// THE definitive egress enforcement for the isolated child: patch the REAL net.Socket.prototype.connect
+// so EVERY outbound TCP connection is validated, no matter how the socket was obtained — net.connect,
+// net.createConnection, `new net.Socket()`, the `net.Stream` alias, `Object.getPrototypeOf(Socket.
+// prototype).connect`, an http(s) custom agent/createConnection, AND the connect that undici (global
+// fetch / WebSocket) performs under the hood. Module-name overrides alone are bypassable; the prototype
+// is the single chokepoint. SAFE ONLY in the child: the whole child process is ONE plugin (its core
+// bootstrap + IPC bridge never use net), so constraining the shared prototype here cannot affect host
+// code. NEVER call this on the host (it would wrongly constrain core). Idempotent.
+let childNetGuardInstalled = false;
+export function installChildNetGuard(): void {
+    if (childNetGuardInstalled) return;
+    childNetGuardInstalled = true;
+    try {
+        const proto = realNet.Socket && realNet.Socket.prototype;
+        if (proto && typeof proto.connect === 'function' && !(proto.connect as any).__wjGuarded) {
+            const origConnect = proto.connect;
+            const patched = function (this: any, ...args: any[]) { return secureConnect(origConnect, this, args); };
+            (patched as any).__wjGuarded = true;
+            proto.connect = patched;
+        }
+    } catch { /* best-effort; module-level wrappers remain as defense */ }
 }
 
 function guardTls(mod: any): any {
