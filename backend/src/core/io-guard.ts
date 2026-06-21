@@ -154,7 +154,13 @@ function isPathSafe(targetPath, isWrite = false) {
         path.join(ROOT_DIR, 'themes')
     ];
 
-    const dirsToCheck = isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS;
+    // A plugin may always read+write within its OWN dir (plugins/<slug> or themes/<slug>) — that's its
+    // private storage (data files, caches, attachments). It's still subject to the file-name blocks
+    // above (manifest.json / DB-in-child / secret-named) and to the per-plugin disk quota at the bridge.
+    const ownDir = pluginSlug.startsWith('theme:')
+        ? path.join(ROOT_DIR, 'themes', pluginSlug.slice('theme:'.length))
+        : path.join(ROOT_DIR, 'plugins', pluginSlug);
+    const dirsToCheck = (isWrite ? SAFE_WRITE_DIRS : SAFE_READ_DIRS).concat([ownDir]);
     // Exact-match or trailing-separator prefix so safe dir 'foo' does not also whitelist
     // a sibling 'foo-bar' that merely shares a string prefix.
     const isAllowed = dirsToCheck.some(dir => resolved === dir || resolved.startsWith(dir + path.sep));
