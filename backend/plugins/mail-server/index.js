@@ -90,11 +90,29 @@ async function initTransporter() {
         return;
     }
 
+    // SECURITY (M2-SSRF parity): the relay/smarthost host is operator-configured, but the direct-MX
+    // path validates+pins its target while this path did not. Apply the same public-host validation
+    // and IP-pinning here so a relay pointed at 127.0.0.1 / 169.254.169.254 / RFC1918 (or a hostname
+    // that DNS-rebinds at nodemailer's connect-time re-resolution) is refused. We connect to the
+    // already-validated public IP and carry the original hostname as the TLS servername so cert
+    // verification still matches. Fails CLOSED: on validation failure no transporter is configured.
+    let pinnedHost;
+    try {
+        const publicAddrs = await assertPublicHost(host);
+        pinnedHost = publicAddrs[0]; // first validated public A/AAAA — all returned addrs were checked
+    } catch (error) {
+        console.error(`   ✗ Refusing relay configuration: ${error.message}`);
+        transporter = null;
+        return;
+    }
+
     transporter = nodemailer.createTransport({
-        host,
+        host: pinnedHost,        // already-validated public IP — no second resolution at connect time
         port,
         secure,
-        auth: { user, pass }
+        auth: { user, pass },
+        // Keep certificate verification against the configured hostname (SNI + altname match).
+        tls: { servername: host }
     });
 
     try {
@@ -977,13 +995,21 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
         }
     };
 
-    // A TLS verification failure surfaces as a cert error (self-signed / hostname mismatch / expiry).
+    // SECURITY (TLS-downgrade): only a genuine certificate-VERIFICATION failure may trigger the
+    // unauthenticated retry. Match the exact OpenSSL/Node cert codes ONLY — no message-substring
+    // fallbacks (the old msg.includes('tls')/'certificate'/'altname' matched transient/non-cert TLS
+    // and even generic errors, letting an active MITM force the downgrade with a non-cert error).
+    // The broad `ERR_TLS_` code prefix is likewise dropped (it matched handshake/protocol errors).
+    const TLS_CERT_VERIFY_CODES = new Set([
+        'ERR_TLS_CERT_ALTNAME_INVALID',       // hostname / SAN mismatch
+        'DEPTH_ZERO_SELF_SIGNED_CERT',        // self-signed leaf
+        'SELF_SIGNED_CERT_IN_CHAIN',          // self-signed CA in chain
+        'UNABLE_TO_VERIFY_LEAF_SIGNATURE',    // missing/untrusted issuer
+        'CERT_HAS_EXPIRED',                   // expired cert
+    ]);
     const isTlsVerifyError = (e) => {
-        const code = e && e.code ? String(e.code) : '';
-        const msg = (e && e.message ? e.message : '').toLowerCase();
-        return /^(ERR_TLS_CERT_ALTNAME_INVALID|DEPTH_ZERO_SELF_SIGNED_CERT|SELF_SIGNED_CERT_IN_CHAIN|UNABLE_TO_VERIFY_LEAF_SIGNATURE|CERT_HAS_EXPIRED|ERR_TLS_)/i.test(code)
-            || msg.includes('certificate') || msg.includes('self signed') || msg.includes('self-signed')
-            || msg.includes('altname') || msg.includes('tls');
+        const code = e && e.code ? String(e.code).toUpperCase() : '';
+        return TLS_CERT_VERIFY_CODES.has(code);
     };
 
     let lastErr = null;
@@ -1208,6 +1234,22 @@ exports.init = async function (bridge) {
         wordjs.http.route(method, sub, opts, handler);
     };
 
+    // SECURITY: authorize a request against a single email record.
+    //
+    // The previous checks did `email.to_address !== req.user.userEmail`, but to_address (and
+    // cc_address/bcc_address) are COMMA-JOINED recipient lists — so (a) cc/bcc recipients were never
+    // matched (they could not read their own mail and, worse, the whole-string compare leaked nothing
+    // to them but also never authorized them) and (b) a member of a multi-recipient To list failed the
+    // exact-equality compare. Email.canUserAccess parses every recipient field into exact address
+    // tokens and checks membership across to + cc + bcc + sender.
+    //
+    // The `administrator` override is preserved (existing behavior); note that in this sandboxed plugin
+    // req.user is the users:read projection {id,userLogin,username,userEmail,displayName,role} and
+    // carries no capability map, so the override keys off role. If/when a dedicated capability bridge
+    // exists, gate this behind an explicit 'read_others_mail' capability instead of the bare role.
+    const canAccessEmail = (email, user) =>
+        Email.canUserAccess(email, user.userEmail) || user.role === 'administrator';
+
     // GET /api/v1/plugin/mail-server/emails/search
     route('get', '/emails/search', { auth: true }, async (req, res) => {
         const query = req.query.q || '';
@@ -1249,8 +1291,8 @@ exports.init = async function (bridge) {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
-        // Security: Must be either the recipient or the sender
-        if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail && req.user.role !== 'administrator') {
+        // Security: Must be a recipient (to/cc/bcc) or the sender (or an administrator).
+        if (!canAccessEmail(email, req.user)) {
             return res.status(403).json({ error: 'Access denied to this message' });
         }
 
@@ -1272,7 +1314,7 @@ exports.init = async function (bridge) {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
-        if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail && req.user.role !== 'administrator') {
+        if (!canAccessEmail(email, req.user)) {
             return res.status(403).json({ error: 'Cannot delete this message' });
         }
 
@@ -1291,7 +1333,7 @@ exports.init = async function (bridge) {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
-        if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail && req.user.role !== 'administrator') {
+        if (!canAccessEmail(email, req.user)) {
             return res.status(403).json({ error: 'Access denied' });
         }
 
@@ -1309,7 +1351,7 @@ exports.init = async function (bridge) {
     route('put', '/emails/:id/star', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
-        if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail) return res.status(403).json({ error: 'Forbidden' });
+        if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
 
         await Email.setStarred(req.params.id, req.body.starred);
         res.json({ success: true });
@@ -1319,7 +1361,7 @@ exports.init = async function (bridge) {
     route('put', '/emails/:id/archive', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
-        if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail) return res.status(403).json({ error: 'Forbidden' });
+        if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
 
         await Email.setArchived(req.params.id, req.body.archived);
         res.json({ success: true });
@@ -1630,7 +1672,9 @@ exports.init = async function (bridge) {
             const email = await Email.findById(attachment.email_id);
             if (!email) return res.status(404).json({ error: 'Reference email not found' });
 
-            if (email.to_address !== req.user.userEmail && email.from_address !== req.user.userEmail && req.user.role !== 'administrator') {
+            // Security: a CC/BCC recipient (not just a To recipient) of the parent email may fetch its
+            // attachments; whole-string equality on to_address leaked across recipients. Use membership.
+            if (!canAccessEmail(email, req.user)) {
                 return res.status(403).json({ error: 'Access denied' });
             }
 

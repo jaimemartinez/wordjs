@@ -7,16 +7,36 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     // SECURITY: baseline security headers for every route. The KEY anti-clickjacking control is
-    // `frame-ancestors 'none'` (plus the legacy X-Frame-Options: DENY). script-src/style-src are kept
-    // permissive ('self' 'unsafe-inline') in this first pass so the Next.js App Router keeps working;
-    // they can be tightened later. object-src 'none' and base-uri 'self' close common injection vectors.
+    // `frame-ancestors 'none'` (plus the legacy X-Frame-Options: DENY); object-src 'none' + base-uri
+    // 'self' close common injection vectors. Those are the real value here.
+    //
+    // script-src DELIBERATELY keeps 'unsafe-inline' 'unsafe-eval' AND adds blob: — removing them BREAKS
+    // the app (a regression), so they stay:
+    //   • blob: — the admin loads each plugin's frontend bundle via `import(URL.createObjectURL(blob))`
+    //     (lib/pluginBundleLoader.ts). Without script-src blob:, every plugin admin UI + its icons fail
+    //     to render. (This was the cause of the "no icons" regression.)
+    //   • 'unsafe-eval' — the Puck visual editor and some bundled libs use Function()/eval at runtime.
+    //   • 'unsafe-inline' — Next.js App Router emits inline bootstrap/hydration <script> tags; a full
+    //     per-request nonce migration is out of scope. (So script-src isn't an XSS backstop today — the
+    //     server-side sanitizer in lib/sanitize.ts is the real XSS defense.)
+    // worker-src blob: — libs that spawn workers from a blob URL. font-src allows the Google Fonts CDN.
+    // frame-src allows the sanitizer's permitted youtube/vimeo embeds (else legitimate VideoEmbed breaks).
+    // Resource directives (script/style/font/img) allow https: — the app loads its OWN theme assets
+    // (fonts under /uploads/fonts, theme CSS/JS, images) and, crucially, the Puck editor renders the
+    // theme inside an `about:srcdoc` iframe where the CSP keyword 'self' does NOT resolve to the page
+    // origin, so same-origin https assets are blocked unless https: is allowed. These directories are
+    // NOT the XSS line of defense anyway (script-src already has 'unsafe-inline'/'unsafe-eval' for
+    // Next.js + Puck; the server-side sanitizer is the XSS control). The REAL value kept here is the
+    // structural set: frame-ancestors 'none' (clickjacking), object-src 'none', base-uri 'self'.
     const csp = [
       "default-src 'self'",
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-      "style-src 'self' 'unsafe-inline'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:",
+      "worker-src 'self' blob:",
+      "style-src 'self' 'unsafe-inline' https:",
       "img-src 'self' data: blob: https:",
-      "font-src 'self' data:",
+      "font-src 'self' data: https:",
       "connect-src 'self' https: http: ws: wss:",
+      "frame-src 'self' https://www.youtube.com https://player.vimeo.com",
       "frame-ancestors 'none'",
       "object-src 'none'",
       "base-uri 'self'",

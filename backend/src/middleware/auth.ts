@@ -27,8 +27,11 @@ async function verifyAndAttachUser(token, req, res, next) {
         // Stateless-JWT revocation: reject any token issued before the user's security epoch, which is
         // stamped on logout and password change (User meta `token_valid_after`). Without this, a stolen
         // token stays valid until expiry even after logout/password reset.
+        // Use <= (not <): JWT iat is whole seconds and validAfter is stamped as Math.floor(now/1000),
+        // so a token minted in the SAME wall-clock second as the logout/password-change must also be
+        // revoked — otherwise iat === validAfter slips through.
         const validAfter = parseInt(user.meta && user.meta.token_valid_after, 10);
-        if (validAfter && decoded.iat && decoded.iat < validAfter) {
+        if (validAfter && decoded.iat && decoded.iat <= validAfter) {
             return res.status(401).json({
                 code: 'rest_token_revoked',
                 message: 'Session has been revoked. Please log in again.',
@@ -86,8 +89,14 @@ async function authenticate(req, res, next) {
 }
 
 /**
- * Authenticate request (Loose: Headers OR Query Param)
- * Use ONLY for endpoints that require direct browser navigation (downloads)
+ * Authenticate request (Loose: Headers OR Cookie OR Query Param)
+ * Use ONLY for read-only endpoints that require direct browser navigation where the client cannot set
+ * an Authorization header (EventSource/SSE, <a href> downloads).
+ *
+ * SECURITY: a JWT placed in ?token= leaks via access logs, the Referer header, and browser history.
+ * Prefer the HttpOnly cookie (EventSource/navigations send it same-origin) and the Authorization
+ * header; only fall back to the query token when neither is present. This route MUST stay read-only —
+ * never authorize a state-changing request off a query-string token.
  */
 async function authenticateAllowQuery(req, res, next) {
     const authHeader = req.headers.authorization;
@@ -95,10 +104,12 @@ async function authenticateAllowQuery(req, res, next) {
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
         token = authHeader.substring(7);
-    } else if (req.query && req.query.token) {
-        token = req.query.token;
     } else if (req.cookies && req.cookies.wordjs_token) {
         token = req.cookies.wordjs_token;
+    } else if (req.query && req.query.token) {
+        // Last-resort fallback (documented leak above). Kept for legacy EventSource/download clients
+        // that can supply neither header nor cookie.
+        token = req.query.token;
     }
 
     if (!token) {
@@ -135,8 +146,9 @@ async function optionalAuth(req, res, next) {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
         const user = await User.findById(decoded.userId);
         // Honor token revocation here too (see verifyAndAttachUser): treat a revoked token as anonymous.
+        // Use <= so a token issued in the same second as logout/password-change is also revoked.
         const validAfter = user ? parseInt(user.meta && user.meta.token_valid_after, 10) : 0;
-        if (user && validAfter && decoded.iat && decoded.iat < validAfter) {
+        if (user && validAfter && decoded.iat && decoded.iat <= validAfter) {
             req.user = null;
             req.userId = null;
         } else {

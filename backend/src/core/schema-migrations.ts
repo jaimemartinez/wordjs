@@ -51,6 +51,10 @@ const MIGRATIONS: Migration[] = [
                     indexSql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users (user_login)'
                 },
                 {
+                    // Case-insensitive email uniqueness. The authoritative fold is app-layer
+                    // (User.normalizeEmail: full-Unicode lowercase + NFC, applied on store/lookup);
+                    // this LOWER()-expression index is the DB backstop. SQLite LOWER() is ASCII-only,
+                    // so non-ASCII confusables ('Ä@x'/'ä@x') are caught by the app-layer fold, not here.
                     label: 'users.user_email (case-insensitive)',
                     dupSql: 'SELECT LOWER(user_email) AS k, COUNT(*) AS c FROM users GROUP BY LOWER(user_email) HAVING COUNT(*) > 1',
                     indexSql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))'

@@ -359,9 +359,11 @@ async function initializeSchema(db, isAsync = false) {
   // UNIQUE constraints — close the TOCTOU window where a check-then-insert race (or two concurrent
   // requests) can create duplicate logins/emails/slugs. These match the existing app lookups:
   //   - user_login: case-SENSITIVE (User.findByLogin uses exact match) → plain unique index.
-  //   - user_email: case-INSENSITIVE (User.findByEmail / update use LOWER(user_email)) → unique on
-  //     LOWER(user_email) so 'A@x' and 'a@x' can't both exist (an expression index; supported by
-  //     SQLite ≥3.9 and Postgres).
+  //   - user_email: case-INSENSITIVE. The PRIMARY canonicalization is app-layer: User.create/update
+  //     store a full-Unicode-lowercased (NFC) email via normalizeEmail(), and findByEmail compares the
+  //     same canonical form. This LOWER(user_email) expression index is a backstop that also folds any
+  //     legacy ASCII mixed-case rows. (SQLite LOWER() is ASCII-only, so it CANNOT be the sole defense:
+  //     'Ä@x'/'ä@x' would slip past it — hence the app-layer fold.) Supported by SQLite ≥3.9 + Postgres.
   //   - posts(post_name, post_type): PARTIAL on post_name <> '' — many drafts/auto-drafts legitimately
   //     carry an empty post_name, so we only enforce uniqueness for real slugs (Post.create always
   //     fills post_name via generateUniqueSlug). Partial unique indexes work on both engines.
