@@ -90,6 +90,23 @@ test('assertUrlAllowedSync blocks ws:// to a private IP literal', () => {
     assert.doesNotThrow(() => eg.assertUrlAllowedSync('wss://example.com/x'));
 });
 
+test('installChildNetGuard guards the REAL net.Socket.prototype.connect — closes Stream + prototype-chain bypass (restores after)', () => {
+    const net = require('net');
+    const orig = net.Socket.prototype.connect;
+    eg.installChildNetGuard();
+    try {
+        assert.notStrictEqual(net.Socket.prototype.connect, orig, 'real Socket.prototype.connect must be patched');
+        // Direct real Socket → guarded
+        assert.throws(() => { const s = new net.Socket(); try { s.connect(80, '169.254.169.254'); } finally { s.destroy(); } }, /egress/i, 'direct real Socket blocked');
+        // net.Stream legacy alias → guarded (was the bypass)
+        assert.throws(() => { const s = new net.Stream(); try { s.connect(80, '127.0.0.1'); } finally { s.destroy(); } }, /egress/i, 'net.Stream alias blocked');
+        // prototype-chain reach-around → now hits the patched real connect
+        assert.throws(() => { const s = new net.Socket(); try { Object.getPrototypeOf(net.Socket.prototype).connect; s.connect(80, '10.0.0.1'); } finally { s.destroy(); } }, /egress/i);
+    } finally {
+        net.Socket.prototype.connect = orig; // CRITICAL: restore so other tests' loopback connections (supertest) work
+    }
+});
+
 test('assertUrlAllowed (async) rejects a blocked IP-literal URL and accepts a public one', async () => {
     await assert.rejects(eg.assertUrlAllowed('http://169.254.169.254/latest/meta-data/'), /egress/i);
     await assert.rejects(eg.assertUrlAllowed('http://127.0.0.1:5432/'), /egress/i);
