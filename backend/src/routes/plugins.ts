@@ -335,20 +335,40 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
     // Default-deny grants: when an admin activates a plugin (having seen its requested permissions in the
     // activation dialog), grant exactly what its manifest DECLARES — but ONLY if it has no grant record
     // yet, so a later REVOKE via the per-permission switches survives a re-activation. The admin can
-    // refine grants anytime in /admin/plugins. Done BEFORE spawn so init runs with its grants.
-    try {
-        const { getGrants, setGrants } = require('../core/plugin-permissions');
-        if (getGrants(slug).length === 0) {
+    // refine grants anytime in /admin/plugins.
+    //
+    // Resolve the declared set BEFORE activation (so we can spawn with the grants), but only PERSIST it
+    // AFTER activation SUCCEEDS — a plugin that fails its AST scan / test gate must not leave behind a
+    // persisted grant record. To make init see the grants, seed them in-memory first, then either
+    // persist-on-success or roll back the in-memory seed on failure.
+    const { getGrants, setGrants, _setGrantsInMemory } = require('../core/plugin-permissions');
+    let seededDeclared: string[] | null = null;
+    const hadNoGrants = getGrants(slug).length === 0;
+    if (hadNoGrants) {
+        try {
             const all = await getAllPlugins();
             const p = all.find((x: any) => x.slug === slug);
             const declared = Array.from(new Set(((p && p.permissions) || [])
                 .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
                 .filter(Boolean))) as string[];
-            if (declared.length) await setGrants(slug, declared);
-        }
-    } catch (e: any) { console.warn(`[Permissions] grant-on-activate for '${slug}' failed:`, e && e.message); }
+            if (declared.length) { _setGrantsInMemory(slug, declared); seededDeclared = declared; }
+        } catch (e: any) { console.warn(`[Permissions] grant-on-activate (seed) for '${slug}' failed:`, e && e.message); }
+    }
 
-    const result = await activatePlugin(req.params.slug);
+    let result;
+    try {
+        result = await activatePlugin(req.params.slug);
+    } catch (e) {
+        // Activation failed (scan/test/init) — undo the in-memory grant seed so nothing is persisted and
+        // a failed-activation plugin holds no grants.
+        if (seededDeclared) { try { _setGrantsInMemory(slug, []); } catch { /* */ } }
+        throw e;
+    }
+
+    // Activation succeeded — NOW persist the grants we seeded (idempotent; only when it had none before).
+    if (seededDeclared && hadNoGrants && getGrants(slug).length > 0) {
+        try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn(`[Permissions] grant-on-activate (persist) for '${slug}' failed:`, e && e.message); }
+    }
 
     // Trigger frontend registry regeneration
     regenerateRegistry();

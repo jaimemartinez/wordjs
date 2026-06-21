@@ -5,6 +5,34 @@ const nextConfig: NextConfig = {
     // We must include the parent directory as root because we import from ../plugins
     root: require('path').resolve(__dirname, '..'),
   },
+  async headers() {
+    // SECURITY: baseline security headers for every route. The KEY anti-clickjacking control is
+    // `frame-ancestors 'none'` (plus the legacy X-Frame-Options: DENY). script-src/style-src are kept
+    // permissive ('self' 'unsafe-inline') in this first pass so the Next.js App Router keeps working;
+    // they can be tightened later. object-src 'none' and base-uri 'self' close common injection vectors.
+    const csp = [
+      "default-src 'self'",
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+      "style-src 'self' 'unsafe-inline'",
+      "img-src 'self' data: blob: https:",
+      "font-src 'self' data:",
+      "connect-src 'self' https: http: ws: wss:",
+      "frame-ancestors 'none'",
+      "object-src 'none'",
+      "base-uri 'self'",
+    ].join('; ');
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          { key: 'Content-Security-Policy', value: csp },
+          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-Content-Type-Options', value: 'nosniff' },
+          { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        ],
+      },
+    ];
+  },
   async rewrites() {
     // Monolith mode: the single-process server dispatches /api and /uploads to the backend in-process
     // before Next sees them, so no proxy rewrite is needed (and there's no gateway port to target).

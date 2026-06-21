@@ -80,6 +80,44 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         });
     }
 
+    /**
+     * Run an atomic transaction. SQLite (better-sqlite3) is single-connection, so BEGIN/COMMIT/
+     * ROLLBACK around fn on the same handle is genuinely atomic — this matches the existing behavior
+     * (revisions previously did BEGIN/COMMIT via run() and it worked precisely because there is one
+     * connection). `tx` exposes get/all/run with the SAME shape as the top-level methods.
+     *
+     * NOTE: better-sqlite3 itself is synchronous; we keep the async/Promise surface for interface
+     * parity with the Postgres driver. Do not nest transaction() calls (SQLite has no nested BEGIN).
+     *
+     * @param {(tx: {get,all,run,exec}) => Promise<any>} fn
+     * @returns {Promise<any>} the value returned by fn
+     */
+    async transaction(fn) {
+        const tx = {
+            get: async (sql, params = []) => this.db.prepare(sql).get(...params),
+            all: async (sql, params = []) => this.db.prepare(sql).all(...params),
+            run: async (sql, params = []) => {
+                const info = this.db.prepare(sql).run(...params);
+                return { lastID: info.lastInsertRowid, changes: info.changes };
+            },
+            exec: async (sql) => { this.db.exec(sql); }
+        };
+
+        this.db.exec('BEGIN');
+        try {
+            const result = await fn(tx);
+            this.db.exec('COMMIT');
+            return result;
+        } catch (err) {
+            try {
+                this.db.exec('ROLLBACK');
+            } catch (rbErr: any) {
+                console.error('❌ SQLite ROLLBACK failed:', rbErr && rbErr.message);
+            }
+            throw err;
+        }
+    }
+
     async getTables() {
         return new Promise((resolve, reject) => {
             try {

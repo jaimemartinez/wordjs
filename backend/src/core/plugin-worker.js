@@ -57,6 +57,42 @@ if (!netAllowed) {
             });
         } catch { /* best-effort: if a global is non-configurable, leave it */ }
     }
+} else {
+    // Network IS granted: keep fetch/WebSocket, but enforce the SAME public-only egress policy as the
+    // raw socket modules — otherwise a granted plugin can fetch http://169.254.169.254/ (cloud metadata
+    // creds), loopback, and internal RFC1918 services. egress-guard is required here (before
+    // secure-require installs) so it captures the real net/dns. FAIL CLOSED: if it can't load, block the
+    // network globals entirely rather than leave them unfiltered.
+    try {
+        const eg = require(path.join(coreDir, 'egress-guard'));
+        const realFetch = globalThis.fetch;
+        if (typeof realFetch === 'function') {
+            const guardedFetch = async (input, init) => {
+                const url = typeof input === 'string' ? input : (input && input.url) || String(input);
+                await eg.assertUrlAllowed(url); // throws → fetch rejects, on blocked/private/unresolvable host
+                return realFetch(input, init);
+            };
+            Object.defineProperty(globalThis, 'fetch', { configurable: true, writable: true, value: guardedFetch });
+        }
+        const RealWS = globalThis.WebSocket;
+        if (typeof RealWS === 'function') {
+            const GuardedWS = function (address, ...rest) {
+                eg.assertUrlAllowedSync(String(address)); // blocks ws:// to a private IP literal
+                return new RealWS(address, ...rest);
+            };
+            GuardedWS.prototype = RealWS.prototype;
+            Object.defineProperty(globalThis, 'WebSocket', { configurable: true, writable: true, value: GuardedWS });
+        }
+    } catch (e) {
+        for (const name of ['fetch', 'WebSocket', 'EventSource']) {
+            try {
+                Object.defineProperty(globalThis, name, {
+                    configurable: true,
+                    get() { throw new Error(`[sandbox] network egress guard unavailable for '${slug}' — '${name}' blocked`); }
+                });
+            } catch { /* */ }
+        }
+    }
 }
 
 // Install the same capability guards inside this isolate (defense-in-depth: even after a heap

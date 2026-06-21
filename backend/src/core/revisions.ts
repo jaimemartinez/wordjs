@@ -124,40 +124,44 @@ async function restoreRevision(revisionId) {
   const revision = await getRevision(revisionId);
   if (!revision) return false;
 
-  // Save current state as a new revision first
+  // Save current state as a new revision first (outside the restore transaction, matching the
+  // original ordering — this is its own multi-statement unit and must persist regardless).
   await saveRevision(revision.postId);
 
   try {
-    await dbAsync.run('BEGIN TRANSACTION');
+    // Run the restore as ONE atomic unit on a single connection. Previously this issued
+    // BEGIN/UPDATE/.../COMMIT as separate dbAsync.run() calls; on the pg driver each call grabs a
+    // DIFFERENT pooled connection, so the BEGIN/COMMIT did not actually bound the statements (they
+    // ran auto-committed on whatever backend the pool handed out). dbAsync.transaction() pins one
+    // connection so the UPDATE + meta delete/insert truly commit or roll back together.
+    await dbAsync.transaction(async (tx) => {
+      // Restore the revision content
+      await tx.run(`
+        UPDATE posts SET
+          post_title = ?,
+          post_content = ?,
+          post_excerpt = ?,
+          post_modified = CURRENT_TIMESTAMP,
+          post_modified_gmt = CURRENT_TIMESTAMP
+        WHERE id = ?
+      `, [revision.title, revision.content, revision.excerpt, revision.postId]);
 
-    // Restore the revision content
-    await dbAsync.run(`
-      UPDATE posts SET
-        post_title = ?,
-        post_content = ?,
-        post_excerpt = ?,
-        post_modified = CURRENT_TIMESTAMP,
-        post_modified_gmt = CURRENT_TIMESTAMP
-      WHERE id = ?
-    `, [revision.title, revision.content, revision.excerpt, revision.postId]);
+      // Restore Meta - ONLY if the revision has meta to restore
+      const metaEntries = Object.entries(revision.meta || {});
+      if (metaEntries.length > 0) {
+        // Delete current parent meta first
+        await tx.run('DELETE FROM post_meta WHERE post_id = ?', [revision.postId]);
 
-    // Restore Meta - ONLY if the revision has meta to restore
-    const metaEntries = Object.entries(revision.meta || {});
-    if (metaEntries.length > 0) {
-      // Delete current parent meta first
-      await dbAsync.run('DELETE FROM post_meta WHERE post_id = ?', [revision.postId]);
-
-      // Insert revision meta into parent post
-      for (const [key, value] of metaEntries) {
-        const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
-        await dbAsync.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [revision.postId, key, serialized]);
+        // Insert revision meta into parent post
+        for (const [key, value] of metaEntries) {
+          const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
+          await tx.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [revision.postId, key, serialized]);
+        }
       }
-    }
-
-    await dbAsync.run('COMMIT');
+    });
     return true;
   } catch (error) {
-    await dbAsync.run('ROLLBACK');
+    // transaction() already rolled back on throw; just report.
     console.error('Failed to restore revision:', error);
     return false;
   }

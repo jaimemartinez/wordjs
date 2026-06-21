@@ -55,8 +55,14 @@ const storage = multer.diskStorage({
         cb(null, uploadPath);
     },
     filename: (req, file, cb) => {
-        const ext = path.extname(file.originalname);
-        const name = path.basename(file.originalname, ext);
+        // SECURITY: Derive the STORED extension from the validated MIME->extension allowlist
+        // (Media.getExtensionForMime), NOT from the client-supplied originalname. This prevents
+        // a malicious filename (e.g. "x.php"/"x.html") from being persisted/served verbatim.
+        // fileFilter already rejected MIME types without a safe mapped extension, so resolvedExt
+        // is expected to be present here; fall back defensively just in case.
+        const resolvedExt = Media.getExtensionForMime(file.mimetype);
+        const ext = resolvedExt ? `.${resolvedExt}` : '';
+        const name = path.basename(file.originalname, path.extname(file.originalname));
         const safeName = name.replace(/[^a-zA-Z0-9-_]/g, '-').toLowerCase();
         const uniqueName = `${safeName}-${uuidv4().substring(0, 8)}${ext}`;
         cb(null, uniqueName);
@@ -72,11 +78,25 @@ const fileFilter = (req, file, cb) => {
         }
     }
 
-    if (Media.isAllowedMimeType(file.mimetype)) {
-        cb(null, true);
-    } else {
-        cb(new Error(`File type ${file.mimetype} is not allowed.`), false);
+    // SECURITY: Explicitly reject dangerous extensions in the declared filename regardless of
+    // the declared MIME (defense in depth — a benign MIME could carry an active-content name).
+    const declaredExt = path.extname(file.originalname);
+    if (Media.isDangerousExtension(declaredExt)) {
+        return cb(new Error(`File extension ${declaredExt} is not allowed.`), false);
     }
+
+    if (!Media.isAllowedMimeType(file.mimetype)) {
+        return cb(new Error(`File type ${file.mimetype} is not allowed.`), false);
+    }
+
+    // SECURITY: The declared MIME must map to a safe stored extension; otherwise we cannot
+    // persist it safely and must reject (getExtensionForMime also returns null for dangerous
+    // extensions like .xml that are otherwise in the allowlist).
+    if (!Media.getExtensionForMime(file.mimetype)) {
+        return cb(new Error(`File type ${file.mimetype} cannot be stored safely.`), false);
+    }
+
+    cb(null, true);
 };
 
 const upload = multer({
@@ -213,6 +233,15 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     const fileType = require('file-type');
     const sanitizeHtml = require('sanitize-html');
 
+    // SECURITY: Types whose binary signature MUST be confirmable. For these, a missing/unknown
+    // magic-byte result is treated as a forgery attempt (fail-closed) rather than waved through.
+    // SVG is text-based XML (no fixed signature) and is handled by the sanitization path below,
+    // so it is intentionally excluded from this requirement.
+    const declaredMime = req.file.mimetype || '';
+    const requiresSignature =
+        (declaredMime.startsWith('image/') && declaredMime !== 'image/svg+xml') ||
+        declaredMime === 'application/pdf';
+
     try {
         const result = await fileType.fromFile(req.file.path);
 
@@ -227,6 +256,26 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                     data: { status: 400 }
                 });
             }
+            // For binary types that must carry a signature, the confirmed signature must also
+            // agree with the declared MIME (e.g. declared image/png whose bytes are application/pdf
+            // would be a mismatch). This blocks polyglot/extension-confusion uploads.
+            if (requiresSignature && result.mime !== declaredMime) {
+                fs.unlinkSync(req.file.path);
+                return res.status(400).json({
+                    code: 'rest_upload_invalid_file_type',
+                    message: `File content (${result.mime}) does not match the declared type (${declaredMime}).`,
+                    data: { status: 400 }
+                });
+            }
+        } else if (requiresSignature) {
+            // FAIL-CLOSED: a type that must have a signature but file-type could not confirm one
+            // (e.g. an HTML/text payload renamed to .png/.pdf) is rejected.
+            fs.unlinkSync(req.file.path);
+            return res.status(400).json({
+                code: 'rest_upload_invalid_file_type',
+                message: `File content could not be verified for declared type ${declaredMime}.`,
+                data: { status: 400 }
+            });
         }
 
         // SVG Sanitization (Defense in Depth)
@@ -265,6 +314,16 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
 
     } catch (err) {
         console.error("Security check failed:", err);
+        // FAIL-CLOSED: if the magic-byte/sanitization step threw for a type that MUST carry a
+        // verifiable signature, do not let the unverified file through.
+        if (requiresSignature) {
+            try { if (fs.existsSync(req.file.path)) fs.unlinkSync(req.file.path); } catch (_) { /* best effort */ }
+            return res.status(400).json({
+                code: 'rest_upload_invalid_file_type',
+                message: `File content could not be verified for declared type ${declaredMime}.`,
+                data: { status: 400 }
+            });
+        }
     }
     // -------------------------------------
     const { getOption } = require('../core/options');
@@ -368,6 +427,21 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req, r
         });
     }
 
+    // SECURITY: Ownership check (prevents IDOR). The upload_files gate alone let any
+    // author/editor modify ANY user's media. Owners need edit_posts; editing another
+    // user's media requires the cross-user edit_others_posts capability. Admins ('*') pass.
+    const canEdit = media.author === req.user.id
+        ? req.user.can('edit_posts')
+        : req.user.can('edit_others_posts');
+
+    if (!canEdit) {
+        return res.status(403).json({
+            code: 'rest_forbidden',
+            message: 'You cannot edit this media.',
+            data: { status: 403 }
+        });
+    }
+
     const { title, description, caption, alt } = req.body;
 
     const updated = await Media.update(mediaId, {
@@ -393,6 +467,21 @@ router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req
             code: 'rest_post_invalid_id',
             message: 'Invalid media ID.',
             data: { status: 404 }
+        });
+    }
+
+    // SECURITY: Ownership check (prevents IDOR). The upload_files gate alone let any
+    // author/editor delete ANY user's media. Owners need delete_posts; deleting another
+    // user's media requires the cross-user delete_others_posts capability. Admins ('*') pass.
+    const canDelete = media.author === req.user.id
+        ? req.user.can('delete_posts')
+        : req.user.can('delete_others_posts');
+
+    if (!canDelete) {
+        return res.status(403).json({
+            code: 'rest_forbidden',
+            message: 'You cannot delete this media.',
+            data: { status: 403 }
         });
     }
 

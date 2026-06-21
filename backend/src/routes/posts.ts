@@ -511,6 +511,20 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req, res) => {
         });
     }
 
+    // SECURITY: Ownership check (prevents IDOR). This route was gated by authenticate only,
+    // letting any logged-in user write arbitrary meta on ANY post. Mirror the PUT /posts/:id gate.
+    const canEdit = post.authorId === req.user.id
+        ? req.user.can('edit_posts')
+        : req.user.can('edit_others_posts');
+
+    if (!canEdit) {
+        return res.status(403).json({
+            code: 'rest_forbidden',
+            message: 'You cannot edit this post.',
+            data: { status: 403 }
+        });
+    }
+
     const { key, value } = req.body;
 
     if (!key) {

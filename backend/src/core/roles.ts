@@ -54,6 +54,18 @@ const defaultRoles = (): Record<string, any> => JSON.parse(JSON.stringify(DEFAUL
 // Cache roles in memory for synchronous access (required by User.toJSON)
 let _rolesCache: Record<string, any> | null = null;
 
+// Freshness fallback (multi-node safety net): the primary invalidation path is the Redis pub/sub
+// signal handled in coherence.ts. But if Redis is down (or a publish is missed), a role/capability
+// REVOCATION on another node would never reach this in-process cache, leaving stale (over-broad)
+// capabilities until restart. So we stamp when the cache was loaded and, on synchronous access,
+// trigger a background re-read once the cache is older than ROLES_CACHE_TTL_MS. This bounds staleness
+// to the TTL (+ one request) and self-heals a missed invalidation, WITHOUT slowing the sync fast path
+// (we never block getRoles(); the refresh applies to subsequent calls). The pub/sub fast path still
+// invalidates instantly when available.
+const ROLES_CACHE_TTL_MS = 30_000; // 30s
+let _rolesCacheLoadedAt = 0;
+let _rolesRefreshInFlight = false;
+
 /**
  * Initialize roles from DB (Async)
  * Must be called on app startup
@@ -72,8 +84,26 @@ async function loadRoles() {
             console.warn('Could not persist default roles:', e?.message);
         }
     }
+    _rolesCacheLoadedAt = Date.now(); // stamp freshness on every (re)load
     console.log(`DEBUG: Roles loaded into cache. Count: ${Object.keys(_rolesCache || {}).length}`);
     return _rolesCache;
+}
+
+/**
+ * Background, non-blocking refresh when the cache has gone stale. Single-flight guarded so a burst of
+ * stale reads triggers at most one DB re-read. Errors are swallowed (the current cache stays usable).
+ */
+function maybeRefreshStaleRoles() {
+    if (_rolesRefreshInFlight) return;
+    if (Date.now() - _rolesCacheLoadedAt < ROLES_CACHE_TTL_MS) return;
+    _rolesRefreshInFlight = true;
+    // Bump the stamp NOW so we don't queue another refresh while this one is in flight even if it's
+    // slow; loadRoles() will stamp again with the real load time on completion.
+    _rolesCacheLoadedAt = Date.now();
+    Promise.resolve()
+        .then(() => loadRoles())
+        .catch((e: any) => console.warn('[roles] background TTL refresh failed:', e && e.message))
+        .finally(() => { _rolesRefreshInFlight = false; });
 }
 
 /**
@@ -85,6 +115,9 @@ function getRoles() {
     if (!_rolesCache) {
         return { ...defaultRoles(), ...(config.roles || {}) };
     }
+    // Bound staleness: kick a background re-read if the cache aged past the TTL (self-heals a missed
+    // cross-node invalidation). Non-blocking — returns the current cache immediately.
+    maybeRefreshStaleRoles();
     return _rolesCache;
 }
 
@@ -99,6 +132,7 @@ async function setRole(slug, roleData) {
         name: roleData.name,
         capabilities: roleData.capabilities || []
     };
+    _rolesCacheLoadedAt = Date.now(); // local write is fresh — reset the TTL clock
 
     // Persist to DB
     return await updateOption(ROLES_OPTION_NAME, _rolesCache);
@@ -211,6 +245,7 @@ async function syncRoles(configRoles) {
 
     if (changed) {
         _rolesCache = dbRoles; // Update cache
+        _rolesCacheLoadedAt = Date.now(); // local write is fresh — reset the TTL clock
         await updateOption(ROLES_OPTION_NAME, dbRoles); // Persist
         return true;
     }

@@ -5,9 +5,17 @@ const { pki, md } = forge;
 
 const CERTS_DIR = path.resolve(__dirname, '../../certs');
 
-// Ensure certs directory exists
+// Ensure certs directory exists. 0o700: private keys live here, so the directory must not be
+// world/group-traversable.
 if (!fs.existsSync(CERTS_DIR)) {
-    fs.mkdirSync(CERTS_DIR, { recursive: true });
+    fs.mkdirSync(CERTS_DIR, { recursive: true, mode: 0o700 });
+}
+
+// Write a PRIVATE KEY with restrictive permissions. writeFileSync's `mode` is ignored when the file
+// already exists, so we ALSO chmod after the write to guarantee 0o600 on every platform/path.
+function writePrivateKey(filePath: string, content: string) {
+    fs.writeFileSync(filePath, content, { mode: 0o600 });
+    try { fs.chmodSync(filePath, 0o600); } catch { /* chmod is a no-op on some filesystems (e.g. Windows) */ }
 }
 
 /**
@@ -58,7 +66,7 @@ function generateClusterCA() {
     const caKeyPem = pki.privateKeyToPem(keys.privateKey);
     const caCertPem = pki.certificateToPem(cert);
 
-    fs.writeFileSync(path.join(CERTS_DIR, 'cluster-ca.key'), caKeyPem);
+    writePrivateKey(path.join(CERTS_DIR, 'cluster-ca.key'), caKeyPem);
     fs.writeFileSync(path.join(CERTS_DIR, 'cluster-ca.crt'), caCertPem);
 
     return { key: caKeyPem, cert: caCertPem };
@@ -134,7 +142,7 @@ function generateServiceCert(serviceName, caKeyPem, caCertPem, additionalAltName
     const keyPem = pki.privateKeyToPem(keys.privateKey);
     const certPem = pki.certificateToPem(cert);
 
-    fs.writeFileSync(path.join(CERTS_DIR, `${serviceName}.key`), keyPem);
+    writePrivateKey(path.join(CERTS_DIR, `${serviceName}.key`), keyPem);
     fs.writeFileSync(path.join(CERTS_DIR, `${serviceName}.crt`), certPem);
 
     return { key: keyPem, cert: certPem };
