@@ -256,7 +256,18 @@ class User {
 
         if (updates.length > 0) {
             values.push(id);
-            await dbAsync.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
+            // The findByEmail pre-check above leaves a TOCTOU window — two concurrent email updates to the
+            // same address can both pass it, then the loser hits idx_users_email and the driver throws a
+            // raw constraint error. Translate that into the SAME clean message create() uses (preserving
+            // the unique index's integrity guarantee) instead of surfacing a driver-internal 500.
+            try {
+                await dbAsync.run(`UPDATE users SET ${updates.join(', ')} WHERE id = ?`, values);
+            } catch (e: any) {
+                if (isUniqueViolation(e)) {
+                    throw new Error('Email already in use');
+                }
+                throw e;
+            }
         }
 
         // Revoke all existing JWTs on password change — stateless tokens carry no server state, so we

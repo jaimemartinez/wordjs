@@ -63,8 +63,12 @@ const IGNORE_PATTERNS = [
 // gateway/certs/, gateway/ssl/. Extension entries match the file SUFFIX and run independently, so any
 // *.db / *.sqlite / *.sqlite3 / *.key / *.pem is dropped wherever it sits. Secrets are generated
 // locally during install, never bundled. (DEPLOY-02)
-const SECRET_DIR_RE = /^(?:backend\/|gateway\/)?(?:data|certs)\/|^gateway\/ssl\//;
-const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.key', '.pem'];
+// Top-level runtime DB/cert/TLS dirs + EACH plugin's own data/ dir (plugins store runtime secrets at
+// rest there, e.g. mail-server's AES root key data/.mailenc — DEPLOY-MAILENC-02). The plugins/<x>/data/
+// match is specific (not a bare nested data/ anywhere), so it never drops legit source like
+// frontend/src/lib/data/.
+const SECRET_DIR_RE = /^(?:backend\/|gateway\/)?(?:data|certs)\/|^gateway\/ssl\/|(?:^|\/)plugins\/[^/]+\/data\//;
+const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.key', '.pem', '.mailenc'];
 
 const INSTALL_MD = `# WordJS — Install & Run (compiled release)
 

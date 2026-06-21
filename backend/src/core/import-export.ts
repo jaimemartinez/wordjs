@@ -459,8 +459,40 @@ async function importSite(data, options: Record<string, any> = {}) {
         const { getDbAsync, createPluginTable } = require('./../config/database');
         const db = getDbAsync();
 
+        // SECURITY (SQLI-01): table.name and column keys come verbatim from the (admin-supplied but
+        // potentially attacker-crafted) import bundle and are interpolated into CREATE/INSERT SQL. Without
+        // validation an import could write arbitrary rows into a core table (e.g. a backdoor admin in
+        // `users`) or inject SQL fragments through identifier names. Restrict to simple, unqualified
+        // identifiers and forbid the core tables — symmetric with the export, which never dumps core tables
+        // (CORE_TABLES) and only ever emits simple non-core table names, so legit round-trips are preserved.
+        const IMPORT_IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/;
+        const CORE_TABLES = [
+            'posts', 'post_meta',
+            'users', 'user_meta',
+            'comments', 'comment_meta',
+            'terms', 'term_taxonomy', 'term_relationships',
+            'options', 'links', 'notifications',
+            'sqlite_sequence', 'migrations'
+        ];
+
         for (const table of data.content.custom_tables) {
             try {
+                // Reject anything that is not a plain identifier (blocks dotted/schema-qualified names,
+                // SQL fragments, comments) or that targets a protected core table.
+                if (typeof table?.name !== 'string' || !IMPORT_IDENT_RE.test(table.name)) {
+                    throw new Error(`invalid table name (must be a simple identifier)`);
+                }
+                if (CORE_TABLES.includes(table.name.toLowerCase())) {
+                    throw new Error(`refusing to import into core table '${table.name}'`);
+                }
+                // Defense-in-depth: also refuse SQLite's reserved internal tables (sqlite_master,
+                // sqlite_sequence, sqlite_stat*, …). These pass the simple-identifier shape but are
+                // engine-internal; SQLite already rejects writes to them, so blocking here just turns a
+                // confusing per-table error into a clear refusal (and forbids accidental schema probing).
+                if (table.name.toLowerCase().startsWith('sqlite_')) {
+                    throw new Error(`refusing to import into reserved table '${table.name}'`);
+                }
+
                 // 1. Reconstruct Schema (Create Table)
                 if (table.schema && table.schema.columns) {
                     await createPluginTable(table.name, table.schema.columns);
@@ -471,6 +503,12 @@ async function importSite(data, options: Record<string, any> = {}) {
                 if (table.rows && table.rows.length > 0) {
                     for (const row of table.rows) {
                         const cols = Object.keys(row);
+                        // Every column identifier must also be a simple identifier before it is interpolated.
+                        for (const col of cols) {
+                            if (!IMPORT_IDENT_RE.test(col)) {
+                                throw new Error(`invalid column name '${col}' (must be a simple identifier)`);
+                            }
+                        }
                         const vals = Object.values(row);
                         const placeholders = cols.map(() => '?').join(',');
                         const sql = `INSERT INTO ${table.name} (${cols.join(',')}) VALUES (${placeholders})`;

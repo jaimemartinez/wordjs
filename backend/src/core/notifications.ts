@@ -193,8 +193,11 @@ class NotificationService {
      */
     async markAsRead(uuid, userId) {
         const now = new Date().toISOString();
+        // Owner-scoped (uuid is not a capability), BUT user_id=0 is a BROADCAST (sent to all via SSE) and
+        // any user may dismiss it — without OR user_id=0 the IDOR fix made broadcasts permanently
+        // unactionable (REG-1). A real per-user notification (user_id=X) still can't be touched by others.
         const result = await dbAsync.run(
-            'UPDATE notifications SET is_read = 1, read_at = ? WHERE uuid = ? AND user_id = ?',
+            'UPDATE notifications SET is_read = 1, read_at = ? WHERE uuid = ? AND (user_id = ? OR user_id = 0)',
             [now, uuid, userId]
         );
         return !!(result && result.changes);
@@ -217,7 +220,8 @@ class NotificationService {
      * their OWN notification. Returns true only when a row the user owns was actually deleted.
      */
     async deleteNotification(uuid, userId) {
-        const result = await dbAsync.run('DELETE FROM notifications WHERE uuid = ? AND user_id = ?', [uuid, userId]);
+        // Owner-scoped + broadcast (user_id=0) dismissable by any user — see markAsRead (REG-1).
+        const result = await dbAsync.run('DELETE FROM notifications WHERE uuid = ? AND (user_id = ? OR user_id = 0)', [uuid, userId]);
         return !!(result && result.changes);
     }
 
