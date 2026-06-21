@@ -94,7 +94,11 @@ async function ensureSSLCerts(config) {
             const selfsigned = require('selfsigned');
             logger.info('[Gateway] Generating self-signed SSL certificate...');
             const pems = await selfsigned.generate([{ name: 'commonName', value: 'localhost' }], { days: 365 });
-            fs.writeFileSync(SSL_AUTO_KEY, pems.private);
+            // SECURITY (H8): the private key must not be world-readable. writeFileSync's mode is
+            // ignored if the file already exists, so also chmod 0600 right after (best-effort —
+            // chmod is a no-op/throws on some Windows setups and must not crash boot).
+            fs.writeFileSync(SSL_AUTO_KEY, pems.private, { mode: 0o600 });
+            try { fs.chmodSync(SSL_AUTO_KEY, 0o600); } catch (e) { /* chmod unsupported (e.g. Windows) */ }
             fs.writeFileSync(SSL_AUTO_CERT, pems.cert);
             logger.info('[Gateway] Self-signed SSL certificate generated.');
         } catch (err) {
@@ -410,12 +414,17 @@ if (cluster.isPrimary) {
 
                     try {
                         const importedDir = path.resolve(__dirname, '../ssl/live/imported');
-                        if (!fs.existsSync(importedDir)) fs.mkdirSync(importedDir, { recursive: true });
+                        // SECURITY (H8): the dir holds a private key — keep it owner-only (0700).
+                        if (!fs.existsSync(importedDir)) fs.mkdirSync(importedDir, { recursive: true, mode: 0o700 });
 
                         const keyPath = path.join(importedDir, 'privkey.pem');
                         const certPath = path.join(importedDir, 'fullchain.pem');
 
-                        fs.writeFileSync(keyPath, key);
+                        // SECURITY (H8): write the private key owner-only. writeFileSync's mode is
+                        // ignored if the file already exists, so also chmod 0600 right after
+                        // (best-effort — chmod is a no-op/throws on some Windows setups).
+                        fs.writeFileSync(keyPath, key, { mode: 0o600 });
+                        try { fs.chmodSync(keyPath, 0o600); } catch (e) { /* chmod unsupported (e.g. Windows) */ }
                         fs.writeFileSync(certPath, cert);
 
                         // Update Config
