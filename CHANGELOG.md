@@ -19,6 +19,13 @@ boundary to a separate OS process, and ten adversarial red-team rounds' worth of
 
 ### Added
 
+- **Android-style per-plugin permissions (admin-controlled, default-deny).** A plugin's manifest now
+  only *requests* capabilities; an operator GRANTS each one per plugin via toggles in `/admin/plugins`,
+  and a bridge capability works only if it is BOTH declared in the manifest AND granted by the admin. A
+  separate **Network** grant can give an untrusted plugin outbound access (with an exfiltration warning);
+  operator-trusted plugins bypass grants (full access by design). New endpoint
+  `POST /plugins/:slug/permissions`, new option `plugin_grants`, and a one-time grandfather of
+  already-active plugins on upgrade so the switch to default-deny is non-breaking.
 - **Layered per-child memory caps.** A reactive host-side RSS poll that SIGKILLs a child over budget on
   every platform (Linux `/proc`, Windows `tasklist`, macOS `ps`), a loose `RLIMIT_AS` virtual backstop,
   and an **opt-in preventive cgroup v2 `MemoryMax`** on systemd Linux (`config.sandbox.useCgroupMemoryCap`,

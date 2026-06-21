@@ -32,6 +32,10 @@ before(() => {
             { scope: 'filesystem', access: 'admin' }
         ]
     }));
+    // Bridge permissions are now default-deny — an admin must GRANT what the manifest requests. Grant
+    // this (untrusted) test plugin's declared scopes so the bridge runs and we exercise its OWN
+    // constraints (secret-option/SQL/path scoping), which apply to untrusted-but-granted plugins.
+    require('../core/plugin-permissions')._setGrantsInMemory(SLUG, ['settings:admin', 'database:admin', 'filesystem:admin']);
 });
 after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } });
 
