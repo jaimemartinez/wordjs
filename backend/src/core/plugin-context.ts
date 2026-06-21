@@ -178,17 +178,27 @@ function hasPermission(scope, access = 'read') {
         return false;
     }
 
-    // Check if any permission matches scope and access
-    const allowed = manifest.permissions.some(p =>
+    // (1) The manifest must DECLARE the capability (the plugin's request).
+    const declared = manifest.permissions.some(p =>
         p.scope === scope &&
         (p.access === access || p.access === 'admin')
     );
-
-    if (!allowed) {
-        console.log(`[Security Block] Plugin '${pluginSlug}' attempted unauthorized: ${scope}:${access}`);
+    if (!declared) {
+        console.log(`[Security Block] Plugin '${pluginSlug}' attempted undeclared permission: ${scope}:${access}`);
+        return false;
     }
 
-    return allowed;
+    // (2) Operator-TRUSTED plugins get the full bridge by design — they bypass the per-permission grant.
+    try { if (require('./plugin-trust').isTrusted(pluginSlug)) return true; } catch { /* treat as untrusted */ }
+
+    // (3) DEFAULT-DENY: a declared permission is only a REQUEST. An admin must GRANT it per-plugin in the
+    // UI (Android-style). Enforced host-side (the bridge runs on the host, where grants are in memory).
+    let granted = false;
+    try { granted = require('./plugin-permissions').isGranted(pluginSlug, scope, access); } catch { granted = false; }
+    if (!granted) {
+        console.log(`[Security Block] Plugin '${pluginSlug}' permission ${scope}:${access} is declared but NOT granted by the admin (grant it in /admin/plugins).`);
+    }
+    return granted;
 }
 
 /**

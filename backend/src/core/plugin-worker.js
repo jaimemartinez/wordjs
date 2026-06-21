@@ -47,12 +47,17 @@ const { slug, entryFile, coreDir } = cfg;
 // toggle reloads the worker); secure-require also reads __WORDJS_PLUGIN_TRUSTED__ for its net branch.
 // Immutable: a plugin must not be able to self-promote to trusted (which would unlock raw sockets).
 Object.defineProperty(global, '__WORDJS_PLUGIN_TRUSTED__', { value: !!cfg.isTrusted, writable: false, configurable: false, enumerable: false });
-if (!global.__WORDJS_PLUGIN_TRUSTED__) {
+// Network grant (admin-controlled; orthogonal to and weaker than trust). Immutable like trust so a
+// plugin can't self-grant network. `netAllowed` opens ONLY the network gates (raw socket modules +
+// fetch/WebSocket/EventSource) — child_process/fs/vm/etc. stay blocked for any untrusted plugin.
+Object.defineProperty(global, '__WORDJS_PLUGIN_NETWORK__', { value: !!cfg.network, writable: false, configurable: false, enumerable: false });
+const netAllowed = global.__WORDJS_PLUGIN_TRUSTED__ || global.__WORDJS_PLUGIN_NETWORK__;
+if (!netAllowed) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
             Object.defineProperty(globalThis, name, {
                 configurable: true,
-                get() { throw new Error(`[sandbox] global '${name}' (network) is blocked for untrusted plugin '${slug}'`); }
+                get() { throw new Error(`[sandbox] global '${name}' (network) is blocked for plugin '${slug}' — grant Network access in the admin UI`); }
             });
         } catch { /* best-effort: if a global is non-configurable, leave it */ }
     }
@@ -82,6 +87,9 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
         'dns', 'dns/promises', 'worker_threads', 'vm', 'module', 'inspector', 'repl', 'test',
         'trace_events', 'cluster', 'async_hooks', 'v8'
     ]);
+    // A network-granted (but still untrusted) plugin may import() the network modules; everything
+    // else (child_process/fs/vm/...) stays blocked. Mirrors the secure-require CJS net allowance.
+    if (netAllowed) for (const m of ['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']) esmBlocked.delete(m);
     let esmGuardInstalled = false;
     try {
         const nodeModule = require('module');
