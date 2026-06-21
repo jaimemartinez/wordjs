@@ -2,7 +2,7 @@
 
 The Mail Server is a powerful plugin (`backend/plugins/mail-server`) that adds full MTA capabilities to WordJS: an inbound SMTP server, direct-to-MX outbound delivery, DKIM/SPF/DNSBL/Bayesian security, and a scheduled + retry delivery queue.
 
-> **Optional, operator-trusted, isolated.** The Mail Server is **not** required to run WordJS. Like every plugin it runs **isolated in a `worker_threads` isolate** and reaches core only through the `wordjs` capability bridge. Because it needs **raw sockets** (TCP to remote MX servers on port 25) plus secret options (the DKIM private key) and unscoped DB access, it must run in the **operator-trusted** tier — an untrusted plugin's outbound network is trapped. It ships in the first-party trusted defaults (`config.trustedSystemPlugins`), but trust is enforced server-side and an operator can still toggle it. Activate it only if you want a self-hosted mail server.
+> **Optional, operator-trusted, isolated.** The Mail Server is **not** required to run WordJS. Like every isolated plugin it runs in a **separate OS process** (`child_process.fork` of `plugin-worker.js`, not a `worker_threads` isolate) and reaches core only through the `wordjs` capability bridge, RPC'd over IPC and permission-checked on the host. Because it needs **raw sockets** (TCP to remote MX servers on port 25) plus secret options (the DKIM private key) and unscoped DB access, it must run in the **operator-trusted** tier — an untrusted plugin's outbound network is trapped. It ships in the first-party trusted defaults (`config.trustedSystemPlugins`), but trust is enforced server-side and an operator can still toggle it. Activate it only if you want a self-hosted mail server.
 
 ## Features
 
@@ -45,7 +45,7 @@ Per-user, per-rolling-hour caps guard against an authenticated account blasting 
 
 ## Developer API
 
-Other plugins send mail through the bridge-provided utility, which the Mail Server registers via `wordjs.provideMail(sendMail)`. The host installs a shim so callers can use `wordjs.mail(...)` (isolated plugins) or the legacy `global.wordjs_send_mail(...)`:
+Other plugins send mail through the bridge. **Sending** is the everyday path: `wordjs.mail(msg)` is an **allowlisted bridge call** (in `ALLOWED_BRIDGE_METHODS`) available to any plugin — it requires the `email`/`admin` capability and RPCs to the host, which forwards to whatever plugin is the registered mail provider. **Becoming** the host-wide mail provider is the privileged path: only the Mail Server does that, via `wordjs.provideMail(sendMail)` (the `register-mail-provider` IPC kind). That is **operator-trusted-only** — the trust gate is enforced both at the registration handler and re-enforced in `provideMail` itself, so an untrusted child cannot reach it via a generic `call`. The host installs a shim so callers can use `wordjs.mail(...)` (isolated plugins) or the legacy `global.wordjs_send_mail(...)`:
 
 ```javascript
 if (global.wordjs_send_mail) {

@@ -65,7 +65,7 @@ graph TB
 
 ## 🚦 Run Modes (SPLIT vs MONOLITH)
 
-The **same codebase** runs two ways, and you can switch **at any time** with no migration. Both modes share the same `backend/wordjs-config.json`, the same database, the same `uploads/`, `themes/`, and `plugins/`, the same secrets, and the same public origin (`https://localhost:3000`). They are **mutually exclusive** — both bind the public port (default **3000**) — so only one runs at a time. In **both** modes plugins stay **isolated** in worker threads exactly as described in the Plugin System section.
+The **same codebase** runs two ways, and you can switch **at any time** with no migration. Both modes share the same `backend/wordjs-config.json`, the same database, the same `uploads/`, `themes/`, and `plugins/`, the same secrets, and the same public origin (`https://localhost:3000`). They are **mutually exclusive** — both bind the public port (default **3000**) — so only one runs at a time. In **both** modes plugins stay **isolated** in separate OS processes (`child_process.fork`) exactly as described in the Plugin System section.
 
 ### SPLIT (default — 3 processes)
 
@@ -81,7 +81,7 @@ The gateway provides clustering, health-checks, load-balancing, an **mTLS** inte
 
 ### MONOLITH (1 process, 1 port)
 
-A single process on one port (`:3000`) via the repo-root entrypoint **`monolith.js`**. It mounts the **backend Express app** (with its isolated worker-thread plugins) **and** the **Next.js request handler** *in-process* — no loopback proxy, no Node `cluster`, no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**:
+A single process on one port (`:3000`) via the repo-root entrypoint **`monolith.js`**. It mounts the **backend Express app** (with its isolated child-process plugins) **and** the **Next.js request handler** *in-process* — no loopback proxy, no Node `cluster`, no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**:
 
 - `helmet`
 - `compression` (skipping SSE)
@@ -355,14 +355,37 @@ graph TB
     MainJS --> Cron
 ```
 
-### Isolated-only sandbox
+### Isolated sandbox (separate OS process)
 
-Plugin server code does **not** run in the host process. Every plugin executes in a `worker_threads` isolate and reaches the host only through the permission-checked `wordjs` capability bridge (`src/core/plugin-worker.js`). An acorn AST static scanner (fail-closed) runs at install. There are **two server-side trust tiers** (`src/core/plugin-trust.ts`), never self-declarable:
+Plugin server code marked `"isolated": true` does **not** run in the host process. The host (`src/core/plugin-isolate.ts`) forks each plugin into a **separate OS process** via `child_process.fork`, running the transport-agnostic sandbox entry `src/core/plugin-worker.js` (it also supports a legacy `worker_threads` fallback, normalized by an internal transport abstraction; a Worker-like adapter keeps the host's RPC code unchanged). Because the child is its own process with its own heap and event loop, a **crash, OOM, or heap escape is contained to the child and the host always survives** — a guarantee a worker thread, which shared the host heap/RSS, could not give. The legacy in-process execution path was removed.
 
-- **untrusted** (default, sandboxed): own DB tables, non-secret options, namespaced routes, **no outbound network** (`fetch`/`WebSocket`/`EventSource` trapped, raw net modules blocked).
-- **operator-trusted** (privileged): unscoped DB, secret options, absolute routes, mail provider, raw sockets.
+The plugin reaches core **only** through the injected `wordjs` capability bridge (`createPluginApi` in `src/core/plugin-api.ts`), whose calls are RPC'd to the host over the IPC channel (v8 structured clone, `serialization: 'advanced'`, so `Buffer`/`Date`/`Map` survive) and **permission-checked on the host** in the plugin's `AsyncLocalStorage` context (`src/core/plugin-context.ts`). The host's heap (secrets, DB handle, other plugins) is unreachable from the child; only a secret-free env allowlist crosses the boundary.
 
-Trust comes from `config.trustedSystemPlugins` (shipped defaults) or an admin toggle in the Plugins UI (persisted in the `trusted_plugins` option). Toggling trust **hot-reloads** the worker; unload/reload does a full teardown. The former `db-migration` plugin has moved into core at `src/core/db-admin/`.
+**Exact-method bridge allowlist.** `kind:'call'` IPC messages can reach only an exact allowlist of bridge methods (`options.get/set`, `db.all/get/run/createTable/getType`, `hooks.doAction`, `fs.read/write`, `mail`, `notify`, `adminMenu.add`, `cron.schedule`). Registration (hooks/filters, routes, shortcodes, mail provider, notify transport) flows **only** through its own dedicated IPC kinds — never a generic call — so privileged surface like `provideMail` can't be reached past its trust gate.
+
+There are **two server-side trust tiers** (`src/core/plugin-trust.ts`), never self-declarable:
+
+- **untrusted** (default, sandboxed): DB scoped to its own `wjp_<slug>_` tables, non-secret options only, routes namespaced under `/api/v1/plugin/<slug>`, **no outbound network** (`fetch`/`WebSocket`/`EventSource` trapped, raw `net`/`tls`/`dns`/`http(s)` denied). Cannot shim raw-HTML hooks (`wordjs_head`/`wordjs_footer`); the host auth JWT cookie (`wordjs_token`) is stripped from forwarded route requests, and dangerous response headers (`Set-Cookie`/CSP/HSTS/`Location`) are stripped from its replies. `fs` read/write is confined to its own directory.
+- **operator-trusted** (privileged): unscoped DB, secret options, absolute routes, mail provider, notification transport, raw sockets.
+
+Trust comes from `config.trustedSystemPlugins` (shipped defaults) or an admin toggle in the Plugins UI (persisted in the `trusted_plugins` option). Toggling trust **hot-reloads** the child (`reloadIsolatedPlugin`) so routes re-register (namespaced ↔ absolute) and host-capability gates re-evaluate without a server restart; unload/reload does a full teardown. The former `db-migration` plugin has moved into core at `src/core/db-admin/`.
+
+#### Defense in depth
+
+- **AST static scanner at install** (`validatePluginPermissions` in `src/core/plugins.ts`, via acorn): flags `eval`/`Function`/`exec`/`spawn`/`fork`, `require()`/`import()` of sensitive builtins (`child_process`/`worker_threads`/`vm`/…), dynamic `import()`, the `.constructor` Function build, and `process`/`global`/`require` aliasing. **Fail-closed** — an unparseable file is treated as a violation and blocked.
+- **In-child runtime guards.** `src/core/secure-require.ts` blocks `worker_threads`/`vm`/`module`/`inspector`/`cluster`/`async_hooks`/`v8`, `process.binding`/`_linkedBinding`/`getBuiltinModule`, native `.node` addons, and network modules. `src/core/io-guard.ts` blocks `fs` writes to plugin code and reads of `.env`/secret files **and** the live database files (any `.db`/`.sqlite`/`.sqlite3` file plus `-wal`/`-shm`/`-journal` sidecars, e.g. `data/wordjs.db`). These run inside the child too, so the plugin's own `fs`/`child_process` are sandboxed even there.
+- **DB SQL guard** (`assertSqlAllowed` in `src/core/plugin-api.ts`) for untrusted plugins: default-deny per-plugin `wjp_<slug>_` prefix attribution; rejects `ATTACH`/`DETACH`/`PRAGMA`, schema catalogs (`sqlite_master`/`information_schema`/`pg_catalog`), stacked statements, comma-joins, the Postgres `USING` clause, and `RETURNING`. Core tables (users/options/roles/sessions/…) are off-limits.
+- **DoS containment** (in `plugin-isolate.ts`): per-child bridge-call rate (token bucket) + concurrency cap (200 inflight), a global inbound IPC message-rate cap, registration caps (hooks/routes/shortcodes + per-hook + adminMenu), a 30 s RPC timeout that recycles a wedged child, inbound call-arg + outbound reply size caps, and `fs.write` per-write size + per-plugin disk quota.
+
+#### Memory caps (layered, per child)
+
+- **Preventive (opt-in, Linux):** a cgroup v2 `memory.max` via `systemd-run --user --scope -p MemoryMax=768M` (no root; `--scope` runs node as a direct child inheriting the IPC fd). Enabled with `config.sandbox.useCgroupMemoryCap=true`; it is probe-gated (validates spawn + IPC + clean teardown on the host before activating) and logs `[Sandbox] preventive cgroup memory cap ACTIVE`. **Default OFF** — auto-detect proved unreliable (some hosts/CI have `systemd-run` but no usable `--user` bus).
+- **Reactive fallback:** a host-side RSS poll (Linux `/proc`, Windows `tasklist`, macOS `ps`) that `SIGKILL`s a child over the **768 MB** budget. It runs on the host loop, so a child blocking its own loop can't evade it.
+- **Loose backstop:** a kernel `RLIMIT_AS` virtual ceiling (default **16384 MB**, override via `config.sandbox.addressSpaceCapMb`) applied through an `sh -c 'ulimit -v N; exec node …'` wrapper that preserves the IPC fd, plus `--max-old-space-size=256` for the JS heap. `RLIMIT_AS` can only be loose because V8's ~4 GB pointer-compression cage counts against it.
+
+Process separation means a child OOM/crash never takes down the host on any platform.
+
+> **Honest residual:** the child still has the full Node API and a normal OS uid — it is not yet capability-minimal at the syscall level. The preventive cap is cgroup (opt-in, Linux); a preventive cap on Windows (a Job Object) needs a native helper and is roadmap, as is deeper hardening (seccomp/landlock + dropped uid). No independent third-party audit yet. See **POSITIONING.md** section 2 for the canonical honest posture.
 
 ---
 

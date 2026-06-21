@@ -51,7 +51,7 @@ The database layer is a driver-abstraction over SQLite and PostgreSQL. Plugins a
 
 **Location:** `backend/src/core/db-admin/`
 
-Formerly the `db-migration` *plugin*, this is now **core infrastructure** (it manages the embedded PG process and runs schema migrations around the DB lifecycle, which cannot happen inside an isolated worker). It is wired in at boot via `register(app)`, mounts the API at `/api/v1/db-migration` (guarded by `authenticate` + `can('manage_options')`), and its admin menu item is a native Sidebar route — always available, never tied to plugin activation.
+Formerly the `db-migration` *plugin*, this is now **core infrastructure** (it manages the embedded PG process and runs schema migrations around the DB lifecycle, which cannot happen inside an isolated child process). It is wired in at boot via `register(app)`, mounts the API at `/api/v1/db-migration` (guarded by `authenticate` + `can('manage_options')`), and its admin menu item is a native Sidebar route — always available, never tied to plugin activation.
 
 ---
 
@@ -111,16 +111,16 @@ The central event bus that allows Core and Plugins to communicate through Action
 *   `doActionSync` / `applyFiltersSync`: Synchronous variants.
 
 ### Plugin-context scoping (isolation-aware)
-Each registered callback records the **plugin slug** that registered it (via `plugin-context.getCurrentPlugin()`). When a hook fires, a plugin's callback is re-entered **in that plugin's context** (`runWithContext`), so an isolated plugin's handler runs back in its worker/sandbox rather than detached as trusted core code.
+Each registered callback records the **plugin slug** that registered it (via `plugin-context.getCurrentPlugin()`). When a hook fires, a plugin's callback is re-entered **in that plugin's context** (`runWithContext`). For an **isolated** plugin the hook is a host-side *shim* installed by `plugin-isolate.ts`: it RPCs the call into the plugin's separate OS process (the real callback lives in the child), rather than running detached as trusted core code.
 
 *   `doActionForPlugin(hook, slug, ...args)`: fires a hook but invokes **only** the callbacks registered by `slug`. Used by Cron so a plugin-scheduled event can only trigger that plugin's own callbacks — a plugin cannot schedule a **core** hook with attacker-controlled args.
-*   **Sync paths skip isolate callbacks:** `doActionSync` / `applyFiltersSync` cannot `await` the worker RPC shim a plugin callback resolves to, so they skip plugin callbacks with a warning. Callers needing plugin participation must use the async `doAction` / `applyFilters`.
+*   **Sync paths skip isolate callbacks:** `doActionSync` / `applyFiltersSync` cannot `await` the cross-process RPC shim a plugin callback resolves to, so they skip plugin callbacks with a warning. Callers needing plugin participation must use the async `doAction` / `applyFilters`.
 
 ---
 
 ## 6. Analytics System 📊
 
-**Location:** `backend/src/models/Analytics.ts` + `backend/src/routes/analytics.js`
+**Location:** `backend/src/models/Analytics.ts` + `backend/src/routes/analytics.ts`
 
 A native, privacy-focused analytics engine built directly into WordJS to track traffic and engagement without external dependencies (like Google Analytics).
 
@@ -158,7 +158,7 @@ These WordPress-style core services back most CMS configuration.
 *   A wp-cron-style scheduler: `scheduleEvent / scheduleSingleEvent / unscheduleEvent / clearScheduledHook / nextScheduled`. Events are stored in the `cron` option keyed by timestamp; `startCron()` polls (default every 60s) and `runCron()` dispatches due events.
 *   **Concurrency-safe writes:** `runCron()` snapshots due events, then re-reads a **fresh** copy of the `cron` option before writing back, applying only its own deletes/reschedules — so a concurrent `scheduleEvent()` between read and write isn't clobbered.
 *   **Isolation-aware:** a plugin-scheduled event records its `pluginSlug` and is dispatched via `doActionForPlugin` (only that plugin's callbacks). Core-scheduled events (no slug) dispatch normally. Recurrence intervals are resolved at run time from the live `schedules` map, so custom schedules registered later still recur.
-*   Built-in jobs include `wordjs_version_check` (daily), `wordjs_db_maintenance` (weekly) and `wordjs_scheduled_backup` (driven by the `backup_schedule` / `backup_time` / `backup_day` options).
+*   Built-in jobs include `wordjs_version_check` (daily), `wordjs_db_maintenance` (weekly), `wordjs_scheduled_backup` (driven by the `backup_schedule` / `backup_time` / `backup_day` options) and `wordjs_cert_renewal` (twicedaily — the ACME/Let's Encrypt renewal check, which only renews when the cert is within its renewal window).
 
 ### Notifications
 

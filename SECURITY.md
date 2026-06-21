@@ -38,7 +38,7 @@ WordJS is built with a "Security First" architecture.
 - **Token-Gated Metrics**: The Prometheus endpoint `GET /metrics` is **disabled (returns 404) unless a scrape token is configured** (`config.metrics.token` / `METRICS_TOKEN`); scrapes must present `Authorization: Bearer <token>`, compared in constant time (mismatch → 401). It is never exposed without a token.
 
 ### Plugin Sandbox (Isolated-Only)
-- **Worker Isolation**: Every plugin runs in a `worker_threads` isolate and reaches core ONLY through the permission-checked `wordjs` capability bridge — it never touches raw `fs` / `child_process` / `dbAsync` / secrets.
+- **OS-Process Isolation**: Every plugin runs in a **separate OS process** (`child_process.fork`; a `worker_threads` transport remains as a fallback) and reaches core ONLY through the permission-checked `wordjs` capability bridge, RPC'd over IPC — it never touches raw `fs` / `child_process` / `dbAsync` / secrets. A crash, OOM, or heap escape is contained to the child and the host always survives. Bridge dispatch enforces an **exact method allowlist**; registration / mail-provider / notify-transport / route flow only through dedicated trust-gated IPC kinds.
 - **Two Trust Tiers (server-side, never self-declarable)**: *untrusted* (sandboxed: own DB tables, non-secret options, namespaced routes, **no outbound network**) vs *operator-trusted* (privileged: unscoped DB, secret options, absolute routes, mail provider, raw sockets). Trust comes from shipped defaults (`config.trustedSystemPlugins`) or an admin toggle (persisted in the `trusted_plugins` option) — a plugin can never grant itself trust.
 - **Outbound-Network Trap**: For untrusted plugins, `fetch`/`WebSocket`/`EventSource` are trapped and raw `net`/`tls`/`http`/`https`/`http2`/`dns`/`dgram` modules are blocked, so an uploaded plugin cannot exfiltrate data or perform SSRF.
 - **Secret Scrubbing**: Untrusted plugins receive `config/app` and `dbAsync` views with credential-like fields stripped and core credential/role/option tables (`users`, `options`, …) refused.
@@ -52,7 +52,7 @@ WordJS is built with a "Security First" architecture.
 ### Known Limitations
 - **CSP**: A strict Content Security Policy is **disabled** at the gateway (`helmet({ contentSecurityPolicy: false })`). Enabling it without breaking the admin UI is a documented follow-up.
 - **CSRF**: Protection is **origin/exact-match** based (Origin/Referer + pinned `X-Forwarded-Host`), not per-request CSRF tokens. Token-based CSRF is future work.
-- **Sandbox escapes**: Low-level escapes (`Module._load`, `process.binding`/`_linkedBinding`, native `.node` addons, deferred timers/event-emitter listeners) are blocked at runtime for plugin contexts (`process.dlopen` left open for native addons). The AST scanner does **not** inspect a plugin's `node_modules`, and there are no hard CPU quotas (memory is capped per isolate).
+- **Sandbox escapes**: Low-level escapes (`Module._load`, `process.binding`/`_linkedBinding`, native `.node` addons, deferred timers/event-emitter listeners) are blocked at runtime for plugin contexts (`process.dlopen` left open for native addons). The AST scanner does **not** inspect a plugin's `node_modules`, and there are no hard CPU quotas (memory is capped per child in layers — an opt-in preventive cgroup v2 cap on Linux, a cross-platform reactive RSS poll, and a loose `RLIMIT_AS` backstop).
 - **No independent audit yet**: see the posture note above.
 
 ## 🐛 Reporting a Vulnerability
