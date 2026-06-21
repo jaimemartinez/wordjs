@@ -13,6 +13,15 @@ let dbInstance: any = null;
 let SQL: any = null;
 let activeDbPath: string | null = null;
 
+// While a transaction() is open we SUPPRESS the per-write save() (StatementWrapper.run / exec) so the
+// on-disk file is never overwritten with mid-transaction (uncommitted) state. The transaction does a
+// single save() after COMMIT (and re-syncs to the last committed image on ROLLBACK). This makes the
+// on-disk image transition atomically between committed states even if the process crashes mid-tx.
+let inTransaction = false;
+// Promise-chain mutex so concurrent transaction() callers run strictly one-at-a-time on the single
+// shared in-memory connection (no interleaved BEGIN/COMMIT, mirrors the native driver's _txChain).
+let txChain: Promise<any> = Promise.resolve();
+
 async function init(options: any = {}) {
     SQL = await initSqlJs();
     activeDbPath = path.resolve(options.dbPath || config.dbPath);
@@ -74,7 +83,8 @@ class DatabaseWrapper {
 
     exec(sql) {
         this.sqlDb.run(sql);
-        save();
+        // Suppress the disk flush while a transaction is open — transaction() saves once after COMMIT.
+        if (!inTransaction) save();
     }
 
     // Helper methods to match dbAsync interface (and PostgresDriver)
@@ -93,11 +103,27 @@ class DatabaseWrapper {
 
     /**
      * Atomic transaction for the pure-JS (sql.js) fallback driver. sql.js is a single in-memory
-     * database, so BEGIN/COMMIT/ROLLBACK around fn is atomic. `tx` mirrors the get/all/run surface
-     * of the async drivers so callers (e.g. dbAsync.transaction) work identically on the fallback.
-     * Kept async for interface parity even though sql.js is synchronous.
+     * database, so BEGIN/COMMIT/ROLLBACK around fn is atomic IN MEMORY. `tx` mirrors the get/all/run
+     * surface of the async drivers so callers (e.g. dbAsync.transaction) work identically on the
+     * fallback. Kept async for interface parity even though sql.js is synchronous.
+     *
+     * DURABILITY: StatementWrapper.run() normally save()s (dumps the whole DB) after EVERY write, which
+     * would flush UNCOMMITTED state to disk mid-transaction — a crash before COMMIT could leave a
+     * partially-applied transaction on disk with no journal to undo it. We therefore set `inTransaction`
+     * so per-write save()s are suppressed, snapshot the last committed image at BEGIN, and write to disk
+     * exactly once after COMMIT. On ROLLBACK we restore the in-memory DB from the snapshot (so a failed
+     * tx leaves both memory AND disk at the prior committed state).
+     *
+     * CONCURRENCY: serialized via the module-level txChain promise-mutex so overlapping callers can't
+     * interleave BEGIN/COMMIT on the single shared connection.
      */
     async transaction(fn) {
+        const run = txChain.then(() => this._runTransaction(fn), () => this._runTransaction(fn));
+        txChain = run.catch(() => { });
+        return run;
+    }
+
+    async _runTransaction(fn) {
         const tx = {
             get: async (sql, params = []) => this.get(sql, params),
             all: async (sql, params = []) => this.all(sql, params),
@@ -105,19 +131,37 @@ class DatabaseWrapper {
             exec: async (sql) => { this.exec(sql); }
         };
 
+        // Snapshot the last committed in-memory image so ROLLBACK can restore it deterministically
+        // (rather than relying on sql.js ROLLBACK + a late re-dump of possibly-mid-state memory).
+        const snapshot = this.sqlDb.export();
+        inTransaction = true; // suppress per-write save() for the duration of the unit of work
         this.sqlDb.run('BEGIN');
         try {
             const result = await fn(tx);
             this.sqlDb.run('COMMIT');
-            save(); // persist the committed state to disk (StatementWrapper.run saves per-write too)
+            inTransaction = false;
+            save(); // single durable flush of the COMMITTED state to disk
             return result;
         } catch (err) {
             try {
                 this.sqlDb.run('ROLLBACK');
-                save(); // re-sync disk to the reverted in-memory state (per-write save() left a partial write on disk)
             } catch (rbErr: any) {
                 console.error('❌ SQLite (legacy) ROLLBACK failed:', rbErr && rbErr.message);
             }
+            // Restore the exact pre-transaction committed image into the live handle, replacing any
+            // mid-transaction in-memory state, then re-sync disk to it. Closing the old handle frees
+            // the WASM memory it held.
+            try {
+                const restored = new SQL.Database(snapshot);
+                restored.run('PRAGMA foreign_keys = ON;');
+                try { this.sqlDb.close(); } catch { /* ignore */ }
+                this.sqlDb = restored;
+                dbInstance = restored;
+            } catch (restoreErr: any) {
+                console.error('❌ SQLite (legacy) snapshot restore failed:', restoreErr && restoreErr.message);
+            }
+            inTransaction = false;
+            save(); // disk now reflects the reverted (last committed) state
             throw err;
         }
     }
@@ -150,7 +194,9 @@ class StatementWrapper {
         const lastId = this.sqlDb.exec('SELECT last_insert_rowid() as id')[0];
         const changes = this.sqlDb.exec('SELECT changes() as changes')[0];
 
-        save(); // Critical: Save after every write
+        // Save after every write — EXCEPT inside an open transaction(), where mid-transaction
+        // (uncommitted) state must not hit disk. transaction() does a single save() after COMMIT.
+        if (!inTransaction) save();
         return {
             lastInsertRowid: lastId?.values?.[0]?.[0] || 0,
             lastID: lastId?.values?.[0]?.[0] || 0, // Alias for compatibility with refactored models

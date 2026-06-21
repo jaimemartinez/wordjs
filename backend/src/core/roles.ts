@@ -62,7 +62,10 @@ let _rolesCache: Record<string, any> | null = null;
 // to the TTL (+ one request) and self-heals a missed invalidation, WITHOUT slowing the sync fast path
 // (we never block getRoles(); the refresh applies to subsequent calls). The pub/sub fast path still
 // invalidates instantly when available.
-const ROLES_CACHE_TTL_MS = 30_000; // 30s
+// Kept short so a missed cross-node revocation (the unsafe, fail-OPEN direction for authorization)
+// is corrected quickly. The dedupe is handled by the in-flight flag, not by pre-bumping the stamp,
+// so a FAILED background reload does NOT extend staleness for another full TTL.
+const ROLES_CACHE_TTL_MS = 10_000; // 10s
 let _rolesCacheLoadedAt = 0;
 let _rolesRefreshInFlight = false;
 
@@ -96,10 +99,12 @@ async function loadRoles() {
 function maybeRefreshStaleRoles() {
     if (_rolesRefreshInFlight) return;
     if (Date.now() - _rolesCacheLoadedAt < ROLES_CACHE_TTL_MS) return;
+    // The in-flight flag alone dedupes concurrent refreshes — do NOT pre-bump _rolesCacheLoadedAt.
+    // loadRoles() advances the stamp ONLY on a successful read (line in loadRoles). If this background
+    // reload FAILS, the stamp stays old so the very next sync access re-attempts the refresh
+    // immediately, instead of believing the cache is fresh and extending stale (over-broad)
+    // capabilities for another full TTL (a fail-open authorization window).
     _rolesRefreshInFlight = true;
-    // Bump the stamp NOW so we don't queue another refresh while this one is in flight even if it's
-    // slow; loadRoles() will stamp again with the real load time on completion.
-    _rolesCacheLoadedAt = Date.now();
     Promise.resolve()
         .then(() => loadRoles())
         .catch((e: any) => console.warn('[roles] background TTL refresh failed:', e && e.message))
