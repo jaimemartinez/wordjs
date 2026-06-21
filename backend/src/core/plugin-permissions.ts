@@ -12,8 +12,8 @@
  * DB is up. The child can't read the DB, so the NETWORK grant is pushed into each isolate's cfg at
  * spawn (→ global.__WORDJS_PLUGIN_NETWORK__); bridge-scope grants are enforced host-side per call.
  *
- * Trust is orthogonal and higher: an operator-TRUSTED plugin (plugin-trust) bypasses these grants
- * entirely (full bridge + network), the same way it bypasses DB scoping and io-guard.
+ * There is NO trust tier: every plugin runs in the child_process sandbox and gets ONLY what an admin
+ * has granted (default-deny). No plugin bypasses DB scoping, io-guard, or these grants.
  */
 
 // slug -> set of granted tokens: "scope:access" (e.g. "database:write") and/or the literal "network".

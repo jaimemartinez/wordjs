@@ -5,9 +5,10 @@
 > `wordjs` capability bridge. The original proposal text is kept below (sections 1–7) for the threat
 > model and the rationale for *why* a hard, host-owned-capability boundary was chosen; the status
 > banner that follows describes what actually shipped, and where it differs from the proposal (notably:
-> there is **no in-process tier** — trusted plugins are isolated too — and the as-built isolate
-> primitive is `child_process`, which gives true OS-level isolation rather than the heap-only boundary
-> of the originally-shipped `worker_threads` runtime).
+> there is **no in-process tier and no "trusted" tier at all** — *every* plugin is isolated and
+> capabilities are admin-granted per plugin, default-deny — and the as-built isolate primitive is
+> `child_process`, which gives true OS-level isolation rather than the heap-only boundary of the
+> originally-shipped `worker_threads` runtime).
 
 > **Status update (2026-06-20): IMPLEMENTED — isolated-only (mandatory), cross-platform, OS-process.**
 > The `wordjs` capability bridge (`src/core/plugin-api.ts`) and the isolate runtime
@@ -49,40 +50,42 @@
 > worker. (This also fixed a latent bug in the old in-process carousel shortcode, which read options
 > without awaiting.)
 >
-> **Two trust tiers — SERVER-SIDE, never self-declarable (`src/core/plugin-trust.ts`):**
-> - **Untrusted** (the default for anything uploaded): sandboxed — DB default-denied to its own
->   `wjp_<slug>_` tables only, enforced host-side by `assertSqlAllowed` (per-plugin prefix attribution;
->   ATTACH/DETACH/PRAGMA, schema catalogs `sqlite_master`/`information_schema`/`pg_catalog`, stacked
->   statements, comma-joins, the Postgres `USING` clause and `RETURNING` are all rejected; core tables
->   `users`/`options`/`sessions`/… off-limits), non-secret options only, routes namespaced under
->   `/api/v1/plugin/<slug>/*`, and **no outbound network**. The raw socket modules
+> **One model — capabilities admin-granted per plugin, default-deny (`src/core/plugin-permissions.ts`):**
+> There is **no trust tier**. Every plugin is sandboxed identically; the manifest *requests* capabilities,
+> an admin *grants* each one in `/admin/plugins` (persisted in the `plugin_grants` option, mirrored in
+> memory), and a bridge call works only if the capability is BOTH declared AND granted.
+> - **Always enforced, for every plugin:** DB default-denied to its own `wjp_<slug>_` tables only,
+>   enforced host-side by `assertSqlAllowed` (per-plugin prefix attribution; ATTACH/DETACH/PRAGMA, schema
+>   catalogs `sqlite_master`/`information_schema`/`pg_catalog`, stacked statements, comma-joins, the
+>   Postgres `USING` clause and `RETURNING` are all rejected; core tables `users`/`options`/`sessions`/…
+>   off-limits). Non-secret options only. Routes always namespaced under `/api/v1/plugin/<slug>/*`. It
+>   cannot shim the raw-HTML output hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`); the host
+>   auth JWT cookie (`wordjs_token`) is stripped from forwarded route requests and dangerous response
+>   headers (Set-Cookie/CSP/HSTS/Location) are stripped from its replies; fs read/write is confined to its
+>   own dir. By default **no outbound network** — the raw socket modules
 >   (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied by secure-require, and the
->   binding-backed globals `fetch`/`WebSocket`/`EventSource` — which the module loader can't see — are
->   trapped as throwing getters in the sandbox entry (`plugin-worker.js`). It also cannot shim the raw-
->   HTML output hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`); the host auth JWT cookie
->   (`wordjs_token`) is stripped from forwarded route requests and dangerous response headers
->   (Set-Cookie/CSP/HSTS/Location) are stripped from its replies; fs read/write is confined to its own
->   dir (not the shared uploads).
-> - **Operator-trusted** (privileged bridge tier, gated on the trust registry, NOT a manifest perm):
->   unscoped `db.*` + `db.createTable` on core tables, `db.getType()`, read/write of secret-named
->   options, `http.route` `opts.absolute` (keep original paths, no frontend churn), `opts.multipart`
->   (host parses the upload — capped at `uploads.maxFileSize` — and forwards file metadata),
->   `provideMail(handler)`, `notify.registerTransport(name, handler)`, and raw sockets (so the SMTP
->   server isolates fine).
+>   binding-backed globals `fetch`/`WebSocket`/`EventSource` are trapped as throwing getters in the
+>   sandbox entry (`plugin-worker.js`).
+> - **Grantable capabilities** (admin opt-in, on top of the above): `database`/`settings`/`filesystem`,
+>   `users:read` (the safe user projection via `wordjs.users.*` — never `user_pass`), `email:provider`
+>   (`provideMail`), `notifications:provider` (`notify.registerTransport`), and **`network`** (opens raw
+>   sockets + `fetch`/`WebSocket`, with an exfiltration warning). `http.route` `opts.multipart` (host
+>   parses the upload, capped at `uploads.maxFileSize`) is available within the namespaced route.
+> - **Removed for every plugin (no grant unlocks them):** shell/`child_process`, native addons, unscoped
+>   / core-table DB, `db.createTable` on core tables, secret-named options, absolute routes
+>   (`opts.absolute`), raw cookie jar / verbatim Set-Cookie/CSP/HSTS/Location, and raw-HTML hooks.
 >
-> **How trust is granted:** a plugin is trusted if EITHER it is a shipped first-party default
-> (`config.trustedSystemPlugins`, currently `conference-manager` + `mail-server`) OR an admin flips its
-> trust toggle in the Plugins UI. Admin-granted trust is persisted server-side in the `trusted_plugins`
-> option and mirrored in memory so the bridge gates can read it synchronously. A plugin can **never**
-> self-declare trust. Flipping the toggle (`POST /plugins/:slug/trust`, admin-only) **hot-reloads the
-> worker** (`reloadIsolatedPlugin`) so its routes re-mount (namespaced ↔ absolute), its network policy
-> re-resolves, and the host-capability gates re-evaluate — no server restart. Shipped defaults can't be
-> toggled off via the UI.
+> **First-party plugins are pre-granted, not privileged:** `mail-server`, `conference-manager`, and the
+> galleries are seeded with grants for the capabilities they declare so they work out of the box, but they
+> run in the same sandbox under the same default-deny checks as anything uploaded. An admin can revoke any
+> grant; changing grants (`POST /plugins/:slug/permissions`, admin-only) **hot-reloads the worker**
+> (`reloadIsolatedPlugin`) so its network policy re-resolves and the host-capability gates re-evaluate —
+> no server restart. A plugin can **never** grant itself anything; the manifest only requests.
 >
-> **AST static scanner (`acorn`, fail-closed):** every plugin is scanned at install/activate and again
+> **AST static scanner (`acorn`, fail-closed):** **every** plugin is scanned at install/activate and again
 > on **every boot** (re-validated to catch code poisoning); a parse failure or a dangerous call blocks
-> activation. Declaring `system:admin` in a manifest does NOT skip the scan — the skip is reserved for
-> plugins listed in `config.trustedSystemPlugins`.
+> activation. There is **no scan-skip for any plugin** — the `system:admin` skip and the trusted-slug
+> exemption were removed.
 >
 > **Full teardown on unload/reload:** `unloadIsolatedPlugin` terminates the worker AND runs a teardown
 > that removes every host-side registration the plugin made — Express route layers are spliced out,
@@ -98,8 +101,8 @@
 > | card-gallery | **isolated** | JSON routes + options + admin menu (frontend → namespaced path) |
 > | photo-carousel | **isolated** | routes + options + **async shortcode** (`[carousel]`) |
 > | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
-> | conference-manager | **isolated** | trusted: privileged DB + `db.getType` + absolute routes + portal cookies |
-> | mail-server | **isolated** | trusted: SMTP server on :25 + MX delivery in the worker; Email model → `db`, DKIM via secret options, multipart upload, `provideMail` + `notify.registerTransport` |
+> | conference-manager | **isolated** | own-table DB + `db.getType`, namespaced routes (pre-granted its declared caps) |
+> | mail-server | **isolated** | SMTP server on :25 + MX delivery in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
 > | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (manages the embedded PostgreSQL *server process* via `child_process.execSync` + runs schema migrations at boot). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
 >
 > **Net (final): the sandbox is isolated-only.** Every plugin runs in its own OS process; the legacy
@@ -107,9 +110,10 @@
 > `deactivatePlugin` terminates the child). All feature plugins are isolated (verified in-browser
 > serving real data — incl. the mail server's inbox and its SMTP listener on :25). db-migration is no
 > longer a plugin at all: its backend moved into core (it manages the database server itself) and its
-> admin UI is a native frontend route reached from a permanent core Sidebar item. Uploaded/untrusted
-> third-party plugins isolate by default and are hard-blocked from core tables/secrets regardless of
-> the permissions they request; trusted plugins get the privileged bridge capabilities.
+> admin UI is a native frontend route reached from a permanent core Sidebar item. **Every** plugin —
+> first-party or uploaded — isolates and is hard-blocked from core tables/secrets regardless of the
+> permissions it requests; capabilities are admin-granted per plugin (default-deny), with first-party
+> plugins merely pre-granted their declared set. There is no privileged tier.
 > (The host-side guards — io-guard / secure-require / appRegistry anchoring — stay: bridge calls run in
 > plugin context on the host, so they're still load-bearing.)
 >
@@ -155,16 +159,17 @@ boundary stops (syscall confinement = roadmap).
 grant, cannot execute shell commands, cannot read other plugins' or core secrets, and cannot crash
 or hang the host — *by construction*, not by enumeration of blocked tricks.
 
-**Trust tiers (as built):** the proposal originally split *untrusted = isolated* vs *trusted =
-in-process*. **What shipped is different and stronger: BOTH tiers are isolated** — the difference is
-purely the *capabilities the host grants over the bridge*, not the runtime. There is no in-process tier.
-A trusted plugin (e.g. mail-server) runs in its own OS process and gets raw sockets, secret options and
-unscoped DB *because the host bridge allows it for trusted slugs* — not because it escapes the isolate.
+**Model (as built):** the proposal originally split *untrusted = isolated* vs *trusted = in-process*, and
+an interim build kept two server-side trust tiers (both isolated). **What ships now is simpler and
+stronger: there is one model and no trust tier.** Every plugin runs in its own OS process behind the
+bridge, and the *capabilities the host grants over the bridge* are **admin-granted per plugin,
+default-deny** (Android-style). No plugin gets unscoped DB, secret options, absolute routes, shell, or
+native addons — those were removed for everyone; the only thing that distinguishes plugins is which of the
+*safe* grantable capabilities an admin has turned on.
 
-| Tier | Examples (today) | Runtime | Capabilities |
+| Model | Examples (today) | Runtime | Capabilities |
 |---|---|---|---|
-| **Operator-trusted** | conference-manager, mail-server (shipped defaults) + any admin-toggled plugin | **isolated** (OS process, `child_process.fork`) | bridge + privileged grants: unscoped DB/core tables, secret options, absolute routes, multipart, `provideMail`, `notify.registerTransport`, raw sockets |
-| **Untrusted / third-party** | marketplace / uploaded plugins | **isolated** (OS process, `child_process.fork`) | bridge only: own DB tables, non-secret options, namespaced routes, NO outbound network |
+| **Single sandbox, per-plugin grants** | every plugin — first-party (conference-manager, mail-server, galleries — pre-granted) and uploaded alike | **isolated** (OS process, `child_process.fork`) | bridge only, default-deny: own `wjp_<slug>_` DB tables, non-secret options, namespaced routes, safe `users:read`/`site` bridges, and admin-grantable `network` / `email:provider` / `notifications:provider`. No unscoped DB, secret options, absolute routes, shell, or native addons — for anyone. |
 
 ---
 
@@ -260,30 +265,35 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
 
 ## 4. Raw-capability plugins (UPDATE — they isolate too)
 > The proposal assumed raw-capability plugins couldn't be isolated and would stay in-process. **That's
-> not how it shipped.** A separate OS process still has a full Node runtime, so the host can simply
-> *grant* raw capabilities to trusted slugs instead of exempting them from isolation. So:
+> not how it shipped, and the model has since simplified further.** A separate OS process still has a full
+> Node runtime, so the host *grants* the *safe* high-level capabilities a plugin needs over the bridge —
+> per plugin, admin-controlled, default-deny — instead of exempting anything from isolation or handing out
+> raw OS primitives. So:
 - **mail-server**: runs its SMTP server on port 25 and does outbound MX delivery **inside its own OS
-  process**. secure-require allows raw `net`/`tls`/`dns` for operator-trusted slugs (trust resolved
-  host-side at spawn and passed in the child's config argument — `JSON.parse(process.argv[2]).isTrusted`,
-  surfaced in-child as the frozen `global.__WORDJS_PLUGIN_TRUSTED__` that secure-require's net branch
-  reads, re-resolved on the trust toggle via `reloadIsolatedPlugin`), and the bridge grants secret options (DKIM key), multipart
-  upload, `provideMail`, and `notify.registerTransport`. Fully isolated.
-- **conference-manager**: trusted → unscoped DB + `db.getType()` + absolute routes (portal cookies),
-  all over the bridge. Isolated.
+  process**. secure-require opens raw `net`/`tls`/`dns` only when the **`network`** capability is granted
+  (resolved host-side at spawn and passed in the child's config argument, surfaced in-child as the frozen
+  `global.__WORDJS_PLUGIN_NETWORK__` that secure-require's net branch reads, re-resolved on a grant change
+  via `reloadIsolatedPlugin`). The DKIM key lives in the plugin's own DB/files (not a core secret option),
+  and the bridge grants multipart upload, `provideMail` (`email:provider`), and `notify.registerTransport`
+  (`notifications:provider`). It is pre-granted these, but runs fully sandboxed.
+- **conference-manager**: pre-granted `database` (its own `wjp_conference-manager_` tables) + `db.getType()`,
+  namespaced routes — all over the bridge, no unscoped DB or absolute routes (those no longer exist).
+  Isolated.
 - **db-migration**: was **de-pluginized** — it manages the database *server process* and runs at boot,
   which is core infrastructure, not a feature plugin. Moved to `backend/src/core/db-admin/`; it is no
   longer a plugin and is not isolated (it's core).
-- Any plugin needing native addons, raw sockets, or child processes is an **operator-trusted** plugin:
-  isolated for crash/heap containment, but the host grants it the raw capability — the correct trust
-  model (you audit what you ship / what an admin trusts; you sandbox what users upload).
+- There is no longer any plugin path to native addons, raw sockets at the OS level (only the
+  host-mediated `network` grant), or child processes — those raw capabilities were removed entirely. A
+  plugin that genuinely needs that level of OS access is not a sandboxed plugin and belongs in core (as
+  db-migration did).
 
 ---
 
 ## 5. Migration path — COMPLETED
 The phased migration the proposal laid out has all landed; for the record:
 1. ✅ Shipped the `wordjs` bridge API (`src/core/plugin-api.ts`), passed as `init(wordjs)`.
-2. ✅ Ported the bundled plugins' backends to the bridge (galleries, hello-world, test-schema, and the
-   trusted ones).
+2. ✅ Ported the bundled plugins' backends to the bridge (galleries, hello-world, test-schema, plus the
+   higher-capability mail-server and conference-manager — all sandboxed, pre-granted their declared caps).
 3. ✅ Added the isolate runner (`src/core/plugin-isolate.ts` + `plugin-worker.js`), first on
    `worker_threads` (chosen over `isolated-vm` for zero native deps / cross-platform), then **moved to
    `child_process.fork`** for true OS-process isolation (the host always survives a child crash/OOM); the
@@ -320,12 +330,14 @@ cross-platform RSS poll).
 ## 7. Cost & non-goals
 - **Cost (actual):** the bridge API + the `child_process` OS-process isolate runner (+ layered memory
   caps) + porting the bundled plugins + the async-handler / `doShortcodeAsync` convention — all landed.
-- **Non-goals:** this does not make *trusted* plugins safe (they're trusted by definition); it does not
-  sandbox the frontend bundle (plugin React components are build-time assets, bundled and reviewed as
-  before); it does not replace code review of first-party plugins; and a separate OS process is **not yet**
-  syscall-confinement (seccomp/landlock + dropped uid are roadmap — see the residual-risk note in the
-  status banner).
-- **Net:** moves untrusted-plugin security from "we blocked every trick we found" (soft, enumerated)
+- **Non-goals:** a granted capability is a granted capability — if an admin grants `network`, the plugin
+  can reach the network (that's the point); the model contains *ungranted* capability, not the
+  consequences of what was deliberately granted. It does not sandbox the frontend bundle (plugin React
+  components are build-time assets, bundled and reviewed as before); it does not replace code review of
+  first-party plugins (they are pre-granted, so review them as you would any code you ship); and a separate
+  OS process is **not yet** syscall-confinement (seccomp/landlock + dropped uid are roadmap — see the
+  residual-risk note in the status banner).
+- **Net:** moves plugin security from "we blocked every trick we found" (soft, enumerated)
   toward "core capabilities are reached only through a permission-checked bridge, the plugin runs in a
   separate OS process (own heap/rss, host survives any crash/OOM, layered memory caps), and raw fs/net are
   proxied/trapped in the child" — a hard process boundary plus guarded capabilities, with syscall-level

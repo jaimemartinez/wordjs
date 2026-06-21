@@ -70,7 +70,6 @@ Thumbs.db
 .idea/
 
 # Client-Specific Content (Restricted)
-backend/plugins/conference-manager/
 backend/themes/vidaParaTodos/
 
 

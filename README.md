@@ -40,7 +40,7 @@ process, reachable only through a permission-checked capability bridge.
   (structured-clone IPC, no live host references) and **permission-checked on the host side**
   under the plugin's context. Bridge dispatch enforces an **exact method allowlist**; privileged
   surfaces (mail provider, notification transport, route/hook registration) flow through dedicated
-  IPC kinds gated by trust, never a generic call. Includes **layered per-child memory caps**
+  IPC kinds gated by per-plugin capability grants, never a generic call. Includes **layered per-child memory caps**
   (see below), RPC timeouts with wedged-child recycling, and concurrent-call backpressure. A
   `worker_threads` transport remains as a cross-platform fallback; the same guards run either way.
   (This is real OS-process isolation, but not yet capability-minimal at the syscall level — see
@@ -48,21 +48,26 @@ process, reachable only through a permission-checked capability bridge.
 - **AST static scanner.** Before activation, each plugin's `.js/.cjs/.mjs` files are parsed
   with `acorn` and walked for dangerous constructs — `eval`, `Function`, `exec`/`spawn`,
   dynamic/computed `require`, sensitive core modules, and forbidden `process` access. The
-  scan is **fail-closed** (an unparseable file is a violation). Declaring `system:admin` in
-  your own manifest does **not** skip the scan; only plugins an operator explicitly trusts
-  (`trustedSystemPlugins`, or the admin trust toggle) are exempt.
+  scan is **fail-closed** (an unparseable file is a violation). It runs on **every** plugin —
+  there is no scan-skip and no "trusted" exemption.
 - **In-child runtime guards.** Inside the sandboxed process, `fs`, `child_process`, and the
   network modules are wrapped in permission-checking proxies that resist obfuscation (they also
   block `worker_threads`/`vm`/`module`/`inspector`, `process.binding`, native `.node` addons,
-  deferred timers, and event listeners). For untrusted plugins the binding-backed globals
-  (`fetch`/`WebSocket`/`EventSource`) are trapped, so they get **no outbound network**. An
-  `io-guard` confines fs reads/writes to the plugin's own dir and blocks reads of `.env`/secret
-  files and the database files. Plugins receive a **secret-scrubbed** view of config and a
-  **table-scoped** DB handle (untrusted plugins are confined to their own `wjp_<slug>_` tables
-  and refused raw SQL against core credential/role/option tables).
-- **Mandatory permission model.** Plugins declare scoped permissions in `manifest.json`
-  (filesystem, network, database, settings, etc.) with human-readable reasons; the sandbox
-  enforces them at runtime. Trust is **server-side and never self-declarable**.
+  deferred timers, and event listeners). By default the binding-backed globals
+  (`fetch`/`WebSocket`/`EventSource`) and raw sockets are trapped, so a plugin gets **no outbound
+  network** unless an admin grants it the `network` capability. An `io-guard` confines fs
+  reads/writes to the plugin's own dir and blocks reads of `.env`/secret files and the database
+  files. Every plugin receives a **secret-scrubbed** view of config and a **table-scoped** DB
+  handle, confined to its own `wjp_<slug>_` tables and refused raw SQL against core
+  credential/role/option tables. User/site data comes via the safe `wordjs.users.*` (projection
+  only, never `user_pass`) and `wordjs.site.*` bridges.
+- **Android-style permission model — one tier, no bypass.** Plugins *request* scoped capabilities
+  in `manifest.json` (filesystem, network, database, settings, `users:read`, `email:provider`,
+  `notifications:provider`, etc.) with human-readable reasons; an **admin grants each one per
+  plugin** (default-deny) in `/admin/plugins`, and a bridge call works only if it is BOTH declared
+  AND granted. **Every** plugin is sandboxed — first-party plugins are pre-granted their declared
+  capabilities but are **not** privileged. There is no "trusted" tier; shell, native addons,
+  unscoped/core-table DB, and secret options were removed for all plugins.
 - **Layered per-child memory caps.** Process separation already means a child OOM can't crash
   the host on any platform. On top of that: an **opt-in preventive cgroup v2 `MemoryMax`** per
   child on systemd Linux (`systemd-run --user --scope`, no root, probe-gated; enable via
@@ -125,9 +130,10 @@ process, reachable only through a permission-checked capability bridge.
 - **Pluggable storage**: SQLite via `sql.js` (WASM, "legacy") or `better-sqlite3` (native),
   and PostgreSQL via `pg` / `embedded-postgres` (beta), with a migration system to move
   between them.
-- **Native mail server** (shipped as an optional, isolated, operator-trusted plugin):
-  inbound SMTP (`smtp-server`), direct-MX outbound delivery (`nodemailer`), DKIM signing,
-  and attachment handling.
+- **Native mail server** (shipped as an optional, fully sandboxed first-party plugin,
+  pre-granted the `network`/`email:provider` capabilities it needs): inbound SMTP
+  (`smtp-server`), direct-MX outbound delivery (`nodemailer`), DKIM signing, and attachment
+  handling.
 
 ---
 
@@ -191,14 +197,14 @@ Guides live in [`documentation/`](documentation/):
 - 🖥️ **[Frontend Guide](documentation/frontend.md)**
 - 🎨 **[Themes Guide](documentation/themes.md)**
 - 🔌 **[Plugin Tutorial](documentation/plugins.md)** — build an isolated plugin against the `wordjs` bridge.
-- 🧩 **[Plugins Reference](documentation/plugins-reference.md)** — the bundled plugins and their trust tiers.
-- 🧱 **[Plugin Isolation](documentation/plugin-isolation-proposal.md)** — the OS-process sandbox + trust model (implemented).
+- 🧩 **[Plugins Reference](documentation/plugins-reference.md)** — the bundled plugins and their capabilities.
+- 🧱 **[Plugin Isolation](documentation/plugin-isolation-proposal.md)** — the OS-process sandbox + per-plugin capability grants (implemented).
 - ✉️ **[Mail Server Guide](documentation/mail-server.md)**
 - 🗄️ **[Database Guide](documentation/database.md)**
 - 📥 **[Migrating from WordPress](documentation/wordpress-import.md)** — import a WordPress WXR export (authors, terms, posts/pages, comments).
 - 🚀 **[Deployment Guide](documentation/deployment.md)** — incl. **Releases & distribution** (downloadable pre-compiled bundles).
 - 🔐 **[Security Policy](SECURITY.md)** — vulnerability reporting and active defenses.
-- 🛡️ **[Security Architecture](documentation/security.md)** — deeper defenses reference (sandbox, trust model, CSRF, JWT revocation).
+- 🛡️ **[Security Architecture](documentation/security.md)** — deeper defenses reference (sandbox, capability grants, CSRF, JWT revocation).
 - 🔔 **[Notifications System](documentation/notifications.md)**
 - 🧭 **[Product Positioning](POSITIONING.md)** — where WordJS is headed and why.
 - 📡 **API reference**: Swagger/OpenAPI at `http://localhost:4000/api/v1/docs` (admin only).
@@ -332,7 +338,7 @@ exposing it to the internet:**
   endpoints while the default is in place),
 - review the [Security Policy](SECURITY.md) for reporting and current defenses.
 
-The plugin sandbox now runs each untrusted plugin in a **separate OS process** with
+The plugin sandbox runs **every** plugin in a **separate OS process** with
 defense-in-depth capability guards — a kernel-enforced boundary that contains a child crash,
 OOM, or heap escape to that one process. The remaining hardening is honest: the child still
 has the full Node API and a normal OS uid, so it is **not yet capability-minimal at the

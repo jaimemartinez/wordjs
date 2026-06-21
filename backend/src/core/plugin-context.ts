@@ -188,11 +188,9 @@ function hasPermission(scope, access = 'read') {
         return false;
     }
 
-    // (2) Operator-TRUSTED plugins get the full bridge by design — they bypass the per-permission grant.
-    try { if (require('./plugin-trust').isTrusted(pluginSlug)) return true; } catch { /* treat as untrusted */ }
-
-    // (3) DEFAULT-DENY: a declared permission is only a REQUEST. An admin must GRANT it per-plugin in the
-    // UI (Android-style). Enforced host-side (the bridge runs on the host, where grants are in memory).
+    // (2) DEFAULT-DENY: a declared permission is only a REQUEST. An admin must GRANT it per-plugin in the
+    // UI (Android-style) — there is no trust tier that bypasses this. Enforced host-side (the bridge runs
+    // on the host, where grants are in memory).
     let granted = false;
     try { granted = require('./plugin-permissions').isGranted(pluginSlug, scope, access); } catch { granted = false; }
     if (!granted) {
