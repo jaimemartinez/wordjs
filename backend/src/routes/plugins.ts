@@ -330,6 +330,23 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
+    const slug = req.params.slug;
+
+    // Default-deny grants: when an admin activates a plugin (having seen its requested permissions in the
+    // activation dialog), grant exactly what its manifest DECLARES — but ONLY if it has no grant record
+    // yet, so a later REVOKE via the per-permission switches survives a re-activation. The admin can
+    // refine grants anytime in /admin/plugins. Done BEFORE spawn so init runs with its grants.
+    try {
+        const { getGrants, setGrants } = require('../core/plugin-permissions');
+        if (getGrants(slug).length === 0) {
+            const all = await getAllPlugins();
+            const p = all.find((x: any) => x.slug === slug);
+            const declared = Array.from(new Set(((p && p.permissions) || [])
+                .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
+                .filter(Boolean))) as string[];
+            if (declared.length) await setGrants(slug, declared);
+        }
+    } catch (e: any) { console.warn(`[Permissions] grant-on-activate for '${slug}' failed:`, e && e.message); }
 
     const result = await activatePlugin(req.params.slug);
 
