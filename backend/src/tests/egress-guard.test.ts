@@ -90,29 +90,33 @@ test('assertUrlAllowedSync blocks ws:// to a private IP literal', () => {
     assert.doesNotThrow(() => eg.assertUrlAllowedSync('wss://example.com/x'));
 });
 
-test('installChildNetGuard guards the REAL net.Socket.prototype.connect — closes Stream + prototype-chain bypass (restores after)', () => {
+// NOTE: this is the LAST net-using test in the file. installChildNetGuard LOCKS net.Socket.prototype.
+// connect (EG-1), so it cannot be restored — fine here because node --test runs this file in its own
+// process and no later test uses net.Socket.connect.
+test('installChildNetGuard LOCKS the REAL net.Socket.prototype.connect — closes Stream/prototype bypass, un-patch, and unix sockets', () => {
     const net = require('net');
     const orig = net.Socket.prototype.connect;
     eg.installChildNetGuard();
-    try {
-        assert.notStrictEqual(net.Socket.prototype.connect, orig, 'real Socket.prototype.connect must be patched');
-        // Direct real Socket → guarded
-        assert.throws(() => { const s = new net.Socket(); try { s.connect(80, '169.254.169.254'); } finally { s.destroy(); } }, /egress/i, 'direct real Socket blocked');
-        // net.Stream legacy alias → guarded (was the bypass)
-        assert.throws(() => { const s = new net.Stream(); try { s.connect(80, '127.0.0.1'); } finally { s.destroy(); } }, /egress/i, 'net.Stream alias blocked');
-        // prototype-chain reach-around → now hits the patched real connect
-        assert.throws(() => { const s = new net.Socket(); try { Object.getPrototypeOf(net.Socket.prototype).connect; s.connect(80, '10.0.0.1'); } finally { s.destroy(); } }, /egress/i);
-        // REGRESSION GUARD: module-level net.connect/createConnection + http.request pre-normalize their
-        // args into a single [options, cb] ARRAY before Socket.prototype.connect. The patched connect must
-        // unwrap that (not treat it as the options object) — else it throws ERR_MISSING_ARGS instead of
-        // reaching the egress check. Throwing /egress/i here PROVES the unwrap works (a broken unwrap throws
-        // a non-/egress/ ERR_MISSING_ARGS and this assertion would fail).
-        assert.throws(() => net.connect({ host: '10.0.0.1', port: 80 }), /egress/i, 'net.connect({host,port}) must reach egress check, not ERR_MISSING_ARGS');
-        assert.throws(() => net.createConnection({ host: '127.0.0.1', port: 6379 }), /egress/i, 'net.createConnection({}) must reach egress check');
-        assert.throws(() => require('http').request({ host: '169.254.169.254', port: 80, path: '/' }), /egress/i, 'http.request({}) must reach egress check');
-    } finally {
-        net.Socket.prototype.connect = orig; // CRITICAL: restore so other tests' loopback connections (supertest) work
-    }
+    assert.notStrictEqual(net.Socket.prototype.connect, orig, 'real Socket.prototype.connect must be patched');
+    assert.throws(() => { const s = new net.Socket(); try { s.connect(80, '169.254.169.254'); } finally { s.destroy(); } }, /egress/i, 'direct real Socket blocked');
+    assert.throws(() => { const s = new net.Stream(); try { s.connect(80, '127.0.0.1'); } finally { s.destroy(); } }, /egress/i, 'net.Stream alias blocked');
+    assert.throws(() => { const s = new net.Socket(); try { Object.getPrototypeOf(net.Socket.prototype).connect; s.connect(80, '10.0.0.1'); } finally { s.destroy(); } }, /egress/i);
+    // REGRESSION GUARD: net.connect/createConnection + http.request pre-normalize args into a [options,cb]
+    // ARRAY before Socket.prototype.connect; the patch must unwrap it (else ERR_MISSING_ARGS). /egress/i
+    // here proves the unwrap reached the egress check.
+    assert.throws(() => net.connect({ host: '10.0.0.1', port: 80 }), /egress/i, 'net.connect({host,port}) reaches egress check, not ERR_MISSING_ARGS');
+    assert.throws(() => net.createConnection({ host: '127.0.0.1', port: 6379 }), /egress/i);
+    assert.throws(() => require('http').request({ host: '169.254.169.254', port: 80, path: '/' }), /egress/i);
+    // EG-1: the patched connect is LOCKED — a plugin can't reassign it to un-patch the chokepoint.
+    const d: any = Object.getOwnPropertyDescriptor(net.Socket.prototype, 'connect');
+    assert.strictEqual(d.writable, false, 'patched connect must be non-writable');
+    assert.strictEqual(d.configurable, false, 'patched connect must be non-configurable');
+    try { (net.Socket.prototype as any).connect = function () { return 'unpatched'; }; } catch { /* strict-mode TypeError expected */ }
+    assert.strictEqual(net.Socket.prototype.connect, d.value, 'a reassignment attempt must NOT replace the locked connect');
+    assert.throws(() => { const s = new net.Socket(); try { s.connect(80, '127.0.0.1'); } finally { s.destroy(); } }, /egress/i, 'still blocks after a reassignment attempt');
+    // EG-2: IPC / unix-socket / named-pipe targets are denied for plugins (e.g. /var/run/docker.sock).
+    assert.throws(() => net.connect('/var/run/docker.sock'), /blocked|egress/i, 'unix-socket path blocked');
+    assert.throws(() => net.connect({ path: '/var/run/x.sock' }), /blocked|egress/i, 'path option blocked');
 });
 
 test('assertUrlAllowed (async) rejects a blocked IP-literal URL and accepts a public one', async () => {

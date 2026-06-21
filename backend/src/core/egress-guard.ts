@@ -122,13 +122,17 @@ function extractConnectOptions(args: any[]): { options: any | null; rewrite?: an
 function secureConnect(orig: any, thisArg: any, args: any[]): any {
     const { options, rewrite } = extractConnectOptions(args);
     if (options && typeof options === 'object') {
+        // IPC / unix-socket / Windows named-pipe targets are NOT public-internet egress — the `network`
+        // grant does not authorize reaching LOCAL services (e.g. /var/run/docker.sock = container/host
+        // RCE, a postgres/redis socket, \\.\pipe\...). Deny them outright. (EG-2)
+        if (options.path) throw blockErr('local IPC/unix-socket path');
         const host = options.host || options.hostname;
         assertHostLiteral(host); // blocks an explicit private/loopback IP literal up-front
-        // ALWAYS route name resolution through the validating lookup (unless it's a unix-socket/IPC path).
-        // Covers the NO-HOST case (net/tls default host = 'localhost', which validatingLookup blocks) and
-        // hostnames (validated + IP-checked at connect, anti-rebinding). Mutated IN PLACE so the tagged
-        // normalized array / caller options object reaches the real connect with the right shape.
-        if (!options.path) options.lookup = validatingLookup;
+        // ALWAYS route name resolution through the validating lookup. Covers the NO-HOST case (net/tls
+        // default host = 'localhost', which validatingLookup blocks) and hostnames (validated + IP-checked
+        // at connect, anti-rebinding). Mutated IN PLACE so the tagged normalized array / caller options
+        // object reaches the real connect with the right shape.
+        options.lookup = validatingLookup;
     }
     return orig.apply(thisArg, rewrite || args);
 }
@@ -175,9 +179,16 @@ export function installChildNetGuard(): void {
         const proto = realNet.Socket && realNet.Socket.prototype;
         if (proto && typeof proto.connect === 'function' && !(proto.connect as any).__wjGuarded) {
             const origConnect = proto.connect;
+            const desc = Object.getOwnPropertyDescriptor(proto, 'connect');
             const patched = function (this: any, ...args: any[]) { return secureConnect(origConnect, this, args); };
             (patched as any).__wjGuarded = true;
-            proto.connect = patched;
+            // LOCK it: a network-granted plugin must NOT be able to reassign net.Socket.prototype.connect
+            // (e.g. `Object.getPrototypeOf(require('net').Socket.prototype).connect = raw`) back to the raw
+            // one — that would un-patch the chokepoint and restore SSRF (metadata/loopback/private) via
+            // fetch redirects + DNS-rebinding. non-writable + non-configurable makes the override permanent
+            // for the life of the child. origConnect lives only in this closure, unreachable from plugin
+            // code. (EG-1)
+            Object.defineProperty(proto, 'connect', { value: patched, writable: false, configurable: false, enumerable: desc ? !!desc.enumerable : false });
         }
     } catch { /* best-effort; module-level wrappers remain as defense */ }
 }
@@ -259,6 +270,26 @@ function guardDgram(mod: any): any {
                 }
                 return origSend(...sargs); // no explicit address (dgram defaults to 127.0.0.1; UDP, no read-back)
             };
+            // Connected dgram: `sock.connect(port[, address][, cb])` then send() with no address. Validate
+            // the destination host here too, else a connected-send reaches loopback/private unvalidated. (EG-3)
+            if (typeof sock.connect === 'function') {
+                const origConnect = sock.connect.bind(sock);
+                sock.connect = function (...cargs: any[]) {
+                    const cb = typeof cargs[cargs.length - 1] === 'function' ? cargs[cargs.length - 1] : undefined;
+                    const address = cargs.find((x: any, i: number) => i > 0 && typeof x === 'string'); // arg after port
+                    if (!address) { const e = blockErr('127.0.0.1 (dgram connect default)'); if (cb) { cb(e); return; } throw e; }
+                    if (realNet.isIP(address)) {
+                        try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
+                        return origConnect(...cargs);
+                    }
+                    realDns.lookup(address, { all: true, verbatim: true }, (err: any, addrs: any) => {
+                        if (err) { if (cb) cb(err); return; }
+                        const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
+                        for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
+                        origConnect(...cargs);
+                    });
+                };
+            }
             return sock;
         };
     }
