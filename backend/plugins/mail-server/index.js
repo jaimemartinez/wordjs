@@ -895,9 +895,16 @@ exports.init = async function (bridge) {
         }
     };
 
-    // Initialize (schema already created above so the secrets table is ready)
-    await initTransporter();
-    await initSMTPServer();
+    // Network-dependent setup (outbound transport + inbound SMTP server) needs the `network` permission
+    // (raw sockets / tls). It's granted on activation, but degrade gracefully rather than fail
+    // activation if it's ever missing (e.g. the admin revoked Network, or the port is taken): the
+    // plugin still loads, and re-granting Network + reactivating brings these up for real.
+    try {
+        await initTransporter();
+        await initSMTPServer();
+    } catch (e) {
+        console.warn(`[MailServer] Network features disabled (grant the "network" permission in /admin/plugins and reactivate to enable outbound delivery + the inbound SMTP server): ${e && e.message}`);
+    }
 
     // === BACKGROUND TASKS ===
     // Process Scheduled Emails every minute.
