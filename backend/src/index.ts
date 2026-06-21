@@ -97,9 +97,14 @@ app.use(cors({
         // In production, check against allowed domains. Because credentials:true is set,
         // reflecting an arbitrary origin would allow any site to make credentialed
         // requests (account takeover). Only allow the configured origins.
+        // Use the canonical config keys: site.url (== siteUrl, the gateway/public origin),
+        // the top-level frontendUrl (Next.js origin), and the top-level gatewayUrl written at
+        // install (full public gateway URL). `config.site` only carries url/name/description —
+        // `config.site.frontendUrl` was undefined, so the real frontend origin was silently
+        // dropped from the allowlist and legitimate credentialed requests were rejected.
         const allowedOrigins = [
             config.site.url,
-            config.site.frontendUrl,
+            config.frontendUrl,
             config.gatewayUrl,
         ].filter(Boolean);
         if (allowedOrigins.indexOf(origin) !== -1) {
@@ -204,15 +209,25 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // everything, and force NON-image files to download as an opaque attachment (application/octet-stream
 // + Content-Disposition: attachment) so they can never run as a document in this origin. Images keep
 // their inline Content-Type so the admin/media UI can still display them.
-// SVG is deliberately EXCLUDED: it is an image but can carry inline <script>, so it must download
-// rather than render inline. Raster image types stay inline so the admin/media UI can display them.
-const INLINE_IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif']);
+// SECURITY (defense-in-depth on top of upload-time mime validation): the ONLY real risk when serving
+// user uploads from this origin is a file that executes AS A DOCUMENT (.html/.js/.xml → stored XSS).
+// Use a DENYLIST of those executable types (forced to download as an opaque attachment) and serve
+// EVERYTHING ELSE inline with its correct Content-Type — images, FONTS (.ttf/.woff…), pdf, audio/video,
+// json, etc. are not executable as a same-origin document, and forcing them to octet-stream/attachment
+// broke legitimate rendering (logos, theme fonts). SVG is special: served as image/svg+xml so it renders
+// as a logo/icon, with a sandbox CSP so a direct navigation can't run any embedded script either.
+const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml', '.shtm', '.js', '.mjs', '.cjs', '.xml', '.svgz']);
 app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
     dotfiles: 'deny',
     setHeaders: (res, filePath) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         const ext = path.extname(filePath).toLowerCase();
-        if (!INLINE_IMAGE_EXTS.has(ext)) {
+        if (ext === '.svg') {
+            res.setHeader('Content-Type', 'image/svg+xml');
+            res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
+            return;
+        }
+        if (EXECUTABLE_DOC_EXTS.has(ext)) {
             res.setHeader('Content-Type', 'application/octet-stream');
             res.setHeader('Content-Disposition', 'attachment');
         }
