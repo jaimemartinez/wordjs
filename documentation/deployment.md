@@ -8,7 +8,7 @@ WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** 
 
 The **same codebase** runs two ways, and you can switch **at any time** — there is **no migration**. Both modes share the same `backend/wordjs-config.json`, the same database, the same `uploads`/`themes`/`plugins`, the same secrets, and the same public origin (default `https://localhost:3000`). They are **mutually exclusive** because both bind the public port (default `3000`), so run one or the other.
 
-In **both** modes, plugins run **isolated in worker threads** — that behavior is identical.
+In **both** modes, plugins marked `"isolated": true` run **in a separate OS process** (`child_process.fork`) behind the `wordjs` capability bridge — that behavior is identical. See **[Plugin Sandbox & Memory Caps](#-plugin-sandbox--memory-caps)** for the operator-facing knobs.
 
 ### Split (default — 3 processes)
 
@@ -19,7 +19,7 @@ The gateway (`:3000`, public) + backend (`:4000`) + frontend (`:3001`). The gate
 
 ### Monolith (1 process, 1 port `:3000`)
 
-A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **backend Express app** (with its isolated worker-thread plugins) **and** the **Next.js request handler** **in-process** — no loopback proxy, no Node `cluster`, no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `.../robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port** reusing the gateway's certificate (HTTP fallback), plus a loopback-only HTTP listener for the frontend's server-side (SSR) API calls.
+A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **backend Express app** (with its isolated plugins, each running in its own forked OS process) **and** the **Next.js request handler** **in-process** — no loopback proxy, no Node `cluster`, no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `.../robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port** reusing the gateway's certificate (HTTP fallback), plus a loopback-only HTTP listener for the frontend's server-side (SSR) API calls.
 
 - **Dev:** `npm run dev:mono` (Next dev HMR + `ts-node` backend)
 - **Build:** `npm run build:mono` (compiles backend to `dist/` + runs `next build`)
@@ -198,6 +198,86 @@ pm2 start npm --name "wordjs-frontend" -- start
 ```
 
 > Make sure `cd backend && npm run build` has run first, otherwise the backend falls back to slower `ts-node`.
+
+---
+
+## 🧱 Plugin Sandbox & Memory Caps
+
+Plugins marked `"isolated": true` run in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`), each with its **own heap, event loop, and OS memory budget**. They reach core only through the permission-checked `wordjs` bridge (RPC over IPC); the host's secrets, DB handle, and other plugins are unreachable from a child. A crash, OOM, or heap escape is therefore **contained to the child — the host process always survives, on every platform.** (Earlier versions ran plugins in `worker_threads`, which shared the host heap/RSS; that model is gone.)
+
+Untrusted (uploaded/marketplace) plugins additionally get a scoped DB (`wjp_<slug>_` tables only), no outbound network, namespaced routes under `/api/v1/plugin/<slug>`, and fs confined to their own directory. **Operator-trusted** plugins — listed in `config.trustedSystemPlugins` (default `conference-manager`, `mail-server`) or toggled on in **Admin → Plugins** — get the privileged bridge (unscoped DB, secret options, absolute routes, mail provider, raw sockets). Trust is server-side and **never self-declarable** by a plugin.
+
+### Memory caps (per child, layered)
+
+Each isolated child is held to a **768 MB resident budget** plus a 256 MB JS heap (`--max-old-space-size=256`). How the resident budget is enforced depends on the platform and one opt-in config flag:
+
+| Layer | How | Platform | Default |
+|---|---|---|---|
+| **Preventive** | cgroup v2 `MemoryMax` via `systemd-run --user --scope` — the kernel OOM-kills only the offending child the instant it exceeds budget | **Linux** (systemd, user scopes) | **OFF** (opt-in) |
+| **Reactive** | host-side RSS poll that `SIGKILL`s a child over budget (`/proc` on Linux, `tasklist` on Windows, `ps` on macOS) | **Linux / Windows / macOS** | ON (used when the cgroup cap is not active) |
+| **Loose backstop** | kernel `RLIMIT_AS` virtual ceiling (`ulimit -v`) + the 256 MB JS-heap flag | **Linux / macOS** (POSIX; not Windows) | ON |
+
+Because each plugin is a **separate process**, an OOM or crash never takes down the host on *any* platform — even with no cap configured.
+
+### `config.sandbox.useCgroupMemoryCap` — opt-in preventive cgroup cap (Linux)
+
+The RSS poll is *reactive* (a fast off-heap allocation loop can spike the box within a poll window) and `RLIMIT_AS` can only be a *loose virtual* backstop (V8's ~4 GB pointer-compression cage forces it generous). A cgroup v2 `memory.max` is the only **preventive resident cap**: the kernel kills the child by construction the moment its resident set crosses the budget, with the blast radius contained to that child.
+
+It is **OFF by default** because auto-detecting usable cgroup/systemd support across hosts and CI is unreliable — a host can have `systemd-run` yet no working `--user` bus. Enable it explicitly only on a systemd Linux host where you have confirmed user scopes work:
+
+```json
+{
+  "sandbox": {
+    "useCgroupMemoryCap": true
+  }
+}
+```
+
+(Add the `sandbox` block to `backend/wordjs-config.json`.) No root is required — `systemd-run --user --scope` runs `node` as a **direct child** of `systemd-run`, inheriting the IPC fd. Even when the flag is set, WordJS runs a **probe first** (validates spawn + IPC round-trip + clean teardown on this host) and only activates the cap if the probe passes; any failure falls back cleanly to the fork + `RLIMIT_AS` + RSS-poll path with **zero regression**.
+
+**Sanity-check the host before enabling.** A user manager must be running for your account (enable lingering so it survives logout), and a `--user --scope` unit with a memory cap must actually run:
+
+```bash
+# Ensure the per-user systemd manager persists (run once, as the service account)
+loginctl enable-linger <user>
+
+# Confirm a memory-capped user scope works (should print: ok)
+systemd-run --user --scope -p MemoryMax=64M -- echo ok
+```
+
+If that prints `ok`, the cap will activate. On startup with the cap active you will see this in the backend log:
+
+```
+[Sandbox] preventive cgroup memory cap ACTIVE (systemd-run --user --scope, MemoryMax=768 MB per child).
+```
+
+If the flag is set but the probe fails (e.g. "Failed to connect to bus"), the log instead warns and falls back to the RSS poll:
+
+```
+[Sandbox] sandbox.useCgroupMemoryCap is set but the cgroup probe failed (no usable --user scope) — falling back to the RSS poll.
+```
+
+> On **Windows** and **macOS** there is no cgroup option — the reactive RSS poll provides the resident cap, and process separation provides crash containment. A preventive cap on Windows (a Job Object) is on the roadmap.
+
+### `config.sandbox.addressSpaceCapMb` — RLIMIT_AS override (POSIX)
+
+On Linux/macOS the child is also launched under a kernel `RLIMIT_AS` (virtual address-space) ceiling — a coarse backstop that holds even if the host event loop is wedged and is the only cap on `/proc`-less platforms. It defaults to **16384 MB** and is deliberately loose: V8 reserves a ~4 GB pointer-compression cage, and in dev the `ts-node` compiler needs several GB of virtual space, so a tighter ceiling crashes legitimate plugin loads. Override it only on a **compiled (non-`ts-node`) production build with ample RAM headroom**:
+
+```json
+{
+  "sandbox": {
+    "addressSpaceCapMb": 16384
+  }
+}
+```
+
+The value is floored at 6144 MB and validated by a boot probe (using the same `execArgv` the real child uses); if even the floor won't boot on this host, WordJS falls back to a plain fork plus the RSS poll. When the cap is active you'll see:
+
+```
+[Sandbox] kernel memory cap active: RLIMIT_AS <N> MB per isolated child.
+```
+
+> `RLIMIT_AS` is not available on **Windows** (no POSIX `ulimit`); there WordJS relies on process separation + the `tasklist` RSS poll. The precise resident cap is always the RSS poll or the cgroup cap — not `RLIMIT_AS`.
 
 ---
 

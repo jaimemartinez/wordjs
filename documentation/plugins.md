@@ -7,11 +7,11 @@ This guide will teach you how to create a plugin for WordJS from scratch. WordJS
 ## 1. The Mental Model
 
 A WordJS plugin is simply a folder inside `backend/plugins/`.
-*   **Backend (`index.js`):** Runs on the server **inside a `worker_threads` isolate** (a separate V8 heap). It cannot `require()` core modules directly — it reaches core ONLY through the `wordjs` capability bridge, which is passed to its `init(wordjs)` function. Defines API routes, hooks, shortcodes via `wordjs.*`.
+*   **Backend (`index.js`):** Runs on the server **inside a separate OS process** (`child_process.fork`) — its own heap, event loop, and OS memory cap. It cannot `require()` core modules directly — it reaches core ONLY through the `wordjs` capability bridge, which is passed to its `init(wordjs)` function. Defines API routes, hooks, shortcodes via `wordjs.*`.
 *   **Frontend (`client/`):** Runs in the user's browser. Defines the Admin interface and visual blocks for the editor. These are **build-time** React assets and are unaffected by isolation.
 *   **Manifest (`manifest.json`):** The brain. Defines name, version, **`"isolated": true`** (required — non-isolated plugins are rejected), permissions, **npm dependencies**, and **frontend hooks**.
 
-> **🔒 Isolated by default.** Every plugin runs sandboxed in a worker. There is no in-process execution path. Your backend code talks to core only via the injected `wordjs` bridge; every bridge call is permission-checked on the host. See **§9 (The `wordjs` Capability Bridge)** below and **[Plugin Isolation](plugin-isolation-proposal.md)**.
+> **🔒 Isolated by default.** Every plugin runs sandboxed in its own OS process (`child_process.fork`, IPC over a structured-clone channel). There is no in-process execution path. A crash, OOM, or even a heap escape is contained to the child — the host process always survives. Your backend code talks to core only via the injected `wordjs` bridge; every bridge call is permission-checked on the host. See **§11 (The `wordjs` Capability Bridge)** below and **[Plugin Isolation](plugin-isolation-proposal.md)**.
 
 ---
 
@@ -48,7 +48,7 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 
 > **`"isolated": true` is mandatory.** A plugin without it is rejected at activation/boot
 > (`Plugin '<slug>' must declare "isolated": true and use the wordjs bridge — legacy in-process plugins
-> are no longer supported.`). Inside the isolate you must use the `wordjs` bridge instead of `require`ing core.
+> are no longer supported.`). Inside the child process you must use the `wordjs` bridge instead of `require`ing core.
 
 > **🔥 Auto-Dependency Management:** 
 > WordJS reads the `dependencies` object. When you activate the plugin, the system **automatically installs** missing packages (`npm install`). When you deactivate it, if no other plugin needs them, it **garbage collects** them (`npm uninstall`). Zero manual work.
@@ -94,16 +94,16 @@ npx esbuild index.js --bundle --platform=node --outfile=dist/plugin.bundle.js
 
 ### Step 2: Backend Entry Point (`index.js`)
 Create `index.js`. Your `init` function receives the `wordjs` bridge — **use it instead of `require`ing
-core**. Inside the isolate there is no `express`, no `getApp()`, no direct `require('../../src/core/...')`.
+core**. Inside the child process there is no `express`, no `getApp()`, no direct `require('../../src/core/...')`.
 
 ```javascript
 exports.init = function (wordjs) {
     const { http, adminMenu } = wordjs;
 
     // 1. Register a JSON API route. The host namespaces it under /api/v1/plugin/hello-world.
-    //    The handler runs inside the isolate with a mock (req, res) forwarded over RPC.
+    //    The handler runs inside the child process with a mock (req, res) forwarded over RPC.
     http.route('get', '/message', (req, res) => {
-        res.json({ text: "Hello from the isolate!" });
+        res.json({ text: "Hello from the sandboxed child process!" });
     });
 
     // 2. Add a link to the Sidebar (declarative — forwarded to core via the bridge)
@@ -242,7 +242,7 @@ WordJS is highly sophisticated about how it handles React.
 
 ---
 
-## 4. UI Guidelines & Best Practices 🎨
+## 6. UI Guidelines & Best Practices 🎨
 
 WordJS enforces a **Premium Glassmorphism** design system. To ensure your plugin looks native, follow these rules:
 
@@ -267,11 +267,11 @@ Avoid raw `div` containers for main content. Use the `Card` component, which han
 
 ---
 
-## 5. Security & Permissions 🛡️
+## 7. Security & Permissions 🛡️
 
 WordJS is "Secure by Default". This means your plugin cannot perform any "dangerous" actions (like editing settings or writing files) unless it explicitly asks for permission.
 
-### 6.1 The Permissions Manifest
+### 7.1 The Permissions Manifest
 In `manifest.json`, you must declare every capability your plugin needs:
 
 ```json
@@ -289,33 +289,46 @@ In `manifest.json`, you must declare every capability your plugin needs:
 ]
 ```
 
-### 6.2 The AST Scanner
+### 7.2 The AST Scanner
 When you activate a plugin, WordJS runs a **Static Analysis Scan**. It parses your code and blocks it if it finds:
 *   `eval()` or shell commands (`exec`).
 *   Direct access to `global` or `module`.
 *   Obfuscated property access (e.g., `global["ev"+"al"]`).
 *   Unauthorized `require()` of sensitive Node modules.
 
-### 6.3 The Isolate (where the sandbox actually lives)
+### 7.3 The Sandbox (where isolation actually lives)
 
-Your backend runs in a `worker_threads` isolate with its **own V8 heap** — it cannot see the host's
-secrets, DB handle, or other plugins. It reaches core **only** through the `wordjs` bridge, and every
-bridge call is permission-checked on the host against your manifest. The host owns Express, the DB, the
-filesystem and secrets; the isolate gets serialized request/response data over RPC, never the live socket
-or DB handle.
+Your backend runs in a **separate OS process** (`child_process.fork` of `plugin-worker.js`) with its
+**own heap, event loop, and OS memory** — it cannot see the host's secrets, DB handle, or other plugins.
+It reaches core **only** through the `wordjs` bridge, and every bridge call is RPC'd to the host over the
+IPC channel (structured-clone, `serialization: 'advanced'`) and permission-checked there against your
+manifest. The host owns Express, the DB, the filesystem and secrets; the child gets serialized
+request/response data over RPC, never the live socket or DB handle. Because it is a real process, a
+crash, an OOM (including off-heap `Buffer`/`ArrayBuffer` growth), or even a heap escape is contained to
+the child — the host process always survives.
+
+**Memory is capped in layers:** (a) an **opt-in preventive** cgroup v2 `memory.max` via
+`systemd-run --user --scope` (`config.sandbox.useCgroupMemoryCap = true`, probe-gated, no root, Linux
+only); (b) a **reactive** host-side RSS poll on every platform (Linux `/proc`, Windows `tasklist`, macOS
+`ps`) that `SIGKILL`s a child whose resident set exceeds **768 MB**; (c) a loose `RLIMIT_AS` virtual
+backstop (`config.sandbox.addressSpaceCapMb`, default 16384 MB) plus `--max-old-space-size=256` for the
+JS heap.
 
 **Network egress (untrusted plugins):** you get **no outbound network**. The raw socket modules
 (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied, and the globals `fetch` / `WebSocket` /
 `EventSource` are trapped (they throw). Only **operator-trusted** plugins get raw sockets (e.g. the mail
 server's SMTP/MX delivery).
 
-**Defense-in-depth inside the worker:** the same runtime guards (secure-require, io-guard) are installed
-inside the isolate too, so even after a hypothetical heap escape your `fs`/`child_process` stay restricted
-to your declared permissions in every execution path (route handlers, hooks, timers, module top-level).
+**Defense-in-depth inside the child:** the same runtime guards (secure-require, io-guard) are installed
+inside the child process too, so even after a hypothetical escape your `fs`/`child_process` stay
+restricted to your declared permissions in every execution path (route handlers, hooks, timers, module
+top-level). secure-require also blocks `worker_threads`/`vm`/`module`/`inspector`/`process.binding` and
+native addons, and an ESM resolution hook fails closed for the same builtins.
 
-> ⚠️ A worker is a **heap / V8-isolate boundary, not an OS sandbox** — the worker still has a full Node
-> runtime, so capability denial relies on the in-worker guards above. See the residual-risk note in
-> **[Plugin Isolation](plugin-isolation-proposal.md)**.
+> ⚠️ **Residual risk:** the sandbox is OS-process isolation with userspace guards — it is **not yet
+> capability-minimal at the syscall level** (seccomp/landlock/dropped-uid are on the roadmap), and a
+> *preventive* memory cap on Windows needs a Job Object that is not built yet (Windows relies on the
+> reactive RSS poll). See **[Plugin Isolation](plugin-isolation-proposal.md)**.
 
 > **`system:admin` is not self-granting.** Declaring `system:admin` does **not** skip the AST scan. The skip is reserved for trusted plugins listed in `config.trustedSystemPlugins` (shipped defaults: `conference-manager` and `mail-server`) or granted trust by an admin via the Plugins UI. An uploaded third-party plugin that declares it still goes through the full scan. The scan also re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
 
@@ -323,7 +336,7 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ---
 
-## 6. Folder Structure Reference
+## 8. Folder Structure Reference
 
 | File/Folder             | Purpose                                         |
 | :---------------------- | :---------------------------------------------- |
@@ -335,19 +348,19 @@ For a full list of security rules, see the **[Security Guide](security.md)**.
 
 ---
 
-## 7. Developer Rules of Gold 🏆
+## 9. Developer Rules of Gold 🏆
 
 1.  **Auth First:** Never fetch data from the server without headers.
-2.  **Use the bridge, not `require`:** In `index.js`, accept `init(wordjs)` and call `wordjs.*`. You **cannot** `require('../../src/core/...')`, `express`, or core modules from inside the isolate — that path is gone.
+2.  **Use the bridge, not `require`:** In `index.js`, accept `init(wordjs)` and call `wordjs.*`. You **cannot** `require('../../src/core/...')`, `express`, or core modules from inside the child process — that path is gone.
 3.  **Declare `"isolated": true`:** It is mandatory; a plugin without it is rejected.
 4.  **Namespaced routes:** Your routes mount under `/api/v1/plugin/<slug>/...` — fetch them at that path.
 5.  **Unique Slugs:** Ensure your plugin folder name and slug are unique.
 
 ---
 
-## 8. Advanced Features
+## 10. Advanced Features
 
-### 8.1 Admin Menus & Deduplication ⚠️
+### 10.1 Admin Menus & Deduplication ⚠️
 WordJS's frontend (`Sidebar.tsx`) automatically **deduplicates** menu items.
 *   **Core Items:** Dashboard, Media, Posts, Settings, etc., are hardcoded in the frontend.
 *   **Plugin Items:** Fetched from the backend.
@@ -358,7 +371,7 @@ Always use unique paths (e.g., `/admin/plugin/my-plugin-media`) unless you inten
 **Use `plugin: 'core'` filtering:**
 The backend marks standard menus with `plugin: 'core'`. The frontend filters these out from the dynamic list.
 
-### 8.2 Widgets API
+### 10.2 Widgets API
 Core can register "Widgets" (they appear in the `Widgets` admin panel and can be assigned to sidebars):
 
 ```javascript
@@ -374,18 +387,18 @@ registerWidget('my_weather_widget', {
 > cannot register a widget today (there is no `wordjs.widgets.*`). Expose data via a route + an admin
 > page instead, or open an issue to add a `widgets` bridge capability.
 
-### 8.3 Sending Notifications 🔔
+### 10.3 Sending Notifications 🔔
 Plugins push real-time alerts to the Admin UI via `wordjs.notify(n)` (`notifications:send` permission).
 See **[Notification System](notifications.md)** for full details.
 
-### 8.4 Sending Emails 📧
+### 10.4 Sending Emails 📧
 If a mail provider plugin is active, send mail with `wordjs.mail(msg)` (`email:admin` permission).
 See **[Mail Server](mail-server.md)** for full details.
 
-### 8.5 Hook System (Actions & Filters) 🪝
+### 10.5 Hook System (Actions & Filters) 🪝
 WordJS exposes a hook system similar to WordPress. From an isolated plugin you register hooks through
-the bridge (`wordjs.hooks`); your callback lives in the isolate and the host installs a shim that calls
-back into it over RPC.
+the bridge (`wordjs.hooks`); your callback lives in the child process and the host installs a shim that
+calls back into it over RPC.
 
 **Using Actions (Do something):**
 ```javascript
@@ -412,9 +425,9 @@ You can use the **Hooks Registry** in the Admin Panel (`/admin/hooks`) to:
 
 ---
 
-## 9. The `wordjs` Capability Bridge (reference)
+## 11. The `wordjs` Capability Bridge (reference)
 
-`init(wordjs)` receives this object. Data methods are **async** (they cross the worker→host boundary).
+`init(wordjs)` receives this object. Data methods are **async** (they cross the child→host IPC boundary).
 Every call is permission-checked on the host against your manifest.
 
 | Bridge call | Permission | Notes |
@@ -423,7 +436,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Untrusted: SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. Trusted: unscoped. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Core table names blocked for untrusted plugins. |
 | `wordjs.db.getType()` | `database:read` | `'sqlite'` vs `'postgres'` — branch your DDL. |
-| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the isolate; host installs an RPC shim. |
+| `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. |
 | `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path`. `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`, `{ absolute: true }` (operator-trusted only). Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
 | `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your plugin dir + `uploads/` (realpath-checked). `manifest.json` is immutable. |
@@ -432,11 +445,11 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:send` | Register a notification transport. **Operator-trusted only.** |
 | `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
-| `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the isolate. |
+| `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process. |
 
 ---
 
-## 10. Trust tiers & the admin trust toggle
+## 12. Trust tiers & the admin trust toggle
 
 Every plugin is either **untrusted** (the default — sandboxed) or **operator-trusted** (privileged
 bridge grants: unscoped DB, secret options, absolute routes, multipart, `provideMail`,
@@ -446,7 +459,7 @@ manifest.** A plugin is trusted if EITHER:
 1.  it is a shipped first-party default in `config.trustedSystemPlugins` (`conference-manager`, `mail-server`), which can't be toggled off via the UI; OR
 2.  an admin flips its trust toggle in the **Plugins** admin page (`POST /plugins/:slug/trust`, persisted in the `trusted_plugins` option).
 
-Flipping the toggle **hot-reloads the plugin's worker** so its routes re-mount (namespaced ↔ absolute),
+Flipping the toggle **hot-reloads the plugin's child process** so its routes re-mount (namespaced ↔ absolute),
 its network policy re-resolves, and the bridge gates re-evaluate — no server restart. Granting trust is a
 real security decision: the UI warns that a trusted plugin can reach core data, secret options, and host
 capabilities. Only trust code you have audited.

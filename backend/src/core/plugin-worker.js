@@ -1,11 +1,13 @@
 /**
- * WordJS - Isolated Plugin Worker (cross-platform, no native deps)
+ * WordJS - Isolated Plugin Sandbox Entry (cross-platform, no native deps)
  *
- * Runs ONE untrusted plugin inside a worker_threads Worker (a separate V8 isolate). The plugin
- * reaches core ONLY through the injected `wordjs` bridge, whose calls are RPC'd to the host and
- * permission-checked THERE — the host's heap (secrets, DB handle, other plugins) is unreachable
- * from this isolate. The same runtime guards (secure-require / io-guard) are installed inside the
- * worker too, so the plugin's own fs/child_process are sandboxed even here.
+ * Runs ONE untrusted plugin inside the sandbox. The host loads this entry in a SEPARATE OS PROCESS
+ * (child_process.fork — own heap + OS memory cap; a crash/OOM is contained to the child) or, as a
+ * legacy fallback, a worker_threads Worker; the transport abstraction below normalizes both. The
+ * plugin reaches core ONLY through the injected `wordjs` bridge, whose calls are RPC'd to the host
+ * and permission-checked THERE — the host's heap (secrets, DB handle, other plugins) is unreachable
+ * from this isolate. The same runtime guards (secure-require / io-guard) are installed in-process
+ * too, so the plugin's own fs/child_process are sandboxed even here.
  *
  * Protocol (JSON, structured-clone safe):
  *   worker -> host: {kind:'call', id, method, args}      // a wordjs.* bridge call
@@ -25,7 +27,18 @@ Object.defineProperty(global, '__WORDJS_ISOLATED__', { value: true, writable: fa
 const { parentPort, workerData } = require('worker_threads');
 const path = require('path');
 
-const { slug, entryFile, coreDir } = workerData;
+// Transport abstraction: this sandbox entry runs either in a worker_threads Worker (parentPort +
+// workerData) OR in a child_process fork (process IPC + a JSON config blob in argv[2]). Normalize both
+// to one API so the SAME entry + guards work for either host. child_process is the OS-isolation model
+// (separate OS process + OS memory cap; a heap escape / OOM is contained to the child, not the host);
+// worker_threads is the legacy/fallback host. The ternaries short-circuit, so parentPort.* is never
+// touched when running as a child (parentPort is null there).
+const IS_WORKER = !!parentPort;
+const cfg = IS_WORKER ? (workerData || {}) : JSON.parse(process.argv[2] || '{}');
+const send = IS_WORKER ? parentPort.postMessage.bind(parentPort) : (m) => { try { process.send(m); } catch { /* parent gone */ } };
+const onMessage = IS_WORKER ? (cb) => parentPort.on('message', cb) : (cb) => process.on('message', cb);
+
+const { slug, entryFile, coreDir } = cfg;
 
 // Network egress policy. The raw socket modules (net/tls/dns/http/https/...) are denied to untrusted
 // plugins by secure-require, but the binding-backed globals `fetch`/`WebSocket`/`EventSource` are NOT
@@ -33,7 +46,7 @@ const { slug, entryFile, coreDir } = workerData;
 // here. Trust is supplied by the HOST via workerData (re-resolved on every reload, since the trust
 // toggle reloads the worker); secure-require also reads __WORDJS_PLUGIN_TRUSTED__ for its net branch.
 // Immutable: a plugin must not be able to self-promote to trusted (which would unlock raw sockets).
-Object.defineProperty(global, '__WORDJS_PLUGIN_TRUSTED__', { value: !!workerData.isTrusted, writable: false, configurable: false, enumerable: false });
+Object.defineProperty(global, '__WORDJS_PLUGIN_TRUSTED__', { value: !!cfg.isTrusted, writable: false, configurable: false, enumerable: false });
 if (!global.__WORDJS_PLUGIN_TRUSTED__) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
@@ -53,7 +66,7 @@ try {
 } catch (e) {
     // FAIL CLOSED: if the in-isolate guards can't install, do NOT run the plugin with only the heap
     // boundary — a missing guard re-opens fs/child_process/network from inside the worker. Abort.
-    try { parentPort.postMessage({ kind: 'fatal', error: `sandbox guard install failed: ${e && e.message}` }); } catch { /* parent gone */ }
+    try { send({ kind: 'fatal', error: `sandbox guard install failed: ${e && e.message}` }); } catch { /* parent gone */ }
     process.exit(1);
 }
 
@@ -107,7 +120,7 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
         esmGuardInstalled = false;
     }
     if (!esmGuardInstalled) {
-        try { parentPort.postMessage({ kind: 'fatal', error: 'sandbox ESM import() guard unavailable — Node >= 18.19 is required to safely run untrusted plugins' }); } catch { /* parent gone */ }
+        try { send({ kind: 'fatal', error: 'sandbox ESM import() guard unavailable — Node >= 18.19 is required to safely run untrusted plugins' }); } catch { /* parent gone */ }
         process.exit(1);
     }
 }
@@ -122,7 +135,7 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
         try {
             const m = process.memoryUsage();
             if (m.rss > MEM_BUDGET_BYTES || (m.external || 0) > MEM_BUDGET_BYTES) {
-                try { parentPort.postMessage({ kind: 'fatal', error: `[sandbox] plugin '${slug}' exceeded memory budget (rss=${m.rss}, external=${m.external})` }); } catch { /* parent gone */ }
+                try { send({ kind: 'fatal', error: `[sandbox] plugin '${slug}' exceeded memory budget (rss=${m.rss}, external=${m.external})` }); } catch { /* parent gone */ }
                 process.exit(1);
             }
         } catch { /* memoryUsage unavailable — ignore */ }
@@ -144,14 +157,14 @@ function callHost(method, args) {
     return new Promise((resolve, reject) => {
         const id = ++_id;
         pending.set(id, { resolve, reject });
-        parentPort.postMessage({ kind: 'call', id, method, args });
+        send({ kind: 'call', id, method, args });
     });
 }
 
 function registerCallback(hookType, hook, cb, priority) {
     const cbId = `${hookType}:${hook}:${++_id}`;
     callbacks.set(cbId, cb);
-    parentPort.postMessage({ kind: 'register', hookType, hook, cbId, priority });
+    send({ kind: 'register', hookType, hook, cbId, priority });
 }
 
 // The `wordjs` bridge as seen INSIDE the isolate. Data methods RPC to the host; hook registration
@@ -180,13 +193,13 @@ const wordjs = {
     // RPCs back here whenever anything calls wordjs.mail / global.wordjs_send_mail.
     provideMail(handler) {
         mailProvider = handler;
-        parentPort.postMessage({ kind: 'register-mail-provider' });
+        send({ kind: 'register-mail-provider' });
     },
     notify: Object.assign((n) => callHost('notify', [n]), {
         // Register a notification transport (e.g. 'email') whose handler lives in this isolate.
         registerTransport(name, handler) {
             notifyTransports.set(name, handler);
-            parentPort.postMessage({ kind: 'register-notify-transport', name });
+            send({ kind: 'register-notify-transport', name });
         }
     }),
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
@@ -200,7 +213,7 @@ const wordjs = {
             if (typeof opts === 'function') { handler = opts; opts = {}; }
             const routeId = `route:${method}:${routePath}:${++_id}`;
             routeHandlers.set(routeId, handler);
-            parentPort.postMessage({ kind: 'register-route', method, routePath, opts: opts || {}, routeId });
+            send({ kind: 'register-route', method, routePath, opts: opts || {}, routeId });
         }
     },
 
@@ -210,7 +223,7 @@ const wordjs = {
         add(tag, handler) {
             const scId = `sc:${tag}:${++_id}`;
             shortcodeHandlers.set(scId, handler);
-            parentPort.postMessage({ kind: 'register-shortcode', tag, scId });
+            send({ kind: 'register-shortcode', tag, scId });
         }
     }
 };
@@ -228,7 +241,7 @@ function replyTooLarge(v) {
     return false;
 }
 
-parentPort.on('message', async (msg) => {
+onMessage(async (msg) => {
     if (msg.kind === 'reply') {
         const p = pending.get(msg.id);
         if (!p) return;
@@ -239,10 +252,10 @@ parentPort.on('message', async (msg) => {
         const cb = callbacks.get(msg.cbId);
         try {
             const value = cb ? await cb(...msg.args) : (msg.args[0]);
-            if (replyTooLarge(value)) { parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: false, error: 'reply payload too large' }); return; }
-            parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: true, value });
+            if (replyTooLarge(value)) { send({ kind: 'invoke-reply', id: msg.id, ok: false, error: 'reply payload too large' }); return; }
+            send({ kind: 'invoke-reply', id: msg.id, ok: true, value });
         } catch (e) {
-            parentPort.postMessage({ kind: 'invoke-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+            send({ kind: 'invoke-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     } else if (msg.kind === 'invoke-route') {
         // Host forwarded an HTTP request for a route handler living in this isolate.
@@ -251,8 +264,8 @@ parentPort.on('message', async (msg) => {
         let settled = false;
         const reply = (status, body, headers, cookies) => {
             if (settled) return; settled = true;
-            if (replyTooLarge(body)) { parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: false, error: 'response body too large' }); return; }
-            parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers, cookies } });
+            if (replyTooLarge(body)) { send({ kind: 'route-reply', id: msg.id, ok: false, error: 'response body too large' }); return; }
+            send({ kind: 'route-reply', id: msg.id, ok: true, response: { status, body, headers, cookies } });
         };
         const res = {
             _status: 200, _headers: undefined, _cookies: undefined,
@@ -270,33 +283,33 @@ parentPort.on('message', async (msg) => {
             await handler(reqData, res);
             if (!settled) reply(res._status, undefined, res._headers);
         } catch (e) {
-            parentPort.postMessage({ kind: 'route-reply', id: msg.id, ok: false, error: String(e && e.stack || e) });
+            send({ kind: 'route-reply', id: msg.id, ok: false, error: String(e && e.stack || e) });
         }
     } else if (msg.kind === 'invoke-shortcode') {
         // Host is expanding a shortcode whose handler lives in this isolate.
         const handler = shortcodeHandlers.get(msg.scId);
         try {
             const out = handler ? await handler(msg.attrs || {}, msg.content || '', msg.tag) : '';
-            parentPort.postMessage({ kind: 'shortcode-reply', id: msg.id, ok: true, value: out == null ? '' : String(out) });
+            send({ kind: 'shortcode-reply', id: msg.id, ok: true, value: out == null ? '' : String(out) });
         } catch (e) {
-            parentPort.postMessage({ kind: 'shortcode-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+            send({ kind: 'shortcode-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     } else if (msg.kind === 'invoke-mail') {
         // Host (on behalf of another plugin/core calling wordjs.mail) asks THIS provider to send.
         try {
             const out = mailProvider ? await mailProvider(msg.msg) : (() => { throw new Error('No mail provider'); })();
-            parentPort.postMessage({ kind: 'mail-reply', id: msg.id, ok: true, value: out });
+            send({ kind: 'mail-reply', id: msg.id, ok: true, value: out });
         } catch (e) {
-            parentPort.postMessage({ kind: 'mail-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+            send({ kind: 'mail-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     } else if (msg.kind === 'invoke-notify-transport') {
         // Core's notification loop is dispatching through a transport this isolate registered.
         const handler = notifyTransports.get(msg.name);
         try {
             const out = handler ? await handler(msg.notification) : undefined;
-            parentPort.postMessage({ kind: 'notify-transport-reply', id: msg.id, ok: true, value: out });
+            send({ kind: 'notify-transport-reply', id: msg.id, ok: true, value: out });
         } catch (e) {
-            parentPort.postMessage({ kind: 'notify-transport-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
+            send({ kind: 'notify-transport-reply', id: msg.id, ok: false, error: String(e && e.message || e) });
         }
     }
 });
@@ -320,8 +333,8 @@ parentPort.on('message', async (msg) => {
                 await plugin.init(wordjs);
             }
         });
-        parentPort.postMessage({ kind: 'ready' });
+        send({ kind: 'ready' });
     } catch (e) {
-        parentPort.postMessage({ kind: 'init-error', error: String(e && e.stack || e) });
+        send({ kind: 'init-error', error: String(e && e.stack || e) });
     }
 })();

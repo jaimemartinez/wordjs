@@ -2,7 +2,7 @@
 
 WordJS ships a built-in importer for the WordPress **WXR** (WordPress eXtended RSS) export format. Point it at the `.xml` file WordPress produces and it recreates your authors, taxonomy, posts, pages and comments as native WordJS content.
 
-> **Admin-only and idempotent.** The importer runs behind the admin capability (`manage_options`) and is safe to re-run: existing users, terms and posts are *matched, not duplicated*. If an import is interrupted, just run it again — already-imported content is skipped.
+> **Admin-only and idempotent.** The importer is restricted to the **administrator** role (the `isAdmin` middleware) and is safe to re-run: existing users, terms and posts are *matched, not duplicated*. If an import is interrupted, just run it again — already-imported content is skipped.
 
 The implementation lives in `backend/src/core/wxr-import.ts` (`parseWxr` / `analyzeWxr` / `importWxr`) with the HTTP layer in `backend/src/routes/import.ts` and the admin UI at `frontend/src/app/admin/import/page.tsx`.
 
@@ -32,7 +32,7 @@ The friendliest path is the bundled wizard.
 
 | Option | Default | Effect |
 | --- | --- | --- |
-| **Import comments** | On | Bring over approved and pending comments, with threading preserved. Pingbacks, trackbacks and trashed/spam-only states are skipped (see below). |
+| **Import comments** | On | Bring over comments, with threading preserved. Approved and pending (`hold`/unapproved) comments keep their state, and spam-flagged comments are imported with status `spam`. Pingbacks, trackbacks and trashed comments are skipped (see below). |
 | **Create attachment records** | Off | Create post records of type `attachment` (metadata only). **Media files are never downloaded** — only the original URLs are recorded. |
 
 Posts whose original WordPress author cannot be matched are assigned to a **default author**. In the UI this defaults to **you** (the importing admin).
@@ -135,7 +135,7 @@ Additional fidelity details:
 
 *   **Media files (attachments).** A WXR contains only the **URLs** of your images and uploads, not the binaries. By default attachment items are skipped entirely. Enabling "Create attachment records" only stores the metadata/URL — **no files are downloaded** from your old site. Plan to migrate your `wp-content/uploads` separately.
 *   **Navigation menus** (`nav_menu_item`). WordJS menus differ enough that these are skipped; rebuild menus in the admin.
-*   **Trashed posts**, and comments that are **pingbacks, trackbacks, spam-only/trashed**, or missing an author/email/body — these are skipped (and counted under `skipped`).
+*   **Trashed posts** (`status` = `trash`), and comments that are **pingbacks, trackbacks, trashed/post-trashed**, or missing an author/email/body — these are skipped (and counted under `skipped`). Spam-flagged comments are *not* skipped; they are imported with status `spam`.
 *   **Passwords.** WordPress never exports password hashes. Imported users are created with a **random password** and must use the password-reset flow before they can log in.
 
 ## Re-running is safe
