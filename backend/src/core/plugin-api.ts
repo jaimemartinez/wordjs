@@ -98,9 +98,13 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (allowedVerbs.length && !allowedVerbs.includes(verb)) {
         throw new Error(`🛡️ Plugin DB access denied: '${verb || '(empty)'}' statements are not permitted here.`);
     }
-    // Core-table denylist (defense in depth alongside the prefix allowlist below).
+    // Core-table denylist (defense in depth alongside the prefix allowlist below). Anchor the match to a
+    // table-INTRODUCING keyword (from/join/into/update/using/table) + optional SQL delimiter, so a
+    // legitimate COLUMN named like a core table (e.g. a plugin's own `options`/`status`/`type` column in
+    // an INSERT column list or UPDATE SET) is NOT a false positive — only an actual table REFERENCE to a
+    // core table is blocked. (The prefix allowlist below is the real enforcement.)
     for (const t of PROTECTED_TABLES) {
-        if (new RegExp(`\\b${t}\\b`).test(lower)) {
+        if (new RegExp(`\\b(?:from|join|into|update|using|table)\\s+["\\[\`]?${t}\\b`).test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
         }
     }
