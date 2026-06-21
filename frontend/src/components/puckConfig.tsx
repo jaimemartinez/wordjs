@@ -1564,16 +1564,33 @@ const baseConfig = {
                     embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
                     isYouTube = true;
                 } else if (url?.includes("youtube.com/embed/")) {
-                    // Already embed URL, just add params if not present
-                    embedUrl = url.includes("?") ? url : `${url}?rel=0&modestbranding=1`;
+                    // Already an embed URL. Canonicalize the host to https://www.youtube.com so host
+                    // variants (bare youtube.com, m.youtube.com, http://) still pass the allowlist
+                    // below, preserving the existing embed UX, and add params if not present.
+                    const path = url.split("youtube.com/embed/")[1] || "";
+                    const hasQuery = path.includes("?");
+                    embedUrl = `https://www.youtube.com/embed/${hasQuery ? path : `${path}?rel=0&modestbranding=1`}`;
                     isYouTube = true;
                 } else if (url?.includes("vimeo.com/") && !url?.includes("player.vimeo.com")) {
                     const videoId = url.split("vimeo.com/")[1]?.split("?")[0];
                     embedUrl = `https://player.vimeo.com/video/${videoId}`;
                 }
 
-                // Show placeholder if no URL
-                if (!url) {
+                // Validate the resolved embed URL against an allowlist of trusted embed
+                // providers (mirrors lib/sanitize.ts isAllowedIframeSrc): require https and a
+                // hostname in {www.youtube.com, player.vimeo.com}. Anything else (arbitrary src,
+                // javascript:/data: schemes, non-embed hosts) renders a placeholder, never an iframe.
+                const ALLOWED_EMBED_HOSTS = ["www.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com", "player.vimeo.com"];
+                let isAllowedEmbed = false;
+                try {
+                    const parsed = new URL(embedUrl);
+                    isAllowedEmbed = parsed.protocol === "https:" && ALLOWED_EMBED_HOSTS.includes(parsed.hostname.toLowerCase());
+                } catch {
+                    isAllowedEmbed = false;
+                }
+
+                // Show placeholder if no URL or the URL is not a trusted embed
+                if (!url || !isAllowedEmbed) {
                     return (
                         <div className="wp-block-video-embed" style={{
                             position: "relative",
@@ -1587,7 +1604,7 @@ const baseConfig = {
                         }}>
                             <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", color: "var(--wjs-color-text-muted, #9ca3af)" }}>
                                 <i className="fa-solid fa-video" style={{ fontSize: "2rem", marginBottom: "8px" }}></i>
-                                <p style={{ margin: 0 }}>Enter a video URL</p>
+                                <p style={{ margin: 0 }}>{url ? "Unsupported video URL (use YouTube or Vimeo)" : "Enter a video URL"}</p>
                             </div>
                         </div>
                     );
@@ -1598,6 +1615,7 @@ const baseConfig = {
                         <iframe
                             src={embedUrl}
                             style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
+                            sandbox="allow-scripts allow-same-origin allow-presentation"
                             allowFullScreen
                             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                             referrerPolicy="strict-origin-when-cross-origin"
