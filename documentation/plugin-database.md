@@ -4,7 +4,7 @@
 
 ## Acceso a la BD: el bridge `wordjs` (plugins aislados)
 
-Los plugins corren **aislados** en un worker (`worker_threads`) y NO hacen `require()` de módulos del core. Acceden a la base de datos a través del **capability bridge** `wordjs`, que el host les pasa en `init(wordjs)` y que verifica permisos y restringe argumentos en el host (`backend/src/core/plugin-api.ts`):
+Los plugins marcados `"isolated": true` corren **aislados** en un **proceso del SO separado** (`child_process.fork` de `backend/src/core/plugin-worker.js`, orquestado por `backend/src/core/plugin-isolate.ts`) — heap, event loop y tope de memoria propios, así que un crash/OOM/escape de heap queda contenido en el hijo y nunca alcanza al host. NO hacen `require()` de módulos del core. Acceden a la base de datos a través del **capability bridge** `wordjs`, que el host les pasa en `init(wordjs)` por RPC sobre el canal IPC y que verifica permisos y restringe argumentos **en el host** (`backend/src/core/plugin-api.ts`), dentro del contexto del plugin (`plugin-context.ts`):
 
 ```javascript
 module.exports = {
@@ -28,18 +28,35 @@ module.exports = {
 };
 ```
 
-Métodos del bridge: `wordjs.db.all/get/run`, `wordjs.db.createTable(name, columns)`, `wordjs.db.getType()`. Cada uno exige el permiso correspondiente del manifest (`database:read` / `database:write`).
+Métodos del bridge: `wordjs.db.all/get/run`, `wordjs.db.createTable(name, columns)`, `wordjs.db.getType()`, y la propiedad `wordjs.db.tablePrefix` (el prefijo `wjp_<slug>_` de tus tablas). Cada uno exige el permiso correspondiente del manifest (`database:read` / `database:write`).
 
-### Aislamiento de tablas: el core está fuera de límites
+### Aislamiento de tablas: prefijo por plugin + el core fuera de límites
 
-Un plugin **no confiable** (sandboxed) está **table-scoped**: el host rechaza cualquier SQL que mencione una tabla del core, y no puede crear una tabla cuyo nombre choque con una del core.
+Cada plugin tiene un **namespace de tablas propio** — el prefijo `wjp_<slug>_` (como `$wpdb->prefix` en WordPress), expuesto en `wordjs.db.tablePrefix` y derivado en `createPluginApi()` (`'wjp_' + slug + '_'`, normalizado a minúsculas/`[A-Za-z0-9]`).
+
+Un plugin **no confiable** (sandboxed) está **table-scoped por defecto-deny**: el host (`assertSqlAllowed` en `plugin-api.ts`) exige que **toda** tabla que la query toque pertenezca al plugin (esté bajo su prefijo). Un token no atribuible o sin prefijo se **rechaza** (fail-closed), no se ignora — así un plugin no puede leer tablas de otro plugin (p.ej. `received_emails` de mail-server) ni del core, incluso una que no esté en la denylist explícita.
 
 | Tipo de plugin                         | Acceso a BD                                                                 |
 | :------------------------------------- | :------------------------------------------------------------------------- |
-| **Untrusted** (sandboxed, por defecto) | Solo sus propias tablas. SQL que referencie `users`, `user_meta`, `options`, `roles`, `sessions`, … es **denegado** (`🛡️ query references core table`). |
-| **Operator-trusted** (privilegiado)    | BD sin restricción (puede tocar tablas del core). El scoping se levanta.    |
+| **Untrusted** (sandboxed, por defecto) | Solo sus propias tablas `wjp_<slug>_*`. SQL que toque cualquier otra tabla (incluidas las del core `users`, `user_meta`, `options`, `roles`, `sessions`) es **denegado**. |
+| **Operator-trusted** (privilegiado)    | BD **sin restricción** (puede tocar tablas del core): el scoping se levanta — `assertSqlAllowed` no se ejecuta. |
 
-La confianza es **server-side** y nunca auto-declarable: se otorga vía `config.trustedSystemPlugins` (defaults de fábrica) o un toggle de admin en la UI de Plugins. Un plugin puede pedir `database:admin` en su manifest cuanto quiera — sin confianza del operador, sigue sin alcanzar las tablas del core. El guard es un **denylist textual conservador** (quita comentarios SQL y bloquea el nombre de tabla como palabra completa en cualquier parte de la sentencia), no un parser, así que puede sobre-bloquear queries que solo mencionen el nombre de una tabla del core — comportamiento aceptable, un plugin no confiable no tiene por qué nombrarlas.
+Además del default-deny por prefijo, `assertSqlAllowed` rechaza para untrusted (defensa en profundidad):
+
+- **Verbo no permitido**: la sentencia debe empezar por un verbo del allowlist según el método — `all/get` solo `SELECT`/`WITH`; `run` solo `INSERT/UPDATE/DELETE/CREATE/ALTER/DROP/REPLACE`.
+- **`ATTACH` / `DETACH` / `PRAGMA`**: montar archivos del host como BD o leer settings/metadatos.
+- **Catálogos de esquema**: `sqlite_master`/`sqlite_schema`/`information_schema`/`pg_catalog` (enumerar/leer el esquema del core).
+- **Sentencias apiladas** (`SELECT 1; DROP TABLE x`) — una sola sentencia por llamada.
+- **Comma-joins** (`FROM a, b`): cross-join implícito que cuela una segunda tabla — usa `JOIN` explícito.
+- **`USING`** (el `DELETE ... USING <tabla>` de Postgres): se incluye en la atribución por prefijo para que una tabla referida ahí no escape el scoping.
+- **`RETURNING`**: canal de exfiltración escalar — denegado; usa un `SELECT` aparte (el `lastID` de inserciones ya está disponible).
+- **Tablas del core como denylist explícita** (`PROTECTED_TABLES`: `users`, `user_meta`, `options`, `roles`, `sessions`, …) — redundante con el prefijo, como segunda barrera.
+
+Los comentarios SQL (`/* */` y `--`) se eliminan **antes** de evaluar para que no sirvan de espacio en blanco que evada los chequeos; los delimitadores de identificador (`[corchetes]`, `"comillas"`, `` `backticks` ``) se normalizan para que un nombre entrecomillado no se cuele. `createTable` aplica el mismo principio: un plugin untrusted solo puede crear tablas bajo su propio prefijo (no puede crear ni shadowear tablas del core o de otros plugins).
+
+La confianza es **server-side** y nunca auto-declarable (`plugin-trust.ts`): se otorga vía `config.trustedSystemPlugins` (defaults de fábrica) o un toggle de admin en la UI de Plugins. Un plugin puede pedir `database:admin` en su manifest cuanto quiera — sin confianza del operador, sigue table-scoped a su prefijo.
+
+> **Defensa en profundidad (en el hijo):** el proceso aislado también corre `secure-require.ts` (bloquea `worker_threads`/`vm`/`child_process`/módulos de red, `process.binding`, addons nativos) e `io-guard.ts` (bloquea escrituras al código del plugin y lecturas de `.env`/secretos **y de los archivos de BD** `data/wordjs.db` + sidecars), de modo que un plugin no puede leer la BD por fuera del bridge tocando el archivo directamente.
 
 > **Nota histórica:** `db-migration` ya **no** es un plugin (migraba/tocaba tablas del core y gestionaba procesos del servidor). Ahora es infraestructura del core en `backend/src/core/db-admin/`. Ver [database.md §1.5](./database.md).
 

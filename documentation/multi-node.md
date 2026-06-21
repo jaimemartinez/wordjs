@@ -131,10 +131,11 @@ Point your L4/L7 load balancer at the gateway. Health probes (added for orchestr
 
 ## Known limitations
 
-- **Plugin activate/deactivate** changes plugin code/worker state in-process on the handling node and
-  the active set in the DB. Other nodes do not hot-reload plugin workers live — do a **rolling restart**
-  to propagate a plugin activation/deactivation across the cluster. (Role/capability and option changes
-  do propagate live.)
+- **Plugin activate/deactivate** changes the loaded plugin state on the handling node (for an
+  `isolated` plugin this is the forked child process it manages; for an in-process plugin it is the
+  loaded module) and the active set in the DB. Other nodes do not hot-reload that state live — do a
+  **rolling restart** to propagate a plugin activation/deactivation across the cluster.
+  (Role/capability and option changes do propagate live.)
 - The **service registry and certificate live on the single gateway**; running multiple active-active
   gateway nodes would additionally require registry replication and cross-gateway cert distribution,
   which this topology intentionally avoids.

@@ -4,9 +4,9 @@
 
 **WordJS** is a developer-first, JavaScript-native CMS that brings a WordPress-style
 extension model (plugins, themes, hooks, shortcodes) to a modern stack: a **TypeScript**
-backend, a **Next.js** frontend, and a small custom gateway. Its defining feature is a
-**worker-thread plugin sandbox** that runs third-party plugins in isolated V8 isolates,
-reachable only through a permission-checked capability bridge.
+backend, a **Next.js** frontend, and a small custom gateway. Its defining feature is an
+**OS-process plugin sandbox** that runs each third-party plugin in its own isolated operating-system
+process, reachable only through a permission-checked capability bridge.
 
 > ### ⚠️ Project status / maturity
 >
@@ -33,30 +33,42 @@ reachable only through a permission-checked capability bridge.
 ## ✨ What's actually here
 
 **Plugin system & security (the core differentiator)**
-- **Worker-thread plugin sandbox.** Plugins marked `"isolated": true` run in a separate
-  V8 isolate (`worker_threads`). They never touch the host heap (secrets, DB handle, other
-  plugins) directly — they reach core **only** through a `wordjs` capability bridge that is
-  RPC'd back to the host and executed under the plugin's permission context. Includes
-  per-isolate memory caps, RPC timeouts, and concurrent-call backpressure. (This is a
-  worker/heap boundary, **not** OS-level isolation — see the security note below.)
+- **OS-process plugin sandbox.** Plugins marked `"isolated": true` run in a **separate OS
+  process** (`child_process.fork`) — their own heap, event loop, and memory cap, so a crash,
+  OOM, or heap escape is contained to the child **by the kernel** and never takes down the host.
+  They reach core **only** through a `wordjs` capability bridge that is RPC'd back to the host
+  (structured-clone IPC, no live host references) and **permission-checked on the host side**
+  under the plugin's context. Bridge dispatch enforces an **exact method allowlist**; privileged
+  surfaces (mail provider, notification transport, route/hook registration) flow through dedicated
+  IPC kinds gated by trust, never a generic call. Includes **layered per-child memory caps**
+  (see below), RPC timeouts with wedged-child recycling, and concurrent-call backpressure. A
+  `worker_threads` transport remains as a cross-platform fallback; the same guards run either way.
+  (This is real OS-process isolation, but not yet capability-minimal at the syscall level — see
+  the security note below.)
 - **AST static scanner.** Before activation, each plugin's `.js/.cjs/.mjs` files are parsed
   with `acorn` and walked for dangerous constructs — `eval`, `Function`, `exec`/`spawn`,
   dynamic/computed `require`, sensitive core modules, and forbidden `process` access. The
   scan is **fail-closed** (an unparseable file is a violation). Declaring `system:admin` in
   your own manifest does **not** skip the scan; only plugins an operator explicitly trusts
   (`trustedSystemPlugins`, or the admin trust toggle) are exempt.
-- **Runtime secure-require.** `fs`, `child_process`, and the network modules are wrapped in
-  permission-checking proxies that resist obfuscation (they also guard `Module._load`,
-  `process.binding`, native `.node` addons, deferred timers, and event listeners). For
-  untrusted plugins the binding-backed globals (`fetch`/`WebSocket`/`EventSource`) are
-  trapped, so they get **no outbound network**. Plugins receive a **secret-scrubbed** view
-  of config and a **table-scoped** DB handle that refuses raw SQL against core
-  credential/role/option tables.
+- **In-child runtime guards.** Inside the sandboxed process, `fs`, `child_process`, and the
+  network modules are wrapped in permission-checking proxies that resist obfuscation (they also
+  block `worker_threads`/`vm`/`module`/`inspector`, `process.binding`, native `.node` addons,
+  deferred timers, and event listeners). For untrusted plugins the binding-backed globals
+  (`fetch`/`WebSocket`/`EventSource`) are trapped, so they get **no outbound network**. An
+  `io-guard` confines fs reads/writes to the plugin's own dir and blocks reads of `.env`/secret
+  files and the database files. Plugins receive a **secret-scrubbed** view of config and a
+  **table-scoped** DB handle (untrusted plugins are confined to their own `wjp_<slug>_` tables
+  and refused raw SQL against core credential/role/option tables).
 - **Mandatory permission model.** Plugins declare scoped permissions in `manifest.json`
   (filesystem, network, database, settings, etc.) with human-readable reasons; the sandbox
   enforces them at runtime. Trust is **server-side and never self-declarable**.
-
-**Public site & SEO**
+- **Layered per-child memory caps.** Process separation already means a child OOM can't crash
+  the host on any platform. On top of that: an **opt-in preventive cgroup v2 `MemoryMax`** per
+  child on systemd Linux (`systemd-run --user --scope`, no root, probe-gated; enable via
+  `sandbox.useCgroupMemoryCap`); a **reactive host-side RSS poll** that `SIGKILL`s a child over
+  budget (Linux `/proc`, Windows `tasklist`, macOS `ps`); and a loose `RLIMIT_AS` virtual
+  backstop plus a `--max-old-space-size` JS-heap cap.
 - **Real server-side rendering.** The public routes (home, posts, pages, search) are async
   React Server Components that fetch on the server (`frontend/src/lib/server-api.ts`), so the
   initial HTML sent to crawlers and the first paint already contain the real title/body —
@@ -77,7 +89,7 @@ reachable only through a permission-checked capability bridge.
   so the responsive layout matches the live site exactly.
 - **Hooks & filters** event system, with admin-side hook inspection.
 - **Shortcodes** (WordPress-style) for dynamic content, including from plugins.
-- **Themes** with CSS-variable theming (13 first-party themes ship in-repo).
+- **Themes** with CSS-variable theming (14 first-party themes ship in-repo).
 - **Dynamic roles & permissions**, database-driven.
 - **i18n** for core and plugins (es / en / pt).
 - **Import / export** for full site backup and restore, with **retention pruning** — after
@@ -180,7 +192,7 @@ Guides live in [`documentation/`](documentation/):
 - 🎨 **[Themes Guide](documentation/themes.md)**
 - 🔌 **[Plugin Tutorial](documentation/plugins.md)** — build an isolated plugin against the `wordjs` bridge.
 - 🧩 **[Plugins Reference](documentation/plugins-reference.md)** — the bundled plugins and their trust tiers.
-- 🧱 **[Plugin Isolation](documentation/plugin-isolation-proposal.md)** — the worker sandbox + trust model (implemented).
+- 🧱 **[Plugin Isolation](documentation/plugin-isolation-proposal.md)** — the OS-process sandbox + trust model (implemented).
 - ✉️ **[Mail Server Guide](documentation/mail-server.md)**
 - 🗄️ **[Database Guide](documentation/database.md)**
 - 📥 **[Migrating from WordPress](documentation/wordpress-import.md)** — import a WordPress WXR export (authors, terms, posts/pages, comments).
@@ -297,7 +309,7 @@ tests** (`npm run test`, e.g. the XSS sanitizer), and build.
 - **Communication:** REST + JWT + WebSockets/SSE
 - **Logging:** Structured JSON via Winston (daily-rotated)
 - **Gateway:** Express + Node `cluster`, http-proxy, mTLS internal channel
-- **Sandbox:** `worker_threads` isolates + `acorn` AST scanning + runtime require proxies
+- **Sandbox:** `child_process` OS-process isolation (`worker_threads` fallback) + `acorn` AST scanning + runtime require proxies + layered memory caps (cgroup/RSS-poll/RLIMIT_AS)
 - **TLS:** `acme-client` (Let's Encrypt HTTP-01 / DNS-01)
 - **Mail:** `smtp-server`, `nodemailer`, `mailparser`, DKIM (isolated plugin)
 - **Database:** SQLite (`sql.js` WASM / `better-sqlite3`) or PostgreSQL (`pg` /
@@ -310,7 +322,7 @@ tests** (`npm run test`, e.g. the XSS sanitizer), and build.
 
 WordJS recently completed a round of security hardening that addressed several **critical**
 findings (a CSRF bypass, committed secrets, and XSS sinks), and adds defense-in-depth around
-plugins (worker isolation, AST scanning, runtime require proxies, secret scrubbing,
+plugins (OS-process isolation, AST scanning, runtime require proxies, secret scrubbing,
 SQL-scope guards, gateway mTLS, and constant-time secret comparison).
 
 That said, this is a young project under active change. **Before deploying to production or
@@ -320,8 +332,11 @@ exposing it to the internet:**
   endpoints while the default is in place),
 - review the [Security Policy](SECURITY.md) for reporting and current defenses.
 
-The plugin sandbox is a **worker/heap boundary with runtime guards**, not OS-level
-isolation; a path to stronger (`isolated-vm` / child-process + OS sandbox) isolation is
+The plugin sandbox now runs each untrusted plugin in a **separate OS process** with
+defense-in-depth capability guards — a kernel-enforced boundary that contains a child crash,
+OOM, or heap escape to that one process. The remaining hardening is honest: the child still
+has the full Node API and a normal OS uid, so it is **not yet capability-minimal at the
+syscall level**. A path to stronger isolation (seccomp/landlock, cgroup caps, dropped uid) is
 tracked in [POSITIONING.md](POSITIONING.md). Found a vulnerability? Please follow the
 disclosure process in [SECURITY.md](SECURITY.md).
 
@@ -335,8 +350,9 @@ Planned, **not yet implemented**:
   is a verifiable trust badge (see [POSITIONING.md](POSITIONING.md)).
 - **☁️ Media CDN integration** — S3-compatible object storage.
 - **🌐 Multi-site** — manage multiple domains/sites from one install.
-- **🛡️ OS-level plugin isolation** — `isolated-vm` / sandboxed child processes for the
-  hosted tier.
+- **🛡️ Kernel-level plugin hardening** — OS-process isolation already ships; next is
+  syscall filtering (seccomp/landlock), a preventive Windows memory cap (Job Object), and a
+  dropped OS uid for the hosted tier.
 
 **In progress / deferred migrations** (tracked as open PRs):
 

@@ -7,7 +7,7 @@
 ## 1. The repositioning (one sentence)
 
 > **WordJS is the CMS where third-party plugins can't compromise your site** — every
-> untrusted plugin runs in an isolated worker and can only reach the system through a
+> untrusted plugin runs in an isolated OS process and can only reach the system through a
 > permission-checked capability bridge.
 
 Everything else (posts, themes, media, menus) is table stakes. The **plugin sandbox is the

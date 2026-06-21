@@ -16,7 +16,7 @@ The backend follows a layered architecture inspired by WordPress but implemented
     *   `MigrationGuard`: Validates `Host` header against `siteUrl`.
 4.  **Security Layers:**
     *   `AST Scanner`: Static analysis (acorn, fail-closed) of plugin code at install time.
-    *   `Worker Isolation`: Every plugin runs in a `worker_threads` isolate and reaches the host only through the permission-checked `wordjs` capability bridge. Two server-side trust tiers (untrusted/sandboxed vs operator-trusted) gate DB scope, secret options, route mounting, and outbound network. See `documentation/plugins.md` / `documentation/security.md`.
+    *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. Two server-side trust tiers (untrusted/sandboxed vs operator-trusted) gate DB scope, secret options, route mounting, and outbound network. Untrusted-plugin routes are namespaced under `/api/v1/plugin/<slug>` (operator-trusted plugins may opt into an absolute path); their DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
 5.  **Routing:** `backend/src/routes/index.ts` dispatches to controllers.
 6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
 7.  **Response:** JSON response sent back.
@@ -62,8 +62,8 @@ Located in `backend/src/middleware/permissions.ts` (and `auth.ts`).
 ### 2.3 Dynamic Roles & Capabilities
 Roles are no longer hardcoded. They are stored in the database (table `options`) under the key `wordjs_user_roles`.
 
-*   **Logic:** `backend/src/core/roles.js` manages the abstraction.
-*   **Discovery:** The system automatically aggregates all unique `cap` identifiers registered by plugins via `adminMenu.js`. These are then presented as toggleable options in the Roles Management UI.
+*   **Logic:** `backend/src/core/roles.ts` manages the abstraction.
+*   **Discovery:** The system automatically aggregates all unique `cap` identifiers registered by plugins via `adminMenu.ts`. These are then presented as toggleable options in the Roles Management UI.
 *   **Initialization:** Default roles are seeded during installation but can be modified via the Roles UI.
 *   **Capabilities:** Users' capabilities are resolved at runtime based on their assigned role in the `roles` manager.
 
@@ -78,7 +78,7 @@ Default roles include:
 
 ## 3. The Hook System (Actions & Filters)
 
-WordJS implements a WordPress-style Event-Driven Architecture via `backend/src/core/hooks.js`.
+WordJS implements a WordPress-style Event-Driven Architecture via `backend/src/core/hooks.ts`.
 
 ### 3.1 Concepts
 *   **Actions:** Do something at a specific point (fire-and-forget).
@@ -101,11 +101,11 @@ WordJS implements a WordPress-style Event-Driven Architecture via `backend/src/c
 
 Models wrap database operations. Located in `backend/src/models/`.
 
-### 4.1 User Model (`User.js`)
+### 4.1 User Model (`User.ts`)
 *   **Meta Data:** Supports arbitrary key-value storage via `user_meta` table.
 *   **Methods:** `User.create()`, `User.authenticate()`, `user.can()`.
 
-### 4.2 Options API (`core/options.js`)
+### 4.2 Options API (`core/options.ts`)
 Global key-value store for system settings.
 *   `getOption(key, default)`
 *   `updateOption(key, value)` - Auto-serializes JSON.
@@ -114,7 +114,7 @@ Global key-value store for system settings.
 
 ## 5. Standardized Error Handling
 
-All errors should follow the structure defined in `backend/src/middleware/errorHandler.js`.
+All errors should follow the structure defined in `backend/src/middleware/errorHandler.ts`.
 
 ### 5.1 Error Response Schema
 ```json
@@ -182,7 +182,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install)  |
 | `POST` | `/plugins/:slug/activate`   | Admin | Activate a plugin                                   |
 | `POST` | `/plugins/:slug/deactivate` | Admin | Deactivate a plugin                                 |
-| `POST` | `/plugins/:slug/trust`      | Admin | Toggle the privileged "trusted" tier (`{ trusted }`); hot-reloads the worker. First-party defaults return `409` |
+| `POST` | `/plugins/:slug/trust`      | Admin | Toggle the privileged "trusted" tier (`{ trusted }`); reloads the isolated child process. First-party defaults return `409` |
 | `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin                                  |
 | `GET`  | `/themes`                   | Admin | List available themes                               |
 | `POST` | `/themes/:slug/activate`    | Admin | Change active theme                                 |
@@ -314,7 +314,7 @@ Base path: `/api/v1/import`. Migrates an existing WordPress site from its **WXR*
 
 ## 8. Cron System ⏰
 
-WordJS includes a robust scheduling system similar to `wp-cron`, located in `backend/src/core/cron.js`.
+WordJS includes a robust scheduling system similar to `wp-cron`, located in `backend/src/core/cron.ts`.
 
 ### 8.1 Scheduling Events
 ```javascript
@@ -341,7 +341,7 @@ addAction('my_plugin_daily_task', () => {
 
 ## 9. Internationalization (i18n) 🌍
 
-WordJS supports native translation via `backend/src/core/i18n.js`. It uses JSON files located in `backend/languages/`.
+WordJS supports native translation via `backend/src/core/i18n.ts`. It uses JSON files located in `backend/languages/`.
 
 ### 9.1 Usage
 ```javascript
@@ -366,7 +366,7 @@ File format: `domain-locale.json` (e.g., `my-plugin-es_ES.json`).
 
 ## 10. Shortcodes 🧩
 
-Shortcodes allow users to inject dynamic content into posts/pages using `[tag]` syntax. Handled by `backend/src/core/shortcodes.js`.
+Shortcodes allow users to inject dynamic content into posts/pages using `[tag]` syntax. Handled by `backend/src/core/shortcodes.ts`.
 
 ### 10.1 Registering a Shortcode
 ```javascript
@@ -410,7 +410,7 @@ WordJS features a powerful **Full System State Backup** engine located in `backe
 > **Retention:** Backups still live **on-host** in `backend/backups/`; off-host / S3 storage is roadmap. The only automatic cleanup is the retention prune above.
 
 ### 11.3 Import/Expert (Logical Data Only)
-Located in `backend/src/core/import-export.js`.
+Located in `backend/src/core/import-export.ts`.
 *   `exportSite(options)`: Generates the JSON dump used inside full backups. Can also return WXR (WordPress XML).
 *   `importSite(data, options)`: The engine that consumes the JSON dump to populate the DB.
 
@@ -418,7 +418,7 @@ Located in `backend/src/core/import-export.js`.
 
 ## 12. Widgets System 🧱
 
-The Widgets API (`backend/src/core/widgets.js`) allows plugins to register dynamic content blocks for Sidebars and Footers.
+The Widgets API (`backend/src/core/widgets.ts`) allows plugins to register dynamic content blocks for Sidebars and Footers.
 
 ### 12.1 Registering a Widget
 ```javascript

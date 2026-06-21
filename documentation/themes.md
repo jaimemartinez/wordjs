@@ -30,9 +30,23 @@ themes/
 > back to defaults (name = slug, version = `1.0.0`). A `screenshot.{png,jpg,webp}`, if present,
 > is auto-detected and exposed in the theme picker.
 
+> **`functions.js` is sandboxed.** A theme's optional `functions.js` is *not* trusted code. When
+> the backend theme engine loads it (`loadThemeLogic()` in `backend/src/core/theme-engine.ts`)
+> it first runs the same install-time **AST static scanner** as plugins
+> (`validatePluginPermissions`, which fails closed and blocks `eval`/`Function`, `exec`/`spawn`,
+> `require()`/`import()` of sensitive builtins such as `child_process`, etc.). It then executes
+> the logic **in-process** inside an AsyncLocalStorage security context under the slug
+> `theme:<slug>` (`runWithContext`), which activates the runtime guards in `secure-require.ts`:
+> dangerous Node builtins are blocked and `fs`/`require` access is confined to the theme's own
+> directory (reads of `.env`/secret files and the database are denied). By default a theme is
+> granted only `settings:read` + `content:read`; a theme that needs more must ship a
+> `manifest.json`. This is the lighter in-process guard model — distinct from the full OS-process
+> isolation (`child_process.fork`) used for plugins marked `"isolated": true`. If the AST scan
+> trips, the theme's `functions.js` is blocked and the rest of the theme still loads.
+
 ## Available Themes
 
-There are **9 shipped themes**:
+There are **14 shipped themes**:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
@@ -44,10 +58,15 @@ There are **9 shipped themes**:
 | **midnight-luxury** | Dark Premium       | Gold accents, serif fonts, elegant          |
 | **aurora-gradient** | Mesh Gradient      | Flowing gradients, purple/cyan/magenta      |
 | **neon-pulse**      | Tech Noir          | Neon glow, dark mode, rose accents          |
+| **carbon-terminal** | OLED Dev/Docs      | OLED-dark, terminal-green accent            |
+| **noir-or**         | Luxury             | Gold accents on deep charcoal               |
+| **pop-studio**      | Bold Creative      | Vibrant pink/cyan, big rounded shapes       |
+| **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
+| **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 | **vidaParaTodos**   | Corporate          | Clean professional blue; full template set  |
 
 > **`--wjs-` variable adoption.** All themes except **default** are built on the `--wjs-*`
-> variable system documented below (each defines 38–88 `--wjs-` declarations). The **default**
+> variable system documented below (each defines dozens of `--wjs-` declarations). The **default**
 > theme predates that convention and uses a smaller, legacy set (`--primary`, `--text`, `--bg`,
 > `--border`, …) — copy a `--wjs-` theme (e.g. `aurora-gradient`) as a starting point rather
 > than `default` if you want full variable coverage.

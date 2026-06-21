@@ -68,6 +68,8 @@ cd backend
 npm run dev        # node --watch -r ts-node/register src/index.ts
 ```
 
+Each `"isolated": true` plugin runs in a **separate OS process** (`child_process.fork` of `src/core/plugin-worker.js`, host: `src/core/plugin-isolate.ts`) — not a worker thread, and never in the host process — so a plugin crash/OOM is contained to the child. In **dev** the forked child must also load `ts-node` (core is `.ts`): `plugin-isolate.ts` detects this from its own `.ts` filename and passes `-r ts-node/register` to the child's `execArgv`; on a compiled `dist/` build no flag is needed. The same in-child runtime guards (`secure-require.ts`, `io-guard.ts`) and host-side bridge allowlist apply in both modes.
+
 ### Strict typecheck
 
 ```bash
@@ -145,20 +147,20 @@ Config lives in `gateway/gateway-config.json` (`gatewaySecret`, `gatewayPort`, `
 From the repo root:
 
 ```bash
-npm run dev    # launches the gateway + backend (watch / ts-node)
-# start the frontend separately if needed:
-cd frontend && npm run dev
+npm run dev    # concurrently launches all three: gateway + backend (watch / ts-node) + frontend
 ```
 
-For a production-style local run, `npm start` uses `concurrently` to bring up the gateway, backend, and frontend together. (See the troubleshooting note below.)
+`npm run dev` uses `concurrently` to bring up the gateway (`dev:gateway` → `cd gateway && node src/index.js`), backend (`dev:backend` → `npm run dev`), and frontend (`dev:frontend` → `npm run dev`) together, with `-k` so killing one tears down the rest.
 
-> **Troubleshooting:** the root `start` / `prod:gateway` scripts invoke `node gateway.js`, but the gateway entry is actually `gateway/src/index.js`. If `npm start` fails to launch the gateway, start it directly with `node gateway/src/index.js` (matching the working `dev:gateway` script), or run each service in its own terminal.
+For a production-style local run, `npm start` likewise uses `concurrently` to bring up the gateway (`prod:gateway` → `cd gateway && node src/index.js`), backend (`npm start`), and frontend (`npm start`) together.
+
+> **Tip:** if you'd rather watch the logs of one service at a time, run each in its own terminal — e.g. `cd gateway && node src/index.js`, `cd backend && npm run dev`, `cd frontend && npm run dev` — instead of the combined `concurrently` script.
 
 ---
 
 ## 🪺 Run modes: split vs monolith
 
-The **same codebase** runs two ways. The modes are **switchable at any time** — both share the same `backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`, secrets, and the same public origin (`https://localhost:3000`), so **there is no migration to switch**. They are **mutually exclusive** (both bind the public port, default 3000) — run one or the other, not both. **Plugins stay isolated (worker threads) in both modes.**
+The **same codebase** runs two ways. The modes are **switchable at any time** — both share the same `backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`, secrets, and the same public origin (`https://localhost:3000`), so **there is no migration to switch**. They are **mutually exclusive** (both bind the public port, default 3000) — run one or the other, not both. **Plugins stay isolated (each `"isolated": true` plugin runs in a separate OS process via `child_process.fork`) in both modes.**
 
 | Mode         | Processes / ports                              | Dev               | Build             | Prod               |
 | ------------ | ---------------------------------------------- | ----------------- | ----------------- | ------------------ |
@@ -171,7 +173,7 @@ The default. The **gateway** (`:3000` public, a Node `cluster` reverse-proxy) si
 
 ### Monolith (1 process, 1 port)
 
-The repo-root entrypoint **`monolith.js`** mounts the backend Express app (**with** its isolated worker-thread plugins) **and** the Next.js request handler **in-process** — no loopback proxy, no Node `cluster`, and no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `…/robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port reusing the gateway's certificate** (HTTP fallback), plus a **loopback-only HTTP listener** for the frontend's server-side (SSR) API calls.
+The repo-root entrypoint **`monolith.js`** mounts the backend Express app (**with** its isolated plugins — each runs in its own forked OS process, never in-process) **and** the Next.js request handler **in-process** — no loopback proxy, no Node `cluster`, and no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `…/robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port reusing the gateway's certificate** (HTTP fallback), plus a **loopback-only HTTP listener** for the frontend's server-side (SSR) API calls.
 
 ```bash
 npm run dev:mono     # dev: Next dev HMR + ts-node backend
