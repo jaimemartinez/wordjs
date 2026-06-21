@@ -62,6 +62,27 @@ test('guarded http rejects request to a blocked IP literal (synchronously)', () 
     assert.throws(() => guarded.get({ host: '127.0.0.1', port: 80, path: '/' }), /egress/i);
 });
 
+test('guarded net.connect with NO host is blocked (Node would default to localhost)', async () => {
+    const guarded = eg.getGuardedModule('net');
+    await new Promise((resolve, reject) => {
+        const to = setTimeout(() => reject(new Error('timed out — no-host connect was not blocked')), 5000);
+        const sock = guarded.connect({ port: 1 });
+        sock.on('error', (e: any) => { clearTimeout(to); try { assert.match(String(e && e.message), /egress/i); resolve(null); } catch (err) { reject(err); } });
+        sock.on('connect', () => { clearTimeout(to); sock.destroy(); reject(new Error('should not have connected to localhost')); });
+    });
+});
+
+test('guarded http.request with NO host is blocked (defaults to localhost)', async () => {
+    const guarded = eg.getGuardedModule('http');
+    await new Promise((resolve, reject) => {
+        const to = setTimeout(() => reject(new Error('timed out — no-host request was not blocked')), 5000);
+        const req = guarded.request({ port: 1, path: '/' });
+        req.on('error', (e: any) => { clearTimeout(to); try { assert.match(String(e && e.message), /egress/i); resolve(null); } catch (err) { reject(err); } });
+        req.on('response', () => { clearTimeout(to); reject(new Error('should not have connected to localhost')); });
+        req.end();
+    });
+});
+
 test('assertUrlAllowedSync blocks ws:// to a private IP literal', () => {
     assert.throws(() => eg.assertUrlAllowedSync('ws://169.254.169.254/'), /egress/i);
     assert.throws(() => eg.assertUrlAllowedSync('wss://10.0.0.1:8080/x'), /egress/i);

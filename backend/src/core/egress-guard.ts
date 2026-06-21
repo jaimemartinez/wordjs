@@ -113,11 +113,15 @@ function parseConnectArgs(args: any[]): { options: any; cb?: any } {
     return { options, cb };
 }
 
-function secureConnect(orig: Function, thisArg: any, args: any[]): any {
+function secureConnect(orig: any, thisArg: any, args: any[]): any {
     const { options, cb } = parseConnectArgs(args);
     const host = options.host || options.hostname;
-    assertHostLiteral(host);
-    if (host && !realNet.isIP(host)) options.lookup = validatingLookup; // hostname → validate resolved IP
+    assertHostLiteral(host); // blocks an explicit private/loopback IP literal up-front
+    // ALWAYS route name resolution through the validating lookup (unless it's a unix-socket/IPC path,
+    // which isn't network egress). This covers the NO-HOST case too: net/tls default the host to
+    // 'localhost' when none is given, and validatingLookup blocks 'localhost' → no silent loopback
+    // connect. For an IP-literal host Node skips lookup, so assertHostLiteral above is the guard.
+    if (!options.path) options.lookup = validatingLookup;
     return cb ? orig.call(thisArg, options, cb) : orig.call(thisArg, options);
 }
 
@@ -162,12 +166,15 @@ function normalizeHttpArgs(args: any[]): { url?: any; options: any; cb?: any } {
 }
 
 function guardHttp(mod: any): any {
-    const wrap = (orig: Function) => function (...args: any[]) {
+    const wrap = (orig: any) => function (...args: any[]) {
         const { url, options, cb } = normalizeHttpArgs(args);
         let host = options.host || options.hostname;
         if (!host && url) { try { host = new URL(String(url)).hostname; } catch { /* */ } }
         assertHostLiteral(host);
-        if (host && !realNet.isIP(host)) options.lookup = validatingLookup;
+        // Always inject the validating lookup (unless a unix-socket), so http(s).request({port}) with no
+        // host — which defaults to 'localhost' — is validated (and blocked) instead of silently hitting
+        // loopback. IP-literal hosts skip lookup and are covered by assertHostLiteral above.
+        if (!options.socketPath) options.lookup = validatingLookup;
         const rebuilt = url !== undefined ? [url, options] : [options];
         if (cb) rebuilt.push(cb);
         return orig.apply(mod, rebuilt);
@@ -200,12 +207,25 @@ function guardDgram(mod: any): any {
             const sock = mod.createSocket(...args);
             const origSend = sock.send.bind(sock);
             sock.send = function (...sargs: any[]) {
-                // dgram.send(msg, [offset, length,] port, address, cb): the address is the 2nd-to-last
-                // non-function arg. Block IP literals in private ranges (hostnames do their own lookup).
-                const noFn = sargs.filter((x) => typeof x !== 'function');
-                const address = noFn.find((x) => typeof x === 'string' && realNet.isIP(x));
-                if (address) assertHostLiteral(address);
-                return origSend(...sargs);
+                // dgram.send(msg, [offset, length,] port, address, cb): the destination host is the last
+                // string arg. dgram has no `lookup` option, so resolve+validate hostnames ourselves.
+                const cb = typeof sargs[sargs.length - 1] === 'function' ? sargs[sargs.length - 1] : undefined;
+                const strs = sargs.filter((x) => typeof x === 'string');
+                const address = strs.length ? strs[strs.length - 1] : undefined;
+                if (address && realNet.isIP(address)) {
+                    try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e); return; } throw e; }
+                    return origSend(...sargs);
+                }
+                if (address) {
+                    realDns.lookup(address, { all: true, verbatim: true }, (err: any, addrs: any) => {
+                        if (err) { if (cb) cb(err); return; }
+                        const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
+                        for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
+                        origSend(...sargs);
+                    });
+                    return;
+                }
+                return origSend(...sargs); // no explicit address (dgram defaults to 127.0.0.1; UDP, no read-back)
             };
             return sock;
         };
