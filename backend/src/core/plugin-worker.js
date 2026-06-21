@@ -58,49 +58,40 @@ if (!netAllowed) {
         } catch { /* best-effort: if a global is non-configurable, leave it */ }
     }
 } else {
-    // Network IS granted: keep fetch/WebSocket, but enforce the SAME public-only egress policy as the
-    // raw socket modules — otherwise a granted plugin can fetch http://169.254.169.254/ (cloud metadata
-    // creds), loopback, and internal RFC1918 services. egress-guard is required here (before
-    // secure-require installs) so it captures the real net/dns. FAIL CLOSED: if it can't load, block the
-    // network globals entirely rather than leave them unfiltered.
+    // Network IS granted: enforce the public-only egress policy or a granted plugin can fetch
+    // http://169.254.169.254/ (cloud metadata creds), loopback, and internal RFC1918 services.
+    // egress-guard is required here (before secure-require installs) so it captures the real net/dns.
+    // FAIL CLOSED: if it can't load, block the network globals entirely rather than leave them unfiltered.
     try {
         const eg = require(path.join(coreDir, 'egress-guard'));
+        // PRIMARY enforcement: patch net.Socket.prototype.connect so EVERY outbound TCP connection in
+        // this child is validated AT THE REAL CONNECT against the resolved IP — covers raw net/tls,
+        // http/https (incl. custom agent/createConnection), the net.Stream alias, prototype-chain
+        // bypasses, AND the connect that undici (global fetch / WebSocket / EventSource) performs. This
+        // closes redirect-to-private and DNS-rebinding at the socket layer (the actual IP is checked).
+        eg.installChildNetGuard();
+        // Defense-in-depth: fast, clear failures on the binding-backed globals. We DO NOT hand-roll
+        // redirects anymore — native fetch follows them AND correctly strips Authorization/Cookie on a
+        // cross-origin hop; each hop's connect is IP-validated by the prototype patch above.
         const realFetch = globalThis.fetch;
         if (typeof realFetch === 'function') {
             const guardedFetch = async (input, init) => {
-                init = init ? { ...init } : {};
-                let url = typeof input === 'string' ? input : (input && input.url) || String(input);
-                // If the caller opted out of auto-following (manual/error), just validate the one URL.
-                const wantsManual = init.redirect === 'manual' || init.redirect === 'error'
-                    || (typeof input === 'object' && input && (input.redirect === 'manual' || input.redirect === 'error'));
-                if (wantsManual) { await eg.assertUrlAllowed(url); return realFetch(input, init); }
-                // Default 'follow': follow redirects OURSELVES and re-validate EVERY hop — a public host
-                // can 3xx-redirect to http://169.254.169.254/ (metadata creds) or loopback, and undici's
-                // auto-follow would chase it unchecked.
-                let method = init.method || (typeof input === 'object' && input && input.method) || 'GET';
-                let body = init.body;
-                const headers = init.headers || (typeof input === 'object' && input && input.headers) || undefined;
-                const MAX = 20;
-                for (let i = 0; i <= MAX; i++) {
-                    await eg.assertUrlAllowed(url); // throws on blocked/private/unresolvable host (fail closed)
-                    const resp = await realFetch(url, { ...init, method, body, headers, redirect: 'manual' });
-                    const loc = (resp.status >= 300 && resp.status < 400 && resp.status !== 304) ? resp.headers.get('location') : null;
-                    if (!loc) return resp;
-                    url = new URL(loc, url).href;
-                    if (resp.status === 303 || ((resp.status === 301 || resp.status === 302) && method !== 'GET' && method !== 'HEAD')) { method = 'GET'; body = undefined; }
-                }
-                throw new Error('[sandbox] fetch exceeded maximum redirects');
+                const url = typeof input === 'string' ? input : (input && input.url) || String(input || '');
+                await eg.assertUrlAllowed(url); // fast-fail on an obviously blocked initial host (connect patch is authoritative)
+                return realFetch(input, init); // unchanged input/init → no body/header regressions; redirects handled natively + connect-guarded
             };
             Object.defineProperty(globalThis, 'fetch', { configurable: true, writable: true, value: guardedFetch });
         }
-        const RealWS = globalThis.WebSocket;
-        if (typeof RealWS === 'function') {
-            const GuardedWS = function (address, ...rest) {
-                eg.assertUrlAllowedSync(String(address)); // blocks ws:// to a private IP literal
-                return new RealWS(address, ...rest);
-            };
-            GuardedWS.prototype = RealWS.prototype;
-            Object.defineProperty(globalThis, 'WebSocket', { configurable: true, writable: true, value: GuardedWS });
+        for (const wsName of ['WebSocket', 'EventSource']) {
+            const Real = globalThis[wsName];
+            if (typeof Real === 'function') {
+                const Guarded = function (address, ...rest) {
+                    eg.assertUrlAllowedSync(String(address)); // fast block of an IP-literal private target; hostname→private is caught at connect
+                    return new Real(address, ...rest);
+                };
+                Guarded.prototype = Real.prototype;
+                Object.defineProperty(globalThis, wsName, { configurable: true, writable: true, value: Guarded });
+            }
         }
     } catch (e) {
         for (const name of ['fetch', 'WebSocket', 'EventSource']) {
