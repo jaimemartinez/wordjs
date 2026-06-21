@@ -187,15 +187,17 @@ class NotificationService {
     }
 
     /**
-     * Mark notification as read
+     * Mark notification as read. Scoped to the owning user so a caller can only act on their OWN
+     * notification (the uuid is not a capability — an attacker who learns another user's uuid must not
+     * be able to mutate it). Returns true only when a row the user owns was actually updated.
      */
-    async markAsRead(uuid) {
+    async markAsRead(uuid, userId) {
         const now = new Date().toISOString();
-        await dbAsync.run(
-            'UPDATE notifications SET is_read = 1, read_at = ? WHERE uuid = ?',
-            [now, uuid]
+        const result = await dbAsync.run(
+            'UPDATE notifications SET is_read = 1, read_at = ? WHERE uuid = ? AND user_id = ?',
+            [now, uuid, userId]
         );
-        return true;
+        return !!(result && result.changes);
     }
 
     /**
@@ -211,11 +213,12 @@ class NotificationService {
     }
 
     /**
-     * Delete a notification
+     * Delete a notification. Scoped to the owning user (see markAsRead) so a caller can only delete
+     * their OWN notification. Returns true only when a row the user owns was actually deleted.
      */
-    async deleteNotification(uuid) {
-        await dbAsync.run('DELETE FROM notifications WHERE uuid = ?', [uuid]);
-        return true;
+    async deleteNotification(uuid, userId) {
+        const result = await dbAsync.run('DELETE FROM notifications WHERE uuid = ? AND user_id = ?', [uuid, userId]);
+        return !!(result && result.changes);
     }
 
     /**

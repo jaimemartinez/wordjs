@@ -10,6 +10,12 @@ const fs = require('fs');
 
 const PLUGINS_DIR = path.resolve(__dirname, '../../plugins');
 
+// Allow-listed bundle types. The `type` query param is interpolated into the on-disk path, so an
+// unvalidated value (e.g. '../../..') is a path-traversal primitive even with the fixed '.bundle.js'
+// suffix. Only these three bundles are produced by the build pipeline and requested by the frontend
+// (pluginBundleLoader: 'admin' | 'component' | 'hooks').
+const ALLOWED_BUNDLE_TYPES = new Set(['admin', 'component', 'hooks']);
+
 /**
  * GET /api/v1/plugins/:slug/bundle
  * 
@@ -24,6 +30,11 @@ router.get('/:slug/bundle', async (req, res) => {
     // Validate slug (prevent path traversal)
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+
+    // Validate bundle type against the allow-list (prevent `type=../..` path traversal).
+    if (!ALLOWED_BUNDLE_TYPES.has(String(bundleType))) {
+        return res.status(400).json({ error: 'Invalid bundle type' });
     }
 
     const bundlePath = path.join(PLUGINS_DIR, slug, 'dist', `${bundleType}.bundle.js`);
@@ -81,6 +92,11 @@ router.get('/:slug/bundle/css', async (req, res) => {
 
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+
+    // Validate bundle type against the allow-list (prevent `type=../..` path traversal).
+    if (!ALLOWED_BUNDLE_TYPES.has(String(bundleType))) {
+        return res.status(400).json({ error: 'Invalid bundle type' });
     }
 
     const cssPath = path.join(PLUGINS_DIR, slug, 'dist', `${bundleType}.bundle.css`);

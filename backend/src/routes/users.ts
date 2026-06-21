@@ -256,6 +256,18 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
         });
     }
 
+    // SECURITY (privilege hierarchy / account takeover): editing ANOTHER user mutates their email +
+    // password below. `edit_users` is a delegable capability, so without this a non-administrator could
+    // reset an ADMINISTRATOR's password/email and seize the account. An administrator account may only be
+    // edited by an administrator (or its owner). (AUTH-1)
+    if (!isOwn && user.getRole && user.getRole() === 'administrator' && req.user.getRole() !== 'administrator') {
+        return res.status(403).json({
+            code: 'rest_forbidden',
+            message: 'Only an administrator can edit an administrator account.',
+            data: { status: 403 }
+        });
+    }
+
     const { email, displayName, password, url, role } = req.body;
 
     const updateData: any = { email, displayName, password, url };
