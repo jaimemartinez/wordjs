@@ -82,6 +82,13 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         /\binformation_schema\b/.test(lower) || /\bpg_catalog\b/.test(lower)) {
         throw new Error(`🛡️ Plugin DB access denied: querying the schema catalog is not permitted.`);
     }
+    // File / extension / program SQL functions never belong in plugin SQL, and (taking no FROM) they
+    // bypass the table-prefix attribution below. Inert on the default better-sqlite3 driver (no such
+    // functions / load_extension SQL not authorized), but deny TEXTUALLY so a driver swap or an enabled
+    // extension can never open a file-read / file-write / RCE channel from a scoped query.
+    if (/\b(?:readfile|writefile|load_extension|fsdir|zipfile|sqlite3_\w+|lo_import|lo_export|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|dblink|dblink_exec)\s*\(/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: file/extension/program SQL functions are not permitted.`);
+    }
     // Single statement only — strip a single trailing ';' then reject any remaining one.
     if (lower.replace(/;\s*$/, '').includes(';')) {
         throw new Error(`🛡️ Plugin DB access denied: multiple statements are not permitted.`);
