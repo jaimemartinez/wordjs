@@ -122,9 +122,45 @@ router.post('/install', async (req, res) => {
         return fail('PostgreSQL requires host, database, and user.');
     }
 
-    // Fix: Trust upstream Gateway protocol
-    const protocol = req.get('x-forwarded-proto') || req.protocol;
-    const host = req.get('host');
+    // SECURITY: siteUrl and the mTLS cert SANs below are derived from the request host. The Host /
+    // X-Forwarded-* headers are attacker-controllable, so an explicit operator-provided siteUrl takes
+    // precedence; otherwise we accept the request host ONLY after validating it against a strict
+    // hostname/IP[:port] allow-pattern (defeats header injection / CRLF / bogus SAN poisoning).
+    // Install is already gated by the one-time install token; this is defense-in-depth on top of that.
+    const HOST_PATTERN = /^(?:(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)(?:\.(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?))*|(?:\d{1,3}\.){3}\d{1,3})(?::\d{1,5})?$/;
+
+    let protocol: string;
+    let host: string;
+    const explicitSiteUrl = req.body.siteUrl ? String(req.body.siteUrl).trim() : '';
+    if (explicitSiteUrl) {
+        // Operator passed an explicit site URL — trust it but parse + validate its shape.
+        let parsed: URL;
+        try {
+            parsed = new URL(explicitSiteUrl);
+        } catch {
+            return fail('siteUrl must be a valid absolute URL (e.g. https://example.com).');
+        }
+        if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+            return fail('siteUrl must use http or https.');
+        }
+        if (!HOST_PATTERN.test(parsed.host)) {
+            return fail('siteUrl host is not a valid hostname or IP address.');
+        }
+        protocol = parsed.protocol.replace(':', '');
+        host = parsed.host;
+    } else {
+        // Derive from the (attacker-controllable) request headers — validate before any use.
+        const rawProto = req.get('x-forwarded-proto') || req.protocol;
+        protocol = String(rawProto).split(',')[0].trim().toLowerCase();
+        if (protocol !== 'http' && protocol !== 'https') {
+            return fail('Invalid request protocol; pass an explicit siteUrl in the installer.');
+        }
+        const rawHost = req.get('host') || '';
+        if (!HOST_PATTERN.test(rawHost)) {
+            return fail('Could not determine a valid install host. Pass an explicit siteUrl in the installer.');
+        }
+        host = rawHost;
+    }
     const siteUrl = `${protocol}://${host}`;
 
     // Frontend URL could be inferred or passed. 

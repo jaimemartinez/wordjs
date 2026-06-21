@@ -243,7 +243,49 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         declaredMime === 'application/pdf';
 
     try {
-        const result = await fileType.fromFile(req.file.path);
+        // SECURITY (GHSA-5v7r-6r5c-r473): file-type <=21.x has an ASF parser that can spin in an
+        // infinite loop on a malformed ASF object (zero-size sub-header), hanging the single-process
+        // event loop (DoS). We bound the magic-byte detection three ways:
+        //   1. Read only the first MAGIC_BYTES of the file — all signatures we care about live in the
+        //      header, and a bounded buffer caps how much the parser can iterate.
+        //   2. Skip the ASF code path outright: an ASF file is identified by its leading GUID; no ASF
+        //      MIME is on the upload allowlist (isAllowedMimeType), so detecting it could only ever
+        //      lead to rejection. We treat an ASF magic prefix as "undetected" (fail-closed for types
+        //      that require a signature; a disguised ASF is a forgery anyway).
+        //   3. Race detection against a timeout so any other pathological parse cannot hang the loop.
+        const MAGIC_BYTES = 4100; // sufficient for every signature file-type recognises
+        // ASF/WMV/WMA header GUID (little-endian): 30 26 B2 75 8E 66 CF 11 A6 D9 00 AA 00 62 CE 6C
+        const ASF_GUID = Buffer.from([
+            0x30, 0x26, 0xB2, 0x75, 0x8E, 0x66, 0xCF, 0x11,
+            0xA6, 0xD9, 0x00, 0xAA, 0x00, 0x62, 0xCE, 0x6C
+        ]);
+
+        const fd = fs.openSync(req.file.path, 'r');
+        let head: Buffer;
+        try {
+            const buf = Buffer.alloc(MAGIC_BYTES);
+            const bytesRead = fs.readSync(fd, buf, 0, MAGIC_BYTES, 0);
+            head = buf.subarray(0, bytesRead);
+        } finally {
+            fs.closeSync(fd);
+        }
+
+        let result;
+        if (head.length >= ASF_GUID.length && head.subarray(0, ASF_GUID.length).equals(ASF_GUID)) {
+            // ASF container — skip the vulnerable parser and treat as undetected.
+            result = undefined;
+        } else {
+            const DETECT_TIMEOUT_MS = 3000;
+            let timer: NodeJS.Timeout;
+            const timeout = new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('file-type detection timed out')), DETECT_TIMEOUT_MS);
+            });
+            try {
+                result = await Promise.race([fileType.fromBuffer(head), timeout]);
+            } finally {
+                clearTimeout(timer!);
+            }
+        }
 
         // If file-type detected something, verify it matches the extension/mimetype
         if (result) {

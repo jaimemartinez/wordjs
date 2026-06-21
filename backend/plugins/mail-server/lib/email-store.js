@@ -124,6 +124,35 @@ module.exports = function createEmailStore(db) {
         // Expose the storage dir so index.js resolves attachment paths from a single source of truth.
         UPLOAD_DIR,
 
+        /**
+         * SECURITY: authoritative recipient/ownership check for a single email record.
+         *
+         * to_address/cc_address/bcc_address are stored as COMMA-JOINED recipient lists, so a naive
+         * `email.to_address === userEmail` (a) denies legitimate multi-recipient To members and (b)
+         * ignores cc/bcc recipients entirely (they could neither read their own mail nor be matched).
+         * This parses every recipient field into exact, case-insensitive address tokens and checks
+         * membership across to + cc + bcc, plus the sender (from_address). Exact-token matching also
+         * avoids the substring false-positives a `LIKE %email%` membership test would have.
+         *
+         * @param {object} email   a row from findById (to_address/cc_address/bcc_address/from_address)
+         * @param {string} userEmail the requesting user's address
+         * @returns {boolean} true if the user is the sender or any (to/cc/bcc) recipient
+         */
+        canUserAccess(email, userEmail) {
+            if (!email || !userEmail) return false;
+            const me = String(userEmail).trim().toLowerCase();
+            if (!me) return false;
+            const tokens = new Set();
+            for (const field of [email.from_address, email.to_address, email.cc_address, email.bcc_address]) {
+                if (!field) continue;
+                for (const part of String(field).split(',')) {
+                    const addr = part.trim().toLowerCase();
+                    if (addr) tokens.add(addr);
+                }
+            }
+            return tokens.has(me);
+        },
+
         async initSchema() {
             // 1. Create the plugin-owned tables (idempotent).
             await db.createTable(T_EMAILS, [

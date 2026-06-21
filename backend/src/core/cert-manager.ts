@@ -319,11 +319,17 @@ class CertManager {
             if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
 
             const https = require('https');
+            // SECURITY: validate the gateway's server cert. We hand the freshly-issued PRIVATE KEY to
+            // this connection, so a co-resident process that port-steals 127.0.0.1:3100 must not be able
+            // to receive it. The cluster CA is loaded as `ca`, and the gateway-internal cert carries
+            // 'localhost' + '127.0.0.1' SANs (certManager.generateServiceCert), so verifying against
+            // servername 'localhost' succeeds for the genuine gateway and fails for an impostor.
             const agent = new https.Agent({
                 key: fs.readFileSync(MTLS_KEY),
                 cert: fs.readFileSync(MTLS_CERT),
                 ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
-                rejectUnauthorized: false
+                rejectUnauthorized: true,
+                servername: 'localhost'
             });
 
             const gatewayUrl = `https://127.0.0.1:3100/cert-upload`;
@@ -480,13 +486,16 @@ class CertManager {
             if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
 
             const https = require('https');
+            // SECURITY: validate the gateway's server cert against the cluster CA. The stale comment
+            // (rejectUnauthorized:false "because localhost might not match the CN") is wrong: the
+            // gateway-internal cert carries 'localhost' + '127.0.0.1' SANs, so verifying with
+            // servername 'localhost' matches the genuine gateway and rejects any impostor on :3100.
             const agent = new https.Agent({
                 key: fs.readFileSync(MTLS_KEY),
                 cert: fs.readFileSync(MTLS_CERT),
                 ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
-                rejectUnauthorized: false
-                // We use rejectUnauthorized: false primarily because 'localhost' might not match the CN if cert is IP based, 
-                // but checking CA should be strict ideally. For internal loopback, we trust the port + mTLS auth.
+                rejectUnauthorized: true,
+                servername: 'localhost'
             });
 
             const gatewayUrl = `https://127.0.0.1:3100/info`; // Default internal port
@@ -695,11 +704,15 @@ class CertManager {
             if (!MTLS_KEY || !fs.existsSync(MTLS_KEY)) throw new Error('Backend mTLS Key not found');
 
             const https = require('https');
+            // SECURITY: validate the gateway's server cert against the cluster CA (servername 'localhost'
+            // matches the gateway-internal cert SANs) so config-update can't be hijacked by a co-resident
+            // process occupying 127.0.0.1:3100.
             const agent = new https.Agent({
                 key: fs.readFileSync(MTLS_KEY),
                 cert: fs.readFileSync(MTLS_CERT),
                 ca: MTLS_CA && fs.existsSync(MTLS_CA) ? fs.readFileSync(MTLS_CA) : undefined,
-                rejectUnauthorized: false
+                rejectUnauthorized: true,
+                servername: 'localhost'
             });
 
             const gatewayUrl = `https://127.0.0.1:3100/config-update`;
