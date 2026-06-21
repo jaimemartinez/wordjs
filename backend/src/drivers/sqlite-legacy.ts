@@ -114,6 +114,7 @@ class DatabaseWrapper {
         } catch (err) {
             try {
                 this.sqlDb.run('ROLLBACK');
+                save(); // re-sync disk to the reverted in-memory state (per-write save() left a partial write on disk)
             } catch (rbErr: any) {
                 console.error('❌ SQLite (legacy) ROLLBACK failed:', rbErr && rbErr.message);
             }

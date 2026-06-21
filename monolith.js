@@ -85,7 +85,14 @@ function resolveSSL() {
         if (ssl === true || (ssl && ssl.enabled) || gwConfig.sslAuto) {
             const selfsigned = require('selfsigned');
             const pems = selfsigned.generate([{ name: 'commonName', value: 'localhost' }], { days: 365 });
-            try { fs.writeFileSync(autoKey, pems.private); fs.writeFileSync(autoCert, pems.cert); } catch { /* read-only fs ok */ }
+            // SECURITY (H8): the private key must not be world-readable. writeFileSync's mode is
+            // ignored if the file already exists, so also chmod 0600 right after (best-effort —
+            // chmod is a no-op/throws on some Windows setups and must not crash).
+            try {
+                fs.writeFileSync(autoKey, pems.private, { mode: 0o600 });
+                try { fs.chmodSync(autoKey, 0o600); } catch { /* chmod unsupported (e.g. Windows) */ }
+                fs.writeFileSync(autoCert, pems.cert);
+            } catch { /* read-only fs ok */ }
             return { key: pems.private, cert: pems.cert };
         }
     } catch (e) {

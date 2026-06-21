@@ -68,9 +68,28 @@ if (!netAllowed) {
         const realFetch = globalThis.fetch;
         if (typeof realFetch === 'function') {
             const guardedFetch = async (input, init) => {
-                const url = typeof input === 'string' ? input : (input && input.url) || String(input);
-                await eg.assertUrlAllowed(url); // throws → fetch rejects, on blocked/private/unresolvable host
-                return realFetch(input, init);
+                init = init ? { ...init } : {};
+                let url = typeof input === 'string' ? input : (input && input.url) || String(input);
+                // If the caller opted out of auto-following (manual/error), just validate the one URL.
+                const wantsManual = init.redirect === 'manual' || init.redirect === 'error'
+                    || (typeof input === 'object' && input && (input.redirect === 'manual' || input.redirect === 'error'));
+                if (wantsManual) { await eg.assertUrlAllowed(url); return realFetch(input, init); }
+                // Default 'follow': follow redirects OURSELVES and re-validate EVERY hop — a public host
+                // can 3xx-redirect to http://169.254.169.254/ (metadata creds) or loopback, and undici's
+                // auto-follow would chase it unchecked.
+                let method = init.method || (typeof input === 'object' && input && input.method) || 'GET';
+                let body = init.body;
+                const headers = init.headers || (typeof input === 'object' && input && input.headers) || undefined;
+                const MAX = 20;
+                for (let i = 0; i <= MAX; i++) {
+                    await eg.assertUrlAllowed(url); // throws on blocked/private/unresolvable host (fail closed)
+                    const resp = await realFetch(url, { ...init, method, body, headers, redirect: 'manual' });
+                    const loc = (resp.status >= 300 && resp.status < 400 && resp.status !== 304) ? resp.headers.get('location') : null;
+                    if (!loc) return resp;
+                    url = new URL(loc, url).href;
+                    if (resp.status === 303 || ((resp.status === 301 || resp.status === 302) && method !== 'GET' && method !== 'HEAD')) { method = 'GET'; body = undefined; }
+                }
+                throw new Error('[sandbox] fetch exceeded maximum redirects');
             };
             Object.defineProperty(globalThis, 'fetch', { configurable: true, writable: true, value: guardedFetch });
         }

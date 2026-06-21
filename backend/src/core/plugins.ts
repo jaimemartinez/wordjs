@@ -477,8 +477,12 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                 }
             },
             MemberExpression(node, ancestors) {
-                // Detect access to sensitive globals
-                const sensitiveGlobals = ['process', 'global', 'globalThis', 'require', 'module', 'arguments', '__dirname', '__filename', 'Buffer'];
+                // Detect access to sensitive globals. NOTE: `Buffer` is intentionally NOT restricted —
+                // under OS-process isolation (child_process) a plugin's Buffer (incl. allocUnsafe) only
+                // ever exposes the plugin's OWN process memory, never the host heap or another plugin, so
+                // it carries no cross-boundary risk; and it's essential for legitimate crypto/binary work
+                // (e.g. AES-GCM secret encryption). Blocking it broke real plugins for no security gain.
+                const sensitiveGlobals = ['process', 'global', 'globalThis', 'require', 'module', 'arguments', '__dirname', '__filename'];
                 if (node.object.type === 'Identifier' && sensitiveGlobals.includes(node.object.name)) {
                     // Check if this is an assignment (e.g. global.x = 1 or module.exports = ...)
                     // We allow WRITING to them for legitimate sharing/exporting, but BLOCK reading them as objects
