@@ -237,8 +237,10 @@ const config: AppConfig = {
     // Roles placeholder (if managed via config)
     roles: {},
 
-    // Environment
-    nodeEnv: fileConfig.nodeEnv || 'development',
+    // Environment — fail safe to 'production' (the hardened default). process.env.NODE_ENV wins so
+    // dev tooling (monolith.js dev, the dev scripts) can opt into development; the file value is a
+    // fallback. Only an EXPLICIT 'development' relaxes CORS / enables verbose logging.
+    nodeEnv: process.env.NODE_ENV || fileConfig.nodeEnv || 'production',
 
     // Security options
     jwt: {

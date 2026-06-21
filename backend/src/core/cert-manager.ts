@@ -9,8 +9,18 @@ const DATA_DIR = path.resolve(__dirname, '../../data/ssl'); // Store ACME accoun
 const LIVE_DIR = path.resolve(__dirname, '../../ssl/live'); // Store real certs here
 const WWW_ROOT = path.resolve(__dirname, '../../public'); // For HTTP-01
 
-if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-if (!fs.existsSync(LIVE_DIR)) fs.mkdirSync(LIVE_DIR, { recursive: true });
+// 0o700: these directories hold private keys (account.key, privkey.pem) — they must not be
+// world/group-traversable.
+if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+if (!fs.existsSync(LIVE_DIR)) fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o700 });
+
+// Write a PRIVATE KEY (account key / privkey.pem) with restrictive permissions. writeFileSync's
+// `mode` is ignored when the file already exists, so we ALSO chmod after the write to guarantee 0o600
+// on every platform/path.
+function writePrivateKey(filePath, content) {
+    fs.writeFileSync(filePath, content, { mode: 0o600 });
+    try { fs.chmodSync(filePath, 0o600); } catch { /* chmod is a no-op on some filesystems (e.g. Windows) */ }
+}
 
 class CertManager {
     client: any;
@@ -35,7 +45,7 @@ class CertManager {
         } else {
             console.log('[CertManager] Generatng new Account Key...');
             accountKey = await acme.forge.createPrivateKey(); // ECDSA by default in newer lib or RSA
-            fs.writeFileSync(this.accountKeyPath, accountKey);
+            writePrivateKey(this.accountKeyPath, accountKey);
         }
 
         // 2. Initialize Client
@@ -145,9 +155,9 @@ class CertManager {
 
             // 5. Save locally (backup/reference)
             const domainDir = path.join(LIVE_DIR, domain);
-            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true });
+            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
 
-            fs.writeFileSync(path.join(domainDir, 'privkey.pem'), key);
+            writePrivateKey(path.join(domainDir, 'privkey.pem'), key);
             fs.writeFileSync(path.join(domainDir, 'fullchain.pem'), cert);
 
             // 6. Push to Gateway
@@ -225,9 +235,9 @@ class CertManager {
 
             // Save to files
             const domainDir = path.join(LIVE_DIR, step1Data.domain);
-            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true });
+            if (!fs.existsSync(domainDir)) fs.mkdirSync(domainDir, { recursive: true, mode: 0o700 });
 
-            fs.writeFileSync(path.join(domainDir, 'privkey.pem'), key);
+            writePrivateKey(path.join(domainDir, 'privkey.pem'), key);
             fs.writeFileSync(path.join(domainDir, 'fullchain.pem'), cert);
 
             // Update config to use new cert
@@ -262,8 +272,8 @@ class CertManager {
     async installCertEmbedded(keyContent, certContent) {
         const gwDir = path.resolve(__dirname, '../../../gateway');
         const importedDir = path.join(gwDir, 'ssl', 'live', 'imported');
-        fs.mkdirSync(importedDir, { recursive: true });
-        fs.writeFileSync(path.join(importedDir, 'privkey.pem'), keyContent);
+        fs.mkdirSync(importedDir, { recursive: true, mode: 0o700 });
+        writePrivateKey(path.join(importedDir, 'privkey.pem'), keyContent);
         fs.writeFileSync(path.join(importedDir, 'fullchain.pem'), certContent);
 
         // Point gateway-config.json at the new cert so the next monolith boot's resolveSSL() serves it.
@@ -420,12 +430,12 @@ class CertManager {
 
             const domain = 'custom'; // We could parse the cert to get the CN, but 'custom' folder is fine for now
             const customDir = path.join(LIVE_DIR, 'custom_upload');
-            if (!fs.existsSync(customDir)) fs.mkdirSync(customDir, { recursive: true });
+            if (!fs.existsSync(customDir)) fs.mkdirSync(customDir, { recursive: true, mode: 0o700 });
 
             const keyPath = path.join(customDir, 'privkey.pem');
             const certPath = path.join(customDir, 'fullchain.pem');
 
-            fs.writeFileSync(keyPath, keyContent);
+            writePrivateKey(keyPath, keyContent);
             fs.writeFileSync(certPath, certContent);
 
             // Update Config
