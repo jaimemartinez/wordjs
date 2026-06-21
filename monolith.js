@@ -84,7 +84,28 @@ function resolveSSL() {
         }
         if (ssl === true || (ssl && ssl.enabled) || gwConfig.sslAuto) {
             const selfsigned = require('selfsigned');
-            const pems = selfsigned.generate([{ name: 'commonName', value: 'localhost' }], { days: 365 });
+            // Put localhost + every non-internal LAN IP in the cert SANs, so the dev server (and its
+            // subresources — fonts/images loaded by the page or the Puck preview iframe) validate when
+            // browsed via https://<lan-ip>:3000, not only https://localhost. A CN=localhost-only cert
+            // fails for the LAN IP (ERR_CERT_*). Still self-signed → trust ssl-auto.crt once to silence
+            // the warning, but now it MATCHES the host you browse to.
+            const os = require('os');
+            const altNames = [
+                { type: 2, value: 'localhost' },
+                { type: 7, ip: '127.0.0.1' },
+                { type: 7, ip: '::1' },
+            ];
+            try {
+                for (const ifaces of Object.values(os.networkInterfaces())) {
+                    for (const i of (ifaces || [])) {
+                        if (!i.internal && i.address && (i.family === 'IPv4' || i.family === 4)) altNames.push({ type: 7, ip: i.address });
+                    }
+                }
+            } catch { /* network enumeration best-effort */ }
+            const pems = selfsigned.generate(
+                [{ name: 'commonName', value: 'localhost' }],
+                { days: 365, keySize: 2048, extensions: [{ name: 'subjectAltName', altNames }] }
+            );
             // SECURITY (H8): the private key must not be world-readable. writeFileSync's mode is
             // ignored if the file already exists, so also chmod 0600 right after (best-effort —
             // chmod is a no-op/throws on some Windows setups and must not crash).
