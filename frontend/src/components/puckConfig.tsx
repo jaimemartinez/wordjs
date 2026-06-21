@@ -2015,9 +2015,18 @@ const baseConfig = {
                 const handleSubmit = (e: React.FormEvent) => {
                     e.preventDefault();
                     if (query.trim()) {
-                        // In production, redirect to search page
-                        const searchUrl = `${searchPage || '/search'}?q=${encodeURIComponent(query.trim())}`;
-                        window.location.href = searchUrl;
+                        // Restrict navigation to a same-origin relative path. `searchPage` is
+                        // editor-controlled, so an absolute/scheme URL (https://evil.com, javascript:)
+                        // or a protocol-relative //host must never reach window.location — that would be
+                        // an open redirect / javascript: navigation. Resolve against the current origin
+                        // and keep only the same-origin pathname; otherwise fall back to '/search'.
+                        let dest = '/search';
+                        try {
+                            const u = new URL(searchPage || '/search', window.location.origin);
+                            if (u.origin === window.location.origin) dest = u.pathname;
+                        } catch { /* malformed searchPage → keep default '/search' */ }
+                        const searchUrl = `${dest}?q=${encodeURIComponent(query.trim())}`;
+                        window.location.assign(searchUrl);
                     }
                 };
 

@@ -61,16 +61,17 @@ function sanitizePuckTree(node: any, keyHint: string | null = null) {
         }
         return out;
     }
-    if (typeof node === 'string' && keyHint) {
-        const lower = String(keyHint).toLowerCase();
-        if (PUCK_URL_FIELDS.has(lower)) {
-            // Strip only script-bearing schemes; preserve relative/fragment/absolute URLs (escUrl was too
-            // strict — it blanked relative paths + '#', corrupting the page builder).
-            return safePuckUrl(node);
-        }
+    if (typeof node === 'string') {
+        const lower = keyHint ? String(keyHint).toLowerCase() : '';
         if (PUCK_HTML_FIELDS.has(lower)) {
             return sanitize(node);
         }
+        // VALUE-BASED (not key-based): run EVERY other string leaf through safePuckUrl. It ONLY blanks a
+        // value that STARTS with a script/dangerous scheme (javascript:/data:/vbscript:/file:) and returns
+        // everything else untouched — so it closes stored XSS via URL-bearing props whose key we didn't
+        // enumerate (e.g. CTABanner/PricingTable `buttonLink`, a menu `to`, etc.) while preserving labels,
+        // classes, colors, relative paths, fragments. (XSS-01: the old key-name allowlist missed buttonLink.)
+        return safePuckUrl(node);
     }
     return node;
 }
@@ -80,8 +81,14 @@ function sanitizePuckTree(node: any, keyHint: string | null = null) {
  * page tree) which is rendered as HTML on the public site; structured JSON shape is preserved.
  */
 function sanitizeMetaValue(key, value) {
-    if (key === '_puck_data' && value && typeof value === 'object') {
-        return sanitizePuckTree(value);
+    if (key === '_puck_data' && value) {
+        if (typeof value === 'object') return sanitizePuckTree(value);
+        // XSS-02: _puck_data sent as a JSON STRING (some clients/imports do) bypassed the object-only
+        // guard entirely. Parse → sanitize → re-stringify; a non-JSON string isn't a Puck tree so leave it.
+        if (typeof value === 'string') {
+            try { return JSON.stringify(sanitizePuckTree(JSON.parse(value))); }
+            catch { return value; }
+        }
     }
     return value;
 }

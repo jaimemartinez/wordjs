@@ -16,12 +16,16 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     // Promise-chain mutex: serializes transaction() so two overlapping callers can never interleave
     // their BEGIN/COMMIT on the single shared better-sqlite3 connection. See transaction() below.
     _txChain: Promise<any>;
+    // True while a transaction() is between BEGIN and COMMIT/ROLLBACK. Used to detect a RE-ENTRANT
+    // transaction() (one called from inside another's callback), which would deadlock _txChain.
+    _inTransaction: boolean;
 
     constructor() {
         super();
         this.db = null;
         this.dbPath = path.resolve(config.dbPath || './data/wordjs-native.db');
         this._txChain = Promise.resolve();
+        this._inTransaction = false;
     }
 
     async connect() {
@@ -104,6 +108,14 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
      * @returns {Promise<any>} the value returned by fn
      */
     async transaction(fn) {
+        // Re-entrancy guard: a transaction() invoked from INSIDE another transaction()'s callback would
+        // chain off the OUTER tx's still-pending tail (which can't settle until this inner call resolves)
+        // → circular wait that permanently wedges _txChain and every future transaction(). SQLite has no
+        // nested BEGIN anyway, so fail FAST and synchronously (the throw rejects this call's promise)
+        // instead of silently deadlocking. The happy (non-nested) path is unchanged.
+        if (this._inTransaction) {
+            throw new Error('nested transaction() is not supported');
+        }
         // Queue this transaction behind any in-flight one. We chain off a settled-no-matter-what tail
         // (catch swallows the PREVIOUS tx's error for chaining only) so one failed tx never blocks the
         // queue; the caller still receives their own tx's result/error via `run`.
@@ -124,6 +136,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         };
 
         this.db.exec('BEGIN');
+        this._inTransaction = true; // mark open so a re-entrant transaction() fails fast (see transaction())
         try {
             const result = await fn(tx);
             this.db.exec('COMMIT');
@@ -135,6 +148,8 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
                 console.error('❌ SQLite ROLLBACK failed:', rbErr && rbErr.message);
             }
             throw err;
+        } finally {
+            this._inTransaction = false;
         }
     }
 

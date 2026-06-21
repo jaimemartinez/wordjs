@@ -122,16 +122,26 @@ function extractConnectOptions(args: any[]): { options: any | null; rewrite?: an
 function secureConnect(orig: any, thisArg: any, args: any[]): any {
     const { options, rewrite } = extractConnectOptions(args);
     if (options && typeof options === 'object') {
-        // IPC / unix-socket / Windows named-pipe targets are NOT public-internet egress — the `network`
-        // grant does not authorize reaching LOCAL services (e.g. /var/run/docker.sock = container/host
-        // RCE, a postgres/redis socket, \\.\pipe\...). Deny them outright. (EG-2)
-        if (options.path) throw blockErr('local IPC/unix-socket path');
-        const host = options.host || options.hostname;
-        assertHostLiteral(host); // blocks an explicit private/loopback IP literal up-front
-        // ALWAYS route name resolution through the validating lookup. Covers the NO-HOST case (net/tls
-        // default host = 'localhost', which validatingLookup blocks) and hostnames (validated + IP-checked
-        // at connect, anti-rebinding). Mutated IN PLACE so the tagged normalized array / caller options
-        // object reaches the real connect with the right shape.
+        // TOCTOU DEFENSE (EG-TOCTOU): a plugin can pass an options object whose host/hostname/path is a
+        // GETTER returning a benign value to US and a forbidden one to Node's LATER re-read (Node re-reads
+        // options.host/path in lookupAndConnect; an IP-literal host skips the injected lookup entirely). So
+        // read each security field EXACTLY ONCE into a primitive, validate that, then OVERWRITE the field
+        // as a plain own data-property so Node connects to EXACTLY what we validated — no second read of a
+        // getter is possible.
+        const hostVal = options.host;
+        const hostnameVal = options.hostname;
+        const pathVal = options.path;
+        // IPC / unix-socket / named-pipe targets are NOT public-internet egress (e.g. /var/run/docker.sock
+        // = container/host RCE, a postgres/redis socket). Deny outright. (EG-2)
+        if (pathVal !== undefined && pathVal !== null && pathVal !== '') throw blockErr('local IPC/unix-socket path');
+        assertHostLiteral(hostVal || hostnameVal); // blocks an explicit private/loopback IP literal up-front
+        // Freeze the snapshots back as own data-properties (replacing any getter). ALWAYS (even undefined)
+        // so no getter survives for host/hostname/path.
+        for (const [k, val] of [['host', hostVal], ['hostname', hostnameVal], ['path', pathVal]] as const) {
+            try { Object.defineProperty(options, k, { value: val, writable: true, configurable: true, enumerable: true }); } catch { /* non-configurable: best-effort */ }
+        }
+        // Route resolution through the validating lookup (covers the NO-HOST default-localhost case and
+        // hostnames — validated + IP-checked at connect, anti-rebinding).
         options.lookup = validatingLookup;
     }
     return orig.apply(thisArg, rewrite || args);

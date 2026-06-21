@@ -10,6 +10,37 @@ const { authenticate, optionalAuth } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
+// SECURITY (XSS-03): menu item urls render site-wide as <a href={item.url}> in the public nav, so a
+// `javascript:`/`data:`/`vbscript:` url set by an admin would execute stored XSS in every visitor's
+// browser. Allow only safe link targets: relative paths, fragments, and http(s)/mailto/tel absolute
+// URLs. Anything with a disallowed scheme is blanked to '#'. A blank input returns '' so existing
+// `url || '#'` defaulting is preserved.
+const SAFE_URL_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:']);
+function safeMenuUrl(raw) {
+    if (raw === undefined || raw === null) return raw;
+    const value = String(raw).trim();
+    if (!value) return '';
+    // Same-origin relative paths and in-page fragments have no scheme and are always safe. NOTE the
+    // explicit `!startsWith('//')`: a protocol-relative URL ("//evil.com/x") also begins with '/', but it
+    // is an EXTERNAL navigation (open-redirect in the nav), so it must NOT be treated as a relative path —
+    // it falls through to scheme validation below, where `new URL('//evil.com')` throws → neutralized to '#'.
+    if ((value.startsWith('/') && !value.startsWith('//')) || value.startsWith('#') || value.startsWith('?')) {
+        return value;
+    }
+    try {
+        // No protocol-relative coercion: "//host" is left as-is so new URL() rejects it (→ catch → '#'),
+        // closing the open-redirect. Genuine absolute URLs (http(s)/mailto/tel) parse and are scheme-checked.
+        const parsed = new URL(value);
+        if (SAFE_URL_SCHEMES.has(parsed.protocol)) {
+            return value;
+        }
+    } catch {
+        // Not an absolute URL and not a recognized relative form: fall through.
+    }
+    // Disallowed scheme (javascript:, data:, vbscript:, ...) or unparseable: neutralize.
+    return '#';
+}
+
 /**
  * @swagger
  * tags:
@@ -313,7 +344,7 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req, res) =
     const item = await MenuItem.create({
         menuId,
         title,
-        url: url || '#',
+        url: safeMenuUrl(url) || '#',
         target,
         type,
         objectId,
@@ -341,7 +372,15 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res
         });
     }
 
-    const item = await MenuItem.update(itemId, req.body);
+    // SECURITY (XSS-03): sanitize the url before persisting. Only sanitize when a url is actually being
+    // updated so the model's "update only provided fields" contract is preserved; an explicitly-cleared
+    // url becomes '#' rather than being dropped.
+    const updateData = req.body;
+    if (updateData && updateData.url !== undefined) {
+        updateData.url = safeMenuUrl(updateData.url) || '#';
+    }
+
+    const item = await MenuItem.update(itemId, updateData);
     res.json(item.toJSON());
 }));
 

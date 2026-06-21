@@ -108,8 +108,20 @@ function decryptSecret(stored) {
         const pt = Buffer.concat([decipher.update(ct), decipher.final()]);
         return pt.toString('utf8');
     } catch (e) {
-        // Wrong key (key file lost/rotated) or tampered value — don't leak ciphertext to callers.
-        console.error('[MailServer] Failed to decrypt stored secret:', e.message);
+        // The value carried the enc:v1: marker (so it WAS encrypted by this plugin) but GCM auth-tag
+        // verification failed. The overwhelmingly common cause is a lost/rotated/regenerated
+        // .mailenc root key (the file was not included in a backup, or was deleted and a fresh key
+        // regenerated) — NOT tampering. The plaintext is unrecoverable; the operator must RE-ENTER the
+        // secret (DKIM private key / relay credentials). Surface a clear, actionable error instead of a
+        // generic line so silent degradation (unsigned mail, disabled relay) isn't a mystery. We still
+        // return '' so ciphertext is never leaked to callers and downstream logic treats it as unset.
+        console.error(
+            '[MailServer] Could not decrypt a stored secret (enc:v1) — the encryption root key in ' +
+            'backend/plugins/mail-server/data/.mailenc does not match the data. This usually means the ' +
+            'key file was lost, rotated, or regenerated (e.g. a DB restore that omitted it). The ' +
+            'affected DKIM key / relay credential must be RE-ENTERED in the mail server settings. ' +
+            'Underlying error:', e.message
+        );
         return '';
     }
 }
