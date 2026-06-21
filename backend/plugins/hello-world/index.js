@@ -12,16 +12,12 @@ exports.metadata = {
 };
 
 // Called when plugin is activated. Receives the WordJS capability bridge (`wordjs`).
-// Phase-1 adoption pattern: use the injected API instead of require()ing core modules directly
-// (see documentation/plugin-isolation-proposal.md). Falls back to a direct require if loaded
-// without the API, so it stays compatible.
+// Isolated plugins run in their own OS process and reach core ONLY through the injected `wordjs`
+// bridge — never require() core modules directly (the sandbox blocks that). See
+// documentation/plugin-isolation-proposal.md.
 exports.init = function (wordjs) {
-    const addFilter = wordjs
-        ? wordjs.hooks.addFilter
-        : require('../../src/core/hooks').addFilter;
-
-    // Add a filter to post content
-    addFilter('the_content', (content) => {
+    // Add a filter to post content via the capability bridge.
+    wordjs.hooks.addFilter('the_content', (content) => {
         return '<p><em>Hello from the Hello World plugin!</em></p>' + content;
     });
 
