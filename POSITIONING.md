@@ -6,9 +6,9 @@
 
 ## 1. The repositioning (one sentence)
 
-> **WordJS is the CMS where third-party plugins can't compromise your site** — every
-> untrusted plugin runs in an isolated OS process and can only reach the system through a
-> permission-checked capability bridge.
+> **WordJS is the CMS where third-party plugins can't compromise your site** — **every**
+> plugin runs in an isolated OS process and can only reach the system through a
+> permission-checked capability bridge, with each capability admin-granted per plugin.
 
 Everything else (posts, themes, media, menus) is table stakes. The **plugin sandbox is the
 product**. We sell *safety of the plugin ecosystem*, not "WordPress, but JavaScript."
@@ -17,7 +17,7 @@ product**. We sell *safety of the plugin ecosystem*, not "WordPress, but JavaScr
 
 ## 2. What the sandbox actually guarantees today (grounded in the code)
 
-This section is deliberately honest. The differentiator is real: untrusted plugins now run in a
+This section is deliberately honest. The differentiator is real: **every** plugin now runs in a
 **separate OS process** (kernel-enforced isolation), with the JS-level guards retained as
 defense-in-depth *inside* that process. We still don't oversell — the remaining hardening
 (syscall filtering, hard kernel memory caps, dropped privileges) is named below.
@@ -33,25 +33,32 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   RPC'd to the host and **permission-checked on the host side**, in the plugin's context. The
   host's heap — secrets, DB handle, other plugins — is never passed into the isolate
   (structured-clone only, no live refs).
-- **Two trust tiers** (`plugin-trust.ts`), server-side, never self-declarable:
-  - **Untrusted** (uploaded / marketplace): bridge only. DB scoped away from core tables
-    (`users`, `options`, `sessions`, …), secret-named options blocked, routes namespaced
-    under `/api/v1/plugin/<slug>`, **no outbound network**.
-  - **Operator-trusted** (first-party or admin-toggled in the UI): privileged bridge —
-    unscoped DB, secret options, absolute routes, mail provider, notification transport, raw
-    sockets.
+- **One model — no trust tier.** There is **no** "trusted" plugin and no bypass: every plugin
+  runs in the same sandbox under the same rules. Capabilities are **admin-granted per plugin,
+  Android-style** (`plugin-permissions.ts`): the manifest *requests* a capability, an admin
+  *grants* it, and a bridge call works only if it is BOTH declared AND granted (**default-deny**).
+  The DB is always scoped to the plugin's own `wjp_<slug>_` tables (core tables `users`,
+  `options`, `sessions`, … are *never* reachable by any plugin), secret-named options are *never*
+  exposed, and routes are *always* namespaced under `/api/v1/plugin/<slug>`. Grantable
+  capabilities include `database`, `settings`, `filesystem`, **`users:read`** (a safe user
+  projection — never `user_pass`), **`email:provider`**, **`notifications:provider`**, and
+  **`network`** (outbound access, opt-in with an exfiltration warning). First-party plugins are
+  **pre-granted** their declared capabilities for a working out-of-box experience, but they are
+  **not privileged** — same sandbox, same grant checks. Shell/`child_process`, native addons,
+  AST-scan skip, raw cookie/header control, raw-HTML hooks, unscoped/core-table DB, and
+  secret-named options were **removed** — no plugin can be granted them.
 
 **Defense-in-depth, all present in code:**
 - **AST static scanner** at install (`validatePluginPermissions` in `plugins.ts`, via `acorn`
   + `acorn-walk`): flags `eval` / `Function` / `exec` / `spawn`, `require()` of sensitive
   modules, dynamic/computed/obfuscated access to `process` / `global` / `require`, and
   undeclared capabilities vs. the manifest. **Fail-closed**: an unparseable source file is a
-  violation. Self-declaring `system:admin` does **not** skip the scan unless the slug is
-  operator-trusted.
+  violation. The scan runs on **every** plugin — there is no scan-skip for any plugin.
 - **Network egress trap** (`plugin-worker.js`): the binding-backed globals `fetch` /
-  `WebSocket` / `EventSource` are trapped to throw for untrusted plugins; raw socket modules
-  (`net` / `tls` / `dns` / `http` / `https` / …) are denied by `secure-require`. So an
-  untrusted plugin gets **no exfiltration channel**.
+  `WebSocket` / `EventSource` are trapped to throw, and raw socket modules
+  (`net` / `tls` / `dns` / `http` / `https` / …) are denied by `secure-require`, **unless** the
+  plugin has been granted the `network` capability. So a plugin gets **no exfiltration channel**
+  until an admin explicitly opts it in (with a warning).
 - **`.env` / secret masking**: `io-guard` blocks reads of `.env` and secret files;
   `secure-require`'s `secureConfig()` strips any credential-like config key; the bridge's
   `PROTECTED_OPTION_RE` blocks secret-named options.
@@ -91,10 +98,11 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
 - The model has had several red-team passes (8 rounds) plus the OS-isolation pivot; it has
   **not had an independent third-party audit**.
 
-**Honest one-liner for the sandbox:** *"Untrusted plugins run in a separate OS process with
-defense-in-depth capability guards — materially stronger than any in-process plugin model on
-the market — with a clear, documented path to full kernel-level hardening (seccomp, cgroups,
-dropped privileges)."* We lead with that, not with "unbreakable."
+**Honest one-liner for the sandbox:** *"Every plugin runs in a separate OS process with
+admin-granted, default-deny capabilities and defense-in-depth guards — no plugin bypasses the
+sandbox — materially stronger than any in-process plugin model on the market, with a clear,
+documented path to full kernel-level hardening (seccomp, cgroups, dropped privileges)."* We lead
+with that, not with "unbreakable."
 
 ---
 
@@ -142,10 +150,11 @@ The sandbox + AST scanner are the *enabling technology* for a marketplace where 
 install" is a verifiable claim**, not a vibe.
 
 - **"Sandboxed & Reviewed" trust badge.** A plugin earns it by: (a) passing the AST static
-  scan clean (fail-closed), (b) running untrusted-tier (no privileged bridge, no raw network,
-  core tables off-limits) — verified, not self-declared, and (c) passing human review of its
-  capability manifest. Untrusted-tier plugins are *structurally* prevented from touching
-  `users` / `options` / secrets regardless of the permissions they request.
+  scan clean (fail-closed), (b) running in the sandbox with a minimal, sensible capability set
+  (core tables off-limits, no network unless it genuinely needs it) — verified, not
+  self-declared, and (c) passing human review of its capability manifest. **Every** plugin is
+  *structurally* prevented from touching `users` / `options` / secrets regardless of the
+  permissions it requests — there is no tier that unlocks them.
 - **Capability-manifest disclosure to buyers.** Because the bridge is permission-checked and
   the manifest is the source of truth, we render a plain-language "this plugin can: read
   settings, write its own tables, render a shortcode — it CANNOT: read your users, access
@@ -155,10 +164,12 @@ install" is a verifiable claim**, not a vibe.
   version bump (flag a plugin that newly requests `network` / `filesystem` / absolute routes)
   → human spot-check for badge tier. The scanner does the heavy lifting; humans gate the
   badge.
-- **Tiering as a product surface.** "Untrusted (sandboxed)" is the default and the
-  safe-to-install majority. "Operator-trusted" plugins (raw network, system) are clearly
-  marked, require explicit operator opt-in via the admin trust toggle, and carry a heavier
-  review + warning — the UI already warns what trust grants.
+- **Per-capability grants as a product surface.** Every plugin is sandboxed; the install/admin
+  UI shows exactly which capabilities a plugin *requests* and lets the operator grant each one
+  (default-deny, Android-style). Higher-risk grants — **`network`** (outbound),
+  `email:provider`, `notifications:provider` — are clearly marked and carry an explicit warning
+  on grant. There is no "trusted" escape hatch to flip; the unsafe raw capabilities (shell,
+  native, unscoped DB, secret options) simply don't exist for any plugin.
 - **Revenue:** marketplace take rate; "Verified Sandboxed" as a paid developer badge;
   private/internal marketplaces for enterprise.
 
@@ -169,14 +180,14 @@ install" is a verifiable claim**, not a vibe.
 A managed WordJS where **the sandbox is the headline feature**, not an implementation detail.
 
 - **"Managed CMS where every plugin is contained."** Customers install from the curated
-  marketplace; we guarantee untrusted plugins run sandboxed, can't egress, can't touch
-  secrets or core tables.
+  marketplace; we guarantee **every** plugin runs sandboxed, can't egress unless granted
+  `network`, and can never touch secrets or core tables.
 - **Per-tenant isolation** layered on top of per-plugin isolation: each tenant is its own
   container, and within it every plugin is already its own OS process. Defense in depth: even a
   plugin escape is contained to one process, and even a process escape to one tenant.
-- **Operator controls as the value prop:** the trust toggle, capability visibility,
-  per-plugin resource caps, crash isolation (a runaway plugin can't take the site down), and
-  an audit of what every plugin is allowed to do.
+- **Operator controls as the value prop:** per-plugin capability grants (default-deny),
+  capability visibility, per-plugin resource caps, crash isolation (a runaway plugin can't take
+  the site down), and an audit of what every plugin is allowed to do.
 - **This is where the kernel-level hardening lands first.** Per-plugin OS-process isolation
   ships in OSS; the hosted environment is where we add **seccomp / landlock, cgroup memory
   caps, and dropped uid** on top of it, so "by construction" capability-minimal isolation
@@ -190,10 +201,12 @@ The repositioning only works if the core is **small, auditable, and obviously ab
 sandbox**. Today the core carries heavyweight infrastructure that dilutes the story and
 enlarges the trust surface:
 
-- **Mail / MTA → optional operator-trusted plugin.** The mail-server runs an SMTP listener on
-  :25 + outbound MX / DKIM delivery — it *needs* raw sockets, so it's already operator-trusted
-  and isolated. It should ship as an **optional add-on**, not a core dependency. Direct-MX
-  deliverability is an ops liability most users don't want in core.
+- **Mail / MTA → optional add-on.** The mail-server runs an SMTP listener on :25 + outbound
+  MX / DKIM delivery. With the trust tier gone, it ships as a normal sandboxed first-party
+  plugin pre-granted the capabilities it declares (`network` for SMTP/MX, `email:provider`).
+  It should ship as an **optional add-on**, not a core dependency: direct-MX deliverability is
+  an ops liability most users don't want in core, and a high-capability plugin enlarges the
+  capability surface even though it stays sandboxed.
 - **ACME / cert-manager → out of core.** TLS issuance is a deployment concern (reverse proxy /
   hosting layer), not CMS core.
 - **Embedded PostgreSQL → out of core.** Bundling and auto-starting an embedded PG *server
@@ -203,9 +216,10 @@ enlarges the trust surface:
   `postgres`) with fallback logic. Standardize on **Postgres** (the serious,
   multi-tenant-capable target) for the product; keep SQLite as a dev-only convenience at most.
   Multiple DB paths multiply the test / security matrix for zero positioning value.
-- **General principle:** anything requiring **operator-trust / raw capabilities** should be an
-  *optional, clearly-marked add-on*, so the **default install is the sandboxed, minimal-trust
-  core** the whole pitch rests on. The smaller the trusted core, the more credible "your
+- **General principle:** anything requiring **high-risk capabilities** (raw network, mail
+  provider) should be an *optional, clearly-marked add-on*, so the **default install is the
+  minimal-capability core** the whole pitch rests on. Note these add-ons are still sandboxed
+  (no plugin escapes it) — the smaller and lower-capability the core, the more credible "your
   plugins can't compromise you."
 
 ---
@@ -217,32 +231,32 @@ enlarges the trust surface:
 | **Ecosystem from zero** | The marketplace pitch needs plugins; we have a handful of first-party plugins and no third-party authors. A safe marketplace with nothing in it sells nothing. | Seed with high-quality first-party + a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
 | **Kernel-surface hardening gap** | Plugins now run in a separate OS process (host-crash / heap-escape closed), but the child still has the full Node API + normal uid; capability-minimality at the syscall level isn't built yet. A skeptical security buyer will probe this. | Add seccomp / landlock + cgroup caps + dropped uid on the **hosted tier first**; message §2 honestly; never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
-| **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + untrusted-tier enforcement is the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
+| **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + default-deny capability grants are the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
 | **License** *(resolved)* | A commercial marketplace + hosted offering needs a license that permits monetization. | **Done:** the project is now consistently **MIT** (no copyleft prod deps; see `THIRD-PARTY-NOTICES.md` + the CI license gate). Optionally revisit a source-available (BSL-style) license later if a hosted clone becomes a threat. |
-| **Trust-tier UX is a footgun** | The whole model collapses if operators casually flip plugins to "trusted." | Make the trust toggle high-friction, well-warned (already warns), and audited; default everything to untrusted; surface the capability diff on every grant. |
+| **Capability-grant UX is a footgun** | The model weakens if operators reflexively grant every requested capability (especially `network`). | Default-deny everything; keep high-risk grants (`network`, `email:provider`, `notifications:provider`) high-friction and well-warned; surface the capability diff on every version bump; never re-introduce a "grant all / trusted" shortcut. |
 | **Repositioning abandons a known category** | "WordPress alternative" is at least a search term people use. "Secure plugin CMS" is a category we have to teach. | Lead with the concrete pain ("plugins are how CMSs get breached"), target the three segments in §3 who already feel it, don't try to convert the generic WP migrator on day one. |
 
 ---
 
 ### Bottom line
 
-The sandbox is **genuinely differentiated and genuinely implemented** — isolated workers, a
-permission-checked bridge, non-self-declarable trust tiers, a fail-closed AST scanner, and
-network / secret / core-table lockdown. It is **not** OS-level isolation, and we win by being
-honest about that while shipping the curated marketplace and hosted offering that turn "your
-plugins can't compromise your site" into the product. The work to get there is **ecosystem,
-an external audit, the OS-level isolation primitive on hosted, and a deliberately shrunken
-trusted core** (cut MTA / ACME / embedded-PG, pick one DB). The license question is resolved
-(MIT).
+The sandbox is **genuinely differentiated and genuinely implemented** — isolated OS processes
+for *every* plugin, a permission-checked bridge, admin-granted default-deny capabilities (no
+trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-table lockdown.
+We win by being honest about the remaining kernel-level hardening while shipping the curated
+marketplace and hosted offering that turn "your plugins can't compromise your site" into the
+product. The work to get there is **ecosystem, an external audit, the kernel-level hardening on
+hosted, and a deliberately shrunken minimal-capability core** (cut MTA / ACME / embedded-PG,
+pick one DB). The license question is resolved (MIT).
 
 ---
 
 **Key source references** (for anyone extending this doc):
-- `backend/src/core/plugin-isolate.ts` — worker host, RPC, trust-gated capabilities, teardown
+- `backend/src/core/plugin-isolate.ts` — worker host, RPC, capability-gated bridge dispatch, teardown
 - `backend/src/core/plugin-worker.js` — isolate bootstrap, network egress trap, in-worker guards
-- `backend/src/core/plugin-api.ts` — the `wordjs` capability bridge, permission checks, SQL/option/path scoping
+- `backend/src/core/plugin-api.ts` — the `wordjs` capability bridge, permission checks, SQL/option/path scoping, safe `users`/`site` bridges
 - `backend/src/core/secure-require.ts` — module/native/network lockdown, config & DB scrubbing, context anchoring
-- `backend/src/core/plugin-trust.ts` — trust tiers (server-side, non-self-declarable)
+- `backend/src/core/plugin-permissions.ts` — per-plugin capability grants (Android-style, default-deny)
 - `backend/src/core/plugins.ts` (`validatePluginPermissions`) — AST static scanner (acorn, fail-closed)
 - `backend/src/core/io-guard.ts` — `.env` / secret-file fs backstop
 - `documentation/plugin-isolation-proposal.md` — the soft-vs-hard boundary analysis

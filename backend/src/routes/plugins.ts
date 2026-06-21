@@ -155,20 +155,17 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
             }
         }
 
-        // SECURITY: an uploaded plugin must NOT claim the slug of an operator-trusted system plugin.
-        // Trust is keyed on the slug (config.trustedSystemPlugins), so squatting a trusted name —
-        // and extractAllTo(..., true) would even overwrite the bundled one — would hand uploaded code
-        // the privileged bridge tier (core DB, secret options, absolute routes, mail provider).
+        // SECURITY: an uploaded plugin must NOT claim a reserved system-plugin slug (which would let
+        // it overwrite the bundled one via extractAllTo(..., true)). There is no trust tier anymore, so
+        // this is just a small hardcoded reserved-name list (empty by default).
         const intendedSlug = (rootDirs.size === 1 ? Array.from(rootDirs)[0] : zipName) as string;
-        // Canonicalize for comparison: trust is keyed on slug, but a case-insensitive / Unicode-variant
-        // filesystem (Windows, macOS) lets 'Mail-Server' overwrite the bundled 'mail-server' dir and
-        // inherit its trust. Compare case-insensitively after NFC normalization.
+        // Canonicalize for comparison: a case-insensitive / Unicode-variant filesystem (Windows, macOS)
+        // lets 'Mail-Server' overwrite the bundled 'mail-server' dir. Compare case-insensitively after NFC.
         const canonSlug = String(intendedSlug).normalize('NFC').toLowerCase();
-        let trustedSlugs: string[] = [];
-        try { trustedSlugs = require('../config/app').trustedSystemPlugins || []; } catch { /* */ }
-        if (trustedSlugs.some(s => String(s).normalize('NFC').toLowerCase() === canonSlug)) {
+        const RESERVED_SLUGS: string[] = [];
+        if (RESERVED_SLUGS.some(s => String(s).normalize('NFC').toLowerCase() === canonSlug)) {
             fs.unlinkSync(zipPath);
-            return res.status(409).json({ error: `Refused: '${intendedSlug}' is a reserved trusted system plugin and cannot be uploaded or overwritten.` });
+            return res.status(409).json({ error: `Refused: '${intendedSlug}' is a reserved system plugin slug and cannot be uploaded or overwritten.` });
         }
         // Refuse a different-cased / Unicode-variant name that collides with an EXISTING plugin dir
         // (re-uploading the SAME exact name is still allowed = a normal update; a squat that only
@@ -294,20 +291,16 @@ router.get('/active', asyncHandler(async (req, res) => {
 router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
     // Await getAllPlugins()
     const plugins = await getAllPlugins();
-    // Annotate each with its trust state + requested/granted permissions so the admin UI can render the
-    // per-permission switches. `trusted` = currently privileged; `trustedShipped` = first-party default
-    // (toggle locked on). `requestedPermissions` = what the manifest asks for ("scope:access"), the set
-    // of switches to show; `grantedPermissions` = what the admin has granted (+ "network").
-    const { isTrusted, isShippedTrusted } = require('../core/plugin-trust');
+    // Annotate each with its requested/granted permissions so the admin UI can render the per-permission
+    // switches. `requestedPermissions` = what the manifest asks for ("scope:access"), the set of switches
+    // to show; `grantedPermissions` = what the admin has granted (+ "network"). No trust tier exists.
     const { getGrants } = require('../core/plugin-permissions');
     res.json(plugins.map((p: any) => {
         const requested = Array.from(new Set((p.permissions || [])
-            .map((perm: any) => (perm && perm.scope) ? `${perm.scope}:${perm.access || 'read'}` : null)
+            .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
             .filter(Boolean)));
         return {
             ...p,
-            trusted: isTrusted(p.slug),
-            trustedShipped: isShippedTrusted(p.slug),
             requestedPermissions: requested,
             grantedPermissions: getGrants(p.slug),
         };
@@ -344,51 +337,6 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
     regenerateRegistry();
 
     res.json(result);
-}));
-
-/**
- * @swagger
- * /plugins/{slug}/trust:
- *   post:
- *     summary: Grant or revoke the privileged "trusted" tier for a plugin (admin)
- *     tags: [Plugins]
- *     security: [{ bearerAuth: [] }]
- */
-router.post('/:slug/trust', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    if (!validateSlug(req.params.slug)) {
-        return res.status(400).json({ error: 'Invalid plugin slug' });
-    }
-    const slug = req.params.slug;
-    const { isShippedTrusted, setTrusted, isTrusted } = require('../core/plugin-trust');
-
-    // First-party defaults are always trusted and can't be toggled off via the UI.
-    if (isShippedTrusted(slug)) {
-        return res.status(409).json({ error: `'${slug}' is a first-party system plugin (always trusted); its trust can't be changed here.` });
-    }
-
-    const trusted = !!(req.body && req.body.trusted);
-    await setTrusted(slug, trusted);
-
-    // Reload the worker so its routes re-mount under the new tier (namespaced ↔ absolute) and the
-    // host-capability gates re-evaluate — no server restart needed. Best-effort: trust is already
-    // persisted, so a reload hiccup (e.g. plugin not currently running) must not fail the toggle.
-    let reloaded = false;
-    try {
-        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
-        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
-    } catch (e: any) {
-        console.warn(`[Trust] reload of '${slug}' after trust change failed:`, e && e.message);
-    }
-
-    res.json({
-        success: true,
-        slug,
-        trusted: isTrusted(slug),
-        reloaded,
-        message: trusted
-            ? `Plugin '${slug}' is now TRUSTED — it can reach core data, secret options and host capabilities.${reloaded ? ' Its worker was reloaded, so the change is fully in effect.' : ' Restart the server (or reactivate the plugin) to fully apply.'}`
-            : `Trust revoked for '${slug}' — it is sandboxed again.${reloaded ? ' Its worker was reloaded.' : ''}`
-    });
 }));
 
 /**

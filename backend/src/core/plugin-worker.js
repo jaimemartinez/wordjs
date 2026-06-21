@@ -1,7 +1,7 @@
 /**
  * WordJS - Isolated Plugin Sandbox Entry (cross-platform, no native deps)
  *
- * Runs ONE untrusted plugin inside the sandbox. The host loads this entry in a SEPARATE OS PROCESS
+ * Runs ONE plugin inside the sandbox. The host loads this entry in a SEPARATE OS PROCESS
  * (child_process.fork — own heap + OS memory cap; a crash/OOM is contained to the child) or, as a
  * legacy fallback, a worker_threads Worker; the transport abstraction below normalizes both. The
  * plugin reaches core ONLY through the injected `wordjs` bridge, whose calls are RPC'd to the host
@@ -40,18 +40,14 @@ const onMessage = IS_WORKER ? (cb) => parentPort.on('message', cb) : (cb) => pro
 
 const { slug, entryFile, coreDir } = cfg;
 
-// Network egress policy. The raw socket modules (net/tls/dns/http/https/...) are denied to untrusted
-// plugins by secure-require, but the binding-backed globals `fetch`/`WebSocket`/`EventSource` are NOT
+// Network egress policy. The raw socket modules (net/tls/dns/http/https/...) are denied to plugins
+// by secure-require, but the binding-backed globals `fetch`/`WebSocket`/`EventSource` are NOT
 // reachable through the module loader, so a denylist there is useless against them — trap the globals
-// here. Trust is supplied by the HOST via workerData (re-resolved on every reload, since the trust
-// toggle reloads the worker); secure-require also reads __WORDJS_PLUGIN_TRUSTED__ for its net branch.
-// Immutable: a plugin must not be able to self-promote to trusted (which would unlock raw sockets).
-Object.defineProperty(global, '__WORDJS_PLUGIN_TRUSTED__', { value: !!cfg.isTrusted, writable: false, configurable: false, enumerable: false });
-// Network grant (admin-controlled; orthogonal to and weaker than trust). Immutable like trust so a
-// plugin can't self-grant network. `netAllowed` opens ONLY the network gates (raw socket modules +
-// fetch/WebSocket/EventSource) — child_process/fs/vm/etc. stay blocked for any untrusted plugin.
+// here. The network grant is supplied by the HOST via cfg (re-resolved on every reload). Immutable so
+// a plugin can't self-grant network. `netAllowed` opens ONLY the network gates (raw socket modules +
+// fetch/WebSocket/EventSource) — child_process/fs/vm/etc. stay blocked for every plugin.
 Object.defineProperty(global, '__WORDJS_PLUGIN_NETWORK__', { value: !!cfg.network, writable: false, configurable: false, enumerable: false });
-const netAllowed = global.__WORDJS_PLUGIN_TRUSTED__ || global.__WORDJS_PLUGIN_NETWORK__;
+const netAllowed = !!global.__WORDJS_PLUGIN_NETWORK__;
 if (!netAllowed) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
@@ -76,19 +72,19 @@ try {
 }
 
 // ESM dynamic import() guard. import('child_process') uses the V8/Node ESM loader, which does NOT go
-// through the CommonJS require proxy (secure-require) — so without this an untrusted plugin could
+// through the CommonJS require proxy (secure-require) — so without this a plugin could
 // `await import('node:child_process')` and get the REAL module (host RCE). Install a module-resolution
-// hook that rejects sensitive builtins for untrusted plugins. FAIL CLOSED: if no hook API is available,
+// hook that rejects sensitive builtins for the plugin. FAIL CLOSED: if no hook API is available,
 // refuse to run rather than leave the import() hole open. (require('module')/('url') here resolve to the
 // real modules: secure-require is installed but no plugin slug is set yet, so its proxies are inactive.)
-if (!global.__WORDJS_PLUGIN_TRUSTED__) {
+{
     const esmBlocked = new Set([
         'child_process', 'fs', 'fs/promises', 'net', 'tls', 'dgram', 'http', 'https', 'http2',
         'dns', 'dns/promises', 'worker_threads', 'vm', 'module', 'inspector', 'repl', 'test',
         'trace_events', 'cluster', 'async_hooks', 'v8'
     ]);
-    // A network-granted (but still untrusted) plugin may import() the network modules; everything
-    // else (child_process/fs/vm/...) stays blocked. Mirrors the secure-require CJS net allowance.
+    // A network-granted plugin may import() the network modules; everything else (child_process/fs/
+    // vm/...) stays blocked. Mirrors the secure-require CJS net allowance.
     if (netAllowed) for (const m of ['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']) esmBlocked.delete(m);
     let esmGuardInstalled = false;
     try {
@@ -100,7 +96,7 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
                     const bare = String(specifier).replace(/^node:/, '');
                     // Match the first path segment too, so submodules (inspector/promises, dns/promises) are caught.
                     if (esmBlocked.has(bare) || esmBlocked.has(bare.split('/')[0])) {
-                        throw new Error(`[sandbox] import('${specifier}') is blocked for untrusted plugin '${slug}'`);
+                        throw new Error(`[sandbox] import('${specifier}') is blocked for plugin '${slug}'`);
                     }
                     return nextResolve(specifier, context);
                 }
@@ -114,7 +110,7 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
                 'export async function initialize(d){ blocked = new Set(d.blocked); }\n' +
                 'export async function resolve(spec, ctx, next){\n' +
                 '  const bare = String(spec).replace(/^node:/, "");\n' +
-                '  if (blocked.has(bare) || blocked.has(bare.split("/")[0])) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for untrusted plugin");\n' +
+                '  if (blocked.has(bare) || blocked.has(bare.split("/")[0])) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for plugin");\n' +
                 '  return next(spec, ctx);\n' +
                 '}';
             nodeModule.register(
@@ -128,17 +124,17 @@ if (!global.__WORDJS_PLUGIN_TRUSTED__) {
         esmGuardInstalled = false;
     }
     if (!esmGuardInstalled) {
-        try { send({ kind: 'fatal', error: 'sandbox ESM import() guard unavailable — Node >= 18.19 is required to safely run untrusted plugins' }); } catch { /* parent gone */ }
+        try { send({ kind: 'fatal', error: 'sandbox ESM import() guard unavailable — Node >= 18.19 is required to safely run plugins' }); } catch { /* parent gone */ }
         process.exit(1);
     }
 }
 
 // Off-heap memory (Buffer / ArrayBuffer / native) is NOT bounded by the Worker's V8 resourceLimits
-// (maxOldGenerationSizeMb only caps the JS heap), so an untrusted plugin could allocate gigabytes and
-// OOM-crash the WHOLE host process. Watchdog: periodically check rss/external and self-terminate if
-// over budget (the host treats a worker exit as plugin death and tears it down cleanly).
-if (!global.__WORDJS_PLUGIN_TRUSTED__) {
-    const MEM_BUDGET_BYTES = 512 * 1024 * 1024; // 512 MB rss/external ceiling for an untrusted plugin
+// (maxOldGenerationSizeMb only caps the JS heap), so a plugin could allocate gigabytes and OOM-crash
+// the WHOLE host process. Watchdog: periodically check rss/external and self-terminate if over budget
+// (the host treats a worker exit as plugin death and tears it down cleanly). Applies to ALL plugins.
+{
+    const MEM_BUDGET_BYTES = 512 * 1024 * 1024; // 512 MB rss/external ceiling per plugin
     const memWatch = setInterval(() => {
         try {
             const m = process.memoryUsage();
@@ -212,6 +208,21 @@ const wordjs = {
     }),
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
     cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
+
+    // SAFE user lookups (gated host-side on users:read). Return a SAFE projection
+    // {id,userLogin,username,userEmail,displayName,role} — never user_pass.
+    users: {
+        findByEmail: (e) => callHost('users.findByEmail', [e]),
+        findByLogin: (l) => callHost('users.findByLogin', [l]),
+        findById: (i) => callHost('users.findById', [i]),
+        search: (t, lim) => callHost('users.search', [t, lim])
+    },
+    // SAFE site info (gated host-side on settings:read).
+    site: {
+        url: () => callHost('site.url', []),
+        domain: () => callHost('site.domain', []),
+        adminEmail: () => callHost('site.adminEmail', [])
+    },
 
     // Register a JSON route. `opts` (optional): { auth, admin } -> host applies the real auth
     // middleware before forwarding. The handler runs HERE with a mock (req,res) over RPC: it gets

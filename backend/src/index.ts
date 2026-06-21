@@ -412,9 +412,6 @@ async function initialize() {
         // (moved out of options.ts import-time to avoid a startup race).
         await require('./core/options').initCacheSetting();
 
-        // Load the operator-toggled plugin trust set (admin UI) so the bridge gates see it.
-        await require('./core/plugin-trust').loadTrusted();
-
         // Load the per-plugin permission grants (Android-style, default-deny). Then a one-time,
         // non-breaking backfill: grandfather the manifest-declared permissions of plugins that are
         // ALREADY ACTIVE (and have no grant record yet) so flipping to default-deny doesn't break a
@@ -429,7 +426,7 @@ async function initialize() {
                 .map((p: any) => ({
                     slug: p.slug,
                     requested: Array.from(new Set((p.permissions || [])
-                        .map((perm: any) => (perm && perm.scope) ? `${perm.scope}:${perm.access || 'read'}` : null)
+                        .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
                         .filter(Boolean))) as string[],
                 }));
             await require('./core/plugin-permissions').backfillActive(entries);
