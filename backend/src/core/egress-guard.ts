@@ -98,31 +98,39 @@ function assertHostLiteral(host: string | undefined): void {
 }
 
 // ---- connect-arg normalization (net/tls) -------------------------------------------------------
-function parseConnectArgs(args: any[]): { options: any; cb?: any } {
-    const a = [...args];
-    let cb: any;
-    if (typeof a[a.length - 1] === 'function') cb = a.pop();
-    let options: any = {};
-    if (a[0] && typeof a[0] === 'object') options = { ...a[0] };
-    else if (typeof a[0] === 'number' || (typeof a[0] === 'string' && /^\d+$/.test(a[0]))) {
-        options = { port: Number(a[0]) };
-        if (typeof a[1] === 'string') options.host = a[1];
-    } else if (typeof a[0] === 'string') {
-        options = { path: a[0] }; // IPC/unix-socket path (not a network destination)
+// Find the LIVE options object Node's connect will use, WITHOUT copying it, and preserve the exact arg
+// SHAPE the underlying connect expects. CRITICAL: net.connect/net.createConnection (and http/https via
+// createConnection) pre-normalize their args into a single `[options, cb]` array (tagged) BEFORE calling
+// Socket.prototype.connect — so the patched prototype receives args === `[ [options, cb] ]`. We must NOT
+// treat that array as an options object (that loses host/port → ERR_MISSING_ARGS); we unwrap to the inner
+// options and mutate it in place, leaving the tagged array intact for the real connect.
+function extractConnectOptions(args: any[]): { options: any | null; rewrite?: any[] } {
+    const a0 = args[0];
+    if (Array.isArray(a0)) return { options: (a0[0] && typeof a0[0] === 'object') ? a0[0] : null }; // [options, cb]
+    if (a0 && typeof a0 === 'object') return { options: a0 };                                        // connect(options[, cb])
+    if (typeof a0 === 'number' || (typeof a0 === 'string' && /^\d+$/.test(a0))) {                    // connect(port[, host][, cb])
+        const options: any = { port: Number(a0) };
+        let cb: any;
+        if (typeof args[1] === 'string') { options.host = args[1]; if (typeof args[2] === 'function') cb = args[2]; }
+        else if (typeof args[1] === 'function') cb = args[1];
+        return { options, rewrite: cb ? [options, cb] : [options] };
     }
-    return { options, cb };
+    if (typeof a0 === 'string') return { options: { path: a0 } };                                    // IPC/unix-socket path
+    return { options: null };
 }
 
 function secureConnect(orig: any, thisArg: any, args: any[]): any {
-    const { options, cb } = parseConnectArgs(args);
-    const host = options.host || options.hostname;
-    assertHostLiteral(host); // blocks an explicit private/loopback IP literal up-front
-    // ALWAYS route name resolution through the validating lookup (unless it's a unix-socket/IPC path,
-    // which isn't network egress). This covers the NO-HOST case too: net/tls default the host to
-    // 'localhost' when none is given, and validatingLookup blocks 'localhost' → no silent loopback
-    // connect. For an IP-literal host Node skips lookup, so assertHostLiteral above is the guard.
-    if (!options.path) options.lookup = validatingLookup;
-    return cb ? orig.call(thisArg, options, cb) : orig.call(thisArg, options);
+    const { options, rewrite } = extractConnectOptions(args);
+    if (options && typeof options === 'object') {
+        const host = options.host || options.hostname;
+        assertHostLiteral(host); // blocks an explicit private/loopback IP literal up-front
+        // ALWAYS route name resolution through the validating lookup (unless it's a unix-socket/IPC path).
+        // Covers the NO-HOST case (net/tls default host = 'localhost', which validatingLookup blocks) and
+        // hostnames (validated + IP-checked at connect, anti-rebinding). Mutated IN PLACE so the tagged
+        // normalized array / caller options object reaches the real connect with the right shape.
+        if (!options.path) options.lookup = validatingLookup;
+    }
+    return orig.apply(thisArg, rewrite || args);
 }
 
 // Return a Proxy over a builtin that swaps in our guarded functions and forwards everything else to

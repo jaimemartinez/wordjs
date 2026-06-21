@@ -20,6 +20,11 @@ function extractLastId(rows: any[]): any {
         const firstRow = rows[0];
         if (firstRow.id !== undefined && firstRow.id !== null) return firstRow.id;
         if (firstRow.ID !== undefined && firstRow.ID !== null) return firstRow.ID;
+        // Single-column explicit RETURNING (e.g. `RETURNING comment_id` / `term_id`): that one column IS
+        // the new key — use it. Restricted to EXACTLY one returned column so a multi-column `RETURNING *`
+        // never fabricates lastID from an arbitrary first column (the original mis-attribution finding).
+        const keys = Object.keys(firstRow);
+        if (keys.length === 1 && firstRow[keys[0]] !== undefined && firstRow[keys[0]] !== null) return firstRow[keys[0]];
     }
     return 0;
 }
