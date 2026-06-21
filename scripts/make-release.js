@@ -55,13 +55,15 @@ const IGNORE_PATTERNS = [
     'build-production.ps1'
 ];
 
-// SECURITY: never ship local databases, private keys or TLS material in a release. These are matched
-// PRECISELY (not naive substring) so we don't accidentally drop legitimate source like
-// backend/dist/routes/certs.js: directory entries match a whole PATH SEGMENT, and extension entries
-// match the file SUFFIX. Skips data/ + backend/data/, certs/ + backend/certs/, any */ssl/* dir, and
-// any *.db / *.sqlite / *.sqlite3 / *.key / *.pem file. Secrets are generated locally during install,
-// never bundled.
-const SECRET_DIR_SEGMENTS = ['data', 'certs', 'ssl'];
+// SECURITY: never ship local databases, private keys or TLS material in a release. The sensitive
+// DIRECTORIES are ANCHORED to their KNOWN top-level locations (not a bare segment match anywhere in
+// the path) so we never silently drop legitimate runtime source that merely lives under a nested dir
+// literally named data/ certs/ ssl/ (e.g. a future plugins/<x>/data/seed.js or a frontend/src/lib/data
+// build input). The real runtime DB/cert/TLS dirs are: data/, backend/data/, certs/, backend/certs/,
+// gateway/certs/, gateway/ssl/. Extension entries match the file SUFFIX and run independently, so any
+// *.db / *.sqlite / *.sqlite3 / *.key / *.pem is dropped wherever it sits. Secrets are generated
+// locally during install, never bundled. (DEPLOY-02)
+const SECRET_DIR_RE = /^(?:backend\/|gateway\/)?(?:data|certs)\/|^gateway\/ssl\//;
 const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.key', '.pem'];
 
 const INSTALL_MD = `# WordJS — Install & Run (compiled release)
@@ -202,17 +204,21 @@ function shouldIgnore(filePath) {
         if (relativePath.includes(pattern)) return true;
     }
 
-    // SECURITY: drop databases / private keys / TLS material — matched precisely so we never strip
-    // legitimate source (e.g. routes/certs.js) that merely contains one of these words.
-    const segments = relativePath.split('/');
-    if (segments.some(seg => SECRET_DIR_SEGMENTS.includes(seg))) return true;
+    // SECURITY: drop databases / private keys / TLS material — the secret DIRS are anchored to their
+    // known top-level locations (SECRET_DIR_RE) so we never strip legitimate source (e.g.
+    // routes/certs.js, or a nested dir incidentally named data/) while still dropping the real
+    // DB/cert/TLS trees. (DEPLOY-02)
+    if (SECRET_DIR_RE.test(relativePath)) return true;
     const lowerBase = basename.toLowerCase();
     if (SECRET_EXTENSIONS.some(ext => lowerBase.endsWith(ext))) return true;
 
     // SECURITY: drop any *-config.json (e.g. gateway-config.json, wordjs-config.json) that may hold
     // secrets such as the gatewaySecret. Anchored to a leading separator so legitimate build configs
-    // (tsconfig.json, next.config.json, jest.config.json, package.json) are NOT matched.
-    if (/(^|-)config\.json$/.test(lowerBase)) return true;
+    // (tsconfig.json, next.config.json, jest.config.json, package.json) are NOT matched. ALSO drop any
+    // basename containing `wordjs-config` / `gateway-config` — that catches BACKUPS/variants like
+    // wordjs-config.backup.json (created by index.ts on config rewrite) which carry the same
+    // jwtSecret/gatewaySecret/dbPassword and would otherwise slip past the `*-config.json$` anchor. (DEPLOY-01)
+    if (/(^|-)config\.json$/.test(lowerBase) || lowerBase.includes('wordjs-config') || lowerBase.includes('gateway-config')) return true;
 
     return false;
 }
