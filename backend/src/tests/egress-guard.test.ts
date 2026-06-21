@@ -102,6 +102,14 @@ test('installChildNetGuard guards the REAL net.Socket.prototype.connect — clos
         assert.throws(() => { const s = new net.Stream(); try { s.connect(80, '127.0.0.1'); } finally { s.destroy(); } }, /egress/i, 'net.Stream alias blocked');
         // prototype-chain reach-around → now hits the patched real connect
         assert.throws(() => { const s = new net.Socket(); try { Object.getPrototypeOf(net.Socket.prototype).connect; s.connect(80, '10.0.0.1'); } finally { s.destroy(); } }, /egress/i);
+        // REGRESSION GUARD: module-level net.connect/createConnection + http.request pre-normalize their
+        // args into a single [options, cb] ARRAY before Socket.prototype.connect. The patched connect must
+        // unwrap that (not treat it as the options object) — else it throws ERR_MISSING_ARGS instead of
+        // reaching the egress check. Throwing /egress/i here PROVES the unwrap works (a broken unwrap throws
+        // a non-/egress/ ERR_MISSING_ARGS and this assertion would fail).
+        assert.throws(() => net.connect({ host: '10.0.0.1', port: 80 }), /egress/i, 'net.connect({host,port}) must reach egress check, not ERR_MISSING_ARGS');
+        assert.throws(() => net.createConnection({ host: '127.0.0.1', port: 6379 }), /egress/i, 'net.createConnection({}) must reach egress check');
+        assert.throws(() => require('http').request({ host: '169.254.169.254', port: 80, path: '/' }), /egress/i, 'http.request({}) must reach egress check');
     } finally {
         net.Socket.prototype.connect = orig; // CRITICAL: restore so other tests' loopback connections (supertest) work
     }
