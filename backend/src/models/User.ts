@@ -273,7 +273,14 @@ class User {
         }
 
         if (data.meta) {
+            // Protected keys must NEVER be set through the generic meta path: 'role' has a dedicated
+            // assertValidRole-guarded branch above (mass-assigning meta.role would bypass the allow-list
+            // → privilege escalation, since getRole() reads meta.role and administrators short-circuit
+            // to '*'), and 'token_valid_after' is the JWT revocation epoch. Skip them here so a future
+            // route forwarding req.body.meta into update() can't escalate or tamper with auth state.
+            const PROTECTED_META = new Set(['role', 'token_valid_after']);
             for (const [key, value] of Object.entries(data.meta)) {
+                if (PROTECTED_META.has(key)) continue;
                 await User.updateMeta(id, key, value);
             }
         }

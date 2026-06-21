@@ -367,6 +367,10 @@ router.post('/install', async (req, res) => {
                 console.warn('Auto-login after install failed (user can log in manually):', e && e.message);
             }
 
+            // Install complete — remove the on-disk install-token mirror so the bootstrap secret does
+            // not linger (the token is irrelevant now; the setup endpoints early-return once installed).
+            try { require('../core/install-token').clearInstallTokenFile(); } catch { /* best-effort */ }
+
             res.json({
                 success: true,
                 autoLoggedIn,
