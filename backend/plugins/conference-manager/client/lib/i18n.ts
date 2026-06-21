@@ -1,3 +1,4 @@
+// @ts-nocheck — backend plugin client source; bundled by the plugin loader, not type-checked by the frontend.
 /**
  * Internationalization (i18n) for Conference Manager Plugin
  * Supports: Spanish (es), English (en), Portuguese (pt)
