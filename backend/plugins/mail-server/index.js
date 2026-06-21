@@ -110,6 +110,12 @@ async function initTransporter() {
         host: pinnedHost,        // already-validated public IP — no second resolution at connect time
         port,
         secure,
+        // SECURITY (STARTTLS downgrade): the relay is an operator-configured smarthost that must be
+        // reachable over TLS. nodemailer's STARTTLS is opportunistic by default, so an on-path attacker
+        // could strip the STARTTLS advertisement and capture the relay credentials in plaintext. Force
+        // STARTTLS (abort if unavailable) for the non-implicit-TLS case. When secure:true (465) TLS is
+        // already implicit, so requireTLS is unnecessary there.
+        requireTLS: !secure,
         auth: { user, pass },
         // Keep certificate verification against the configured hostname (SNI + altname match).
         tls: { servername: host }
@@ -1376,6 +1382,13 @@ exports.init = async function (bridge) {
             const email = await Email.findById(id);
             if (!email) return res.status(404).json({ error: 'Email not found' });
 
+            // Security (IDOR): only the email's owner (sender/recipient, or an administrator) may train
+            // on / trash it. Without this gate any authenticated user could submit another user's email
+            // id to poison the shared Bayes filter and trash that user's message.
+            if (!canAccessEmail(email, req.user)) {
+                return res.status(403).json({ error: 'Access denied' });
+            }
+
             // Learn
             const text = (email.subject || '') + ' ' + (email.body_text || '');
             await classifier.learn(text, category);
@@ -1685,9 +1698,15 @@ exports.init = async function (bridge) {
             // Stream the file back through the bridge response (res.download is not available in the
             // isolate's mock res; send the buffer with a download disposition header instead).
             const buf = fs.readFileSync(filePath);
+            // SECURITY (header injection / disposition spoof): attachment.filename is attacker-controlled
+            // (inbound mail / upload originalname). Strip quotes + CR/LF for the ASCII quoted-string
+            // fallback, and provide the real name via RFC 5987 filename*= (percent-encoded).
+            const rawName = String(attachment.filename || 'download');
+            const asciiName = rawName.replace(/[\r\n"]/g, '_');
+            const encodedName = encodeURIComponent(rawName);
             res.set({
                 'Content-Type': attachment.content_type || 'application/octet-stream',
-                'Content-Disposition': `attachment; filename="${attachment.filename}"`
+                'Content-Disposition': `attachment; filename="${asciiName}"; filename*=UTF-8''${encodedName}`
             }).send(buf);
 
         } catch (e) {
