@@ -163,6 +163,8 @@ export interface Plugin {
         access: string;
         reason: string;
     }[];
+    requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
+    grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")
 }
 
 export interface Theme {
@@ -282,6 +284,11 @@ export const pluginsApi = {
     activate: (slug: string) => apiPost(`/plugins/${slug}/activate`, {}),
     deactivate: (slug: string) => apiPost(`/plugins/${slug}/deactivate`, {}),
     setTrust: (slug: string, trusted: boolean) => apiPost<{ success: boolean; trusted: boolean; message: string }>(`/plugins/${slug}/trust`, { trusted }),
+
+    // Android-style per-permission grants (default-deny). `granted` = the "scope:access" tokens the admin
+    // approves; `network` = grant outbound network to an untrusted plugin.
+    setPermissions: (slug: string, granted: string[], network: boolean) =>
+        apiPost<{ success: boolean; granted: string[]; network: boolean; reloaded: boolean; message: string }>(`/plugins/${slug}/permissions`, { granted, network }),
     delete: (slug: string, password?: string) => api<{ success: boolean; message: string }>(`/plugins/${slug}`, {
         method: "DELETE",
         body: { password }

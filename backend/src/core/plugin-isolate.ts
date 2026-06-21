@@ -149,6 +149,13 @@ function isTrustedPlugin(slug: string): boolean {
     try { return require('./plugin-trust').isTrusted(slug); } catch { return false; }
 }
 
+// Network is OFF for untrusted plugins unless an admin granted it (plugin-permissions). The child can't
+// read the DB, so this host-resolved value is pushed into cfg → global.__WORDJS_PLUGIN_NETWORK__, which
+// opens ONLY the network gates (net/tls/dns/http/... + fetch/WebSocket), never child_process/fs/vm.
+function isNetworkGrantedFor(slug: string): boolean {
+    try { return require('./plugin-permissions').isNetworkGranted(slug); } catch { return false; }
+}
+
 // Hooks whose filter return value is emitted as RAW, UNESCAPED HTML into every server-rendered page
 // (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). An untrusted plugin
 // shimming one of these is a stored-XSS primitive (incl. the admin UI), so it is denied for untrusted
@@ -208,7 +215,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // contained to the child and the host always survives. isTrusted is resolved HERE at spawn
         // (re-resolved on reload via the trust toggle) so the child's network policy matches current
         // trust; config travels in argv[2] (no secrets); env is the same secret-free allowlist.
-        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug) });
+        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, isTrusted: isTrustedPlugin(slug), network: isNetworkGrantedFor(slug) });
         const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
         const RSS_BUDGET_BYTES = 768 * 1024 * 1024;   // resident budget — cgroup memory.max AND the /proc poll
         // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
