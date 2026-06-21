@@ -8,6 +8,8 @@ const router = express.Router();
 const Post = require('../models/Post');
 const { getOption } = require('../core/options');
 const { generateSitemap, generateRobotsTxt } = require('../core/seo-helper');
+const { authenticate } = require('../middleware/auth');
+const { can } = require('../middleware/permissions');
 
 /**
  * @swagger
@@ -99,12 +101,28 @@ router.get('/robots.txt', async (req, res) => {
  *       200:
  *         description: SEO metadata
  */
-router.get('/meta/:postId', async (req, res) => {
+router.get('/meta/:postId', authenticate, can('edit_posts'), async (req, res) => {
     try {
-        const post = await Post.findById(req.params.postId);
+        const postId = parseInt(req.params.postId, 10);
+        if (!postId) {
+            return res.status(404).json({ error: 'Post not found' });
+        }
+
+        const post = await Post.findById(postId);
 
         if (!post) {
             return res.status(404).json({ error: 'Post not found' });
+        }
+
+        // SECURITY: this is an admin-preview contract (security: bearerAuth in the swagger). It was
+        // registered with NO middleware, leaking unpublished title/excerpt/keywords to anyone. Require
+        // auth + edit_posts above; additionally hide non-published posts authored by others from a
+        // non-privileged editor.
+        if (post.postStatus !== 'publish') {
+            const isOwner = post.authorId === req.user.id;
+            if (!isOwner && !req.user.can('edit_others_posts')) {
+                return res.status(404).json({ error: 'Post not found' });
+            }
         }
 
         res.json({

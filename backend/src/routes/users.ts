@@ -9,6 +9,7 @@ const User = require('../models/User');
 const { authenticate } = require('../middleware/auth');
 const { can, isAdmin, ownerOrCan } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { getRoles } = require('../core/roles');
 
 /**
  * @swagger
@@ -257,9 +258,45 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
 
     const { email, displayName, password, url, role } = req.body;
 
-    // Only admins can change roles
     const updateData: any = { email, displayName, password, url };
-    if (role && req.user.can('promote_users')) {
+
+    // SECURITY: role changes.
+    //  - WordPress forbids editing your OWN role regardless of capability (otherwise a user holding the
+    //    delegable `promote_users` cap could self-promote to administrator). Only apply role when this
+    //    is NOT a self-edit AND the caller holds promote_users.
+    //  - Validate the requested role against the known roles allow-list (no mass-assignment of a bogus
+    //    or non-existent role).
+    //  - Promoting someone to `administrator` is reserved for callers who are already administrators.
+    if (role !== undefined && role !== null && role !== '') {
+        if (isOwn) {
+            return res.status(403).json({
+                code: 'rest_cannot_edit_own_role',
+                message: 'You cannot change your own role.',
+                data: { status: 403 }
+            });
+        }
+        if (!req.user.can('promote_users')) {
+            return res.status(403).json({
+                code: 'rest_forbidden',
+                message: 'You are not allowed to change user roles.',
+                data: { status: 403 }
+            });
+        }
+        const roles = getRoles() || {};
+        if (!Object.prototype.hasOwnProperty.call(roles, role)) {
+            return res.status(400).json({
+                code: 'rest_invalid_role',
+                message: 'Invalid role.',
+                data: { status: 400 }
+            });
+        }
+        if (role === 'administrator' && req.user.getRole() !== 'administrator') {
+            return res.status(403).json({
+                code: 'rest_forbidden',
+                message: 'Only an administrator can assign the administrator role.',
+                data: { status: 403 }
+            });
+        }
         updateData.role = role;
     }
 
