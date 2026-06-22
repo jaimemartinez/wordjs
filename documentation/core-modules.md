@@ -91,6 +91,41 @@ Enforces quality control by running unit tests before enabling a plugin.
 
 ---
 
+## 4a. Plugin Permission Grants 🔐
+
+**Location:** `backend/src/core/plugin-permissions.ts`
+
+An Android-style, admin-controlled, **default-deny** grant registry. The plugin's manifest only **REQUESTS** permissions; this registry records what an operator has actually **GRANTED** per plugin in **/admin/plugins**. A bridge capability is allowed only if the manifest declares it **AND** the admin granted it (`plugin-context.hasPermission` → `isGranted`), so a plugin gets nothing until an admin approves it.
+
+> **There is NO "trusted" tier.** The old trust tier was removed (PR#62; `plugin-trust.ts` is deleted). Every plugin runs in the `child_process` sandbox and gets **only** what an admin granted — no plugin bypasses DB scoping, `io-guard`, or these grants. First-party plugins are pre-granted their **declared** capabilities, but are **not** privileged.
+
+### Logic
+*   **Server-side store:** grants live in the `plugin_grants` option (never self-declarable) and are mirrored in an in-memory `Map<slug, Set<token>>` so host-side security gates read them synchronously. `loadGrants()` runs once at boot **after the DB is up**.
+*   **Token shape:** a token is either `scope:access` (e.g. `database:write`) or the literal `network`. `isGranted(slug, scope, access)` treats `scope:admin` as implying read+write for that scope.
+*   **Network grant:** `network` is a separate, manifest-independent grant; `isNetworkGranted(slug)` is pushed into each isolate's child config at spawn (the child can't read the DB).
+*   **One-time backfill:** `backfillActive(entries)` grandfathers **already-active** plugins their manifest-declared caps at upgrade time (so flipping to default-deny doesn't break a running site); **new** activations stay default-deny. It skips any plugin that already has an explicit grant record.
+
+---
+
+## 4b. Sandbox Network Egress Guard 🌐
+
+**Location:** `backend/src/core/egress-guard.ts`
+
+When an admin grants a plugin the `network` permission, the raw socket modules (`net`/`tls`/`http`/`https`/`http2`/`dgram`) and the binding-backed globals (`fetch`/`WebSocket`) open up — a full SSRF + exfiltration surface (cloud metadata at `169.254.169.254`, loopback, RFC1918 internals) without a destination filter. This module confines a network-granted plugin's outbound connections to **public IPs only**.
+
+> Loaded only inside the **isolated child**, never on the host (constraining the shared prototype on the host would wrongly constrain core). Its own `net`/`dns`/… requires resolve to the **real** modules because it loads during the sandbox bootstrap, before any plugin slug is on the stack.
+
+### What gets blocked
+*   `isBlockedIp()` blocks loopback (`127.0.0.0/8`, `::1`), link-local incl. `169.254.169.254` cloud metadata, RFC1918 (`10/8`, `172.16/12`, `192.168/16`), CGNAT (`100.64/10`), unspecified/`0.0.0.0`, multicast/reserved (`224.0.0.0/4`+), and the IPv6 `fe80::/10` link-local, `fc00::/7` ULA, `ff00::/8` multicast and IPv4-mapped-v6 forms. It **fails CLOSED** on anything that isn't a parseable public IP (garbage/unresolvable).
+*   **IPC / unix-socket / named-pipe** targets (the `path` option, e.g. `/var/run/docker.sock`) are **denied** outright.
+
+### How it enforces
+*   **Connect-time validation (anti-DNS-rebinding):** an injected `validatingLookup` resolves the hostname and re-checks the **actual** resolved IP across `net`/`tls`/`http`/`https`/`http2`/`dgram`, plus `fetch`/`WebSocket`.
+*   **Single chokepoint:** `installChildNetGuard()` patches the **real** `net.Socket.prototype.connect` inside the child (covering the `net.Stream` alias, the `getPrototypeOf(...).connect` bypass, and the pre-normalized `[options, cb]` arg array) and **LOCKS** it via `Object.defineProperty(... writable:false, configurable:false)` so a plugin cannot reassign/un-patch the chokepoint.
+*   **TOCTOU-hardened:** `host`/`hostname`/`path` are snapshot **once**, validated, then re-frozen as own data-properties — so a malicious getter can't return a benign value to the guard and a private one to Node's later re-read.
+
+---
+
 ## 5. Hook System & Live Registry 🪝
 
 **Location:** `backend/src/core/hooks.ts`
@@ -163,3 +198,32 @@ These WordPress-style core services back most CMS configuration.
 ### Notifications
 
 The notification service is a core module too — see **[notifications.md](./notifications.md)** for the transport model.
+
+---
+
+## 8. Shared Meta Sanitizer 🧼
+
+**Location:** `backend/src/core/sanitize-meta.ts`
+
+The Puck page tree (`_puck_data`) is stored verbatim in `post_meta` and rendered as HTML on many public sites, so it **must** be sanitized on every write path. This logic was extracted from `routes/posts.ts` so non-route write paths (the WXR importer) sanitize through the **exact same code** rather than bypassing it. Shared by `posts.ts` + `wxr-import.ts`.
+
+### Logic
+*   `sanitizeMetaValue(key, value)` targets `_puck_data`. It sanitizes an object tree, and **(XSS-02)** also parses a `_puck_data` sent as a **JSON string** → sanitizes → re-stringifies (it was previously object-only).
+*   `sanitizePuckTree` walks the structure and sanitizes only **string leaves** (preserving JSON shape):
+    *   **HTML-bearing fields** (`PUCK_HTML_FIELDS`: `content`/`html`/`text`/`title`/`heading`/`description`/`caption`/`body`) run through the `sanitize-html` body sanitizer.
+    *   **Every other** string leaf runs **value-based** through `safePuckUrl`, which strips control-char obfuscation then blanks values starting with `javascript:`/`data:`/`vbscript:`/`file:` while preserving relative paths, fragments, labels, and classes. So a URL prop **not** in any key-name allowlist (CTABanner/PricingTable `buttonLink`, menu targets) cannot carry a script URL **(XSS-01)**.
+*   `icon` is intentionally **excluded** — it is a FontAwesome class token, not a URL.
+
+---
+
+## 9. One-Time Install Token 🔑
+
+**Location:** `backend/src/core/install-token.ts`
+
+`POST /setup/install` and `POST /setup/test-db` run **before** the instance is configured, so they are necessarily unauthenticated and CSRF-exempt. Without a gate, anyone reaching a not-yet-installed instance could complete the install themselves (pre-install takeover). This module is that gate.
+
+### Logic
+*   `generateInstallToken()` mints a random token at boot (`crypto.randomBytes(24)` hex), prints it to the console, and mirrors it to a **0600 file** in the data dir (`TOKEN_FILE`) for headless/Docker installs. Idempotent for the life of the process.
+*   **Operator override:** a `WORDJS_INSTALL_TOKEN` env value is honored **only if ≥ 16 chars** (else ignored with a warning, falling back to the random token).
+*   **Enforcement:** `routes/setup.ts` rejects any `/install` or `/test-db` request whose `x-install-token` header or `installToken` body field fails `verifyInstallToken()` (constant-time, **fail-closed** when no token was generated).
+*   **Lifecycle:** the token is held **in memory** (lost on restart, re-minted while uninstalled); `clearInstallTokenFile()` removes the on-disk mirror once the instance is installed.

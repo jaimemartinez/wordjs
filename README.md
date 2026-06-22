@@ -193,6 +193,8 @@ Guides live in [`documentation/`](documentation/):
 
 - 🏗️ **[Architecture Overview](documentation/architecture.md)**
 - 🛠️ **[Development & Build Guide](documentation/development.md)** — install, compiled build, strict typecheck, dev vs prod.
+- 🔩 **[Core Modules Reference](documentation/core-modules.md)** — the backend core modules and their responsibilities.
+- ⌨️ **[CLI & Setup](documentation/cli.md)** — the `setup` / `migrate` command-line tools.
 - 🛰️ **[Gateway Guide](documentation/gateway.md)**
 - 🖥️ **[Frontend Guide](documentation/frontend.md)**
 - 🎨 **[Themes Guide](documentation/themes.md)**
@@ -201,13 +203,15 @@ Guides live in [`documentation/`](documentation/):
 - 🧱 **[Plugin Isolation](documentation/plugin-isolation-proposal.md)** — the OS-process sandbox + per-plugin capability grants (implemented).
 - ✉️ **[Mail Server Guide](documentation/mail-server.md)**
 - 🗄️ **[Database Guide](documentation/database.md)**
+- 🗃️ **[Plugin Database Access](documentation/plugin-database.md)** — the table-scoped `wjp_<slug>_` plugin DB handle.
 - 📥 **[Migrating from WordPress](documentation/wordpress-import.md)** — import a WordPress WXR export (authors, terms, posts/pages, comments).
 - 🚀 **[Deployment Guide](documentation/deployment.md)** — incl. **Releases & distribution** (downloadable pre-compiled bundles).
+- 🌐 **[Multi-Node Operations](documentation/multi-node.md)** — dist-lock leases, Redis coherence, and what's deferred.
 - 🔐 **[Security Policy](SECURITY.md)** — vulnerability reporting and active defenses.
 - 🛡️ **[Security Architecture](documentation/security.md)** — deeper defenses reference (sandbox, capability grants, CSRF, JWT revocation).
 - 🔔 **[Notifications System](documentation/notifications.md)**
 - 🧭 **[Product Positioning](POSITIONING.md)** — where WordJS is headed and why.
-- 📡 **API reference**: Swagger/OpenAPI at `http://localhost:4000/api/v1/docs` (admin only).
+- 📡 **[REST API Reference](documentation/api.md)** — endpoint-by-endpoint REST docs; also live Swagger/OpenAPI at `http://localhost:4000/api/v1/docs` (admin only).
 
 ---
 
