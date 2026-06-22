@@ -1,36 +1,21 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# WordJS Frontend
 
-## Getting Started
+The WordJS frontend package: a [Next.js](https://nextjs.org) (App Router) app that serves **both** the public site and the admin dashboard.
 
-First, run the development server:
+- **Public site** — server-rendered (SSR/RSC) routes under `src/app/(public)/` (home, posts, pages, search).
+- **Admin dashboard** — management UI under `src/app/admin/`.
+- **Visual editor** — a [Puck](https://puckeditor.com)-based page builder (`src/components/puckConfig.tsx` + `src/components/puck`); plugins can inject custom Puck components.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+## Documentation
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+The canonical reference for this package is [`../documentation/frontend.md`](../documentation/frontend.md) — it covers the structure, gateway self-registration (`src/instrumentation.ts`), the SSR data layer, Puck, and ports. For running/deploying the whole stack, see [`../documentation/deployment.md`](../documentation/deployment.md).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Run model
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+This is **not** a standalone `localhost:3000` Next.js app. The frontend is one of WordJS's services:
 
-## Learn More
+- It listens on internal port **`3001`** by default and is reached through the WordJS **gateway** on port `3000` (or `80`/`443` in production).
+- It can also run inside the **monolith** (a single process on `:3000`).
+- In the browser the frontend calls a **relative** `/api/v1` path (see `src/lib/api.ts`), so it reaches the backend through the gateway automatically — there is no client-side API-URL env var to set. For SSR fetches the backend base is resolved server-side from `WORDJS_MONO_ORIGIN` (monolith) or `wordjs-config.json` (split), with an optional `INTERNAL_API_URL` override; see [`../documentation/frontend.md`](../documentation/frontend.md).
 
-To learn more about Next.js, take a look at the following resources:
-
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See [`../documentation/frontend.md`](../documentation/frontend.md) and [`../documentation/deployment.md`](../documentation/deployment.md) for the full setup; this is a beta, self-hosted project, so prefer those docs over duplicating details here.

@@ -14,9 +14,15 @@ This document lists the official plugins available in the WordJS ecosystem and t
 > `/admin/plugins`, default-deny — persisted in the `plugin_grants` option). A bridge call works only if
 > the capability is BOTH declared AND granted. Every plugin is confined to its own `wjp_<slug>_` DB
 > tables, non-secret options, and namespaced routes; outbound network requires the granted `network`
-> capability. First-party plugins are **pre-granted** their declared capabilities but are **not
-> privileged** — no plugin bypasses the sandbox. (The old trusted tier and its bypass machinery were
-> removed.)
+> capability. A `network`-granted plugin is confined to **public IPs only** — the egress guard validates
+> each outbound connection **at connect time** (anti DNS-rebinding) and blocks loopback, link-local
+> (incl. `169.254.169.254` cloud metadata), RFC1918, CGNAT (`100.64/10`), IPv6 ULA/loopback/mapped, and
+> unresolvable hosts (fail-closed). First-party plugins are **pre-granted** their declared capabilities
+> but are **not privileged** — no plugin bypasses the sandbox. (The old trusted tier and its bypass
+> machinery were removed.) **Every plugin — bundled ones included — is AST-scanned on activation,
+> fail-closed:** a file that is loaded but parses as dangerous (or cannot be parsed) blocks activation,
+> and there is no scan-skip for any plugin. The runtime `eval`/`Function` block is opt-in via
+> `config.sandbox.blockCodeGen` (skipped under `ts-node`).
 
 ## 0. The `wordjs` Bridge — API Reference 🌉
 
@@ -88,7 +94,7 @@ Manages image carousels for Hero sections or content sliders.
 
 Displays event or promo cards in a zigzag or grid layout.
 
-*   **Shortcode:** `[cards]`
+*   **Rendering:** via the `PromoCards` / `CardGalleryPuck` frontend component (no shortcode is registered at runtime — `index.js` calls no `shortcodes.add`).
 *   **Puck Component:** `CardGalleryPuck` (PromoCards)
 *   **Permissions:** `settings` (read/write), `database` (write).
 *   **Sandbox:** isolated (like every plugin). Routes namespaced under `/api/v1/plugin/card-gallery/*`. Pre-granted its declared `settings`/`database` capabilities.
@@ -107,7 +113,7 @@ Manages YouTube video carousels.
 ---
 
 ## 4. Mail Server 📧
-**ID:** `mail-server` | **Version:** 1.0.0
+**ID:** `mail-server` | **Version:** 2.0.0
 
 A complete SMTP server and email manager. Allows sending and receiving emails directly within WordJS.
 
@@ -116,16 +122,21 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
     *   Attachment handling (multipart upload parsed by the host, forwarded to the isolate)
     *   DKIM signing (private key stored in the plugin's own DB/files, not a core secret option)
     *   Registers the host-wide mail sender (`provideMail`) and a notification transport
-*   **Requested capabilities:** `email` (provider), `filesystem` (read/write), `notifications` (provider/send), `network` (for SMTP / outbound MX).
+*   **Requested capabilities:** `settings` (read/write — non-secret SMTP/display options + the safe `site` bridge), `database` (read/write — its own `wjp_mail_server_*` tables), `email` (admin + provider), `notifications` (send/provider), `filesystem` (read/write), `users` (read — resolves local recipients via the safe users projection, never password hashes), `network` (for SMTP / outbound MX).
+*   **Egress:** because it holds the `network` grant, its outbound connections are validated at connect
+    time against the egress guard — direct-MX delivery is **IP-pinned** into nodemailer and only public
+    IPs are reachable (loopback/RFC1918/link-local/metadata blocked). An **operator-configured
+    relay/smarthost is exempt** from the public-only pin, so an internal/LAN smarthost works; `requireTLS`
+    defaults ON but is opt-out via the `mail_relay_require_tls` option for a TLS-less internal relay.
 *   **Sandbox:** isolated, like every plugin — no trust bypass. It is **pre-granted** the capabilities it
-    declares (`network` for raw sockets, `email:provider`, `notifications:provider`, `filesystem`), so it
+    declares (`network` for raw sockets, `email:provider`, `notifications:provider`, `filesystem`, etc.), so it
     works out of the box, but it runs under the same default-deny grant checks and OS-process isolation as
     anything uploaded. An admin can revoke any of its grants in `/admin/plugins`.
 
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 1.0.0
+**ID:** `conference-manager` | **Version:** 2.0.0
 
 Complex business logic for managing church conferences.
 
@@ -133,7 +144,7 @@ Complex business logic for managing church conferences.
     *   Inscription/Registration management
     *   Hotel & Room assignment
     *   Payment tracking
-*   **Requested capabilities:** `database` (read/write — its own `wjp_conference-manager_` tables), routes (namespaced).
+*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Pre-granted its declared capabilities. It
     stores its data in its own prefixed tables (no unscoped/core-table access — that capability no longer
     exists) and uses `db.getType()` for dialect branches. Routes are namespaced under

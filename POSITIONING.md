@@ -53,12 +53,22 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   + `acorn-walk`): flags `eval` / `Function` / `exec` / `spawn`, `require()` of sensitive
   modules, dynamic/computed/obfuscated access to `process` / `global` / `require`, and
   undeclared capabilities vs. the manifest. **Fail-closed**: an unparseable source file is a
-  violation. The scan runs on **every** plugin — there is no scan-skip for any plugin.
+  violation. The scan runs on **every** plugin — there is no scan-skip for any plugin. (Runtime
+  code generation can additionally be hard-disabled at the engine level via
+  `--disallow-code-generation-from-strings` — opt-in through `config.sandbox.blockCodeGen`, OFF by
+  default since some plugin deps legitimately use `Function()`, and never applied under `ts-node`.)
 - **Network egress trap** (`plugin-worker.js`): the binding-backed globals `fetch` /
   `WebSocket` / `EventSource` are trapped to throw, and raw socket modules
   (`net` / `tls` / `dns` / `http` / `https` / …) are denied by `secure-require`, **unless** the
   plugin has been granted the `network` capability. So a plugin gets **no exfiltration channel**
-  until an admin explicitly opts it in (with a warning).
+  until an admin explicitly opts it in (with a warning). And even **when** `network` is granted,
+  outbound is **confined to public destinations** (`egress-guard.ts`): loopback, the
+  `169.254.169.254` cloud-metadata endpoint, RFC1918 / CGNAT private ranges, IPC / unix-socket
+  paths, and IPv6 ULA / loopback are **blocked**, validated **at connect time against the resolved
+  IP** (anti-DNS-rebinding) and **failing closed** on unresolvable hosts. The guard patches and
+  **locks** `net.Socket.prototype.connect` as the single chokepoint so a plugin can't un-patch it.
+  This is JS-layer enforcement at the socket chokepoint (not kernel-level), but it means a granted
+  plugin **still can't reach your internal services or steal cloud IAM credentials**.
 - **`.env` / secret masking**: `io-guard` blocks reads of `.env` and secret files;
   `secure-require`'s `secureConfig()` strips any credential-like config key; the bridge's
   `PROTECTED_OPTION_RE` blocks secret-named options.
@@ -256,6 +266,7 @@ pick one DB). The license question is resolved (MIT).
 - `backend/src/core/plugin-worker.js` — isolate bootstrap, network egress trap, in-worker guards
 - `backend/src/core/plugin-api.ts` — the `wordjs` capability bridge, permission checks, SQL/option/path scoping, safe `users`/`site` bridges
 - `backend/src/core/secure-require.ts` — module/native/network lockdown, config & DB scrubbing, context anchoring
+- `backend/src/core/egress-guard.ts` — public-only outbound egress confinement (connect-time IP validation, anti-DNS-rebinding, `net.Socket.prototype.connect` chokepoint lock)
 - `backend/src/core/plugin-permissions.ts` — per-plugin capability grants (Android-style, default-deny)
 - `backend/src/core/plugins.ts` (`validatePluginPermissions`) — AST static scanner (acorn, fail-closed)
 - `backend/src/core/io-guard.ts` — `.env` / secret-file fs backstop

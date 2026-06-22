@@ -60,15 +60,22 @@ A `v*` tag triggers **`.github/workflows/release.yml`**, which runs `npm run ins
 1. Builds the **frontend** (`next build` → `.next`).
 2. Compiles the **backend** to `dist/` (`tsc`), so the bundle runs without `ts-node`.
 3. Builds the **plugin frontend bundles** (`backend/scripts/build-plugin.js --all`).
-4. Writes a self-contained `INSTALL.md` and zips everything **except** `node_modules`, `.git`/`.github`, the `release/` folder, local config (`wordjs-config.json`), local DB (`database.sqlite`), local certs (`ssl-auto.crt`/`ssl-auto.key`), `.env`, logs, and debug/CLI scripts.
+4. Writes a self-contained `INSTALL.md` and writes the ZIP as `release/wordjs-compiled-release.zip`, zipping everything **except** `node_modules`, `.git`/`.github`, the `release/` folder, local config (`wordjs-config.json`, `gateway-config.json`), `.env`, logs, and debug/CLI scripts.
 
-The workflow then publishes a **GitHub Release** with `wordjs-<tag>.zip` attached (with auto-generated release notes). A manual **`workflow_dispatch`** run builds the same bundle but uploads it only as a **workflow artifact** — no Release is created — which is handy for testing the packaging.
+Beyond those, the packager applies a **security-anchored secret filter** so no credentials or runtime state can leak into a bundle:
+
+- **Any** `*.db` / `*.sqlite` / `*.sqlite3` / `*.key` / `*.pem` / `*.mailenc` file, wherever it sits.
+- The runtime DB/cert/TLS directories: `data/`, `backend/data/`, `certs/`, `backend/certs/`, `gateway/certs/`, `gateway/ssl/`.
+- **Each plugin's own `plugins/<slug>/data/` directory** — e.g. `mail-server`'s AES-GCM root key (`.mailenc`).
+- Any **config backup** carrying `jwtSecret`/`gatewaySecret`/`dbPassword` — both `*-config.json` and any basename containing `wordjs-config` / `gateway-config` (so `wordjs-config.backup.json` is caught, not just `wordjs-config.json`).
+
+The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag>.zip` (copied from `wordjs-compiled-release.zip` on tag pushes) attached, with auto-generated release notes. A manual **`workflow_dispatch`** run builds the same bundle but uploads it only as a **workflow artifact** named `wordjs-compiled-release` (the un-versioned `wordjs-compiled-release.zip`) — no Release is created — which is handy for testing the packaging.
 
 ### What the bundle contains
 
 - **Pre-compiled** frontend (`.next`), backend (`dist/`), and plugin bundles — recipients **do not build or compile anything**.
-- **No secrets.** `jwtSecret`, `gatewaySecret`, and the DB password are **generated locally during install** and written to `backend/wordjs-config.json` — they never ship and are never committed.
-- **No data.** The database is created fresh by the install wizard; no `database.sqlite` is included.
+- **No secrets.** `jwtSecret`, `gatewaySecret`, and the DB password are **generated locally during install** and written to `backend/wordjs-config.json` — they never ship and are never committed. The packager's secret filter (above) additionally strips any `*.key`/`*.pem`/`*.mailenc`, the cert/TLS dirs, each plugin's `plugins/<slug>/data/`, and config backups so even a stray local secret can't be bundled.
+- **No data.** The database is created fresh by the install wizard; no `database.sqlite` (or any `*.db`/`*.sqlite`/`*.sqlite3`) is included.
 
 ### How an operator deploys a release
 
@@ -83,9 +90,15 @@ The workflow then publishes a **GitHub Release** with `wordjs-<tag>.zip` attache
    # or
    npm start              # 3-service split: gateway + backend + frontend
    ```
-4. Finish in the **browser install wizard**: pick **SQLite** (zero-config) or **PostgreSQL**, then create your admin account. See `INSTALL.md` inside the bundle for the same steps.
+4. **Read the one-time install token from the server console.** On a not-yet-installed instance the boot path mints a random token and prints it in a banner:
+   ```
+   🔑 WordJS install token:
+      <token>
+   ```
+   The pre-install endpoints (`POST /setup/install`, `POST /setup/test-db`) reject any request whose token is missing or mismatched (constant-time), so this gates a pre-install takeover. The install wizard prompts for it; supply it via the `x-install-token` header or an `installToken` body field. For headless/Docker deploys the same token is **also** mirrored to a `0600` file in the runtime data dir (`backend/data/install-token`, never shipped, removed once installed) and can be **overridden** out-of-band via the `WORDJS_INSTALL_TOKEN` env var — but an operator-supplied env token **must be ≥ 16 chars** or it is ignored (a warning is logged) and a random token is used instead. The token is in-memory only: a fresh one is minted on each restart while uninstalled, and it becomes irrelevant once the instance is installed.
+5. Finish in the **browser install wizard**: pick **SQLite** (zero-config) or **PostgreSQL**, then create your admin account. See `INSTALL.md` inside the bundle for the same steps.
 
-> **LAN / remote access & TLS.** In monolith mode the process binds **`0.0.0.0`** on the public port, so it is reachable from other machines. The backend's **Site-URL guard rejects host mismatches**, so set the site host / `siteUrl` (in the install wizard or `backend/wordjs-config.json`) to the **IP or domain you will actually use** — not `localhost`. For a public deployment, terminate **TLS at a reverse proxy** (Nginx/Caddy/Cloudflare) in front of the bundle, or use the built-in HTTPS.
+> **LAN / remote access & TLS.** In monolith mode the process binds **`0.0.0.0`** on the public port, so it is reachable from other machines. The backend's **Site-URL guard rejects host mismatches**, so set the site host / `siteUrl` (in the install wizard or `backend/wordjs-config.json`) to the **IP or domain you will actually use** — not `localhost`. For a public deployment, terminate **TLS at a reverse proxy** (Nginx/Caddy/Cloudflare) in front of the bundle, or use the built-in HTTPS. Setting `siteUrl`/`frontendUrl` correctly is also all the **CORS** config you need: in production CORS allows only the configured origins (`siteUrl`, `frontendUrl`, `gatewayUrl`); only an explicit `nodeEnv: "development"` relaxes it, and even then it reflects only `localhost`/`127.0.0.1`/`::1` (never an arbitrary origin, since `credentials: true` is set).
 
 > The remaining sections describe installing **from source** (clone + build) and running under **PM2**. The release bundle skips the build steps — go straight from `npm run release:install` to `npm run start:mono` / `npm start`.
 
@@ -205,7 +218,7 @@ pm2 start npm --name "wordjs-frontend" -- start
 
 Plugins marked `"isolated": true` run in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`), each with its **own heap, event loop, and OS memory budget**. They reach core only through the permission-checked `wordjs` bridge (RPC over IPC); the host's secrets, DB handle, and other plugins are unreachable from a child. A crash, OOM, or heap escape is therefore **contained to the child — the host process always survives, on every platform.** (Earlier versions ran plugins in `worker_threads`, which shared the host heap/RSS; that model is gone.)
 
-Untrusted (uploaded/marketplace) plugins additionally get a scoped DB (`wjp_<slug>_` tables only), no outbound network, namespaced routes under `/api/v1/plugin/<slug>`, and fs confined to their own directory. **Operator-trusted** plugins — listed in `config.trustedSystemPlugins` (default `conference-manager`, `mail-server`) or toggled on in **Admin → Plugins** — get the privileged bridge (unscoped DB, secret options, absolute routes, mail provider, raw sockets). Trust is server-side and **never self-declarable** by a plugin.
+**Every** plugin runs in this isolated child — there is **no "trusted" tier** and no plugin bypasses the sandbox. Each gets a scoped DB (`wjp_<slug>_` tables only), namespaced routes under `/api/v1/plugin/<slug>`, fs confined to its own directory, and **no outbound network** unless an admin grants the `network` capability (public-IP-only egress when granted). Capabilities are **granted per plugin by an admin** (Android-style, default-deny) in **Admin → Plugins**; a bridge call works only if the capability is both **declared** in the manifest AND **granted**. First-party plugins (`mail-server`, `conference-manager`) are pre-granted only their **declared** capabilities and are **not** privileged. Grants are server-side and **never self-declarable** by a plugin.
 
 ### Memory caps (per child, layered)
 
@@ -286,6 +299,10 @@ The value is floored at 6144 MB and validated by a boot probe (using the same `e
 1.  **Firewall:** Only open port `3000` (Gateway) to the public. Ports `4000` (Backend) and `3001` (Frontend) should stay internal.
 2.  **HTTPS:** Use a service like **Cloudflare** or a simple **Nginx Reverse Proxy** on top of the Gateway to handle SSL (Certbot).
 3.  **Secrets:** Ensure your `gatewaySecret` and `jwtSecret` in `wordjs-config.json` are cryptographically secure (auto-generated by the installer).
+4.  **Install token:** On a fresh, not-yet-installed instance the pre-install endpoints (`POST /setup/install`, `POST /setup/test-db`) are gated by a **one-time install token** printed to the server console (also mirrored to `backend/data/install-token`, `0600`, and overridable via `WORDJS_INSTALL_TOKEN` ≥ 16 chars). Read it from the console to complete the wizard; it is cleared once installed. See **[How an operator deploys a release](#how-an-operator-deploys-a-release)**.
+5.  **Metrics:** The Prometheus `/metrics` endpoint is **disabled (returns 404) by default** — it only serves once a scrape token is set via `config.metrics.token` (`wordjs-config.json`) or the `METRICS_TOKEN` env var. Once set, scrape with `Authorization: Bearer <token>` (or `?token=`); a wrong token returns 401. So metrics are never exposed publicly unless you opt in.
+6.  **CORS:** No extra config is needed beyond setting `siteUrl`/`frontendUrl` correctly — in production CORS allows only the configured origins (`siteUrl`, `frontendUrl`, `gatewayUrl`); only an explicit `nodeEnv: "development"` relaxes it, and even then only for `localhost`/`127.0.0.1`/`::1`.
+7.  **Private keys 0600:** Auto-generated private keys (`ssl-auto.key`, `gateway-internal.key`, ACME `privkey.pem`) are written owner-only (`0600`) on POSIX (`chmod` is a no-op on Windows), so the self-signed/auto keys are not world-readable.
 
 ### Production Checklist
 

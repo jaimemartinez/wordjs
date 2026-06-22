@@ -39,7 +39,7 @@
 > notify-transport) flows ONLY through its own dedicated IPC kinds (`register`, `register-route`,
 > `register-shortcode`, `register-mail-provider`, `register-notify-transport`), never via a generic
 > `call` — so privileged surface (e.g. `provideMail`) is **deliberately absent** from the call allowlist
-> (default-deny) and can't be reached past its trust gate. e2e tests cover the bridge guards, an
+> (default-deny) and can't be reached through a generic `call`. e2e tests cover the bridge guards, an
 > isolated hook/filter over RPC, an isolated DB write, an isolated JSON route served through host
 > Express, and an isolated async shortcode expanded via doShortcodeAsync.
 >
@@ -62,15 +62,48 @@
 >   cannot shim the raw-HTML output hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`); the host
 >   auth JWT cookie (`wordjs_token`) is stripped from forwarded route requests and dangerous response
 >   headers (Set-Cookie/CSP/HSTS/Location) are stripped from its replies; fs read/write is confined to its
->   own dir. By default **no outbound network** — the raw socket modules
+>   own dir (`plugins/<slug>` or `themes/<slug>`) by io-guard, which also blocks `.env`/secret-named files
+>   and — in the isolated child — raw DB files (`.db`/`.sqlite` + the configured DB path). The `plugins/`
+>   tree is intentionally **not** a broad read safe-zone: a plugin **cannot read a SIBLING plugin's files**
+>   (another plugin's encryption-key/`.env`/data); the cross-plugin `package.json`/`node_modules` reads
+>   that module resolution needs are scoped to the plugin's own tree + shared ancestors, with sibling-dir
+>   reads explicitly denied (IO-1). By default **no outbound network** — the raw socket modules
 >   (`net`/`tls`/`dgram`/`http`/`https`/`http2`/`dns`) are denied by secure-require, and the
 >   binding-backed globals `fetch`/`WebSocket`/`EventSource` are trapped as throwing getters in the
 >   sandbox entry (`plugin-worker.js`).
 > - **Grantable capabilities** (admin opt-in, on top of the above): `database`/`settings`/`filesystem`,
 >   `users:read` (the safe user projection via `wordjs.users.*` — never `user_pass`), `email:provider`
 >   (`provideMail`), `notifications:provider` (`notify.registerTransport`), and **`network`** (opens raw
->   sockets + `fetch`/`WebSocket`, with an exfiltration warning). `http.route` `opts.multipart` (host
->   parses the upload, capped at `uploads.maxFileSize`) is available within the namespaced route.
+>   sockets + `fetch`/`WebSocket`, **confined to PUBLIC destinations** — see below). `http.route`
+>   `opts.multipart` (host parses the upload, capped at `uploads.maxFileSize`) is available within the
+>   namespaced route.
+> - **`network` is egress-confined, not an open SSRF surface (`src/core/egress-guard.ts`):** when an
+>   admin grants `network`, secure-require hands the plugin the **egress-guarded** `net`/`tls`/`http`/
+>   `https`/`http2`/`dgram` module (`getGuardedModule`, fail-closed if the guard errors) and the worker
+>   wraps the global `fetch`/`WebSocket`/`EventSource` with the same policy. Egress is restricted to
+>   **public** destinations: it blocks loopback (`127.0.0.0/8`, `::1`), link-local incl.
+>   **`169.254.169.254` cloud metadata**, RFC1918 private (`10/8`, `172.16/12`, `192.168/16`), CGNAT
+>   `100.64/10`, IPv6 ULA (`fc00::/7`) / link-local (`fe80::/10`), IPv4-mapped-v6, multicast/reserved,
+>   and **fails CLOSED on an unresolvable/garbage host**. Validation happens **at connect time against
+>   the RESOLVED IP** (a validating `lookup` is always injected, anti-DNS-rebinding) — not just on the
+>   hostname string. So a `network` grant is **exfiltration to the public internet**, NOT a reach into
+>   loopback / metadata-creds / internal RFC1918 services. (It still does not stop deliberate exfil to an
+>   attacker's *public* server — that's the point of the grant; see §7 non-goals.)
+> - **Connect-time enforcement is locked (can't be un-patched):** inside the child the guard patches
+>   `net.Socket.prototype.connect` as the **single chokepoint** (`installChildNetGuard`) — covering
+>   `net.connect`/`createConnection`, `new net.Socket()`, the `net.Stream` alias,
+>   `Object.getPrototypeOf(Socket.prototype).connect`, custom `http(s)` agents, and the connect undici
+>   performs under global `fetch`/`WebSocket` — then **LOCKS** it
+>   (`Object.defineProperty … writable:false, configurable:false`) so a network-granted plugin cannot
+>   reassign it back to the raw `connect` to restore SSRF. Local **IPC / unix-socket / named-pipe**
+>   targets (e.g. `/var/run/docker.sock`, the connect `path` option) are **denied outright** (not public
+>   egress); `dgram` send/connect destinations are resolved + validated manually. The connect options
+>   `host`/`hostname`/`path` are snapshot ONCE then **frozen** as own data-properties, so a getter cannot
+>   return a benign value to the check and a private one to Node's later re-read (TOCTOU defense). Global
+>   `fetch` is wrapped (`guardedFetch`): the initial host is fast-failed via `assertUrlAllowed`, then
+>   native fetch follows redirects (correctly stripping `Authorization`/`Cookie` cross-origin) while
+>   **each redirect hop's actual connect is IP-validated by the prototype patch** — so a
+>   redirect-to-private/metadata is blocked at the socket layer.
 > - **Removed for every plugin (no grant unlocks them):** shell/`child_process`, native addons, unscoped
 >   / core-table DB, `db.createTable` on core tables, secret-named options, absolute routes
 >   (`opts.absolute`), raw cookie jar / verbatim Set-Cookie/CSP/HSTS/Location, and raw-HTML hooks.
@@ -85,7 +118,11 @@
 > **AST static scanner (`acorn`, fail-closed):** **every** plugin is scanned at install/activate and again
 > on **every boot** (re-validated to catch code poisoning); a parse failure or a dangerous call blocks
 > activation. There is **no scan-skip for any plugin** — the `system:admin` skip and the trusted-slug
-> exemption were removed.
+> exemption were removed. The scanner catches `eval`/`Function` **statically**; for runtime-constructed
+> or downloaded-then-eval'd code there is an **OPT-IN engine-level hard block** —
+> `config.sandbox.blockCodeGen` adds `--disallow-code-generation-from-strings` to the child so V8 refuses
+> all runtime codegen. It is **OFF by default** (some plugin deps legitimately use `Function()`) and is
+> **never applied under ts-node** (dev needs codegen to compile TS).
 >
 > **Full teardown on unload/reload:** `unloadIsolatedPlugin` terminates the worker AND runs a teardown
 > that removes every host-side registration the plugin made — Express route layers are spliced out,
@@ -131,7 +168,10 @@
 > **capability-minimal syscall confinement**: the child has a full Node runtime, so capability denial
 > still relies on the in-child guards (secure-require proxies `fs`/`child_process`/raw-net modules and
 > blocks `worker_threads`/`vm`/`module`/`inspector`; the bootstrap traps `fetch`/`WebSocket`/
-> `EventSource`; io-guard confines fs; the table-scoped DB confines SQL). A *novel* Node global or native
+> `EventSource`; **when `network` is granted, egress-guard patches and LOCKS
+> `net.Socket.prototype.connect` so every outbound connection — incl. fetch redirect hops — is validated
+> at connect time against the resolved IP and confined to public destinations**; io-guard confines fs to
+> the plugin's own dir; the table-scoped DB confines SQL). A *novel* Node global or native
 > binding that reaches the disk/network without going through those proxies would be an escape **of the
 > userspace policy** (it could not escape the process or its memory cap). For by-construction,
 > OS-enforced confinement, seccomp/landlock + a dropped uid can layer **on top of** the already-separate
@@ -236,7 +276,7 @@ Async by necessity (crosses the boundary). Each maps to a current direct use:
 | `require('config/database').dbAsync.*` | `wordjs.db.query(sql, params)` | `database:*`; **table scoping enforced host-side** (plugin's own tables only — already prototyped by the dbAsync guard) |
 | `require('core/hooks').addAction/doAction` | `wordjs.hooks.addAction(hook, fnId)` / `doAction` | callbacks live in the isolate; host dispatches by id |
 | `getApp().get('/x', handler)` | `wordjs.http.route(method, path, fnId)` | host owns Express; on a request it sends a **plain req subset** to the isolate and awaits a **response descriptor** (status/headers/body) — the isolate never touches the socket |
-| `fs.readFileSync(...)` | `wordjs.fs.read(relPath)` / `write` | `filesystem:*`; paths confined to the plugin dir + uploads, realpath-checked host-side |
+| `fs.readFileSync(...)` | `wordjs.fs.read(relPath)` / `write` | `filesystem:*`; paths confined to the plugin's OWN dir + uploads, realpath-checked host-side; io-guard denies sibling-plugin reads (IO-1), `.env`/secret files, and raw DB files in the child |
 | `nodemailer` / `global.wordjs_send_mail` | `wordjs.mail.send(msg)` | `email:*`; host owns the MTA |
 | `notificationService.send` | `wordjs.notify(n)` | `notifications:send` |
 | `registerAdminMenu(...)` | `wordjs.adminMenu.add(item)` | declarative |
@@ -252,7 +292,9 @@ Async by necessity (crosses the boundary). Each maps to a current direct use:
   `memory.max` (Linux), reactive cross-platform RSS poll → SIGKILL at 768 MB, loose `RLIMIT_AS`
   backstop + `--max-old-space-size=256` — plus per-RPC timeout, bridge-call rate/concurrency token
   buckets, IPC message-rate caps, payload/disk caps and registration caps. Closes the DoS class the
-  in-process model can't.
+  in-process model can't. An OPT-IN `config.sandbox.blockCodeGen` additionally passes
+  `--disallow-code-generation-from-strings` to the child (engine-level `eval`/`new Function(string)`
+  block; off by default, skipped under ts-node).
 - **Deactivate:** terminate (SIGKILL) the child process → all its memory/handles gone, deterministically;
   `teardown()` splices out every host-side registration it made.
 
@@ -270,10 +312,15 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
 > per plugin, admin-controlled, default-deny — instead of exempting anything from isolation or handing out
 > raw OS primitives. So:
 - **mail-server**: runs its SMTP server on port 25 and does outbound MX delivery **inside its own OS
-  process**. secure-require opens raw `net`/`tls`/`dns` only when the **`network`** capability is granted
-  (resolved host-side at spawn and passed in the child's config argument, surfaced in-child as the frozen
-  `global.__WORDJS_PLUGIN_NETWORK__` that secure-require's net branch reads, re-resolved on a grant change
-  via `reloadIsolatedPlugin`). The DKIM key lives in the plugin's own DB/files (not a core secret option),
+  process**. secure-require opens the **egress-guarded** `net`/`tls`/`http`/`https`/`http2`/`dgram`
+  (plus raw `dns` for resolution — the connect, not the lookup, is the guarded sink) only when the
+  **`network`** capability is granted (resolved host-side at spawn and passed in
+  the child's config argument, surfaced in-child as the frozen `global.__WORDJS_PLUGIN_NETWORK__` that
+  secure-require's net branch reads, re-resolved on a grant change via `reloadIsolatedPlugin`). Even
+  granted, its raw sockets and global `fetch`/`WebSocket` are confined to **public** IPs at connect time
+  — outbound MX delivery is the legitimate use; loopback/metadata/RFC1918 targets are denied. (The mail
+  plugin separately IP-pins its MX delivery against rebinding, in the plugin itself.) The DKIM key lives
+  in the plugin's own DB/files (not a core secret option),
   and the bridge grants multipart upload, `provideMail` (`email:provider`), and `notify.registerTransport`
   (`notifications:provider`). It is pre-granted these, but runs fully sandboxed.
 - **conference-manager**: pre-granted `database` (its own `wjp_conference-manager_` tables) + `db.getType()`,

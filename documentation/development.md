@@ -65,8 +65,10 @@ So **always run `npm run build` for production**; otherwise you silently get the
 
 ```bash
 cd backend
-npm run dev        # node --watch -r ts-node/register src/index.ts
+npm run dev        # node --watch -r ./scripts/dev-env.js -r ts-node/register src/index.ts
 ```
+
+The dev script preloads `scripts/dev-env.js` first: it fail-safes `NODE_ENV` to `development` when unset, because `config/app.ts` now defaults `nodeEnv` to `production` (so a misconfigured deploy never boots in the relaxed mode). Without the preload the split-mode dev backend would boot in production mode and reject the localhost frontend's credentialed CORS requests.
 
 Each `"isolated": true` plugin runs in a **separate OS process** (`child_process.fork` of `src/core/plugin-worker.js`, host: `src/core/plugin-isolate.ts`) — not a worker thread, and never in the host process — so a plugin crash/OOM is contained to the child. In **dev** the forked child must also load `ts-node` (core is `.ts`): `plugin-isolate.ts` detects this from its own `.ts` filename and passes `-r ts-node/register` to the child's `execArgv`; on a compiled `dist/` build no flag is needed. The same in-child runtime guards (`secure-require.ts`, `io-guard.ts`) and host-side bridge allowlist apply in both modes.
 
@@ -92,7 +94,9 @@ npm run lint           # eslint (flat config)
 npm run format
 ```
 
-The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs every driver (`sqlite-native`, `sqlite-legacy`, `postgres`, embedded) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/close`). **Adding a new database** = implement that interface and add a conformance block.
+`npm test` runs ~172 backend test cases (171 pass, 1 skip) across 18 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
+
+The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs every driver (`sqlite-native`, `sqlite-legacy`, `postgres`, embedded) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The 7th method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
 The **integration suite** (`src/tests-integration/`, run by `npm run test:integration` and in CI against real `postgres:16` + `redis:7` containers) exercises the multi-node coordination paths and full-app endpoints: distributed-lock lease CAS against Postgres (`dist-lock.integration.test.ts`), Redis pub/sub coherence (`coherence.integration.test.ts`), and the health/metrics endpoints (`health.integration.test.ts`).
 
@@ -228,9 +232,11 @@ Behaviour: **idempotent / re-runnable** — existing users (by login/email), ter
 
 `.github/workflows/ci.yml` runs three parallel jobs on every push/PR (Node 22):
 
-- **Backend:** strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers.
-- **Gateway:** tests (proxy + mTLS integration).
-- **Frontend:** lint → **vitest** (`npm run test`) → production build.
+Every job first runs an **audit gate** (`npm audit --omit=dev --audit-level=high`) that fails on any high/critical **production** dependency CVE, then:
+
+- **Backend:** audit gate → strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers.
+- **Gateway:** audit gate → tests (proxy + mTLS integration).
+- **Frontend:** audit gate → **generate plugin registries** (`generate-plugin-registry.js` + `generate-admin-plugin-registry.js` + `generate-puck-plugin-registry.js`, so type-check/lint/build only reference the checked-out plugins) → strict typecheck (`tsc --noEmit`) → lint → **vitest** (`npm run test`) → production build (`next build`).
 
 The license gate keeps the distribution MIT-clean by failing on network-copyleft (AGPL/SSPL) production dependencies.
 
