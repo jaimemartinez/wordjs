@@ -296,6 +296,12 @@ When you activate a plugin, WordJS runs a **Static Analysis Scan**. It parses yo
 *   Obfuscated property access (e.g., `global["ev"+"al"]`).
 *   Unauthorized `require()` of sensitive Node modules.
 
+This static scan is **mandatory** — it runs on **every** plugin at activation and re-runs on each boot,
+fail-closed (an unparseable file blocks the plugin). The separate **engine-level runtime block** of
+dynamic code generation (`--disallow-code-generation-from-strings`, which kills a runtime-constructed
+`eval`/`new Function(string)`) is **opt-in** via `config.sandbox.blockCodeGen` and is skipped under
+ts-node (dev needs codegen to compile TS) — see §7.3.
+
 ### 7.3 The Sandbox (where isolation actually lives)
 
 Your backend runs in a **separate OS process** (`child_process.fork` of `plugin-worker.js`) with its
@@ -320,11 +326,23 @@ JS heap.
 the **`network`** capability (declare `scope: "network"` in your manifest; the grant carries an
 exfiltration warning). This is the only network path — there is no trusted tier that bypasses it.
 
+Even **with** `network` granted, egress is confined to **public destinations only**. secure-require hands
+you the *egress-guarded* socket module (not the raw one) and the worker wraps the global `fetch` /
+`WebSocket` / `EventSource` with the same policy, so the guard blocks loopback, link-local (including
+`169.254.169.254` cloud-metadata/IAM), RFC1918 private ranges, CGNAT, IPv6 ULA/loopback and IPv4-mapped
+addresses, and **fails closed** on an unresolvable/garbage host. It validates the **actual resolved IP at
+connect time** (anti-DNS-rebinding) across `net`/`tls`/`http`/`https`/`http2`/`dgram` and global
+`fetch`/`WebSocket`/`EventSource`, so a granted plugin still cannot pivot to internal services or steal
+cloud credentials. (This is a userspace guard, not a network namespace — see the residual-risk note below.)
+
 **Defense-in-depth inside the child:** the same runtime guards (secure-require, io-guard) are installed
 inside the child process too, so even after a hypothetical escape your `fs`/`child_process` stay
 restricted to your declared permissions in every execution path (route handlers, hooks, timers, module
 top-level). secure-require also blocks `worker_threads`/`vm`/`module`/`inspector`/`process.binding` and
-native addons, and an ESM resolution hook fails closed for the same builtins.
+native addons, and an ESM resolution hook fails closed for the same builtins. The io-guard confines raw
+`fs` to your **own** plugin dir (plus a few shared safe zones); the whole `plugins/` tree is intentionally
+**not** a safe zone, so you **cannot** read a sibling plugin's files — another plugin's `package.json`,
+`node_modules`, `data/`, or encryption-key files are unreachable (no cross-plugin data/secret exfiltration).
 
 > ⚠️ **Residual risk:** the sandbox is OS-process isolation with userspace guards — it is **not yet
 > capability-minimal at the syscall level** (seccomp/landlock/dropped-uid are on the roadmap), and a
@@ -393,7 +411,8 @@ Plugins push real-time alerts to the Admin UI via `wordjs.notify(n)` (`notificat
 See **[Notification System](notifications.md)** for full details.
 
 ### 10.4 Sending Emails 📧
-If a mail provider plugin is active, send mail with `wordjs.mail(msg)` (`email:provider` permission).
+If a mail provider plugin is active, send mail with `wordjs.mail(msg)` (`email:admin` permission;
+`email:provider` is the separate grant that `wordjs.provideMail` needs to *become* the host-wide sender).
 See **[Mail Server](mail-server.md)** for full details.
 
 ### 10.5 Hook System (Actions & Filters) 🪝
@@ -442,8 +461,8 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. |
 | `wordjs.http.route(method, path, [opts,] handler)` | — | Mounted at `/api/v1/plugin/<slug>/path` (always namespaced — no absolute mode). `opts`: `{ auth, admin }` (host runs the real auth middleware), `{ multipart: 'field' }`. Handler gets a mock `(req,res)` over RPC. |
 | `wordjs.shortcodes.add(tag, handler)` | — | Handler may be async; expanded via `doShortcodeAsync`. |
-| `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your plugin dir + `uploads/` (realpath-checked). `manifest.json` is immutable. |
-| `wordjs.mail(msg)` | `email:provider` | Sends via the active mail provider. |
+| `wordjs.fs.read(relPath, enc)` / `write(relPath, data)` | `filesystem:read` / `write` | Confined to your **own** plugin dir only (realpath-checked) — never the shared `uploads/` dir. `manifest.json` is immutable. |
+| `wordjs.mail(msg)` | `email:admin` | Sends via the active mail provider. (Distinct from `email:provider`, which only `wordjs.provideMail` needs.) |
 | `wordjs.provideMail(handler)` | `email:provider` | Become the host-wide mail sender (sandboxed; needs the `email:provider` grant). |
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
@@ -462,8 +481,9 @@ the capability is BOTH declared in the manifest AND granted.
 
 **Grantable capabilities:** `database` (read/write — own tables only), `settings` (read/write — non-secret
 options), `filesystem` (read/write — own dir), `users:read` (the safe user projection), `email:provider`,
-`notifications:provider` / `notifications:send`, and **`network`** (outbound access, opt-in, with an
-exfiltration warning — declare `scope: "network"`).
+`notifications:provider` / `notifications:send`, and **`network`** (outbound access to **public IPs only**
+— the egress guard blocks loopback/link-local/`169.254.169.254` metadata/RFC1918/CGNAT/ULA and validates
+the resolved IP at connect time; opt-in, with an exfiltration warning — declare `scope: "network"`).
 
 First-party plugins (`mail-server`, `conference-manager`, the galleries, …) are **pre-granted** the
 capabilities they declare for a working out-of-box experience, but they are **not privileged** — they run

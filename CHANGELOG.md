@@ -11,6 +11,11 @@ OS-process sandbox; capabilities are admin-granted per plugin (Android-style, de
 bypasses the sandbox anymore. This builds on the move from a worker-thread (heap) boundary to a separate
 OS process, and ten adversarial red-team rounds' worth of findings.
 
+This window also folds in three **self-audit remediation cycles** (a whole-project adversarial review
+of sandbox egress, auth/access, XSS, data integrity, injection, mail, and deploy/ops, then the fixes
+below). WordJS remains pre-production and **self-audited, not independently audited** — these are our
+own findings and fixes; see the [README](README.md) for the honest maturity caveats.
+
 ### Changed
 
 - **One plugin model: every plugin is sandboxed; capabilities are admin-granted per plugin.** The binary
@@ -77,6 +82,88 @@ OS process, and ten adversarial red-team rounds' worth of findings.
   payload caps, `fs.write` size + per-plugin disk quota, admin-menu caps, wedged-child recycling.
 - AST scanner extended (dynamic `import()`, `.constructor`, `process`/`global` aliasing); cross-tenant
   uploads read closed; activation-time host-RCE via plugin test files closed.
+- **Network grant is confined to PUBLIC destinations only** (`core/egress-guard.ts`). When a plugin is
+  granted `network`, its outbound connections are validated AT CONNECT TIME (anti-DNS-rebinding) across
+  `net`/`tls`/`http`/`https`/`http2`/`dgram` and the global `fetch`/`WebSocket`: loopback, link-local
+  (incl. `169.254.169.254` cloud metadata), RFC1918, CGNAT (`100.64.0.0/10`), IPv6 ULA/loopback,
+  IPv4-mapped-v6, multicast and unspecified ranges are blocked, and an unresolvable/garbage host
+  **fails closed**. IPC / unix-socket / named-pipe targets (e.g. the `path` option, `/var/run/docker.sock`)
+  are denied outright. Redirects are followed by native `fetch`, and **every hop is IP-validated at
+  connect time** by the locked socket chokepoint (next bullet) — so a redirect to a private/metadata
+  host is blocked at the socket layer, not by re-parsing the URL.
+- **Egress chokepoint locked inside the isolated child (EG-1).** The guard patches
+  `net.Socket.prototype.connect` in the child as the single enforcement point and **locks it**
+  (non-writable, non-configurable) so a plugin cannot reassign or un-patch it to restore raw SSRF; it
+  covers the `net.Stream` alias, the `getPrototypeOf(Socket.prototype).connect` bypass, and the
+  pre-normalized `[options, cb]` connect-arg array. The connect `host`/`hostname`/`path` are snapshotted
+  once, validated, then frozen as own data-properties (TOCTOU defense). Unix-socket and `dgram` egress
+  to a private/blocked target are denied.
+- **Account-takeover / privilege-escalation guards on `PUT /users/:id`.** A non-administrator can no
+  longer edit an administrator account (AUTH-1) or change their **own** role; a `promote_users` delegate
+  cannot assign the `administrator` role, nor any custom role that grants `*` or a capability the caller
+  does not already hold (privilege amplification, AUTH-A1); the requested role is validated against the
+  roles allow-list.
+- **CSRF check fails closed when both `Origin` and `Referer` are absent (AUTH-A2).** A header-less,
+  cookie-authenticated state change is now rejected unless it carries a real `Bearer` token
+  (server-to-server) — this path previously failed open. The allowed-origin comparison is an exact
+  normalized-origin match (never a prefix `startsWith`).
+- **Per-account login lockout (AUTH-A3).** Login now throttles by ACCOUNT (in addition to per-IP) after
+  repeated failures, backed by the shared rate-limit store with a byte-identical in-memory fallback; a
+  Redis error never blocks login.
+- **`GET /posts?status=any` BOLA closed.** A non-privileged user can no longer list other users'
+  drafts/pending/private posts — unpublished statuses are scoped to the caller's own author id unless
+  they hold `edit_others_posts`/`read_private_posts`.
+- **Value-based Puck page-tree (`_puck_data`) sanitizer (`core/sanitize-meta.ts`, shared).** Every
+  non-HTML string leaf now runs through a URL-scheme filter that blanks `javascript:`/`data:`/
+  `vbscript:`/`file:` (incl. control-char obfuscation), so a URL prop outside any key-name allow-list
+  (e.g. `buttonLink`) can no longer carry a script URL; `_puck_data` arriving as a JSON STRING is
+  parsed → sanitized → re-stringified. The same code is used by `routes/posts.ts` and the WXR importer.
+- **Menu item URLs are scheme-validated on create AND update (`routes/menus.ts`, XSS-03).**
+  `javascript:`/`data:`/`vbscript:` become `#`, and a protocol-relative `//host` URL is neutralized to
+  `#` (open-redirect closed).
+- **Frontend sanitizer + CSP hardening.** The server-side sanitizer (`lib/sanitize.ts`) now drops
+  `<style>` and any non-allowlisted `<iframe>`, restricts embeds to a YouTube/Vimeo **host** allow-list,
+  and forces a `sandbox` attribute on every surviving iframe (FE-XSS-02). The Next.js CSP
+  (`next.config.ts`) sets `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, and a
+  `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:`. `blob:` is REQUIRED — the admin loads
+  each plugin's frontend bundle via `import(URL.createObjectURL(blob))` (without it: no plugin UIs/icons)
+  — and `https:` in `font-src`/`style-src` is needed for theme fonts/CSS inside the Puck `srcdoc` iframe.
+- **SQL-injection hardening on `custom_tables` import (`core/import-export.ts`, SQLI-01).** Each table
+  and column name is validated against a strict simple-identifier allow-list, and core tables plus
+  `sqlite_*` reserved tables are refused before any identifier is interpolated.
+- **Comment parent validation (`routes/comments.ts`, VAL-01).** A reply must reference a parent comment
+  that exists AND belongs to the same post (thread-spoofing / cross-post linking closed).
+- **Mail server hardening.** Inbound SPF/DNSBL checks default ON and fail closed for external senders;
+  outbound direct-MX delivery is IP-pinned into nodemailer (anti-rebinding, with the real MX hostname
+  kept as `tls.servername`); DKIM/relay secrets are AES-256-GCM at rest (root key
+  `plugins/mail-server/data/.mailenc`, `0600`, with a clear operator error on decrypt failure). An
+  operator-configured relay/smarthost is EXEMPT from the public-only SSRF pin (internal/LAN smarthost
+  works), and `requireTLS` defaults ON but is opt-out via `mail_relay_require_tls` for a TLS-less
+  internal relay (REG-2). `/classification/train` is scoped to its owner, attachment filenames are
+  Content-Disposition-encoded, and thread access uses an exact-thread match.
+- **Deploy/ops hardening.** A one-time **install token** gates the pre-install `/install` and `/test-db`
+  endpoints (printed to the console and mirrored to a `0600` file in the data dir; a `WORDJS_INSTALL_TOKEN`
+  override must be ≥16 chars; cleared after setup). `scripts/make-release.js` excludes `*.db`/`*.sqlite`,
+  `certs/`, `*.pem`/`*.key`, `*.mailenc`, `plugins/<slug>/data/`, and config backups from release ZIPs.
+  Prometheus `/metrics` returns `404` unless a scrape token is configured (`config.metrics.token` /
+  `METRICS_TOKEN`). Frontend `metadataBase`/canonical URLs now derive from the configured site URL
+  instead of the raw `X-Forwarded-Host` header (FE-SSR-01, SEO/OG poisoning).
+
+### Fixed
+
+- **Atomic transactions on every driver (DATA-TX-01).** `transaction(fn)` is atomic across drivers; the
+  SQLite drivers serialize transactions through a promise-chain mutex, a re-entrant `transaction()` call
+  throws fast instead of deadlocking, and the open-transaction flag is reset on both commit and rollback.
+- **UNIQUE indexes for `users` (login / `LOWER(email)`) and `posts` (`post_name`+`post_type`)
+  (DATA-USR-01).** A defensive migration logs any pre-existing duplicates and attempts each index in its
+  own try/catch, so it NEVER aborts boot; `User.update` maps a unique-email violation to a clean
+  "Email already in use" error instead of a raw 500.
+- **Notifications IDOR closed while broadcasts stay dismissable (REG-1).** `markAsRead`/`delete` are
+  scoped `WHERE uuid = ? AND (user_id = ? OR user_id = 0)`, so a user can only act on their own
+  notification while broadcast notifications (`user_id = 0`) remain dismissable by anyone.
+- **Roles cache write-coherence.** The roles cache self-heals on a short TTL, and a local-write epoch
+  stops a stale TTL refresh from clobbering a just-written change (DATA-05). (Cross-node roles
+  coherence, DATA-COH-01, remains DEFERRED.)
 
 ## [1.1.0] - 2026-06-20
 
