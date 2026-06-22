@@ -38,7 +38,7 @@ Uses a pure JavaScript WASM build of SQLite (`sql.js`) via `backend/src/drivers/
 
 ### 1.2 The Driver Interface & Conformance Suite
 
-All async drivers extend `DatabaseDriverInterface` (`backend/src/drivers/interface.ts`), a six-method contract:
+All async drivers extend `DatabaseDriverInterface` (`backend/src/drivers/interface.ts`), a seven-method contract:
 
 | Method                 | Purpose                                              |
 | :--------------------- | :--------------------------------------------------- |
@@ -47,9 +47,26 @@ All async drivers extend `DatabaseDriverInterface` (`backend/src/drivers/interfa
 | `all(sql, params)`     | Run a query, return all rows.                        |
 | `run(sql, params)`     | Run INSERT/UPDATE/DELETE, return `{ lastID, changes }`. |
 | `exec(sql)`            | Run a raw SQL script (e.g. DDL / migrations).        |
+| `transaction(fn)`      | Run `fn(tx)` atomically (BEGIN → COMMIT, ROLLBACK on throw). |
 | `close()`              | Close the connection / pool.                         |
 
+The base `interface.ts` default `transaction()` throws `transaction() not implemented`; every async driver (`sqlite-native-async`, `postgres`, `sqlite-legacy`) overrides it with a real atomic implementation — see [§1.2.1](#121-atomic-transactionfn) below.
+
 A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the *same* contract (create → insert → get → all → update → delete → drop) against every async driver, asserting `run()` returns a truthy `lastID` and correct `changes`, that params bind, and that mutations persist. Drivers whose backend isn't reachable **skip gracefully**: if `better-sqlite3` can't load it's treated as the sql.js-fallback case, and if no Postgres is reachable that block is skipped (3s connect timeout). The legacy sync `sqlite-legacy` driver is intentionally out of scope (the suite validates the async interface implementers).
+
+#### 1.2.1 Atomic `transaction(fn)`
+
+`transaction(fn)` is part of the driver contract and is genuinely **atomic** on every async driver. The callback receives a `tx` exposing `get`/`all`/`run`/`exec` with the **same SQLite-style SQL shape** (placeholders, `RETURNING` auto-injection, `{ lastID, changes }`) inside the transaction as outside it, so callers write identical SQL either way.
+
+*   **PostgreSQL** (`postgres.ts`) pins **one** pooled client for the whole unit of work — `BEGIN` → `fn(tx)` → `COMMIT`, `ROLLBACK` on throw, and the client is **always** released in a `finally`. This matters because the per-statement methods each grab a *different* pooled connection, so a multi-statement unit would otherwise not share a transaction.
+*   **SQLite (Native)** (`sqlite-native-async.ts`) wraps `BEGIN`/`COMMIT`/`ROLLBACK` on its single shared `better-sqlite3` handle.
+*   **SQLite (Legacy)** (`sqlite-legacy.ts`) suppresses its per-write disk flush while a transaction is open and saves to disk **once** after `COMMIT`; on `ROLLBACK` it restores the pre-transaction in-memory image (so a failed tx leaves both memory and disk at the prior committed state).
+
+**SQLite transaction serialization & re-entrancy.** Both SQLite drivers serialize `transaction()` through a per-driver promise-chain mutex (`_txChain` / module-level `txChain`): because the callback is async and may `await` between `BEGIN` and `COMMIT`, two overlapping callers could otherwise interleave their `BEGIN`/`COMMIT` on the single shared connection (SQLite has no nested `BEGIN`). Each call waits for the previous to fully settle before its own `BEGIN` runs. A **re-entrant** `transaction()` — one invoked from inside another's callback — fails fast by throwing `nested transaction() is not supported` rather than deadlocking the queue, and `_inTransaction` is reset in a `finally` on **both** commit and rollback.
+
+**Clean unique-constraint errors.** `User.create` and `User.update` translate a cross-driver UNIQUE-constraint violation (on `idx_users_login` / `idx_users_email`) into a clean application error — `Username or email already exists` on create, `Email already in use` on update — instead of surfacing a raw driver constraint error / 500. The detector `isUniqueViolation` handles Postgres SQLSTATE `23505` and SQLite `SQLITE_CONSTRAINT*` / `UNIQUE constraint failed`. Emails are canonicalized (full-Unicode lowercase + NFC via `normalizeEmail`) before store/lookup, so the ASCII-only SQLite `LOWER()` backstop holds.
+
+> **Roles cache (DATA-05).** `getRoles()` serves from an in-memory cache that, once older than `ROLES_CACHE_TTL_MS` (**10s** in code), kicks a non-blocking, single-flight background re-read to bound staleness and self-heal a missed pub/sub invalidation. A monotonic `_localWriteEpoch` is captured before the background DB read and the result is applied **only** if the epoch is unchanged, so a stale read cannot clobber a just-written local change. Cross-node coherence (DATA-COH-01) is **deferred**.
 
 ### 1.3 Automatic Fallback Mechanics
 
@@ -232,6 +249,8 @@ Global system settings.
 | `option_value` | LONGTEXT   | Auto-serialized JSON        |
 | `autoload`     | VARCHAR    | `yes`/`no` to load on boot  |
 
+> Option writes are an **atomic** `INSERT … ON CONFLICT (option_name) DO UPDATE` upsert (`updateOption`), and `DO NOTHING` for insert-if-absent (`addOption`) — replacing the old SELECT-then-INSERT/UPDATE that raced the `idx_options_name` UNIQUE index (two concurrent first-writes both INSERTed, and the loser hit a raw violation). Supported by SQLite ≥3.24 and Postgres; the legacy sql.js driver strips `RETURNING` but honors `ON CONFLICT`.
+
 ### 2.6 `terms` & `term_taxonomy`
 Manages Categories and Tags.
 
@@ -305,8 +324,13 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 | `idx_options_name` (UNIQUE)    | `options (option_name)`                    |
 | `idx_options_autoload`         | `options (autoload)`                       |
 | `idx_notifications_user_read_created` | `notifications (user_id, is_read, created_at)` |
+| `idx_users_login` (UNIQUE)     | `users (user_login)`                       |
+| `idx_users_email` (UNIQUE)     | `users (LOWER(user_email))` — case-insensitive backstop |
+| `idx_posts_name_type` (UNIQUE) | `posts (post_name, post_type)` — partial: `WHERE post_name <> ''` |
 
 > `options.option_name` uniqueness is enforced by the **`idx_options_name` UNIQUE index** (created alongside the others), not by an inline column constraint.
+
+> **UNIQUE constraints (TOCTOU-closing).** `users (user_login)`, `users (LOWER(user_email))`, and `posts (post_name, post_type)` [partial, `WHERE post_name <> ''` — real slugs only] now carry UNIQUE indexes that close the check-then-insert race for duplicate logins/emails/slugs. The non-unique `idx_posts_name` (above) coexists with the new partial-unique `idx_posts_name_type` — both are real. **Fresh installs** create all three in `initializeSchema`. **Existing installs** get them via schema migration `0001_unique_constraints_users_posts`, which is **defensive**: it first detects and logs any duplicate groups, then attempts each `CREATE UNIQUE INDEX` in its own `try/catch`, and **never throws** — a residual duplicate logs a warning and boot continues (the migration is still recorded as applied so it doesn't retry every boot). This is a deliberate exception: the schema-migration runner is otherwise **fail-closed** (a failing migration aborts boot to avoid a half-migrated schema).
 
 ### Batched Meta Loading (N+1 avoidance)
 

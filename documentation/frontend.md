@@ -29,7 +29,7 @@ WordJS uses **Puck** for its visual editor.
 *   **Internal Port:** `3001` (default).
 *   **Public Access:** Accessed via Gateway on port `3000` (or `80`/`443` in prod).
 
-Ensure `NEXT_PUBLIC_API_URL` points to the Gateway URL, not direct backend port.
+The browser calls a **relative** `/api/v1` path (`frontend/src/lib/api.ts`), so it reaches the backend through the gateway automatically — there is **no** client-side API-URL env var to set. Server-side rendering resolves the backend base on the server from `WORDJS_MONO_ORIGIN` (monolith) or `wordjs-config.json` (split), with an optional `INTERNAL_API_URL` override.
 
 
 ## Public Site Rendering (SSR) 🌐
@@ -48,7 +48,8 @@ A **server-only** module (must never be imported from a `"use client"` file). It
 The actual content markup lives in **client components** that receive the already-fetched `post` as a prop from the Server Component: `src/components/public/PostContent.tsx` (single post / page / category-post) and `src/components/public/HomeContent.tsx` (static home page). Because the data arrives as a prop (not via a browser-only `useEffect` fetch), these **render on the server during SSR** — real HTML body and sanitized content reach the crawler — and then **hydrate** the interactive bits (photo carousels, comments, locale-aware dates, plugin `[shortcode]` embeds).
 
 ### SEO & behavior
-*   **`generateMetadata`** — each page exports it for a per-page `<title>` (the root layout applies a `%s | site` template; the home page uses `title.absolute` to avoid doubling), description, canonical, and OpenGraph/Twitter tags.
+*   **`generateMetadata`** — each page exports it for a per-page `<title>` (the root layout applies a `%s | site` template; the home page uses `title.absolute` to avoid doubling), description, canonical, and OpenGraph/Twitter tags. Per-route `generateMetadata` returns **relative** canonical/`og:url` values (e.g. `/my-post`).
+*   **`metadataBase` is anchored to the configured site URL (FE-SSR-01)** — the root layout's `generateMetadata` (`src/app/layout.tsx`) sets `Metadata.metadataBase` so the relative canonical/OpenGraph URLs absolutize correctly. The base is taken from the **configured** site URL (`settings.siteurl || home || site_url`), **not** the raw `Host`/`X-Forwarded-Host` header. The request host is honored only when its hostname matches the configured origin (a host allowlist); only when no site URL is configured does it fall back to the raw request host. This prevents an attacker-controlled `Host` header from rewriting every canonical/`og:url` to their own domain (SEO/phishing poisoning).
 *   **Real 404s** — when content is missing, pages call `notFound()` (a real HTTP 404), and their `generateMetadata` returns `robots: { index: false }`.
 *   **Search is no-JS** — `search/page.tsx` is a plain `<form action="/search" method="get">`, so it works with JavaScript disabled; it server-fetches results via `searchPosts()` and is marked `robots: { index: false }`.
 *   **`suppressHydrationWarning`** — sanitized-HTML blocks (`dangerouslySetInnerHTML`) carry `suppressHydrationWarning` because the server (`sanitize-html`) and client (DOMPurify) serialize styles slightly differently (see **HTML Sanitization** below).
@@ -189,6 +190,13 @@ WordJS integrates **Puck** (by Measured) as its visual page builder.
 | **CategoryPosts** | Posts by category    | `categoryId`, `layout`, `css`                                      |
 | **SearchBar**     | Search input         | `placeholder`, `buttonText`, `searchPage`, `align`, `width`, `css` |
 
+### Component Security
+
+Two render-time components self-enforce XSS hardening (independent of the HTML sanitizer):
+
+*   **VideoEmbed** renders an `<iframe>` only when the resolved URL is `https:` with a hostname in `{www.youtube.com, (www.)youtube-nocookie.com, player.vimeo.com}`; anything else (arbitrary `src`, `javascript:`/`data:`, a non-embed host) renders a placeholder instead. Every embed carries `sandbox="allow-scripts allow-same-origin allow-presentation"` + `referrerPolicy="strict-origin-when-cross-origin"`.
+*   **SearchBar** confines navigation to a same-origin **relative path**: the editor-controlled `searchPage` is resolved against `window.location.origin` and only its `pathname` is used when the origin matches; otherwise it falls back to `/search`. So an absolute/scheme/protocol-relative URL cannot become an open redirect or a `javascript:` navigation.
+
 ### Component CSS Properties
 
 All components include a `css` field that allows custom styling with:
@@ -259,8 +267,8 @@ User-generated and Puck-rendered HTML is sanitized before it hits `dangerouslySe
 
 > The file is marked `"use client"`, so it executes during SSR only when invoked from a Client Component (e.g. `PostContent`/`HomeContent`) — it **cannot be imported into a Server Component**. Server Components that need plain text (SEO metadata) use `htmlToText()` from `src/lib/server-api.ts` instead. Because server (`sanitize-html`) and client (DOMPurify) serialize styles slightly differently, the rendered HTML blocks set `suppressHydrationWarning`.
 
-*   **Client (browser):** uses **DOMPurify** with an explicit tag/attribute allowlist (text formatting, headings, lists, links, media incl. `iframe` for video embeds, tables, read-only form elements, plus `style`). `on*` handlers and `<script>/<object>/<embed>/<base>/<meta>/<link>` are forbidden.
-*   **Server (SSR):** uses **`sanitize-html`** with `SERVER_SANITIZE_OPTIONS`, which mirrors the DOMPurify allowlist (schemes limited to `http/https/mailto/tel`, plus `data:` for `img`/`source`). If the library is unavailable it **fails closed** by stripping all tags via regex.
+*   **Client (browser):** uses **DOMPurify** with an explicit tag/attribute allowlist (text formatting, headings, lists, links, media incl. `iframe` for video embeds, tables, read-only form elements). The `<style>` **tag** and the `style` **attribute** are intentionally **not** allowed (CSS-injection / data-exfiltration vector — `@import`/`url()` beacons and attribute-selector exfil need no script). `<iframe>` is allowed only when its `src` matches the embed-host allowlist (`www.youtube.com`, `player.vimeo.com`); a DOMPurify `uponSanitizeElement` hook drops any other iframe and force-applies `sandbox="allow-scripts allow-same-origin allow-presentation"` on the survivors, and an `afterSanitizeAttributes` hook forces `rel="noopener noreferrer"` on any `target="_blank"` link. `on*` handlers and `<script>/<object>/<embed>/<base>/<meta>/<link>` are forbidden.
+*   **Server (SSR):** uses **`sanitize-html`** with `SERVER_SANITIZE_OPTIONS`, which mirrors the DOMPurify allowlist (schemes limited to `http/https/mailto/tel`, plus `data:` for `img`/`source`). To stay symmetric with the client, it restricts `<iframe>` to the same embed-host allowlist (`allowedIframeHostnames`), force-applies a `sandbox` on every surviving iframe and `rel="noopener noreferrer"` on `target="_blank"` links via `transformTags`, and no longer opts `<style>` in (the previous `allowVulnerableTags`/`<style>` opt-in is gone). If the library is unavailable it **fails closed** by stripping all tags via regex.
 *   **Exports:**
     *   `sanitizeHTML(dirty)` — the default; safe HTML for rendering.
     *   `sanitizeHTMLCustom(dirty, options)` — extra DOMPurify options on the client; falls back to the base server allowlist during SSR.
@@ -268,3 +276,32 @@ User-generated and Puck-rendered HTML is sanitized before it hits `dangerouslySe
     *   `hasDangerousContent(html)` — heuristic check for `<script>`, `javascript:`, inline `on*=`, `data:text/html`, etc.
 
 > Note: the backend has its own content-sanitization layer (`backend/src/core/formatting.ts`); the frontend `sanitize.ts` is the rendering-time defense in depth.
+
+## Content Security Policy 🔒
+
+`next.config.ts` `headers()` sets a baseline Content-Security-Policy (and companion headers) on **every** route (`source: '/:path*'`):
+
+```text
+default-src 'self';
+script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:;
+worker-src 'self' blob:;
+style-src 'self' 'unsafe-inline' https:;
+img-src 'self' data: blob: https:;
+font-src 'self' data: https:;
+connect-src 'self' https: http: ws: wss:;
+frame-src 'self' https://www.youtube.com https://player.vimeo.com;
+frame-ancestors 'none';
+object-src 'none';
+base-uri 'self';
+```
+
+Companion headers: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`.
+
+**Honest caveats** (documented in the code comments — this CSP is *not* the XSS backstop):
+
+*   **`script-src` is permissive by necessity, so it is not the XSS control** — the server-side sanitizer in `sanitize.ts` is. Its directives stay because removing them is a regression:
+    *   `blob:` is **required** — the admin loads each plugin's frontend bundle via `import(URL.createObjectURL(blob))` (`lib/pluginBundleLoader.ts`); without it every plugin admin UI and its icons fail (the "no icons" regression).
+    *   `'unsafe-eval'` — the Puck visual editor and some bundled libs use `Function()`/`eval` at runtime.
+    *   `'unsafe-inline'` — Next.js App Router emits inline bootstrap/hydration `<script>` tags (a per-request nonce migration is out of scope).
+*   **`https:` on `font-src`/`style-src`/`img-src`/`script-src`** is needed because the app loads its own theme assets and, crucially, the Puck editor renders the theme inside an `about:srcdoc` iframe where the CSP keyword `'self'` does **not** resolve to the page origin — same-origin `https:` assets would otherwise be blocked.
+*   The **real structural value** is `frame-ancestors 'none'` (clickjacking, plus the legacy `X-Frame-Options: DENY`), `object-src 'none'`, and `base-uri 'self'`.

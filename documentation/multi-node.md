@@ -136,6 +136,19 @@ Point your L4/L7 load balancer at the gateway. Health probes (added for orchestr
   loaded module) and the active set in the DB. Other nodes do not hot-reload that state live — do a
   **rolling restart** to propagate a plugin activation/deactivation across the cluster.
   (Role/capability and option changes do propagate live.)
+- **No cross-node roles-coherence epoch yet (DATA-COH-01, deferred).** The Redis
+  `wordjs:option-changed` pub/sub *does* propagate role/capability edits live, and a same-node
+  local-write epoch stops a stale background TTL refresh from clobbering a just-applied local edit.
+  But there is no **cross-node** epoch: if Redis drops a publish, a lagging replica corrects itself
+  only via the in-process roles-cache TTL self-heal fallback — a missed cross-node revocation is
+  bounded by the TTL (the fail-open direction), not corrected instantly. Strengthening this into a
+  cross-node coherence epoch is on the roadmap.
+- **No cross-node plugin worker reconciliation.** Consistent with the rolling-restart limitation
+  above, other nodes do not reconcile their loaded/forked plugin worker state from the DB active set
+  without a restart.
+- **Residual multi-node lost-update edges.** The `active_plugins` read-modify-write **is** serialized
+  across nodes (best-effort, under the `wordjs:active-plugins` distributed lock), but general
+  concurrent option/row writes across nodes are not yet fully guarded against lost updates.
 - The **service registry and certificate live on the single gateway**; running multiple active-active
   gateway nodes would additionally require registry replication and cross-gateway cert distribution,
   which this topology intentionally avoids.

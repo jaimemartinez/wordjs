@@ -16,7 +16,7 @@ The backend follows a layered architecture inspired by WordPress but implemented
     *   `MigrationGuard`: Validates `Host` header against `siteUrl`.
 4.  **Security Layers:**
     *   `AST Scanner`: Static analysis (acorn, fail-closed) of plugin code at install time.
-    *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. Two server-side trust tiers (untrusted/sandboxed vs operator-trusted) gate DB scope, secret options, route mounting, and outbound network. Untrusted-plugin routes are namespaced under `/api/v1/plugin/<slug>` (operator-trusted plugins may opt into an absolute path); their DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
+    *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. There is **no "trusted" tier**: every plugin is sandboxed and the admin grants each capability per-plugin (Android-style, default-deny). First-party plugins are pre-granted their *declared* capabilities on first activation but are **not** privileged. A `network`-granted plugin's outbound connections are confined to **public IPs only** by `backend/src/core/egress-guard.ts` (loopback / link-local incl. cloud-metadata `169.254.169.254` / RFC1918 / CGNAT / IPv6 ULA are blocked, validated at connect time). Plugin DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
 5.  **Routing:** `backend/src/routes/index.ts` dispatches to controllers.
 6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
 7.  **Response:** JSON response sent back.
@@ -73,6 +73,14 @@ Default roles include:
 *   **Author:** `publish_posts`, `edit_posts`.
 *   **Contributor:** `edit_posts` (cannot publish).
 *   **Subscriber:** `read` only.
+
+### 2.4 CSRF Protection
+All state-changing requests (`POST`/`PUT`/`PATCH`/`DELETE`) under the API prefix pass through `csrfProtection` (`backend/src/middleware/auth.ts`, mounted globally in `backend/src/index.ts`). It requires a same-origin signal:
+
+*   The `Origin` (or, as a fallback, `Referer`) must match the configured site URL / frontend URL or the request host — an **exact** origin comparison, never a prefix match.
+*   Behind the gateway it honors `X-Forwarded-Host` (the gateway pins it to the real client host) when computing the expected origin.
+*   When **both** `Origin` and `Referer` are absent the request is **rejected** (`403 rest_csrf_invalid`, fail-closed) **unless** it carries a real `Authorization: Bearer <token>` (a genuine server-to-server caller that can't be CSRF'd via an ambient cookie). Cookie-only header-less requests are blocked.
+*   `/api/v1/setup/*` is exempt (it runs before an origin is configured).
 
 ---
 
@@ -162,16 +170,26 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`    | `/posts`            | Opt.  | List posts (filters: `type`, `status`, `author`) |
 | `GET`    | `/posts/:id`        | Opt.  | Get post details by ID                           |
 | `GET`    | `/posts/slug/:slug` | Opt.  | Get post details by URL slug                     |
-| `POST`   | `/posts`            | Admin | Create a new post/page                           |
-| `PUT`    | `/posts/:id`        | Admin | Update an existing post                          |
-| `DELETE` | `/posts/:id`        | Admin | Move post to trash / Delete                      |
+| `POST`   | `/posts`            | `edit_posts`       | Create a new post/page                          |
+| `PUT`    | `/posts/:id`        | `edit_posts`†      | Update a post (own, or `edit_others_posts`)     |
+| `DELETE` | `/posts/:id`        | `edit_posts`†      | Trash/delete a post (own, or `delete_others_posts`) |
 | `GET`    | `/categories`       | No    | List all categories                              |
 | `POST`   | `/categories`       | Admin | Create a new category                            |
 | `GET`    | `/tags`             | No    | List all tags                                    |
 | `GET`    | `/media`            | JWT   | List library items                               |
 | `POST`   | `/media`            | Admin | Upload a new media file                          |
 
+> † `edit_posts` is held by authors/editors/admins; `PUT`/`DELETE` additionally require **ownership** of the post **or** `edit_others_posts` / `delete_others_posts` (see the access notes below).
+
 > **Pagination:** `GET /posts` returns `X-WP-Total` and `X-WP-TotalPages` response headers. These now reflect the **filtered** list: `Post.count()` shares a `buildWhere()` with `findAll` (and defaults `status` to `publish`), so the totals match the rows actually returned.
+
+> **Status filtering (access control, no BOLA):** listing non-published statuses is authorization-scoped (`backend/src/routes/posts.ts`). Anonymous callers always see **only `publish`** regardless of the requested `status`. A logged-in **non-privileged** user requesting `status=any` or a specific non-publish status (`draft`/`pending`/`private`) only sees **their own** such posts (the author filter is forced to their id). Only users with `edit_others_posts` or `read_private_posts` see other authors' unpublished content. This mirrors the per-post `GET /posts/:id` gate and closes the list-path BOLA.
+
+> **Comments (`POST /comments`):** when a comment supplies a `parent`, the parent must exist **and** belong to the same post, else `400 rest_comment_invalid_parent` (top-level comments are unaffected). A guest's `author_url` (on create and edit) is restricted to `http(s)` only, so `javascript:`/`data:` can't become a clickable author link.
+
+> **Menu item URLs (`POST /menus/:id/items`, `PUT /menus/items/:itemId`):** the item `url` is scheme-validated on both create and update (`backend/src/routes/menus.ts`). Relative paths, fragments (`#`) and queries (`?`) are allowed; absolute URLs are restricted to `http`/`https`/`mailto`/`tel`; protocol-relative `//host` and disallowed schemes (`javascript:`/`data:`/`vbscript:`) are neutralized to `#` (XSS-03).
+
+> **User updates (`PUT /users/:id`):** authorization is layered (`backend/src/routes/users.ts`). Editing **another** user requires `edit_users`; a non-administrator **cannot edit an administrator** account (`403 rest_forbidden`, AUTH-1). On a **role change**: you cannot change your **own** role (`403 rest_cannot_edit_own_role`); changing a role requires `promote_users`; the role is validated against the roles allow-list (`400 rest_invalid_role`); only an administrator may assign the **administrator** role; and a non-administrator `promote_users` delegate cannot assign any role that grants `*` or a capability the caller lacks (privilege-amplification, AUTH-A1).
 
 ### 6.3 System & Extensions
 | Method | Endpoint                  | Auth  | Description                           |
@@ -182,17 +200,22 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install)  |
 | `POST` | `/plugins/:slug/activate`   | Admin | Activate a plugin                                   |
 | `POST` | `/plugins/:slug/deactivate` | Admin | Deactivate a plugin                                 |
-| `POST` | `/plugins/:slug/trust`      | Admin | Toggle the privileged "trusted" tier (`{ trusted }`); reloads the isolated child process. First-party defaults return `409` |
+| `POST` | `/plugins/:slug/permissions` | Admin | Set the per-permission grants (Android-style, default-deny). Body `{ granted: ["scope:access", ...], network: boolean }`; re-spawns the isolate so a `network` grant takes effect |
 | `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin                                  |
 | `GET`  | `/themes`                   | Admin | List available themes                               |
 | `POST` | `/themes/:slug/activate`    | Admin | Change active theme                                 |
-| `GET`  | `/setup/status`             | No    | Check if site is installed                          |
-| `POST` | `/setup/install`            | No    | Run the installation wizard                         |
+| `GET`  | `/setup/status`             | No    | Check if site is installed (not token-gated)        |
+| `POST` | `/setup/test-db`            | Token | Validate a DB connection before install (install-token gated) |
+| `POST` | `/setup/install`            | Token | Run the installation wizard (install-token gated)   |
 | `GET`  | `/export`                   | Admin | Download a logical site export (JSON)               |
 | `GET`  | `/export/wxr`               | Admin | Export as WordPress WXR (XML)                       |
 | `POST` | `/import`                   | Admin | Import a site from JSON (file upload or `data`)     |
 
 > **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.ts`, distinct from the logical `/export` above.
+
+> **Install token (pre-install setup):** `POST /setup/install` and `POST /setup/test-db` run before the instance is configured (unauthenticated, CSRF-exempt), so they are gated by a **one-time install token** (`backend/src/core/install-token.ts`) — supply it via the `x-install-token` header or an `installToken` body field (constant-time compared; `403` on mismatch). The token is printed to the server console at boot, mirrored to a `0600` file in the data dir, and overridable via the `WORDJS_INSTALL_TOKEN` env var (≥ 16 chars). Both endpoints also early-return `400` once the site is installed, and the on-disk token mirror is cleared after a successful install. `GET /setup/status` is **not** token-gated; `POST /setup/migrate` instead requires admin username/password.
+
+> **Plugin permissions (default-deny):** `POST /plugins/:slug/permissions` is the admin's source of truth for grants. An undeclared scope has no effect — `hasPermission` requires **both** the manifest declaration **and** the grant. Activating a plugin with no prior grant record pre-grants exactly its manifest-**declared** permissions, persisted only **after** activation + AST-scan succeed (a plugin that fails its scan leaves behind no grant record).
 
 ### 6.4 Analytics System 📊
 | Method | Endpoint           | Auth  | Description                        |
