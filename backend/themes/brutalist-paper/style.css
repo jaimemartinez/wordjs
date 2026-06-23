@@ -53,6 +53,61 @@
 
     /* --- TYPOGRAPHY --- */
     --wjs-font-family-base: 'Helvetica', 'Arial', sans-serif;
+
+    /* --- WordJS UI framework tokens --- */
+    /* Colors */
+    --wjs-color-secondary: #ff3333;
+    --wjs-color-secondary-dark: #cc0000;
+    --wjs-color-accent: #ff3333;
+    --wjs-color-success: #15803d;
+    --wjs-color-danger: #dc2626;
+    --wjs-color-warning: #d97706;
+    --wjs-color-info: #0369a1;
+    --wjs-color-light: #f4f1ea;
+    --wjs-color-dark: #000000;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #161616;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+    /* Surfaces / text / border */
+    --wjs-bg-muted: #e9e5dc;
+    --wjs-color-heading: #000000;
+    --wjs-color-link: #000000;
+    --wjs-color-link-hover: #ff3333;
+    --wjs-border-width: 3px;
+    --wjs-focus-ring: rgba(255, 51, 51, 0.3);
+
+    /* Typography */
+    --wjs-font-family-heading: 'Times New Roman', Times, serif;
+    --wjs-font-family-mono: 'Courier New', Courier, monospace;
+    --wjs-font-size-base: 1rem;
+    --wjs-line-height-base: 1.6;
+    --wjs-heading-weight: 900;
+    --wjs-heading-line-height: 1.05;
+    --wjs-h1: 3rem;
+    --wjs-h2: 2.25rem;
+    --wjs-h3: 1.75rem;
+    --wjs-h4: 1.35rem;
+    --wjs-h5: 1.1rem;
+    --wjs-h6: 0.95rem;
+
+    /* Spacing / shape (brutalist: 0 radius, hard offset shadows) */
+    --wjs-spacer: 1rem;
+    --wjs-radius-sm: 0;
+    --wjs-radius: 0;
+    --wjs-radius-md: 0;
+    --wjs-radius-lg: 0;
+    --wjs-radius-pill: 0;
+    --wjs-shadow-sm: 3px 3px 0px 0px #000000;
+    --wjs-shadow: 6px 6px 0px 0px #000000;
+    --wjs-shadow-md: 8px 8px 0px 0px #000000;
+    --wjs-shadow-lg: 10px 10px 0px 0px #000000;
 }
 
 /* =========================================

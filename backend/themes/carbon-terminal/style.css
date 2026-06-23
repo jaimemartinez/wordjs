@@ -61,6 +61,56 @@
   --wjs-shadow-1: 0 1px 2px rgba(0, 0, 0, 0.6);
   --wjs-shadow-2: 0 4px 16px rgba(0, 0, 0, 0.55);
   --wjs-glow: 0 0 0 1px rgba(34, 197, 94, 0.5), 0 0 12px rgba(34, 197, 94, 0.18);
+
+  /* --- WordJS UI framework tokens --- */
+  --wjs-color-secondary: #3B82F6;
+  --wjs-color-secondary-dark: #2563EB;
+  --wjs-color-accent: #2DD4BF;
+  --wjs-color-success: #22C55E;
+  --wjs-color-danger: #F87171;
+  --wjs-color-warning: #FBBF24;
+  --wjs-color-info: #38BDF8;
+  --wjs-color-light: #E6EDF3;
+  --wjs-color-dark: #070A12;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #161616;
+  --wjs-color-on-secondary: #161616;
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #161616;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  --wjs-bg-muted: #18212E;
+  --wjs-color-heading: #E6EDF3;
+  --wjs-color-link: #22C55E;
+  --wjs-color-link-hover: #4ADE80;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(34, 197, 94, 0.3);
+
+  --wjs-font-family-heading: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --wjs-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.65;
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.2;
+  --wjs-h1: 2.5rem;
+  --wjs-h2: 2rem;
+  --wjs-h3: 1.5rem;
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.0625rem;
+  --wjs-h6: 0.875rem;
+
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 8px;
+  --wjs-radius-lg: 12px;
+  --wjs-radius-pill: 999px;
+  --wjs-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.6);
+  --wjs-shadow: 0 2px 8px rgba(0, 0, 0, 0.55);
+  --wjs-shadow-md: 0 4px 16px rgba(0, 0, 0, 0.55);
+  --wjs-shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
 }
 
 /* =========================================
