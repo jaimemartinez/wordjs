@@ -173,10 +173,11 @@
 > at connect time against the resolved IP and confined to public destinations**; io-guard confines fs to
 > the plugin's own dir; the table-scoped DB confines SQL). A *novel* Node global or native
 > binding that reaches the disk/network without going through those proxies would be an escape **of the
-> userspace policy** (it could not escape the process or its memory cap). For by-construction,
-> OS-enforced confinement, seccomp/landlock + a dropped uid can layer **on top of** the already-separate
-> process, and a Windows Job Object would make the memory cap preventive on Windows too — both are
-> **roadmap** (see §2/§6). An independent security audit is recommended before relying on this for
+> userspace policy** (it could not escape the process or its memory cap). By-construction, OS-enforced
+> confinement now ships as an **opt-in** Linux layer (bubblewrap: dropped uid + capabilities + no-new-privs
+> + PID/IPC/UTS namespaces + read-only fs + a seccomp syscall denylist; `sandbox.useKernelHardening`,
+> default-off, probe-gated — see the status banner). Still **roadmap**: a Windows Job Object to make the
+> memory cap preventive on Windows. An independent security audit is recommended before relying on this for
 > genuinely hostile multi-tenant input.
 
 Status: **IMPLEMENTED** (was: proposal) · Author: WordJS · History: the original proposal followed 4
@@ -189,7 +190,7 @@ first via `worker_threads` (heap-isolated), then — because a worker shares the
 off-heap OOM in it cannot be capped without taking the host down — moved to **`child_process.fork`** for
 true OS-level process isolation (a `worker_threads` transport remains only as a fallback). See the
 status banner above for the as-built details and the residual-risk note for where the OS-process
-boundary stops (syscall confinement = roadmap).
+boundary stops (syscall confinement now ships via the opt-in bubblewrap + seccomp layer; see the banner).
 
 ---
 
@@ -237,8 +238,10 @@ architecture below is the same — only the isolate primitive differs.
 > half of that recommendation — chosen over `isolated-vm` because it needs **zero native dependencies**
 > and works on any platform, and over `worker_threads` because a separate process gives true OS-level
 > crash/OOM/resource isolation (the host always survives) where a worker shared the host heap/rss. The
-> **OS-sandbox layer** of the gold standard (seccomp/AppArmor/landlock, dropped uid) is **not yet
-> applied** — it is roadmap that can layer on top of the already-separate process. The kernel resource
+> **OS-sandbox layer** of the gold standard (dropped uid + dropped capabilities + no-new-privs + namespaces
+> + a seccomp syscall denylist) now ships as an **opt-in** Linux layer (bubblewrap, `sandbox.useKernelHardening`,
+> default-off, probe-gated); the Landlock LSM is intentionally omitted (the read-only mount namespace covers
+> its fs-confinement goal, and it would need a native dep). The kernel resource
 > limits ARE partly in place today: an OPT-IN cgroup v2 `memory.max` (Linux, `systemd-run --user
 > --scope`) and a loose `RLIMIT_AS` virtual backstop, plus a cross-platform RSS poll (see §6 and the
 > status banner).
@@ -360,17 +363,19 @@ The phased migration the proposal laid out has all landed; for the record:
 | `worker_threads` (was shipped, now fallback) | ❌ (full Node in worker; shares host heap/rss) | ✅ crash, ⚠️ off-heap OOM can take the host down | medium (IPC + clone) | medium |
 | **`child_process.fork` (shipped)** | ❌ (full Node in child) but separate OS process: own heap/rss/pid, host always survives | ✅✅ (separate process + layered mem caps: cgroup/RLIMIT_AS/RSS-poll) | higher (process + IPC) | medium-high |
 | **`isolated-vm`** | ✅ (no bindings) | ✅ (mem/cpu caps) | medium | medium-high (async API rewrite, native build) |
-| **child-process + OS sandbox (seccomp/uid)** | ✅✅ (OS-enforced syscalls) | ✅✅ | higher (process + IPC) | high (= shipped child-process + roadmap kernel layer) |
+| **child-process + OS sandbox (seccomp/uid)** | ✅✅ (OS-enforced syscalls) | ✅✅ | higher (process + IPC) | high (= shipped child-process + **opt-in** bwrap kernel layer, Linux) |
 
 **Decision (as built):** shipped the **bridge API + `child_process.fork` (separate OS process)** for
 **all** plugins. The proposal leaned toward `isolated-vm`; a process was chosen instead because it has
 **zero native dependencies and works on any platform** (`isolated-vm` needs a native build) while still
 giving **true OS-level crash/OOM/resource isolation** — a worker_threads version shipped first but was
 replaced because a worker shares the host heap/rss and an off-heap OOM in it can't be capped without
-crashing the host. The remaining gap vs the gold standard is the **OS-sandbox layer** (seccomp/landlock
-+ dropped uid) that would make capability denial by-construction rather than relying on the in-child
-guards (secure-require module proxies + the `fetch`/`WebSocket`/`EventSource` global trap); that layer is
-**roadmap** and can be added on top of the already-separate process without changing the bridge.
+crashing the host. The **OS-sandbox layer** that makes capability denial by-construction — dropped uid +
+dropped capabilities + no-new-privs + PID/IPC/UTS namespaces + a seccomp syscall denylist — now ships as an
+**opt-in** Linux layer (bubblewrap, `sandbox.useKernelHardening`, default-off, probe-gated) on top of the
+in-child guards (secure-require module proxies + the `fetch`/`WebSocket`/`EventSource` global trap), without
+changing the bridge. The Landlock LSM is intentionally omitted (the read-only mount namespace covers its
+fs-confinement goal, and it would need a native dep); a preventive Windows memory cap (Job Object) remains roadmap.
 Kernel resource limits are partly in place today (OPT-IN cgroup v2 `memory.max`, loose `RLIMIT_AS`,
 cross-platform RSS poll).
 
@@ -383,12 +388,12 @@ cross-platform RSS poll).
   components are build-time assets, bundled and reviewed as before); it does not replace code review of
   first-party plugins (they are pre-granted, so review them as you would any code you ship); and a separate
   OS process gains an **opt-in** bubblewrap layer (dropped uid + capabilities + `no-new-privs` +
-  PID/IPC/UTS namespaces + read-only fs; `sandbox.useKernelHardening`, Linux, default-off, probe-gated)
-  but is **not yet** full syscall-confinement (`seccomp`/`Landlock` are phase 2 — see the residual-risk
-  note in the status banner).
+  PID/IPC/UTS namespaces + read-only fs + a **`seccomp` syscall denylist**; `sandbox.useKernelHardening`,
+  Linux, default-off, probe-gated). The `Landlock` LSM is not used (the read-only mount namespace already
+  provides its fs-confinement goal, and the LSM needs a native dep).
 - **Net:** moves plugin security from "we blocked every trick we found" (soft, enumerated)
   toward "core capabilities are reached only through a permission-checked bridge, the plugin runs in a
   separate OS process (own heap/rss, host survives any crash/OOM, layered memory caps), and raw fs/net are
   proxied/trapped in the child, with an opt-in bubblewrap deprivileging layer (dropped uid/caps/
-  no-new-privs/namespaces/read-only-fs)" — a hard process boundary plus guarded capabilities, with
-  `seccomp`/`Landlock` syscall-level confinement as phase 2.
+  no-new-privs/namespaces/read-only-fs + a `seccomp` syscall denylist)" — a hard process boundary plus
+  guarded capabilities and a by-construction-shrunk syscall surface.
