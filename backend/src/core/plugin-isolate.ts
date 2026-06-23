@@ -155,10 +155,13 @@ function probeCgroupCap(): Promise<boolean> {
 //   OPT-IN (config.sandbox.useKernelHardening) + Linux-only + PROBE-VALIDATED on the host before
 //   activating + clean fallback to the standard launch on any failure ⇒ ZERO regression by construction
 //   (default-off; Windows/macOS/no-bwrap = no-op). It composes with the cgroup/rlimit memory cap: the
-//   fork-style IPC fd survives every composition (probe-verified), and the resident RSS poll sums the
-//   bwrap subtree so the memory cap keeps biting. A seccomp-bpf syscall denylist + Landlock path rules
-//   are a documented PHASE 2 (they need an arch-specific compiled BPF / kernel >=5.13). Requires the
-//   `bubblewrap` (bwrap) binary installed on the host. Validate with backend/scripts/verify-sandbox-hardening.js.
+//   fork-style IPC fd + the seccomp fd survive every composition (probe-verified), and the resident RSS
+//   poll sums the bwrap subtree so the memory cap keeps biting. It ALSO applies a seccomp-bpf syscall
+//   DENYLIST (EPERM on ptrace/mount/kexec/*_module/bpf/keyctl/userfaultfd/setns/process_vm_*/pivot_root/
+//   reboot/… — syscalls a Node app/web plugin never issues; see buildSeccompBpf). (Landlock's fs-confinement
+//   goal is already met by the read-only mount namespace; the Landlock LSM itself would need a native dep,
+//   contrary to this sandbox's no-native-deps design, for redundant protection — so it is intentionally not
+//   added.) Requires the `bubblewrap` (bwrap) binary. Validate with backend/scripts/verify-sandbox-hardening.js.
 function bwrapProfile(writableDir: string): string[] {
     return [
         '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
@@ -168,6 +171,58 @@ function bwrapProfile(writableDir: string): string[] {
         '--bind', writableDir, writableDir,
         '--die-with-parent', '--new-session',
     ];
+}
+
+// seccomp-bpf syscall denylist, assembled as classic-BPF in PURE JS (no native dep) and handed to
+// `bwrap --seccomp <fd>`. Single-arch (the host's): wrong-arch => KILL the process; a blocked syscall nr
+// => EPERM (not kill — gentle on any false positive); else ALLOW. The denylist is conservative: only
+// syscalls a Node runtime + web plugins never issue but that are escape / kernel-manipulation primitives,
+// so it cannot break a legitimate plugin (and probeKernelHardening boots node UNDER it to prove that on
+// the host). x86_64 + aarch64 only; on other arches getSeccompBpfPath() returns null and hardening still
+// applies WITHOUT seccomp.
+const SECCOMP_ARCHES: Record<string, { audit: number; x32?: boolean; nr: number[] }> = {
+    // nr lists: ptrace, kexec_load, kexec_file_load, init_module, finit_module, delete_module, [create/get_kernel_syms/
+    // query_module, _sysctl, nfsservctl on x64 only], bpf, perf_event_open, userfaultfd, process_vm_readv/writev, kcmp,
+    // add_key, request_key, keyctl, mount, umount2, pivot_root, swapon, swapoff, reboot, setns, open_by_handle_at, name_to_handle_at
+    x64: { audit: 0xC000003E, x32: true, nr: [101, 246, 320, 175, 313, 176, 174, 177, 178, 321, 298, 323, 310, 311, 312, 248, 249, 250, 165, 166, 155, 167, 168, 169, 308, 304, 303, 180, 156] },
+    arm64: { audit: 0xC00000B7, nr: [117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219, 40, 39, 41, 224, 225, 142, 268, 265, 264] },
+};
+function buildSeccompBpf(archKey: string): Buffer | null {
+    const a = SECCOMP_ARCHES[archKey];
+    if (!a) return null;
+    const LD = 0x20, JEQ = 0x15, JGE = 0x35, RET = 0x06, KILL = 0x80000000, EPERM = 0x00050001, ALLOW = 0x7FFF0000;
+    const X32 = 0x40000000; // x86_64 x32-ABI bit: deny the WHOLE x32 range so a denylisted syscall can't be reached via x32 (legit native syscalls are all below it, so Node is unaffected)
+    const ins = (code: number, jt: number, jf: number, k: number): Buffer => {
+        const b = Buffer.alloc(8); b.writeUInt16LE(code, 0); b.writeUInt8(jt, 2); b.writeUInt8(jf, 3); b.writeUInt32LE(k >>> 0, 4); return b;
+    };
+    const blocked = a.nr.slice().sort((x, y) => x - y);
+    // 0:LD arch 1:JEQ arch(skip KILL) 2:RET KILL 3:LD nr  [x64: JGE x32->ERRNO]  JEQ blocked->ERRNO …  RET ALLOW, RET EPERM
+    const bodyLen = (a.x32 ? 1 : 0) + blocked.length;
+    const ERRNO_IDX = 4 + bodyLen + 1;
+    const out: Buffer[] = [ins(LD, 0, 0, 4), ins(JEQ, 1, 0, a.audit), ins(RET, 0, 0, KILL), ins(LD, 0, 0, 0)];
+    if (a.x32) out.push(ins(JGE, ERRNO_IDX - (out.length + 1), 0, X32)); // nr >= x32 bit -> EPERM (out.length == this instr's index)
+    blocked.forEach((nr) => out.push(ins(JEQ, ERRNO_IDX - (out.length + 1), 0, nr)));
+    out.push(ins(RET, 0, 0, ALLOW)); out.push(ins(RET, 0, 0, EPERM));
+    return Buffer.concat(out);
+}
+// Lazily write the host-arch BPF to a 0600 temp file once; each child opens its own read fd for --seccomp.
+// Returns the path, or null if the arch is unsupported or the write fails (→ hardening without seccomp).
+let seccompBpfPath: string | null | undefined;
+function getSeccompBpfPath(): string | null {
+    if (seccompBpfPath !== undefined) return seccompBpfPath;
+    const result: string | null = (() => {
+        try {
+            const bpf = buildSeccompBpf(process.arch);
+            if (!bpf) return null;
+            const fsmod = require('fs'); const osmod = require('os'); const pathmod = require('path');
+            const p = pathmod.join(osmod.tmpdir(), `wjs-seccomp-${process.pid}.bpf`);
+            fsmod.writeFileSync(p, bpf, { mode: 0o600 });
+            try { process.on('exit', () => { try { fsmod.unlinkSync(p); } catch { /* */ } }); } catch { /* */ }
+            return p;
+        } catch { return null; }
+    })();
+    seccompBpfPath = result;
+    return result;
 }
 let hardenProbe: Promise<boolean> | undefined;
 function probeKernelHardening(): Promise<boolean> {
@@ -187,21 +242,25 @@ function probeKernelHardening(): Promise<boolean> {
         let dir: string | null = null;
         try { dir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-harden-probe-')); } catch { return false; }
         const src = "if(!process.send){process.exit(3)}process.send('ok',function(){process.exit(0)});setTimeout(function(){process.exit(4)},8000)";
+        const bpfPath = getSeccompBpfPath(); // validate the FULL launch INCLUDING seccomp, so a host where it fails falls back
         const ok = await new Promise<boolean>((res) => {
-            let proc: any, got = false, done = false;
-            const finish = (v: boolean) => { if (!done) { done = true; try { proc && proc.kill('SIGKILL'); } catch { /* */ } res(v); } };
+            let proc: any, got = false, done = false, probeFd = -1;
+            const finish = (v: boolean) => { if (!done) { done = true; try { proc && proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
             const overall = setTimeout(() => finish(false), 20000);
             if ((overall as any).unref) (overall as any).unref();
+            const stdio: any[] = ['ignore', 'ignore', 'ignore', 'ipc'];
+            const seccompArgs: string[] = [];
+            if (bpfPath) { try { probeFd = fsmod.openSync(bpfPath, 'r'); stdio.push(probeFd); seccompArgs.push('--seccomp', '4'); } catch { probeFd = -1; } }
             try {
-                proc = spawn('bwrap', [...bwrapProfile(dir as string), '--', process.execPath, '-e', src],
-                    { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 18000 });
-            } catch { clearTimeout(overall); return res(false); }
+                proc = spawn('bwrap', [...seccompArgs, ...bwrapProfile(dir as string), '--', process.execPath, '-e', src],
+                    { stdio, serialization: 'advanced', timeout: 18000 });
+            } catch { clearTimeout(overall); finish(false); return; }
             proc.on('message', (m: any) => { if (m === 'ok') got = true; });
             proc.on('error', () => { clearTimeout(overall); finish(false); });
             proc.on('exit', (code: number) => { clearTimeout(overall); finish(got && code === 0); });
         });
         try { if (dir) fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
-        if (ok) console.log('[Sandbox] kernel hardening ACTIVE (bwrap: unprivileged uid + dropped caps + no-new-privs + PID/IPC/UTS namespaces + read-only fs per isolated child).');
+        if (ok) console.log('[Sandbox] kernel hardening ACTIVE (bwrap: unprivileged uid + dropped caps + no-new-privs + PID/IPC/UTS namespaces + read-only fs' + (getSeccompBpfPath() ? ' + seccomp syscall denylist' : '') + ' per isolated child).');
         else console.warn('[Sandbox] sandbox.useKernelHardening is set but the bwrap probe failed (bwrap missing or rootless userns unavailable) — falling back to the standard isolated launch.');
         return ok;
     })();
@@ -304,7 +363,14 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // Composes with the memory-cap wrapper below; the IPC fd survives (probe-verified). When off,
         // bwrapPre is empty and every launch path is byte-identical to before (zero regression).
         const APP_ROOT = path.resolve(__dirname, '..', '..');
-        const bwrapPre = hardened ? ['bwrap', ...bwrapProfile(APP_ROOT), '--'] : [];
+        // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
+        // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
+        // after the child is spawned (the child kept its own dup).
+        let bpfFd = -1;
+        if (hardened) { const p = getSeccompBpfPath(); if (p) { try { bpfFd = require('fs').openSync(p, 'r'); } catch { bpfFd = -1; } } }
+        const seccompArgs = bpfFd >= 0 ? ['--seccomp', '4'] : [];
+        const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(APP_ROOT), '--'] : [];
+        const childStdio: any = bpfFd >= 0 ? [...IPC_STDIO, bpfFd] : IPC_STDIO;
         let child: any;
         let cgroupUnit: string | null = null;
         if (cgroupOk) {
@@ -316,7 +382,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             child = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', cgroupUnit,
                 '-p', `MemoryMax=${RSS_BUDGET_BYTES}`, '-p', 'MemorySwapMax=0', '--',
                 ...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
-                { stdio: IPC_STDIO, serialization: 'advanced', env: workerEnv });
+                { stdio: childStdio, serialization: 'advanced', env: workerEnv });
         } else if (capKb) {
             // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
             // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
@@ -324,7 +390,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
             const nodeArgv = [...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
             child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
-                stdio: IPC_STDIO,
+                stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
             });
@@ -333,8 +399,8 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             // (preserves the fork-style IPC fd, probe-verified) instead of a plain fork, so the child
             // still gets the unprivileged-uid / dropped-caps / no-new-privs / namespace confinement. The
             // resident RSS poll below sums the bwrap subtree so the memory cap keeps biting.
-            child = spawn('bwrap', [...bwrapProfile(APP_ROOT), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
-                stdio: IPC_STDIO,
+            child = spawn('bwrap', [...seccompArgs, ...bwrapProfile(APP_ROOT), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
+                stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
             });
@@ -344,10 +410,11 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             child = fork(WORKER_FILE, [childCfg], {
                 execArgv: [...execArgv, HEAP_FLAG],
                 env: workerEnv,
-                stdio: IPC_STDIO,
+                stdio: childStdio,
                 serialization: 'advanced',
             });
         }
+        if (bpfFd >= 0) { try { require('fs').closeSync(bpfFd); } catch { /* parent's dup; the child kept its own */ } }
         // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
         const worker: any = {
             postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
