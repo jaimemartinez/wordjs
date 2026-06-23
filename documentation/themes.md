@@ -65,11 +65,46 @@ There are **14 shipped themes**:
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 | **vidaParaTodos**   | Corporate          | Clean professional blue; full template set  |
 
-> **`--wjs-` variable adoption.** All themes except **default** are built on the `--wjs-*`
-> variable system documented below (each defines dozens of `--wjs-` declarations). The **default**
-> theme predates that convention and uses a smaller, legacy set (`--primary`, `--text`, `--bg`,
-> `--border`, …) — copy a `--wjs-` theme (e.g. `aurora-gradient`) as a starting point rather
-> than `default` if you want full variable coverage.
+> **`--wjs-` variable adoption.** All 14 themes ship the full `--wjs-*` token set documented below
+> (dozens of declarations each, including the `--wjs-color-on-*` contrast set). The **default** theme
+> additionally keeps a few older bare aliases (`--primary`, `--text`, `--bg`, `--border`) at the top of
+> its `:root` for backward-compatibility with its legacy rules — but it carries the complete `--wjs-*`
+> set too. Copy any theme as a starting point.
+
+## The WordJS UI Framework
+
+Beyond a theme's own `style.css`, WordJS ships **one shared, token-driven CSS framework** —
+`backend/public/css/wordjs-ui.css` (served at `/public/css/wordjs-ui.css`). It is the
+"Bootstrap-like" base that every theme builds on:
+
+- **Auto-styles every standard HTML element** (typography, forms, tables, lists, etc.).
+- **Bootstrap-compatible components**: `.btn`/`.card`/`.alert`/`.badge`/`.table`/`.nav`/
+  `.list-group`/`.pagination`/`.progress`/`.modal`/`.dropdown`, plus a flexbox grid
+  (`.container`/`.row`/`.col-*`).
+- **A utility layer**: spacing, display, flexbox, text, colors, borders, sizing, and shadow helpers.
+
+Everything in the framework is driven by the same `--wjs-*` design tokens documented below, each with
+a sensible fallback. Because the tokens are declared in each theme's **`style.css :root`** (not
+`theme.json`), a theme re-skins the entire framework — every element, component, and utility — just by
+overriding tokens. Per-variant `--wjs-color-on-*` tokens carry the max-contrast text color
+(black/white) for each solid color, computed per theme so text on `.btn-primary`, `.badge`, etc.
+stays legible against that theme's palette.
+
+**Where it loads (and where it does not):**
+
+- On **public pages**, `ThemeLoader` (`frontend/src/components/public/ThemeLoader.tsx`) injects
+  `wordjs-ui.css` **first** (id `wjs-ui-framework`), then the active theme's `style.css` — so the
+  theme's `:root` tokens and custom rules win at equal specificity.
+- In the **editor preview iframe** (`frontend/src/components/PuckEditor.tsx`), the same framework +
+  active-theme stylesheet are injected (framework first), so the WYSIWYG canvas matches the live site.
+- The backend Handlebars `wordjs_head` helper (`backend/src/core/theme-engine.ts`) likewise links
+  `wordjs-ui.css` before the theme stylesheet.
+- It is **never** loaded into the admin UI. Selectors are intentionally low-specificity, so themed
+  chrome built with utility/Tailwind classes keeps winning; in practice the framework styles raw
+  content HTML and offers opt-in classes wherever it's loaded.
+
+All 14 bundled themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
+class reference, see [`documentation/theming.md`](./theming.md).
 
 ## CSS Variables Reference
 
