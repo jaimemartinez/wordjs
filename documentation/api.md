@@ -25,7 +25,7 @@ The backend follows a layered architecture inspired by WordPress but implemented
 WordJS loads a database **driver** behind a common interface (`backend/src/drivers/interface.ts`: `connect/get/all/run/exec/close`). Drivers are selected by `db.driver` (in `wordjs-config.json`) via the DB manager in `backend/src/config/database.ts`.
 *   **Default:** `sqlite-native` (file-based SQLite via `better-sqlite3`), ideal for "Zero Config". File: `backend/data/wordjs-native.db`.
 *   **Automatic fallback:** `sqlite-legacy` (pure-JS WASM `sql.js`, file `backend/data/wordjs.db`) — used only when a SQLite driver fails to load (e.g. the native binary is missing). It reads the same SQLite file format.
-*   **PostgreSQL:** `postgres` driver (the `pg` client). Embedded Postgres is **opt-in** via `db.embedded: true` (the old `db.port == 5433` heuristic is deprecated); `embedded-postgres` is an optional dependency.
+*   **PostgreSQL:** `postgres` driver (the `pg` client), connecting to an external Postgres server (`db: { host, port, user, password, name, ssl }`).
 *   **Adding a driver:** implement `DatabaseDriverInterface` and add a block to the conformance suite (`backend/src/tests/driver-conformance.test.ts`).
 *   **Querying:** Uses `better-sqlite3`-style prepared statements (`db.prepare(...)`) on the sync path, with an async driver layer for Postgres/native.
 
@@ -157,7 +157,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 - **System**: `/settings`, `/plugins`, `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8).
 - **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
-- **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration & embedded Postgres).
+- **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
 
 ### 6.2.1 Authentication Flow (JWT)
 1. **Login**: `POST /auth/login` -> sets the `wordjs_token` HttpOnly cookie and returns `{ user }`.
@@ -245,10 +245,6 @@ Base path: `/api/v1/db-migration`. This is **core infrastructure** (formerly the
 | `GET`  | `/status`            | manage_options | Migration status + detected legacy DB files          |
 | `POST` | `/migrate`           | manage_options | Migrate site content to the target engine            |
 | `POST` | `/cleanup`           | manage_options | Remove leftover legacy DB files after a migration    |
-| `GET`  | `/embedded/status`   | manage_options | Embedded PostgreSQL server status                    |
-| `POST` | `/embedded/install`  | manage_options | Install the embedded PostgreSQL binaries (opt-in)    |
-| `POST` | `/embedded/start`    | manage_options | Start the embedded PostgreSQL server                 |
-| `POST` | `/embedded/stop`     | manage_options | Stop the embedded PostgreSQL server                  |
 
 ### 6.7 Revisions 📝
 Base path: `/api/v1/revisions`. All routes require `authenticate`. Access is gated **per parent post**: the post owner (with `edit_posts` for mutating actions) or a user with `edit_others_posts`.

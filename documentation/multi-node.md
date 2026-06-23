@@ -32,7 +32,7 @@ Multi-node requires all three shared backends. Without them, replicas diverge.
 
 | Requirement | Why | How |
 |---|---|---|
-| **External PostgreSQL** | SQLite is a single-host file; `embedded-postgres` is single-host too. | Set `dbDriver: "postgres"` + `db: { host, port, user, password, name }` in `wordjs-config.json` and point every node at the SAME server. |
+| **External PostgreSQL** | SQLite is a single-host file; every node must share one database. | Set `dbDriver: "postgres"` + `db: { host, port, user, password, name }` in `wordjs-config.json` and point every node at the SAME server. |
 | **Shared Redis** | Cross-node cache coherence, shared rate limiting, and realtime (SSE) fan-out. | Set `redis: { "enabled": true, host, port, password }` identically on every node, all pointing at ONE Redis. |
 | **Shared filesystem** | Uploads, themes, plugins, backups, ACME challenge files and certs are written to local disk. | Mount shared storage (NFS / EFS / SMB) at the backend's `uploads/`, `themes/`, `plugins/`, `backups/`, `public/` and `ssl/` directories on every node (see below). |
 

@@ -15,8 +15,6 @@ process, reachable only through a permission-checked capability bridge.
 > - It recently underwent **security hardening** that fixed several critical issues
 >   (a CSRF bypass, committed secrets, and XSS sinks). An **independent security audit is
 >   strongly recommended before any production or internet-facing deployment.**
-> - It ships some **pre-release / experimental dependencies** — notably
->   `embedded-postgres` (beta).
 > - The backend **compiles to `dist/` for production** (no `ts-node` at runtime) with a
 >   **strict** type-check enforced in CI. The strict core (`strictNullChecks`, etc.) is
 >   on, but two sub-flags — `noImplicitAny` and `useUnknownInCatchVariables` — are
@@ -128,7 +126,7 @@ process, reachable only through a permission-checked capability bridge.
   `Authorization: Bearer <token>`. Routed publicly via the gateway and in monolith mode, and
   never exposed without a token.
 - **Pluggable storage**: SQLite via `sql.js` (WASM, "legacy") or `better-sqlite3` (native),
-  and PostgreSQL via `pg` / `embedded-postgres` (beta), with a migration system to move
+  and PostgreSQL via `pg`, with a migration system to move
   between them.
 - **Native mail server** (shipped as an optional, fully sandboxed first-party plugin,
   pre-granted the `network`/`email:provider` capabilities it needs): inbound SMTP
@@ -322,8 +320,8 @@ tests** (`npm run test`, e.g. the XSS sanitizer), and build.
 - **Sandbox:** `child_process` OS-process isolation (`worker_threads` fallback) + `acorn` AST scanning + runtime require proxies + layered memory caps (cgroup/RSS-poll/RLIMIT_AS)
 - **TLS:** `acme-client` (Let's Encrypt HTTP-01 / DNS-01)
 - **Mail:** `smtp-server`, `nodemailer`, `mailparser`, DKIM (isolated plugin)
-- **Database:** SQLite (`sql.js` WASM / `better-sqlite3`) or PostgreSQL (`pg` /
-  `embedded-postgres` *beta*), interchangeable via the migration system
+- **Database:** SQLite (`sql.js` WASM / `better-sqlite3`) or PostgreSQL (`pg`),
+  interchangeable via the migration system
 - **Tooling:** ESLint + Prettier, `node:test`, GitHub Actions CI
 
 ---
