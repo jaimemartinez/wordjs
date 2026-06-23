@@ -282,7 +282,7 @@ If the flag is set but the probe fails (e.g. "Failed to connect to bus"), the lo
 [Sandbox] sandbox.useCgroupMemoryCap is set but the cgroup probe failed (no usable --user scope) — falling back to the RSS poll.
 ```
 
-> On **Windows** and **macOS** there is no cgroup option — the reactive RSS poll provides the resident cap, and process separation provides crash containment. A preventive cap on Windows (a Job Object) is on the roadmap.
+> On **Windows** and **macOS** there is no cgroup option. On **Windows** a preventive cap now ships as a **Job Object** (`ProcessMemoryLimit` = 768 MB, default-on, probe-gated, pure-JS via PowerShell P/Invoke; opt out with `sandbox.useJobObjectMemoryCap=false`), with the reactive RSS poll as a backstop. On **macOS** the reactive RSS poll provides the resident cap, and process separation provides crash containment either way.
 
 ### `config.sandbox.addressSpaceCapMb` — RLIMIT_AS override (POSIX)
 

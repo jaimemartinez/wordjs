@@ -26,6 +26,15 @@ own findings and fixes; see the [README](README.md) for the honest maturity cave
   x32 ABI). Probe-validated per host, composes with the memory caps, network preserved — zero regression
   on single-node / Windows / macOS. The Landlock LSM is intentionally not used (the read-only mount
   namespace already provides its filesystem confinement). Validate with `verify-sandbox-hardening.js`.
+- **Preventive memory cap on Windows (Job Object, default-on).** Each isolated plugin child is assigned
+  to a Windows Job Object with `JOB_OBJECT_LIMIT_PROCESS_MEMORY` (768 MB) — the Win32 analog of the Linux
+  cgroup `memory.max` — so the kernel fails any over-budget commit instead of only the reactive RSS poll
+  catching it after the fact. Implemented with a one-shot PowerShell P/Invoke (**pure-JS, no native
+  dependency**) that assigns the already-forked child by PID (the fork IPC channel is untouched) then
+  exits; the job and its limit persist for the child's lifetime via the kernel job refcount. Probe-gated
+  with graceful fallback to the RSS poll (the brief post-fork assign window is covered by that poll,
+  exactly as before); opt out via `config.sandbox.useJobObjectMemoryCap=false`. No-op (zero regression)
+  on Linux/macOS, where the cgroup/RSS-poll caps are unchanged.
 - **Live cross-node plugin activate/deactivate propagation (multi-node).** Activating or deactivating a
   plugin on one node now propagates to the others over Redis (`wordjs:plugin-changed`): each node
   loads/unloads that one isolated plugin live (forked child + routes/hooks/menus) — no rolling restart.
