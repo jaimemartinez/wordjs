@@ -140,7 +140,7 @@
 > | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
 > | conference-manager | **isolated** | own-table DB + `db.getType`, namespaced routes (pre-granted its declared caps) |
 > | mail-server | **isolated** | SMTP server on :25 + MX delivery in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
-> | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (manages the embedded PostgreSQL *server process* via `child_process.execSync` + runs schema migrations at boot). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
+> | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (runs schema migrations at boot, around the DB lifecycle). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
 >
 > **Net (final): the sandbox is isolated-only.** Every plugin runs in its own OS process; the legacy
 > in-process execution path was removed (`loadActivePlugins`/`activatePlugin` reject non-isolated plugins,
