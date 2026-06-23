@@ -75,13 +75,13 @@ The database file depends on the active driver (selected by `db.driver` in `word
 | :------------------- | :---------------------------------- | :----------------------------------------------- |
 | `sqlite-native` (default) | `backend/data/wordjs-native.db` | `better-sqlite3`. The DB-manager default.        |
 | `sqlite-legacy` (fallback) | `backend/data/wordjs.db`       | pure-JS WASM `sql.js`; same SQLite file format. Automatic fallback only. |
-| `postgres`           | external PG, or embedded under `backend/data/postgres-embed` | Embedded Postgres is **opt-in** (`db.embedded: true`). |
+| `postgres`           | external PostgreSQL server (via the `pg` client) | Set `db: { host, port, user, password, name, ssl }` in `wordjs-config.json`. |
 
 You can open any SQLite file with a SQLite CLI or GUI (like *DB Browser for SQLite*) directly while the server is stopped.
 
 ### DB-Admin API (engine migration)
 
-Switching DB engines and managing the embedded PostgreSQL server is done at runtime via the **DB-Admin** core module (`backend/src/core/db-admin/`, formerly the `db-migration` plugin), exposed under `/api/v1/db-migration/*` (requires the `manage_options` capability). See `documentation/api.md` § 6.6 for the endpoint list.
+Switching DB engines is done at runtime via the **DB-Admin** core module (`backend/src/core/db-admin/`, formerly the `db-migration` plugin), exposed under `/api/v1/db-migration/*` (requires the `manage_options` capability). See `documentation/api.md` § 6.6 for the endpoint list.
 
 ## 6. Notes
 

@@ -37,14 +37,6 @@ The database layer is a driver-abstraction over SQLite and PostgreSQL. Plugins a
 *   All drivers implement a common interface — `connect / get / all / run / exec / close` — defined in `backend/src/drivers/interface.ts`.
 *   A conformance test (`backend/src/tests/driver-conformance.test.ts`) exercises every driver against the same contract. **Adding a new database = implement the interface + add a conformance block.**
 
-### Embedded PostgreSQL (opt-in)
-*   **Location:** `backend/src/core/embedded-db.ts`. Spawns a local PG process via the **optional** `embedded-postgres` dependency.
-*   **Opt-in:** disabled unless `config.db.embedded === true`. (The old `db.port == 5433` heuristic still triggers it but is **deprecated** and logs a warning — prefer the explicit flag.)
-*   **Port / persistence:** runs on `5433`; data stored under `backend/data/postgres-embed/data`.
-*   **Security:** synchronizes the `postgres` password with `config.db.password` on boot (with a trust-update-revert self-heal path that always restores `pg_hba.conf`). The password is escaped before `ALTER USER` and control characters are rejected.
-
-> Embedded PostgreSQL is dev/managed convenience. The standard production path is `sqlite-native` or an external Postgres.
-
 ---
 
 ## 2b. Database Administration (core) 🛠️

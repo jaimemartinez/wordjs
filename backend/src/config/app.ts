@@ -31,9 +31,6 @@ export interface AppConfig {
         password: string;
         name: string;
         ssl: boolean;
-        // Opt-in: run the EMBEDDED Postgres server (spawns a PG process via the optional
-        // 'embedded-postgres' dep). Default/false = connect to an EXTERNAL Postgres via the pg client.
-        embedded?: boolean;
     };
 
     // Uploads

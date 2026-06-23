@@ -80,26 +80,8 @@ const init = async (options: any = {}) => {
     await loadDriver(options.driver);
   }
 
-  // Optionally start the EMBEDDED PostgreSQL server. This is OPT-IN: the 'postgres' driver connects
-  // to an EXTERNAL Postgres (the pg client) by default and does NOT bundle/start a server. Set
-  // db.embedded:true to run the embedded server (a heavyweight dev/managed convenience that spawns a
-  // PG process via the OPTIONAL 'embedded-postgres' dep). The old db.port==5433 heuristic still works
-  // but is deprecated in favor of the explicit flag.
-  if (driverName === 'postgres' && config.db) {
-    const wantEmbedded = config.db.embedded === true;
-    const legacyPortTrigger = !wantEmbedded && config.db.port == 5433;
-    if (legacyPortTrigger) {
-      console.warn('⚠️  DB Manager: starting embedded Postgres because db.port==5433 (deprecated). Set db.embedded:true to opt in explicitly.');
-    }
-    if (wantEmbedded || legacyPortTrigger) {
-      try {
-        const embedded = require('../core/embedded-db');
-        await embedded.startServer();
-      } catch (e) {
-        console.warn('⚠️  Could not auto-start embedded postgres:', e.message);
-      }
-    }
-  }
+  // The 'postgres' driver connects to an EXTERNAL Postgres via the pg client (host/port/user/password
+  // from wordjs-config.json). WordJS does NOT bundle or spawn a database server.
 
   // Initialize Sync Driver
   if (driver && driver.init) await driver.init(options);

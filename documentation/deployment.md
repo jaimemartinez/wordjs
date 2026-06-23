@@ -176,7 +176,7 @@ Example `backend/wordjs-config.json`:
 
 > The **gateway has its own config file** at `gateway/gateway-config.json` (`gatewaySecret`, `gatewayPort`, `gatewayInternalPort`, `ssl`, `mtls`). The setup orchestrator (`npm run setup`) writes the matching secret into both files and generates the mTLS cluster CA + per-service certs. Keep the two `gatewaySecret` values in sync.
 
-> **Database choice:** SQLite is the zero-config default — the canonical driver is `sqlite-native` (better-sqlite3); `sqlite-legacy` (pure-JS WASM) is an automatic fallback. For Postgres set the `db` block to use the `postgres` driver (the `pg` client). **Embedded Postgres is opt-in** via `db.embedded: true` (the old `db.port == 5433` auto-start heuristic is deprecated, and `embedded-postgres` is now an optional dependency).
+> **Database choice:** SQLite is the zero-config default — the canonical driver is `sqlite-native` (better-sqlite3); `sqlite-legacy` (pure-JS WASM) is an automatic fallback. For Postgres set the `db` block to use the `postgres` driver (the `pg` client) pointed at an external Postgres server.
 
 ---
 

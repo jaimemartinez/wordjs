@@ -156,10 +156,9 @@ Complex business logic for managing church conferences.
 ## 6. Database Migration 🚚 — now in core (no longer a plugin)
 **Location:** `backend/src/core/db-admin/` | Admin UI: `/admin/db-migration` (permanent core Sidebar item)
 
-Database administration (migrate data between SQLite and PostgreSQL, manage the embedded PostgreSQL
-server process, run schema migrations at boot) is **no longer a plugin**. It was de-pluginized because
-it is database infrastructure, not a feature plugin: it manages the database server itself (via
-`child_process`) and must run at boot. It moved into core (`backend/src/core/db-admin/`, routes still
+Database administration (migrate data between SQLite and PostgreSQL, run schema migrations at boot) is
+**no longer a plugin**. It was de-pluginized because it is database infrastructure, not a feature
+plugin: it runs around the DB lifecycle at boot and cannot run in an isolated worker. It moved into core (`backend/src/core/db-admin/`, routes still
 `/api/v1/db-migration/*`) and its admin UI is a native frontend route reached from a permanent **core**
 Sidebar item — not a toggleable plugin. It is gone from `plugins/` and all generated registries. (It
 runs as core, never in the plugin sandbox.) See **[Database](database.md)**.
