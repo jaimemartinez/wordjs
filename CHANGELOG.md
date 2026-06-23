@@ -18,6 +18,15 @@ own findings and fixes; see the [README](README.md) for the honest maturity cave
 
 ### Added
 
+- **Theme UI framework (Bootstrap-like, token-driven).** Themes now share one stylesheet
+  (`backend/public/css/wordjs-ui.css`) that auto-styles **every** standard HTML element and ships
+  Bootstrap-compatible **components** (`.btn`/`.card`/`.alert`/`.badge`/`.table`/`.nav`/`.list-group`/
+  `.pagination`/`.modal`/grid…) and a **utility** layer (spacing/display/flex/text/colors/borders/
+  sizing…). Everything is driven by `--wjs-*` design tokens, so a theme re-skins the entire framework
+  just by declaring tokens in its `:root` — colors, typography scale, spacing, radius, shadows. Loaded on
+  public pages **and the editor preview** (WYSIWYG), never the admin UI; the theme stylesheet loads after
+  the framework so a theme's own rules always win. All 14 bundled themes ship a full canonical token set
+  tuned to their palette (light/dark/mono/glass/brutalist). See `documentation/theming.md`.
 - **`noImplicitAny` is now enforced (CI-gated).** Every implicit-any site in the backend (~1,276 across
   92 files) is annotated — real types where locally determinable (Express `Request`/`Response`/
   `NextFunction`, primitives, model/array element types), explicit `any` only at genuinely dynamic

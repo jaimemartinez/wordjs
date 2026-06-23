@@ -25,7 +25,10 @@ class ThemeEngine {
 
     registerHelpers() {
         Handlebars.registerHelper('wordjs_head', () => {
+            // The shared WordJS UI framework loads BEFORE core.css and the theme stylesheet so the
+            // theme's own `:root` tokens + rules win at equal specificity (see public/css/wordjs-ui.css).
             let headElements = applyFilters('wordjs_head', [
+                '<link rel="stylesheet" href="/public/css/wordjs-ui.css">',
                 '<link rel="stylesheet" href="/public/css/core.css">'
             ]);
             // Defensive: ensure it's an array
