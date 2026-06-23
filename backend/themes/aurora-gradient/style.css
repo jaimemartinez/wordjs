@@ -50,6 +50,59 @@
 
   /* --- TYPOGRAPHY --- */
   --wjs-font-family-base: 'Space Grotesk', sans-serif;
+
+  /* --- WordJS UI framework tokens --- */
+  /* Colors (extending the existing Aurora palette) */
+  --wjs-color-secondary-dark: #0891b2;
+  --wjs-color-success: #34d399;
+  --wjs-color-danger: #f87171;
+  --wjs-color-warning: #fbbf24;
+  --wjs-color-info: #38bdf8;
+  --wjs-color-light: #f8fafc;
+  --wjs-color-dark: #0f0f1a;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #161616;
+  --wjs-color-on-secondary: #161616;
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #161616;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  /* Surfaces / text / border */
+  --wjs-bg-muted: #1a1a2e;
+  --wjs-color-heading: #ffffff;
+  --wjs-color-link: #8b5cf6;
+  --wjs-color-link-hover: #ec4899;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(139, 92, 246, 0.3);
+
+  /* Typography */
+  --wjs-font-family-heading: 'Space Grotesk', sans-serif;
+  --wjs-font-family-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.65;
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.15;
+  --wjs-h1: 3rem;
+  --wjs-h2: 2.25rem;
+  --wjs-h3: 1.75rem;
+  --wjs-h4: 1.375rem;
+  --wjs-h5: 1.125rem;
+  --wjs-h6: 0.95rem;
+
+  /* Spacing / shape (soft glass aesthetic) */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 0.5rem;
+  --wjs-radius: 0.875rem;
+  --wjs-radius-md: 1rem;
+  --wjs-radius-lg: 1.5rem;
+  --wjs-radius-pill: 50px;
+  --wjs-shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.3);
+  --wjs-shadow: 0 8px 24px rgba(139, 92, 246, 0.18);
+  --wjs-shadow-md: 0 16px 40px rgba(139, 92, 246, 0.25);
+  --wjs-shadow-lg: 0 30px 80px rgba(139, 92, 246, 0.35);
 }
 
 /* =========================================

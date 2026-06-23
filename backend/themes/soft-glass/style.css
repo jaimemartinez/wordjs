@@ -52,6 +52,58 @@
 
   /* --- TYPOGRAPHY --- */
   --wjs-font-family-base: 'Quicksand', sans-serif;
+
+  /* --- WordJS UI framework tokens --- */
+  /* Colors */
+  --wjs-color-secondary: #db2777;
+  --wjs-color-secondary-dark: #be185d;
+  --wjs-color-accent: #0ea5e9;
+  --wjs-color-success: #10b981;
+  --wjs-color-danger: #f43f5e;
+  --wjs-color-warning: #f59e0b;
+  --wjs-color-info: #38bdf8;
+  --wjs-color-light: #fdf2f8;
+  --wjs-color-dark: #4c1d95;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #161616;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #161616;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+  /* Surfaces / text / border */
+  --wjs-bg-muted: #f5ecfb;
+  --wjs-color-heading: #5b21b6;
+  --wjs-color-link: #8b5cf6;
+  --wjs-color-link-hover: #db2777;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(139, 92, 246, 0.3);
+  /* Typography */
+  --wjs-font-family-heading: 'Quicksand', sans-serif;
+  --wjs-font-family-mono: 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.65;
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.25;
+  --wjs-h1: 2.75rem;
+  --wjs-h2: 2.25rem;
+  --wjs-h3: 1.75rem;
+  --wjs-h4: 1.4rem;
+  --wjs-h5: 1.15rem;
+  --wjs-h6: 1rem;
+  /* Spacing / shape */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 12px;
+  --wjs-radius: 16px;
+  --wjs-radius-md: 20px;
+  --wjs-radius-lg: 24px;
+  --wjs-radius-pill: 9999px;
+  --wjs-shadow-sm: 0 2px 8px rgba(31, 38, 135, 0.06);
+  --wjs-shadow: 0 8px 24px rgba(31, 38, 135, 0.08);
+  --wjs-shadow-md: 0 12px 32px rgba(31, 38, 135, 0.1);
+  --wjs-shadow-lg: 0 20px 50px rgba(139, 92, 246, 0.2);
 }
 
 /* =========================================

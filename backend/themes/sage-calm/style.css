@@ -61,6 +61,57 @@
   --wjs-shadow-sm: 0 2px 10px rgba(37, 48, 42, 0.06);
   --wjs-shadow-md: 0 4px 18px rgba(37, 48, 42, 0.08);
   --wjs-shadow-lg: 0 10px 32px rgba(37, 48, 42, 0.12);
+
+  /* --- WordJS UI framework tokens --- */
+  /* Colors */
+  --wjs-color-secondary: #7FB08A;
+  /* Soft Sage Accent Green */
+  --wjs-color-secondary-dark: #5C8E6A;
+  --wjs-color-accent: #C18A4B;
+  /* Warm Earthen Clay */
+  --wjs-color-success: #3B7A57;
+  --wjs-color-danger: #C0533F;
+  --wjs-color-warning: #D9A441;
+  --wjs-color-info: #4E8FA0;
+  --wjs-color-light: #F4F7F2;
+  --wjs-color-dark: #25302A;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #161616;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  /* Surfaces / text / border */
+  --wjs-bg-muted: #EAF0E8;
+  --wjs-color-heading: #25302A;
+  --wjs-color-link: #3B7A57;
+  --wjs-color-link-hover: #2E6044;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(59, 122, 87, 0.3);
+
+  /* Typography */
+  --wjs-font-family-heading: 'Lora', Georgia, serif;
+  --wjs-font-family-mono: ui-monospace, 'SFMono-Regular', 'Menlo', 'Consolas', monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.7;
+  --wjs-heading-weight: 600;
+  --wjs-heading-line-height: 1.25;
+  --wjs-h1: 2.5rem;
+  --wjs-h2: 2rem;
+  --wjs-h3: 1.6rem;
+  --wjs-h4: 1.3rem;
+  --wjs-h5: 1.1rem;
+  --wjs-h6: 0.95rem;
+
+  /* Spacing / shape */
+  --wjs-spacer: 1rem;
+  --wjs-radius: 12px;
+  --wjs-radius-pill: 999px;
+  --wjs-shadow: 0 4px 18px rgba(37, 48, 42, 0.08);
 }
 
 /* =========================================

@@ -55,6 +55,57 @@
 
   /* --- TYPOGRAPHY --- */
   --wjs-font-family-base: 'Montserrat', sans-serif;
+
+  /* --- WordJS UI framework tokens --- */
+  --wjs-color-secondary: #8A6D3B;
+  --wjs-color-secondary-dark: #6B5429;
+  --wjs-color-accent: #E6C77A;
+  --wjs-color-success: #5BB97E;
+  --wjs-color-danger: #E26D6D;
+  --wjs-color-warning: #E0A93D;
+  --wjs-color-info: #6FB4D6;
+  --wjs-color-light: #F5F1EA;
+  --wjs-color-dark: #0E0C0A;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #161616;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #161616;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  --wjs-bg-muted: #221E1A;
+  --wjs-color-heading: #F5F1EA;
+  --wjs-color-link: #D4A24C;
+  --wjs-color-link-hover: #E6C77A;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(212, 162, 76, 0.3);
+
+  --wjs-font-family-heading: 'Cormorant', serif;
+  --wjs-font-family-mono: 'SFMono-Regular', Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.75;
+  --wjs-heading-weight: 400;
+  --wjs-heading-line-height: 1.15;
+  --wjs-h1: 3rem;
+  --wjs-h2: 2.25rem;
+  --wjs-h3: 1.75rem;
+  --wjs-h4: 1.375rem;
+  --wjs-h5: 1.125rem;
+  --wjs-h6: 0.9375rem;
+
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 1px;
+  --wjs-radius: 2px;
+  --wjs-radius-md: 2px;
+  --wjs-radius-lg: 4px;
+  --wjs-radius-pill: 999px;
+  --wjs-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wjs-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  --wjs-shadow-md: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --wjs-shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
 }
 
 /* =========================================

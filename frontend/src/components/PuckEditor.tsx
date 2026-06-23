@@ -11,7 +11,7 @@ import RevisionsSidebar from "./RevisionsSidebar";
 import BlockInserter from "./BlockInserter";
 import { PATTERNS, insertPattern } from "@/lib/puckPatterns";
 import InlineTiptap from "./InlineTiptap";
-import { revisionsApi, Revision } from "@/lib/api";
+import { revisionsApi, Revision, themesApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -92,6 +92,48 @@ function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?
         const t = setInterval(() => (done ? clearInterval(t) : tick()), 400);
         const stop = setTimeout(() => clearInterval(t), 10000);
         return () => {
+            clearInterval(t);
+            clearTimeout(stop);
+        };
+    }, []);
+    // WYSIWYG: load the shared WordJS UI framework + the ACTIVE theme stylesheet into the preview iframe
+    // so the canvas content (typography, tables, buttons, components, utilities) renders like the public
+    // site. Only the iframe canvas is themed — Puck's editing chrome lives outside it. Idempotent + id-
+    // guarded, so it's a safe no-op if the public layout already injected these into the iframe.
+    React.useEffect(() => {
+        let cancelled = false;
+        let activeSlug = "default";
+        const ensureLink = (doc: Document, id: string, href: string) => {
+            const existing = doc.getElementById(id) as HTMLLinkElement | null;
+            if (existing) {
+                if (existing.getAttribute("href") !== href) existing.setAttribute("href", href);
+                return;
+            }
+            const l = doc.createElement("link");
+            l.id = id;
+            l.rel = "stylesheet";
+            l.href = href;
+            doc.head.appendChild(l);
+        };
+        const inject = (): boolean => {
+            const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
+            const doc = iframe?.contentDocument;
+            if (!doc?.head) return false;
+            ensureLink(doc, "wjs-ui-framework", "/public/css/wordjs-ui.css"); // framework first
+            ensureLink(doc, "wjs-theme-stylesheet", `/themes/${activeSlug}/style.css`); // theme overrides
+            return true;
+        };
+        themesApi.list().then((list) => {
+            if (cancelled) return;
+            const active = list.find((t) => t.active) || list.find((t) => t.slug === "default");
+            if (active?.slug) activeSlug = active.slug;
+            inject();
+        }).catch(() => { /* fall back to the default theme link */ });
+        inject();
+        const t = setInterval(inject, 500);
+        const stop = setTimeout(() => clearInterval(t), 12000);
+        return () => {
+            cancelled = true;
             clearInterval(t);
             clearTimeout(stop);
         };
