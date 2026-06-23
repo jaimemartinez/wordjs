@@ -342,11 +342,16 @@ exposing it to the internet:**
 
 The plugin sandbox runs **every** plugin in a **separate OS process** with
 defense-in-depth capability guards — a kernel-enforced boundary that contains a child crash,
-OOM, or heap escape to that one process. The remaining hardening is honest: the child still
-has the full Node API and a normal OS uid, so it is **not yet capability-minimal at the
-syscall level**. A path to stronger isolation (seccomp/landlock, cgroup caps, dropped uid) is
-tracked in [POSITIONING.md](POSITIONING.md). Found a vulnerability? Please follow the
-disclosure process in [SECURITY.md](SECURITY.md).
+OOM, or heap escape to that one process. On Linux, an **opt-in** layer
+(`config.sandbox.useKernelHardening`, via [bubblewrap](https://github.com/containers/bubblewrap))
+additionally runs each plugin child as an **unprivileged uid with all capabilities dropped,
+`no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (probe-validated per host,
+default-off, a no-op on Windows/macOS). The honest remaining gap: **`seccomp` syscall filtering
+and `Landlock` path rules are still phase 2**, so without them the child keeps the full Node
+syscall surface. (The uid-drop trades away privileged-port binding — a plugin needing a port
+`<1024` won't bind it under hardening.) The rest of the path is tracked in
+[POSITIONING.md](POSITIONING.md). Found a vulnerability? Please follow the disclosure process in
+[SECURITY.md](SECURITY.md).
 
 ---
 
@@ -358,9 +363,10 @@ Planned, **not yet implemented**:
   is a verifiable trust badge (see [POSITIONING.md](POSITIONING.md)).
 - **☁️ Media CDN integration** — S3-compatible object storage.
 - **🌐 Multi-site** — manage multiple domains/sites from one install.
-- **🛡️ Kernel-level plugin hardening** — OS-process isolation already ships; next is
-  syscall filtering (seccomp/landlock), a preventive Windows memory cap (Job Object), and a
-  dropped OS uid for the hosted tier.
+- **🛡️ Kernel-level plugin hardening** — OS-process isolation ships, and an **opt-in** Linux
+  layer (bubblewrap) now drops uid + capabilities and adds `no-new-privs` / namespaces /
+  read-only-fs; **next is `seccomp`/`Landlock` syscall filtering** and a preventive Windows
+  memory cap (Job Object).
 
 **In progress / deferred migrations** (tracked as open PRs):
 

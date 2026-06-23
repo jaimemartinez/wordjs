@@ -232,6 +232,16 @@ Each isolated child is held to a **768 MB resident budget** plus a 256 MB JS hea
 
 Because each plugin is a **separate process**, an OOM or crash never takes down the host on *any* platform — even with no cap configured.
 
+### `config.sandbox.useKernelHardening` — opt-in kernel hardening (Linux)
+
+Beyond the memory caps, an **opt-in** layer runs each isolated plugin child through [bubblewrap](https://github.com/containers/bubblewrap) so it executes as an **unprivileged uid (`nobody`) in a rootless user namespace, with all Linux capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (the app root stays writable so plugin storage — `uploads/`, `data/`, `plugins/<slug>/` — keeps working; network is preserved and still egress-guarded). It is **OFF by default**, **Linux-only** (a no-op on Windows/macOS), and **probe-validated on the host before activating** — if `bwrap` is missing or rootless user namespaces are unavailable it logs a warning and falls back to the standard isolated launch (**zero regression**). It composes with the memory caps above (the resident RSS poll sums the bwrap subtree so the cap keeps biting). Requires the `bubblewrap` package (`sudo apt-get install -y bubblewrap`); validate it on the host with `node backend/scripts/verify-sandbox-hardening.js`.
+
+```json
+{ "sandbox": { "useKernelHardening": true } }
+```
+
+> **Trade-off:** dropping capabilities + the unprivileged uid means a plugin **cannot bind a privileged port (`<1024`)** under hardening — e.g. the mail-server on port 25 (its default `2525` is unaffected; for port 25 use a high port + a redirect/reverse-proxy, or leave hardening off for that deployment). A `seccomp` syscall denylist and `Landlock` path rules are a documented **phase 2** — without them the child keeps the full Node syscall surface even when hardening is on.
+
 ### `config.sandbox.useCgroupMemoryCap` — opt-in preventive cgroup cap (Linux)
 
 The RSS poll is *reactive* (a fast off-heap allocation loop can spike the box within a poll window) and `RLIMIT_AS` can only be a *loose virtual* backstop (V8's ~4 GB pointer-compression cage forces it generous). A cgroup v2 `memory.max` is the only **preventive resident cap**: the kernel kills the child by construction the moment its resident set crosses the budget, with the blast radius contained to that child.

@@ -144,6 +144,70 @@ function probeCgroupCap(): Promise<boolean> {
     return cgroupProbe;
 }
 
+// --- OPT-IN kernel hardening of the isolated child via bubblewrap (Linux only) --------------------
+// Layers OS-level confinement UNDER the existing OS-process isolation: the child node runs as an
+// UNPRIVILEGED uid (nobody, in a rootless user namespace), with ALL Linux capabilities dropped,
+// no-new-privs (can't regain privilege via a setuid binary), PID/IPC/UTS namespaces (can't see or
+// signal host processes), and the filesystem READ-ONLY except the app root (so plugin storage —
+// uploads/, data/, plugins/<slug>/ — keeps working) plus a private tmpfs /tmp. NETWORK is PRESERVED
+// (egress stays bounded by egress-guard at the socket layer inside the child). This is defense-in-depth
+// ON TOP OF the JS-level guards (secure-require/io-guard), never a replacement.
+//   OPT-IN (config.sandbox.useKernelHardening) + Linux-only + PROBE-VALIDATED on the host before
+//   activating + clean fallback to the standard launch on any failure ⇒ ZERO regression by construction
+//   (default-off; Windows/macOS/no-bwrap = no-op). It composes with the cgroup/rlimit memory cap: the
+//   fork-style IPC fd survives every composition (probe-verified), and the resident RSS poll sums the
+//   bwrap subtree so the memory cap keeps biting. A seccomp-bpf syscall denylist + Landlock path rules
+//   are a documented PHASE 2 (they need an arch-specific compiled BPF / kernel >=5.13). Requires the
+//   `bubblewrap` (bwrap) binary installed on the host. Validate with backend/scripts/verify-sandbox-hardening.js.
+function bwrapProfile(writableDir: string): string[] {
+    return [
+        '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
+        '--uid', '65534', '--gid', '65534',
+        '--ro-bind', '/', '/',
+        '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
+        '--bind', writableDir, writableDir,
+        '--die-with-parent', '--new-session',
+    ];
+}
+let hardenProbe: Promise<boolean> | undefined;
+function probeKernelHardening(): Promise<boolean> {
+    if (hardenProbe) return hardenProbe;
+    hardenProbe = (async () => {
+        if (process.platform !== 'linux') return false; // seccomp/userns/uid-drop are Linux-kernel features
+        // OPT-IN: bwrap presence + rootless-userns support varies by host/kernel, and auto-enabling could
+        // break a host where unprivileged user namespaces are disabled. Require the operator to turn it on;
+        // the probe below STILL validates it works before activating, and any failure falls back cleanly.
+        let enabled = false;
+        try { const s = require('../config/app').sandbox; enabled = !!(s && s.useKernelHardening); } catch { /* default off */ }
+        if (!enabled) return false;
+        // Self-validate on THIS host: a node child launched through the FULL profile must keep its
+        // fork-style IPC channel (serialization 'advanced') — the exact launch this module performs. Only
+        // activate if spawn + IPC round-trip + clean exit all work; otherwise fall back to the standard launch.
+        const fsmod = require('fs'); const osmod = require('os'); const pathmod = require('path');
+        let dir: string | null = null;
+        try { dir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-harden-probe-')); } catch { return false; }
+        const src = "if(!process.send){process.exit(3)}process.send('ok',function(){process.exit(0)});setTimeout(function(){process.exit(4)},8000)";
+        const ok = await new Promise<boolean>((res) => {
+            let proc: any, got = false, done = false;
+            const finish = (v: boolean) => { if (!done) { done = true; try { proc && proc.kill('SIGKILL'); } catch { /* */ } res(v); } };
+            const overall = setTimeout(() => finish(false), 20000);
+            if ((overall as any).unref) (overall as any).unref();
+            try {
+                proc = spawn('bwrap', [...bwrapProfile(dir as string), '--', process.execPath, '-e', src],
+                    { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 18000 });
+            } catch { clearTimeout(overall); return res(false); }
+            proc.on('message', (m: any) => { if (m === 'ok') got = true; });
+            proc.on('error', () => { clearTimeout(overall); finish(false); });
+            proc.on('exit', (code: number) => { clearTimeout(overall); finish(got && code === 0); });
+        });
+        try { if (dir) fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
+        if (ok) console.log('[Sandbox] kernel hardening ACTIVE (bwrap: unprivileged uid + dropped caps + no-new-privs + PID/IPC/UTS namespaces + read-only fs per isolated child).');
+        else console.warn('[Sandbox] sandbox.useKernelHardening is set but the bwrap probe failed (bwrap missing or rootless userns unavailable) — falling back to the standard isolated launch.');
+        return ok;
+    })();
+    return hardenProbe;
+}
+
 // Per-plugin permission grant check (Android-style, default-deny). No plugin bypasses the sandbox:
 // host-level capabilities (mail provider, notify transport, raw-HTML hooks are denied to all) are
 // gated on an explicit admin grant for the requested scope:access. See core/plugin-permissions.
@@ -201,6 +265,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
     // chosen synchronously inside the executor below. cgroup (preventive) is preferred over rlimit (loose).
     const cgroupOk = await probeCgroupCap();
     const capKb = cgroupOk ? null : await probeOsMemoryCap();
+    const hardened = await probeKernelHardening(); // opt-in bwrap confinement (Linux); false ⇒ no-op
     return new Promise((resolve, reject) => {
         // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
@@ -212,7 +277,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // default (some plugin deps legitimately use Function()), and NEVER under ts-node (dev needs
         // codegen to compile TS). Enable via config.sandbox.blockCodeGen for maximum hardening.
         let blockCodeGen = false;
-        try { blockCodeGen = !!((require('../config/app').config || {}).sandbox || {}).blockCodeGen; } catch { /* config unavailable */ }
+        try { const s = require('../config/app').sandbox; blockCodeGen = !!(s && s.blockCodeGen); } catch { /* config unavailable */ }
         if (!__filename.endsWith('.ts') && blockCodeGen) execArgv.push('--disallow-code-generation-from-strings');
         // Pass an explicit, secret-free env ALLOWLIST instead of inheriting the full host environment:
         // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
@@ -233,6 +298,13 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
         // (and a raw JSON channel) would lose them — match the worker_threads postMessage fidelity.
         const IPC_STDIO: any = ['inherit', 'inherit', 'inherit', 'ipc']; // inherit stdio for plugin logs
+        // OPT-IN kernel hardening: when active (Linux + probe passed), launch node THROUGH bwrap so the
+        // child runs unprivileged (nobody) with dropped caps / no-new-privs / PID-IPC-UTS namespaces /
+        // read-only fs. APP_ROOT (backend/) is the single writable bind so plugin storage keeps working.
+        // Composes with the memory-cap wrapper below; the IPC fd survives (probe-verified). When off,
+        // bwrapPre is empty and every launch path is byte-identical to before (zero regression).
+        const APP_ROOT = path.resolve(__dirname, '..', '..');
+        const bwrapPre = hardened ? ['bwrap', ...bwrapProfile(APP_ROOT), '--'] : [];
         let child: any;
         let cgroupUnit: string | null = null;
         if (cgroupOk) {
@@ -243,15 +315,25 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             cgroupUnit = `wjp-${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${process.pid}-${++cgroupSeq}.scope`;
             child = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', cgroupUnit,
                 '-p', `MemoryMax=${RSS_BUDGET_BYTES}`, '-p', 'MemorySwapMax=0', '--',
-                process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
+                ...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 { stdio: IPC_STDIO, serialization: 'advanced', env: workerEnv });
         } else if (capKb) {
             // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
             // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
             // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
             // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
-            const nodeArgv = [process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
+            const nodeArgv = [...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
             child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
+                stdio: IPC_STDIO,
+                serialization: 'advanced',
+                env: workerEnv,
+            });
+        } else if (hardened) {
+            // Kernel hardening on but no memory-cap wrapper available here: launch node THROUGH bwrap
+            // (preserves the fork-style IPC fd, probe-verified) instead of a plain fork, so the child
+            // still gets the unprivileged-uid / dropped-caps / no-new-privs / namespace confinement. The
+            // resident RSS poll below sums the bwrap subtree so the memory cap keeps biting.
+            child = spawn('bwrap', [...bwrapProfile(APP_ROOT), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
                 stdio: IPC_STDIO,
                 serialization: 'advanced',
                 env: workerEnv,
@@ -292,14 +374,25 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             }
         };
         if (!cgroupOk && process.platform === 'linux' && child.pid) {
-            // Cheapest path: synchronous /proc read on the host loop (field 2 = resident pages).
+            // Cheapest path: synchronous /proc read on the host loop (field 2 of statm = resident pages).
+            // Under kernel hardening the spawned child is `bwrap` and the real node runs as a DESCENDANT in
+            // its PID namespace, so we sum the rss of the WHOLE bwrap subtree (probe-verified) — otherwise
+            // the poll would read bwrap's ~2 MB rss and the resident cap would stop biting (a regression).
+            // When hardening is off this is byte-identical to before: a single statm read of child.pid.
             const fsmod = require('fs');
-            const statmPath = `/proc/${child.pid}/statm`;
+            const rssBytesOf = (pid: number): number => {
+                try { return (parseInt(String(fsmod.readFileSync(`/proc/${pid}/statm`, 'utf8')).split(' ')[1], 10) || 0) * 4096; } catch { return 0; }
+            };
+            const childrenOf = (pid: number): number[] => {
+                try { return String(fsmod.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8')).trim().split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
+            };
+            const subtreeRss = (root: number): number => {
+                let total = 0; const stack = [root]; const seen = new Set<number>();
+                while (stack.length) { const pid = stack.pop() as number; if (seen.has(pid)) continue; seen.add(pid); total += rssBytesOf(pid); for (const k of childrenOf(pid)) stack.push(k); }
+                return total;
+            };
             rssPoll = setInterval(() => {
-                try {
-                    const rssPages = parseInt(String(fsmod.readFileSync(statmPath, 'utf8')).split(' ')[1], 10) || 0;
-                    killOverBudget(rssPages * 4096);
-                } catch { /* child gone / statm unavailable */ }
+                try { killOverBudget(hardened ? subtreeRss(child.pid) : rssBytesOf(child.pid)); } catch { /* child gone / statm unavailable */ }
             }, 250);
             if (rssPoll.unref) rssPoll.unref();
         } else if ((process.platform === 'win32' || process.platform === 'darwin') && child.pid) {
