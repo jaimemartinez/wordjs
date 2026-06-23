@@ -94,9 +94,9 @@ npm run lint           # eslint (flat config)
 npm run format
 ```
 
-`npm test` runs ~172 backend test cases (171 pass, 1 skip) across 18 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
+`npm test` runs ~174 backend test cases (173 pass, 1 skip) across 20 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
 
-The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs every driver (`sqlite-native`, `sqlite-legacy`, `postgres`, embedded) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The 7th method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
+The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers (`sqlite-native` and `postgres`, each skipped gracefully when its backend isn't reachable) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 7th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
 The **integration suite** (`src/tests-integration/`, run by `npm run test:integration` and in CI against real `postgres:16` + `redis:7` containers) exercises the multi-node coordination paths and full-app endpoints: distributed-lock lease CAS against Postgres (`dist-lock.integration.test.ts`), Redis pub/sub coherence (`coherence.integration.test.ts`), and the health/metrics endpoints (`health.integration.test.ts`).
 

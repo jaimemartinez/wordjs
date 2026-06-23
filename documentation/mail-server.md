@@ -68,7 +68,7 @@ The Mail Server also registers an **`email` notification transport**, so any `no
 
 ### HTTP API (authenticated)
 
-All routes are mounted at `/api/v1/mail-server/*`. Highlights:
+All routes are mounted by the host under `/api/v1/plugin/mail-server/*` (every isolated plugin is namespaced under `/api/v1/plugin/<slug>` — no route-hijack/`absolute` bypass). Highlights:
 
 | Method & path | Purpose |
 | --- | --- |
@@ -87,7 +87,7 @@ All routes are mounted at `/api/v1/mail-server/*`. Highlights:
 | `GET /attachments/:fileId`, `POST /upload/attachment` | Attachment download/upload. |
 
 ```json
-// POST /api/v1/mail-server/send
+// POST /api/v1/plugin/mail-server/send
 {
     "to": "admin@localhost",
     "subject": "System Alert",

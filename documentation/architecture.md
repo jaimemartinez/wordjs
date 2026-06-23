@@ -213,6 +213,14 @@ graph TD
     ThemeVars --> Buttons
 ```
 
+### Token-driven UI framework — `wordjs-ui.css`
+
+On top of per-theme `style.css`, the theme system ships **one shared static stylesheet**, `backend/public/css/wordjs-ui.css` — a token-driven, Bootstrap-like CSS framework. It auto-styles **every** HTML element and provides Bootstrap-compatible components (`.btn` / `.card` / `.alert` / `.badge` / `.table` / `.nav` / `.list-group` / `.pagination` / `.progress` / `.modal` / `.dropdown`, a flexbox grid `.container` / `.row` / `.col-*`) plus a utility layer (spacing / display / flex / text / colors / borders / sizing / shadow).
+
+- **Driven by `--wjs-*` design tokens** declared in each theme's `style.css :root` (not `theme.json`). The framework carries safe fallbacks, so a theme re-skins everything just by setting tokens. Per-variant `--wjs-color-on-*` tokens hold the max-contrast (black/white) text computed per theme for each solid color.
+- **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor preview iframe** (frontend `PuckEditor.tsx`, for true WYSIWYG) — never the admin chrome. It is linked **before** `core.css` and the theme's own `style.css` so the theme wins at equal specificity. Backend Handlebars rendering links it the same way in `wordjs_head` (`core/theme-engine.ts`).
+- All 14 bundled themes tune a full `--wjs-*` token set to their palette (the `default` theme also keeps a few legacy bare aliases like `--primary` for backward-compat). Full reference: **[theming.md](theming.md)**.
+
 ---
 
 ## 🎯 Puck Editor Flow
@@ -560,6 +568,7 @@ wordjs/
 │   │   └── 📁 .../
 │   ├── 📁 public/              # Static Assets
 │   │   └── 📁 css/
+│   │       ├── wordjs-ui.css   # Shared token-driven UI framework (--wjs-*)
 │   │       └── core.css        # Core Styles
 │   └── package.json
 │
@@ -605,7 +614,7 @@ The backend is written in **TypeScript** (`backend/src/**/*.ts`). In **productio
 - **Strict typecheck:** `backend/tsconfig.json` has `strict: true`, so the strict core is enforced (`strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitThis`, `alwaysStrict`). `noImplicitAny: true` is now **enforced** (every parameter/variable is annotated — real types where locally determinable, explicit `any` only at genuinely dynamic boundaries; the annotation pass was type-only, zero runtime change). One sub-flag remains explicitly **OFF**: `useUnknownInCatchVariables: false`. `module: commonjs`, `moduleDetection: force`, `allowJs`.
 - **Entry / supervisor:** `npm start` runs the `server.js` supervisor. It checks for `backend/dist/index.js`: if present it spawns `node dist/index.js` (compiled); otherwise it falls back to `node -r ts-node/register src/index.ts`. `npm run dev` uses `node --watch -r ts-node/register src/index.ts`.
 - **In-tree `.js` files compiled via `allowJs`:** `src/core/db-admin/*` (the in-core DB migration/admin runner that used to be the `db-migration` plugin) and `src/core/plugin-worker.js` (the plugin isolate worker) are carried into `dist/` by `allowJs`.
-- **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/transaction/close`, where `transaction(fn)` runs `fn` atomically on a single connection wrapped in BEGIN/COMMIT with ROLLBACK on throw) plus implementations (`sqlite-native`, `sqlite-legacy`, `postgres`, embedded). Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
+- **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/transaction/close`, where `transaction(fn)` runs `fn` atomically on a single connection wrapped in BEGIN/COMMIT with ROLLBACK on throw) plus implementations (`sqlite-native`, `sqlite-native-async`, `sqlite-legacy`, `postgres`). Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
 - **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`. Plugins are excluded from the build.
 - **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs **strict typecheck → build → license gate (block AGPL/SSPL) → tests** for the backend, gateway tests, and frontend lint + build.
 

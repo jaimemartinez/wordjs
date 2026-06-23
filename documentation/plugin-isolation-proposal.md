@@ -33,7 +33,8 @@
 > mail, notify, adminMenu.add, cron.schedule. The dispatch is split by design: data calls travel as a
 > generic `kind:'call'` IPC message that `callApi` checks against an **EXACT method allowlist**
 > (`ALLOWED_BRIDGE_METHODS`: options.get/set, db.all/get/run/createTable/getType, hooks.doAction,
-> fs.read/write, mail, notify, adminMenu.add, cron.schedule) — a child sends ANY method string and
+> fs.read/write, mail, notify, adminMenu.add, cron.schedule, the safe `users.findByEmail/findByLogin/
+> findById/search` projection, and `site.url/domain/adminEmail`) — a child sends ANY method string and
 > `callApi` walks it as a dotted path, so without this gate it could reach a registration method or a
 > prototype-chain segment directly. **Registration** (hooks/filters, routes, shortcodes, mail-provider,
 > notify-transport) flows ONLY through its own dedicated IPC kinds (`register`, `register-route`,

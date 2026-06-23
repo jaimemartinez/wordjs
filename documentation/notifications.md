@@ -8,7 +8,7 @@ The system is a centralized service (`backend/src/core/notifications.ts`) that d
 
 ### Transports
 1.  **DB (Database):** Persists notifications to the `notifications` table for history. (Registered by core.)
-2.  **SSE (Server-Sent Events):** Real-time push to the browser. (Registered by core.)
+2.  **SSE (Server-Sent Events):** Real-time push to the browser. (Registered by core.) The SSE transport always delivers to *this* node's local clients immediately, and — when Redis pub/sub is available (multi-node) — also publishes the notification to the `wordjs:notify` channel so a notification produced on one node reaches another node's SSE clients. Each message is tagged with a per-process `NODE_ID` so a node skips re-broadcasting its own echo, and `initClusterBus()` (called once at boot in `index.ts`) subscribes the node to that channel. Without Redis this is a no-op (single node); the `db` transport persists regardless, so a briefly-unsubscribed remote node recovers on the next list/reload.
 3.  **Email:** (Optional) Delivered by the **Mail Server plugin**, which registers an `email` transport at activation via the capability bridge (`wordjs.notify.registerTransport`). Present only while that plugin is active.
 
 Transports are extensible: a plugin can `registerTransport(name, handler)` (slack, push, etc.). Note that **registering a transport requires the admin-granted `notifications: provider` capability** — see [Sending Notifications from Plugins](#sending-notifications-from-plugins).
@@ -45,7 +45,7 @@ Every `send()` is gated by `verifyPermission('notifications', 'send')`, so an un
 Notifications are stored in the `notifications` table (UUID, `user_id`, `type`, `title`, `message`, `data`, `is_read`, `created_at`, `read_at`, `icon`, `color`, `action_url`).
 
 *   **Bounded listing:** `getNotifications(userId, limit = 50)` returns **unread first (capped at `limit`)** plus the **5 most recent read** items, both `ORDER BY created_at DESC`. The query is backed by a composite index `idx_notifications_user_read_created (user_id, is_read, created_at)`, so the per-user listing stays cheap as history grows.
-*   `markAsRead(uuid)`, `markAllAsRead(userId)`, and `deleteNotification(uuid)` manage state.
+*   `markAsRead(uuid, userId)`, `markAllAsRead(userId)`, and `deleteNotification(uuid, userId)` manage state. The single-item mutators are **owner-scoped** (`WHERE uuid = ? AND (user_id = ? OR user_id = 0)`): a uuid is not a capability, so a caller can only act on their own notification — except a broadcast (`user_id = 0`) which any user may dismiss. They return `true` only when a row the user owns was actually changed (the routes 404 otherwise).
 
 ### REST endpoints (`backend/src/routes/notifications.ts`)
 *   `GET  /api/v1/notifications/stream` — SSE stream (auth via header or query token).
