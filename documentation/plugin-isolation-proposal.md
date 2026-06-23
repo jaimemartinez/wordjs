@@ -164,7 +164,12 @@
 > offending child at 768 MB; (b) a **reactive host-side RSS poll** on every platform (Linux `/proc`,
 > Windows `tasklist`, macOS `ps`) that SIGKILLs at 768 MB; (c) a **loose `RLIMIT_AS` virtual backstop**
 > (`config.sandbox.addressSpaceCapMb`, default 16384 MB) via a `sh -c 'ulimit -v N; exec node …'` wrapper
-> + `--max-old-space-size=256` for the JS heap. What the OS process still does **not** buy by itself is
+> + `--max-old-space-size=256` for the JS heap; and (d) a **preventive Windows Job Object** with
+> `JOB_OBJECT_LIMIT_PROCESS_MEMORY` (the Win32 analog of cgroup `memory.max`) — default-on on Windows,
+> probe-gated, opt-out via `config.sandbox.useJobObjectMemoryCap`. A one-shot PowerShell P/Invoke (no
+> native dep) assigns the forked child to a 768 MB-capped job, so the kernel FAILS any commit past the
+> budget; the job + limit persist for the child's lifetime via the kernel job refcount, and the brief
+> post-fork assign window is covered by the RSS poll exactly as before. What the OS process still does **not** buy by itself is
 > **capability-minimal syscall confinement**: the child has a full Node runtime, so capability denial
 > still relies on the in-child guards (secure-require proxies `fs`/`child_process`/raw-net modules and
 > blocks `worker_threads`/`vm`/`module`/`inspector`; the bootstrap traps `fetch`/`WebSocket`/
@@ -176,8 +181,9 @@
 > userspace policy** (it could not escape the process or its memory cap). By-construction, OS-enforced
 > confinement now ships as an **opt-in** Linux layer (bubblewrap: dropped uid + capabilities + no-new-privs
 > + PID/IPC/UTS namespaces + read-only fs + a seccomp syscall denylist; `sandbox.useKernelHardening`,
-> default-off, probe-gated — see the status banner). Still **roadmap**: a Windows Job Object to make the
-> memory cap preventive on Windows. An independent security audit is recommended before relying on this for
+> default-off, probe-gated — see the status banner). The Windows preventive memory cap (Job Object) is
+> now **shipped** (layer (d) above), so the resident budget is kernel-enforced on Linux (cgroup) AND
+> Windows (Job Object). An independent security audit is recommended before relying on this for
 > genuinely hostile multi-tenant input.
 
 Status: **IMPLEMENTED** (was: proposal) · Author: WordJS · History: the original proposal followed 4
@@ -242,9 +248,9 @@ architecture below is the same — only the isolate primitive differs.
 > + a seccomp syscall denylist) now ships as an **opt-in** Linux layer (bubblewrap, `sandbox.useKernelHardening`,
 > default-off, probe-gated); the Landlock LSM is intentionally omitted (the read-only mount namespace covers
 > its fs-confinement goal, and it would need a native dep). The kernel resource
-> limits ARE partly in place today: an OPT-IN cgroup v2 `memory.max` (Linux, `systemd-run --user
-> --scope`) and a loose `RLIMIT_AS` virtual backstop, plus a cross-platform RSS poll (see §6 and the
-> status banner).
+> limits ARE in place today: an OPT-IN cgroup v2 `memory.max` (Linux, `systemd-run --user
+> --scope`), a default-on preventive **Windows Job Object** memory cap, and a loose `RLIMIT_AS` virtual
+> backstop, plus a cross-platform RSS poll (see §6 and the status banner).
 
 ---
 
@@ -292,7 +298,8 @@ Async by necessity (crosses the boundary). Each maps to a current direct use:
   awaiting a result (with a timeout). Crash/timeout → the host disables the plugin (CrashGuard, already
   present) without taking down the process.
 - **Resource limits (as built):** layered memory caps on the child — OPT-IN preventive cgroup v2
-  `memory.max` (Linux), reactive cross-platform RSS poll → SIGKILL at 768 MB, loose `RLIMIT_AS`
+  `memory.max` (Linux), default-on preventive Windows **Job Object** `ProcessMemoryLimit`, reactive
+  cross-platform RSS poll → SIGKILL at 768 MB, loose `RLIMIT_AS`
   backstop + `--max-old-space-size=256` — plus per-RPC timeout, bridge-call rate/concurrency token
   buckets, IPC message-rate caps, payload/disk caps and registration caps. Closes the DoS class the
   in-process model can't. An OPT-IN `config.sandbox.blockCodeGen` additionally passes
@@ -375,9 +382,9 @@ dropped capabilities + no-new-privs + PID/IPC/UTS namespaces + a seccomp syscall
 **opt-in** Linux layer (bubblewrap, `sandbox.useKernelHardening`, default-off, probe-gated) on top of the
 in-child guards (secure-require module proxies + the `fetch`/`WebSocket`/`EventSource` global trap), without
 changing the bridge. The Landlock LSM is intentionally omitted (the read-only mount namespace covers its
-fs-confinement goal, and it would need a native dep); a preventive Windows memory cap (Job Object) remains roadmap.
-Kernel resource limits are partly in place today (OPT-IN cgroup v2 `memory.max`, loose `RLIMIT_AS`,
-cross-platform RSS poll).
+fs-confinement goal, and it would need a native dep); a preventive Windows memory cap (Job Object) is now
+shipped (default-on, probe-gated). Kernel resource limits in place today: OPT-IN cgroup v2 `memory.max`
+(Linux) + preventive Job Object `ProcessMemoryLimit` (Windows), loose `RLIMIT_AS`, cross-platform RSS poll.
 
 ## 7. Cost & non-goals
 - **Cost (actual):** the bridge API + the `child_process` OS-process isolate runner (+ layered memory

@@ -144,6 +144,120 @@ function probeCgroupCap(): Promise<boolean> {
     return cgroupProbe;
 }
 
+// --- PREVENTIVE memory cap on WINDOWS via a Job Object (the Win32 analog of cgroup memory.max) ------
+// On Linux a cgroup `memory.max` (or, looser, RLIMIT_AS) lets the KERNEL fail/kill the child the moment
+// it crosses the resident budget. Windows has neither, so the child previously had only the REACTIVE
+// RSS poll (kills AFTER a tick observes the overage — a fast off-heap balloon can spike the host within
+// the poll window). A Windows Job Object with JOB_OBJECT_LIMIT_PROCESS_MEMORY is the preventive
+// equivalent: the kernel FAILS any commit past ProcessMemoryLimit, so the host is never at risk.
+//
+// We assign the ALREADY-FORKED child to the job by PID (so the fork-style IPC channel is untouched),
+// using a one-shot PowerShell helper that P/Invokes the Win32 APIs — NO native npm dependency, in
+// keeping with this sandbox's design. The helper creates the job, sets the limit, assigns the child,
+// then EXITS: the job and its limit persist for the child's lifetime because a job is destroyed only
+// once its last handle is closed AND all assigned processes have exited (a running assigned process
+// keeps it alive after handle-close — verified empirically), so no babysitter process is needed.
+// DIE_ON_UNHANDLED_EXCEPTION is also set so an over-budget child dies cleanly instead of popping a WER
+// dialog. Default-ON on Windows, PROBE-VALIDATED on the host, opt-out via config.sandbox
+// .useJobObjectMemoryCap=false; any failure (no PowerShell, locked-down host, 32-bit PS layout) just
+// leaves the RSS poll as the cap, exactly as before ⇒ zero regression. The brief post-fork assign
+// latency (~1–2 s, powershell JIT) is covered by that same poll, so the only window matches today's
+// behavior; the kernel cap binds preventively thereafter.
+function buildJobCapScript(pid: number, limitBytes: number): string {
+    // pid + limitBytes are integers WE control (never plugin/user input) → safe to inline. The C# is a
+    // PowerShell here-string (@'…'@ — delimiters MUST sit at column 0); JS double-quoted lines keep the
+    // literal `$`/single-quotes intact (no template interpolation).
+    return [
+        "$ErrorActionPreference='Stop'",
+        "try {",
+        "$sig=@'",
+        "using System; using System.Runtime.InteropServices;",
+        "public static class WJSJob {",
+        "[StructLayout(LayoutKind.Sequential)] public struct BLI { public Int64 a; public Int64 b; public UInt32 LimitFlags; public UIntPtr c; public UIntPtr d; public UInt32 e; public UIntPtr f; public UInt32 g; public UInt32 h; }",
+        "[StructLayout(LayoutKind.Sequential)] public struct IOC { public UInt64 a; public UInt64 b; public UInt64 c; public UInt64 d; public UInt64 e; public UInt64 f; }",
+        "[StructLayout(LayoutKind.Sequential)] public struct ELI { public BLI Basic; public IOC Io; public UIntPtr ProcessMemoryLimit; public UIntPtr JobMemoryLimit; public UIntPtr PeakProc; public UIntPtr PeakJob; }",
+        "[DllImport(\"kernel32.dll\", CharSet=CharSet.Unicode, SetLastError=true)] public static extern IntPtr CreateJobObject(IntPtr a, string n);",
+        "[DllImport(\"kernel32.dll\", SetLastError=true)] public static extern bool SetInformationJobObject(IntPtr j, int c, IntPtr p, uint l);",
+        "[DllImport(\"kernel32.dll\", SetLastError=true)] public static extern IntPtr OpenProcess(uint a, bool i, uint p);",
+        "[DllImport(\"kernel32.dll\", SetLastError=true)] public static extern bool AssignProcessToJobObject(IntPtr j, IntPtr p);",
+        "[DllImport(\"kernel32.dll\", SetLastError=true)] public static extern bool CloseHandle(IntPtr h);",
+        "}",
+        "'@",
+        "Add-Type -TypeDefinition $sig",
+        "$j=[WJSJob]::CreateJobObject([IntPtr]::Zero,$null)",
+        "if($j -eq [IntPtr]::Zero){ Write-Output 'JOBCAP_FAIL create'; exit 1 }",
+        "$i=New-Object WJSJob+ELI",
+        "$bl=$i.Basic; $bl.LimitFlags=0x00000100 -bor 0x00000400; $i.Basic=$bl", // PROCESS_MEMORY | DIE_ON_UNHANDLED_EXCEPTION
+        "$i.ProcessMemoryLimit=[uintptr]::new([uint64]" + Math.floor(limitBytes) + ")",
+        "$cb=[Runtime.InteropServices.Marshal]::SizeOf($i)",
+        "$p=[Runtime.InteropServices.Marshal]::AllocHGlobal($cb)",
+        "[Runtime.InteropServices.Marshal]::StructureToPtr($i,$p,$false)",
+        "$ok=[WJSJob]::SetInformationJobObject($j,9,$p,[uint32]$cb)", // 9 = JobObjectExtendedLimitInformation
+        "[Runtime.InteropServices.Marshal]::FreeHGlobal($p)",
+        "if(-not $ok){ Write-Output 'JOBCAP_FAIL setinfo'; exit 1 }",
+        "$h=[WJSJob]::OpenProcess(0x0100 -bor 0x0001 -bor 0x0400,$false,[uint32]" + Math.floor(pid) + ")", // SET_QUOTA|TERMINATE|QUERY_INFORMATION
+        "if($h -eq [IntPtr]::Zero){ Write-Output 'JOBCAP_FAIL open'; exit 1 }",
+        "$asn=[WJSJob]::AssignProcessToJobObject($j,$h)",
+        "[WJSJob]::CloseHandle($h) | Out-Null",
+        "[WJSJob]::CloseHandle($j) | Out-Null", // close BOTH: the running child keeps the job (and its cap) alive
+        "if(-not $asn){ Write-Output 'JOBCAP_FAIL assign'; exit 1 }",
+        "Write-Output 'JOBCAP_OK'; exit 0",
+        "} catch { Write-Output ('JOBCAP_FAIL ex:'+$_.Exception.Message); exit 1 }",
+    ].join("\n");
+}
+
+// Run the one-shot helper for one child PID. Resolves true only if it reported JOBCAP_OK (job created,
+// limit set, process assigned). Never throws — a missing powershell / failed P/Invoke resolves false.
+function assignProcessToJobObject(pid: number, limitBytes: number): Promise<boolean> {
+    return new Promise((resolve) => {
+        let ps: any;
+        try {
+            const b64 = Buffer.from(buildJobCapScript(pid, limitBytes), 'utf16le').toString('base64'); // -EncodedCommand = UTF-16LE b64 (no quoting pitfalls)
+            ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', b64], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+        } catch { return resolve(false); }
+        let out = '';
+        try { ps.stdout.on('data', (d: any) => { out += String(d); }); } catch { /* */ }
+        ps.on('error', () => resolve(false));
+        ps.on('exit', (code: number) => resolve(code === 0 && /JOBCAP_OK/.test(out)));
+    });
+}
+
+let jobCapProbe: Promise<boolean> | undefined;
+function probeJobObjectCap(): Promise<boolean> {
+    if (jobCapProbe) return jobCapProbe;
+    jobCapProbe = (async () => {
+        if (process.platform !== 'win32') return false; // Win32-only feature
+        // Default ON; opt OUT via config.sandbox.useJobObjectMemoryCap === false (config is loaded by the
+        // time the first plugin loads, so the opt-out is honored).
+        try { const s = require('../config/app').sandbox; if (s && s.useJobObjectMemoryCap === false) return false; } catch { /* config unavailable → default on */ }
+        // Validate the WHOLE chain on THIS host (powershell present, P/Invoke + AssignProcessToJobObject
+        // succeed): assign a throwaway child to a small-capped job and require JOBCAP_OK. The cap's BITE is
+        // deterministic kernel behavior (verified separately), so the probe only confirms the API path works.
+        return await new Promise<boolean>((resolve) => {
+            let probe: any;
+            // Keep the probe child alive long enough to OUTLAST a COLD powershell Add-Type JIT (2–5 s, more
+            // on a loaded/CI box) — else OpenProcess(pid) could hit a dead PID and the probe would falsely
+            // report the cap unavailable for the whole process. finish() kills it the moment assign resolves,
+            // so this ceiling (under the 20 s backstop) is only a safety net, not the real lifetime.
+            try { probe = spawn(process.execPath, ['-e', 'setTimeout(function(){}, 18000)'], { windowsHide: true, stdio: 'ignore' }); }
+            catch { return resolve(false); }
+            if (!probe || !probe.pid) return resolve(false);
+            let done = false;
+            const finish = (ok: boolean) => { if (done) return; done = true; try { probe.kill(); } catch { /* */ } resolve(ok); };
+            const to = setTimeout(() => finish(false), 20000); // first powershell Add-Type JIT can be slow
+            if (to.unref) to.unref();
+            assignProcessToJobObject(probe.pid, 256 * 1024 * 1024)
+                .then((ok) => {
+                    if (ok) console.log('[Sandbox] preventive Job Object memory cap ACTIVE (Windows; per-plugin-child ProcessMemoryLimit).');
+                    else console.warn('[Sandbox] Job Object memory cap unavailable here (PowerShell/Win32 probe failed) — relying on the RSS poll.');
+                    finish(ok);
+                })
+                .catch(() => finish(false));
+        });
+    })();
+    return jobCapProbe;
+}
+
 // --- OPT-IN kernel hardening of the isolated child via bubblewrap (Linux only) --------------------
 // Layers OS-level confinement UNDER the existing OS-process isolation: the child node runs as an
 // UNPRIVILEGED uid (nobody, in a rootless user namespace), with ALL Linux capabilities dropped,
@@ -325,6 +439,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
     const cgroupOk = await probeCgroupCap();
     const capKb = cgroupOk ? null : await probeOsMemoryCap();
     const hardened = await probeKernelHardening(); // opt-in bwrap confinement (Linux); false ⇒ no-op
+    const jobCapOk = await probeJobObjectCap();     // preventive memory cap on Windows (Job Object); false elsewhere
     return new Promise((resolve, reject) => {
         // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
@@ -415,6 +530,17 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             });
         }
         if (bpfFd >= 0) { try { require('fs').closeSync(bpfFd); } catch { /* parent's dup; the child kept its own */ } }
+        // WINDOWS preventive memory cap: assign the just-forked child to a Job Object whose per-process
+        // commit limit (JOB_OBJECT_LIMIT_PROCESS_MEMORY = RSS_BUDGET_BYTES) makes the KERNEL fail any
+        // allocation past the budget — the host stays safe even on a fast off-heap balloon, instead of
+        // only the reactive poll below catching it. Assigned AFTER fork (IPC untouched); the job + cap
+        // persist for the child's lifetime via the kernel job refcount (see buildJobCapScript). Async +
+        // best-effort: the ~1–2 s assign latency is covered by the RSS poll exactly as before, and any
+        // failure just leaves that poll as the only cap (zero regression). Only meaningful on win32
+        // (jobCapOk is false elsewhere). The poll stays as a backstop for the brief assign window.
+        if (jobCapOk && process.platform === 'win32' && child.pid) {
+            assignProcessToJobObject(child.pid, RSS_BUDGET_BYTES).catch(() => { /* poll remains the cap */ });
+        }
         // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
         const worker: any = {
             postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
@@ -929,4 +1055,4 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     return loadIsolatedPlugin(slug, entryFile);
 }
 
-module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug) };
+module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), assignProcessToJobObject, probeJobObjectCap };

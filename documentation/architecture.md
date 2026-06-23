@@ -383,7 +383,7 @@ Host-level capabilities each gate on their own grant: becoming the host mail sen
 
 Process separation means a child OOM/crash never takes down the host on any platform.
 
-> **Honest residual:** the child still has the full Node API and a normal OS uid — it is not yet capability-minimal at the syscall level. The preventive cap is cgroup (opt-in, Linux); a preventive cap on Windows (a Job Object) needs a native helper and is roadmap, as is deeper hardening (seccomp/landlock + dropped uid). No independent third-party audit yet. See **POSITIONING.md** section 2 for the canonical honest posture.
+> **Honest residual:** the child still has the full Node API and a normal OS uid — it is not yet capability-minimal at the syscall level. The preventive cap is cgroup (opt-in, Linux) and a **Job Object** on Windows (default-on, probe-gated, pure-JS — no native helper); dropped-uid + a seccomp denylist ship as the opt-in bubblewrap layer (Linux), and landlock is intentionally not used. No independent third-party audit yet. See **POSITIONING.md** section 2 for the canonical honest posture.
 
 ---
 

@@ -346,8 +346,8 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 
 > ⚠️ **Residual risk:** the sandbox is OS-process isolation with userspace guards — it is **not yet
 > capability-minimal at the syscall level** (seccomp/landlock/dropped-uid are on the roadmap), and a
-> *preventive* memory cap on Windows needs a Job Object that is not built yet (Windows relies on the
-> reactive RSS poll). See **[Plugin Isolation](plugin-isolation-proposal.md)**.
+> *preventive* memory cap on Windows now ships as a Job Object (default-on, probe-gated, pure-JS; the
+> reactive RSS poll remains a backstop). See **[Plugin Isolation](plugin-isolation-proposal.md)**.
 
 > **The AST scan runs on every plugin — there is no skip.** With the trusted tier removed, no plugin is exempt from the scan, and `system:admin` no longer exists as a scan-skip. The scan re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
 
