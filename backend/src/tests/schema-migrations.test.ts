@@ -18,7 +18,7 @@ const cleanup = (tmp: string) => {
     for (const f of [tmp, tmp + '-wal', tmp + '-shm']) { try { fs.rmSync(f, { force: true }); } catch { /* */ } }
 };
 
-test('schema-migrations: applies pending, records it, and is idempotent on re-run', async (t) => {
+test('schema-migrations: applies pending, records it, and is idempotent on re-run', async (t: any) => {
     const tmp = path.join(os.tmpdir(), `wordjs-mig-${process.pid}-${Date.now()}.db`);
     let driver: any;
     try { driver = require('../drivers/sqlite-native-async'); }
@@ -52,7 +52,7 @@ test('schema-migrations: applies pending, records it, and is idempotent on re-ru
     }
 });
 
-test('schema-migrations: a failing migration aborts (fail-closed) and is not recorded', async (t) => {
+test('schema-migrations: a failing migration aborts (fail-closed) and is not recorded', async (t: any) => {
     const tmp = path.join(os.tmpdir(), `wordjs-migf-${process.pid}-${Date.now()}.db`);
     let driver: any;
     try { driver = require('../drivers/sqlite-native-async'); }

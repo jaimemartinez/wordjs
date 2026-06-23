@@ -49,11 +49,11 @@ class ThemeEngine {
             return `/themes/${this.activeTheme.slug}/style.css`;
         });
 
-        Handlebars.registerHelper('formatDate', (date) => {
+        Handlebars.registerHelper('formatDate', (date: string | number | Date) => {
             return new Date(date).toLocaleDateString();
         });
 
-        Handlebars.registerHelper('json', (context) => {
+        Handlebars.registerHelper('json', (context: any) => {
             return JSON.stringify(context);
         });
     }
@@ -82,7 +82,7 @@ class ThemeEngine {
         if (!this.activeTheme || !fs.existsSync(this.activeTheme.partialsDir)) return;
 
         const files = fs.readdirSync(this.activeTheme.partialsDir);
-        files.forEach(file => {
+        files.forEach((file: string) => {
             if (file.endsWith('.html')) {
                 const name = path.parse(file).name;
                 const template = fs.readFileSync(path.join(this.activeTheme.partialsDir, file), 'utf8');
@@ -148,7 +148,7 @@ class ThemeEngine {
         }
     }
 
-    async render(templateName, data = {}) {
+    async render(templateName: string, data: any = {}) {
         // Detect theme change and re-init if necessary
         const currentOption = await getOption('template', 'default');
         if (!this.activeTheme || this.activeTheme.slug !== currentOption) {

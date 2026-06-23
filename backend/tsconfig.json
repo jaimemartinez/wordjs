@@ -8,14 +8,14 @@
     "types": ["node"],
     "allowJs": true,
     "checkJs": false,
-    // strict is ON, but TWO sub-flags are deliberately OFF (be honest — this is a real gap, not
-    // "nearly done"): noImplicitAny is off — enabling it currently surfaces ~1,220 implicit-any sites
-    // still to annotate with real types (NOT blanket any), worked through incrementally; and
-    // useUnknownInCatchVariables is off (catch bindings stay any for now). strictNullChecks,
+    // strict is ON and noImplicitAny is now ENFORCED: every parameter/variable is annotated — real
+    // types where locally determinable, explicit `any` only at genuinely dynamic boundaries (plugin
+    // payloads, RPC/hook glue, request bodies). The ONE remaining strict sub-flag deliberately OFF is
+    // useUnknownInCatchVariables (catch bindings stay `any` for now). strictNullChecks,
     // strictFunctionTypes, strictBindCallApply, strictPropertyInitialization, noImplicitThis and
     // alwaysStrict ARE all enforced.
     "strict": true,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "useUnknownInCatchVariables": false,
     "strictNullChecks": true,
     "esModuleInterop": true,

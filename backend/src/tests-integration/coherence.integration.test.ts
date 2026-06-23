@@ -17,7 +17,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 // replaces). --test-force-exit is the backstop that exits even if a handle lingers.
 after(async () => { try { await require('../core/cache').closeAll(); } catch { /* */ } });
 
-test('coherence: Redis pub/sub round-trip (skipped if no Redis reachable)', async (t) => {
+test('coherence: Redis pub/sub round-trip (skipped if no Redis reachable)', async (t: any) => {
     const cache = require('../core/cache');
 
     // Wait for the publisher connection to come up (config.redis.enabled must be set, e.g. REDIS_ENABLED=true).
@@ -41,7 +41,7 @@ test('coherence: Redis pub/sub round-trip (skipped if no Redis reachable)', asyn
     // connections are closed once in the after() hook (not here) so later tests can still use them
 });
 
-test('coherence: wordjs:plugin-changed propagates across nodes via Redis (skipped if no Redis)', async (t) => {
+test('coherence: wordjs:plugin-changed propagates across nodes via Redis (skipped if no Redis)', async (t: any) => {
     const cache = require('../core/cache');
     let up = false;
     for (let i = 0; i < 30; i++) { if (cache.pubsubAvailable()) { up = true; break; } await sleep(100); }

@@ -3,6 +3,8 @@
  * /api/v1/tags/*
  */
 
+import type { Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const Term = require('../models/Term');
@@ -38,7 +40,7 @@ const TAXONOMY = 'post_tag';
  *       200:
  *         description: List of tags
  */
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const {
         page = 1,
         per_page = 100,
@@ -69,9 +71,9 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages);
+    res.set('X-WP-TotalPages', totalPages as any);
 
-    res.json(terms.map(term => term.toJSON()));
+    res.json(terms.map((term: any) => term.toJSON()));
 }));
 
 /**
@@ -92,7 +94,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  *       404:
  *         description: Tag not found
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const term = await Term.findById(parseInt(req.params.id, 10), TAXONOMY);
 
     if (!term) {
@@ -134,7 +136,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  *       400:
  *         description: Validation error
  */
-router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
+router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req: any, res: Response) => {
     const { name, slug, description } = req.body;
 
     if (!name) {
@@ -198,7 +200,7 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
  *       404:
  *         description: Tag not found
  */
-router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
+router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: any, res: Response) => {
     const termId = parseInt(req.params.id, 10);
     const term = await Term.findById(termId, TAXONOMY);
 
@@ -241,7 +243,7 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
  *       404:
  *         description: Tag not found
  */
-router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
+router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: any, res: Response) => {
     const termId = parseInt(req.params.id, 10);
     const term = await Term.findById(termId, TAXONOMY);
 

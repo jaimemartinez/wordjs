@@ -25,14 +25,14 @@ class Widget {
     form: any;
     update: any;
 
-    constructor(id, name, options: Record<string, any> = {}) {
+    constructor(id: string, name: string, options: Record<string, any> = {}) {
         this.id = id;
         this.name = name;
         this.description = options.description || '';
         this.classname = options.classname || '';
         this.render = options.render || (() => '');
         this.form = options.form || (() => '');
-        this.update = options.update || ((instance) => instance);
+        this.update = options.update || ((instance: any) => instance);
     }
 }
 
@@ -40,7 +40,7 @@ class Widget {
  * Register a widget
  * Equivalent to register_widget()
  */
-function registerWidget(id, name, options = {}) {
+function registerWidget(id: string, name: string, options: Record<string, any> = {}) {
     const widget = new Widget(id, name, options);
     registeredWidgets.set(id, widget);
     return widget;
@@ -50,7 +50,7 @@ function registerWidget(id, name, options = {}) {
  * Unregister a widget
  * Equivalent to unregister_widget()
  */
-function unregisterWidget(id) {
+function unregisterWidget(id: string) {
     return registeredWidgets.delete(id);
 }
 
@@ -65,7 +65,7 @@ function getWidgets() {
  * Register a sidebar
  * Equivalent to register_sidebar()
  */
-function registerSidebar(id, options: Record<string, any> = {}) {
+function registerSidebar(id: string, options: Record<string, any> = {}) {
     const sidebar = {
         id,
         name: options.name || id,
@@ -83,7 +83,7 @@ function registerSidebar(id, options: Record<string, any> = {}) {
 /**
  * Unregister a sidebar
  */
-function unregisterSidebar(id) {
+function unregisterSidebar(id: string) {
     return registeredSidebars.delete(id);
 }
 
@@ -100,7 +100,7 @@ function getSidebars() {
 /**
  * Get widgets assigned to a sidebar
  */
-async function getSidebarWidgets(sidebarId) {
+async function getSidebarWidgets(sidebarId: string) {
     const sidebarsWidgets = await getOption('sidebars_widgets', {});
     return sidebarsWidgets[sidebarId] || [];
 }
@@ -108,7 +108,7 @@ async function getSidebarWidgets(sidebarId) {
 /**
  * Set widgets for a sidebar
  */
-async function setSidebarWidgets(sidebarId, widgetIds) {
+async function setSidebarWidgets(sidebarId: string, widgetIds: any) {
     const sidebarsWidgets = await getOption('sidebars_widgets', {});
     sidebarsWidgets[sidebarId] = widgetIds;
     await updateOption('sidebars_widgets', sidebarsWidgets);
@@ -117,7 +117,7 @@ async function setSidebarWidgets(sidebarId, widgetIds) {
 /**
  * Get widget instance settings
  */
-async function getWidgetSettings(widgetId, instanceId) {
+async function getWidgetSettings(widgetId: string, instanceId: string) {
     const allSettings = await getOption(`widget_${widgetId}`, {});
     return allSettings[instanceId] || {};
 }
@@ -125,7 +125,7 @@ async function getWidgetSettings(widgetId, instanceId) {
 /**
  * Set widget instance settings
  */
-async function setWidgetSettings(widgetId, instanceId, settings) {
+async function setWidgetSettings(widgetId: string, instanceId: string, settings: any) {
     const allSettings = await getOption(`widget_${widgetId}`, {});
     allSettings[instanceId] = settings;
     await updateOption(`widget_${widgetId}`, allSettings);
@@ -135,7 +135,7 @@ async function setWidgetSettings(widgetId, instanceId, settings) {
  * Render a sidebar
  * Equivalent to dynamic_sidebar()
  */
-async function renderSidebar(sidebarId) {
+async function renderSidebar(sidebarId: string) {
     const sidebar = registeredSidebars.get(sidebarId);
     if (!sidebar) return '';
 
@@ -171,7 +171,7 @@ async function renderSidebar(sidebarId) {
 /**
  * Add widget to sidebar
  */
-async function addWidgetToSidebar(sidebarId, widgetId, settings = {}) {
+async function addWidgetToSidebar(sidebarId: string, widgetId: string, settings: Record<string, any> = {}) {
     const widgets = await getSidebarWidgets(sidebarId);
     // Use a UUID, not Date.now().toString(36), which collides for two adds within the same millisecond.
     const instanceId = crypto.randomUUID();
@@ -187,7 +187,7 @@ async function addWidgetToSidebar(sidebarId, widgetId, settings = {}) {
 /**
  * Remove widget from sidebar
  */
-async function removeWidgetFromSidebar(sidebarId, instanceKey) {
+async function removeWidgetFromSidebar(sidebarId: string, instanceKey: any) {
     const widgets = await getSidebarWidgets(sidebarId);
     const index = widgets.indexOf(instanceKey);
 
@@ -204,19 +204,19 @@ async function removeWidgetFromSidebar(sidebarId, instanceKey) {
 
 registerWidget('text', 'Text', {
     description: 'Arbitrary text or HTML',
-    render: async (settings) => `<div class="textwidget">${settings.content || ''}</div>`,
-    form: (settings) => `<textarea name="content">${settings.content || ''}</textarea>`
+    render: async (settings: any) => `<div class="textwidget">${settings.content || ''}</div>`,
+    form: (settings: any) => `<textarea name="content">${settings.content || ''}</textarea>`
 });
 
 registerWidget('recent_posts', 'Recent Posts', {
     description: 'Your most recent posts',
-    render: async (settings) => {
+    render: async (settings: any) => {
         const Post = require('../models/Post');
         const limit = parseInt(settings.number) || 5;
         const posts = await Post.findAll({ type: 'post', status: 'publish', limit });
 
         let html = '<ul class="recent-posts">';
-        posts.forEach(p => {
+        posts.forEach((p: any) => {
             html += `<li><a href="/${p.postName}">${p.postTitle}</a></li>`;
         });
         html += '</ul>';
@@ -226,12 +226,12 @@ registerWidget('recent_posts', 'Recent Posts', {
 
 registerWidget('categories', 'Categories', {
     description: 'A list of categories',
-    render: async (settings) => {
+    render: async (settings: any) => {
         const Term = require('../models/Term');
         const categories = await Term.getCategories({ hideEmpty: settings.hideEmpty });
 
         let html = '<ul class="categories">';
-        categories.forEach(c => {
+        categories.forEach((c: any) => {
             html += `<li><a href="/category/${c.slug}">${c.name}</a> (${c.count})</li>`;
         });
         html += '</ul>';
@@ -251,7 +251,7 @@ registerWidget('search', 'Search', {
 
 registerWidget('custom_html', 'Custom HTML', {
     description: 'Add custom HTML code',
-    render: async (settings) => settings.html || ''
+    render: async (settings: any) => settings.html || ''
 });
 
 // Register default sidebars

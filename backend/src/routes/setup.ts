@@ -1,3 +1,4 @@
+import type { Request, Response, NextFunction } from 'express';
 const express = require('express');
 const router = express.Router();
 const { getConfig, saveConfig, isInstalled } = require('../core/configManager');
@@ -20,7 +21,7 @@ function requireInstallToken(req: any, res: any): boolean {
 }
 
 // Check installation status
-router.get('/status', (req, res) => {
+router.get('/status', (req: any, res: Response) => {
     const installed = isInstalled();
     const currentConfig = getConfig();
 
@@ -56,7 +57,7 @@ router.get('/status', (req, res) => {
 // Test a database connection BEFORE committing the install, so the wizard can validate Postgres
 // credentials. Isolated: uses a throwaway pg client and never switches the live driver. Always 200
 // with { ok, message|error } so the wizard can render the result inline.
-router.post('/test-db', async (req, res) => {
+router.post('/test-db', async (req: any, res: Response) => {
     if (isInstalled()) return res.status(400).json({ ok: false, error: 'Already installed' });
     if (!requireInstallToken(req, res)) return;
     const { dbDriver = 'sqlite-native', db: dbConn } = req.body || {};
@@ -94,7 +95,7 @@ router.post('/test-db', async (req, res) => {
 });
 
 // Install endpoint
-router.post('/install', async (req, res) => {
+router.post('/install', async (req: any, res: Response) => {
     if (isInstalled()) {
         return res.status(400).json({ error: 'Already installed' });
     }
@@ -247,7 +248,7 @@ router.post('/install', async (req, res) => {
 
                 // Logic: If host is "wordjs.com", we create "gateway.wordjs.com", "backend.wordjs.com", etc.
                 // If it's an IP, we just use the IP.
-                const getSubdomain = (prefix) => {
+                const getSubdomain = (prefix: string) => {
                     if (isIp || baseHost === 'localhost') return baseHost;
                     // Avoid double prefixing if user installed on a subdomain already
                     const parts = baseHost.split('.');
@@ -388,7 +389,7 @@ router.post('/install', async (req, res) => {
 });
 
 // Migration endpoint
-router.post('/migrate', async (req, res) => {
+router.post('/migrate', async (req: any, res: Response) => {
     if (!isInstalled()) {
         return res.status(400).json({ error: 'Not installed' });
     }
@@ -460,7 +461,7 @@ router.post('/migrate', async (req, res) => {
                 const baseHost = new URL(newConfig.siteUrl).hostname;
                 const isIp = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(baseHost);
 
-                const getSubdomain = (prefix) => {
+                const getSubdomain = (prefix: string) => {
                     if (isIp || baseHost === 'localhost') return baseHost;
                     const parts = baseHost.split('.');
                     return parts.length > 2 ? `${prefix}.${parts.slice(1).join('.')}` : `${prefix}.${baseHost}`;

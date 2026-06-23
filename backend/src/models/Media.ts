@@ -14,7 +14,7 @@ class Media {
      * Create a media attachment
      * This creates a post of type 'attachment'
      */
-    static async create(data) {
+    static async create(data: any) {
         const {
             authorId,
             title,
@@ -67,7 +67,7 @@ class Media {
     /**
      * Find media by ID
      */
-    static async findById(id) {
+    static async findById(id: number) {
         const post = await Post.findById(id);
         if (!post || post.postType !== 'attachment') return null;
         return await Media.formatAttachment(post);
@@ -85,14 +85,14 @@ class Media {
 
         // Bulk-hydrate all post meta in ONE query, then format from each bucket
         // (avoids 3 getMeta queries per attachment).
-        const metaById = await Post.getAllMetaForIds(posts.map(p => p.id));
-        return await Promise.all(posts.map(post => Media.formatAttachment(post, metaById[post.id] || {})));
+        const metaById = await Post.getAllMetaForIds(posts.map((p: any) => p.id));
+        return await Promise.all(posts.map((post: any) => Media.formatAttachment(post, metaById[post.id] || {})));
     }
 
     /**
      * Format attachment post to media object
      */
-    static async formatAttachment(post, meta = null) {
+    static async formatAttachment(post: any, meta = null) {
         // Read all three keys from ONE meta bucket. For list paths the caller passes
         // a pre-hydrated bucket (Post.getAllMetaForIds); for single lookups we fetch
         // all of this post's meta once instead of three sequential getMeta() queries.
@@ -149,7 +149,7 @@ class Media {
     /**
      * Update media
      */
-    static async update(id, data) {
+    static async update(id: number, data: any) {
         const media = await Media.findById(id);
         if (!media) throw new Error('Media not found');
 
@@ -173,7 +173,7 @@ class Media {
     /**
      * Delete media
      */
-    static async delete(id, deleteFile = true) {
+    static async delete(id: number, deleteFile = true) {
         const media = await Media.findById(id);
         if (!media) return false;
 
@@ -208,7 +208,7 @@ class Media {
     /**
      * Get media by post (attached to)
      */
-    static async getByPost(postId) {
+    static async getByPost(postId: number) {
         const posts = await Post.findAll({
             type: 'attachment',
             parent: postId,
@@ -217,8 +217,8 @@ class Media {
 
         // Bulk-hydrate all post meta in ONE query, then format from each bucket
         // (avoids 3 getMeta queries per attachment).
-        const metaById = await Post.getAllMetaForIds(posts.map(p => p.id));
-        return await Promise.all(posts.map(post => Media.formatAttachment(post, metaById[post.id] || {})));
+        const metaById = await Post.getAllMetaForIds(posts.map((p: any) => p.id));
+        return await Promise.all(posts.map((post: any) => Media.formatAttachment(post, metaById[post.id] || {})));
     }
 
     /**
@@ -281,7 +281,7 @@ class Media {
     /**
      * Check if MIME type is allowed
      */
-    static isAllowedMimeType(mimeType) {
+    static isAllowedMimeType(mimeType: string) {
         const allowed = Object.values(Media.getAllowedMimeTypes());
         return allowed.includes(mimeType);
     }
@@ -299,7 +299,7 @@ class Media {
      * @param {string} mimeType
      * @returns {string|null} extension WITHOUT a leading dot (e.g. 'jpg'), or null
      */
-    static getExtensionForMime(mimeType) {
+    static getExtensionForMime(mimeType: string) {
         const map = Media.getAllowedMimeTypes();
         for (const [extKey, mime] of Object.entries(map)) {
             if (mime === mimeType) {
@@ -321,7 +321,7 @@ class Media {
      * @param {string} ext extension with or without a leading dot
      * @returns {boolean}
      */
-    static isDangerousExtension(ext) {
+    static isDangerousExtension(ext: string) {
         if (!ext) return false;
         const clean = String(ext).replace(/^\./, '').toLowerCase();
         const blocked = new Set([

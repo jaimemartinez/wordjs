@@ -11,7 +11,7 @@ const { getCurrentPlugin } = require('./plugin-context');
 const cronJobs = new Map();
 
 // Cron schedules
-const schedules = {
+const schedules: Record<string, { interval: number; display: string }> = {
     hourly: { interval: 3600000, display: 'Once Hourly' },
     twicedaily: { interval: 43200000, display: 'Twice Daily' },
     daily: { interval: 86400000, display: 'Once Daily' },
@@ -25,7 +25,7 @@ let cronTimer: NodeJS.Timeout | null = null;
 /**
  * Register a cron schedule
  */
-function addSchedule(name, interval, display) {
+function addSchedule(name: string, interval: number, display: string) {
     schedules[name] = { interval, display };
 }
 
@@ -41,7 +41,7 @@ function getSchedules() {
 const MAX_CRON_EVENTS_PER_PLUGIN = 200;
 const MAX_CRON_EVENTS_TOTAL = 5000;
 const MAX_CRON_ARGS_BYTES = 4096;
-function assertCronCapacity(events, pluginSlug, args) {
+function assertCronCapacity(events: any, pluginSlug: any, args: any) {
     if (JSON.stringify(args || []).length > MAX_CRON_ARGS_BYTES) {
         throw new Error('🛡️ Cron schedule denied: event args are too large.');
     }
@@ -64,7 +64,7 @@ function assertCronCapacity(events, pluginSlug, args) {
  * Schedule an event (Async)
  * Equivalent to wp_schedule_event()
  */
-async function scheduleEvent(timestamp, recurrence, hook, args = []) {
+async function scheduleEvent(timestamp: any, recurrence: any, hook: any, args = []) {
     const events = await getOption('cron', {});
     const pluginSlug = getCurrentPlugin();
     assertCronCapacity(events, pluginSlug, args);
@@ -91,7 +91,7 @@ async function scheduleEvent(timestamp, recurrence, hook, args = []) {
  * Schedule a single event (Async)
  * Equivalent to wp_schedule_single_event()
  */
-async function scheduleSingleEvent(timestamp, hook, args = []) {
+async function scheduleSingleEvent(timestamp: any, hook: any, args = []) {
     const events = await getOption('cron', {});
     const pluginSlug = getCurrentPlugin();
     assertCronCapacity(events, pluginSlug, args);
@@ -116,7 +116,7 @@ async function scheduleSingleEvent(timestamp, hook, args = []) {
  * Unschedule an event (Async)
  * Equivalent to wp_unschedule_event()
  */
-async function unscheduleEvent(timestamp, hook, args = []) {
+async function unscheduleEvent(timestamp: any, hook: any, args = []) {
     const events = await getOption('cron', {});
     const key = `${hook}_${JSON.stringify(args)}`;
 
@@ -138,7 +138,7 @@ async function unscheduleEvent(timestamp, hook, args = []) {
  * Clear all scheduled hooks (Async)
  * Equivalent to wp_clear_scheduled_hook()
  */
-async function clearScheduledHook(hook, args = null) {
+async function clearScheduledHook(hook: any, args = null) {
     const events = await getOption('cron', {});
     let cleared = false;
 
@@ -171,7 +171,7 @@ async function clearScheduledHook(hook, args = null) {
  * Get next scheduled time for a hook (Async)
  * Equivalent to wp_next_scheduled()
  */
-async function nextScheduled(hook, args = []) {
+async function nextScheduled(hook: any, args = []) {
     const events = await getOption('cron', {});
     const key = `${hook}_${JSON.stringify(args)}`;
 
@@ -305,7 +305,7 @@ function stopCron() {
 /**
  * Register a cron job handler
  */
-function registerCronJob(name, callback) {
+function registerCronJob(name: any, callback: any) {
     cronJobs.set(name, callback);
 }
 
@@ -451,7 +451,7 @@ async function initDefaultCronEvents() {
     });
 
     // 3. React to Option Updates
-    addAction('updated_option', async (name, value) => {
+    addAction('updated_option', async (name: any, value: any) => {
         if (name === 'backup_schedule') {
             await rescheduleBackup(value);
         }

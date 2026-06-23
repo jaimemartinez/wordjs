@@ -16,7 +16,7 @@ const THEMES_DIR = path.join(__dirname, '../../themes');
 /**
  * Run a function within a specific plugin context
  */
-function runWithContext(pluginSlug, callback) {
+function runWithContext(pluginSlug: string, callback: () => any) {
     return storage.run({ pluginSlug }, callback);
 }
 
@@ -132,7 +132,7 @@ function getEffectivePlugin(): string | null {
 /**
  * Check if current context has a specific permission
  */
-function hasPermission(scope, access = 'read') {
+function hasPermission(scope: string, access = 'read') {
     // Use the effective plugin (context OR call-stack) so detached plugin code (route
     // handlers, timers, sync hooks) is still subject to its manifest permissions.
     const pluginSlug = getEffectivePlugin();
@@ -179,7 +179,7 @@ function hasPermission(scope, access = 'read') {
     }
 
     // (1) The manifest must DECLARE the capability (the plugin's request).
-    const declared = manifest.permissions.some(p =>
+    const declared = manifest.permissions.some((p: any) =>
         p.scope === scope &&
         (p.access === access || p.access === 'admin')
     );
@@ -202,7 +202,7 @@ function hasPermission(scope, access = 'read') {
 /**
  * Strong enforcement helper: Throws error if permission is missing
  */
-function verifyPermission(scope, access = 'read') {
+function verifyPermission(scope: string, access = 'read') {
     if (!hasPermission(scope, access)) {
         const slug = getCurrentPlugin();
         const error = `🛡️ Security Block: Plugin '${slug}' tried to access '${scope}' (${access}) without permission. Declare it in manifest.json first.`;

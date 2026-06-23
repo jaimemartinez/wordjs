@@ -72,7 +72,7 @@ const defaultPostTypes = {
  * Register a custom post type
  * Equivalent to register_post_type()
  */
-function registerPostType(name, args: Record<string, any> = {}) {
+function registerPostType(name: string, args: Record<string, any> = {}) {
     const postType: Record<string, any> = {
         name,
         label: args.label || name,
@@ -108,7 +108,7 @@ function registerPostType(name, args: Record<string, any> = {}) {
 /**
  * Unregister a post type
  */
-function unregisterPostType(name) {
+function unregisterPostType(name: string) {
     // Can't unregister built-in types
     if (['post', 'page', 'attachment', 'revision', 'nav_menu_item'].includes(name)) {
         return false;
@@ -121,7 +121,7 @@ function unregisterPostType(name) {
  * Get a post type object
  * Equivalent to get_post_type_object()
  */
-function getPostType(name) {
+function getPostType(name: string) {
     return postTypes.get(name) || null;
 }
 
@@ -145,7 +145,7 @@ function getPostTypes(args: Record<string, any> = {}) {
  * Check if post type exists
  * Equivalent to post_type_exists()
  */
-function postTypeExists(name) {
+function postTypeExists(name: string) {
     return postTypes.has(name);
 }
 
@@ -153,7 +153,7 @@ function postTypeExists(name) {
  * Check if post type supports a feature
  * Equivalent to post_type_supports()
  */
-function postTypeSupports(name, feature) {
+function postTypeSupports(name: string, feature: string) {
     const type = getPostType(name);
     if (!type) return false;
     return type.supports.includes(feature);
@@ -162,7 +162,7 @@ function postTypeSupports(name, feature) {
 /**
  * Add support for a feature to a post type
  */
-function addPostTypeSupport(name, features) {
+function addPostTypeSupport(name: string, features: string | string[]) {
     const type = getPostType(name);
     if (!type) return false;
 
@@ -179,7 +179,7 @@ function addPostTypeSupport(name, features) {
 /**
  * Remove support for a feature from a post type
  */
-function removePostTypeSupport(name, feature) {
+function removePostTypeSupport(name: string, feature: string) {
     const type = getPostType(name);
     if (!type) return false;
 
@@ -195,7 +195,7 @@ function removePostTypeSupport(name, feature) {
 /**
  * Get post types that support a feature
  */
-function getPostTypesBy(feature) {
+function getPostTypesBy(feature: string) {
     return getPostTypes().filter(type => type.supports.includes(feature));
 }
 
@@ -236,7 +236,7 @@ async function initPostTypes() {
 /**
  * Save custom post type to persist across restarts
  */
-async function saveCustomPostType(name, args) {
+async function saveCustomPostType(name: string, args: Record<string, any>) {
     const customTypes = await getOption('custom_post_types', {});
     customTypes[name] = { name, ...args };
     await updateOption('custom_post_types', customTypes);
@@ -246,7 +246,7 @@ async function saveCustomPostType(name, args) {
 /**
  * Delete a custom post type
  */
-async function deleteCustomPostType(name) {
+async function deleteCustomPostType(name: string) {
     const customTypes = await getOption('custom_post_types', {});
     if (customTypes[name]) {
         delete customTypes[name];

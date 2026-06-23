@@ -35,7 +35,7 @@ class Analytics {
     /**
      * Track an event
      */
-    async track({ type, resource, user_id = null, ip = null, metadata = {} }) {
+    async track({ type, resource, user_id = null, ip = null, metadata = {} }: any) {
         const id = uuidv4();
 
         // PRIVACY: Anonymize IP
@@ -80,9 +80,9 @@ class Analytics {
 
         // Process in JS to ensure format matches Recharts expectation
         // Group by Day
-        const grouped = {};
+        const grouped: Record<string, any> = {};
 
-        result.forEach(row => {
+        result.forEach((row: any) => {
             const date = new Date(row.created_at).toLocaleDateString(undefined, { weekday: 'short' }); // "Mon", "Tue"
             // For Monthly: maybe use date number?
 

@@ -24,7 +24,7 @@ class Comment {
     commentParent?: number;
     userId?: number;
 
-    constructor(data) {
+    constructor(data: any) {
         this.commentId = data.comment_id;
         this.commentPostId = data.comment_post_id;
         this.commentAuthor = data.comment_author;
@@ -116,7 +116,7 @@ class Comment {
      * Create a new comment
      * Equivalent to wp_insert_comment()
      */
-    static async create(data) {
+    static async create(data: any) {
         const {
             postId,
             author,
@@ -178,7 +178,7 @@ class Comment {
      * Find comment by ID
      * Equivalent to get_comment()
      */
-    static async findById(id) {
+    static async findById(id: number) {
         const row = await dbAsync.get('SELECT * FROM comments WHERE comment_id = ?', [id]);
         return row ? new Comment(row) : null;
     }
@@ -249,7 +249,7 @@ class Comment {
         params.push(limit, offset);
 
         const rows = await dbAsync.all(sql, params);
-        return rows.map(row => new Comment(row));
+        return rows.map((row: any) => new Comment(row));
     }
 
     /**
@@ -346,7 +346,7 @@ class Comment {
      * Update a comment
      * Equivalent to wp_update_comment()
      */
-    static async update(id, data) {
+    static async update(id: number, data: any) {
         const comment = await Comment.findById(id);
         if (!comment) throw new Error('Comment not found');
 
@@ -393,7 +393,7 @@ class Comment {
 
         // Update post comment count if status changed
         if (data.status !== undefined) {
-            await Comment.updatePostCommentCount(comment.commentPostId);
+            await Comment.updatePostCommentCount(comment.commentPostId as number);
         }
 
         return await Comment.findById(id);
@@ -403,7 +403,7 @@ class Comment {
      * Delete a comment
      * Equivalent to wp_delete_comment()
      */
-    static async delete(id, forceDelete = false) {
+    static async delete(id: number, forceDelete = false) {
         const comment = await Comment.findById(id);
         if (!comment) return false;
 
@@ -415,7 +415,7 @@ class Comment {
             await dbAsync.run('DELETE FROM comments WHERE comment_id = ?', [id]);
 
             // Update post comment count
-            await Comment.updatePostCommentCount(comment.commentPostId);
+            await Comment.updatePostCommentCount(comment.commentPostId as number);
 
             await doAction('deleted_comment', id);
 
@@ -429,28 +429,28 @@ class Comment {
     /**
      * Approve a comment
      */
-    static async approve(id) {
+    static async approve(id: number) {
         return await Comment.update(id, { status: '1' });
     }
 
     /**
      * Unapprove a comment (set to pending)
      */
-    static async unapprove(id) {
+    static async unapprove(id: number) {
         return await Comment.update(id, { status: '0' });
     }
 
     /**
      * Mark as spam
      */
-    static async spam(id) {
+    static async spam(id: number) {
         return await Comment.update(id, { status: 'spam' });
     }
 
     /**
      * Update post comment count
      */
-    static async updatePostCommentCount(postId) {
+    static async updatePostCommentCount(postId: number) {
         const row = await dbAsync.get(`
       SELECT COUNT(*) as count FROM comments 
       WHERE comment_post_id = ? AND comment_approved = '1'
@@ -462,7 +462,7 @@ class Comment {
     /**
      * Get comment thread (comment with all replies)
      */
-    static async getThread(commentId) {
+    static async getThread(commentId: number) {
         const comment = await Comment.findById(commentId);
         if (!comment) return null;
 

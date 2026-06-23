@@ -20,7 +20,7 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * Validate a guest-supplied author URL: only http/https are permitted, and the value must be a
  * well-formed absolute URL. escUrl returns '' for anything else (javascript:, data:, mailto:, etc.).
  */
-function safeAuthorUrl(raw) {
+function safeAuthorUrl(raw: any) {
     if (!raw) return '';
     const cleaned = escUrl(String(raw).trim());
     if (!cleaned) return '';
@@ -64,7 +64,7 @@ function safeAuthorUrl(raw) {
  *       200:
  *         description: List of comments
  */
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const {
         page = 1,
         per_page = 10,
@@ -85,7 +85,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         commentStatus = '1';
     }
 
-    const orderByMap = {
+    const orderByMap: Record<string, string> = {
         date: 'comment_date',
         id: 'comment_id'
     };
@@ -113,7 +113,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     res.set('X-WP-Total', total);
     res.set('X-WP-TotalPages', totalPages);
 
-    res.json(comments.map(comment => comment.toJSON()));
+    res.json(comments.map((comment: any) => comment.toJSON()));
 }));
 
 /**
@@ -134,7 +134,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  *       404:
  *         description: Comment not found
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const comment = await Comment.findById(parseInt(req.params.id, 10));
 
     if (!comment) {
@@ -191,7 +191,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  *       400:
  *         description: Validation error
  */
-router.post('/', optionalAuth, asyncHandler(async (req, res) => {
+router.post('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const {
         post: postId,
         author_name,
@@ -347,7 +347,7 @@ router.post('/', optionalAuth, asyncHandler(async (req, res) => {
  *       200:
  *         description: Comment updated
  */
-router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req, res) => {
+router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: any, res: any) => {
     const commentId = parseInt(req.params.id, 10);
     const comment = await Comment.findById(commentId);
 
@@ -400,7 +400,7 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req, 
  *       200:
  *         description: Comment deleted
  */
-router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async (req, res) => {
+router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async (req: any, res: any) => {
     const commentId = parseInt(req.params.id, 10);
     const comment = await Comment.findById(commentId);
 
@@ -434,7 +434,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
  * POST /comments/:id/approve
  * Approve comment
  */
-router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler(async (req, res) => {
+router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler(async (req: any, res: any) => {
     const commentId = parseInt(req.params.id, 10);
     const updated = await Comment.approve(commentId);
 
@@ -453,7 +453,7 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
  * POST /comments/:id/spam
  * Mark comment as spam
  */
-router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(async (req, res) => {
+router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(async (req: any, res: any) => {
     const commentId = parseInt(req.params.id, 10);
     const updated = await Comment.spam(commentId);
 

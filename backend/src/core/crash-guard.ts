@@ -26,7 +26,7 @@ if (!fs.existsSync(DATA_DIR)) {
 /**
  * Get current strike count for a plugin
  */
-function getStrikes(slug) {
+function getStrikes(slug: string) {
     try {
         if (fs.existsSync(STRIKE_FILE)) {
             const strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
@@ -42,8 +42,8 @@ function getStrikes(slug) {
  * Increment strike counter for a plugin
  * @returns {number} New strike count
  */
-function addStrike(slug) {
-    let strikes = {};
+function addStrike(slug: string) {
+    let strikes: Record<string, number> = {};
     try {
         if (fs.existsSync(STRIKE_FILE)) {
             strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
@@ -66,7 +66,7 @@ function addStrike(slug) {
 /**
  * Clear strikes for a plugin (successful load resets counter)
  */
-function clearStrikes(slug) {
+function clearStrikes(slug: string) {
     try {
         if (fs.existsSync(STRIKE_FILE)) {
             const strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
@@ -88,7 +88,7 @@ function clearStrikes(slug) {
  * Record that we are about to load a plugin.
  * MUST be synchronous to ensure it hits disk before potential crash.
  */
-function startLoading(slug) {
+function startLoading(slug: string) {
     try {
         const data = {
             plugin: slug,
@@ -104,7 +104,7 @@ function startLoading(slug) {
  * Record that the plugin loaded successfully.
  * Also clears any strikes for this plugin (it loaded fine).
  */
-function finishLoading(slug) {
+function finishLoading(slug: string) {
     try {
         if (fs.existsSync(LOCK_FILE)) {
             fs.unlinkSync(LOCK_FILE);
@@ -173,7 +173,7 @@ function checkPreviousCrash() {
  * Extract plugin slug from error stack trace
  * Looks for paths containing /plugins/SLUG/
  */
-function extractPluginFromStack(stack) {
+function extractPluginFromStack(stack: string | undefined) {
     if (!stack) return null;
 
     // Match patterns like /plugins/my-plugin/ or \plugins\my-plugin\
@@ -201,7 +201,7 @@ function extractPluginFromStack(stack) {
  * Blame a plugin for a runtime crash
  * Called from uncaughtException/unhandledRejection handlers
  */
-function blamePlugin(slug, error) {
+function blamePlugin(slug: string, error: any) {
     try {
         const data = {
             plugin: slug,

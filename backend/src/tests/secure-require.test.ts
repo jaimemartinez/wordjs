@@ -3,6 +3,8 @@
  * Run with: node src/tests/secure-require.test.js
  */
 
+import type { Response } from 'express';
+
 const path = require('path');
 const fs = require('fs');
 
@@ -10,7 +12,7 @@ const fs = require('fs');
 let passed = 0;
 let failed = 0;
 
-function test(name, fn) {
+function test(name: string, fn: any) {
     try {
         fn();
         console.log(`  ✅ ${name}`);
@@ -22,9 +24,9 @@ function test(name, fn) {
     }
 }
 
-function expect(actual) {
+function expect(actual: any) {
     return {
-        toBe(expected) {
+        toBe(expected: any) {
             if (actual !== expected) {
                 throw new Error(`Expected ${expected}, got ${actual}`);
             }
@@ -46,7 +48,7 @@ function expect(actual) {
     };
 }
 
-function expectThrows(fn, msgContains = '') {
+function expectThrows(fn: any, msgContains = '') {
     try {
         fn();
         throw new Error('Expected function to throw but it did not');
@@ -286,7 +288,7 @@ console.log('\n🔴 Red-team Adversarial Escape Tests:');
 // so getEffectivePlugin() (call-stack detection) classifies them as a plugin even without
 // runWithContext — exactly the detached scenario the audit exploited.
 
-function withRunner(slug, src, fn) {
+function withRunner(slug: any, src: any, fn: any) {
     const pluginDir = path.join(path.resolve(__dirname, '../../plugins'), slug);
     const runnerPath = path.join(pluginDir, 'runner.js');
     if (!fs.existsSync(pluginDir)) fs.mkdirSync(pluginDir, { recursive: true });
@@ -302,20 +304,20 @@ function withRunner(slug, src, fn) {
 }
 
 test("require('node:child_process') from plugin returns the SECURE blocking module", () => {
-    withRunner('rt-node-cp', "module.exports = () => require('node:child_process').execSync('echo pwned');\n", (runner) => {
+    withRunner('rt-node-cp', "module.exports = () => require('node:child_process').execSync('echo pwned');\n", (runner: any) => {
         expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
     });
 });
 
 test("require('node:fs') in plugin returns the secure proxy (write outside dir throws)", () => {
-    withRunner('rt-node-fs', "module.exports = () => require('node:fs').writeFileSync('/tmp/pwn.txt','x');\n", (runner) => {
+    withRunner('rt-node-fs', "module.exports = () => require('node:fs').writeFileSync('/tmp/pwn.txt','x');\n", (runner: any) => {
         expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
     });
 });
 
 test("Detached plugin with Error.stackTraceLimit=0 is STILL blocked from fs (stack hardening)", () => {
     const secureFs = createSecureFs();
-    withRunner('rt-stacklimit', "module.exports = (sfs) => { Error.stackTraceLimit = 0; return sfs.readFileSync('/etc/passwd','utf8'); };\n", (runner) => {
+    withRunner('rt-stacklimit', "module.exports = (sfs) => { Error.stackTraceLimit = 0; return sfs.readFileSync('/etc/passwd','utf8'); };\n", (runner: any) => {
         const saved = Error.stackTraceLimit;
         try {
             expectThrows(() => runner(secureFs), 'RUNTIME SECURITY BLOCK');
@@ -344,13 +346,13 @@ test('fs deny-by-default: secureFs.openAsBlob throws in plugin context', () => {
 });
 
 test("require('worker_threads') is blocked (inert) for plugins", () => {
-    withRunner('rt-worker', "module.exports = () => new (require('worker_threads').Worker)('x');\n", (runner) => {
+    withRunner('rt-worker', "module.exports = () => new (require('worker_threads').Worker)('x');\n", (runner: any) => {
         expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
     });
 });
 
 test("require('vm') is blocked (inert) for plugins", () => {
-    withRunner('rt-vm', "module.exports = () => require('vm').runInThisContext('1+1');\n", (runner) => {
+    withRunner('rt-vm', "module.exports = () => require('vm').runInThisContext('1+1');\n", (runner: any) => {
         expectThrows(() => runner(), 'RUNTIME SECURITY BLOCK');
     });
 });
@@ -365,12 +367,12 @@ test('Plugin-registered route handler is ALS-anchored even when invoked detached
 
     // Minimal express-like app that just stores the registered handler.
     let stored: any = null;
-    const app: any = { get(_path, h) { stored = h; return app; } };
+    const app: any = { get(_path: any, h: any) { stored = h; return app; } };
     anchorPluginRoutes(app);
 
     // Register the handler AS the plugin (registration happens inside its context).
     pc.runWithContext('anchored-evil', () => {
-        app.get('/x', (_req, res) => { res.seen = pc.getCurrentPlugin(); });
+        app.get('/x', (_req: any, res: Response) => { (res as any).seen = pc.getCurrentPlugin(); });
     });
 
     // Invoke later, fully DETACHED (no runWithContext) and with the stack scan blinded.
@@ -461,7 +463,7 @@ test('express.Router() handler is ALS-anchored (#1)', () => {
     appReg.setApp(express()); // patches the shared Router prototype
     const router = express.Router();
     pc.runWithContext('router-evil', () => {
-        router.get('/x', (_req, res) => { res.seen = pc.getCurrentPlugin(); });
+        router.get('/x', (_req: any, res: Response) => { (res as any).seen = pc.getCurrentPlugin(); });
     });
     const layer = router.stack.find((l: any) => l.route);
     const handler = layer.route.stack[0].handle;

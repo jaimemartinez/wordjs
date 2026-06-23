@@ -7,6 +7,8 @@
  * handler runs detached on an HTTP request with empty AsyncLocalStorage.
  */
 
+import type { Request, Response } from 'express';
+
 const { test, before, after } = require('node:test');
 const assert = require('node:assert');
 const request = require('supertest');
@@ -36,19 +38,19 @@ before(() => {
 
     // Register routes AS the plugin (registration happens inside its context, like init()).
     runWithContext(SLUG, () => {
-        app.get('/own', (_req, res) => {
+        app.get('/own', (_req: Request, res: Response) => {
             try {
                 const c = require('fs').readFileSync(path.join(dir, 'data.txt'), 'utf8');
                 res.json({ ok: true, c });
             } catch (e) { res.status(500).json({ err: e.message }); }
         });
-        app.get('/escape', (_req, res) => {
+        app.get('/escape', (_req: Request, res: Response) => {
             try {
                 require('fs').readFileSync(outsideFile, 'utf8');
                 res.json({ ok: true }); // should NOT happen
             } catch (e) { res.status(403).json({ blocked: true, err: e.message }); }
         });
-        app.get('/shell', (_req, res) => {
+        app.get('/shell', (_req: Request, res: Response) => {
             try {
                 require('child_process').execSync('echo x');
                 res.json({ ok: true }); // should NOT happen

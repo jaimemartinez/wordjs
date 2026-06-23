@@ -13,6 +13,7 @@ const {
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+import type { Request, Response } from 'express';
 
 /**
  * @swagger
@@ -31,9 +32,9 @@ const { asyncHandler } = require('../middleware/errorHandler');
  *       200:
  *         description: List of widgets
  */
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', asyncHandler(async (req: Request, res: Response) => {
     const widgets = getWidgets();
-    res.json(widgets.map(w => ({
+    res.json(widgets.map((w: any) => ({
         id: w.id,
         name: w.name,
         description: w.description
@@ -50,10 +51,10 @@ router.get('/', asyncHandler(async (req, res) => {
  *       200:
  *         description: List of sidebars
  */
-router.get('/sidebars', asyncHandler(async (req, res) => {
+router.get('/sidebars', asyncHandler(async (req: Request, res: Response) => {
     const sidebars = getSidebars();
     // We need to resolve widgets for each sidebar async
-    const result = await Promise.all(sidebars.map(async s => ({
+    const result = await Promise.all(sidebars.map(async (s: any) => ({
         id: s.id,
         name: s.name,
         description: s.description,
@@ -78,7 +79,7 @@ router.get('/sidebars', asyncHandler(async (req, res) => {
  *       200:
  *         description: HTML content
  */
-router.get('/sidebars/:id/render', asyncHandler(async (req, res) => {
+router.get('/sidebars/:id/render', asyncHandler(async (req: Request, res: Response) => {
     const html = await renderSidebar(req.params.id);
     res.type('html').send(html);
 }));
@@ -113,7 +114,7 @@ router.get('/sidebars/:id/render', asyncHandler(async (req, res) => {
  *       200:
  *         description: Widget added
  */
-router.post('/sidebars/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/sidebars/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { widgetId, settings = {} } = req.body;
 
     if (!widgetId) {
@@ -154,7 +155,7 @@ router.post('/sidebars/:id', authenticate, isAdmin, asyncHandler(async (req, res
  *       200:
  *         description: Widgets reordered
  */
-router.post('/sidebars/:id/reorder', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/sidebars/:id/reorder', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { widgets } = req.body; // Array of instance keys
     const { setSidebarWidgets } = require('../core/widgets');
 
@@ -189,7 +190,7 @@ router.post('/sidebars/:id/reorder', authenticate, isAdmin, asyncHandler(async (
  *       200:
  *         description: Widget removed
  */
-router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const result = await removeWidgetFromSidebar(req.params.sidebarId, req.params.instanceKey);
     res.json({ success: result });
 }));
@@ -225,7 +226,7 @@ router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncH
  *       200:
  *         description: Settings updated
  */
-router.put('/:widgetId/instances/:instanceId', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.put('/:widgetId/instances/:instanceId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { settings } = req.body;
     await setWidgetSettings(req.params.widgetId, req.params.instanceId, settings || {});
     res.json({ success: true });

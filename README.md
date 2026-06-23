@@ -17,9 +17,9 @@ process, reachable only through a permission-checked capability bridge.
 >   strongly recommended before any production or internet-facing deployment.**
 > - The backend **compiles to `dist/` for production** (no `ts-node` at runtime) with a
 >   **strict** type-check enforced in CI. The strict core (`strictNullChecks`, etc.) is
->   on, but two sub-flags — `noImplicitAny` and `useUnknownInCatchVariables` — are
->   deliberately **off**: enabling `noImplicitAny` today still surfaces **~1,220
->   implicit-any sites** that need real type annotations. This is ongoing, not nearly done.
+>   on, and `noImplicitAny` is now **enforced** (every parameter/variable is annotated — real
+>   types where locally determinable, explicit `any` only at genuinely dynamic boundaries). The
+>   one remaining sub-flag deliberately **off** is `useUnknownInCatchVariables` (catch bindings stay `any`).
 > - There is **no plugin marketplace or community ecosystem yet**. The repo ships a
 >   handful of first-party/example plugins and themes.
 >
@@ -293,9 +293,9 @@ no `ts-node` at runtime. In development it runs in-place via `ts-node`. From `ba
 > (Admin → Database), not `npm run migrate`.
 
 > `strict` is **on** (`strictNullChecks`, `strictFunctionTypes`, etc. are enforced). Two
-> sub-flags are deliberately **off**: `noImplicitAny` and `useUnknownInCatchVariables`.
-> Turning on `noImplicitAny` today still surfaces **~1,220 implicit-any sites** to annotate
-> with real types — this is in progress, not nearly complete. Plugins under
+> `noImplicitAny` is now **enforced** (all implicit-any sites annotated — real types where
+> determinable, explicit `any` only at dynamic boundaries). The one sub-flag deliberately
+> **off** is `useUnknownInCatchVariables` (catch bindings stay `any`). Plugins under
 > `backend/plugins/*` stay **JavaScript** on purpose — the AST scanner and dynamic `require`
 > assume `.js`.
 

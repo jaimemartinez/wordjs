@@ -11,7 +11,7 @@ const path = require('path');
 
 describe('SEO Helper', () => {
     // Mock helper functions for testing
-    const escapeHtml = (text) => {
+    const escapeHtml = (text: string | null | undefined) => {
         if (!text) return '';
         return String(text)
             .replace(/&/g, '&amp;')
@@ -92,7 +92,7 @@ describe('Sitemap XML', () => {
     });
 
     it('should validate priority values', () => {
-        const isValidPriority = (p) => parseFloat(p) >= 0 && parseFloat(p) <= 1;
+        const isValidPriority = (p: string) => parseFloat(p) >= 0 && parseFloat(p) <= 1;
 
         assert.ok(isValidPriority('1.0'), '1.0 is valid');
         assert.ok(isValidPriority('0.5'), '0.5 is valid');

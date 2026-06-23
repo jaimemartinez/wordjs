@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const crypto = require('crypto');
@@ -8,7 +9,7 @@ const config = require('../config/app');
  * Constant-time string comparison that does not leak length or content via timing.
  * Returns false for any missing/empty input (no secret configured = deny).
  */
-function secretsMatch(a, b) {
+function secretsMatch(a: any, b: any) {
     if (typeof a !== 'string' || typeof b !== 'string' || a.length === 0 || b.length === 0) {
         return false;
     }
@@ -22,7 +23,7 @@ function secretsMatch(a, b) {
 }
 
 // POST /api/internal/gateway-update
-router.post('/gateway-update', (req, res) => {
+router.post('/gateway-update', (req: Request, res: Response) => {
     // SECURITY: Validate the gateway secret in constant time (no early-out timing oracle), and refuse
     // when no secret is configured rather than allowing an empty/default match.
     const incomeSecret = req.headers['x-gateway-secret'];

@@ -64,7 +64,7 @@ class SystemHealth {
             './themes'
         ];
 
-        const results = {};
+        const results: Record<string, string> = {};
         for (const dir of dirs) {
             const fullPath = path.resolve(dir);
             try {

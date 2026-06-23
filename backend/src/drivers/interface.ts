@@ -18,7 +18,7 @@ class DatabaseDriverInterface {
      * @param {Array} params - Query parameters
      * @returns {Promise<Object|undefined>}
      */
-    async get(sql, params = []) {
+    async get(sql: string, params = []) {
         throw new Error('get() not implemented');
     }
 
@@ -28,7 +28,7 @@ class DatabaseDriverInterface {
      * @param {Array} params - Query parameters
      * @returns {Promise<Array>}
      */
-    async all(sql, params = []) {
+    async all(sql: string, params = []) {
         throw new Error('all() not implemented');
     }
 
@@ -38,7 +38,7 @@ class DatabaseDriverInterface {
      * @param {Array} params - Query parameters
      * @returns {Promise<Object>} { lastID, changes }
      */
-    async run(sql, params = []) {
+    async run(sql: string, params = []) {
         throw new Error('run() not implemented');
     }
 
@@ -47,7 +47,7 @@ class DatabaseDriverInterface {
      * @param {string} sql - SQL script
      * @returns {Promise<void>}
      */
-    async exec(sql) {
+    async exec(sql: string) {
         throw new Error('exec() not implemented');
     }
 
@@ -57,7 +57,7 @@ class DatabaseDriverInterface {
      * @param {(tx: { get: Function, all: Function, run: Function, exec: Function }) => Promise<any>} fn
      * @returns {Promise<any>} the value returned by fn
      */
-    async transaction(fn) {
+    async transaction(fn: (tx: { get: Function; all: Function; run: Function; exec: Function }) => Promise<any>) {
         throw new Error('transaction() not implemented');
     }
 

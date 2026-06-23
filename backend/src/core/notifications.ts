@@ -21,7 +21,7 @@ class NotificationService {
         this.clients = new Set();
 
         // Register core transports
-        this.registerTransport('db', async (notification) => {
+        this.registerTransport('db', async (notification: any) => {
             try {
                 await dbAsync.run(
                     'INSERT INTO notifications (uuid, user_id, type, title, message, data, created_at, icon, color, action_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
@@ -43,7 +43,7 @@ class NotificationService {
             }
         });
 
-        this.registerTransport('sse', async (notification) => {
+        this.registerTransport('sse', async (notification: any) => {
             // ALWAYS deliver to THIS node's own SSE clients immediately — never depend on the bus
             // round-trip for local delivery (the subscriber may be mid-(re)subscribe, and a 0-receiver
             // publish still "succeeds"). Then, in multi-node, ALSO publish for OTHER nodes, tagged with
@@ -63,7 +63,7 @@ class NotificationService {
      */
     initClusterBus() {
         const cache = require('./cache');
-        cache.subscribe('wordjs:notify', (msg) => {
+        cache.subscribe('wordjs:notify', (msg: any) => {
             try {
                 const parsed = JSON.parse(msg);
                 if (parsed && parsed.o === NODE_ID) return; // our own echo — already delivered locally
@@ -77,7 +77,7 @@ class NotificationService {
      * @param {string} name - Transport identifier
      * @param {Function} handler - Function to call when sending a notification
      */
-    registerTransport(name, handler) {
+    registerTransport(name: string, handler: Function) {
         // Capture the registering plugin (if any) so its handler runs in its sandbox context
         // when fired later by core's notify loop (otherwise it would run detached = trusted).
         const { getCurrentPlugin } = require('./plugin-context');
@@ -89,7 +89,7 @@ class NotificationService {
      * Drop every transport a plugin registered. Called when an isolated plugin is unloaded
      * or reloaded, so a dispatched notification is never routed to a dead worker.
      */
-    unregisterPluginTransports(slug) {
+    unregisterPluginTransports(slug: any) {
         for (const [name, t] of this.transports) {
             if (t.pluginSlug === slug) {
                 this.transports.delete(name);
@@ -101,7 +101,7 @@ class NotificationService {
     /**
      * Register a web client (for SSE)
      */
-    addClient(res, userId) {
+    addClient(res: any, userId: any) {
         res._wordjs_user_id = userId;
         this.clients.add(res);
         console.log(`[SSE] 🔌 Client Connected. User: ${userId}. Total Active Clients: ${this.clients.size}`);
@@ -116,7 +116,7 @@ class NotificationService {
     /**
      * Remove a client manually
      */
-    removeClient(userId, res) {
+    removeClient(userId: any, res: any) {
         if (this.clients.has(res)) {
             this.clients.delete(res);
             console.log(`[SSE] 🔌 Client Disconnected. User: ${userId}. Remaining Active Clients: ${this.clients.size}`);
@@ -127,7 +127,7 @@ class NotificationService {
      * Send a notification through all (or specific) transports
      * @param {Object} data - { user_id, type, title, message, data, icon, color, transports }
      */
-    async send(data) {
+    async send(data: any) {
         console.log(`📡 Service.send() from current context. Target User: ${data.user_id}, Type: ${data.type}`);
         // Enforce plugin security
         verifyPermission('notifications', 'send');
@@ -170,7 +170,7 @@ class NotificationService {
         return notification;
     }
 
-    broadcast(notification) {
+    broadcast(notification: any) {
         console.log(`📢 Broadcasting: ID=${notification.uuid}, TargetUser=${notification.user_id}, ActiveClients=${this.clients.size}`);
         const payload = `data: ${JSON.stringify(notification)}\n\n`;
         let sentCount = 0;
@@ -191,7 +191,7 @@ class NotificationService {
      * notification (the uuid is not a capability — an attacker who learns another user's uuid must not
      * be able to mutate it). Returns true only when a row the user owns was actually updated.
      */
-    async markAsRead(uuid, userId) {
+    async markAsRead(uuid: any, userId: any) {
         const now = new Date().toISOString();
         // Owner-scoped (uuid is not a capability), BUT user_id=0 is a BROADCAST (sent to all via SSE) and
         // any user may dismiss it — without OR user_id=0 the IDOR fix made broadcasts permanently
@@ -206,7 +206,7 @@ class NotificationService {
     /**
      * Mark all notifications as read for a user
      */
-    async markAllAsRead(userId) {
+    async markAllAsRead(userId: any) {
         const now = new Date().toISOString();
         await dbAsync.run(
             'UPDATE notifications SET is_read = 1, read_at = ? WHERE user_id = ? AND is_read = 0',
@@ -219,7 +219,7 @@ class NotificationService {
      * Delete a notification. Scoped to the owning user (see markAsRead) so a caller can only delete
      * their OWN notification. Returns true only when a row the user owns was actually deleted.
      */
-    async deleteNotification(uuid, userId) {
+    async deleteNotification(uuid: any, userId: any) {
         // Owner-scoped + broadcast (user_id=0) dismissable by any user — see markAsRead (REG-1).
         const result = await dbAsync.run('DELETE FROM notifications WHERE uuid = ? AND (user_id = ? OR user_id = 0)', [uuid, userId]);
         return !!(result && result.changes);
@@ -228,7 +228,7 @@ class NotificationService {
     /**
      * Get notifications for a user
      */
-    async getNotifications(userId, limit = 50) {
+    async getNotifications(userId: any, limit = 50) {
         const unread = await dbAsync.all(
             'SELECT * FROM notifications WHERE user_id = ? AND is_read = 0 ORDER BY created_at DESC LIMIT ?',
             [userId, limit]

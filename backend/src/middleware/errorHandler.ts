@@ -1,11 +1,12 @@
 /**
  * WordJS - Error Handler Middleware
  */
+import type { Request, Response, NextFunction } from 'express';
 
 /**
  * Not found handler
  */
-function notFound(req, res, next) {
+function notFound(req: Request, res: Response, next: NextFunction) {
     res.status(404).json({
         code: 'rest_no_route',
         message: `No route was found matching the URL and request method: ${req.method} ${req.path}`,
@@ -16,7 +17,7 @@ function notFound(req, res, next) {
 /**
  * Global error handler
  */
-function errorHandler(err, req, res, next) {
+function errorHandler(err: any, req: Request, res: Response, next: NextFunction) {
     console.error('Error:', err);
 
     // Handle specific error types
@@ -48,8 +49,8 @@ function errorHandler(err, req, res, next) {
 /**
  * Async handler wrapper
  */
-function asyncHandler(fn) {
-    return (req, res, next) => {
+function asyncHandler(fn: any) {
+    return (req: Request, res: Response, next: NextFunction) => {
         Promise.resolve(fn(req, res, next)).catch(next);
     };
 }

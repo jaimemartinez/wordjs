@@ -26,11 +26,11 @@ class Hooks {
         if (this.monitoringActive > 0) this.monitoringActive--;
     }
 
-    _emitMonitor(type, hook, args) {
+    _emitMonitor(type: string, hook: string, args: any[]) {
         if (this.monitoringActive > 0) {
             // Light cloning to avoid reference issues in async transmission
             // simplistic serialize for now to avoid circular json errors
-            const safeArgs = args.map(a => {
+            const safeArgs = args.map((a: any) => {
                 try {
                     const type = typeof a;
                     if (type === 'object' && a !== null) {
@@ -56,7 +56,7 @@ class Hooks {
      * @param {Function} callback - Callback function
      * @param {number} priority - Priority (lower = earlier)
      */
-    addAction(hook, callback, priority = 10) {
+    addAction(hook: string, callback: any, priority: number = 10) {
         const { getCurrentPlugin } = require('./plugin-context');
         const pluginSlug = getCurrentPlugin();
 
@@ -71,7 +71,7 @@ class Hooks {
      * Remove an action hook
      * Equivalent to remove_action()
      */
-    removeAction(hook, callback) {
+    removeAction(hook: string, callback: any) {
         if (!this.actions.has(hook)) return;
         const hooks = this.actions.get(hook)!;
         const index = hooks.findIndex(h => h.callback === callback);
@@ -82,7 +82,7 @@ class Hooks {
      * Execute an action hook
      * Equivalent to do_action()
      */
-    async doAction(hook, ...args) {
+    async doAction(hook: string, ...args: any[]) {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
@@ -100,7 +100,7 @@ class Hooks {
      * that plugin's context. Used by cron so a plugin-scheduled event cannot trigger CORE hook
      * callbacks (with attacker-controlled args) — it only runs the scheduling plugin's own callbacks.
      */
-    async doActionForPlugin(hook, slug, ...args) {
+    async doActionForPlugin(hook: string, slug: string, ...args: any[]) {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         const { runWithContext } = require('./plugin-context');
@@ -113,7 +113,7 @@ class Hooks {
     /**
      * Execute an action hook synchronously
      */
-    doActionSync(hook, ...args) {
+    doActionSync(hook: string, ...args: any[]) {
         this._emitMonitor('action', hook, args);
         if (!this.actions.has(hook)) return;
         for (const { callback, pluginSlug } of this.actions.get(hook)!) {
@@ -133,7 +133,7 @@ class Hooks {
      * Check if action exists
      * Equivalent to has_action()
      */
-    hasAction(hook) {
+    hasAction(hook: string) {
         return this.actions.has(hook) && this.actions.get(hook)!.length > 0;
     }
 
@@ -141,7 +141,7 @@ class Hooks {
      * Add a filter hook
      * Equivalent to add_filter()
      */
-    addFilter(hook, callback, priority = 10) {
+    addFilter(hook: string, callback: any, priority: number = 10) {
         const { getCurrentPlugin } = require('./plugin-context');
         const pluginSlug = getCurrentPlugin();
 
@@ -156,7 +156,7 @@ class Hooks {
      * Remove a filter hook
      * Equivalent to remove_filter()
      */
-    removeFilter(hook, callback) {
+    removeFilter(hook: string, callback: any) {
         if (!this.filters.has(hook)) return;
         const hooks = this.filters.get(hook)!;
         const index = hooks.findIndex(h => h.callback === callback);
@@ -167,7 +167,7 @@ class Hooks {
      * Apply filters to a value
      * Equivalent to apply_filters()
      */
-    async applyFilters(hook, value, ...args) {
+    async applyFilters(hook: string, value: any, ...args: any[]) {
         this._emitMonitor('filter', hook, [value, ...args]);
         if (!this.filters.has(hook)) return value;
         const { runWithContext } = require('./plugin-context');
@@ -185,7 +185,7 @@ class Hooks {
     /**
      * Apply filters synchronously
      */
-    applyFiltersSync(hook, value, ...args) {
+    applyFiltersSync(hook: string, value: any, ...args: any[]) {
         this._emitMonitor('filter', hook, [value, ...args]);
         if (!this.filters.has(hook)) return value;
         let result = value;
@@ -206,7 +206,7 @@ class Hooks {
      * Check if filter exists
      * Equivalent to has_filter()
      */
-    hasFilter(hook) {
+    hasFilter(hook: string) {
         return this.filters.has(hook) && this.filters.get(hook)!.length > 0;
     }
 
@@ -214,7 +214,7 @@ class Hooks {
      * Get the number of callbacks currently registered for an action hook.
      * NOTE: this is the registered-handler count, NOT a "times fired" counter (no such counter exists).
      */
-    getActionHandlerCount(hook) {
+    getActionHandlerCount(hook: string) {
         return this.actions.has(hook) ? this.actions.get(hook)!.length : 0;
     }
     /**
@@ -222,10 +222,10 @@ class Hooks {
      * For debugging/admin registry
      */
     getHooks() {
-        const serializeHooks = (map) => {
-            const result = {};
+        const serializeHooks = (map: Map<string, any[]>) => {
+            const result: Record<string, any> = {};
             for (const [hookName, handlers] of map.entries()) {
-                result[hookName] = handlers.map(h => {
+                result[hookName] = handlers.map((h: any) => {
                     let fnName = h.callback.name;
                     if (!fnName || fnName === 'anonymous') {
                         // Extract preview of anonymous function
@@ -257,15 +257,15 @@ const hooks = new Hooks();
 // Export convenience functions like WordPress
 module.exports = {
     hooks,
-    addAction: (hook, callback, priority) => hooks.addAction(hook, callback, priority),
-    removeAction: (hook, callback) => hooks.removeAction(hook, callback),
-    doAction: (hook, ...args) => hooks.doAction(hook, ...args),
-    doActionForPlugin: (hook, slug, ...args) => hooks.doActionForPlugin(hook, slug, ...args),
-    doActionSync: (hook, ...args) => hooks.doActionSync(hook, ...args),
-    hasAction: (hook) => hooks.hasAction(hook),
-    addFilter: (hook, callback, priority) => hooks.addFilter(hook, callback, priority),
-    removeFilter: (hook, callback) => hooks.removeFilter(hook, callback),
-    applyFilters: (hook, value, ...args) => hooks.applyFilters(hook, value, ...args),
-    applyFiltersSync: (hook, value, ...args) => hooks.applyFiltersSync(hook, value, ...args),
-    hasFilter: (hook) => hooks.hasFilter(hook)
+    addAction: (hook: string, callback: any, priority?: number) => hooks.addAction(hook, callback, priority),
+    removeAction: (hook: string, callback: any) => hooks.removeAction(hook, callback),
+    doAction: (hook: string, ...args: any[]) => hooks.doAction(hook, ...args),
+    doActionForPlugin: (hook: string, slug: string, ...args: any[]) => hooks.doActionForPlugin(hook, slug, ...args),
+    doActionSync: (hook: string, ...args: any[]) => hooks.doActionSync(hook, ...args),
+    hasAction: (hook: string) => hooks.hasAction(hook),
+    addFilter: (hook: string, callback: any, priority?: number) => hooks.addFilter(hook, callback, priority),
+    removeFilter: (hook: string, callback: any) => hooks.removeFilter(hook, callback),
+    applyFilters: (hook: string, value: any, ...args: any[]) => hooks.applyFilters(hook, value, ...args),
+    applyFiltersSync: (hook: string, value: any, ...args: any[]) => hooks.applyFiltersSync(hook, value, ...args),
+    hasFilter: (hook: string) => hooks.hasFilter(hook)
 };

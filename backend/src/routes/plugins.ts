@@ -3,6 +3,8 @@
  * /api/v1/plugins/*
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const AdmZip = require('adm-zip');
@@ -32,7 +34,7 @@ const upload = multer({
         fields: 10,         // Minimal fields needed
         parts: 15           // Limited total parts
     },
-    fileFilter: (req, file, cb) => {
+    fileFilter: (req: any, file: any, cb: any) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
@@ -62,7 +64,7 @@ function regenerateRegistry() {
         }
 
         // SECURITY: Use execFile instead of exec to prevent command injection
-        execFile('node', [scriptPath], (error, stdout, stderr) => {
+        execFile('node', [scriptPath], (error: Error | null, stdout: string, stderr: string) => {
             if (error) {
                 console.error(`❌ Failed to run ${script}:`, error.message);
                 return;
@@ -78,7 +80,7 @@ function regenerateRegistry() {
 /**
  * SECURITY: Validate plugin slug to prevent path traversal
  */
-function validateSlug(slug) {
+function validateSlug(slug: string) {
     // Only allow alphanumeric, dashes, and underscores
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
         return false;
@@ -110,7 +112,7 @@ function validateSlug(slug) {
  *       400:
  *         description: Invalid file or zip slip detected
  */
-router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req, res) => {
+router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: any, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -139,7 +141,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         const potentialDir = path.join(PLUGINS_DIR, zipName);
 
         // Check if zip has a single root directory
-        const rootDirs = new Set(zipEntries.map(e => e.entryName.split('/')[0]).filter(Boolean));
+        const rootDirs = new Set(zipEntries.map((e: any) => e.entryName.split('/')[0]).filter(Boolean));
 
         // SECURITY: Determine the extraction target, then verify EVERY entry
         // resolves inside it (Zip Slip: absolute paths, '..', symlink-style escapes).
@@ -171,7 +173,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         // (re-uploading the SAME exact name is still allowed = a normal update; a squat that only
         // differs by case/normalization is rejected so it can't clobber another plugin by path).
         try {
-            const clash = fs.readdirSync(PLUGINS_DIR).find(d => d !== intendedSlug && d.normalize('NFC').toLowerCase() === canonSlug);
+            const clash = fs.readdirSync(PLUGINS_DIR).find((d: string) => d !== intendedSlug && d.normalize('NFC').toLowerCase() === canonSlug);
             if (clash) {
                 fs.unlinkSync(zipPath);
                 return res.status(409).json({ error: `Refused: name collides with existing plugin '${clash}' (case/Unicode squat).` });
@@ -210,10 +212,10 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *       200:
  *         description: List of active plugins with manifest data
  */
-router.get('/registry', asyncHandler(async (req, res) => {
+router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
     // Await getAllPlugins()
     const plugins = await getAllPlugins();
-    const activePlugins = plugins.filter(p => p.active);
+    const activePlugins = plugins.filter((p: any) => p.active);
 
     const registry: any[] = [];
 
@@ -267,12 +269,12 @@ router.get('/registry', asyncHandler(async (req, res) => {
  *       200:
  *         description: Array of active plugin slugs
  */
-router.get('/active', asyncHandler(async (req, res) => {
+router.get('/active', asyncHandler(async (req: Request, res: Response) => {
     // Await getAllPlugins()
     const plugins = await getAllPlugins();
     const activeSlugs = plugins
-        .filter(p => p.active)
-        .map(p => p.slug);
+        .filter((p: any) => p.active)
+        .map((p: any) => p.slug);
     res.json(activeSlugs);
 }));
 
@@ -288,7 +290,7 @@ router.get('/active', asyncHandler(async (req, res) => {
  *       200:
  *         description: List of all plugins
  */
-router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Await getAllPlugins()
     const plugins = await getAllPlugins();
     // Annotate each with its requested/granted permissions so the admin UI can render the per-permission
@@ -325,9 +327,9 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: Plugin activated
  */
-router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug to prevent path traversal
-    if (!validateSlug(req.params.slug)) {
+    if (!validateSlug(req.params.slug as string)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
     const slug = req.params.slug;
@@ -384,8 +386,8 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
  *     tags: [Plugins]
  *     security: [{ bearerAuth: [] }]
  */
-router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    if (!validateSlug(req.params.slug)) {
+router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    if (!validateSlug(req.params.slug as string)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
     const slug = req.params.slug;
@@ -439,9 +441,9 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
  *       200:
  *         description: Plugin deactivated
  */
-router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
-    if (!validateSlug(req.params.slug)) {
+    if (!validateSlug(req.params.slug as string)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
 
@@ -484,7 +486,7 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req,
  *       403:
  *         description: Invalid password
  */
-router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
     const slug = req.params.slug;
     const { password } = req.body;
     const { isPluginActive, deactivatePlugin, PLUGINS_DIR } = require('../core/plugins');
@@ -554,7 +556,7 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => 
  *               type: string
  *               format: binary
  */
-router.get('/:slug/download', authenticateAllowQuery, isAdmin, asyncHandler(async (req, res) => {
+router.get('/:slug/download', authenticateAllowQuery, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = req.params.slug;
     const { PLUGINS_DIR } = require('../core/plugins');
     const pluginPath = path.join(PLUGINS_DIR, slug);
@@ -593,7 +595,7 @@ router.get('/:slug/download', authenticateAllowQuery, isAdmin, asyncHandler(asyn
  *       200:
  *         description: Sample plugin created
  */
-router.post('/sample', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/sample', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     createSamplePlugin();
     res.json({ success: true, message: 'Sample plugin created in /plugins/hello-world' });
 }));
@@ -610,7 +612,7 @@ router.post('/sample', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: List of menu items
  */
-router.get('/menus', authenticate, asyncHandler(async (req, res) => {
+router.get('/menus', authenticate, asyncHandler(async (req: any, res: Response) => {
     const { getAdminMenuItems } = require('../core/adminMenu');
     const { getActivePlugins } = require('../core/plugins');
     const { applyFiltersSync } = require('../core/hooks');
@@ -621,7 +623,7 @@ router.get('/menus', authenticate, asyncHandler(async (req, res) => {
     const activePlugins = await getActivePlugins();
 
     // 1. Filter menus to only include those from active plugins or core
-    let activeMenus = allMenus.filter(menu => menu.plugin === 'core' || activePlugins.includes(menu.plugin));
+    let activeMenus = allMenus.filter((menu: any) => menu.plugin === 'core' || activePlugins.includes(menu.plugin));
 
     // 2. Apply filters to allows plugins to hide/modify items per user
     activeMenus = applyFiltersSync('admin_menu_items', activeMenus, { user: req.user });

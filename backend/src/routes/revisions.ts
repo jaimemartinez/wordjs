@@ -3,6 +3,8 @@
  * /api/v1/revisions/*
  */
 
+import type { Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
@@ -19,7 +21,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
  * from read/compare actions. Returns the parent post on success, or an error
  * descriptor `{ code, status }` the caller should send.
  */
-async function authorizeForPost(req, postId, { edit = false } = {}) {
+async function authorizeForPost(req: any, postId: any, { edit = false } = {}) {
     if (postId == null) {
         return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
@@ -64,7 +66,7 @@ async function authorizeForPost(req, postId, { edit = false } = {}) {
  *       200:
  *         description: List of revisions
  */
-router.get('/post/:postId', authenticate, asyncHandler(async (req, res) => {
+router.get('/post/:postId', authenticate, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.postId, 10);
     const limit = parseInt(req.query.limit) || 10;
     const offset = parseInt(req.query.offset) || 0;
@@ -107,7 +109,7 @@ router.get('/post/:postId', authenticate, asyncHandler(async (req, res) => {
  *       404:
  *         description: Revision not found
  */
-router.get('/:id', authenticate, asyncHandler(async (req, res) => {
+router.get('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
     const revision = await getRevision(parseInt(req.params.id, 10));
 
     if (!revision) {
@@ -143,7 +145,7 @@ router.get('/:id', authenticate, asyncHandler(async (req, res) => {
  *       200:
  *         description: Revision restored
  */
-router.post('/:id/restore', authenticate, asyncHandler(async (req, res) => {
+router.post('/:id/restore', authenticate, asyncHandler(async (req: any, res: Response) => {
     const revisionId = parseInt(req.params.id, 10);
 
     const revision = await getRevision(revisionId);
@@ -186,7 +188,7 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req, res) => {
  *       200:
  *         description: Revision deleted
  */
-router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
+router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
     const revisionId = parseInt(req.params.id, 10);
 
     const revision = await getRevision(revisionId);
@@ -230,7 +232,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
  *       200:
  *         description: Comparison diff
  */
-router.get('/compare/:id1/:id2', authenticate, asyncHandler(async (req, res) => {
+router.get('/compare/:id1/:id2', authenticate, asyncHandler(async (req: any, res: Response) => {
     const comparison = await compareRevisions(
         parseInt(req.params.id1, 10),
         parseInt(req.params.id2, 10)

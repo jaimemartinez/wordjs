@@ -17,7 +17,7 @@ class Term {
     count?: number;
     termTaxonomyId?: number;
 
-    constructor(data) {
+    constructor(data: any) {
         this.termId = data.term_id;
         this.name = data.name;
         this.slug = data.slug;
@@ -50,7 +50,7 @@ class Term {
      * Create a new term
      * Equivalent to wp_insert_term()
      */
-    static async create(data) {
+    static async create(data: any) {
         const { name, taxonomy, slug, description = '', parent = 0 } = data;
 
         if (!name || !taxonomy) {
@@ -88,7 +88,7 @@ class Term {
     /**
      * Generate unique slug
      */
-    static async generateUniqueSlug(slug, excludeTermId = null) {
+    static async generateUniqueSlug(slug: string, excludeTermId: number | null = null) {
         let uniqueSlug = slug;
         let counter = 1;
 
@@ -116,7 +116,7 @@ class Term {
      * Find term by ID
      * Equivalent to get_term()
      */
-    static async findById(termId, taxonomy = null) {
+    static async findById(termId: number, taxonomy: any = null) {
         let sql = `
       SELECT t.*, tt.taxonomy, tt.description, tt.parent, tt.count, tt.term_taxonomy_id
       FROM terms t
@@ -138,7 +138,7 @@ class Term {
      * Find term by slug
      * Equivalent to get_term_by('slug', ...)
      */
-    static async findBySlug(slug, taxonomy) {
+    static async findBySlug(slug: string, taxonomy: string) {
         const row = await dbAsync.get(`
       SELECT t.*, tt.taxonomy, tt.description, tt.parent, tt.count, tt.term_taxonomy_id
       FROM terms t
@@ -209,13 +209,13 @@ class Term {
         params.push(limit, offset);
 
         const rows = await dbAsync.all(sql, params);
-        return rows.map(row => new Term(row));
+        return rows.map((row: any) => new Term(row));
     }
 
     /**
      * Find one term by criteria
      */
-    static async findOne(criteria) {
+    static async findOne(criteria: any) {
         const terms = await Term.findAll({ ...criteria, limit: 1 });
         return terms.length > 0 ? terms[0] : null;
     }
@@ -238,7 +238,7 @@ class Term {
      * Update a term
      * Equivalent to wp_update_term()
      */
-    static async update(termId, taxonomy, data) {
+    static async update(termId: number, taxonomy: string, data: any) {
         const term = await Term.findById(termId, taxonomy);
         if (!term) throw new Error('Term not found');
 
@@ -286,7 +286,7 @@ class Term {
      * Delete a term
      * Equivalent to wp_delete_term()
      */
-    static async delete(termId, taxonomy) {
+    static async delete(termId: number, taxonomy: string) {
         const term = await Term.findById(termId, taxonomy);
         if (!term) return false;
 
@@ -355,11 +355,11 @@ class Term {
     /**
      * Get term hierarchy (for categories)
      */
-    static async getHierarchy(taxonomy, parentId = 0) {
+    static async getHierarchy(taxonomy: string, parentId: number = 0) {
         const terms = await Term.findAll({ taxonomy, parent: parentId });
 
         // Recursive async map
-        return await Promise.all(terms.map(async term => ({
+        return await Promise.all(terms.map(async (term: any) => ({
             ...term.toJSON(),
             children: await Term.getHierarchy(taxonomy, term.termId)
         })));

@@ -3,6 +3,8 @@
  * Combines all API routes
  */
 
+import type { Request, Response, NextFunction } from 'express';
+
 const express = require('express');
 const router = express.Router();
 
@@ -31,7 +33,7 @@ const healthRoutes = require('./health');
 const hooksRoutes = require('./hooks');
 
 // API Info endpoint
-router.get('/', (req, res) => {
+router.get('/', (req: Request, res: Response) => {
     res.json({
         name: 'WordJS REST API',
         description: 'WordPress-like CMS REST API',
@@ -87,7 +89,7 @@ router.use('/import', require('./import'));
 router.use('/', exportRoutes);
 
 // Pages endpoint (alias for posts with type=page)
-router.get('/pages', (req, res, next) => {
+router.get('/pages', (req: any, res: Response, next: NextFunction) => {
     req.query.type = 'page';
     postsRoutes.handle(req, res, next);
 });
