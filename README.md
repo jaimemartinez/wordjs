@@ -346,10 +346,11 @@ OOM, or heap escape to that one process. On Linux, an **opt-in** layer
 (`config.sandbox.useKernelHardening`, via [bubblewrap](https://github.com/containers/bubblewrap))
 additionally runs each plugin child as an **unprivileged uid with all capabilities dropped,
 `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (probe-validated per host,
-default-off, a no-op on Windows/macOS). The honest remaining gap: **`seccomp` syscall filtering
-and `Landlock` path rules are still phase 2**, so without them the child keeps the full Node
-syscall surface. (The uid-drop trades away privileged-port binding — a plugin needing a port
-`<1024` won't bind it under hardening.) The rest of the path is tracked in
+default-off, a no-op on Windows/macOS), **plus a `seccomp` syscall denylist** (`EPERM` on
+`ptrace`/`mount`/`kexec`/`keyctl`/`userfaultfd`/… — syscalls a Node app/plugin never issues). The
+read-only-filesystem confinement covers what `Landlock` would add, so the Landlock LSM itself isn't
+used (it would need a native dependency). (The uid-drop trades away privileged-port binding — a
+plugin needing a port `<1024` won't bind it under hardening.) Further hardening is tracked in
 [POSITIONING.md](POSITIONING.md). Found a vulnerability? Please follow the disclosure process in
 [SECURITY.md](SECURITY.md).
 
@@ -364,9 +365,8 @@ Planned, **not yet implemented**:
 - **☁️ Media CDN integration** — S3-compatible object storage.
 - **🌐 Multi-site** — manage multiple domains/sites from one install.
 - **🛡️ Kernel-level plugin hardening** — OS-process isolation ships, and an **opt-in** Linux
-  layer (bubblewrap) now drops uid + capabilities and adds `no-new-privs` / namespaces /
-  read-only-fs; **next is `seccomp`/`Landlock` syscall filtering** and a preventive Windows
-  memory cap (Job Object).
+  layer (bubblewrap) drops uid + capabilities and adds `no-new-privs` / namespaces / read-only-fs
+  / a **`seccomp` syscall denylist**; next is a preventive Windows memory cap (Job Object).
 
 **In progress / deferred migrations** (tracked as open PRs):
 

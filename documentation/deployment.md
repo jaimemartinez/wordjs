@@ -240,7 +240,9 @@ Beyond the memory caps, an **opt-in** layer runs each isolated plugin child thro
 { "sandbox": { "useKernelHardening": true } }
 ```
 
-> **Trade-off:** dropping capabilities + the unprivileged uid means a plugin **cannot bind a privileged port (`<1024`)** under hardening — e.g. the mail-server on port 25 (its default `2525` is unaffected; for port 25 use a high port + a redirect/reverse-proxy, or leave hardening off for that deployment). A `seccomp` syscall denylist and `Landlock` path rules are a documented **phase 2** — without them the child keeps the full Node syscall surface even when hardening is on.
+It also applies a **`seccomp`-bpf syscall denylist** (`ptrace`/`mount`/`kexec`/`*_module`/`bpf`/`keyctl`/`userfaultfd`/`setns`/`process_vm_*`/… → `EPERM`), assembled in pure JS and applied via `bwrap --seccomp`. (The `Landlock` LSM is **not** used — the read-only mount namespace already provides the filesystem confinement it would, and the LSM needs a native dependency.)
+
+> **Trade-off:** dropping capabilities + the unprivileged uid means a plugin **cannot bind a privileged port (`<1024`)** under hardening — e.g. the mail-server on port 25 (its default `2525` is unaffected; for port 25 use a high port + a redirect/reverse-proxy, or leave hardening off for that deployment).
 
 ### `config.sandbox.useCgroupMemoryCap` — opt-in preventive cgroup cap (Linux)
 
