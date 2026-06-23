@@ -16,6 +16,22 @@ of sandbox egress, auth/access, XSS, data integrity, injection, mail, and deploy
 below). WordJS remains pre-production and **self-audited, not independently audited** — these are our
 own findings and fixes; see the [README](README.md) for the honest maturity caveats.
 
+### Added
+
+- **Opt-in kernel hardening of the plugin sandbox (Linux, default-off).** With
+  `config.sandbox.useKernelHardening`, each isolated plugin child runs through bubblewrap as an
+  unprivileged uid with all Linux capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, a
+  read-only filesystem (app root writable), **and a seccomp-bpf syscall denylist** (ptrace, mount,
+  kexec, `*_module`, bpf, keyctl, userfaultfd, setns, `process_vm_*`, … → EPERM; x86_64 also denies the
+  x32 ABI). Probe-validated per host, composes with the memory caps, network preserved — zero regression
+  on single-node / Windows / macOS. The Landlock LSM is intentionally not used (the read-only mount
+  namespace already provides its filesystem confinement). Validate with `verify-sandbox-hardening.js`.
+- **Live cross-node plugin activate/deactivate propagation (multi-node).** Activating or deactivating a
+  plugin on one node now propagates to the others over Redis (`wordjs:plugin-changed`): each node
+  loads/unloads that one isolated plugin live (forked child + routes/hooks/menus) — no rolling restart.
+  No-op on single-node. (Cross-node role/option coherence and the `active_plugins` distributed lock were
+  already in place.)
+
 ### Changed
 
 - **One plugin model: every plugin is sandboxed; capabilities are admin-granted per plugin.** The binary

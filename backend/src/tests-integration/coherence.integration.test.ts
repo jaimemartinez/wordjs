@@ -36,3 +36,32 @@ test('coherence: Redis pub/sub round-trip (skipped if no Redis reachable)', asyn
 
     await cache.closeAll(); // release connections so the test process can exit
 });
+
+test('coherence: wordjs:plugin-changed propagates across nodes via Redis (skipped if no Redis)', async (t) => {
+    const cache = require('../core/cache');
+    let up = false;
+    for (let i = 0; i < 30; i++) { if (cache.pubsubAvailable()) { up = true; break; } await sleep(100); }
+    if (!up) { await cache.closeAll(); return (t as any).skip('no reachable Redis (pubsubAvailable=false)'); }
+
+    // Simulate the receiving node: subscribe the REAL coherence handler with stubbed plugin load/unload
+    // so a published activate/deactivate (from a DIFFERENT origin) drives the cross-node dispatch.
+    const coherence = require('../core/coherence');
+    const plugins = require('../core/plugins');
+    const seen: any[] = [];
+    const origLoad = plugins.loadOnePlugin, origUnload = plugins.unloadOnePlugin;
+    plugins.loadOnePlugin = (slug: string) => { seen.push(['load', slug]); return Promise.resolve(true); };
+    plugins.unloadOnePlugin = (slug: string) => { seen.push(['unload', slug]); return true; };
+    cache.subscribe('wordjs:plugin-changed', coherence.handlePluginChange);
+    await sleep(400); // let SUBSCRIBE round-trip
+
+    try {
+        await cache.publish('wordjs:plugin-changed', JSON.stringify({ slug: 'demo-x', action: 'activate', origin: 'remote-node:9:zz' }));
+        await cache.publish('wordjs:plugin-changed', JSON.stringify({ slug: 'demo-y', action: 'deactivate', origin: 'remote-node:9:zz' }));
+        for (let i = 0; i < 40 && seen.length < 2; i++) await sleep(100);
+        assert.ok(seen.some((c) => c[0] === 'load' && c[1] === 'demo-x'), 'remote activate → loadOnePlugin over Redis');
+        assert.ok(seen.some((c) => c[0] === 'unload' && c[1] === 'demo-y'), 'remote deactivate → unloadOnePlugin over Redis');
+    } finally {
+        plugins.loadOnePlugin = origLoad; plugins.unloadOnePlugin = origUnload;
+        await cache.closeAll();
+    }
+});

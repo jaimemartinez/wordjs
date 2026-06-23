@@ -10,11 +10,33 @@
  * No-op when Redis isn't configured: cache.subscribe() does nothing, so single-node behavior is
  * unchanged.
  *
- * NOTE: full plugin activate/deactivate propagation (worker (re)start, menu re-registration) is NOT
- * applied live across nodes — that requires a rolling restart. See documentation/multi-node.md.
+ * Plugin activate/deactivate is ALSO propagated live across nodes: activatePlugin/deactivatePlugin
+ * publish 'wordjs:plugin-changed', and each node loads/unloads that one plugin locally (worker start/
+ * stop + route/hook/menu (de)registration) — no rolling restart needed. The shared `active_plugins`
+ * option is written once by the originating node (under the dist-lock); other nodes only sync their
+ * in-process load state. See documentation/multi-node.md.
  */
 
 const cache = require('./cache');
+
+// Handle a 'wordjs:plugin-changed' message. Exported for unit testing. Skips the message this node
+// published itself (origin === our dist-lock HOLDER): the originating node already applied the change.
+function handlePluginChange(msg: string): void {
+    let data: any;
+    try { data = JSON.parse(msg); } catch { return; }
+    if (!data || !data.slug || !data.action) return;
+    try { if (data.origin && data.origin === require('./dist-lock').HOLDER) return; } catch { /* */ }
+    const plugins = require('./plugins');
+    try {
+        if (data.action === 'activate') {
+            Promise.resolve(plugins.loadOnePlugin(data.slug)).catch((e: any) => console.warn('[coherence] cross-node activate failed:', e && e.message));
+        } else if (data.action === 'deactivate') {
+            plugins.unloadOnePlugin(data.slug);
+        }
+    } catch (e: any) {
+        console.warn('[coherence] plugin-changed handler error:', e && e.message);
+    }
+}
 
 function initCoherence(): void {
     cache.subscribe('wordjs:option-changed', async (name: string) => {
@@ -30,6 +52,7 @@ function initCoherence(): void {
             console.warn('[coherence] handler error:', e && e.message);
         }
     });
+    cache.subscribe('wordjs:plugin-changed', handlePluginChange);
 }
 
-module.exports = { initCoherence };
+module.exports = { initCoherence, handlePluginChange };
