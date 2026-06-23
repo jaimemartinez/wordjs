@@ -147,7 +147,8 @@ Complex business logic for managing church conferences.
 *   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Pre-granted its declared capabilities. It
     stores its data in its own prefixed tables (no unscoped/core-table access — that capability no longer
-    exists) and uses `db.getType()` for dialect branches. Routes are namespaced under
+    exists), building table names from `db.tablePrefix` and creating them idempotently via `db.createTable`
+    (`CREATE TABLE IF NOT EXISTS`). Routes are namespaced under
     `/api/v1/plugin/conference-manager/*` (absolute routes were removed). The AST scanner runs on it like
     every plugin; there is no scan-skip.
 

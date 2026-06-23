@@ -93,7 +93,14 @@ process, reachable only through a permission-checked capability bridge.
   so the responsive layout matches the live site exactly.
 - **Hooks & filters** event system, with admin-side hook inspection.
 - **Shortcodes** (WordPress-style) for dynamic content, including from plugins.
-- **Themes** with CSS-variable theming (14 first-party themes ship in-repo).
+- **Themes** with CSS-variable theming (14 first-party themes ship in-repo). The theme
+  system ships a **token-driven, Bootstrap-like CSS framework** (`backend/public/css/wordjs-ui.css`):
+  one shared stylesheet that auto-styles every HTML element plus opt-in components
+  (`.btn`/`.card`/`.alert`/`.table`/`.nav`/a flexbox grid/…) and a utility layer, all driven by
+  `--wjs-*` design tokens a theme declares in its own `style.css :root` (with built-in fallbacks).
+  It loads on public pages (frontend `ThemeLoader`) and the editor preview iframe (frontend
+  `PuckEditor`), and is linked by the backend Handlebars `wordjs_head` — always **before** the
+  theme's own `style.css`, so the theme wins. See [`documentation/theming.md`](documentation/theming.md).
 - **Dynamic roles & permissions**, database-driven.
 - **i18n** for core and plugins (es / en / pt).
 - **Import / export** for full site backup and restore, with **retention pruning** — after
@@ -292,7 +299,7 @@ no `ts-node` at runtime. In development it runs in-place via `ts-node`. From `ba
 > (copying data between SQLite and PostgreSQL) is a **separate** operation in the admin panel
 > (Admin → Database), not `npm run migrate`.
 
-> `strict` is **on** (`strictNullChecks`, `strictFunctionTypes`, etc. are enforced). Two
+> `strict` is **on** (`strictNullChecks`, `strictFunctionTypes`, etc. are enforced) and
 > `noImplicitAny` is now **enforced** (all implicit-any sites annotated — real types where
 > determinable, explicit `any` only at dynamic boundaries). The one sub-flag deliberately
 > **off** is `useUnknownInCatchVariables` (catch bindings stay `any`). Plugins under

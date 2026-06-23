@@ -43,7 +43,7 @@ The database layer is a driver-abstraction over SQLite and PostgreSQL. Plugins a
 
 **Location:** `backend/src/core/db-admin/`
 
-Formerly the `db-migration` *plugin*, this is now **core infrastructure** (it manages the embedded PG process and runs schema migrations around the DB lifecycle, which cannot happen inside an isolated child process). It is wired in at boot via `register(app)`, mounts the API at `/api/v1/db-migration` (guarded by `authenticate` + `can('manage_options')`), and its admin menu item is a native Sidebar route — always available, never tied to plugin activation.
+Formerly the `db-migration` *plugin*, this is now **core infrastructure** (it runs schema migrations around the DB lifecycle, which cannot happen inside an isolated child process). It is wired in at boot via `register(app)`, mounts the API at `/api/v1/db-migration` (guarded by `authenticate` + `can('manage_options')`), and its admin menu item is a native Sidebar route — always available, never tied to plugin activation.
 
 ---
 
@@ -56,7 +56,7 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 ### Capabilities
 *   **ACME Client:** Built-in client to request standard `HTTP-01` and `DNS-01` challenges.
 *   **DNS-01 Support:** Provides TXT record values for verifying wildcards or local domains.
-*   **Auto-Renewal:** (Roadmap) Intended to automate renewal flows.
+*   **Auto-Renewal:** A `wordjs_cert_renewal` cron job (twicedaily) calls `renewIfDue()`, which re-runs HTTP-01 provisioning only when the live cert is within its renewal window (DNS-01 still needs manual TXT publishing). See the Cron section below.
 *   **Custom Certs:** Supports uploading existing `.pem` files via the Admin UI.
 *   **Configuration:** Updates `wordjs-config.json` with paths to the active keys and certs.
 
