@@ -13,7 +13,7 @@ Run from `backend/`.
 | Script              | Command                                          | Purpose                                                              |
 | :------------------ | :----------------------------------------------- | :------------------------------------------------------------------ |
 | `npm start`         | `node server.js`                                 | Production launcher (supervisor). Runs `dist/index.js` if built, else falls back to ts-node. |
-| `npm run dev`       | `node --watch -r ts-node/register src/index.ts`  | Development server with auto-reload via ts-node.                     |
+| `npm run dev`       | `node --watch -r ./scripts/dev-env.js -r ts-node/register src/index.ts` | Development server with auto-reload via ts-node. The `dev-env.js` preload forces `NODE_ENV=development` (unless already set) so the split-mode dev backend accepts the localhost frontend's credentialed CORS. |
 | `npm run build`     | `tsc -p tsconfig.build.json`                      | Compile TypeScript to `dist/` for production (runs `clean` first).  |
 | `npm run clean`     | removes `dist/`                                   | Wipe the compiled output (also runs automatically before `build`).  |
 | `npm run typecheck` | `tsc --noEmit`                                    | Strict type-check with no emit (also run in CI).                    |

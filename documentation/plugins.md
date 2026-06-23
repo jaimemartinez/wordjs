@@ -344,10 +344,16 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 **not** a safe zone, so you **cannot** read a sibling plugin's files — another plugin's `package.json`,
 `node_modules`, `data/`, or encryption-key files are unreachable (no cross-plugin data/secret exfiltration).
 
-> ⚠️ **Residual risk:** the sandbox is OS-process isolation with userspace guards — it is **not yet
-> capability-minimal at the syscall level** (seccomp/landlock/dropped-uid are on the roadmap), and a
-> *preventive* memory cap on Windows now ships as a Job Object (default-on, probe-gated, pure-JS; the
-> reactive RSS poll remains a backstop). See **[Plugin Isolation](plugin-isolation-proposal.md)**.
+> ⚠️ **Residual risk:** the baseline sandbox is OS-process isolation with userspace guards. Optional
+> **kernel hardening** now ships (`config.sandbox.useKernelHardening`, **Linux-only, default-off,
+> probe-gated**): bwrap runs the child as an unprivileged uid with all Linux capabilities dropped,
+> no-new-privs, PID/IPC/UTS namespaces and a read-only filesystem, plus a **seccomp-bpf syscall denylist**.
+> Landlock is intentionally **not** used (the read-only mount namespace already meets its fs-confinement
+> goal and the LSM would need a native dep, against this sandbox's no-native-deps design). With hardening
+> off, the child is **not** capability-minimal at the syscall level. A *preventive* memory cap on Windows
+> ships as a Job Object (default-on, probe-gated, pure-JS; the reactive RSS poll remains a backstop). The
+> outstanding gap is an **independent external security audit** — the sandbox is candidly **self-audited**.
+> See **[Plugin Isolation](plugin-isolation-proposal.md)**.
 
 > **The AST scan runs on every plugin — there is no skip.** With the trusted tier removed, no plugin is exempt from the scan, and `system:admin` no longer exists as a scan-skip. The scan re-runs on **every server boot** to catch code poisoning. (`db-migration` is no longer a plugin — it moved into core; see below.)
 
