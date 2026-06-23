@@ -3,6 +3,8 @@
  * /api/v1/themes/*
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const AdmZip = require('adm-zip');
@@ -38,7 +40,7 @@ const upload = multer({
         fields: 10,         // Minimal fields needed
         parts: 15           // Limited total parts
     },
-    fileFilter: (req, file, cb) => {
+    fileFilter: (req: any, file: any, cb: any) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
             cb(null, true);
         } else {
@@ -50,7 +52,7 @@ const upload = multer({
 /**
  * SECURITY: Validate theme slug to prevent path traversal
  */
-function validateSlug(slug) {
+function validateSlug(slug: any) {
     // Only allow alphanumeric, dashes, and underscores
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
         return false;
@@ -83,7 +85,7 @@ function validateSlug(slug) {
  *       400:
  *         description: Invalid file or zip slip
  */
-router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req, res) => {
+router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandler(async (req: any, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -144,7 +146,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
  *       200:
  *         description: List of themes
  */
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', asyncHandler(async (req: Request, res: Response) => {
     const themes = await getAllThemes();
     res.json(themes);
 }));
@@ -167,7 +169,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       200:
  *         description: Theme activated
  */
-router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });
@@ -188,7 +190,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req, r
  *       200:
  *         description: Default theme restored
  */
-router.post('/default', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     createDefaultTheme();
     res.json({ success: true, message: 'Default theme created in /themes/default' });
 }));
@@ -211,7 +213,7 @@ router.post('/default', authenticate, isAdmin, asyncHandler(async (req, res) => 
  *       200:
  *         description: Theme deleted
  */
-router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });
@@ -243,14 +245,14 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => 
  *               type: string
  *               format: binary
  */
-router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/:slug/download', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
     const zipPath = await createThemeZip(req.params.slug);
 
-    res.download(zipPath, `${req.params.slug}.zip`, (err) => {
+    res.download(zipPath, `${req.params.slug}.zip`, (err: any) => {
         // Clean up temp file after download
         if (fs.existsSync(zipPath)) {
             fs.unlinkSync(zipPath);

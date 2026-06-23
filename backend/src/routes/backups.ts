@@ -3,6 +3,7 @@
  * /api/v1/backups
  */
 
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { createBackup, listBackups, deleteBackup, getBackupPath, restoreBackup } = require('../core/backup');
@@ -29,7 +30,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
  *       200:
  *         description: List of backup files
  */
-router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const files = listBackups();
     res.json(files);
 }));
@@ -46,7 +47,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: Backup created details
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // Potentially long running, might want to increase timeout or use background job in future
     const result = await createBackup();
     res.json(result);
@@ -70,7 +71,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: Backup deleted
  */
-router.delete('/:filename', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.delete('/:filename', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const success = deleteBackup(req.params.filename);
     if (!success) {
         return res.status(404).json({ error: 'Backup not found' });
@@ -96,7 +97,7 @@ router.delete('/:filename', authenticate, isAdmin, asyncHandler(async (req, res)
  *       200:
  *         description: Backup zip file
  */
-router.get('/:filename/download', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/:filename/download', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const filepath = getBackupPath(req.params.filename);
     if (!filepath) {
         return res.status(404).json({ error: 'Backup not found' });
@@ -122,7 +123,7 @@ router.get('/:filename/download', authenticate, isAdmin, asyncHandler(async (req
  *       200:
  *         description: Restore results
  */
-router.post('/:filename/restore', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/:filename/restore', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const results = await restoreBackup(req.params.filename);
     res.json({ success: true, results });
 }));

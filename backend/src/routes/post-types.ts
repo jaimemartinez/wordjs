@@ -3,6 +3,8 @@
  * /api/v1/types/*
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const {
@@ -36,11 +38,11 @@ const { asyncHandler } = require('../middleware/errorHandler');
  *       200:
  *         description: List of post types
  */
-router.get('/', asyncHandler(async (req, res) => {
+router.get('/', asyncHandler(async (req: Request, res: Response) => {
     const showInRest = req.query.rest !== 'false';
     const types = getPostTypes({ showInRest });
 
-    res.json(types.map(t => ({
+    res.json(types.map((t: any) => ({
         name: t.name,
         label: t.label,
         labels: t.labels,
@@ -70,7 +72,7 @@ router.get('/', asyncHandler(async (req, res) => {
  *       200:
  *         description: Post type details
  */
-router.get('/:name', asyncHandler(async (req, res) => {
+router.get('/:name', asyncHandler(async (req: Request, res: Response) => {
     const type = getPostType(req.params.name);
 
     if (!type) {
@@ -106,7 +108,7 @@ router.get('/:name', asyncHandler(async (req, res) => {
  *       201:
  *         description: Post type created
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { name, label, labels, supports, taxonomies, ...options } = req.body;
 
     if (!name) {
@@ -146,7 +148,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: Post type deleted
  */
-router.delete('/:name', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.delete('/:name', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const result = deleteCustomPostType(req.params.name);
 
     if (!result) {

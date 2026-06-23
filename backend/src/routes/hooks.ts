@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { hooks } = require('../core/hooks');
@@ -16,7 +17,7 @@ const { authenticate } = require('../middleware/auth');
  *       200:
  *         description: List of all actions and filters
  */
-router.get('/', authenticate, isAdmin, (req, res) => {
+router.get('/', authenticate, isAdmin, (req: Request, res: Response) => {
     try {
         const allHooks = hooks.getHooks();
         res.json(allHooks);
@@ -38,7 +39,7 @@ router.get('/', authenticate, isAdmin, (req, res) => {
  *       200:
  *         description: Event stream
  */
-router.get('/stream', authenticate, isAdmin, (req, res) => {
+router.get('/stream', authenticate, isAdmin, (req: Request, res: Response) => {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -50,7 +51,7 @@ router.get('/stream', authenticate, isAdmin, (req, res) => {
     // Enable monitoring globally
     hooks.enableMonitoring();
 
-    const onHookCall = (data) => {
+    const onHookCall = (data: any) => {
         res.write(`data: ${JSON.stringify(data)}\n\n`);
     };
 

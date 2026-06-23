@@ -10,7 +10,7 @@ const slugifyLib = require('slugify');
  * Sanitize a string for use as a slug
  * Equivalent to sanitize_title()
  */
-function sanitizeTitle(title) {
+function sanitizeTitle(title: string) {
     return slugifyLib(title, {
         lower: true,
         strict: true,
@@ -22,7 +22,7 @@ function sanitizeTitle(title) {
  * Sanitize HTML content
  * Equivalent to wp_kses()
  */
-function sanitizeContent(content, allowedTags = null) {
+function sanitizeContent(content: string, allowedTags: any = null) {
     const defaultAllowed = {
         allowedTags: [
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
@@ -88,7 +88,7 @@ function sanitizeContent(content, allowedTags = null) {
  * Escape HTML entities
  * Equivalent to esc_html()
  */
-function escHtml(text) {
+function escHtml(text: any) {
     if (!text) return '';
     return String(text)
         .replace(/&/g, '&amp;')
@@ -102,7 +102,7 @@ function escHtml(text) {
  * Escape attribute value
  * Equivalent to esc_attr()
  */
-function escAttr(text) {
+function escAttr(text: any) {
     return escHtml(text);
 }
 
@@ -110,7 +110,7 @@ function escAttr(text) {
  * Escape URL
  * Equivalent to esc_url()
  */
-function escUrl(url) {
+function escUrl(url: string) {
     if (!url) return '';
     try {
         const parsed = new URL(url);
@@ -128,7 +128,7 @@ function escUrl(url) {
  * Convert line breaks to <br> tags
  * Equivalent to nl2br()
  */
-function nl2br(text) {
+function nl2br(text: any) {
     if (!text) return '';
     return String(text).replace(/\n/g, '<br>');
 }
@@ -137,7 +137,7 @@ function nl2br(text) {
  * Auto-paragraph text
  * Equivalent to wpautop()
  */
-function autop(text) {
+function autop(text: string) {
     if (!text) return '';
 
     // Normalize line breaks
@@ -147,9 +147,9 @@ function autop(text) {
     const paragraphs = text.split(/\n\n+/);
 
     return paragraphs
-        .map(p => p.trim())
-        .filter(p => p.length > 0)
-        .map(p => `<p>${p.replace(/\n/g, '<br>')}</p>`)
+        .map((p: string) => p.trim())
+        .filter((p: string) => p.length > 0)
+        .map((p: string) => `<p>${p.replace(/\n/g, '<br>')}</p>`)
         .join('\n');
 }
 
@@ -157,7 +157,7 @@ function autop(text) {
  * Truncate text to specified length
  * Equivalent to wp_trim_words()
  */
-function trimWords(text, numWords = 55, more = '...') {
+function trimWords(text: string, numWords = 55, more = '...') {
     if (!text) return '';
     const words = text.split(/\s+/);
     if (words.length <= numWords) return text;
@@ -168,7 +168,7 @@ function trimWords(text, numWords = 55, more = '...') {
  * Strip all HTML tags
  * Equivalent to wp_strip_all_tags()
  */
-function stripTags(text) {
+function stripTags(text: any) {
     if (!text) return '';
     return sanitizeHtml(text, { allowedTags: [], allowedAttributes: {} });
 }
@@ -177,7 +177,7 @@ function stripTags(text) {
  * Generate excerpt from content
  * Equivalent to wp_trim_excerpt()
  */
-function generateExcerpt(content, length = 55) {
+function generateExcerpt(content: any, length = 55) {
     const stripped = stripTags(content);
     return trimWords(stripped, length);
 }
@@ -187,10 +187,10 @@ function generateExcerpt(content, length = 55) {
  * @param {string|Date} date - Date to format
  * @param {string} format - Format string (simple implementation)
  */
-function formatDate(date, format = 'Y-m-d H:i:s') {
+function formatDate(date: string | Date, format = 'Y-m-d H:i:s') {
     const d = new Date(date);
 
-    const pad = (n) => String(n).padStart(2, '0');
+    const pad = (n: number) => String(n).padStart(2, '0');
 
     const replacements: Record<string, string | number> = {
         'Y': d.getFullYear(),

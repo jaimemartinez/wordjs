@@ -79,7 +79,7 @@ function generateClusterCA() {
  * @param {string} caCertPem
  * @param {Array<{type: number, value?: string, ip?: string}>} additionalAltNames
  */
-function generateServiceCert(serviceName, caKeyPem, caCertPem, additionalAltNames = []) {
+function generateServiceCert(serviceName: string, caKeyPem: string, caCertPem: string, additionalAltNames = []) {
     console.log(`🔐 Generating Certificate for service: ${serviceName}...`);
 
     const caKey = pki.privateKeyFromPem(caKeyPem);

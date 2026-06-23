@@ -3,6 +3,8 @@
  * /api/v1/fonts
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const multer = require('multer');
@@ -33,10 +35,10 @@ if (!fs.existsSync(fontsDir)) {
 
 // Configure multer storage for fonts
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
+    destination: (req: any, file: any, cb: any) => {
         cb(null, fontsDir);
     },
-    filename: (req, file, cb) => {
+    filename: (req: any, file: any, cb: any) => {
         // Keep original name but sanitize it slightly to prevent path traversal
         const name = path.basename(file.originalname).replace(/[^a-zA-Z0-9.\-_ ]/g, '');
         cb(null, name);
@@ -44,7 +46,7 @@ const storage = multer.diskStorage({
 });
 
 // File filter for fonts
-const fileFilter = (req, file, cb) => {
+const fileFilter = (req: any, file: any, cb: any) => {
     const allowedMimeTypes = [
         'font/ttf',
         'font/otf',
@@ -81,19 +83,19 @@ const upload = multer({
  * GET /fonts
  * List all installed fonts
  */
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     // Read the directory
-    fs.readdir(fontsDir, (err, files) => {
+    fs.readdir(fontsDir, (err: any, files: any) => {
         if (err) {
             return res.status(500).json({ error: 'Failed to read fonts directory' });
         }
 
         const fonts = files
-            .filter(file => {
+            .filter((file: any) => {
                 const ext = path.extname(file).toLowerCase();
                 return ['.ttf', '.otf', '.woff', '.woff2', '.eot'].includes(ext);
             })
-            .map(file => {
+            .map((file: any) => {
                 const stats = fs.statSync(path.join(fontsDir, file));
 
                 // Intelligent Parsing
@@ -112,7 +114,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
                 let familyParts: string[] = [];
                 let variantParts: string[] = [];
 
-                parts.forEach(part => {
+                parts.forEach((part: string) => {
                     if (variantTokens.includes(part.toLowerCase())) {
                         variantParts.push(part);
                     } else {
@@ -155,7 +157,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
             });
 
         // Sort: Protected first, then Alphabetical Family, then Variant
-        fonts.sort((a, b) => {
+        fonts.sort((a: any, b: any) => {
             if (a.protected && !b.protected) return -1;
             if (!a.protected && b.protected) return 1;
 
@@ -173,7 +175,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  * POST /fonts
  * Upload a new font
  */
-router.post('/', authenticate, can('manage_options'), upload.single('file'), asyncHandler(async (req, res) => {
+router.post('/', authenticate, can('manage_options'), upload.single('file'), asyncHandler(async (req: any, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -189,7 +191,7 @@ router.post('/', authenticate, can('manage_options'), upload.single('file'), asy
  * DELETE /fonts/:filename
  * Delete a font
  */
-router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(async (req, res) => {
+router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(async (req: Request, res: Response) => {
     const filename = path.basename(req.params.filename); // Prevent path traversal
     const filePath = path.join(fontsDir, filename);
 
@@ -203,7 +205,7 @@ router.delete('/:filename', authenticate, can('manage_options'), asyncHandler(as
         try {
             const familyName = path.basename(filename, path.extname(filename))
                 .replace(/[-_]/g, ' ')
-                .replace(/\b\w/g, l => l.toUpperCase());
+                .replace(/\b\w/g, (l: string) => l.toUpperCase());
 
             const searchTerm = `%${familyName}%`;
 

@@ -81,13 +81,13 @@ class PostgresDriver extends DatabaseDriverInterface {
     /**
      * Normalize SQL queries from SQLite style (?) to Postgres style ($1, $2)
      */
-    normalizeSql(sql) {
+    normalizeSql(sql: string) {
         let i = 1;
         // Replace ? with $1, $2, etc.
         return sql.replace(/\?/g, () => `$${i++}`);
     }
 
-    async get(sql, params = []) {
+    async get(sql: string, params: any[] = []) {
         try {
             // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             // This allows plugins to always write SQLite-style SQL
@@ -100,7 +100,7 @@ class PostgresDriver extends DatabaseDriverInterface {
         }
     }
 
-    async all(sql, params = []) {
+    async all(sql: string, params: any[] = []) {
         try {
             // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             const normalizedSql = this.normalizeSql(sql);
@@ -112,7 +112,7 @@ class PostgresDriver extends DatabaseDriverInterface {
         }
     }
 
-    async run(sql, params = []) {
+    async run(sql: string, params: any[] = []) {
         try {
             // Normalize SQL from SQLite style (?) to Postgres style ($1, $2)
             let normalizedSql = this.normalizeSql(sql);
@@ -141,7 +141,7 @@ class PostgresDriver extends DatabaseDriverInterface {
         }
     }
 
-    async exec(sql) {
+    async exec(sql: string) {
         try {
             await this.pool.query(sql);
         } catch (err) {
@@ -165,19 +165,19 @@ class PostgresDriver extends DatabaseDriverInterface {
      * @param {(tx: {get,all,run,exec}) => Promise<any>} fn
      * @returns {Promise<any>} the value returned by fn
      */
-    async transaction(fn) {
+    async transaction(fn: any) {
         const client = await this.pool.connect();
 
         const tx = {
-            get: async (sql, params = []) => {
+            get: async (sql: string, params: any[] = []) => {
                 const res = await client.query(this.normalizeSql(sql), params);
                 return res.rows[0];
             },
-            all: async (sql, params = []) => {
+            all: async (sql: string, params: any[] = []) => {
                 const res = await client.query(this.normalizeSql(sql), params);
                 return res.rows;
             },
-            run: async (sql, params = []) => {
+            run: async (sql: string, params: any[] = []) => {
                 let normalizedSql = this.normalizeSql(sql);
                 // Mirror run(): auto-inject RETURNING * for INSERTs lacking it, so lastID works.
                 if (/^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
@@ -187,7 +187,7 @@ class PostgresDriver extends DatabaseDriverInterface {
                 // Same id-only attribution as run() — never fabricate lastID from an arbitrary column.
                 return { lastID: extractLastId(res.rows), changes: res.rowCount };
             },
-            exec: async (sql) => {
+            exec: async (sql: string) => {
                 await client.query(sql);
             }
         };
@@ -214,14 +214,14 @@ class PostgresDriver extends DatabaseDriverInterface {
             const res = await this.pool.query(
                 "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'"
             );
-            return res.rows.map(r => r.table_name);
+            return res.rows.map((r: any) => r.table_name);
         } catch (err) {
             console.error('❌ Postgres getTables Error:', err.message);
             throw err;
         }
     }
 
-    async getTableSchema(tableName) {
+    async getTableSchema(tableName: string) {
         try {
             const res = await this.pool.query(
                 "SELECT column_name, data_type, is_nullable, column_default FROM information_schema.columns WHERE table_name = $1 ORDER BY ordinal_position",
@@ -229,7 +229,7 @@ class PostgresDriver extends DatabaseDriverInterface {
             );
 
             // Map to generic format roughly compatible with createPluginTable
-            const columns = res.rows.map(col => {
+            const columns = res.rows.map((col: any) => {
                 let type = col.data_type.toUpperCase();
 
                 // Normalizations for Universal Compatibility

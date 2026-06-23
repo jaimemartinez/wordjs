@@ -2,6 +2,7 @@
  * WordJS - Notification Routes
  */
 
+import type { Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const notificationService = require('../core/notifications');
@@ -10,7 +11,7 @@ const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 /**
  * SSE Endpoint for real-time notifications
  */
-router.get('/stream', authenticateAllowQuery, (req, res) => {
+router.get('/stream', authenticateAllowQuery, (req: any, res: any) => {
     const startTime = Date.now();
     console.log(`[SSE] 📥 New Stream Request from User ${req.user.id} (IP: ${req.ip})`);
 
@@ -51,7 +52,7 @@ router.get('/stream', authenticateAllowQuery, (req, res) => {
 /**
  * Get notification list
  */
-router.get('/', authenticate, async (req, res) => {
+router.get('/', authenticate, async (req: any, res: Response) => {
     try {
         const userId = req.user.id;
         const notifications = await notificationService.getNotifications(userId);
@@ -64,7 +65,7 @@ router.get('/', authenticate, async (req, res) => {
 /**
  * Mark as read
  */
-router.post('/:uuid/read', authenticate, async (req, res) => {
+router.post('/:uuid/read', authenticate, async (req: any, res: Response) => {
     try {
         const ok = await notificationService.markAsRead(req.params.uuid, req.user.id);
         if (!ok) return res.status(404).json({ error: 'Notification not found' });
@@ -77,7 +78,7 @@ router.post('/:uuid/read', authenticate, async (req, res) => {
 /**
  * Mark all as read
  */
-router.post('/read-all', authenticate, async (req, res) => {
+router.post('/read-all', authenticate, async (req: any, res: Response) => {
     try {
         await notificationService.markAllAsRead(req.user.id);
         res.json({ success: true });
@@ -89,7 +90,7 @@ router.post('/read-all', authenticate, async (req, res) => {
 /**
  * Delete a notification
  */
-router.delete('/:uuid', authenticate, async (req, res) => {
+router.delete('/:uuid', authenticate, async (req: any, res: Response) => {
     try {
         const ok = await notificationService.deleteNotification(req.params.uuid, req.user.id);
         if (!ok) return res.status(404).json({ error: 'Notification not found' });

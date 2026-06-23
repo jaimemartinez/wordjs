@@ -63,7 +63,7 @@ function getConfiguredDbPaths(): string[] {
 /**
  * Check if a path is safe to access
  */
-function isPathSafe(targetPath, isWrite = false) {
+function isPathSafe(targetPath: string, isWrite = false) {
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return true; // Core code is trusted
 
@@ -200,8 +200,8 @@ function isPathSafe(targetPath, isWrite = false) {
 
 // === PATCHES ===
 
-function patch(methodName, isSync = false) {
-    const original = ORIGINALS[methodName];
+function patch(methodName: string, isSync = false) {
+    const original = (ORIGINALS as any)[methodName];
     if (!original) return;
 
     const isWrite = [
@@ -216,7 +216,7 @@ function patch(methodName, isSync = false) {
         'chmod', 'chmodSync', 'lchmod', 'chown', 'chownSync'
     ].includes(methodName);
 
-    fs[methodName] = function (...args) {
+    fs[methodName] = function (...args: any[]) {
         // Different methods have path at different positions
         let pathsToCheck = [args[0]];
 

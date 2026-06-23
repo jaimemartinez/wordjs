@@ -27,7 +27,7 @@ const ROOT_DIR = path.resolve('.');
  * 2. Plugin has its own node_modules/ directory
  * 3. Plugin has a dist/*.bundle.js file
  */
-function isBundledPlugin(pluginPath, manifest: any = {}) {
+function isBundledPlugin(pluginPath: string, manifest: any = {}) {
     // 1. Explicit flag in manifest
     if (manifest.bundled === true) {
         return true;
@@ -50,7 +50,7 @@ function isBundledPlugin(pluginPath, manifest: any = {}) {
     if (fs.existsSync(distPath) && fs.statSync(distPath).isDirectory()) {
         try {
             const files = fs.readdirSync(distPath);
-            if (files.some(f => f.endsWith('.bundle.js'))) {
+            if (files.some((f: string) => f.endsWith('.bundle.js'))) {
                 return true;
             }
         } catch { }
@@ -67,7 +67,7 @@ function isBundledPlugin(pluginPath, manifest: any = {}) {
  * @param {object} manifest - Plugin manifest with dependencies
  * @returns {{ compatible: boolean, conflicts: Array<{dep: string, newRange: string, existingRange: string, conflictPlugin: string}> }}
  */
-async function checkDependencyConflicts(slug, manifest) {
+async function checkDependencyConflicts(slug: string, manifest: any) {
     if (!manifest || !manifest.dependencies) {
         return { compatible: true, conflicts: [] };
     }
@@ -140,7 +140,7 @@ async function checkDependencyConflicts(slug, manifest) {
  * Check if two SemVer ranges have any intersection
  * Uses a simple heuristic: coerce to concrete version and check
  */
-function semverRangesIntersect(range1, range2) {
+function semverRangesIntersect(range1: any, range2: any) {
     try {
         // Try to find a version that satisfies both ranges
         // We test common major versions to find intersection
@@ -148,7 +148,7 @@ function semverRangesIntersect(range1, range2) {
 
         // Extract potential major versions from ranges
         const majors = new Set();
-        const extractMajor = (range) => {
+        const extractMajor = (range: any) => {
             const match = range.match(/(\d+)/);
             if (match) majors.add(parseInt(match[1]));
         };
@@ -185,8 +185,8 @@ function semverRangesIntersect(range1, range2) {
 /**
  * Format dependency conflict error message
  */
-function formatDependencyConflictError(slug, conflicts) {
-    const conflictDetails = conflicts.map(c => {
+function formatDependencyConflictError(slug: string, conflicts: any[]) {
+    const conflictDetails = conflicts.map((c: any) => {
         return `  ┌─────────────────────────────────────────────────────────────────┐
   │  Dependencia: ${c.dep.padEnd(49)}│
   │  ${slug} requiere: ${c.newRange.padEnd(44)}│
@@ -195,7 +195,7 @@ function formatDependencyConflictError(slug, conflicts) {
   └─────────────────────────────────────────────────────────────────┘`;
     }).join('\n\n');
 
-    const pluginNames = [...new Set(conflicts.map(c => c.conflictPlugin))];
+    const pluginNames = [...new Set(conflicts.map((c: any) => c.conflictPlugin))];
     const solutions = pluginNames.map((p, i) => `  ${i + 1}. Desactivar "${p}" antes de activar "${slug}"`).join('\n');
 
     return `❌ No se puede activar "${slug}"
@@ -215,7 +215,7 @@ ${solutions}
  * @param {object} manifest - Plugin manifest
  * @param {string} pluginPath - Path to the plugin directory
  */
-async function installPluginDependencies(slug, manifest, pluginPath = null) {
+async function installPluginDependencies(slug: string, manifest: any, pluginPath: any = null) {
     if (!manifest || !manifest.dependencies) return;
 
     // Skip bundled plugins - they have their own dependencies
@@ -272,12 +272,12 @@ async function installPluginDependencies(slug, manifest, pluginPath = null) {
 /**
  * Remove dependencies if not used by other active plugins
  */
-async function prunePluginDependencies(slug, manifest) {
+async function prunePluginDependencies(slug: string, manifest: any) {
     if (!manifest || !manifest.dependencies) return;
 
     // 1. Get all other active plugins
     const activePlugins = await getActivePlugins();
-    const activeSlugs = activePlugins.filter(s => s !== slug);
+    const activeSlugs = activePlugins.filter((s: any) => s !== slug);
     const plugins = scanPlugins();
 
     const usedDependencies = new Set();
@@ -338,13 +338,13 @@ const walk = require('acorn-walk');
  * Static Analysis 2.0: AST-based scan
  * Detects API calls even if split, renamed, or accessed via global.
  */
-function validatePluginPermissions(slug, pluginPath, manifest) {
+function validatePluginPermissions(slug: string, pluginPath: string, manifest: any) {
     const permissions = manifest.permissions || [];
     const missingPermissions = new Set();
     const dangerousCalls = new Set();
 
-    const hasDeclared = (scope, access) => {
-        return permissions.some(p => p.scope === scope && (p.access === access || p.access === 'admin'));
+    const hasDeclared = (scope: any, access: any) => {
+        return permissions.some((p: any) => p.scope === scope && (p.access === access || p.access === 'admin'));
     };
 
     // Sensitive Node builtins. Reached via require(), dynamic import(), or static import — all three
@@ -352,7 +352,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
     // runtime (different module loader), so catching it statically is the primary defense; the worker's
     // ESM resolve hook is the runtime backstop.
     const SENSITIVE_MODULES = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads', 'module', 'inspector', 'v8', 'repl'];
-    const flagModuleLiteral = (rawValue, kindLabel: string) => {
+    const flagModuleLiteral = (rawValue: any, kindLabel: string) => {
         const moduleName = String(rawValue).replace(/^node:/, '');
         if (!SENSITIVE_MODULES.includes(moduleName)) return;
         if (moduleName === 'dns' || moduleName === 'net') {
@@ -367,11 +367,11 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
     // No plugin may skip the AST scan: there is no trust tier, and declaring system:admin grants
     // nothing. EVERY plugin runs the full scan (so its child_process/eval/native use is caught).
 
-    function getFiles(dir): string[] {
+    function getFiles(dir: string): string[] {
         let results: string[] = [];
         if (!fs.existsSync(dir)) return results;
         const list = fs.readdirSync(dir);
-        list.forEach(file => {
+        list.forEach((file: string) => {
             const fullPath = path.join(dir, file);
             const stat = fs.statSync(fullPath);
             if (stat && stat.isDirectory()) {
@@ -419,7 +419,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
         }
 
         walk.ancestor(ast, {
-            CallExpression(node, ancestors) {
+            CallExpression(node: any, ancestors: any) {
                 let name = '';
                 // 1. Direct calls: eval(), execSync()
                 if (node.callee.type === 'Identifier') {
@@ -458,7 +458,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
 
                 // SAFE LOOKUP: Prevent prototype-based false positives (like toString)
                 if (name && Object.prototype.hasOwnProperty.call(apiAccess, name)) {
-                    const { scope, access, label } = apiAccess[name];
+                    const { scope, access, label } = (apiAccess as any)[name];
                     if (!hasDeclared(scope, access)) {
                         missingPermissions.add(`${label} (${scope}:${access})`);
                     }
@@ -476,7 +476,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                     dangerousCalls.add(`Function constructor via .constructor (obfuscation risk)`);
                 }
             },
-            MemberExpression(node, ancestors) {
+            MemberExpression(node: any, ancestors: any) {
                 // Detect access to sensitive globals. NOTE: `Buffer` is intentionally NOT restricted —
                 // under OS-process isolation (child_process) a plugin's Buffer (incl. allocUnsafe) only
                 // ever exposes the plugin's OWN process memory, never the host heap or another plugin, so
@@ -519,7 +519,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                     }
                 }
             },
-            TemplateLiteral(node) {
+            TemplateLiteral(node: any) {
                 // Check if any template literal contains dangerous keywords
                 const text = content.slice(node.start, node.end);
                 if (/eval|exec|dbAsync|updateOption/.test(text)) {
@@ -530,7 +530,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
             // Dynamic import('child_process') — parses as ImportExpression (NOT a CallExpression), so it
             // was previously invisible to the walk and bypassed the require proxy at runtime. Treat it
             // exactly like require(); flag non-literal specifiers as obfuscation (catches import('child'+'_process')).
-            ImportExpression(node) {
+            ImportExpression(node: any) {
                 const arg = node.source;
                 if (arg && arg.type === 'Literal') {
                     flagModuleLiteral(arg.value, 'import');
@@ -539,7 +539,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
                 }
             },
             // Static `import x from 'child_process'` — hoisted and runs before any runtime guard.
-            ImportDeclaration(node) {
+            ImportDeclaration(node: any) {
                 if (node.source && node.source.type === 'Literal') {
                     flagModuleLiteral(node.source.value, 'import');
                 }
@@ -549,7 +549,7 @@ function validatePluginPermissions(slug, pluginPath, manifest) {
             // process.getBuiltinModule / process.binding / etc. Flag any binding initialized directly
             // from a restricted global identifier. (The runtime wrap of getBuiltinModule is the primary
             // defense; this is the static backstop.)
-            VariableDeclarator(node) {
+            VariableDeclarator(node: any) {
                 if (node.init && node.init.type === 'Identifier' &&
                     ['process', 'global', 'globalThis', 'require', 'module'].includes(node.init.name)) {
                     dangerousCalls.add(`Aliasing restricted global '${node.init.name}' (obfuscation risk)`);
@@ -589,7 +589,7 @@ class Plugin {
     deactivate: any;
     permissions: any;
 
-    constructor(data) {
+    constructor(data: any) {
         this.name = data.name;
         this.slug = data.slug;
         this.version = data.version || '1.0.0';
@@ -681,7 +681,7 @@ function scanPlugins() {
 /**
  * Find main plugin file
  */
-function findMainFile(pluginDir) {
+function findMainFile(pluginDir: string) {
     const candidates = ['index.js', 'main.js', 'plugin.js'];
 
     for (const candidate of candidates) {
@@ -704,7 +704,7 @@ async function getActivePlugins() {
 /**
  * Check if plugin is active
  */
-async function isPluginActive(slug) {
+async function isPluginActive(slug: string) {
     const active = await getActivePlugins();
     return active.includes(slug);
 }
@@ -779,7 +779,7 @@ function fixMiddlewareOrder() {
 /**
  * Activate a plugin
  */
-async function activatePlugin(slug) {
+async function activatePlugin(slug: string) {
     const plugins = scanPlugins();
     const plugin = plugins.find(p => p.slug === slug);
 
@@ -880,7 +880,7 @@ async function activatePlugin(slug) {
 /**
  * Deactivate a plugin
  */
-async function deactivatePlugin(slug) {
+async function deactivatePlugin(slug: string) {
     if (!await isPluginActive(slug)) {
         return { success: true, message: 'Plugin not active' };
     }
@@ -919,7 +919,7 @@ async function deactivatePlugin(slug) {
 // When a plugin is activated/deactivated on one node, that node publishes 'wordjs:plugin-changed' and
 // every OTHER node syncs its in-process load state via coherence.ts → loadOnePlugin/unloadOnePlugin.
 // No-op on single-node (cache.publish does nothing without Redis), so single-node behavior is unchanged.
-function publishPluginChange(slug, action) {
+function publishPluginChange(slug: string, action: string) {
     try {
         const cache = require('./cache');
         const { HOLDER } = require('./dist-lock');
@@ -933,7 +933,7 @@ function publishPluginChange(slug, action) {
  * `active_plugins` option (the originating node already wrote it under the dist-lock). Unloads any
  * existing instance first so a re-fire can't double-register routes/hooks (idempotent).
  */
-async function loadOnePlugin(slug) {
+async function loadOnePlugin(slug: string) {
     const plugin = scanPlugins().find(p => p.slug === slug);
     if (!plugin) { console.warn(`[plugins] cross-node activate '${slug}': not present on this node`); return false; }
     const mainFile = findMainFile(plugin.path);
@@ -959,7 +959,7 @@ async function loadOnePlugin(slug) {
 /**
  * Unload ONE plugin live from THIS node (cross-node deactivation). Does NOT touch `active_plugins`.
  */
-function unloadOnePlugin(slug) {
+function unloadOnePlugin(slug: string) {
     try { unloadIsolatedPlugin(slug); console.log(`[plugins] '${slug}' unloaded live (cross-node deactivation)`); return true; }
     catch (e: any) { console.warn(`[plugins] cross-node unload of '${slug}':`, e && e.message); return false; }
 }

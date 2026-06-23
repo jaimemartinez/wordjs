@@ -42,7 +42,7 @@ class Post {
     // "resolved, no featured image".
     _featuredImageCache?: { post: any; attachedFile: any } | undefined;
 
-    constructor(data) {
+    constructor(data: any) {
         this.id = data.id;
         this.authorId = data.author_id;
         this.postDate = data.post_date;
@@ -70,14 +70,14 @@ class Post {
      * Get post meta
      * Equivalent to get_post_meta()
      */
-    async getMeta(key, single = true) {
+    async getMeta(key: string, single = true) {
         return await Post.getMeta(this.id, key, single);
     }
 
     /**
      * Get post terms
      */
-    async getTerms(taxonomy) {
+    async getTerms(taxonomy: string) {
         const stmt = `
       SELECT t.*, tt.taxonomy, tt.description, tt.parent, tt.count
       FROM terms t
@@ -202,7 +202,7 @@ class Post {
      * Create a new post
      * Equivalent to wp_insert_post()
      */
-    static async create(data) {
+    static async create(data: any) {
         const {
             authorId,
             title,
@@ -277,7 +277,7 @@ class Post {
     /**
      * Generate unique slug
      */
-    static async generateUniqueSlug(slug, postType, excludeId = null) {
+    static async generateUniqueSlug(slug: string, postType: string, excludeId: any = null) {
         let uniqueSlug = slug;
         let counter = 1;
 
@@ -304,7 +304,7 @@ class Post {
      * Find post by ID
      * Equivalent to get_post()
      */
-    static async findById(id) {
+    static async findById(id: any) {
         if (!id) return null;
 
         // 1. Try Cache
@@ -324,7 +324,7 @@ class Post {
         return post;
     }
 
-    static async findBySlug(slug, type = null) {
+    static async findBySlug(slug: string, type: any = null) {
         if (!slug) return null;
 
         // 1. Try Cache
@@ -357,7 +357,7 @@ class Post {
     /**
      * Find one post by criteria
      */
-    static async findOne(criteria) {
+    static async findOne(criteria: any) {
         const posts = await Post.findAll({ ...criteria, limit: 1 });
         return posts.length > 0 ? posts[0] : null;
     }
@@ -365,7 +365,7 @@ class Post {
     /**
      * Find posts by term ID
      */
-    static async findByTerm(termId, limit = 10) {
+    static async findByTerm(termId: any, limit = 10) {
         const sql = `
             SELECT p.* FROM posts p
             JOIN term_relationships tr ON p.id = tr.object_id
@@ -375,7 +375,7 @@ class Post {
             LIMIT ?
         `;
         const rows = await dbAsync.all(sql, [termId, limit]);
-        return rows.map(row => new Post(row));
+        return rows.map((row: any) => new Post(row));
     }
 
     /**
@@ -505,7 +505,7 @@ class Post {
 
         const rows = await dbAsync.all(sql, params);
 
-        return rows.map(row => new Post(row));
+        return rows.map((row: any) => new Post(row));
     }
 
     /**
@@ -531,7 +531,7 @@ class Post {
      * Update a post
      * Equivalent to wp_update_post()
      */
-    static async update(id, data) {
+    static async update(id: any, data: any) {
         const post = await Post.findById(id);
         if (!post) throw new Error('Post not found');
 
@@ -559,7 +559,7 @@ class Post {
         }
 
         if (data.slug !== undefined) {
-            const uniqueSlug = await Post.generateUniqueSlug(sanitizeTitle(data.slug), post.postType, id);
+            const uniqueSlug = await Post.generateUniqueSlug(sanitizeTitle(data.slug as string) as string, post.postType as string, id);
             updates.push('post_name = ?');
             values.push(uniqueSlug);
         }
@@ -614,7 +614,7 @@ class Post {
      * Delete a post
      * Equivalent to wp_delete_post()
      */
-    static async delete(id, forceDelete = false) {
+    static async delete(id: any, forceDelete = false) {
         const post = await Post.findById(id);
         if (!post) return false;
 
@@ -648,7 +648,7 @@ class Post {
      * Trash a post
      * Equivalent to wp_trash_post()
      */
-    static async trash(id) {
+    static async trash(id: any) {
         const post = await Post.findById(id);
         if (!post) return false;
 
@@ -663,7 +663,7 @@ class Post {
      * Restore a post from trash
      * Equivalent to wp_untrash_post()
      */
-    static async untrash(id) {
+    static async untrash(id: any) {
         const post = await Post.findById(id);
         if (!post || post.postStatus !== 'trash') return false;
 
@@ -680,7 +680,7 @@ class Post {
      * Update post meta
      * Equivalent to update_post_meta()
      */
-    static async updateMeta(postId, key, value) {
+    static async updateMeta(postId: any, key: string, value: any) {
         const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
         const existing = await dbAsync.get('SELECT meta_id FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
@@ -708,7 +708,7 @@ class Post {
      * Get post meta
      * Equivalent to get_post_meta()
      */
-    static async getMeta(postId, key, single = true) {
+    static async getMeta(postId: any, key: string, single = true) {
         if (single) {
             const row = await dbAsync.get('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ? LIMIT 1', [postId, key]);
             if (!row) return null;
@@ -719,7 +719,7 @@ class Post {
             }
         } else {
             const rows = await dbAsync.all('SELECT meta_value FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
-            return rows.map(row => {
+            return rows.map((row: any) => {
                 try {
                     return JSON.parse(row.meta_value);
                 } catch {
@@ -733,7 +733,7 @@ class Post {
      * Delete post meta
      * Equivalent to delete_post_meta()
      */
-    static async deleteMeta(postId, key) {
+    static async deleteMeta(postId: any, key: string) {
         const result = await dbAsync.run('DELETE FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
         const success = result.changes > 0;
         if (success) {
@@ -750,10 +750,10 @@ class Post {
     /**
      * Get all meta for a post
      */
-    static async getAllMeta(postId) {
+    static async getAllMeta(postId: any) {
         const rows = await dbAsync.all('SELECT meta_key, meta_value FROM post_meta WHERE post_id = ?', [postId]);
 
-        const meta = {};
+        const meta: Record<string, any> = {};
         for (const row of rows) {
             try {
                 meta[row.meta_key] = JSON.parse(row.meta_value);
@@ -770,8 +770,8 @@ class Post {
      * every requested id (empty object if the post has no meta). This produces
      * the exact same per-post shape as getAllMeta().
      */
-    static async getAllMetaForIds(ids) {
-        const result = {};
+    static async getAllMetaForIds(ids: any) {
+        const result: Record<string, any> = {};
         if (!Array.isArray(ids) || ids.length === 0) return result;
 
         // De-duplicate and seed empty buckets so every id has an entry.
@@ -802,7 +802,7 @@ class Post {
      * Mutates each post's _metaCache. Behavior of toJSON() is unchanged; this
      * only swaps where the meta comes from. Returns the same array for chaining.
      */
-    static async hydrateRelations(posts) {
+    static async hydrateRelations(posts: any) {
         if (!Array.isArray(posts) || posts.length === 0) return posts;
         const ids = posts.map(p => p.id).filter(id => id != null);
         const metaById = await Post.getAllMetaForIds(ids);
@@ -826,13 +826,13 @@ class Post {
                 `SELECT * FROM posts WHERE id IN (${placeholders})`,
                 thumbnailIds
             );
-            const attachmentById = {};
+            const attachmentById: Record<string, any> = {};
             for (const row of attachmentRows) {
                 attachmentById[row.id] = new Post(row);
             }
             // One IN-query for the attached-file meta of all attachments.
             const attachmentMetaById = await Post.getAllMetaForIds(
-                attachmentRows.map(row => row.id)
+                attachmentRows.map((row: any) => row.id)
             );
 
             for (const post of posts) {
@@ -873,7 +873,7 @@ class Post {
      * Set post terms
      * Equivalent to wp_set_post_terms()
      */
-    static async setTerms(postId, termIds, taxonomy, append = false) {
+    static async setTerms(postId: any, termIds: any, taxonomy: string, append = false) {
         if (!append) {
             // Remove existing terms of this taxonomy
             await dbAsync.run(`
@@ -913,7 +913,7 @@ class Post {
     /**
      * Update term counts
      */
-    static async updateTermCounts(taxonomy) {
+    static async updateTermCounts(taxonomy: string) {
         // Complex subquery update
         // SQLite: UPDATE term_taxonomy SET count = (SELECT ...) WHERE taxonomy = ?
         // Postgres: UPDATE term_taxonomy SET count = (SELECT ...) WHERE taxonomy = $1

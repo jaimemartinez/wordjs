@@ -25,7 +25,7 @@ function getConfig() {
  * @param {Object} config The configuration object to save
  * @returns {boolean} True on success
  */
-function saveConfig(config) {
+function saveConfig(config: any) {
     try {
         const current = getConfig() || {};
         const newConfig = { ...current, ...config, updatedAt: new Date().toISOString() };

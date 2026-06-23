@@ -18,6 +18,14 @@ own findings and fixes; see the [README](README.md) for the honest maturity cave
 
 ### Added
 
+- **`noImplicitAny` is now enforced (CI-gated).** Every implicit-any site in the backend (~1,276 across
+  92 files) is annotated — real types where locally determinable (Express `Request`/`Response`/
+  `NextFunction`, primitives, model/array element types), explicit `any` only at genuinely dynamic
+  boundaries (plugin payloads, RPC/hook glue, request bodies). The pass was **type-only** (annotations
+  and `as` casts erase at compile time, so runtime is unchanged — verified by transpiling every changed
+  file before/after and confirming byte-identical JS), so it introduces no behavior change. The strict
+  core (`strictNullChecks`, `strictFunctionTypes`, etc.) was already enforced; the only remaining strict
+  sub-flag deliberately off is `useUnknownInCatchVariables`.
 - **Opt-in kernel hardening of the plugin sandbox (Linux, default-off).** With
   `config.sandbox.useKernelHardening`, each isolated plugin child runs through bubblewrap as an
   unprivileged uid with all Linux capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, a

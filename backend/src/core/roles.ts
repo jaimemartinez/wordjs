@@ -158,7 +158,7 @@ function getRoles() {
 /**
  * Add or Update a role
  */
-async function setRole(slug, roleData) {
+async function setRole(slug: string, roleData: any) {
     // Update cache immediately
     if (!_rolesCache) _rolesCache = {};
 
@@ -176,7 +176,7 @@ async function setRole(slug, roleData) {
 /**
  * Get a single role by slug
  */
-function getRole(slug) {
+function getRole(slug: string) {
     const roles = getRoles();
     return roles[slug] || null;
 }
@@ -184,7 +184,7 @@ function getRole(slug) {
 /**
  * Remove a role
  */
-async function removeRole(slug) {
+async function removeRole(slug: string) {
     if (!_rolesCache) await loadRoles();
 
     if (_rolesCache![slug]) {
@@ -199,7 +199,7 @@ async function removeRole(slug) {
 /**
  * Update capabilities for a specific role
  */
-async function updateRoleCapabilities(slug, capabilities) {
+async function updateRoleCapabilities(slug: string, capabilities: any[]) {
     const role = getRole(slug);
     if (role) {
         role.capabilities = capabilities;
@@ -216,7 +216,7 @@ function getAllAvailableCapabilities() {
     const caps = new Set();
     Object.values(roles).forEach((role: any) => {
         if (role.capabilities) {
-            role.capabilities.forEach(cap => caps.add(cap));
+            role.capabilities.forEach((cap: any) => caps.add(cap));
         }
     });
 
@@ -235,7 +235,7 @@ function getAllAvailableCapabilities() {
     try {
         const { getAllRegisteredCapabilities } = require('./adminMenu');
         const pluginCaps = getAllRegisteredCapabilities();
-        pluginCaps.forEach(cap => caps.add(cap));
+        pluginCaps.forEach((cap: any) => caps.add(cap));
     } catch (err) {
         console.warn('Could not load plugin capabilities:', err.message);
     }
@@ -247,7 +247,7 @@ function getAllAvailableCapabilities() {
  * Sync roles with configuration on startup
  * Ensures critical capabilities are present
  */
-async function syncRoles(configRoles) {
+async function syncRoles(configRoles: any) {
     // Ensure cache is loaded first
     if (!_rolesCache) await loadRoles();
 

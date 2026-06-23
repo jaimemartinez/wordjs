@@ -3,6 +3,8 @@
  * /api/v1/categories/*
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const Term = require('../models/Term');
@@ -38,7 +40,7 @@ const TAXONOMY = 'category';
  *       200:
  *         description: List of categories
  */
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const {
         page = 1,
         per_page = 100,
@@ -49,12 +51,12 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
         order = 'asc'
     } = req.query;
 
-    const limit = Math.min(parseInt(per_page, 10) || 100, 100);
-    const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
+    const limit = Math.min(parseInt(per_page as any, 10) || 100, 100);
+    const offset = (Math.max(parseInt(page as any, 10) || 1, 1) - 1) * limit;
 
     const terms = await Term.findAll({
         taxonomy: TAXONOMY,
-        parent: parent !== undefined ? parseInt(parent, 10) : undefined,
+        parent: parent !== undefined ? parseInt(parent as any, 10) : undefined,
         hideEmpty: hide_empty === 'true',
         search,
         limit,
@@ -66,15 +68,15 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const total = await Term.count({
         taxonomy: TAXONOMY,
         hideEmpty: hide_empty === 'true',
-        parent: parent !== undefined ? parseInt(parent, 10) : undefined,
+        parent: parent !== undefined ? parseInt(parent as any, 10) : undefined,
         search
     });
     const totalPages = Math.ceil(total / limit);
 
-    res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages);
+    res.set('X-WP-Total', total as any);
+    res.set('X-WP-TotalPages', totalPages as any);
 
-    res.json(terms.map(term => term.toJSON()));
+    res.json(terms.map((term: any) => term.toJSON()));
 }));
 
 /**
@@ -95,8 +97,8 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  *       404:
  *         description: Category not found
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
-    const term = await Term.findById(parseInt(req.params.id, 10), TAXONOMY);
+router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    const term = await Term.findById(parseInt(req.params.id as any, 10), TAXONOMY);
 
     if (!term) {
         return res.status(404).json({
@@ -139,7 +141,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  *       400:
  *         description: Validation error
  */
-router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
+router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
     const { name, slug, description, parent } = req.body;
 
     if (!name) {
@@ -206,8 +208,8 @@ router.post('/', authenticate, can('manage_categories'), asyncHandler(async (req
  *       404:
  *         description: Category not found
  */
-router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
-    const termId = parseInt(req.params.id, 10);
+router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
+    const termId = parseInt(req.params.id as any, 10);
     const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {
@@ -250,8 +252,8 @@ router.put('/:id', authenticate, can('manage_categories'), asyncHandler(async (r
  *       404:
  *         description: Category not found
  */
-router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req, res) => {
-    const termId = parseInt(req.params.id, 10);
+router.delete('/:id', authenticate, can('manage_categories'), asyncHandler(async (req: Request, res: Response) => {
+    const termId = parseInt(req.params.id as any, 10);
     const term = await Term.findById(termId, TAXONOMY);
 
     if (!term) {

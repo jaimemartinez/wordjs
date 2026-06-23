@@ -28,7 +28,7 @@ function ensureLanguagesDir() {
 /**
  * Load translation file for a locale
  */
-function loadTextDomain(domain, locale = null) {
+function loadTextDomain(domain: string, locale: string | null = null) {
     const loc = locale || currentLocale;
     const key = `${domain}_${loc}`;
 
@@ -57,7 +57,7 @@ function loadTextDomain(domain, locale = null) {
 /**
  * Unload translation file
  */
-function unloadTextDomain(domain) {
+function unloadTextDomain(domain: string) {
     let removed = false;
     for (const key of translations.keys()) {
         if (key.startsWith(`${domain}_`)) {
@@ -72,7 +72,7 @@ function unloadTextDomain(domain) {
  * Get translated string
  * Equivalent to __()
  */
-function __(text, domain = 'default') {
+function __(text: string, domain: string = 'default') {
     const key = `${domain}_${currentLocale}`;
     const domainTranslations = translations.get(key);
 
@@ -87,7 +87,7 @@ function __(text, domain = 'default') {
  * Get translated string with context
  * Equivalent to _x()
  */
-function _x(text, context, domain = 'default') {
+function _x(text: string, context: string, domain: string = 'default') {
     const key = `${domain}_${currentLocale}`;
     const domainTranslations = translations.get(key);
     const contextKey = `${context}\u0004${text}`;
@@ -103,7 +103,7 @@ function _x(text, context, domain = 'default') {
  * Get translated plural string
  * Equivalent to _n()
  */
-function _n(single, plural, number, domain = 'default') {
+function _n(single: string, plural: string, number: number, domain: string = 'default') {
     const key = `${domain}_${currentLocale}`;
     const domainTranslations = translations.get(key);
 
@@ -125,14 +125,14 @@ function _n(single, plural, number, domain = 'default') {
 /**
  * Echo translated string (for templates)
  */
-function _e(text, domain = 'default') {
+function _e(text: string, domain: string = 'default') {
     return __(text, domain);
 }
 
 /**
  * Get plural form index for a locale
  */
-function getPluralForm(n, locale) {
+function getPluralForm(n: number, locale: string) {
     // Most common plural rules
     const lang = locale.split('_')[0];
 
@@ -178,7 +178,7 @@ function getPluralForm(n, locale) {
 /**
  * Set the current locale
  */
-function setLocale(locale) {
+function setLocale(locale: string) {
     currentLocale = locale;
     updateOption('WPLANG', locale);
 
@@ -216,7 +216,7 @@ function getAvailableLocales() {
 /**
  * Create a translation file
  */
-function createTranslationFile(domain, locale, translations) {
+function createTranslationFile(domain: string, locale: string, translations: any) {
     ensureLanguagesDir();
 
     const filepath = path.join(LANGUAGES_DIR, `${domain}-${locale}.json`);
@@ -245,8 +245,8 @@ const languages = {
 /**
  * Get language info
  */
-function getLanguageInfo(locale) {
-    return languages[locale] || { name: locale, native: locale };
+function getLanguageInfo(locale: string) {
+    return (languages as any)[locale] || { name: locale, native: locale };
 }
 
 /**

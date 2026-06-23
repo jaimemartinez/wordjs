@@ -3,13 +3,15 @@
  * Capability-based access control
  */
 
+import type { Response, NextFunction } from 'express';
+
 const config = require('../config/app');
 
 /**
  * Check if user has required capability
  */
-function can(capability) {
-    return (req, res, next) => {
+function can(capability: string) {
+    return (req: any, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',
@@ -33,8 +35,8 @@ function can(capability) {
 /**
  * Check if user has any of the required capabilities
  */
-function canAny(capabilities) {
-    return (req, res, next) => {
+function canAny(capabilities: string[]) {
+    return (req: any, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',
@@ -43,7 +45,7 @@ function canAny(capabilities) {
             });
         }
 
-        const hasPermission = capabilities.some(cap => req.user.can(cap));
+        const hasPermission = capabilities.some((cap: string) => req.user.can(cap));
 
         if (!hasPermission) {
             return res.status(403).json({
@@ -60,8 +62,8 @@ function canAny(capabilities) {
 /**
  * Check if user has all required capabilities
  */
-function canAll(capabilities) {
-    return (req, res, next) => {
+function canAll(capabilities: string[]) {
+    return (req: any, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',
@@ -70,7 +72,7 @@ function canAll(capabilities) {
             });
         }
 
-        const hasAllPermissions = capabilities.every(cap => req.user.can(cap));
+        const hasAllPermissions = capabilities.every((cap: string) => req.user.can(cap));
 
         if (!hasAllPermissions) {
             return res.status(403).json({
@@ -87,7 +89,7 @@ function canAll(capabilities) {
 /**
  * Check if user is administrator
  */
-function isAdmin(req, res, next) {
+function isAdmin(req: any, res: Response, next: NextFunction) {
     if (!req.user) {
         return res.status(401).json({
             code: 'rest_not_logged_in',
@@ -110,8 +112,8 @@ function isAdmin(req, res, next) {
 /**
  * Check if user owns the resource or has capability
  */
-function ownerOrCan(capability, getOwnerId) {
-    return (req, res, next) => {
+function ownerOrCan(capability: string, getOwnerId: (req: any) => any) {
+    return (req: any, res: Response, next: NextFunction) => {
         if (!req.user) {
             return res.status(401).json({
                 code: 'rest_not_logged_in',

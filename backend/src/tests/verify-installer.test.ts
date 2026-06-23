@@ -15,7 +15,7 @@ const cleanup = () => {
     }
 };
 
-test('Installer: Should ENTRY in SETUP MODE (No Auto-Config)', async (t) => {
+test('Installer: Should ENTRY in SETUP MODE (No Auto-Config)', async (t: any) => {
     // 1. Setup isolated environment
     cleanup();
     fs.mkdirSync(SRC_CONFIG_DIR, { recursive: true });

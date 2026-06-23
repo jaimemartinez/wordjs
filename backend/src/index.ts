@@ -3,6 +3,8 @@
  * A WordPress-like CMS built with Node.js
  */
 
+import type { Request, Response, NextFunction } from 'express';
+
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
@@ -79,7 +81,7 @@ app.disable('x-powered-by');
 // CORS configuration
 // CORS configuration
 app.use(cors({
-    origin: (origin, callback) => {
+    origin: (origin: any, callback: any) => {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
 
@@ -219,7 +221,7 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml', '.shtm', '.js', '.mjs', '.cjs', '.xml', '.svgz']);
 app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
     dotfiles: 'deny',
-    setHeaders: (res, filePath) => {
+    setHeaders: (res: Response, filePath: string) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         const ext = path.extname(filePath).toLowerCase();
         if (ext === '.svg') {
@@ -243,14 +245,14 @@ app.use('/public', express.static(path.resolve('./public'), { dotfiles: 'deny' }
 
 // Request logging in development
 if (config.nodeEnv === 'development') {
-    app.use((req, res, next) => {
+    app.use((req: Request, res: Response, next: NextFunction) => {
         console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
         next();
     });
 }
 
 // Health check endpoint
-app.get('/health', async (req, res) => {
+app.get('/health', async (req: Request, res: Response) => {
     const SystemHealth = require('./core/system-health');
     const status = await SystemHealth.checkDatabase();
     res.json({
@@ -266,14 +268,14 @@ app.get('/health', async (req, res) => {
 let appReady = false;
 
 // Liveness — the process is up and the event loop is responsive. Deliberately does NOT touch the DB.
-app.get('/healthz', (req, res) => {
+app.get('/healthz', (req: Request, res: Response) => {
     res.json({ status: 'ok', uptime: process.uptime(), pid: process.pid, timestamp: new Date().toISOString() });
 });
 
 // Prometheus metrics (default Node/process metrics + app gauges). DISABLED unless a scrape token is
 // configured (config.metrics.token), so metrics are never exposed publicly by default. Scrape with
 // `Authorization: Bearer <token>` (or ?token=). Root-level so it's CSRF-free and not rate-limited.
-app.get('/metrics', async (req, res) => {
+app.get('/metrics', async (req: Request, res: Response) => {
     const token = config.metrics && config.metrics.token;
     if (!token) return res.status(404).end();
     const provided = (req.get('authorization') || '').replace(/^Bearer\s+/i, '') || (req.query.token as string) || '';
@@ -290,7 +292,7 @@ app.get('/metrics', async (req, res) => {
 
 // Readiness — installed, fully booted, and the database answers. Returns 503 (not 200) when not
 // ready, so an orchestrator/load-balancer holds traffic until the instance can actually serve it.
-app.get('/readyz', async (req, res) => {
+app.get('/readyz', async (req: Request, res: Response) => {
     const checks: any = { installed: false, booted: appReady, db: 'unknown' };
     try {
         const { isInstalled } = require('./core/configManager');
@@ -309,7 +311,7 @@ app.get('/readyz', async (req, res) => {
 });
 
 // Installation and Migration Guard Middleware
-app.use((req, res, next) => {
+app.use((req: Request, res: Response, next: NextFunction) => {
     // Bypass for static files, health check, and setup endpoints
     if (
         req.path.startsWith('/uploads') ||
@@ -386,7 +388,7 @@ app.use((req, res, next) => {
 app.use(config.api.prefix, routes);
 
 // API info at /api endpoint  
-app.get('/api', (req, res) => {
+app.get('/api', (req: Request, res: Response) => {
     res.json({
         name: 'WordJS',
         description: 'A WordPress-like CMS built with Node.js',
@@ -652,7 +654,7 @@ async function initialize() {
                 }
             ];
 
-            const tryRegister = (protocolName, serviceData) => {
+            const tryRegister = (protocolName: any, serviceData: any) => {
                 return new Promise((resolve, reject) => {
                     const protocol = protocolName === 'https' ? https : http;
                     const data = JSON.stringify(serviceData);
@@ -677,7 +679,7 @@ async function initialize() {
                             'x-gateway-secret': process.env.GATEWAY_SECRET || (config.gatewaySecret) || 'secure-your-gateway-secret'
                         },
                         timeout: 2000
-                    }, (res) => {
+                    }, (res: any) => {
                         if (res.statusCode === 200) {
                             const actualProto = useMtls ? 'HTTPS (mTLS)' : protocolName.toUpperCase();
                             console.log(`✅ ${serviceData.name} Registered with Gateway via ${actualProto}`);
@@ -687,7 +689,7 @@ async function initialize() {
                         }
                     });
 
-                    req.on('error', (e) => reject(e));
+                    req.on('error', (e: any) => reject(e));
                     req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')); });
                     req.write(data);
                     req.end();
@@ -712,9 +714,9 @@ async function initialize() {
                             'x-gateway-secret': process.env.GATEWAY_SECRET || (config.gatewaySecret) || 'secure-your-gateway-secret'
                         },
                         timeout: 5000
-                    }, (res) => {
+                    }, (res: any) => {
                         let body = '';
-                        res.on('data', chunk => body += chunk);
+                        res.on('data', (chunk: any) => body += chunk);
                         res.on('end', async () => {
                             if (res.statusCode === 200) {
                                 try {
@@ -737,7 +739,7 @@ async function initialize() {
                             resolve();
                         });
                     });
-                    req.on('error', (e) => {
+                    req.on('error', (e: any) => {
                         console.warn('[Sync] Could not reach Gateway for URL sync:', e.message);
                         resolve();
                     });

@@ -12,7 +12,7 @@ const cache = require('./cache');
  * Get an option value
  * Equivalent to get_option()
  */
-async function getOption(name, defaultValue: any = null) {
+async function getOption(name: string, defaultValue: any = null) {
     // Only verify if we are in a plugin context
     verifyPermission('settings', 'read');
 
@@ -56,7 +56,7 @@ async function getOption(name, defaultValue: any = null) {
  * Update an option value
  * Equivalent to update_option()
  */
-async function updateOption(name, value, autoload = 'yes') {
+async function updateOption(name: string, value: any, autoload = 'yes') {
     verifyPermission('settings', 'write');
 
     return runWithContext(null, async () => {
@@ -95,7 +95,7 @@ async function updateOption(name, value, autoload = 'yes') {
  * Add an option (only if it doesn't exist)
  * Equivalent to add_option()
  */
-async function addOption(name, value, autoload = 'yes') {
+async function addOption(name: string, value: any, autoload = 'yes') {
     verifyPermission('settings', 'write');
 
     return runWithContext(null, async () => {
@@ -116,7 +116,7 @@ async function addOption(name, value, autoload = 'yes') {
  * Delete an option
  * Equivalent to delete_option()
  */
-async function deleteOption(name) {
+async function deleteOption(name: string) {
     verifyPermission('settings', 'write');
 
     return runWithContext(null, async () => {
@@ -137,7 +137,7 @@ async function getAutoloadedOptions() {
     return runWithContext(null, async () => {
         const rows = await dbAsync.all('SELECT option_name, option_value FROM options WHERE autoload = ?', ['yes']);
 
-        const options = {};
+        const options: Record<string, any> = {};
         for (const row of rows) {
             try {
                 options[row.option_name] = JSON.parse(row.option_value);
@@ -153,7 +153,7 @@ async function getAutoloadedOptions() {
  * Initialize default options
  * WARNING: This is called during init, ensure DB is ready.
  */
-async function initDefaultOptions(fullConfig) {
+async function initDefaultOptions(fullConfig: any) {
     const defaults = {
         siteurl: fullConfig.site.url,
         home: fullConfig.site.url,

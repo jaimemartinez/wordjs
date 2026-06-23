@@ -15,7 +15,7 @@ const shortcodes = new Map();
  * @param {string} tag - Shortcode tag
  * @param {Function} callback - Function(attrs, content, tag) => string
  */
-function addShortcode(tag, callback) {
+function addShortcode(tag: string, callback: Function) {
     shortcodes.set(tag, callback);
 }
 
@@ -23,7 +23,7 @@ function addShortcode(tag, callback) {
  * Remove a shortcode
  * Equivalent to remove_shortcode()
  */
-function removeShortcode(tag) {
+function removeShortcode(tag: string) {
     shortcodes.delete(tag);
 }
 
@@ -31,7 +31,7 @@ function removeShortcode(tag) {
  * Check if shortcode exists
  * Equivalent to shortcode_exists()
  */
-function shortcodeExists(tag) {
+function shortcodeExists(tag: string) {
     return shortcodes.has(tag);
 }
 
@@ -39,10 +39,10 @@ function shortcodeExists(tag) {
  * Parse shortcode attributes
  * Equivalent to shortcode_parse_atts()
  */
-function parseAttrs(text) {
+function parseAttrs(text: string) {
     if (!text) return {};
 
-    const attrs = {};
+    const attrs: Record<string, any> = {};
     // Match key="value" or key='value' or key=value or just value
     const regex = /(\w+)\s*=\s*["']([^"']*)["']|(\w+)\s*=\s*(\S+)|(\w+)/g;
     let match;
@@ -71,7 +71,7 @@ function parseAttrs(text) {
  * @param {string} content - Content with shortcodes
  * @returns {string} - Processed content
  */
-function doShortcode(content) {
+function doShortcode(content: string) {
     if (!content || shortcodes.size === 0) return content;
 
     // Build regex pattern for all registered shortcodes
@@ -84,7 +84,7 @@ function doShortcode(content) {
         'g'
     );
 
-    return content.replace(pattern, (match, tag, attrs, innerContent) => {
+    return content.replace(pattern, (match: string, tag: string, attrs: string, innerContent: string) => {
         const callback = shortcodes.get(tag);
         if (!callback) return match;
 
@@ -103,7 +103,7 @@ function doShortcode(content) {
  * @param {string} content
  * @returns {Promise<string>}
  */
-async function doShortcodeAsync(content) {
+async function doShortcodeAsync(content: string) {
     if (!content || shortcodes.size === 0) return content;
 
     const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
@@ -145,7 +145,7 @@ async function doShortcodeAsync(content) {
 /**
  * Escape regex special characters
  */
-function escapeRegex(str) {
+function escapeRegex(str: string) {
     return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
@@ -153,7 +153,7 @@ function escapeRegex(str) {
  * Strip all shortcodes from content
  * Equivalent to strip_shortcodes()
  */
-function stripShortcodes(content) {
+function stripShortcodes(content: string) {
     if (!content || shortcodes.size === 0) return content;
 
     const tagPattern = Array.from(shortcodes.keys()).map(escapeRegex).join('|');
@@ -170,7 +170,7 @@ function stripShortcodes(content) {
 // Register default shortcodes
 
 // [gallery ids="1,2,3"]
-addShortcode('gallery', (attrs) => {
+addShortcode('gallery', (attrs: any) => {
     const ids = attrs.ids ? attrs.ids.split(',') : [];
     const columns = Number(attrs.columns) || 3;
     const size = attrs.size || 'thumbnail';
@@ -179,7 +179,7 @@ addShortcode('gallery', (attrs) => {
 });
 
 // [caption]content[/caption]
-addShortcode('caption', (attrs, content) => {
+addShortcode('caption', (attrs: any, content: string) => {
     const id = attrs.id || '';
     const align = attrs.align || 'alignnone';
     const width = attrs.width === 'auto' || attrs.width === undefined ? 'auto' : Number(attrs.width) || 0;
@@ -188,14 +188,14 @@ addShortcode('caption', (attrs, content) => {
 });
 
 // [embed]url[/embed]
-addShortcode('embed', (attrs, content) => {
+addShortcode('embed', (attrs: any, content: string) => {
     const url = content.trim();
     const safeUrl = escUrl(url);
     return `<div class="wp-embed" data-url="${safeUrl}"><a href="${safeUrl}">${escAttr(url)}</a></div>`;
 });
 
 // [audio src="url"]
-addShortcode('audio', (attrs) => {
+addShortcode('audio', (attrs: any) => {
     const src = attrs.src || attrs[0] || '';
     const loop = attrs.loop === 'on' ? 'loop' : '';
     const autoplay = attrs.autoplay === 'on' ? 'autoplay' : '';
@@ -204,7 +204,7 @@ addShortcode('audio', (attrs) => {
 });
 
 // [video src="url"]
-addShortcode('video', (attrs) => {
+addShortcode('video', (attrs: any) => {
     const src = attrs.src || attrs[0] || '';
     const width = attrs.width || '100%';
     const height = attrs.height || 'auto';
@@ -214,7 +214,7 @@ addShortcode('video', (attrs) => {
 });
 
 // [button]text[/button]
-addShortcode('button', (attrs, content) => {
+addShortcode('button', (attrs: any, content: string) => {
     const url = attrs.url || attrs.href || '#';
     const safeUrl = escUrl(url) || '#';
     const target = attrs.target || '_self';
@@ -224,13 +224,13 @@ addShortcode('button', (attrs, content) => {
 });
 
 // [columns]content[/columns]
-addShortcode('columns', (attrs, content) => {
+addShortcode('columns', (attrs: any, content: string) => {
     const count = Number(attrs.count) || 2;
     return `<div class="wp-columns columns-${count}">${content}</div>`;
 });
 
 // [column]content[/column]
-addShortcode('column', (attrs, content) => {
+addShortcode('column', (attrs: any, content: string) => {
     const width = attrs.width || '';
     const style = width ? `style="width:${escAttr(width)}"` : '';
     return `<div class="wp-column" ${style}>${content}</div>`;

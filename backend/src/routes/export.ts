@@ -3,6 +3,7 @@
  * /api/v1/export, /api/v1/import
  */
 
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const path = require('path');
@@ -23,7 +24,7 @@ const upload = multer({
  * GET /export
  * Export site as JSON
  */
-router.get('/export', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/export', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const options = {
         includeMedia: req.query.media !== 'false',
         includePosts: req.query.posts !== 'false',
@@ -43,7 +44,7 @@ router.get('/export', authenticate, isAdmin, asyncHandler(async (req, res) => {
  * GET /export/wxr
  * Export site as WordPress WXR format
  */
-router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const wxr = await exportToWXR();
 
     res.setHeader('Content-Type', 'application/xml');
@@ -55,7 +56,7 @@ router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req, res) =
  * POST /import
  * Import site from JSON
  */
-router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req, res) => {
+router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: any, res: Response) => {
     let data;
 
     if (req.file) {

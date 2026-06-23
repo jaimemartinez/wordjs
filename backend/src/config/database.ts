@@ -121,11 +121,11 @@ const closeDatabase = async () => {
 }
 
 // 3. Schema Management (Core Tables)
-async function initializeSchema(db, isAsync = false) {
+async function initializeSchema(db: any, isAsync = false) {
   console.log('🏗️  Verifying Database Schema...');
 
   // Helper to run exec
-  const exec = async (sql) => {
+  const exec = async (sql: string) => {
     if (isAsync) await db.exec(sql);
     else db.exec(sql);
   };
@@ -140,9 +140,9 @@ async function initializeSchema(db, isAsync = false) {
   // For PG: id SERIAL PRIMARY KEY
   // For SQLite: id INTEGER PRIMARY KEY AUTOINCREMENT
 
-  const createTable = async (name, columns) => {
+  const createTable = async (name: string, columns: string[]) => {
     let sql = `CREATE TABLE IF NOT EXISTS ${name} (\n`;
-    sql += columns.map(c => `  ${c}`).join(',\n');
+    sql += columns.map((c: string) => `  ${c}`).join(',\n');
     sql += '\n)';
     await exec(sql);
   };
@@ -470,7 +470,7 @@ const dbAsyncProxy = new Proxy({}, {
 
     // If prop is a function on the driver, wrap it with automatic normalization
     if (typeof db[prop] === 'function') {
-      return async (...args) => {
+      return async (...args: any[]) => {
         // Double check for write operations. transaction() wraps writes, so it requires write
         // permission too (the tx.run/tx.exec calls inside go straight to the pinned connection and
         // are not re-checked through this proxy — the transaction-level check covers them).
@@ -508,7 +508,7 @@ const dbAsyncProxy = new Proxy({}, {
  *   'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
  * ]);
  */
-async function createPluginTable(tableName, columns) {
+async function createPluginTable(tableName: string, columns: string[]) {
   const isPostgres = driverName === 'postgres';
 
   // SECURITY: the table name and column strings are concatenated into DDL and run via exec(), which

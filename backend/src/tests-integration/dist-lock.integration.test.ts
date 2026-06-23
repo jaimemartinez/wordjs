@@ -17,7 +17,7 @@ require('../config/app');
 const withTimeout = (p: Promise<any>, ms: number) =>
     Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
 
-test('dist-lock: lease CAS semantics against Postgres (skipped if no PG reachable)', async (t) => {
+test('dist-lock: lease CAS semantics against Postgres (skipped if no PG reachable)', async (t: any) => {
     const db = require('../config/database');
     try {
         await withTimeout(db.init({ driver: 'postgres' }), 4000);

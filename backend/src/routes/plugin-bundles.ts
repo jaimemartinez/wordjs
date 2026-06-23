@@ -3,6 +3,8 @@
  * Serves pre-compiled plugin frontend bundles
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const path = require('path');
@@ -23,8 +25,8 @@ const ALLOWED_BUNDLE_TYPES = new Set(['admin', 'component', 'hooks']);
  * The bundle uses external references to React which are
  * provided by the WordJS host at runtime.
  */
-router.get('/:slug/bundle', async (req, res) => {
-    const { slug } = req.params;
+router.get('/:slug/bundle', async (req: Request, res: Response) => {
+    const { slug } = req.params as { slug: string };
     const bundleType = req.query.type || 'admin';
 
     // Validate slug (prevent path traversal)
@@ -60,8 +62,8 @@ router.get('/:slug/bundle', async (req, res) => {
  * 
  * Returns build manifest for a plugin bundle
  */
-router.get('/:slug/bundle/manifest', async (req, res) => {
-    const { slug } = req.params;
+router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
+    const { slug } = req.params as { slug: string };
 
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
@@ -86,8 +88,8 @@ router.get('/:slug/bundle/manifest', async (req, res) => {
  * 
  * Returns CSS bundle for a plugin (if exists)
  */
-router.get('/:slug/bundle/css', async (req, res) => {
-    const { slug } = req.params;
+router.get('/:slug/bundle/css', async (req: Request, res: Response) => {
+    const { slug } = req.params as { slug: string };
     const bundleType = req.query.type || 'admin';
 
     if (!/^[a-zA-Z0-9_-]+$/.test(slug)) {

@@ -37,14 +37,14 @@ describe('Plugin System', () => {
         const safeCode = 'const x = require("./utils");';
         const dangerousCode = 'eval(userInput)';
 
-        const hasDangerous = (code) => dangerousPatterns.some(p => code.includes(p));
+        const hasDangerous = (code: string) => dangerousPatterns.some(p => code.includes(p));
 
         assert.ok(!hasDangerous(safeCode), 'Safe code should pass');
         assert.ok(hasDangerous(dangerousCode), 'Dangerous code should be detected');
     });
 
     it('should validate plugin slug format', () => {
-        const isValidSlug = (slug) => /^[a-z0-9-]+$/.test(slug);
+        const isValidSlug = (slug: string) => /^[a-z0-9-]+$/.test(slug);
 
         assert.ok(isValidSlug('my-plugin'), 'Lowercase with dashes is valid');
         assert.ok(isValidSlug('plugin123'), 'Lowercase with numbers is valid');
@@ -54,7 +54,7 @@ describe('Plugin System', () => {
 
     it('should check core dependency protection', () => {
         const coreDeps = ['express', 'cors', 'helmet', 'jsonwebtoken', 'bcryptjs'];
-        const isProtected = (dep) => coreDeps.includes(dep);
+        const isProtected = (dep: string) => coreDeps.includes(dep);
 
         assert.ok(isProtected('express'), 'Express should be protected');
         assert.ok(!isProtected('random-package'), 'Random packages are not protected');
@@ -78,7 +78,7 @@ describe('Theme System', () => {
     });
 
     it('should validate theme slug format', () => {
-        const isValidSlug = (slug) => /^[a-z0-9-]+$/.test(slug);
+        const isValidSlug = (slug: string) => /^[a-z0-9-]+$/.test(slug);
 
         assert.ok(isValidSlug('midnight-luxury'), 'Valid theme slug');
         assert.ok(!isValidSlug('My Theme'), 'Invalid theme slug');
@@ -94,7 +94,7 @@ describe('Theme System', () => {
 
     it('should validate template file extensions', () => {
         const validExtensions = ['.hbs', '.html', '.ejs'];
-        const isValidTemplate = (file) => validExtensions.some(ext => file.endsWith(ext));
+        const isValidTemplate = (file: string) => validExtensions.some(ext => file.endsWith(ext));
 
         assert.ok(isValidTemplate('index.hbs'), '.hbs is valid');
         assert.ok(isValidTemplate('page.html'), '.html is valid');
@@ -155,8 +155,8 @@ describe('File Upload System', () => {
         const allowedExt = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.pdf', '.mp4'];
         const blockedExt = ['.exe', '.php', '.sh', '.bat', '.js'];
 
-        const isAllowed = (ext) => allowedExt.includes(ext.toLowerCase());
-        const isBlocked = (ext) => blockedExt.includes(ext.toLowerCase());
+        const isAllowed = (ext: string) => allowedExt.includes(ext.toLowerCase());
+        const isBlocked = (ext: string) => blockedExt.includes(ext.toLowerCase());
 
         assert.ok(isAllowed('.jpg'), 'JPG should be allowed');
         assert.ok(isAllowed('.pdf'), 'PDF should be allowed');
@@ -166,7 +166,7 @@ describe('File Upload System', () => {
 
     it('should validate file size limits', () => {
         const maxSize = 10 * 1024 * 1024; // 10MB
-        const isValidSize = (size) => size <= maxSize;
+        const isValidSize = (size: number) => size <= maxSize;
 
         assert.ok(isValidSize(1024), '1KB is valid');
         assert.ok(isValidSize(5 * 1024 * 1024), '5MB is valid');
@@ -174,7 +174,7 @@ describe('File Upload System', () => {
     });
 
     it('should sanitize filenames', () => {
-        const sanitize = (name) => name
+        const sanitize = (name: string) => name
             .replace(/[^a-zA-Z0-9.-]/g, '-')
             .replace(/-+/g, '-')
             .toLowerCase();
@@ -184,7 +184,7 @@ describe('File Upload System', () => {
     });
 
     it('should prevent path traversal', () => {
-        const hasTraversal = (filename) => filename.includes('..') || filename.includes('/') || filename.includes('\\');
+        const hasTraversal = (filename: string) => filename.includes('..') || filename.includes('/') || filename.includes('\\');
 
         assert.ok(hasTraversal('../etc/passwd'), 'Should detect ../');
         assert.ok(hasTraversal('..\\windows\\system32'), 'Should detect ..\\');
@@ -192,7 +192,7 @@ describe('File Upload System', () => {
     });
 
     it('should generate unique filenames', () => {
-        const generateName = (original) => {
+        const generateName = (original: string) => {
             const ext = path.extname(original);
             const base = path.basename(original, ext);
             const timestamp = Date.now();
@@ -216,12 +216,12 @@ describe('Config Manager', () => {
         const requiredFields = ['siteUrl', 'port'];
         const config = { siteUrl: 'http://localhost:4000', port: 4000 };
 
-        const hasRequired = requiredFields.every(f => config[f] !== undefined);
+        const hasRequired = requiredFields.every(f => (config as Record<string, any>)[f] !== undefined);
         assert.ok(hasRequired, 'Config must have required fields');
     });
 
     it('should validate port numbers', () => {
-        const isValidPort = (port) => Number.isInteger(port) && port > 0 && port <= 65535;
+        const isValidPort = (port: any) => Number.isInteger(port) && port > 0 && port <= 65535;
 
         assert.ok(isValidPort(3000), '3000 is valid');
         assert.ok(isValidPort(80), '80 is valid');
@@ -231,7 +231,7 @@ describe('Config Manager', () => {
     });
 
     it('should validate URL format', () => {
-        const isValidUrl = (url) => {
+        const isValidUrl = (url: string) => {
             try { new URL(url); return true; } catch { return false; }
         };
 
@@ -273,7 +273,7 @@ describe('Rate Limiting', () => {
     });
 
     it('should detect rate limit exceeded', () => {
-        const isLimited = (current, max) => current >= max;
+        const isLimited = (current: number, max: number) => current >= max;
 
         assert.ok(isLimited(100, 100), 'At limit should be blocked');
         assert.ok(isLimited(150, 100), 'Over limit should be blocked');
@@ -286,7 +286,7 @@ describe('Rate Limiting', () => {
 // ============================================================================
 describe('Formatting Utilities', () => {
     it('should sanitize titles', () => {
-        const sanitizeTitle = (title) => title
+        const sanitizeTitle = (title: string) => title
             .replace(/<[^>]*>/g, '')  // Remove HTML
             .replace(/&[a-z]+;/gi, '') // Remove entities
             .trim();
@@ -296,7 +296,7 @@ describe('Formatting Utilities', () => {
     });
 
     it('should generate URL-safe slugs', () => {
-        const slugify = (str) => str
+        const slugify = (str: string) => str
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '-')
             .replace(/^-|-$/g, '');
@@ -307,7 +307,7 @@ describe('Formatting Utilities', () => {
     });
 
     it('should format dates consistently', () => {
-        const formatDate = (date) => {
+        const formatDate = (date: string) => {
             const d = new Date(date);
             return d.toISOString().split('T')[0];
         };
@@ -316,7 +316,7 @@ describe('Formatting Utilities', () => {
     });
 
     it('should truncate text with ellipsis', () => {
-        const truncate = (text, maxLen) => {
+        const truncate = (text: string, maxLen: number) => {
             if (text.length <= maxLen) return text;
             return text.substring(0, maxLen - 3) + '...';
         };
@@ -331,7 +331,7 @@ describe('Formatting Utilities', () => {
 // ============================================================================
 describe('Crash Guard', () => {
     it('should generate valid lock file names', () => {
-        const getLockFile = (slug) => `.plugin-loading-${slug}.lock`;
+        const getLockFile = (slug: string) => `.plugin-loading-${slug}.lock`;
 
         assert.strictEqual(getLockFile('my-plugin'), '.plugin-loading-my-plugin.lock');
     });
