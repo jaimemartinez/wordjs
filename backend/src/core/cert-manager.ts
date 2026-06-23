@@ -17,7 +17,7 @@ if (!fs.existsSync(LIVE_DIR)) fs.mkdirSync(LIVE_DIR, { recursive: true, mode: 0o
 // Write a PRIVATE KEY (account key / privkey.pem) with restrictive permissions. writeFileSync's
 // `mode` is ignored when the file already exists, so we ALSO chmod after the write to guarantee 0o600
 // on every platform/path.
-function writePrivateKey(filePath, content) {
+function writePrivateKey(filePath: string, content: any) {
     fs.writeFileSync(filePath, content, { mode: 0o600 });
     try { fs.chmodSync(filePath, 0o600); } catch { /* chmod is a no-op on some filesystems (e.g. Windows) */ }
 }
@@ -35,7 +35,7 @@ class CertManager {
         // this.directoryUrl = acme.directory.letsencrypt.staging; // TODO: Configurable?
     }
 
-    async initClient(email, useStaging = false) {
+    async initClient(email: string, useStaging = false) {
         if (useStaging) this.directoryUrl = acme.directory.letsencrypt.staging;
 
         // 1. Load or Generate Account Key
@@ -72,13 +72,13 @@ class CertManager {
      * @param {string} domain 
      * @param {string} type 'http-01' | 'dns-01'
      */
-    async createOrder(domain, type = 'http-01') {
+    async createOrder(domain: string, type = 'http-01') {
         if (!this.client) throw new Error('Client not initialized. Call initClient first.');
 
         const order = await this.client.createOrder({ identifiers: [{ type: 'dns', value: domain }] });
         const authorizations = await this.client.getAuthorizations(order);
         const authz = authorizations[0];
-        const challenge = authz.challenges.find(c => c.type === type);
+        const challenge = authz.challenges.find((c: any) => c.type === type);
 
         if (!challenge) throw new Error(`Challenge type ${type} not found for this domain.`);
 
@@ -95,7 +95,7 @@ class CertManager {
         };
     }
 
-    async getDNSDigest(keyAuthorization) {
+    async getDNSDigest(keyAuthorization: any) {
         // dns-01 requires SHA256 digest of keyAuth
         // acme-client might have a helper or we do it manually, but client usually handles it ONLY if we use its built-in challenge completion.
         // But since we are Manual, we need to show the User the simplified string.
@@ -115,7 +115,7 @@ class CertManager {
     /**
      * Auto Provision HTTP-01
      */
-    async provisionAutoHTTP(domain, email, useStaging = false) {
+    async provisionAutoHTTP(domain: string, email: string, useStaging = false) {
         try {
             console.log(`[CertManager] Starting HTTP-01 provisioning for ${domain}...`);
             await this.initClient(email, useStaging);
@@ -173,7 +173,7 @@ class CertManager {
         }
     }
 
-    async startDNSChallenge(domain, email, useStaging = false) {
+    async startDNSChallenge(domain: string, email: string, useStaging = false) {
         try {
             // Initialize client if needed
             await this.initClient(email, useStaging);
@@ -204,7 +204,7 @@ class CertManager {
      * Finish DNS-01 Challenge Flow
      * Call after user has added the TXT record
      */
-    async finishDNSChallenge(step1Data, email, useStaging = false) {
+    async finishDNSChallenge(step1Data: any, email: string, useStaging = false) {
         try {
             // Re-init client if needed (in case of server restart)
             await this.initClient(email, useStaging);
@@ -269,7 +269,7 @@ class CertManager {
      * the files the monolith's resolveSSL() reads (so a restart serves it) and hot-reloads the running
      * HTTPS server in-process via a reload hook the monolith installs (so no restart is needed).
      */
-    async installCertEmbedded(keyContent, certContent) {
+    async installCertEmbedded(keyContent: any, certContent: any) {
         const gwDir = path.resolve(__dirname, '../../../gateway');
         const importedDir = path.join(gwDir, 'ssl', 'live', 'imported');
         fs.mkdirSync(importedDir, { recursive: true, mode: 0o700 });
@@ -300,7 +300,7 @@ class CertManager {
         return { success: true, embedded: true };
     }
 
-    async pushCertToGateway(keyContent, certContent) {
+    async pushCertToGateway(keyContent: any, certContent: any) {
         // Monolith/embedded: there is no gateway on :3100 — install the cert in-process instead.
         if (process.env.WORDJS_EMBEDDED === '1') {
             return this.installCertEmbedded(keyContent, certContent);
@@ -344,9 +344,9 @@ class CertManager {
                         'Content-Type': 'application/json',
                         'Content-Length': Buffer.byteLength(postData)
                     }
-                }, (res) => {
+                }, (res: any) => {
                     let data = '';
-                    res.on('data', chunk => data += chunk);
+                    res.on('data', (chunk: any) => data += chunk);
                     res.on('end', () => {
                         if (res.statusCode === 200) {
                             resolve(JSON.parse(data));
@@ -361,7 +361,7 @@ class CertManager {
                     });
                 });
 
-                req.on('error', (e) => reject(e));
+                req.on('error', (e: any) => reject(e));
                 req.write(postData);
                 req.end();
             });
@@ -377,7 +377,7 @@ class CertManager {
      * OR we should refactor upstream callers to pass content.
      * For now, we read the files at paths and push them.
      */
-    async updateSSLConfig(keyPath, certPath) {
+    async updateSSLConfig(keyPath: string, certPath: string) {
         try {
             const keyContent = fs.readFileSync(keyPath, 'utf8');
             const certContent = fs.readFileSync(certPath, 'utf8');
@@ -392,7 +392,7 @@ class CertManager {
     /**
      * Verify DNS Propagation
      */
-    async checkDNSPropagation(domain, expectedValue) {
+    async checkDNSPropagation(domain: string, expectedValue: string) {
         try {
             const records = await dns.resolveTxt(`_acme-challenge.${domain}`);
             // specific record
@@ -406,7 +406,7 @@ class CertManager {
     /**
      * Prepare HTTP-01 Challenge File
      */
-    async writeChallengeFile(token, keyAuthorization) {
+    async writeChallengeFile(token: string, keyAuthorization: any) {
         const challengeDir = path.join(WWW_ROOT, '.well-known', 'acme-challenge');
         if (!fs.existsSync(challengeDir)) fs.mkdirSync(challengeDir, { recursive: true });
         fs.writeFileSync(path.join(challengeDir, token), keyAuthorization);
@@ -418,7 +418,7 @@ class CertManager {
      * @param {string} keyContent Content of Private Key
      * @param {string} certContent Content of Certificate
      */
-    async installCustomCert(keyContent, certContent) {
+    async installCustomCert(keyContent: any, certContent: any) {
         try {
             // Validation: actually PARSE the key + cert and verify they MATCH. The old check only looked
             // for the substrings 'PRIVATE KEY' / 'CERTIFICATE', so a malformed or mismatched pair would
@@ -519,9 +519,9 @@ class CertManager {
                     method: 'GET',
                     agent: agent,
                     timeout: 2000
-                }, (res) => {
+                }, (res: any) => {
                     let data = '';
-                    res.on('data', chunk => data += chunk);
+                    res.on('data', (chunk: any) => data += chunk);
                     res.on('end', () => {
                         if (res.statusCode === 200) {
                             try {
@@ -535,7 +535,7 @@ class CertManager {
                     });
                 });
 
-                req.on('error', (e) => {
+                req.on('error', (e: any) => {
                     console.error('[CertManager] Gateway connection failed:', e.message);
                     resolve({ ...defaultResult, error: 'Gateway Unreachable' });
                 });
@@ -552,7 +552,7 @@ class CertManager {
     /**
      * Days until a cert's validTo (negative if expired/unparseable/absent).
      */
-    daysUntil(validTo): number {
+    daysUntil(validTo: any): number {
         if (!validTo) return -Infinity;
         const t = new Date(validTo).getTime();
         if (Number.isNaN(t)) return -Infinity;
@@ -565,7 +565,7 @@ class CertManager {
      * survives a transient gateway outage, and does NOT depend on the gateway's (lossy, CN-only)
      * issuer-type classification. Returns null when no parseable local cert exists.
      */
-    readLocalCertValidTo(domain): string | null {
+    readLocalCertValidTo(domain: string): string | null {
         try {
             const p = path.join(LIVE_DIR, domain, 'fullchain.pem');
             if (fs.existsSync(p)) {
@@ -588,7 +588,7 @@ class CertManager {
         const acme = config.acme || {};
         const { getOption, updateOption } = require('./options');
 
-        const record = async (data) => {
+        const record = async (data: any) => {
             try { await updateOption('acme_last_renewal', { at: Date.now(), ...data }); }
             catch { /* options table may be unavailable pre-install */ }
             return data;
@@ -689,7 +689,7 @@ class CertManager {
     /**
      * Update Gateway Config (Push Only - No Local Storage)
      */
-    async updateGatewayConfig(port, sslEnabled) {
+    async updateGatewayConfig(port: any, sslEnabled: any) {
         try {
             // Read mTLS config from local file (only for authentication, not for storing gateway config)
             let backendConfig: any = {};
@@ -730,9 +730,9 @@ class CertManager {
                         'Content-Type': 'application/json',
                         'Content-Length': Buffer.byteLength(postData)
                     }
-                }, (res) => {
+                }, (res: any) => {
                     let data = '';
-                    res.on('data', chunk => data += chunk);
+                    res.on('data', (chunk: any) => data += chunk);
                     res.on('end', () => {
                         if (res.statusCode === 200) {
                             const result = JSON.parse(data);
@@ -744,7 +744,7 @@ class CertManager {
                     });
                 });
 
-                req.on('error', (e) => reject(e));
+                req.on('error', (e: any) => reject(e));
                 req.write(postData);
                 req.end();
             });

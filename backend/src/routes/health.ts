@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const SystemHealth = require('../core/system-health');
@@ -27,7 +28,7 @@ const { isAdmin } = require('../middleware/permissions');
  *                 timestamp:
  *                   type: string
  */
-router.get('/', async (req, res) => {
+router.get('/', async (req: Request, res: Response) => {
     const status = await SystemHealth.checkDatabase();
     res.json({
         status: status.status === 'OK' ? 'ok' : 'error',
@@ -61,7 +62,7 @@ router.get('/', async (req, res) => {
  *       403:
  *         description: Forbidden (Non-admin)
  */
-router.get('/details', authenticate, isAdmin, async (req, res) => {
+router.get('/details', authenticate, isAdmin, async (req: Request, res: Response) => {
     try {
         const fullStatus = await SystemHealth.getFullStatus();
         res.json(fullStatus);

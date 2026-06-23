@@ -47,7 +47,7 @@ describe('Post Model', () => {
     });
 
     it('should generate valid slugs', () => {
-        const slugify = (str) => str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const slugify = (str: string) => str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
         assert.strictEqual(slugify('Hello World'), 'hello-world');
         assert.strictEqual(slugify('Test Post 123'), 'test-post-123');
         assert.strictEqual(slugify('Español Título'), 'espa-ol-t-tulo');
@@ -81,7 +81,7 @@ describe('User Model', () => {
     });
 
     it('should validate password requirements', () => {
-        const isValidPassword = (pwd) => pwd.length >= 8 && pwd.length <= 72;
+        const isValidPassword = (pwd: string) => pwd.length >= 8 && pwd.length <= 72;
         assert.ok(isValidPassword('password123'), '8+ chars should pass');
         assert.ok(!isValidPassword('short'), 'Short password should fail');
         assert.ok(!isValidPassword('a'.repeat(100)), 'Too long password should fail');
@@ -113,7 +113,7 @@ describe('Media Model', () => {
     });
 
     it('should generate safe filenames', () => {
-        const safeName = (name) => name.replace(/[^a-zA-Z0-9-_\.]/g, '-').toLowerCase();
+        const safeName = (name: string) => name.replace(/[^a-zA-Z0-9-_\.]/g, '-').toLowerCase();
         assert.strictEqual(safeName('My File.jpg'), 'my-file.jpg');
         assert.strictEqual(safeName('dangerous<script>.png'), 'dangerous-script-.png');
     });
@@ -153,7 +153,7 @@ describe('Comment Model', () => {
 
     it('should detect spam patterns', () => {
         const spamPatterns = ['viagra', 'casino', 'click here', 'free money'];
-        const isSpammy = (text) => spamPatterns.some(p => text.toLowerCase().includes(p));
+        const isSpammy = (text: string) => spamPatterns.some(p => text.toLowerCase().includes(p));
 
         assert.ok(isSpammy('Buy cheap VIAGRA now!'), 'Should detect viagra spam');
         assert.ok(isSpammy('Win at online CASINO'), 'Should detect casino spam');
@@ -172,7 +172,7 @@ describe('Term Model', () => {
     });
 
     it('should generate term slugs', () => {
-        const slugify = (str) => str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+        const slugify = (str: string) => str.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
         assert.strictEqual(slugify('News & Updates'), 'news-updates');
         assert.strictEqual(slugify('Tech/Science'), 'tech-science');
     });
@@ -240,12 +240,12 @@ describe('Options System', () => {
     it('should have required core options', () => {
         const requiredOptions = ['blogname', 'siteurl', 'admin_email'];
         requiredOptions.forEach(opt => {
-            assert.ok(mockOptions[opt], `Option ${opt} must exist`);
+            assert.ok((mockOptions as any)[opt], `Option ${opt} must exist`);
         });
     });
 
     it('should validate URL options', () => {
-        const isValidUrl = (url) => {
+        const isValidUrl = (url: string) => {
             try { new URL(url); return true; } catch { return false; }
         };
         assert.ok(isValidUrl(mockOptions.siteurl), 'siteurl must be valid URL');
@@ -267,7 +267,7 @@ describe('Roles System', () => {
     it('should define all core roles', () => {
         const coreRoles = ['administrator', 'editor', 'author', 'contributor', 'subscriber'];
         coreRoles.forEach(role => {
-            assert.ok(roles[role], `Role ${role} must exist`);
+            assert.ok((roles as any)[role], `Role ${role} must exist`);
         });
     });
 
@@ -276,8 +276,8 @@ describe('Roles System', () => {
     });
 
     it('should check capabilities correctly', () => {
-        const can = (role, capability) => {
-            const caps = roles[role]?.capabilities || [];
+        const can = (role: string, capability: string) => {
+            const caps = (roles as any)[role]?.capabilities || [];
             return caps.includes('*') || caps.includes(capability);
         };
 
@@ -292,15 +292,15 @@ describe('Roles System', () => {
 // ============================================================================
 describe('Hooks System', () => {
     it('should register and execute actions', () => {
-        const hooks = {};
+        const hooks: Record<string, any[]> = {};
         let executed = false;
 
-        const addAction = (name, fn) => {
+        const addAction = (name: string, fn: any) => {
             if (!hooks[name]) hooks[name] = [];
             hooks[name].push(fn);
         };
 
-        const doAction = (name, ...args) => {
+        const doAction = (name: string, ...args: any[]) => {
             if (hooks[name]) hooks[name].forEach(fn => fn(...args));
         };
 
@@ -311,21 +311,21 @@ describe('Hooks System', () => {
     });
 
     it('should apply filters correctly', () => {
-        const hooks = {};
+        const hooks: Record<string, any[]> = {};
 
-        const addFilter = (name, fn) => {
+        const addFilter = (name: string, fn: any) => {
             if (!hooks[name]) hooks[name] = [];
             hooks[name].push(fn);
         };
 
-        const applyFilters = (name, value, ...args) => {
+        const applyFilters = (name: string, value: any, ...args: any[]) => {
             if (hooks[name]) {
                 return hooks[name].reduce((v, fn) => fn(v, ...args), value);
             }
             return value;
         };
 
-        addFilter('the_title', (title) => title.toUpperCase());
+        addFilter('the_title', (title: string) => title.toUpperCase());
         const result = applyFilters('the_title', 'hello world');
 
         assert.strictEqual(result, 'HELLO WORLD', 'Filter should transform value');
@@ -337,7 +337,7 @@ describe('Hooks System', () => {
 // ============================================================================
 describe('Database Abstraction', () => {
     it('should normalize SQL placeholders for Postgres', () => {
-        const normalizeSql = (sql) => {
+        const normalizeSql = (sql: string) => {
             let paramIndex = 1;
             return sql.replace(/\?/g, () => `$${paramIndex++}`);
         };

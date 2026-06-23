@@ -77,11 +77,11 @@ class DatabaseWrapper {
         this.sqlDb = sqlDb;
     }
 
-    prepare(sql) {
+    prepare(sql: string) {
         return new StatementWrapper(this.sqlDb, sql);
     }
 
-    exec(sql) {
+    exec(sql: string) {
         this.sqlDb.run(sql);
         // Suppress the disk flush while a transaction is open — transaction() saves once after COMMIT.
         if (!inTransaction) save();
@@ -89,15 +89,15 @@ class DatabaseWrapper {
 
     // Helper methods to match dbAsync interface (and PostgresDriver)
 
-    get(sql, params = []) {
+    get(sql: string, params: any[] = []) {
         return this.prepare(sql).get(...params);
     }
 
-    all(sql, params = []) {
+    all(sql: string, params: any[] = []) {
         return this.prepare(sql).all(...params);
     }
 
-    run(sql, params = []) {
+    run(sql: string, params: any[] = []) {
         return this.prepare(sql).run(...params);
     }
 
@@ -117,7 +117,7 @@ class DatabaseWrapper {
      * CONCURRENCY: serialized via the module-level txChain promise-mutex so overlapping callers can't
      * interleave BEGIN/COMMIT on the single shared connection.
      */
-    async transaction(fn) {
+    async transaction(fn: any) {
         // Re-entrancy guard: a transaction() invoked from INSIDE another transaction()'s callback would
         // chain off the OUTER tx's still-pending tail (which can't settle until this inner call resolves)
         // → circular wait that permanently wedges txChain and every future transaction(). sql.js has no
@@ -131,12 +131,12 @@ class DatabaseWrapper {
         return run;
     }
 
-    async _runTransaction(fn) {
+    async _runTransaction(fn: any) {
         const tx = {
-            get: async (sql, params = []) => this.get(sql, params),
-            all: async (sql, params = []) => this.all(sql, params),
-            run: async (sql, params = []) => this.run(sql, params),
-            exec: async (sql) => { this.exec(sql); }
+            get: async (sql: string, params: any[] = []) => this.get(sql, params),
+            all: async (sql: string, params: any[] = []) => this.all(sql, params),
+            run: async (sql: string, params: any[] = []) => this.run(sql, params),
+            exec: async (sql: string) => { this.exec(sql); }
         };
 
         // Snapshot the last committed in-memory image so ROLLBACK can restore it deterministically
@@ -174,7 +174,7 @@ class DatabaseWrapper {
         }
     }
 
-    pragma(pragma) {
+    pragma(pragma: string) {
         this.sqlDb.run(`PRAGMA ${pragma};`);
     }
 
@@ -196,7 +196,7 @@ class StatementWrapper {
         this.sql = sql.replace(/\s+RETURNING\s+.*$/i, '');
     }
 
-    run(...params) {
+    run(...params: any[]) {
         this.sqlDb.run(this.sql, params);
 
         const lastId = this.sqlDb.exec('SELECT last_insert_rowid() as id')[0];
@@ -212,7 +212,7 @@ class StatementWrapper {
         };
     }
 
-    get(...params) {
+    get(...params: any[]) {
         try {
             const stmt = this.sqlDb.prepare(this.sql);
             stmt.bind(params);
@@ -222,8 +222,8 @@ class StatementWrapper {
                 const values = stmt.get();
                 stmt.free();
 
-                const row = {};
-                columns.forEach((col, i) => {
+                const row: Record<string, any> = {};
+                columns.forEach((col: string, i: number) => {
                     row[col] = values[i];
                 });
                 return row;
@@ -236,7 +236,7 @@ class StatementWrapper {
         }
     }
 
-    all(...params) {
+    all(...params: any[]) {
         try {
             const results: any[] = [];
             const stmt = this.sqlDb.prepare(this.sql);
@@ -247,7 +247,7 @@ class StatementWrapper {
             while (stmt.step()) {
                 const values = stmt.get();
                 const row: any = {};
-                columns.forEach((col, i) => {
+                columns.forEach((col: string, i: number) => {
                     row[col] = values[i];
                 });
                 results.push(row);

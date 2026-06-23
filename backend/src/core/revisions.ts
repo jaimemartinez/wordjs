@@ -9,7 +9,7 @@ const { db, dbAsync } = require('../config/database');
  * Save a revision of a post
  * Equivalent to wp_save_post_revision()
  */
-async function saveRevision(postId) {
+async function saveRevision(postId: number) {
   // Get current post data
   const post = await dbAsync.get('SELECT * FROM posts WHERE id = ?', [postId]);
   if (!post) return null;
@@ -56,7 +56,7 @@ async function saveRevision(postId) {
  * Get revisions for a post
  * Equivalent to wp_get_post_revisions()
  */
-async function getRevisions(postId, options: { limit?: number; offset?: number } = {}) {
+async function getRevisions(postId: number, options: { limit?: number; offset?: number } = {}) {
   const { limit = 10, offset = 0 } = options;
 
   const rows = await dbAsync.all(`
@@ -66,7 +66,7 @@ async function getRevisions(postId, options: { limit?: number; offset?: number }
     LIMIT ? OFFSET ?
   `, [postId, limit, offset]);
 
-  return rows.map(row => ({
+  return rows.map((row: any) => ({
     id: row.id,
     postId: row.post_parent,
     authorId: row.author_id,
@@ -80,7 +80,7 @@ async function getRevisions(postId, options: { limit?: number; offset?: number }
 /**
  * Get a specific revision
  */
-async function getRevision(revisionId) {
+async function getRevision(revisionId: number) {
   const row = await dbAsync.get(`
     SELECT * FROM posts WHERE id = ? AND post_type = 'revision'
   `, [revisionId]);
@@ -103,10 +103,10 @@ async function getRevision(revisionId) {
 /**
  * Helper to get meta for revisions
  */
-async function getAllMeta(postId) {
+async function getAllMeta(postId: number) {
   const rows = await dbAsync.all('SELECT meta_key, meta_value FROM post_meta WHERE post_id = ?', [postId]);
-  const meta = {};
-  rows.forEach(row => {
+  const meta: Record<string, any> = {};
+  rows.forEach((row: any) => {
     try {
       meta[row.meta_key] = JSON.parse(row.meta_value);
     } catch {
@@ -120,7 +120,7 @@ async function getAllMeta(postId) {
  * Restore a revision
  * Equivalent to wp_restore_post_revision()
  */
-async function restoreRevision(revisionId) {
+async function restoreRevision(revisionId: number) {
   const revision = await getRevision(revisionId);
   if (!revision) return false;
 
@@ -134,7 +134,7 @@ async function restoreRevision(revisionId) {
     // DIFFERENT pooled connection, so the BEGIN/COMMIT did not actually bound the statements (they
     // ran auto-committed on whatever backend the pool handed out). dbAsync.transaction() pins one
     // connection so the UPDATE + meta delete/insert truly commit or roll back together.
-    await dbAsync.transaction(async (tx) => {
+    await dbAsync.transaction(async (tx: any) => {
       // Restore the revision content
       await tx.run(`
         UPDATE posts SET
@@ -170,7 +170,7 @@ async function restoreRevision(revisionId) {
 /**
  * Delete a revision
  */
-async function deleteRevision(revisionId) {
+async function deleteRevision(revisionId: number) {
   const result = await dbAsync.run(`
     DELETE FROM posts WHERE id = ? AND post_type = 'revision'
   `, [revisionId]);
@@ -181,7 +181,7 @@ async function deleteRevision(revisionId) {
 /**
  * Delete all revisions for a post
  */
-async function deleteAllRevisions(postId) {
+async function deleteAllRevisions(postId: number) {
   const result = await dbAsync.run(`
     DELETE FROM posts WHERE post_parent = ? AND post_type = 'revision'
   `, [postId]);
@@ -192,7 +192,7 @@ async function deleteAllRevisions(postId) {
 /**
  * Count revisions for a post
  */
-async function countRevisions(postId) {
+async function countRevisions(postId: number) {
   const row = await dbAsync.get(`
     SELECT COUNT(*) as count FROM posts
     WHERE post_parent = ? AND post_type = 'revision'
@@ -204,7 +204,7 @@ async function countRevisions(postId) {
 /**
  * Compare two revisions
  */
-async function compareRevisions(revisionId1, revisionId2) {
+async function compareRevisions(revisionId1: number, revisionId2: number) {
   const rev1 = await getRevision(revisionId1);
   const rev2 = await getRevision(revisionId2);
 
@@ -222,7 +222,7 @@ async function compareRevisions(revisionId1, revisionId2) {
 /**
  * Limit revisions per post (cleanup old revisions)
  */
-async function limitRevisions(postId, maxRevisions = 10) {
+async function limitRevisions(postId: number, maxRevisions = 10) {
   const count = await countRevisions(postId);
 
   if (count <= maxRevisions) return 0;

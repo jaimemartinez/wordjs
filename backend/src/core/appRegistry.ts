@@ -12,11 +12,11 @@
  * propagates into them); the stack scan remains only as defense-in-depth.
  */
 
-let appInstance = null;
+let appInstance: any = null;
 
 const ROUTE_METHODS = ['get', 'post', 'put', 'delete', 'patch', 'options', 'head', 'all', 'use'];
 
-function wrapHandler(slug, fn) {
+function wrapHandler(slug: any, fn: any) {
     if (typeof fn !== 'function') return fn;
     const { runWithContext } = require('./plugin-context');
     const wrapped = function (this: any, ...args: any[]) {
@@ -32,13 +32,13 @@ function wrapHandler(slug, fn) {
 // Patch the ROUTE_METHODS on a target (app instance OR a shared prototype) so that any
 // handler registered while a plugin is the effective plugin is wrapped to re-enter its
 // context. Core registrations (no effective plugin at registration time) are untouched.
-function patchRouteMethods(target) {
+function patchRouteMethods(target: any) {
     if (!target || target.__wordjsAnchored) return;
     const { getEffectivePlugin } = require('./plugin-context');
     for (const method of ROUTE_METHODS) {
         const original = target[method];
         if (typeof original !== 'function') continue;
-        target[method] = function (...args) {
+        target[method] = function (...args: any[]) {
             const slug = getEffectivePlugin();
             if (slug) {
                 args = args.map(a => (typeof a === 'function' ? wrapHandler(slug, a) : a));
@@ -51,7 +51,7 @@ function patchRouteMethods(target) {
     } catch { /* non-fatal */ }
 }
 
-function anchorPluginRoutes(app) {
+function anchorPluginRoutes(app: any) {
     patchRouteMethods(app);
 }
 
@@ -74,7 +74,7 @@ module.exports = {
     /**
      * Set the Express app instance (called from index.js)
      */
-    setApp(app) {
+    setApp(app: any) {
         appInstance = app;
         anchorPluginRoutes(app);
         anchorExpressRouter();

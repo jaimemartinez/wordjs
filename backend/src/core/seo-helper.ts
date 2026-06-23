@@ -14,7 +14,7 @@ interface SeoOptions {
 /**
  * Generate HTML meta tags for a post/page
  */
-function generateMetaTags(post, options: SeoOptions = {}) {
+function generateMetaTags(post: any, options: SeoOptions = {}) {
     const siteUrl = options.siteUrl || '';
     const siteName = options.siteName || 'WordJS';
 
@@ -65,7 +65,7 @@ function generateMetaTags(post, options: SeoOptions = {}) {
 /**
  * Generate JSON-LD structured data
  */
-function generateJsonLd(post, options: SeoOptions = {}) {
+function generateJsonLd(post: any, options: SeoOptions = {}) {
     const siteUrl = options.siteUrl || '';
     const siteName = options.siteName || 'WordJS';
     const siteDescription = options.siteDescription || '';
@@ -129,8 +129,8 @@ function generateWebsiteSchema(options: SeoOptions = {}) {
 /**
  * Generate breadcrumb schema
  */
-function generateBreadcrumbSchema(breadcrumbs, siteUrl = '') {
-    const items = breadcrumbs.map((crumb, index) => ({
+function generateBreadcrumbSchema(breadcrumbs: any[], siteUrl = '') {
+    const items = breadcrumbs.map((crumb: any, index: number) => ({
         "@type": "ListItem",
         "position": index + 1,
         "name": crumb.name,
@@ -149,7 +149,7 @@ function generateBreadcrumbSchema(breadcrumbs, siteUrl = '') {
 /**
  * Generate XML sitemap
  */
-async function generateSitemap(posts, options: SeoOptions = {}) {
+async function generateSitemap(posts: any[], options: SeoOptions = {}) {
     const siteUrl = options.siteUrl || '';
 
     let xml = '<?xml version="1.0" encoding="UTF-8"?>\n';
@@ -216,7 +216,7 @@ Disallow: /_next/
 /**
  * Escape HTML entities
  */
-function escapeHtml(text) {
+function escapeHtml(text: any) {
     if (!text) return '';
     return String(text)
         .replace(/&/g, '&amp;')

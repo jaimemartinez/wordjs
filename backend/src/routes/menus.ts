@@ -3,6 +3,7 @@
  * /api/v1/menus/*
  */
 
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { Menu, MenuItem } = require('../models/Menu');
@@ -16,7 +17,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // URLs. Anything with a disallowed scheme is blanked to '#'. A blank input returns '' so existing
 // `url || '#'` defaulting is preserved.
 const SAFE_URL_SCHEMES = new Set(['http:', 'https:', 'mailto:', 'tel:']);
-function safeMenuUrl(raw) {
+function safeMenuUrl(raw: any) {
     if (raw === undefined || raw === null) return raw;
     const value = String(raw).trim();
     if (!value) return '';
@@ -58,9 +59,9 @@ function safeMenuUrl(raw) {
  *       200:
  *         description: List of menus
  */
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const menus = await Menu.findAll();
-    res.json(menus.map(m => ({
+    res.json(menus.map((m: any) => ({
         id: m.id,
         name: m.name,
         slug: m.slug,
@@ -78,7 +79,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  *       200:
  *         description: List of locations
  */
-router.get('/locations', asyncHandler(async (req, res) => {
+router.get('/locations', asyncHandler(async (req: Request, res: Response) => {
     const locations = await Menu.getLocations();
     res.json(locations);
 }));
@@ -101,8 +102,8 @@ router.get('/locations', asyncHandler(async (req, res) => {
  *       404:
  *         description: Menu not found
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
-    const menu = await Menu.findById(parseInt(req.params.id, 10));
+router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
+    const menu = await Menu.findById(parseInt(req.params.id as string, 10));
 
     if (!menu) {
         return res.status(404).json({
@@ -114,7 +115,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
 
     const items = await menu.getItems();
     const response = menu.toJSON();
-    response.items = items.map(i => i.toJSON());
+    response.items = items.map((i: any) => i.toJSON());
     res.json(response);
 }));
 
@@ -136,7 +137,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  *       404:
  *         description: No menu assigned
  */
-router.get('/location/:location', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/location/:location', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const menu = await Menu.findByLocation(req.params.location);
 
     if (!menu) {
@@ -149,7 +150,7 @@ router.get('/location/:location', optionalAuth, asyncHandler(async (req, res) =>
 
     const items = await menu.getItems();
     const response = menu.toJSON();
-    response.items = items.map(i => i.toJSON());
+    response.items = items.map((i: any) => i.toJSON());
     res.json(response);
 }));
 
@@ -181,7 +182,7 @@ router.get('/location/:location', optionalAuth, asyncHandler(async (req, res) =>
  *       400:
  *         description: Validation error
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { name, slug, description } = req.body;
 
     if (!name) {
@@ -226,8 +227,8 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: Menu updated
  */
-router.put('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const menuId = parseInt(req.params.id, 10);
+router.put('/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const menuId = parseInt(req.params.id as string, 10);
     const { name, slug, description } = req.body;
 
     const existing = await Menu.findById(menuId);
@@ -263,8 +264,8 @@ router.put('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       404:
  *         description: Menu not found
  */
-router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const menuId = parseInt(req.params.id, 10);
+router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const menuId = parseInt(req.params.id as string, 10);
     const menu = await Menu.findById(menuId);
 
     if (!menu) {
@@ -307,8 +308,8 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: Location updated
  */
-router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const menuId = parseInt(req.params.id, 10);
+router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const menuId = parseInt(req.params.id as string, 10);
     const { location } = req.body;
 
     if (!location) {
@@ -329,8 +330,8 @@ router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req, res
  * POST /menus/:id/items
  * Add menu item
  */
-router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const menuId = parseInt(req.params.id, 10);
+router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const menuId = parseInt(req.params.id as string, 10);
     const { title, url, target, type, objectId, parent, order, classes } = req.body;
 
     if (!title) {
@@ -360,8 +361,8 @@ router.post('/:id/items', authenticate, isAdmin, asyncHandler(async (req, res) =
  * PUT /menus/items/:itemId
  * Update menu item
  */
-router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const itemId = parseInt(req.params.itemId, 10);
+router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const itemId = parseInt(req.params.itemId as string, 10);
 
     const existing = await MenuItem.findById(itemId);
     if (!existing) {
@@ -388,8 +389,8 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res
  * DELETE /menus/items/:itemId
  * Delete menu item
  */
-router.delete('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const itemId = parseInt(req.params.itemId, 10);
+router.delete('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const itemId = parseInt(req.params.itemId as string, 10);
     const item = await MenuItem.findById(itemId);
 
     if (!item) {

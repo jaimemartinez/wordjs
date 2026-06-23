@@ -24,7 +24,7 @@ function safeTestEnv() {
  * @param {string} slug - Plugin slug
  * @returns {Promise<{success: boolean, tests: number, passed: number, failed: number, output: string}>}
  */
-async function runPluginTests(_slug) {
+async function runPluginTests(_slug: string) {
     // SECURITY: a plugin's test files are arbitrary code; `node --test` runs them on the HOST, OUTSIDE
     // the worker sandbox — a host-RCE vector at activation time. There is no trust tier anymore, so NO
     // plugin's tests are ever executed on the host; every plugin is sandboxed at load time in the worker.
@@ -43,8 +43,8 @@ async function runCoreTests() {
     }
 
     const testFiles = fs.readdirSync(testsDir)
-        .filter(f => f.endsWith('.test.js'))
-        .map(f => path.join(testsDir, f));
+        .filter((f: string) => f.endsWith('.test.js'))
+        .map((f: string) => path.join(testsDir, f));
 
     if (testFiles.length === 0) {
         return { success: true, tests: 0, passed: 0, failed: 0 };
@@ -64,10 +64,10 @@ async function runCoreTests() {
             });
 
             let output = '';
-            child.stdout.on('data', (data) => { output += data.toString(); });
-            child.stderr.on('data', (data) => { output += data.toString(); });
+            child.stdout.on('data', (data: Buffer) => { output += data.toString(); });
+            child.stderr.on('data', (data: Buffer) => { output += data.toString(); });
 
-            child.on('close', (code) => {
+            child.on('close', (code: number | null) => {
                 const testsMatch = output.match(/ℹ tests (\d+)/);
                 const passMatch = output.match(/ℹ pass (\d+)/);
                 const failMatch = output.match(/ℹ fail (\d+)/);
@@ -106,7 +106,7 @@ async function runCoreTests() {
  * Verify a plugin's tests pass before activation
  * Throws error if tests fail
  */
-async function verifyPluginTests(slug) {
+async function verifyPluginTests(slug: string) {
     const result = await runPluginTests(slug);
 
     if (!result.success && !result.skipped) {

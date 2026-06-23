@@ -55,7 +55,7 @@ async function createBackup() {
         'wordjs.db', 'wordjs.db-wal', 'wordjs.db-shm'
     ];
 
-    async function addDirectoryToZip(zip, rootPath, relPath = '') {
+    async function addDirectoryToZip(zip: any, rootPath: string, relPath = '') {
         const fullPath = path.join(rootPath, relPath);
         const files = await fs.promises.readdir(fullPath);
 
@@ -168,8 +168,8 @@ function listBackups() {
     if (!fs.existsSync(BACKUPS_DIR)) return [];
 
     const files = fs.readdirSync(BACKUPS_DIR)
-        .filter(f => f.endsWith('.zip'))
-        .map(f => {
+        .filter((f: string) => f.endsWith('.zip'))
+        .map((f: string) => {
             const stats = fs.statSync(path.join(BACKUPS_DIR, f));
             return {
                 filename: f,
@@ -177,7 +177,7 @@ function listBackups() {
                 date: stats.birthtime
             };
         })
-        .sort((a, b) => b.date - a.date); // Newest first
+        .sort((a: any, b: any) => b.date - a.date); // Newest first
 
     return files;
 }
@@ -185,7 +185,7 @@ function listBackups() {
 /**
  * Delete a backup
  */
-function deleteBackup(filename) {
+function deleteBackup(filename: string) {
     // Security: Prevent Directory Traversal
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         throw new Error('Invalid filename');
@@ -202,7 +202,7 @@ function deleteBackup(filename) {
 /**
  * Get absolute path for a backup (for download)
  */
-function getBackupPath(filename) {
+function getBackupPath(filename: string) {
     // Security: Prevent Directory Traversal
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         throw new Error('Invalid filename');
@@ -219,7 +219,7 @@ function getBackupPath(filename) {
  * Restore a backup
  * WARNING: Destructive operation
  */
-async function restoreBackup(filename) {
+async function restoreBackup(filename: string) {
     // Security: Prevent Directory Traversal
     if (filename.includes('..') || filename.includes('/') || filename.includes('\\')) {
         throw new Error('Invalid filename');

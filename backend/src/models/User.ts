@@ -67,7 +67,7 @@ class User {
     meta?: { [key: string]: any };
     role?: string;
 
-    constructor(data) {
+    constructor(data: any) {
         this.id = data.id;
         this.userLogin = data.user_login;
         this.userEmail = data.user_email;
@@ -78,14 +78,14 @@ class User {
         this.userStatus = data.user_status;
     }
 
-    async getMeta(key, single = true) {
+    async getMeta(key: string, single = true) {
         if (single) {
             const row = await dbAsync.get('SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = ? LIMIT 1', [this.id, key]);
             if (!row) return null;
             try { return JSON.parse(row.meta_value); } catch { return row.meta_value; }
         } else {
             const rows = await dbAsync.all('SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = ?', [this.id, key]);
-            return rows.map(row => {
+            return rows.map((row: any) => {
                 try { return JSON.parse(row.meta_value); } catch { return row.meta_value; }
             });
         }
@@ -104,7 +104,7 @@ class User {
         return roles[role]?.capabilities || [];
     }
 
-    can(capability) {
+    can(capability: string) {
         // Administrators bypass the capability lookup entirely (safety net, independent of whether
         // the role→cap map got seeded).
         if (this.getRole() === 'administrator') return true;
@@ -115,7 +115,7 @@ class User {
 
     // Static Methods
 
-    static async create(data) {
+    static async create(data: any) {
         const { username, email, password, displayName, role = 'subscriber' } = data;
 
         // Validation
@@ -169,7 +169,7 @@ class User {
         return await User.findById(userId);
     }
 
-    static async findById(id) {
+    static async findById(id: number) {
         // Core user data
         const row = await dbAsync.get('SELECT * FROM users WHERE id = ?', [id]);
         if (!row) return null;
@@ -181,7 +181,7 @@ class User {
         return user;
     }
 
-    static async findByLogin(login) {
+    static async findByLogin(login: string) {
         const row = await dbAsync.get('SELECT * FROM users WHERE user_login = ?', [login]);
         if (!row) return null;
 
@@ -190,7 +190,7 @@ class User {
         return user;
     }
 
-    static async findByEmail(email) {
+    static async findByEmail(email: any) {
         // Compare against the JS-canonicalized form (full Unicode fold) — the bound value is already
         // lowercased, so the column's LOWER() only has to ASCII-fold legacy mixed-case rows. This
         // matches non-ASCII confusable variants that SQLite's ASCII-only LOWER() alone would miss.
@@ -203,7 +203,7 @@ class User {
         return user;
     }
 
-    static async authenticate(login, password) {
+    static async authenticate(login: string, password: string) {
         let user = await User.findByLogin(login);
         if (!user) user = await User.findByEmail(login);
 
@@ -228,7 +228,7 @@ class User {
         return user;
     }
 
-    static async update(id, data) {
+    static async update(id: number, data: any) {
         const updates: string[] = [];
         const values: any[] = [];
         let passwordChanged = false;
@@ -299,7 +299,7 @@ class User {
         return await User.findById(id);
     }
 
-    static async delete(id) {
+    static async delete(id: number) {
         await dbAsync.run('DELETE FROM user_meta WHERE user_id = ?', [id]);
         await dbAsync.run('DELETE FROM users WHERE id = ?', [id]);
         return true;
@@ -332,10 +332,10 @@ class User {
 
         const rows = await dbAsync.all(sql, params);
 
-        const users = rows.map(row => new User(row));
+        const users = rows.map((row: any) => new User(row));
 
         // Batch-load meta in ONE query instead of loadMeta() per row (N+1).
-        const ids = users.map(u => u.id).filter(id => id != null);
+        const ids = users.map((u: any) => u.id).filter((id: any) => id != null);
         if (ids.length > 0) {
             const placeholders = ids.map(() => '?').join(',');
             const metaRows = await dbAsync.all(
@@ -374,7 +374,7 @@ class User {
     async loadMeta() {
         const rows = await dbAsync.all('SELECT meta_key, meta_value FROM user_meta WHERE user_id = ?', [this.id]);
         const meta: { [key: string]: any } = {};
-        rows.forEach(row => {
+        rows.forEach((row: any) => {
             meta[row.meta_key] = row.meta_value;
         });
         this.meta = meta;
@@ -382,12 +382,12 @@ class User {
         if (meta.role) this.role = meta.role;
     }
 
-    static async getMeta(userId, key) {
+    static async getMeta(userId: number, key: string) {
         const row = await dbAsync.get('SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key]);
         return row ? row.meta_value : null;
     }
 
-    static async updateMeta(userId, key, value) {
+    static async updateMeta(userId: number, key: string, value: any) {
         // Simple upsert logic
         // Check if exists
         const existing = await User.getMeta(userId, key);
@@ -399,7 +399,7 @@ class User {
         }
     }
 
-    static async deleteMeta(userId, key) {
+    static async deleteMeta(userId: number, key: string) {
         await dbAsync.run('DELETE FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key]);
         return true;
     }

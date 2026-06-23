@@ -63,7 +63,7 @@ const CHILD_PROCESS_BLOCKED = [
 // directory pointing outside it and slip past containment. If the target doesn't exist
 // yet, resolve its nearest existing parent dir instead. Falls back to the lexical path
 // on any error so we never crash on a hostile/odd filesystem.
-function realResolve(targetPath) {
+function realResolve(targetPath: string) {
     const resolved = path.resolve(targetPath);
     try {
         return originalFs.realpathSync(resolved);
@@ -88,7 +88,7 @@ function realResolve(targetPath) {
     }
 }
 
-function isPathWithinPluginDir(pluginSlug, targetPath) {
+function isPathWithinPluginDir(pluginSlug: any, targetPath: any) {
     if (!pluginSlug) return true;
 
     const resolvedPath = realResolve(targetPath);
@@ -115,7 +115,7 @@ function isPathWithinPluginDir(pluginSlug, targetPath) {
 /**
  * Create a security error with detailed message
  */
-function createSecurityError(pluginSlug, action, details = '') {
+function createSecurityError(pluginSlug: any, action: any, details = '') {
     const msg = `🛡️ RUNTIME SECURITY BLOCK: Plugin '${pluginSlug}' attempted unauthorized action: ${action}${details ? ` (${details})` : ''}. Add the required permission to manifest.json.`;
     console.error(msg);
     return new Error(msg);
@@ -130,7 +130,7 @@ function createSecurityError(pluginSlug, action, details = '') {
  */
 function createSecureFs() {
     const handler = {
-        get(target, prop) {
+        get(target: any, prop: any) {
             // SECURITY: fs.promises is a non-function OBJECT, so without this it would be
             // returned raw and bypass every guard. Hand plugins the secured promises proxy.
             if (prop === 'promises') {
@@ -160,7 +160,7 @@ function createSecureFs() {
 
             // Check if this is a read method
             if (FS_READ_METHODS.includes(prop)) {
-                return function (...args) {
+                return function (...args: any[]) {
                     const targetPath = args[0];
 
                     // Allow access to own plugin directory without explicit permission
@@ -179,7 +179,7 @@ function createSecureFs() {
 
             // Check if this is a write method
             if (FS_WRITE_METHODS.includes(prop)) {
-                return function (...args) {
+                return function (...args: any[]) {
                     const targetPath = args[0];
 
                     // Allow write to own plugin directory without explicit permission
@@ -217,7 +217,7 @@ function createSecureFs() {
  */
 function createSecureChildProcess() {
     const handler = {
-        get(target, prop) {
+        get(target: any, prop: any) {
             const originalMethod = target[prop];
 
             // If it's not a function, return as-is
@@ -284,7 +284,7 @@ const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', '
 // otherwise. NOT self-declarable.
 const NETWORK_MODULES = new Set(['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']);
 
-function createBlockedModuleProxy(pluginSlug, norm) {
+function createBlockedModuleProxy(pluginSlug: any, norm: any) {
     // Regular (non-arrow) function so it is usable as both a call target and a
     // constructor (new X()) — both paths throw our security error.
     function thrower(): never {
@@ -297,7 +297,7 @@ function createBlockedModuleProxy(pluginSlug, norm) {
     });
 }
 
-function secureModuleFor(id) {
+function secureModuleFor(id: any) {
     // Normalize the 'node:' prefix, then match on the FIRST PATH SEGMENT so SUBMODULES of a blocked
     // builtin are caught too — e.g. require('inspector/promises') (its Session.connectToMainThread() is
     // a worker->host escape) or 'dns/promises'. Exact-string matching missed these.
@@ -413,7 +413,7 @@ const PROTECTED_CORE_TABLES = new Set([
     'users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions'
 ]);
 
-function extractSqlTables(sql): string[] {
+function extractSqlTables(sql: any): string[] {
     const out: string[] = [];
     const re = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+["'`\[]?([a-z_][a-z0-9_]*)/gi;
     let m;
@@ -421,7 +421,7 @@ function extractSqlTables(sql): string[] {
     return out;
 }
 
-function guardPluginSql(sql) {
+function guardPluginSql(sql: any) {
     for (const t of extractSqlTables(sql)) {
         if (PROTECTED_CORE_TABLES.has(t)) {
             throw createSecurityError(getEffectivePlugin() || 'plugin', `dbAsync(${t})`,
@@ -465,7 +465,7 @@ function secureDatabase() {
 // Returns a replacement module (sanitized config / scoped db), THROWS for blocked core modules, or
 // undefined to fall through. Keys on the REQUIRING module: only a plugin/theme file's OWN
 // requires are policed (core->core requires are always allowed, even inside a plugin context).
-function corePolicyFor(request, mod): any {
+function corePolicyFor(request: any, mod: any): any {
     if (typeof request !== 'string' || request[0] !== '.') return undefined;
     const requirer = mod && mod.filename;
     if (!requirer) return undefined;
@@ -484,7 +484,7 @@ function corePolicyFor(request, mod): any {
 
 function installSecureRequire() {
     // 1. Patch Module.prototype.require (the normal `require('fs')` path).
-    Module.prototype.require = function (id) {
+    Module.prototype.require = function (id: any) {
         const secure = secureModuleFor(id);
         if (secure !== undefined) return secure;
         const core = corePolicyFor(id, this);
@@ -496,7 +496,7 @@ function installSecureRequire() {
     //    `require('module').constructor._load('child_process')` bypass Module.prototype.require
     //    but still go through _load, so guard it identically.
     const originalLoad = Module._load;
-    Module._load = function (request, _parent, _isMain) {
+    Module._load = function (request: any, _parent: any, _isMain: any) {
         const secure = secureModuleFor(request);
         if (secure !== undefined) return secure;
         const core = corePolicyFor(request, _parent);
@@ -518,7 +518,7 @@ function installSecureRequire() {
     for (const m of ['binding', '_linkedBinding']) {
         const orig = (process as any)[m];
         if (typeof orig === 'function') {
-            (process as any)[m] = function (...args) {
+            (process as any)[m] = function (...args: any[]) {
                 const pluginSlug = getEffectivePlugin();
                 if (pluginSlug) {
                     throw createSecurityError(pluginSlug, `process.${m}`, 'native bindings are blocked for plugins');
@@ -532,7 +532,7 @@ function installSecureRequire() {
     //     (require proxies, ALS context) — a direct sandbox escape. No trust tier unlocks it.
     const origDlopen = (process as any).dlopen;
     if (typeof origDlopen === 'function') {
-        (process as any).dlopen = function (...args) {
+        (process as any).dlopen = function (...args: any[]) {
             const pluginSlug = getEffectivePlugin();
             if (pluginSlug) {
                 throw createSecurityError(pluginSlug, 'process.dlopen', 'loading native addons is not permitted for plugins');
@@ -565,7 +565,7 @@ function installSecureRequire() {
     for (const m of PROC_BLOCKED) {
         const orig = (process as any)[m];
         if (typeof orig === 'function') {
-            (process as any)[m] = function (...args) {
+            (process as any)[m] = function (...args: any[]) {
                 const pluginSlug = getEffectivePlugin();
                 if (pluginSlug) {
                     throw createSecurityError(pluginSlug, `process.${m}`, 'host process control is not permitted in the plugin sandbox');
@@ -580,7 +580,7 @@ function installSecureRequire() {
         const rep = (process as any).report;
         if (rep && typeof rep.writeReport === 'function') {
             const origWriteReport = rep.writeReport.bind(rep);
-            rep.writeReport = function (...args) {
+            rep.writeReport = function (...args: any[]) {
                 const pluginSlug = getEffectivePlugin();
                 if (pluginSlug) {
                     throw createSecurityError(pluginSlug, 'process.report.writeReport', 'is not permitted in the plugin sandbox');
@@ -602,7 +602,7 @@ function installSecureRequire() {
     for (const m of ['setTimeout', 'setInterval']) {
         const orig = (global as any)[m];
         if (typeof orig !== 'function') continue;
-        (global as any)[m] = function (cb, ...rest) {
+        (global as any)[m] = function (cb: any, ...rest: any[]) {
             if (typeof cb === 'function') {
                 const slug = timerCtx.getEffectivePlugin();
                 if (slug) {
@@ -625,7 +625,7 @@ function installSecureRequire() {
     for (const m of ['on', 'once', 'addListener', 'prependListener', 'prependOnceListener']) {
         const orig = EventEmitter.prototype[m];
         if (typeof orig !== 'function') continue;
-        EventEmitter.prototype[m] = function (event, listener) {
+        EventEmitter.prototype[m] = function (event: any, listener: any) {
             const slug = emCtx.getCurrentPlugin();
             if (slug && typeof listener === 'function') {
                 // PER-SLUG cache: the SAME listener function may be registered by different plugins (or
@@ -652,7 +652,7 @@ function installSecureRequire() {
     for (const m of ['removeListener', 'off']) {
         const orig = EventEmitter.prototype[m];
         if (typeof orig !== 'function') continue;
-        EventEmitter.prototype[m] = function (event, listener) {
+        EventEmitter.prototype[m] = function (event: any, listener: any) {
             const slug = emCtx.getCurrentPlugin();
             const cache: Map<string, any> | undefined = listener && (listener as any).__wordjsWrappedBySlug;
             // Prefer the wrapper for the CURRENT slug; fall back to the sole cached wrapper if there is
@@ -677,7 +677,7 @@ function createSecureFsPromises() {
     const originalFsPromises = originalFs.promises;
 
     const handler = {
-        get(target, prop) {
+        get(target: any, prop: any) {
             const originalMethod = target[prop];
 
             if (typeof originalMethod !== 'function') {
@@ -695,7 +695,7 @@ function createSecureFsPromises() {
             const isWrite = FS_WRITE_METHODS.includes(prop);
 
             if (isRead || isWrite) {
-                return async function (...args) {
+                return async function (...args: any[]) {
                     const targetPath = args[0];
 
                     if (isPathWithinPluginDir(pluginSlug, targetPath)) {

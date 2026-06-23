@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const analytics = require('../models/Analytics');
@@ -13,7 +14,7 @@ const { isAdmin } = require('../middleware/permissions');
  *     security:
  *       - bearerAuth: []
  */
-router.get('/stats', authenticate, isAdmin, async (req, res) => {
+router.get('/stats', authenticate, isAdmin, async (req: Request, res: Response) => {
     try {
         const { period } = req.query; // 'weekly' or 'monthly'
         const data = await analytics.getStats(period || 'weekly');
@@ -28,7 +29,7 @@ router.get('/stats', authenticate, isAdmin, async (req, res) => {
  * Public Endpoint for tracking (Pixel/Beacon)
  * Called by frontend on page load
  */
-router.post('/track', async (req, res) => {
+router.post('/track', async (req: any, res: Response) => {
     try {
         const { type, resource, metadata } = req.body;
 

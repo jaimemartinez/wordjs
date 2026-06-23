@@ -1,3 +1,4 @@
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const certManager = require('../core/cert-manager');
@@ -12,7 +13,7 @@ router.use(isAdmin);
  * POST /auto-provision
  * HTTP-01 Automated Flow
  */
-router.post('/auto-provision', async (req, res) => {
+router.post('/auto-provision', async (req: Request, res: Response) => {
     try {
         const { domain, email, staging } = req.body;
         if (!domain || !email) return res.status(400).json({ error: 'Domain and Email required' });
@@ -29,7 +30,7 @@ router.post('/auto-provision', async (req, res) => {
  * POST /dns-start
  * Step 1 of DNS Flow
  */
-router.post('/dns-start', async (req, res) => {
+router.post('/dns-start', async (req: Request, res: Response) => {
     try {
         const { domain, email, staging } = req.body;
         if (!domain || !email) return res.status(400).json({ error: 'Domain and Email required' });
@@ -46,7 +47,7 @@ router.post('/dns-start', async (req, res) => {
  * POST /dns-check
  * Verify DNS Propagation (Pre-flight)
  */
-router.post('/dns-check', async (req, res) => {
+router.post('/dns-check', async (req: Request, res: Response) => {
     try {
         const { domain, expectedValue } = req.body;
         const passed = await certManager.checkDNSPropagation(domain, expectedValue);
@@ -60,7 +61,7 @@ router.post('/dns-check', async (req, res) => {
  * POST /dns-finish
  * Step 2 of DNS Flow
  */
-router.post('/dns-finish', async (req, res) => {
+router.post('/dns-finish', async (req: Request, res: Response) => {
     try {
         const { step1Data, email, staging } = req.body;
         await certManager.finishDNSChallenge(step1Data, email, !!staging);
@@ -75,7 +76,7 @@ router.post('/dns-finish', async (req, res) => {
  * POST /upload-custom
  * Upload manual certificate and key
  */
-router.post('/upload-custom', async (req, res) => {
+router.post('/upload-custom', async (req: Request, res: Response) => {
     try {
         const { key, cert } = req.body;
         if (!key || !cert) return res.status(400).json({ error: 'Certificate and Key content required' });
@@ -87,7 +88,7 @@ router.post('/upload-custom', async (req, res) => {
         res.status(500).json({ error: e.message });
     }
 });
-router.get('/config', async (req, res) => {
+router.get('/config', async (req: Request, res: Response) => {
     try {
         const config = await certManager.getConfig();
         res.json(config);
@@ -100,7 +101,7 @@ router.get('/config', async (req, res) => {
  * POST /check
  * Ensure certificate exists (Generate Self-Signed if missing)
  */
-router.post('/check', async (req, res) => {
+router.post('/check', async (req: Request, res: Response) => {
     try {
         const result = await certManager.ensureGatewayCert();
         res.json(result);
@@ -113,7 +114,7 @@ router.post('/check', async (req, res) => {
  * POST /config
  * Update Gateway Config
  */
-router.post('/config', async (req, res) => {
+router.post('/config', async (req: Request, res: Response) => {
     try {
         const { port, sslEnabled } = req.body;
         const result = await certManager.updateGatewayConfig(port, sslEnabled);
@@ -133,7 +134,7 @@ router.post('/config', async (req, res) => {
  * GET /acme-config
  * Current auto-renewal settings (no secrets) + last renewal outcome + next scheduled run.
  */
-router.get('/acme-config', async (req, res) => {
+router.get('/acme-config', async (req: Request, res: Response) => {
     try {
         const config = require('../config/app');
         const { getOption } = require('../core/options');
@@ -162,7 +163,7 @@ router.get('/acme-config', async (req, res) => {
  * POST /acme-config
  * Persist auto-renewal settings to wordjs-config.json and reflect them into the live config.
  */
-router.post('/acme-config', async (req, res) => {
+router.post('/acme-config', async (req: Request, res: Response) => {
     try {
         const { enabled, email, domains, staging, renewBeforeDays, challengeType, http01Port } = req.body || {};
 
@@ -214,7 +215,7 @@ router.post('/acme-config', async (req, res) => {
  * POST /renew-now
  * Force an immediate renewal attempt (bypasses the not-due/disabled gates).
  */
-router.post('/renew-now', async (req, res) => {
+router.post('/renew-now', async (req: Request, res: Response) => {
     try {
         const result = await certManager.renewIfDue({ force: true });
         res.json(result);

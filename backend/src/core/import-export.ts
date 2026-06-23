@@ -42,7 +42,7 @@ async function exportSite(options: Record<string, any> = {}) {
     // Export posts
     if (includePosts) {
         const posts = await Post.findAll({ type: 'post', status: 'any', limit: 10000 });
-        exportData.content.posts = await Promise.all(posts.map(async p => ({
+        exportData.content.posts = await Promise.all(posts.map(async (p: any) => ({
             id: p.id,
             title: p.postTitle,
             slug: p.postName,
@@ -52,8 +52,8 @@ async function exportSite(options: Record<string, any> = {}) {
             date: p.postDate,
             modified: p.postModified,
             authorId: p.authorId,
-            categories: (await p.getTerms('category')).map(t => t.name),
-            tags: (await p.getTerms('post_tag')).map(t => t.name),
+            categories: (await p.getTerms('category')).map((t: any) => t.name),
+            tags: (await p.getTerms('post_tag')).map((t: any) => t.name),
             meta: await Post.getAllMeta(p.id)
         })));
     }
@@ -61,7 +61,7 @@ async function exportSite(options: Record<string, any> = {}) {
     // Export pages
     if (includePages) {
         const pages = await Post.findAll({ type: 'page', status: 'any', limit: 10000 });
-        exportData.content.pages = await Promise.all(pages.map(async p => ({
+        exportData.content.pages = await Promise.all(pages.map(async (p: any) => ({
             id: p.id,
             title: p.postTitle,
             slug: p.postName,
@@ -76,7 +76,7 @@ async function exportSite(options: Record<string, any> = {}) {
 
     // Export categories
     const categories = await Term.getCategories();
-    exportData.content.categories = categories.map(c => ({
+    exportData.content.categories = categories.map((c: any) => ({
         id: c.termId,
         name: c.name,
         slug: c.slug,
@@ -86,7 +86,7 @@ async function exportSite(options: Record<string, any> = {}) {
 
     // Export tags
     const tags = await Term.getTags();
-    exportData.content.tags = tags.map(t => ({
+    exportData.content.tags = tags.map((t: any) => ({
         id: t.termId,
         name: t.name,
         slug: t.slug,
@@ -96,7 +96,7 @@ async function exportSite(options: Record<string, any> = {}) {
     // Export menus
     if (includeMenus) {
         const menus = await Menu.findAll();
-        exportData.content.menus = await Promise.all(menus.map(async m => ({
+        exportData.content.menus = await Promise.all(menus.map(async (m: any) => ({
             id: m.id,
             name: m.name,
             slug: m.slug,
@@ -108,7 +108,7 @@ async function exportSite(options: Record<string, any> = {}) {
     // Export users
     if (includeUsers) {
         const users = await User.findAll({ limit: 10000 });
-        exportData.content.users = users.map(u => ({
+        exportData.content.users = users.map((u: any) => ({
             id: u.id,
             username: u.userLogin,
             password: u.userPass, // Include hashed password
@@ -189,7 +189,7 @@ async function exportSite(options: Record<string, any> = {}) {
 /**
  * Export to JSON file (Async)
  */
-async function exportToFile(filepath, options = {}) {
+async function exportToFile(filepath: any, options = {}) {
     const data = await exportSite(options);
     fs.writeFileSync(filepath, JSON.stringify(data, null, 2));
     return filepath;
@@ -198,7 +198,7 @@ async function exportToFile(filepath, options = {}) {
 /**
  * SECURITY: Validate import data to prevent prototype pollution and injection
  */
-function validateImportData(data) {
+function validateImportData(data: any) {
     const dangerousKeys = ['__proto__', 'constructor', 'prototype'];
 
     // DoS guards: a deeply nested or enormous payload could blow the stack or pin the CPU.
@@ -207,7 +207,7 @@ function validateImportData(data) {
     const MAX_ARRAY_LENGTH = 1_000_000;
     let visited = 0;
 
-    function checkObject(obj, path = '', depth = 0) {
+    function checkObject(obj: any, path = '', depth = 0) {
         if (obj === null || typeof obj !== 'object') return;
 
         if (depth > MAX_DEPTH) {
@@ -245,7 +245,7 @@ function validateImportData(data) {
 /**
  * Import site content (Async)
  */
-async function importSite(data, options: Record<string, any> = {}) {
+async function importSite(data: any, options: Record<string, any> = {}) {
     // SECURITY: Validate import data structure
     validateImportData(data);
 
@@ -265,7 +265,7 @@ async function importSite(data, options: Record<string, any> = {}) {
         errors: [] as string[]
     };
 
-    const idMap = {
+    const idMap: Record<string, Record<string, any>> = {
         posts: {},
         pages: {},
         categories: {},
@@ -546,7 +546,7 @@ async function importSite(data, options: Record<string, any> = {}) {
 /**
  * Import from JSON file (Async)
  */
-async function importFromFile(filepath, options = {}) {
+async function importFromFile(filepath: any, options = {}) {
     const content = fs.readFileSync(filepath, 'utf8');
     const data = JSON.parse(content);
     return await importSite(data, options);
@@ -612,7 +612,7 @@ async function exportToWXR() {
     return wxr;
 }
 
-function escapeXml(str) {
+function escapeXml(str: any) {
     if (!str) return '';
     return str
         .replace(/&/g, '&amp;')

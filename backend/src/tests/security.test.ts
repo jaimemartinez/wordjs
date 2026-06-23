@@ -99,7 +99,7 @@ describe('Auth Middleware', () => {
 // ============================================================================
 describe('SVG Sanitization', () => {
     // Custom regex-based sanitizer (simpler, no dependencies)
-    const sanitizeSvg = (rawSvg) => {
+    const sanitizeSvg = (rawSvg: string) => {
         return rawSvg
             .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
             .replace(/javascript:/gi, '')
@@ -171,7 +171,7 @@ describe('IO Guard - Path Safety', () => {
 
     const BLOCKED_EXTENSIONS = ['.pem', '.key', '.crt', '.p12', '.pfx'];
 
-    const isPathSafe = (targetPath) => {
+    const isPathSafe = (targetPath: string) => {
         const resolved = path.resolve(targetPath);
         const filename = path.basename(resolved).toLowerCase();
         const ext = path.extname(filename).toLowerCase();
@@ -216,7 +216,7 @@ describe('CSRF Protection', () => {
     const { csrfProtection } = require('../middleware/auth');
     // Exercise the REAL middleware with a mock req/res. The gateway pins X-Forwarded-Host to the
     // true client Host, so trusting it here is safe; these tests pin the origin-matching logic.
-    const run = (method, headers, path = '/api/v1/posts') => {
+    const run = (method: string, headers: any, path = '/api/v1/posts') => {
         const h: any = {};
         for (const k in headers) h[k.toLowerCase()] = (headers as any)[k];
         const req: any = { method, path, get: (name: string) => h[String(name).toLowerCase()] };

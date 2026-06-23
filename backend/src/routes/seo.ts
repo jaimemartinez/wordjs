@@ -3,6 +3,8 @@
  * Endpoints for sitemap.xml, robots.txt, and SEO-related endpoints
  */
 
+import type { Request, Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
@@ -32,7 +34,7 @@ const { can } = require('../middleware/permissions');
  *             schema:
  *               type: string
  */
-router.get('/sitemap.xml', async (req, res) => {
+router.get('/sitemap.xml', async (req: Request, res: Response) => {
     try {
         // Get site URL
         const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
@@ -69,7 +71,7 @@ router.get('/sitemap.xml', async (req, res) => {
  *             schema:
  *               type: string
  */
-router.get('/robots.txt', async (req, res) => {
+router.get('/robots.txt', async (req: Request, res: Response) => {
     try {
         const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
         const robotsTxt = generateRobotsTxt(siteUrl);
@@ -101,7 +103,7 @@ router.get('/robots.txt', async (req, res) => {
  *       200:
  *         description: SEO metadata
  */
-router.get('/meta/:postId', authenticate, can('edit_posts'), async (req, res) => {
+router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: any, res: Response) => {
     try {
         const postId = parseInt(req.params.postId, 10);
         if (!postId) {

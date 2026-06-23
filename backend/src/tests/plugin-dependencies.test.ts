@@ -11,7 +11,7 @@ const semver = require('semver');
 let passed = 0;
 let failed = 0;
 
-function test(name, fn) {
+function test(name: string, fn: () => void) {
     try {
         fn();
         console.log(`  ✅ ${name}`);
@@ -23,9 +23,9 @@ function test(name, fn) {
     }
 }
 
-function expect(actual) {
+function expect(actual: any) {
     return {
-        toBe(expected) {
+        toBe(expected: any) {
             if (actual !== expected) {
                 throw new Error(`Expected ${expected}, got ${actual}`);
             }
@@ -40,7 +40,7 @@ function expect(actual) {
                 throw new Error(`Expected false, got ${actual}`);
             }
         },
-        toContain(expected) {
+        toContain(expected: any) {
             if (!actual.includes(expected)) {
                 throw new Error(`Expected "${actual}" to contain "${expected}"`);
             }
@@ -52,7 +52,7 @@ function expect(actual) {
 // Test: semverRangesIntersect (inline implementation for testing)
 // ============================================
 
-function semverRangesIntersect(range1, range2) {
+function semverRangesIntersect(range1: string, range2: string) {
     try {
         // Use semver.intersects if available (semver 7.x)
         if (typeof semver.intersects === 'function') {

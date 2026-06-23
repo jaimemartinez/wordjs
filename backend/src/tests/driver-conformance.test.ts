@@ -62,7 +62,7 @@ async function runContract(driver: any, d: any) {
 }
 
 // --- SQLite native (better-sqlite3): the canonical driver. Runs against a throwaway temp DB. ---
-test('driver conformance: sqlite-native (better-sqlite3) satisfies the interface contract', async (t) => {
+test('driver conformance: sqlite-native (better-sqlite3) satisfies the interface contract', async (t: any) => {
     const tmp = path.join(os.tmpdir(), `wordjs-conf-${process.pid}-${Date.now()}.db`);
     let driver: any;
     try {
@@ -78,7 +78,7 @@ test('driver conformance: sqlite-native (better-sqlite3) satisfies the interface
 });
 
 // --- Postgres (pg client): only if an external Postgres is reachable, otherwise skip. ---
-test('driver conformance: postgres satisfies the interface contract (skipped if no PG reachable)', async (t) => {
+test('driver conformance: postgres satisfies the interface contract (skipped if no PG reachable)', async (t: any) => {
     let driver: any;
     try {
         driver = require('../drivers/postgres');

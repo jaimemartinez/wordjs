@@ -10,7 +10,7 @@ const path = require('path');
 let passed = 0;
 let failed = 0;
 
-function test(name, fn) {
+function test(name: string, fn: () => void) {
     try {
         fn();
         console.log(`  ✅ ${name}`);
@@ -22,9 +22,9 @@ function test(name, fn) {
     }
 }
 
-function expect(actual) {
+function expect(actual: any) {
     return {
-        toBe(expected) {
+        toBe(expected: any) {
             if (actual !== expected) {
                 throw new Error(`Expected ${expected}, got ${actual}`);
             }
