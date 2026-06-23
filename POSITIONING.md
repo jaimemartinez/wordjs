@@ -86,12 +86,15 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   in-flight calls, inbound/outbound payload caps, fs-write disk quota.
 
 **Residual gaps (state these plainly — they shape the roadmap):**
-- It is now **OS process isolation**, but not yet *fully* locked down at the kernel surface.
-  The child runs with the full Node API and a normal OS uid; `fs` / `child_process` inside the
-  child are still narrowed by **JS-level proxies** (defense-in-depth), so a missed proxy could
-  let the child do — *within its own process* — more than its manifest declares. It can no
-  longer reach the host heap or crash the host, but it isn't yet capability-minimal at the
-  syscall level.
+- It is now **OS process isolation**, plus an **opt-in Linux hardening layer** (bubblewrap;
+  `sandbox.useKernelHardening`, probe-gated, default-off) that runs the child as an
+  **unprivileged uid with all capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a
+  read-only filesystem**. Still *not* locked down: **`seccomp`/`Landlock` syscall filtering**
+  (phase 2) — without them the child keeps the full Node syscall surface, and `fs` /
+  `child_process` inside the child are narrowed by **JS-level proxies** (defense-in-depth), so a
+  missed proxy could let the child do — *within its own process* — more than its manifest
+  declares. It can no longer reach the host heap or crash the host; full capability-minimality at
+  the syscall level is the remaining gap. (The uid-drop trades away privileged-port binding.)
 - The per-child memory cap is layered: (a) **preventive** — on systemd Linux each child can run in a
   transient **cgroup v2 scope with `MemoryMax`** (`systemd-run --user --scope`, no root; operator
   opt-in via `sandbox.useCgroupMemoryCap` and additionally probe-gated so it only activates where
@@ -102,9 +105,10 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   a box-tight virtual cap infeasible, so this only bounds pathological allocation). The remaining gap
   is a **preventive** cap on **Windows** (a Job Object — needs a native helper, not pure-JS) and on
   non-systemd Linux; there the reactive poll + process separation apply.
-- The strongest remaining hardening — **syscall filtering (seccomp / landlock), dropped uid,
-  containers / cgroups** so the child's OS capabilities shrink "by construction" — is **not yet
-  built**; it now layers cleanly on top of the already-separate process.
+- **Dropped uid + capability-drop + `no-new-privs` + namespaces** now ship as the opt-in
+  bubblewrap layer above. The strongest remaining piece — **`seccomp`/`Landlock` syscall
+  filtering** so the child's syscall surface shrinks "by construction" — is **phase 2**; it layers
+  cleanly on top of the already-separate, already-deprivileged process.
 - The model has had several red-team passes (8 rounds) plus the OS-isolation pivot; it has
   **not had an independent third-party audit**.
 
@@ -240,7 +244,7 @@ enlarges the trust surface:
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
 | **Ecosystem from zero** | The marketplace pitch needs plugins; we have a handful of first-party plugins and no third-party authors. A safe marketplace with nothing in it sells nothing. | Seed with high-quality first-party + a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
-| **Kernel-surface hardening gap** | Plugins now run in a separate OS process (host-crash / heap-escape closed), but the child still has the full Node API + normal uid; capability-minimality at the syscall level isn't built yet. A skeptical security buyer will probe this. | Add seccomp / landlock + cgroup caps + dropped uid on the **hosted tier first**; message §2 honestly; never claim "unbreakable." |
+| **Kernel-surface hardening gap** | Plugins run in a separate OS process (host-crash / heap-escape closed), and an opt-in Linux layer (bubblewrap) now drops uid + caps and adds no-new-privs / namespaces / read-only-fs. Still missing: **seccomp/Landlock syscall filtering** (phase 2), so the child keeps the full Node syscall surface. A skeptical security buyer will probe this. | Opt-in deprivileging layer shipped; add seccomp/Landlock next (hosted tier first); message §2 honestly; never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
 | **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + default-deny capability grants are the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
 | **License** *(resolved)* | A commercial marketplace + hosted offering needs a license that permits monetization. | **Done:** the project is now consistently **MIT** (no copyleft prod deps; see `THIRD-PARTY-NOTICES.md` + the CI license gate). Optionally revisit a source-available (BSL-style) license later if a hosted clone becomes a threat. |
