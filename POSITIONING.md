@@ -219,9 +219,10 @@ enlarges the trust surface:
   capability surface even though it stays sandboxed.
 - **ACME / cert-manager → out of core.** TLS issuance is a deployment concern (reverse proxy /
   hosting layer), not CMS core.
-- **Embedded PostgreSQL → out of core.** Bundling and auto-starting an embedded PG *server
-  process* (via `child_process`) is a large native / ops surface that contradicts "small
-  auditable core." Make it a dev-convenience / managed option, not a default.
+- **Embedded PostgreSQL → removed (done).** Bundling and auto-starting an embedded PG *server
+  process* (via `child_process`) was a large native / ops surface that contradicted the "small
+  auditable core" thesis; it has been **removed**. Postgres support remains via the `pg` client to
+  an external server.
 - **Pick ONE database.** The code ships multiple drivers (`sqlite-legacy`, `sqlite-native`,
   `postgres`) with fallback logic. Standardize on **Postgres** (the serious,
   multi-tenant-capable target) for the product; keep SQLite as a dev-only convenience at most.
@@ -256,7 +257,7 @@ trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-t
 We win by being honest about the remaining kernel-level hardening while shipping the curated
 marketplace and hosted offering that turn "your plugins can't compromise your site" into the
 product. The work to get there is **ecosystem, an external audit, the kernel-level hardening on
-hosted, and a deliberately shrunken minimal-capability core** (cut MTA / ACME / embedded-PG,
+hosted, and a deliberately shrunken minimal-capability core** (cut MTA / ACME,
 pick one DB). The license question is resolved (MIT).
 
 ---

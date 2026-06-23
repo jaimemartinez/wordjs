@@ -347,7 +347,7 @@ const CORE_DIR = __dirname;
 const CONFIG_APP = path.join(CORE_DIR, '../config', 'app');
 const BLOCKED_CORE = new Set([
     'plugin-test-runner', 'import-export', 'backup', 'cert-manager', 'certManager',
-    'embedded-db', 'plugin-context', 'secure-require', 'io-guard', 'crash-guard', 'configManager'
+    'plugin-context', 'secure-require', 'io-guard', 'crash-guard', 'configManager'
 ].map(n => path.join(CORE_DIR, n)));
 
 // Realpath-resolved plugin/theme dirs, used to classify the REQUIRING module by its filename.

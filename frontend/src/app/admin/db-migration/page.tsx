@@ -423,22 +423,6 @@ export default function DbMigrationPage() {
                                     </button>
                                 </div>
 
-                                {/* Embedded Server Helper */}
-                                <div className="mb-8 p-5 bg-indigo-50/50 rounded-2xl border border-indigo-100">
-                                    <h4 className="font-bold text-sm text-indigo-900 mb-3 flex items-center gap-2">
-                                        <i className="fa-solid fa-server"></i> Local Embedded DB
-                                    </h4>
-
-                                    <div className="flex items-center justify-between">
-                                        <div className="text-sm font-medium text-indigo-700/80">
-                                            Use built-in private instance.
-                                        </div>
-                                        <EmbeddedControls
-                                            onReady={(creds) => setPgConfig({ ...pgConfig, ...creds })}
-                                        />
-                                    </div>
-                                </div>
-
                                 <div className="space-y-5 mb-8">
                                     <div>
                                         <label className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2">Host Address</label>
@@ -506,86 +490,6 @@ export default function DbMigrationPage() {
                     </div>
                 </div>
             )}
-        </div>
-    );
-}
-
-// Sub-component for Embedded Controls
-function EmbeddedControls({ onReady }: { onReady: (creds: any) => void }) {
-    const [status, setStatus] = useState<any>(null);
-    const [loading, setLoading] = useState(false);
-
-    const fetchStatus = async () => {
-        try {
-            const data = await api<any>('/db-migration/embedded/status');
-            setStatus(data);
-        } catch { }
-    };
-
-    useEffect(() => { fetchStatus(); }, []);
-
-    const action = async (act: 'install' | 'start' | 'stop') => {
-        setLoading(true);
-        try {
-            await apiPost(`/db-migration/embedded/${act}`, {});
-            await fetchStatus();
-
-            // If just started, auto-fill
-            if (act === 'start') {
-                onReady({
-                    dbHost: 'localhost',
-                    dbPort: '5433', // Embedded Port
-                    dbUser: 'postgres',
-                    dbPassword: 'password',
-                    dbName: 'wordjs'
-                });
-            }
-        } catch { }
-        setLoading(false);
-    };
-
-    if (!status) return <span className="text-xs">Checking...</span>;
-    if (status.isInstalling) return <span className="text-xs text-blue-600 animate-pulse">Installing binary...</span>;
-
-    if (!status.installed) {
-        return (
-            <button
-                onClick={() => action('install')}
-                disabled={loading}
-                className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
-            >
-                {loading ? 'Installing...' : 'Install (~80MB)'}
-            </button>
-        );
-    }
-
-    if (!status.running) {
-        return (
-            <button
-                onClick={() => action('start')}
-                disabled={loading}
-                className="text-xs px-2 py-1 bg-green-100 text-green-700 hover:bg-green-200 rounded font-medium"
-            >
-                {loading ? 'Starting...' : 'Start Server'}
-            </button>
-        );
-    }
-
-    return (
-        <div className="flex items-center gap-2">
-            <span className="text-xs text-green-600 font-bold">● Running :5433</span>
-            <button
-                onClick={() => onReady({
-                    dbHost: 'localhost',
-                    dbPort: '5433',
-                    dbUser: 'postgres',
-                    dbPassword: 'password',
-                    dbName: 'wordjs'
-                })}
-                className="text-xs px-2 py-1 bg-blue-50 text-blue-600 hover:bg-blue-100 rounded"
-            >
-                Use
-            </button>
         </div>
     );
 }
