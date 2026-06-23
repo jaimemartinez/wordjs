@@ -382,10 +382,13 @@ cross-platform RSS poll).
   consequences of what was deliberately granted. It does not sandbox the frontend bundle (plugin React
   components are build-time assets, bundled and reviewed as before); it does not replace code review of
   first-party plugins (they are pre-granted, so review them as you would any code you ship); and a separate
-  OS process is **not yet** syscall-confinement (seccomp/landlock + dropped uid are roadmap — see the
-  residual-risk note in the status banner).
+  OS process gains an **opt-in** bubblewrap layer (dropped uid + capabilities + `no-new-privs` +
+  PID/IPC/UTS namespaces + read-only fs; `sandbox.useKernelHardening`, Linux, default-off, probe-gated)
+  but is **not yet** full syscall-confinement (`seccomp`/`Landlock` are phase 2 — see the residual-risk
+  note in the status banner).
 - **Net:** moves plugin security from "we blocked every trick we found" (soft, enumerated)
   toward "core capabilities are reached only through a permission-checked bridge, the plugin runs in a
   separate OS process (own heap/rss, host survives any crash/OOM, layered memory caps), and raw fs/net are
-  proxied/trapped in the child" — a hard process boundary plus guarded capabilities, with syscall-level
-  confinement still on the roadmap.
+  proxied/trapped in the child, with an opt-in bubblewrap deprivileging layer (dropped uid/caps/
+  no-new-privs/namespaces/read-only-fs)" — a hard process boundary plus guarded capabilities, with
+  `seccomp`/`Landlock` syscall-level confinement as phase 2.
