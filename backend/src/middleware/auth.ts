@@ -3,6 +3,8 @@
  * JWT-based authentication
  */
 
+import type { Response, NextFunction } from 'express';
+
 const jwt = require('jsonwebtoken');
 const config = require('../config/app');
 const User = require('../models/User');
@@ -11,7 +13,7 @@ const User = require('../models/User');
  * Authenticate request with JWT token (Strict: Headers Only)
  */
 // Helper to avoid duplication
-async function verifyAndAttachUser(token, req, res, next) {
+async function verifyAndAttachUser(token: string, req: any, res: Response, next: NextFunction) {
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
         const user = await User.findById(decoded.userId);
@@ -62,7 +64,7 @@ async function verifyAndAttachUser(token, req, res, next) {
 /**
  * Authenticate request with JWT token (Strict: Headers Only, with Cookie fallback)
  */
-async function authenticate(req, res, next) {
+async function authenticate(req: any, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -98,7 +100,7 @@ async function authenticate(req, res, next) {
  * header; only fall back to the query token when neither is present. This route MUST stay read-only —
  * never authorize a state-changing request off a query-string token.
  */
-async function authenticateAllowQuery(req, res, next) {
+async function authenticateAllowQuery(req: any, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -126,7 +128,7 @@ async function authenticateAllowQuery(req, res, next) {
 /**
  * Optional authentication (doesn't fail if no token)
  */
-async function optionalAuth(req, res, next) {
+async function optionalAuth(req: any, res: Response, next: NextFunction) {
     const authHeader = req.headers.authorization;
     let token;
 
@@ -166,7 +168,7 @@ async function optionalAuth(req, res, next) {
 /**
  * Generate JWT token for user
  */
-function generateToken(user) {
+function generateToken(user: any) {
     return jwt.sign(
         {
             userId: user.id,
@@ -180,7 +182,7 @@ function generateToken(user) {
 /**
  * Verify token and return decoded payload
  */
-function verifyToken(token) {
+function verifyToken(token: string) {
     return jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
 }
 
@@ -188,7 +190,7 @@ function verifyToken(token) {
  * CSRF Protection for state-changing requests
  * Validates Origin/Referer headers against allowed origins
  */
-function csrfProtection(req, res, next) {
+function csrfProtection(req: any, res: Response, next: NextFunction) {
     // Only check state-changing methods
     if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method)) {
         return next();

@@ -30,7 +30,7 @@ class MenuItem {
     static delete: (id: any) => Promise<boolean>;
     static deleteByMenu: (menuId: any) => Promise<void>;
 
-    constructor(data) {
+    constructor(data: any) {
         this.id = data.id;
         this.menuId = data.menu_id;
         this.title = data.title;
@@ -68,7 +68,7 @@ class Menu {
     slug?: string;
     description?: string;
 
-    constructor(data) {
+    constructor(data: any) {
         this.id = data.term_id || data.id;
         this.name = data.name;
         this.slug = data.slug;
@@ -112,7 +112,7 @@ class Menu {
     /**
      * Create a new menu
      */
-    static async create(data) {
+    static async create(data: any) {
         const { name, slug, description = '' } = data;
 
         if (!name) {
@@ -137,7 +137,7 @@ class Menu {
     /**
      * Find menu by ID
      */
-    static async findById(id) {
+    static async findById(id: any) {
         const row = await dbAsync.get(`
       SELECT t.term_id, t.name, t.slug, tt.description
       FROM terms t
@@ -151,7 +151,7 @@ class Menu {
     /**
      * Find menu by slug
      */
-    static async findBySlug(slug) {
+    static async findBySlug(slug: any) {
         const row = await dbAsync.get(`
       SELECT t.term_id, t.name, t.slug, tt.description
       FROM terms t
@@ -165,7 +165,7 @@ class Menu {
     /**
      * Find menu by location
      */
-    static async findByLocation(location) {
+    static async findByLocation(location: any) {
         const locations = await getOption('nav_menu_locations', {});
         const menuId = locations[location];
 
@@ -185,13 +185,13 @@ class Menu {
       ORDER BY t.name
     `);
 
-        return rows.map(row => new Menu(row));
+        return rows.map((row: any) => new Menu(row));
     }
 
     /**
      * Update menu
      */
-    static async update(id, data) {
+    static async update(id: any, data: any) {
         const menu = await Menu.findById(id);
         if (!menu) throw new Error('Menu not found');
 
@@ -214,7 +214,7 @@ class Menu {
     /**
      * Delete menu
      */
-    static async delete(id) {
+    static async delete(id: any) {
         // Delete all menu items first
         await MenuItem.deleteByMenu(id);
 
@@ -230,7 +230,7 @@ class Menu {
     /**
      * Set menu location
      */
-    static async setLocation(location, menuId) {
+    static async setLocation(location: any, menuId: any) {
         const locations = await getOption('nav_menu_locations', {});
         locations[location] = menuId;
         await updateOption('nav_menu_locations', locations);
@@ -303,7 +303,7 @@ MenuItem.findById = async function (id) {
     // Get meta
     const metas = await dbAsync.all('SELECT meta_key, meta_value FROM post_meta WHERE post_id = ?', [id]);
     const metaMap: any = {};
-    metas.forEach(m => { metaMap[m.meta_key] = m.meta_value; });
+    metas.forEach((m: any) => { metaMap[m.meta_key] = m.meta_value; });
 
     // Get menu ID
     const rel = await dbAsync.get(`
@@ -338,7 +338,7 @@ MenuItem.findByMenu = async function (menuId) {
   `, [menuId]);
 
     // Parallel fetch for items
-    return (await Promise.all(rows.map(row => MenuItem.findById(row.id)))).filter(Boolean);
+    return (await Promise.all(rows.map((row: any) => MenuItem.findById(row.id)))).filter(Boolean);
 };
 
 MenuItem.update = async function (id, data) {
@@ -391,14 +391,14 @@ MenuItem.deleteByMenu = async function (menuId) {
 /**
  * Build tree structure from flat menu items
  */
-function buildTree(items, parentId = 0) {
+function buildTree(items: any, parentId = 0) {
     return items
-        .filter(item => item.parent === parentId)
-        .map(item => ({
+        .filter((item: any) => item.parent === parentId)
+        .map((item: any) => ({
             ...item.toJSON(),
             children: buildTree(items, item.id)
         }))
-        .sort((a, b) => a.order - b.order);
+        .sort((a: any, b: any) => a.order - b.order);
 }
 
 module.exports = { Menu, MenuItem };

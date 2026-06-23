@@ -16,8 +16,8 @@ const TESTS_DIR = path.join(__dirname);
 
 // Find all test files
 const testFiles = fs.readdirSync(TESTS_DIR)
-    .filter(f => f.endsWith('.test.js'))
-    .map(f => path.join(TESTS_DIR, f));
+    .filter((f: string) => f.endsWith('.test.js'))
+    .map((f: string) => path.join(TESTS_DIR, f));
 
 console.log('╔════════════════════════════════════════════════════════════╗');
 console.log('║          WordJS Installation - System Verification         ║');
@@ -70,17 +70,17 @@ function runNextTest() {
 
     let output = '';
 
-    child.stdout.on('data', (data) => {
+    child.stdout.on('data', (data: Buffer) => {
         output += data.toString();
         process.stdout.write(data);
     });
 
-    child.stderr.on('data', (data) => {
+    child.stderr.on('data', (data: Buffer) => {
         output += data.toString();
         process.stderr.write(data);
     });
 
-    child.on('close', (code) => {
+    child.on('close', (code: number | null) => {
         // Parse results from output
         const testsMatch = output.match(/ℹ tests (\d+)/);
         const passMatch = output.match(/ℹ pass (\d+)/);

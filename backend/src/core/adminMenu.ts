@@ -15,7 +15,7 @@ const MAX_ADMIN_MENU_ITEMS = 50;
  * @param {string} pluginSlug - The plugin slug (used to remove menu when deactivated)
  * @param {object} item - Menu item { href, label, icon, order }
  */
-function registerAdminMenu(pluginSlug, item) {
+function registerAdminMenu(pluginSlug: string, item: any) {
     // Clear existing items for this plugin to avoid duplicates on hot reload
     if (!adminMenuItems.has(pluginSlug)) {
         adminMenuItems.set(pluginSlug, []);
@@ -29,7 +29,7 @@ function registerAdminMenu(pluginSlug, item) {
         console.warn(`[Security] admin-menu cap reached for plugin '${pluginSlug}' (${MAX_ADMIN_MENU_ITEMS}); ignoring further items.`);
         return;
     }
-    const alreadyExists = existingItems.some(existing => existing.href === item.href);
+    const alreadyExists = existingItems.some((existing: any) => existing.href === item.href);
 
     if (!alreadyExists) {
         existingItems.push({
@@ -47,7 +47,7 @@ function registerAdminMenu(pluginSlug, item) {
  * Unregister all menu items for a plugin
  * @param {string} pluginSlug
  */
-function unregisterAdminMenu(pluginSlug) {
+function unregisterAdminMenu(pluginSlug: string) {
     adminMenuItems.delete(pluginSlug);
 }
 
@@ -93,7 +93,7 @@ function initCoreMenus() {
 
     // 2. Post Types (Posts, Pages, etc.)
     const types = getPostTypes({ showInMenu: true });
-    types.forEach(type => {
+    types.forEach((type: any) => {
         registerAdminMenu('core', {
             href: `/admin/posts?type=${type.name}`,
             label: type.label || type.name, // Use Plural label ideally

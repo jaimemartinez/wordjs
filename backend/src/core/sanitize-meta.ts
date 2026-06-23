@@ -11,7 +11,7 @@
 const sanitizeHtml = require('sanitize-html');
 
 // Sanitization Config
-const sanitize = (html) => {
+const sanitize = (html: string) => {
     return sanitizeHtml(html, {
         allowedTags: sanitizeHtml.defaults.allowedTags.concat(['img', 'h1', 'h2', 'iframe']),
         allowedAttributes: {
@@ -50,7 +50,7 @@ function safePuckUrl(v: string): string {
  * shape): HTML-bearing fields via the post-body sanitizer, URL-bearing fields via an allow-list of
  * schemes. Non-HTML/URL strings are left untouched.
  */
-function sanitizePuckTree(node: any, keyHint: string | null = null) {
+function sanitizePuckTree(node: any, keyHint: string | null = null): any {
     if (Array.isArray(node)) {
         return node.map((item) => sanitizePuckTree(item, keyHint));
     }
@@ -80,7 +80,7 @@ function sanitizePuckTree(node: any, keyHint: string | null = null) {
  * Sanitize a single meta value before persisting. Currently targets _puck_data (the serialized Puck
  * page tree) which is rendered as HTML on the public site; structured JSON shape is preserved.
  */
-function sanitizeMetaValue(key, value) {
+function sanitizeMetaValue(key: string, value: any) {
     if (key === '_puck_data' && value) {
         if (typeof value === 'object') return sanitizePuckTree(value);
         // XSS-02: _puck_data sent as a JSON STRING (some clients/imports do) bypassed the object-only

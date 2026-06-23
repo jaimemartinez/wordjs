@@ -41,7 +41,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         }
     }
 
-    async get(sql, params = []) {
+    async get(sql: string, params: any[] = []) {
         return new Promise((resolve, reject) => {
             try {
                 const stmt = this.db.prepare(sql);
@@ -53,7 +53,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         });
     }
 
-    async all(sql, params = []) {
+    async all(sql: string, params: any[] = []) {
         return new Promise((resolve, reject) => {
             try {
                 const stmt = this.db.prepare(sql);
@@ -65,7 +65,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         });
     }
 
-    async run(sql, params = []) {
+    async run(sql: string, params: any[] = []) {
         return new Promise((resolve, reject) => {
             try {
                 const stmt = this.db.prepare(sql);
@@ -77,7 +77,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         });
     }
 
-    async exec(sql) {
+    async exec(sql: string) {
         return new Promise<void>((resolve, reject) => {
             try {
                 this.db.exec(sql);
@@ -107,7 +107,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
      * @param {(tx: {get,all,run,exec}) => Promise<any>} fn
      * @returns {Promise<any>} the value returned by fn
      */
-    async transaction(fn) {
+    async transaction(fn: any) {
         // Re-entrancy guard: a transaction() invoked from INSIDE another transaction()'s callback would
         // chain off the OUTER tx's still-pending tail (which can't settle until this inner call resolves)
         // → circular wait that permanently wedges _txChain and every future transaction(). SQLite has no
@@ -124,15 +124,15 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         return run;
     }
 
-    async _runTransaction(fn) {
+    async _runTransaction(fn: any) {
         const tx = {
-            get: async (sql, params = []) => this.db.prepare(sql).get(...params),
-            all: async (sql, params = []) => this.db.prepare(sql).all(...params),
-            run: async (sql, params = []) => {
+            get: async (sql: string, params: any[] = []) => this.db.prepare(sql).get(...params),
+            all: async (sql: string, params: any[] = []) => this.db.prepare(sql).all(...params),
+            run: async (sql: string, params: any[] = []) => {
                 const info = this.db.prepare(sql).run(...params);
                 return { lastID: info.lastInsertRowid, changes: info.changes };
             },
-            exec: async (sql) => { this.db.exec(sql); }
+            exec: async (sql: string) => { this.db.exec(sql); }
         };
 
         this.db.exec('BEGIN');
@@ -158,14 +158,14 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
             try {
                 const stmt = this.db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'");
                 const rows = stmt.all();
-                resolve(rows.map(r => r.name));
+                resolve(rows.map((r: any) => r.name));
             } catch (err) {
                 reject(err);
             }
         });
     }
 
-    async getTableSchema(tableName) {
+    async getTableSchema(tableName: string) {
         return new Promise((resolve, reject) => {
             try {
                 // Use PRAGMA to get column info similar to needed for createPluginTable
@@ -174,7 +174,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
 
                 // Reconstruct definitions compatible with createPluginTable inputs
                 // Format: "name TYPE constraints"
-                const defs = columns.map(col => {
+                const defs = columns.map((col: any) => {
                     let def = `${col.name} ${col.type}`;
                     if (col.notnull) def += ' NOT NULL';
                     if (col.dflt_value) def += ` DEFAULT ${col.dflt_value}`;

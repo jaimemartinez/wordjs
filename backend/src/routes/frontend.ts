@@ -3,6 +3,8 @@
  * Handles all public web requests and renders them using the active theme.
  */
 
+import type { Response, NextFunction } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const themeEngine = require('../core/theme-engine');
@@ -13,7 +15,7 @@ const { getOption } = require('../core/options');
 /**
  * Catch-all route for public site
  */
-router.get(['/', '/:slug', '/category/:slug', '/tag/:slug'], async (req, res, next) => {
+router.get(['/', '/:slug', '/category/:slug', '/tag/:slug'], async (req: any, res: Response, next: NextFunction) => {
     // Skip if it's an API request or static file (should be handled by other routers)
     if (req.path.startsWith('/api') || req.path.startsWith('/uploads') || req.path.indexOf('.') !== -1) {
         return next();
@@ -30,7 +32,7 @@ router.get(['/', '/:slug', '/category/:slug', '/tag/:slug'], async (req, res, ne
         if (currentPath === '/' || !slug) {
             const posts = await Post.findAll({ status: 'publish', type: 'post' });
             data = {
-                posts: posts.map(p => ({
+                posts: posts.map((p: any) => ({
                     title: p.post_title,
                     slug: p.post_name,
                     excerpt: p.post_excerpt || (p.post_content ? p.post_content.substring(0, 200) + '...' : ''),

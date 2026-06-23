@@ -62,15 +62,15 @@ class NativeWrapper {
         this.db = db;
     }
 
-    prepare(sql) {
+    prepare(sql: string) {
         return this.db.prepare(sql);
     }
 
-    exec(sql) {
+    exec(sql: string) {
         return this.db.exec(sql);
     }
 
-    run(sql, params = []) {
+    run(sql: string, params = []) {
         const info = this.db.prepare(sql).run(params);
         return {
             changes: info.changes,
@@ -79,15 +79,15 @@ class NativeWrapper {
         };
     }
 
-    get(sql, params = []) {
+    get(sql: string, params = []) {
         return this.db.prepare(sql).get(params);
     }
 
-    all(sql, params = []) {
+    all(sql: string, params = []) {
         return this.db.prepare(sql).all(params);
     }
 
-    pragma(str) {
+    pragma(str: string) {
         return this.db.pragma(str);
     }
 

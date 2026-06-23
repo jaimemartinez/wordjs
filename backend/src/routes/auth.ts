@@ -3,6 +3,7 @@
  * /api/v1/auth/*
  */
 
+import type { Response, CookieOptions } from 'express';
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -25,7 +26,7 @@ const config = require('../config/app');
 const LOGIN_MAX_FAILS = 10;
 const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const _loginFails = new Map(); // key -> { count, firstFailAt, lockedUntil }
-const _loginKey = (u) => String(u || '').trim().toLowerCase();
+const _loginKey = (u: any) => String(u || '').trim().toLowerCase();
 
 // Lazily-resolved shared store client (null on single-node or if Redis isn't configured).
 function _lockStore() {
@@ -36,15 +37,15 @@ function _lockStore() {
         return null;
     }
 }
-const _failsRedisKey = (key) => `wjlock:fails:${key}`;
-const _lockedRedisKey = (key) => `wjlock:locked:${key}`;
+const _failsRedisKey = (key: string) => `wjlock:fails:${key}`;
+const _lockedRedisKey = (key: string) => `wjlock:locked:${key}`;
 
-function _isLoginLockedMem(key) {
+function _isLoginLockedMem(key: string) {
     const e = _loginFails.get(key);
     return !!(e && e.lockedUntil && e.lockedUntil > Date.now());
 }
 
-async function isLoginLocked(u) {
+async function isLoginLocked(u: any) {
     const key = _loginKey(u);
     const client = _lockStore();
     if (client) {
@@ -58,7 +59,7 @@ async function isLoginLocked(u) {
     return _isLoginLockedMem(key);
 }
 
-async function recordLoginFail(u) {
+async function recordLoginFail(u: any) {
     const key = _loginKey(u);
     const now = Date.now();
     const client = _lockStore();
@@ -84,7 +85,7 @@ async function recordLoginFail(u) {
     _loginFails.set(key, e);
 }
 
-async function clearLoginFails(u) {
+async function clearLoginFails(u: any) {
     const key = _loginKey(u);
     const client = _lockStore();
     if (client) {
@@ -100,7 +101,7 @@ async function clearLoginFails(u) {
 // Cookie configuration for secure HttpOnly tokens
 // Detect if site uses HTTPS from config
 const siteUsesHttps = config.siteUrl?.startsWith('https://') || config.ssl?.enabled;
-const COOKIE_OPTIONS = {
+const COOKIE_OPTIONS: CookieOptions = {
     httpOnly: true,
     secure: siteUsesHttps, // Send over HTTPS if site uses it
     sameSite: 'lax', // Protect against CSRF while allowing normal navigation
@@ -144,7 +145,7 @@ const COOKIE_OPTIONS = {
  *       400:
  *         description: Validation error or user exists
  */
-router.post('/register', asyncHandler(async (req, res) => {
+router.post('/register', asyncHandler(async (req: any, res: Response) => {
     // ... (rest of the function)
     const registrationAllowed = await getOption('users_can_register', 0);
     if (!registrationAllowed || registrationAllowed == '0') {
@@ -249,7 +250,7 @@ router.post('/register', asyncHandler(async (req, res) => {
  *       401:
  *         description: Invalid credentials
  */
-router.post('/login', asyncHandler(async (req, res) => {
+router.post('/login', asyncHandler(async (req: any, res: Response) => {
     const { username, password } = req.body;
 
     if (!username || !password) {
@@ -289,7 +290,7 @@ router.post('/login', asyncHandler(async (req, res) => {
  * GET /auth/me
  * Get current user
  */
-router.get('/me', authenticate, (req, res) => {
+router.get('/me', authenticate, (req: any, res: Response) => {
     res.json(req.user.toJSON());
 });
 
@@ -297,7 +298,7 @@ router.get('/me', authenticate, (req, res) => {
  * POST /auth/validate
  * Validate token
  */
-router.post('/validate', authenticate, (req, res) => {
+router.post('/validate', authenticate, (req: any, res: Response) => {
     res.json({
         valid: true,
         user: req.user.toJSON()
@@ -308,7 +309,7 @@ router.post('/validate', authenticate, (req, res) => {
  * POST /auth/refresh
  * Refresh token
  */
-router.post('/refresh', authenticate, (req, res) => {
+router.post('/refresh', authenticate, (req: any, res: Response) => {
     const token = generateToken(req.user);
 
     // Update HttpOnly cookie
@@ -323,7 +324,7 @@ router.post('/refresh', authenticate, (req, res) => {
  * POST /auth/logout
  * Clear auth cookie
  */
-router.post('/logout', asyncHandler(async (req, res) => {
+router.post('/logout', asyncHandler(async (req: any, res: Response) => {
     // Best-effort revocation: stamp the user's security epoch so the just-cleared token (and any
     // stolen copy of it) can no longer authenticate. Logout still succeeds without a valid token.
     try {

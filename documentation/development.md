@@ -79,9 +79,9 @@ cd backend
 npm run typecheck  # tsc --noEmit
 ```
 
-`tsconfig.json` has `strict: true` — `strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitThis`, and `alwaysStrict` are all enforced. Two sub-flags remain **off**, and there's still meaningful work left before either can be turned on:
+`tsconfig.json` has `strict: true` — `strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitThis`, and `alwaysStrict` are all enforced. `noImplicitAny` is now enforced too; one sub-flag remains **off**:
 
-- `noImplicitAny: false` — enabling it today surfaces **~1,220 implicit-`any` sites** that still need real type annotations (not a blanket `any`). This is in-progress, not nearly done.
+- `noImplicitAny: true` — **enforced**. Every parameter/variable is annotated: real types where locally determinable, explicit `any` only at genuinely dynamic boundaries (plugin payloads, RPC/hook glue, request bodies). Annotation was type-only (zero runtime change).
 - `useUnknownInCatchVariables: false` — catch bindings stay `any` for now.
 
 ### Tests, lint, format

@@ -13,7 +13,7 @@ let enabledBySettings = false; // Master switch from DB settings
 /**
  * Update dynamic enablement state (called from options.js)
  */
-function setEnabled(val) {
+function setEnabled(val: any) {
     enabledBySettings = (val === 1 || val === '1' || val === true);
     if (enabledBySettings && !redisAvailable && redis) {
         // If we are enabling but redis isn't "live" yet, it might be due to initial connection delay
@@ -29,7 +29,7 @@ if (config.redis && config.redis.enabled !== false) {
             port: config.redis.port || 6379,
             password: config.redis.password || undefined,
             db: config.redis.db || 0,
-            retryStrategy: (times) => {
+            retryStrategy: (times: number) => {
                 if (times > 3) {
                     console.warn('[Cache] Redis unavailable after 3 retries. Falling back to DB.');
                     redisAvailable = false;
@@ -44,7 +44,7 @@ if (config.redis && config.redis.enabled !== false) {
             redisAvailable = true;
         });
 
-        redis.on('error', (err) => {
+        redis.on('error', (err: any) => {
             console.warn('[Cache] Redis Error:', err.message);
             redisAvailable = false;
         });
@@ -56,7 +56,7 @@ if (config.redis && config.redis.enabled !== false) {
 /**
  * Get a value from cache
  */
-async function get(key) {
+async function get(key: string) {
     if (!redisAvailable || !enabledBySettings) return null;
     try {
         const val = await redis.get(key);
@@ -70,7 +70,7 @@ async function get(key) {
 /**
  * Set a value in cache
  */
-async function set(key, value, ttl = 3600) {
+async function set(key: string, value: any, ttl = 3600) {
     if (!redisAvailable || !enabledBySettings) return false;
     try {
         const serialized = JSON.stringify(value);
@@ -88,7 +88,7 @@ async function set(key, value, ttl = 3600) {
 /**
  * Delete a value from cache
  */
-async function del(key) {
+async function del(key: string) {
     if (!redisAvailable || !enabledBySettings) return false;
     try {
         await redis.del(key);
@@ -137,7 +137,7 @@ function getClient(): any {
             port: config.redis.port || 6379,
             password: config.redis.password || undefined,
             db: config.redis.db || 0,
-            retryStrategy: (times) => Math.min(times * 200, 3000), // never gives up → self-heals
+            retryStrategy: (times: number) => Math.min(times * 200, 3000), // never gives up → self-heals
             maxRetriesPerRequest: 1,
             enableOfflineQueue: false
         });
@@ -178,15 +178,15 @@ function subscribe(channel: string, handler: (message: string) => void): void {
             port: config.redis.port || 6379,
             password: config.redis.password || undefined,
             db: config.redis.db || 0,
-            retryStrategy: (times) => Math.min(times * 200, 3000)
+            retryStrategy: (times: number) => Math.min(times * 200, 3000)
         });
-        subscriber.on('message', (ch, msg) => {
+        subscriber.on('message', (ch: string, msg: string) => {
             const hs = subHandlers.get(ch);
             if (hs) for (const h of hs) { try { h(msg); } catch (e: any) { console.warn('[Cache] sub handler error:', e && e.message); } }
         });
-        subscriber.on('error', (e) => console.warn('[Cache] Subscriber error:', e.message));
+        subscriber.on('error', (e: any) => console.warn('[Cache] Subscriber error:', e.message));
     }
-    subscriber.subscribe(channel).catch((e) => console.warn('[Cache] subscribe failed:', e.message));
+    subscriber.subscribe(channel).catch((e: any) => console.warn('[Cache] subscribe failed:', e.message));
 }
 
 /** Quit all Redis connections (object-cache, subscriber, rate-limit). For graceful shutdown / tests. */

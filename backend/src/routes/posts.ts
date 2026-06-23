@@ -3,6 +3,8 @@
  * /api/v1/posts/*
  */
 
+import type { Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
@@ -75,7 +77,7 @@ const { sanitize, sanitizeMetaValue } = require('../core/sanitize-meta');
  *               items:
  *                 $ref: '#/components/schemas/Post'
  */
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const {
         page = 1,
         per_page = 10,
@@ -93,7 +95,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
     // Map orderby to database column
-    const orderByMap = {
+    const orderByMap: Record<string, string> = {
         date: 'post_date',
         modified: 'post_modified',
         title: 'post_title',
@@ -153,16 +155,16 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages);
+    res.set('X-WP-TotalPages', totalPages as any);
 
-    res.json(await Promise.all(posts.map(post => post.toJSON())));
+    res.json(await Promise.all(posts.map((post: any) => post.toJSON())));
 }));
 
 /**
  * GET /posts/slug/:slug
  * Get single post by slug
  */
-router.get('/slug/:slug', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/slug/:slug', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const post = await Post.findBySlug(req.params.slug);
 
     if (!post) {
@@ -191,7 +193,7 @@ router.get('/slug/:slug', optionalAuth, asyncHandler(async (req, res) => {
  * GET /posts/:id
  * Get single post
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const post = await Post.findById(parseInt(req.params.id, 10));
 
     if (!post) {
@@ -247,7 +249,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  *       403:
  *         description: Forbidden
  */
-router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) => {
+router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req: any, res: Response) => {
     // ...
     const {
         title,
@@ -311,7 +313,7 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) 
     }
 
     // Save initial revision
-    saveRevision(post.id).catch(err => console.error('Failed to save initial revision:', err));
+    saveRevision(post.id).catch((err: any) => console.error('Failed to save initial revision:', err));
 
     res.status(201).json(await post.toJSON());
 }));
@@ -350,7 +352,7 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req, res) 
  *       404:
  *         description: Post not found
  */
-router.put('/:id', authenticate, asyncHandler(async (req, res) => {
+router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
@@ -425,7 +427,7 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
     }
 
     // Save revision after ALL updates (including meta) are done
-    saveRevision(postId).catch(err => console.error('Failed to save revision:', err));
+    saveRevision(postId).catch((err: any) => console.error('Failed to save revision:', err));
 
     const fresh = await Post.findById(postId);
     if (!fresh) {
@@ -465,7 +467,7 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
  *       404:
  *         description: Post not found
  */
-router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
+router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
@@ -513,7 +515,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req, res) => {
  * POST /posts/:id/meta
  * Update post meta
  */
-router.post('/:id/meta', authenticate, asyncHandler(async (req, res) => {
+router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 
@@ -564,7 +566,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req, res) => {
  * GET /posts/:id/meta
  * Get all post meta
  */
-router.get('/:id/meta', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/:id/meta', optionalAuth, asyncHandler(async (req: any, res: Response) => {
     const postId = parseInt(req.params.id, 10);
     const post = await Post.findById(postId);
 

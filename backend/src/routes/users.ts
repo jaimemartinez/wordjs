@@ -3,6 +3,8 @@
  * /api/v1/users/*
  */
 
+import type { Response } from 'express';
+
 const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
@@ -62,7 +64,7 @@ const { getRoles } = require('../core/roles');
  *               items:
  *                 $ref: '#/components/schemas/User'
  */
-router.get('/', authenticate, can('list_users'), asyncHandler(async (req, res) => {
+router.get('/', authenticate, can('list_users'), asyncHandler(async (req: any, res: Response) => {
     const {
         page = 1,
         per_page = 10,
@@ -93,16 +95,16 @@ router.get('/', authenticate, can('list_users'), asyncHandler(async (req, res) =
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
-    res.set('X-WP-TotalPages', totalPages);
+    res.set('X-WP-TotalPages', totalPages as any);
 
-    res.json(users.map(user => user.toJSON()));
+    res.json(users.map((user: any) => user.toJSON()));
 }));
 
 /**
  * GET /users/me
  * Get current user
  */
-router.get('/me', authenticate, (req, res) => {
+router.get('/me', authenticate, (req: any, res: Response) => {
     res.json(req.user.toJSON());
 });
 
@@ -110,7 +112,7 @@ router.get('/me', authenticate, (req, res) => {
  * GET /users/:id
  * Get single user
  */
-router.get('/:id', authenticate, asyncHandler(async (req, res) => {
+router.get('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
     const userId = parseInt(req.params.id, 10);
     const user = await User.findById(userId);
 
@@ -165,7 +167,7 @@ router.get('/:id', authenticate, asyncHandler(async (req, res) => {
  *       403:
  *         description: Forbidden
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
     const { username, email, password, displayName, role = 'subscriber' } = req.body;
 
     if (!username || !email || !password) {
@@ -234,7 +236,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       404:
  *         description: User not found
  */
-router.put('/:id', authenticate, asyncHandler(async (req, res) => {
+router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) => {
     const userId = parseInt(req.params.id, 10);
     const user = await User.findById(userId);
 
@@ -361,7 +363,7 @@ router.put('/:id', authenticate, asyncHandler(async (req, res) => {
  *       404:
  *         description: User not found
  */
-router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
     const userId = parseInt(req.params.id, 10);
     const user = await User.findById(userId);
 
@@ -410,7 +412,7 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: Profile updated
  */
-router.put('/me', authenticate, asyncHandler(async (req, res) => {
+router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => {
     const { email, displayName, password, url } = req.body;
 
     const updated = await User.update(req.user.id, {

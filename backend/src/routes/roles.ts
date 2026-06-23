@@ -3,6 +3,7 @@
  * /api/v1/roles/*
  */
 
+import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { getRoles, setRole, getRole, removeRole, getAllAvailableCapabilities } = require('../core/roles');
@@ -29,7 +30,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
  *       200:
  *         description: Map of roles and capabilities
  */
-router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     res.json(getRoles());
 }));
 
@@ -45,7 +46,7 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       200:
  *         description: List of capabilities
  */
-router.get('/capabilities', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/capabilities', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     res.json(getAllAvailableCapabilities());
 }));
 
@@ -69,7 +70,7 @@ router.get('/capabilities', authenticate, isAdmin, asyncHandler(async (req, res)
  *       404:
  *         description: Role not found
  */
-router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const role = getRole(req.params.slug);
     if (!role) {
         return res.status(404).json({
@@ -107,7 +108,7 @@ router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       201:
  *         description: Role saved
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
+router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const { slug, name, capabilities } = req.body;
 
     if (!slug || !name) {
@@ -142,8 +143,8 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req, res) => {
  *       400:
  *         description: Cannot delete core roles
  */
-router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req, res) => {
-    const slug = req.params.slug;
+router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const slug: string = req.params.slug as string;
 
     // Prevent deleting core roles
     const coreRoles = ['administrator', 'editor', 'author', 'contributor', 'subscriber'];

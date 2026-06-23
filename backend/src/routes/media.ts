@@ -42,7 +42,7 @@ if (!fs.existsSync(config.uploads.dir)) {
 
 // Configure multer storage
 const storage = multer.diskStorage({
-    destination: (req, file, cb) => {
+    destination: (req: any, file: any, cb: any) => {
         // Create year/month subdirectory
         const date = new Date();
         const subDir = `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}`;
@@ -54,7 +54,7 @@ const storage = multer.diskStorage({
 
         cb(null, uploadPath);
     },
-    filename: (req, file, cb) => {
+    filename: (req: any, file: any, cb: any) => {
         // SECURITY: Derive the STORED extension from the validated MIME->extension allowlist
         // (Media.getExtensionForMime), NOT from the client-supplied originalname. This prevents
         // a malicious filename (e.g. "x.php"/"x.html") from being persisted/served verbatim.
@@ -70,7 +70,7 @@ const storage = multer.diskStorage({
 });
 
 // File filter
-const fileFilter = (req, file, cb) => {
+const fileFilter = (req: any, file: any, cb: any) => {
     // SECURITY: Block SVG uploads for non-admins (SVGs can contain JavaScript)
     if (file.mimetype === 'image/svg+xml') {
         if (!req.user || req.user.getRole() !== 'administrator') {
@@ -137,7 +137,7 @@ const upload = multer({
  *               items:
  *                 $ref: '#/components/schemas/Media'
  */
-router.get('/', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const {
         page = 1,
         per_page = 20,
@@ -150,7 +150,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
     const limit = Math.min(parseInt(per_page, 10) || 20, 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
-    const orderByMap = {
+    const orderByMap: Record<string, string> = {
         date: 'post_date',
         modified: 'post_modified',
         title: 'post_title',
@@ -179,7 +179,7 @@ router.get('/', optionalAuth, asyncHandler(async (req, res) => {
  * GET /media/:id
  * Get single media
  */
-router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
+router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const media = await Media.findById(parseInt(req.params.id, 10));
 
     if (!media) {
@@ -220,7 +220,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req, res) => {
  *       400:
  *         description: Invalid file
  */
-router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req, res) => {
+router.post('/', authenticate, can('upload_files'), upload.single('file'), asyncHandler(async (req: any, res: any) => {
     if (!req.file) {
         return res.status(400).json({
             code: 'rest_upload_no_file',
@@ -379,7 +379,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
     // Image processing
     let width = 0;
     let height = 0;
-    let sizes = {};
+    let sizes: Record<string, any> = {};
 
     if (req.file.mimetype.startsWith('image/') && req.file.mimetype !== 'image/svg+xml') {
         try {
@@ -457,7 +457,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
  * PUT /media/:id
  * Update media
  */
-router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req, res) => {
+router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req: any, res: any) => {
     const mediaId = parseInt(req.params.id, 10);
     const media = await Media.findById(mediaId);
 
@@ -500,7 +500,7 @@ router.put('/:id', authenticate, can('upload_files'), asyncHandler(async (req, r
  * DELETE /media/:id
  * Delete media
  */
-router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req, res) => {
+router.delete('/:id', authenticate, can('upload_files'), asyncHandler(async (req: any, res: any) => {
     const mediaId = parseInt(req.params.id, 10);
     const media = await Media.findById(mediaId);
 

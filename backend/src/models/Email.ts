@@ -10,7 +10,7 @@ const crypto = require('crypto');
 
 // Ensure attachments directory exists
 const UPLOAD_DIR = path.join(__dirname, '../../uploads/mail-attachments');
-fs.mkdir(UPLOAD_DIR, { recursive: true }).catch(err => console.error("Failed to create attachment dir:", err));
+fs.mkdir(UPLOAD_DIR, { recursive: true }).catch((err: any) => console.error("Failed to create attachment dir:", err));
 
 class Email {
     static async initSchema() {
@@ -50,7 +50,7 @@ class Email {
         ]);
 
         // Helper: Check if column exists to avoid "duplicate column" errors
-        const columnExists = async (table, col) => {
+        const columnExists = async (table: string, col: string) => {
             const { isPostgres } = getDbType();
             try {
                 if (isPostgres) {
@@ -61,7 +61,7 @@ class Email {
                     return !!res;
                 } else {
                     const cols = await dbAsync.all(`PRAGMA table_info(${table})`);
-                    return cols.some(c => c.name === col);
+                    return cols.some((c: any) => c.name === col);
                 }
             } catch (e) {
                 return false;
@@ -69,7 +69,7 @@ class Email {
         };
 
         // Add columns if they don't exist (Migration)
-        const migrate = async (col, type) => {
+        const migrate = async (col: string, type: string) => {
             if (!(await columnExists('received_emails', col))) {
                 try {
                     await dbAsync.run(`ALTER TABLE received_emails ADD COLUMN ${col} ${type}`);
@@ -93,7 +93,7 @@ class Email {
         await migrate('last_error', 'TEXT');
     }
 
-    static async create(data) {
+    static async create(data: any) {
         const {
             messageId, fromAddress, fromName, toAddress, ccAddress = '', bccAddress = '', subject, bodyText, bodyHtml, rawContent,
             isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0,
@@ -123,7 +123,7 @@ class Email {
         return await this.findById(emailId);
     }
 
-    static async saveAttachment(emailId, attachment) {
+    static async saveAttachment(emailId: number, attachment: any) {
         let storageName = '';
         let size = 0;
 
@@ -161,7 +161,7 @@ class Email {
         `, [emailId, attachment.filename, attachment.contentType, size, storageName, attachment.cid || null]);
     }
 
-    static async update(id, data) {
+    static async update(id: number, data: any) {
         const {
             toAddress, ccAddress, bccAddress, subject, bodyText, bodyHtml, rawContent,
             isSent, isDraft
@@ -203,13 +203,13 @@ class Email {
         return await this.findById(id);
     }
 
-    static async findById(id) {
+    static async findById(id: number) {
         return await dbAsync.get('SELECT * FROM received_emails WHERE id = ?', [id]);
     }
 
-    static async findByThreadId(threadId, userEmail = null) {
+    static async findByThreadId(threadId: number, userEmail: any = null) {
         let sql = 'SELECT * FROM received_emails WHERE (thread_id = ? OR id = ?) AND is_trash = 0';
-        const params = [threadId, threadId];
+        const params: any[] = [threadId, threadId];
 
         if (userEmail) {
             sql += ' AND ((to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) OR (from_address = ? AND is_sent = 1))';
@@ -222,7 +222,7 @@ class Email {
         return await dbAsync.all(sql, params);
     }
 
-    static async findAllByUser(email, folder = 'inbox', limit = 50, offset = 0) {
+    static async findAllByUser(email: string, folder = 'inbox', limit = 50, offset = 0) {
         let whereClause = "";
         let params: any[] = [];
         const likeEmail = `%${email}%`;
@@ -261,7 +261,7 @@ class Email {
         `, [...params, limit, offset]);
     }
 
-    static async countByUser(email, folder = 'inbox') {
+    static async countByUser(email: string, folder = 'inbox') {
         let whereClause = "";
         let params: any[] = [];
         const likeEmail = `%${email}%`;
@@ -293,7 +293,7 @@ class Email {
         return row ? row.count : 0;
     }
 
-    static async countUnreadInbox(email) {
+    static async countUnreadInbox(email: string) {
         const likeEmail = `%${email}%`;
         // Inbox logic: Received, Not Sent, Not Draft, Not Trash, Not Archived, Not Scheduled, Not Read
         const row = await dbAsync.get(`
@@ -304,27 +304,27 @@ class Email {
         return row ? row.count : 0;
     }
 
-    static async markAsRead(id) {
+    static async markAsRead(id: number) {
         return await dbAsync.run('UPDATE received_emails SET is_read = 1 WHERE id = ?', [id]);
     }
 
-    static async setStarred(id, state) {
+    static async setStarred(id: number, state: any) {
         return await dbAsync.run('UPDATE received_emails SET is_starred = ? WHERE id = ?', [state ? 1 : 0, id]);
     }
 
-    static async setArchived(id, state) {
+    static async setArchived(id: number, state: any) {
         return await dbAsync.run('UPDATE received_emails SET is_archived = ? WHERE id = ?', [state ? 1 : 0, id]);
     }
 
-    static async moveToTrash(id) {
+    static async moveToTrash(id: number) {
         return await dbAsync.run('UPDATE received_emails SET is_trash = 1 WHERE id = ?', [id]);
     }
 
-    static async restoreFromTrash(id) {
+    static async restoreFromTrash(id: number) {
         return await dbAsync.run('UPDATE received_emails SET is_trash = 0 WHERE id = ?', [id]);
     }
 
-    static async deletePermanently(id) {
+    static async deletePermanently(id: number) {
         // Also delete attachments files
         const attachments = await this.getAttachments(id);
         for (const att of attachments) {
@@ -341,7 +341,7 @@ class Email {
         return await dbAsync.run('DELETE FROM received_emails WHERE id = ?', [id]);
     }
 
-    static async emptyTrash(userEmail) {
+    static async emptyTrash(userEmail: string) {
         // Find all trash emails for user to delete attachments
         const limitDate = new Date();
         limitDate.setDate(limitDate.getDate() - 30); // 30 days retention policy could be added later
@@ -357,7 +357,7 @@ class Email {
         }
     }
 
-    static async searchByUser(email, query, limit = 50) {
+    static async searchByUser(email: string, query: string, limit = 50) {
         const term = `%${query}%`;
         const likeEmail = `%${email}%`;
         return await dbAsync.all(`
@@ -391,7 +391,7 @@ class Email {
     }
 
     // Record a temporary failure: schedule the next attempt and bump the counter.
-    static async markRetry(id, attempts, nextAttemptAt, lastError) {
+    static async markRetry(id: number, attempts: number, nextAttemptAt: any, lastError: any) {
         return await dbAsync.run(`
             UPDATE received_emails
             SET delivery_status = 'retry', delivery_attempts = ?, next_attempt_at = ?, last_error = ?
@@ -400,7 +400,7 @@ class Email {
     }
 
     // Give up (permanent failure or max attempts reached).
-    static async markFailed(id, attempts, lastError) {
+    static async markFailed(id: number, attempts: number, lastError: any) {
         return await dbAsync.run(`
             UPDATE received_emails
             SET delivery_status = 'failed', delivery_attempts = ?, next_attempt_at = NULL, last_error = ?
@@ -409,7 +409,7 @@ class Email {
     }
 
     // All recipients delivered.
-    static async markSent(id) {
+    static async markSent(id: number) {
         return await dbAsync.run(`
             UPDATE received_emails
             SET delivery_status = 'sent', next_attempt_at = NULL, last_error = NULL
@@ -417,7 +417,7 @@ class Email {
         `, [id]);
     }
 
-    static async getAttachments(emailId) {
+    static async getAttachments(emailId: number) {
         return await dbAsync.all('SELECT * FROM email_attachments WHERE email_id = ?', [emailId]);
     }
 }

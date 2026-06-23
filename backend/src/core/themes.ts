@@ -24,7 +24,7 @@ class Theme {
   path: any;
   templatePath: any;
 
-  constructor(data) {
+  constructor(data: any) {
     this.name = data.name;
     this.slug = data.slug;
     this.version = data.version || '1.0.0';
@@ -39,7 +39,7 @@ class Theme {
   /**
    * Get template file path
    */
-  getTemplate(name) {
+  getTemplate(name: string) {
     const templateFile = path.join(this.path, 'templates', `${name}.html`);
     if (fs.existsSync(templateFile)) {
       return templateFile;
@@ -71,7 +71,7 @@ function ensureThemesDir() {
 /**
  * Parse theme.json for metadata
  */
-function parseThemeMetadata(themeDir, slug) {
+function parseThemeMetadata(themeDir: string, slug: string) {
   const metadataFile = path.join(themeDir, 'theme.json');
 
   let metadata: Record<string, any> = {
@@ -147,7 +147,7 @@ async function getActiveTheme() {
 /**
  * Switch to a different theme
  */
-async function switchTheme(slug) {
+async function switchTheme(slug: string) {
   const themes = scanThemes();
   const theme = themes.find(t => t.slug === slug);
 
@@ -190,7 +190,7 @@ async function getAllThemes() {
 /**
  * Render a template with data
  */
-async function renderTemplate(templateName, data = {}) {
+async function renderTemplate(templateName: string, data = {}) {
   const themeEngine = require('./theme-engine');
   return await themeEngine.render(templateName, data);
 }
@@ -338,7 +338,7 @@ article h2 a:hover { color: var(--primary); }
 /**
  * Delete a theme
  */
-async function deleteTheme(slug) {
+async function deleteTheme(slug: string) {
   const current = await getCurrentTheme();
   if (slug === current) {
     throw new Error('Cannot delete the currently active theme');
@@ -364,7 +364,7 @@ async function deleteTheme(slug) {
 /**
  * Create a zip of a theme for download
  */
-async function createThemeZip(slug) {
+async function createThemeZip(slug: string) {
   const themes = scanThemes();
   const theme = themes.find(t => t.slug === slug);
   if (!theme) {
