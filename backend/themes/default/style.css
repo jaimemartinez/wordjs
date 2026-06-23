@@ -6,6 +6,65 @@
   --text-muted: #6b7280;
   --bg: #f9fafb;
   --border: #e5e7eb;
+
+  /* --- WordJS UI framework tokens --- */
+  --wjs-color-primary: #2563eb;
+  --wjs-color-primary-dark: #1e40af;
+  --wjs-color-secondary: #64748b;
+  --wjs-color-secondary-dark: #475569;
+  --wjs-color-accent: #8b5cf6;
+  --wjs-color-success: #16a34a;
+  --wjs-color-danger: #dc2626;
+  --wjs-color-warning: #f59e0b;
+  --wjs-color-info: #0ea5e9;
+  --wjs-color-light: #f9fafb;
+  --wjs-color-dark: #1f2937;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  --wjs-bg-canvas: #f9fafb;
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #f3f4f6;
+  --wjs-color-text-main: #1f2937;
+  --wjs-color-text-muted: #6b7280;
+  --wjs-color-heading: #111827;
+  --wjs-color-link: #2563eb;
+  --wjs-color-link-hover: #1e40af;
+  --wjs-border-subtle: #e5e7eb;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(37, 99, 235, 0.3);
+
+  --wjs-font-family-base: 'Inter', -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Inter', -apple-system, sans-serif;
+  --wjs-font-family-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.6;
+  --wjs-heading-weight: 800;
+  --wjs-heading-line-height: 1.2;
+  --wjs-h1: 2.5rem;
+  --wjs-h2: 1.8rem;
+  --wjs-h3: 1.5rem;
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.1rem;
+  --wjs-h6: 1rem;
+
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 8px;
+  --wjs-radius: 12px;
+  --wjs-radius-md: 16px;
+  --wjs-radius-lg: 24px;
+  --wjs-radius-pill: 999px;
+  --wjs-shadow-sm: 0 1px 2px 0 rgba(0,0,0,0.05);
+  --wjs-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+  --wjs-shadow-md: 0 10px 15px -3px rgba(0,0,0,0.1);
+  --wjs-shadow-lg: 0 20px 25px -5px rgba(0,0,0,0.1);
 }
 
 body {

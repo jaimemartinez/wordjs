@@ -66,6 +66,59 @@
   --wjs-shadow-soft: 0 1px 2px rgba(33, 28, 23, 0.06);
   --wjs-shadow-raised: 0 2px 8px rgba(33, 28, 23, 0.08);
   --wjs-font-heading: 'Libre Bodoni', Georgia, 'Times New Roman', serif;
+
+  /* --- WordJS UI framework tokens --- */
+  /* Colors */
+  --wjs-color-secondary: #2a231d;
+  --wjs-color-secondary-dark: #1b1611;
+  --wjs-color-accent: #d98e5a;
+  --wjs-color-success: #4f7a3f;
+  --wjs-color-danger: #b23b2e;
+  --wjs-color-warning: #c98a2b;
+  --wjs-color-info: #4a7a86;
+  --wjs-color-light: #faf8f3;
+  --wjs-color-dark: #211c17;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  /* Surfaces / text / border */
+  --wjs-bg-muted: #f1ece2;
+  --wjs-color-heading: #211c17;
+  --wjs-color-link: #9a3328;
+  --wjs-color-link-hover: #7a2820;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(154, 51, 40, 0.3);
+
+  /* Typography */
+  --wjs-font-family-heading: 'Libre Bodoni', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.65;
+  --wjs-heading-weight: 600;
+  --wjs-heading-line-height: 1.15;
+  --wjs-h1: 2.6rem;
+  --wjs-h2: 2.05rem;
+  --wjs-h3: 1.6rem;
+  --wjs-h4: 1.3rem;
+  --wjs-h5: 1.1rem;
+  --wjs-h6: 0.95rem;
+
+  /* Spacing / shape */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 1px;
+  --wjs-radius-md: 3px;
+  --wjs-radius-lg: 4px;
+  --wjs-shadow-sm: 0 1px 2px rgba(33, 28, 23, 0.06);
+  --wjs-shadow: 0 2px 8px rgba(33, 28, 23, 0.08);
+  --wjs-shadow-md: 0 4px 14px rgba(33, 28, 23, 0.1);
+  --wjs-shadow-lg: 0 10px 28px rgba(33, 28, 23, 0.14);
 }
 
 /* =========================================

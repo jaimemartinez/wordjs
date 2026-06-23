@@ -47,6 +47,65 @@
 
     /* --- TYPOGRAPHY --- */
     --wjs-font-family-base: 'Courier Prime', 'Courier New', monospace;
+
+    /* --- WordJS UI framework tokens --- */
+    /* Colors */
+    --wjs-color-secondary: #00b3ff;
+    --wjs-color-secondary-dark: #0077aa;
+    --wjs-color-accent: #ff00aa;
+    --wjs-color-success: #00ff41;
+    --wjs-color-danger: #ff3131;
+    --wjs-color-warning: #ffb000;
+    --wjs-color-info: #00b3ff;
+    --wjs-color-light: #0a0a0a;
+    --wjs-color-dark: #000000;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #161616;
+  --wjs-color-on-secondary: #161616;
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #161616;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #ffffff;
+  --wjs-color-on-dark: #ffffff;
+
+    /* Surfaces / text / border */
+    --wjs-bg-muted: #001a08;
+    --wjs-color-heading: #00ff41;
+    --wjs-color-link: #00ff41;
+    --wjs-color-link-hover: #66ff8c;
+    --wjs-border-width: 1px;
+    --wjs-focus-ring: rgba(0, 255, 65, 0.3);
+
+    /* Typography */
+    --wjs-font-family-heading: 'Courier Prime', 'Courier New', monospace;
+    --wjs-font-family-mono: 'Courier Prime', 'Courier New', monospace;
+    --wjs-font-size-base: 1rem;
+    --wjs-line-height-base: 1.6;
+    --wjs-heading-weight: 700;
+    --wjs-heading-line-height: 1.2;
+    --wjs-h1: 2.5rem;
+    --wjs-h2: 2rem;
+    --wjs-h3: 1.6rem;
+    --wjs-h4: 1.3rem;
+    --wjs-h5: 1.1rem;
+    --wjs-h6: 0.95rem;
+
+    /* Spacing / shape (brutalist terminal: zero radius, hard shadows) */
+    --wjs-spacer: 1rem;
+    --wjs-radius-sm: 0;
+    --wjs-radius: 0;
+    --wjs-radius-md: 0;
+    --wjs-radius-lg: 0;
+    --wjs-radius-pill: 0;
+    --wjs-shadow-sm: 2px 2px 0 rgba(0, 255, 65, 0.35);
+    --wjs-shadow: 4px 4px 0 rgba(0, 255, 65, 0.4);
+    --wjs-shadow-md: 6px 6px 0 rgba(0, 255, 65, 0.45);
+    --wjs-shadow-lg: 10px 10px 0 rgba(0, 255, 65, 0.5);
+
+    /* Bare-var aliases for backward compatibility */
+    --wjs-primary: #00ff41;
+    --wjs-secondary: #00b3ff;
 }
 
 /* =========================================

@@ -36,9 +36,22 @@ export default function ThemeLoader() {
         return () => window.removeEventListener('focus', onFocus);
     }, []);
 
+    // The shared WordJS UI framework (token-driven base elements + components + utilities) loads
+    // FIRST, so the theme's own style.css (its `:root` tokens + custom rules, loaded after) overrides
+    // it at equal specificity. It's static, so it can always render — even while the active theme is
+    // still resolving — which also prevents an unstyled flash of content.
+    const framework = (
+        <link rel="stylesheet" href="/public/css/wordjs-ui.css" id="wjs-ui-framework" />
+    );
+
     if (!activeTheme) {
-        // Safe fallback URL while loading (prevents FOUC if possible)
-        return <link rel="stylesheet" href="/themes/default/style.css" />;
+        // Safe fallback while loading (prevents FOUC if possible): framework + default theme.
+        return (
+            <>
+                {framework}
+                <link rel="stylesheet" href="/themes/default/style.css" />
+            </>
+        );
     }
 
     // Use relative path with a STABLE cache buster (theme version/slug). Date.now() here is
@@ -47,6 +60,9 @@ export default function ThemeLoader() {
     const cssUrl = `/themes/${activeTheme.slug}/style.css?v=${activeTheme.version || activeTheme.slug}`;
 
     return (
-        <link rel="stylesheet" href={cssUrl} id="wjs-theme-stylesheet" />
+        <>
+            {framework}
+            <link rel="stylesheet" href={cssUrl} id="wjs-theme-stylesheet" />
+        </>
     );
 }
