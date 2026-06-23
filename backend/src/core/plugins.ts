@@ -867,6 +867,7 @@ async function activatePlugin(slug) {
         });
 
         await doAction('activated_plugin', slug);
+        publishPluginChange(slug, 'activate'); // propagate to other nodes (no-op on single-node)
 
         return { success: true, message: `Plugin ${slug} activated` };
     } catch (error) {
@@ -909,8 +910,58 @@ async function deactivatePlugin(slug) {
     });
 
     await doAction('deactivated_plugin', slug);
+    publishPluginChange(slug, 'deactivate'); // propagate to other nodes (no-op on single-node)
 
     return { success: true, message: `Plugin ${slug} deactivated` };
+}
+
+// --- Cross-node plugin propagation (multi-node) --------------------------------------------------
+// When a plugin is activated/deactivated on one node, that node publishes 'wordjs:plugin-changed' and
+// every OTHER node syncs its in-process load state via coherence.ts → loadOnePlugin/unloadOnePlugin.
+// No-op on single-node (cache.publish does nothing without Redis), so single-node behavior is unchanged.
+function publishPluginChange(slug, action) {
+    try {
+        const cache = require('./cache');
+        const { HOLDER } = require('./dist-lock');
+        cache.publish('wordjs:plugin-changed', JSON.stringify({ slug, action, origin: HOLDER }));
+    } catch (e) { /* best-effort; single-node / Redis-down stays in-process */ }
+}
+
+/**
+ * Load ONE already-active plugin live into THIS node (cross-node coherence handler, when another node
+ * activated it). Mirrors the per-plugin load in loadActivePlugins but does NOT touch the shared
+ * `active_plugins` option (the originating node already wrote it under the dist-lock). Unloads any
+ * existing instance first so a re-fire can't double-register routes/hooks (idempotent).
+ */
+async function loadOnePlugin(slug) {
+    const plugin = scanPlugins().find(p => p.slug === slug);
+    if (!plugin) { console.warn(`[plugins] cross-node activate '${slug}': not present on this node`); return false; }
+    const mainFile = findMainFile(plugin.path);
+    if (!mainFile) { console.warn(`[plugins] cross-node activate '${slug}': no main file`); return false; }
+    let manifest: any = null;
+    const manifestPath = path.join(plugin.path, 'manifest.json');
+    if (fs.existsSync(manifestPath)) { try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* */ } }
+    if (!manifest || !manifest.isolated) return false;
+    try {
+        validatePluginPermissions(slug, plugin.path, manifest); // re-validate locally (code-poisoning guard)
+        await installPluginDependencies(slug, manifest, plugin.path); // shared node_modules; idempotent
+        try { unloadIsolatedPlugin(slug); } catch { /* not loaded here yet */ }
+        await loadIsolatedPlugin(slug, mainFile);
+        fixMiddlewareOrder();
+        console.log(`[plugins] '${slug}' loaded live (cross-node activation)`);
+        return true;
+    } catch (e: any) {
+        console.error(`[plugins] cross-node load of '${slug}' failed:`, e && e.message);
+        return false;
+    }
+}
+
+/**
+ * Unload ONE plugin live from THIS node (cross-node deactivation). Does NOT touch `active_plugins`.
+ */
+function unloadOnePlugin(slug) {
+    try { unloadIsolatedPlugin(slug); console.log(`[plugins] '${slug}' unloaded live (cross-node deactivation)`); return true; }
+    catch (e: any) { console.warn(`[plugins] cross-node unload of '${slug}':`, e && e.message); return false; }
 }
 
 /**
@@ -1085,6 +1136,8 @@ module.exports = {
     activatePlugin,
     deactivatePlugin,
     loadActivePlugins,
+    loadOnePlugin,
+    unloadOnePlugin,
     getAllPlugins,
     createSamplePlugin,
     validatePluginPermissions,
