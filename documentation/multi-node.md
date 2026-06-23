@@ -85,6 +85,10 @@ registered backends in its route group and round-robins across them. (`advertise
   This is what keeps Let's Encrypt renewal from firing N concurrent orders.
 - **Role/permission edits** — propagated across nodes over Redis (`wordjs:option-changed`), so a
   capability change on one node is reflected everywhere without a restart.
+- **Plugin activate/deactivate** — the handling node writes the active set under the
+  `wordjs:active-plugins` lock and publishes `wordjs:plugin-changed`; every other node loads/unloads
+  that one isolated plugin **live** (forked child + routes/hooks/menus) via `coherence.ts` →
+  `plugins.loadOnePlugin`/`unloadOnePlugin`, skipping its own publish. No rolling restart needed.
 - **Realtime notifications (SSE)** — published over Redis (`wordjs:notify`) and re-broadcast by every
   node to its own connected clients, so a notification reaches a user regardless of which node holds
   their stream. Notifications are also persisted, so a brief Redis hiccup degrades to "appears on next
@@ -131,11 +135,6 @@ Point your L4/L7 load balancer at the gateway. Health probes (added for orchestr
 
 ## Known limitations
 
-- **Plugin activate/deactivate** changes the loaded plugin state on the handling node (for an
-  `isolated` plugin this is the forked child process it manages; for an in-process plugin it is the
-  loaded module) and the active set in the DB. Other nodes do not hot-reload that state live — do a
-  **rolling restart** to propagate a plugin activation/deactivation across the cluster.
-  (Role/capability and option changes do propagate live.)
 - **No cross-node roles-coherence epoch yet (DATA-COH-01, deferred).** The Redis
   `wordjs:option-changed` pub/sub *does* propagate role/capability edits live, and a same-node
   local-write epoch stops a stale background TTL refresh from clobbering a just-applied local edit.
@@ -143,9 +142,6 @@ Point your L4/L7 load balancer at the gateway. Health probes (added for orchestr
   only via the in-process roles-cache TTL self-heal fallback — a missed cross-node revocation is
   bounded by the TTL (the fail-open direction), not corrected instantly. Strengthening this into a
   cross-node coherence epoch is on the roadmap.
-- **No cross-node plugin worker reconciliation.** Consistent with the rolling-restart limitation
-  above, other nodes do not reconcile their loaded/forked plugin worker state from the DB active set
-  without a restart.
 - **Residual multi-node lost-update edges.** The `active_plugins` read-modify-write **is** serialized
   across nodes (best-effort, under the `wordjs:active-plugins` distributed lock), but general
   concurrent option/row writes across nodes are not yet fully guarded against lost updates.
