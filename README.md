@@ -69,9 +69,10 @@ process, reachable only through a permission-checked capability bridge.
 - **Layered per-child memory caps.** Process separation already means a child OOM can't crash
   the host on any platform. On top of that: an **opt-in preventive cgroup v2 `MemoryMax`** per
   child on systemd Linux (`systemd-run --user --scope`, no root, probe-gated; enable via
-  `sandbox.useCgroupMemoryCap`); a **reactive host-side RSS poll** that `SIGKILL`s a child over
-  budget (Linux `/proc`, Windows `tasklist`, macOS `ps`); and a loose `RLIMIT_AS` virtual
-  backstop plus a `--max-old-space-size` JS-heap cap.
+  `sandbox.useCgroupMemoryCap`); a **default-on preventive Windows Job Object** (`ProcessMemoryLimit`
+  via pure-JS PowerShell P/Invoke, probe-gated; opt out via `sandbox.useJobObjectMemoryCap`); a
+  **reactive host-side RSS poll** that `SIGKILL`s a child over budget (Linux `/proc`, Windows
+  `tasklist`, macOS `ps`); and a loose `RLIMIT_AS` virtual backstop plus a `--max-old-space-size` JS-heap cap.
 - **Real server-side rendering.** The public routes (home, posts, pages, search) are async
   React Server Components that fetch on the server (`frontend/src/lib/server-api.ts`), so the
   initial HTML sent to crawlers and the first paint already contain the real title/body —
@@ -317,7 +318,7 @@ tests** (`npm run test`, e.g. the XSS sanitizer), and build.
 - **Communication:** REST + JWT + WebSockets/SSE
 - **Logging:** Structured JSON via Winston (daily-rotated)
 - **Gateway:** Express + Node `cluster`, http-proxy, mTLS internal channel
-- **Sandbox:** `child_process` OS-process isolation (`worker_threads` fallback) + `acorn` AST scanning + runtime require proxies + layered memory caps (cgroup/RSS-poll/RLIMIT_AS)
+- **Sandbox:** `child_process` OS-process isolation (`worker_threads` fallback) + `acorn` AST scanning + runtime require proxies + layered memory caps (cgroup/Windows-Job-Object/RSS-poll/RLIMIT_AS)
 - **TLS:** `acme-client` (Let's Encrypt HTTP-01 / DNS-01)
 - **Mail:** `smtp-server`, `nodemailer`, `mailparser`, DKIM (isolated plugin)
 - **Database:** SQLite (`sql.js` WASM / `better-sqlite3`) or PostgreSQL (`pg`),
@@ -366,7 +367,8 @@ Planned, **not yet implemented**:
 - **🌐 Multi-site** — manage multiple domains/sites from one install.
 - **🛡️ Kernel-level plugin hardening** — OS-process isolation ships, and an **opt-in** Linux
   layer (bubblewrap) drops uid + capabilities and adds `no-new-privs` / namespaces / read-only-fs
-  / a **`seccomp` syscall denylist**; next is a preventive Windows memory cap (Job Object).
+  / a **`seccomp` syscall denylist**, plus a **preventive Windows memory cap** (Job Object via
+  pure-JS PowerShell P/Invoke, default-on + probe-gated).
 
 **In progress / deferred migrations** (tracked as open PRs):
 
