@@ -80,7 +80,8 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
 - **DoS containment**: process separation (a child OOM / crash / infinite loop cannot take
   down the host — the host event loop is in a different process), a JS-heap cap
   (`--max-old-space-size`), an opt-in **preventive cgroup `MemoryMax`** per child on systemd Linux
-  (`systemd-run --user --scope`, probe-gated) with a host-side **RSS poll** default/fallback elsewhere
+  (`systemd-run --user --scope`, probe-gated), a **default-on preventive Windows Job Object** cap
+  (pure-JS PowerShell P/Invoke, probe-gated), a host-side **RSS poll** elsewhere / as a backstop
   (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL`) and a loose `RLIMIT_AS` backstop,
   per-child bridge-call rate + message-rate caps, RPC timeouts with wedged-child recycling, bounded
   in-flight calls, inbound/outbound payload caps, fs-write disk quota.
@@ -99,12 +100,14 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   transient **cgroup v2 scope with `MemoryMax`** (`systemd-run --user --scope`, no root; operator
   opt-in via `sandbox.useCgroupMemoryCap` and additionally probe-gated so it only activates where
   spawn+IPC+teardown verify on that host), so the kernel OOM-kills *only* the offending
-  child by construction the instant its resident set exceeds budget; (b) **reactive fallback** where
-  cgroups aren't available (Windows, macOS, non-systemd) — a host-side **RSS poll** (Linux `/proc`,
-  Windows `tasklist`, macOS `ps`); (c) a loose **`RLIMIT_AS`** virtual backstop (V8's ~4 GB cage makes
-  a box-tight virtual cap infeasible, so this only bounds pathological allocation). The remaining gap
-  is a **preventive** cap on **Windows** (a Job Object — needs a native helper, not pure-JS) and on
-  non-systemd Linux; there the reactive poll + process separation apply.
+  child by construction the instant its resident set exceeds budget; (b) **preventive on Windows** — a
+  default-on **Job Object** with `JOB_OBJECT_LIMIT_PROCESS_MEMORY` (the Win32 analog of cgroup
+  `memory.max`), assigned to the forked child via a one-shot PowerShell P/Invoke (**pure-JS, no native
+  dep**) and probe-gated, so the kernel fails any commit past 768 MB; (c) a **reactive RSS poll**
+  everywhere else and as a backstop (Linux `/proc`, Windows `tasklist`, macOS `ps`); (d) a loose
+  **`RLIMIT_AS`** virtual backstop (V8's ~4 GB cage makes a box-tight virtual cap infeasible, so this
+  only bounds pathological allocation). The remaining preventive-cap gap is **non-systemd Linux and
+  macOS**; there the reactive poll + process separation apply.
 - **Dropped uid + capability-drop + `no-new-privs` + namespaces + a `seccomp` syscall denylist**
   now ship as the opt-in bubblewrap layer above, so the child's syscall surface is shrunk "by
   construction". The Landlock LSM is intentionally not added — the read-only mount namespace already
