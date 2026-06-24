@@ -73,7 +73,7 @@ The theme system ships a single token-driven, Bootstrap-like CSS framework. The 
 ## Context Providers & State
 
 The app uses React Contexts to manage global state:
-*   **`AuthContext`**: Handles JWT parsing, role-based capabilities, and login/logout methods.
+*   **`AuthContext`**: Fetches the current user (including the `capabilities` array) from `GET /auth/me`, and exposes role-based capabilities and login/logout methods. The auth token lives in an HttpOnly cookie the frontend cannot read, so there is no client-side JWT parsing.
 *   **`MenuContext`**: Fetches and caches the admin sidebar menu items from `/api/v1/plugins/menus`.
 
 ## System Components
@@ -97,7 +97,7 @@ The in-place rich-text editor for Text/Heading blocks — edits the text **direc
 ## Navigation Components
 
 ### `SmartLink`
-A wrapper around `next/link` that handles conditional prefetching and active state management.
+A wrapper around `next/link` that guards against losing unsaved changes. It intercepts the click and routes through the unsaved-changes confirmation via `useUnsavedChanges()` / `checkAndNavigate(href)`.
 *   Located at: `src/components/SmartLink.tsx`
 *   Usage: `<SmartLink href="/admin/posts">Posts</SmartLink>`
 
@@ -113,16 +113,17 @@ Standard header for all admin pages.
     *   `subtitle` (string): Helper text below title.
     *   `icon` (string): FontAwesome class (e.g., `fa-users`).
     *   `actions` (ReactNode): Buttons or controls to show on the right.
-    *   `backButton` (boolean): Show back arrow (default: false).
+    *   `backButton` (`{ label?: string; onClick: () => void }`, optional): Shows a back arrow; `onClick` handles navigation and `label` overrides the default text.
 
 ### `Card`
 **Location:** `src/components/ui/Card.tsx`
 The primary container for content. Enforces the `rounded-[40px]` premium styling.
 *   **Props:**
     *   `children`: Content.
-    *   `title` (string, optional): Card header title.
-    *   `variant` ('default' | 'glass' | 'neo'): Visual style.
+    *   `variant` ('default' | 'glass' | 'dark' | 'accent'): Visual style.
+    *   `color` ('blue' | 'green' | 'red' | 'orange' | 'purple' | 'indigo'): Accent color (used with `variant="accent"`).
     *   `padding` ('none' | 'sm' | 'md' | 'lg'): Internal padding.
+    *   `hoverable` (boolean), `overflow` ('hidden' | 'visible'), `className` (string).
 
 ### `ActionCard`
 **Location:** `src/components/ui/ActionCard.tsx`
@@ -132,7 +133,7 @@ Clickable cards for dashboards or quick actions.
     *   `title`: Main text.
     *   `description`: Subtext.
     *   `onClick` / `href`: Action handler.
-    *   `variant` ('primary' | 'danger' | 'success' | 'warning' | 'info'): Color theme.
+    *   `color` ('blue' | 'purple' | 'green' | 'orange' | 'indigo' | 'gray'): Color theme (default: `blue`).
 
 ### `Input` / `ModernSelect`
 **Location:** `src/components/ui/Input.tsx`, `src/components/ModernSelect.tsx`
@@ -156,21 +157,21 @@ WordJS integrates **Puck** (by Measured) as its visual page builder.
 
 | Component   | Description          | Key Properties                                      |
 | ----------- | -------------------- | --------------------------------------------------- |
-| **Heading** | Text headings H1-H6  | `title`, `level`, `align`, `css`                    |
-| **Text**    | Rich text content    | `content`, `align`, `css`                           |
-| **Image**   | Responsive images    | `src`, `alt`, `width`, `height`, `objectFit`, `css` |
-| **Button**  | Clickable buttons    | `text`, `href`, `variant`, `size`, `css`            |
-| **Divider** | Horizontal separator | `style`, `color`, `thickness`, `css`                |
-| **Spacer**  | Vertical spacing     | `height`, `css`                                     |
-| **Card**    | Content container    | `title`, `content`, `image`, `link`, `css`          |
+| **Heading** | Text headings H1-H3  | `title`, `level`, `elementId`, `css`                |
+| **Text**    | Rich text content    | `elementId`, `css` (text edited in place)           |
+| **Image**   | Responsive images    | `src`, `elementId`, `css`                           |
+| **Button**  | Clickable buttons    | `label`, `href`, `variant`, `align`, `css`          |
+| **Divider** | Horizontal separator | `type`, `css`                                       |
+| **Spacer**  | Vertical spacing     | `css`                                               |
+| **Card**    | Content container    | `title`, `description`, `icon`, `theme`, `css`      |
 
 #### Layout Components
 
 | Component   | Description       | Key Properties                                        |
 | ----------- | ----------------- | ----------------------------------------------------- |
 | **Columns** | Multi-column grid | `distribution` (column widths), `columnStyles`, `css` |
-| **Section** | Container wrapper | `backgroundColor`, `padding`, `maxWidth`, `css`       |
-| **Grid**    | CSS Grid layout   | `columns`, `gap`, `minItemWidth`, `css`               |
+| **Section** | Container wrapper | `maxWidth`, `css`                                     |
+| **Grid**    | CSS Grid layout   | `columns`, `gap`, `css`                               |
 | **FlexRow** | Flexbox container | `justify`, `align`, `gap`, `wrap`, `css`              |
 
 #### Interactive Components
@@ -192,15 +193,15 @@ WordJS integrates **Puck** (by Measured) as its visual page builder.
 | Component        | Description     | Key Properties                                                       |
 | ---------------- | --------------- | -------------------------------------------------------------------- |
 | **PricingTable** | Pricing plans   | `plans` (array with name, price, features), `css`                    |
-| **Testimonial**  | Customer quotes | `quote`, `author`, `role`, `image`, `css`                            |
-| **CTABanner**    | Call-to-action  | `title`, `description`, `buttonText`, `buttonLink`, `variant`, `css` |
+| **Testimonial**  | Customer quotes | `quote`, `author`, `role`, `avatar`, `css`                           |
+| **CTABanner**    | Call-to-action  | `title`, `subtitle`, `buttonText`, `buttonLink`, `variant`, `css`   |
 
 #### Dynamic Content Components
 
 | Component         | Description          | Key Properties                                                     |
 | ----------------- | -------------------- | ------------------------------------------------------------------ |
 | **PostsGrid**     | Display recent posts | `count`, `columns`, `css`                                          |
-| **CategoryPosts** | Posts by category    | `categoryId`, `layout`, `css`                                      |
+| **CategoryPosts** | Posts by category    | `categorySlug`, `count`, `layout`, `css`                          |
 | **SearchBar**     | Search input         | `placeholder`, `buttonText`, `searchPage`, `align`, `width`, `css` |
 
 ### Component Security
@@ -239,7 +240,7 @@ The Admin Panel is fully responsive ("Mobile First").
 ### Sidebar Strategy
 *   **Desktop:** Supports "Collapsed" (Icon only) vs "Expanded" (Full width) states, persisted in `localStorage`.
 *   **Mobile:** Enforces "Expanded" layout whenever the menu is open.
-    *   The `Sidebar.tsx` component overrides `isCollapsed` styles using `md:` prefixes (e.g., `md:w-24 w-80`) to ensure text labels are always visible on small screens.
+    *   The `Sidebar.tsx` component overrides `isCollapsed` styles using `md:` prefixes (e.g., `md:w-28 w-80`) to ensure text labels are always visible on small screens.
     *   Uses a Backdrop (`z-[5001]`) and High Z-Index Sidebar (`z-[5002]`) to float above the interface.
 
 *   **Top Bar:** Fetches site logo and title from the backend Settings API.
@@ -271,7 +272,7 @@ The admin dashboard is fully translated. The public-facing site renders user con
 *   **Dictionary:** `src/lib/i18n.ts` holds the `translations` map and the `t(key, lang)` lookup. Resolution order: requested language → English fallback → the raw key (so a missing translation degrades gracefully instead of rendering blank).
 *   **Default & persistence:** the default is **Spanish** (`getStoredLanguage()` returns `'es'` during SSR and when nothing is stored). The user's choice is persisted in `localStorage` under `wordjs-lang`.
 *   **Context:** `I18nProvider` / `useI18n()` live in `src/contexts/I18nContext.tsx`. The provider initializes to the deterministic `'es'` default during SSR (to avoid hydration mismatch) and then applies the stored language on mount. It is mounted in `src/app/admin/DashboardLayoutClient.tsx`, so i18n is scoped to the admin area.
-*   **Usage:** `const { t, language, setLanguage } = useI18n();` then `t('nav.posts')`. The language switcher lives in `src/components/Sidebar.tsx` (and the Puck editor in `src/components/PuckEditor.tsx`).
+*   **Usage:** `const { t, language, setLanguage } = useI18n();` then `t('nav.posts')`. The language switcher lives in `src/components/Sidebar.tsx`.
 *   **Plugin translations:** plugins extend the dictionary via `registerTranslations({ es: {...}, en: {...}, pt: {...} })`; only the three supported languages are merged.
 
 ## HTML Sanitization (isomorphic) 🛡️
