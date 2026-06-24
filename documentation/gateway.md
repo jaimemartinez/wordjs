@@ -21,7 +21,6 @@ The **WordJS Gateway** (`gateway/src/index.js`) is an enterprise-grade entry poi
     *   **Liveness probe:** `/healthz` is answered by the gateway worker itself (returns `{ status, role: 'gateway', pid, timestamp }`), independent of any backend. `/readyz` is intentionally **not** handled at the edge so it proxies through to the backend's deep readiness check.
     *   **mTLS Upstream Verification:** Internal calls to backend/frontend use a mutual-TLS agent with `rejectUnauthorized: true`. The upstream certificate must chain to the cluster CA **and** present an allowed internal CN (`backend`, `frontend`, `gateway`, `gateway-internal`). This adds MITM protection without requiring IP SANs in the internal certs.
 *   **📡 Modern Connectivity:** WebSocket proxying support for bidirectional communication.
-*   **🧵 Traceability:** Automatic injection of `X-Correlation-ID` for distributed tracing.
 
 ## Configuration
 

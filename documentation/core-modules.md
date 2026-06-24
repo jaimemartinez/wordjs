@@ -34,8 +34,8 @@ The database layer is a driver-abstraction over SQLite and PostgreSQL. Plugins a
 *   **`postgres`** (the `pg` client) — connects to an **external** PostgreSQL by default.
 
 ### Driver interface & conformance
-*   All drivers implement a common interface — `connect / get / all / run / exec / close` — defined in `backend/src/drivers/interface.ts`.
-*   A conformance test (`backend/src/tests/driver-conformance.test.ts`) exercises every driver against the same contract. **Adding a new database = implement the interface + add a conformance block.**
+*   All drivers implement a common interface — `connect / get / all / run / exec / transaction / close` — defined in `backend/src/drivers/interface.ts`.
+*   A conformance test (`backend/src/tests/driver-conformance.test.ts`) exercises every **async-interface** driver (`sqlite-native` + `postgres`) against the same contract; the sync `sqlite-legacy` (sql.js) fallback is intentionally out of scope. **Adding a new database = implement the interface + add a conformance block.**
 
 ---
 
@@ -66,20 +66,10 @@ Manages SSL/TLS certificates via Let's Encrypt (ACME) or manual uploads.
 
 **Location:** `backend/src/core/plugin-test-runner.ts`
 
-Enforces quality control by running unit tests before enabling a plugin.
-
 ### Logic
-*   **Trigger:** Called automatically (via `verifyPluginTests(slug)`) when an admin attempts to **Activate** a plugin.
-*   **Runner:** Spawns a child process with `node --test` (`NODE_ENV=test`).
-*   **Enforcement:** If tests fail, the activation throws and is **blocked**, preventing broken code from running.
-*   **Scope:** Looks for `*.test.js` files in the plugin's `tests/` directory. **No tests = pass** (tests are optional; a missing `tests/` dir is treated as a skip).
-*   **Core tests:** `runCoreTests()` runs the CMS's own `src/tests/*.test.js` suite the same way.
-
-### Example Output
-```text
-🧪 Running tests for plugin 'my-plugin'...
-   ✅ All tests passed (5/5)
-```
+*   **Trigger:** `verifyPluginTests(slug)` is still called automatically when an admin attempts to **Activate** a plugin (in `plugins.ts`).
+*   **Plugin tests are NO LONGER executed.** A plugin's test files are arbitrary code, and running them with `node --test` would execute them on the **host**, OUTSIDE the sandbox — a host-RCE vector at activation time. Since there is no "trusted" tier anymore (every plugin is sandboxed at load time), `runPluginTests()` is now a deliberate **no-op**: it always returns `{ success: true, skipped: true }`, so activation is **never** blocked by plugin tests. The `verifyPluginTests` wiring remains as a vestigial seam (it only throws if a result is both `!success` and `!skipped`, which the current no-op never produces).
+*   **Core tests:** `runCoreTests()` is the one path that still spawns a child process with `node --test` (`NODE_ENV=test`, secret-free env allowlist). It runs the CMS's own `src/tests/` suite — it scans that directory for files ending in `.test.js`. **No matching files = pass** (returns `{ success: true, tests: 0, ... }`). It is invoked by the installer flow (`routes/setup.ts`), not by plugin activation.
 
 ---
 
@@ -174,7 +164,7 @@ These WordPress-style core services back most CMS configuration.
 ### Options (`backend/src/core/options.ts`)
 *   `getOption / updateOption / addOption / deleteOption / getAutoloadedOptions` — the `options` table is the canonical config store (mirrors `wp_options`).
 *   **Cache-backed:** reads check the cache first; values are wrapped as `{ v: value }` so a real cached `null/false/0/''` is distinguishable from a miss. Writes invalidate the key and fire the `updated_option` action.
-*   **Permission-checked:** every accessor runs `verifyPermission('settings', ...)`, so an isolated untrusted plugin only sees non-secret options.
+*   **Permission-checked:** the plugin-facing accessors run `verifyPermission('settings', ...)` (`getOption` → `settings/read`; `updateOption / addOption / deleteOption` → `settings/write`), so an isolated untrusted plugin only sees non-secret options. (`getAutoloadedOptions` is an internal boot-time autoload reader and skips the check.)
 
 ### Roles (`backend/src/core/roles.ts`)
 *   Roles + capabilities are **persisted in the `options` table** under `wordjs_user_roles` and cached in memory for synchronous access (`getRoles()` is used by `User.toJSON`).

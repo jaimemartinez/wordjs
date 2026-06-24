@@ -69,7 +69,7 @@ This is a **file**, not a script. It contains the current state of the Gateway's
 
 ## 5. Database Files & Maintenance
 
-The database file depends on the active driver (selected by `db.driver` in `wordjs-config.json` — see `documentation/database.md`):
+The database file depends on the active driver (selected by `dbDriver` in `wordjs-config.json` — see `documentation/database.md`):
 
 | Driver               | File / location                     | Notes                                            |
 | :------------------- | :---------------------------------- | :----------------------------------------------- |
