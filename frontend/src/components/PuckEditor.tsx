@@ -5,7 +5,7 @@ import "@measured/puck/puck.css";
 import "./puck-theme.css";
 import React, { useState, useEffect, useRef } from "react";
 import ModernSelect from "./ModernSelect";
-import PublicLayout from "@/app/(public)/layout";
+import PublicLayoutShell from "@/components/public/PublicLayoutShell";
 import { puckConfig } from "./puckConfig";
 import RevisionsSidebar from "./RevisionsSidebar";
 import BlockInserter from "./BlockInserter";
@@ -592,9 +592,9 @@ export default function PuckEditor({
                             if (fn) fn(id);
                         }
                     }}>
-                        <PublicLayout>
+                        <PublicLayoutShell>
                             {children}
-                        </PublicLayout>
+                        </PublicLayoutShell>
                     </EditorContext.Provider>
                 </div>
             );
