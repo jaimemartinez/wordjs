@@ -154,7 +154,7 @@ export default function Header({ disableSticky = false }: HeaderProps) {
                     <div className="wjs-header-actions flex items-center gap-4">
                         {/* Mobile Menu Button */}
                         <button
-                            className="md:hidden w-11 h-11 rounded-full bg-[#2F6D86] text-white flex items-center justify-center shadow-lg hover:bg-[#266073] transition-colors"
+                            className="md:hidden w-11 h-11 rounded-full bg-[var(--wjs-color-primary,#2F6D86)] text-[var(--wjs-color-on-primary,#ffffff)] flex items-center justify-center shadow-lg hover:bg-[var(--wjs-color-primary-dark,#266073)] transition-colors"
                             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                             aria-label="Toggle menu"
                         >
@@ -187,7 +187,7 @@ export default function Header({ disableSticky = false }: HeaderProps) {
                 <div className="p-6">
                     {/* Close Button */}
                     <button
-                        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center hover:bg-gray-200 transition-colors"
+                        className="absolute top-4 right-4 w-10 h-10 rounded-full bg-[var(--wjs-bg-muted,#f3f4f6)] text-[var(--wjs-color-text-muted,#4b5563)] flex items-center justify-center hover:bg-[var(--wjs-border-subtle,#e5e7eb)] transition-colors"
                         onClick={() => setMobileMenuOpen(false)}
                         aria-label="Close menu"
                     >
@@ -201,7 +201,7 @@ export default function Header({ disableSticky = false }: HeaderProps) {
                         {logoUrl ? (
                             <img src={logoUrl} alt={siteTitle} className="h-8 w-auto object-contain" />
                         ) : siteTitle ? (
-                            <span className="text-xl font-bold text-gray-800">{siteTitle}</span>
+                            <span className="text-xl font-bold text-[var(--wjs-color-heading,#1f2937)]">{siteTitle}</span>
                         ) : null}
                     </div>
 
@@ -212,14 +212,14 @@ export default function Header({ disableSticky = false }: HeaderProps) {
                                 <Link
                                     key={item.id}
                                     href={item.url}
-                                    className="text-lg text-gray-700 hover:text-[#2F6D86] font-medium py-2 border-b border-gray-100 transition-colors"
+                                    className="text-lg text-[var(--wjs-color-text-main,#374151)] hover:text-[var(--wjs-color-primary,#2F6D86)] font-medium py-2 border-b border-[var(--wjs-border-subtle,#f3f4f6)] transition-colors"
                                     onClick={(e) => handleNavClick(e, item.url)}
                                 >
                                     {item.title}
                                 </Link>
                             ))
                         ) : (
-                            <p className="text-gray-500 text-sm">No menu items</p>
+                            <p className="text-[var(--wjs-color-text-muted,#6b7280)] text-sm">No menu items</p>
                         )}
                     </nav>
                 </div>

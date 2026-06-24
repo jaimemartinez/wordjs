@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { settingsApi, menusApi } from "@/lib/api";
 import { sanitizeHTML } from "@/lib/sanitize";
+import PublicSidebar from "./PublicSidebar";
 
 interface FooterProps {
     previewSettings?: any;
@@ -72,6 +73,8 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
     return (
         <footer className="bg-[var(--wjs-bg-footer,rgb(17,24,39))] text-[var(--wjs-color-text-footer-main,white)] py-12 mt-auto border-t border-[var(--wjs-border-subtle,transparent)]">
             <div className="container mx-auto px-4">
+                {/* Footer widget area (honors the admin widget editor; renders nothing when empty) */}
+                <PublicSidebar id="footer-1" />
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
                     {/* Column 1: About / Brand */}
                     <div className="col-span-1 md:col-span-2">
