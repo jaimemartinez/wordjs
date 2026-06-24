@@ -18,8 +18,9 @@ export default function PublicSidebar({ id, onEmpty }: { id: string, onEmpty?: (
             .finally(() => setLoading(false));
     }, [id, onEmpty]);
 
-    if (loading) return <div className="animate-pulse bg-[var(--wjs-bg-surface-hover,gray)] h-64 rounded-xl"></div>;
-    if (!html) return null;
+    // Render nothing until content resolves: most widget areas are empty, and a big placeholder would
+    // flash on every page. When there are no widgets, stay invisible (no layout shift).
+    if (loading || !html) return null;
 
     return (
         <aside

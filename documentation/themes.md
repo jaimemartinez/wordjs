@@ -10,21 +10,23 @@ Each theme is located in `backend/themes/{theme-slug}/`. A theme can be as simpl
 themes/
 ├── my-theme/
 │   ├── style.css         # Main stylesheet (the file the Next.js frontend loads)
-│   ├── theme.json        # Optional: Theme metadata (name, version, description, author)
+│   ├── theme.json        # Optional: Theme metadata (name, version, description, author) + a `layout` block
 │   ├── functions.js      # Optional: Theme logic/hooks, loaded by the backend theme engine
 │   ├── templates/        # Optional: Handlebars page templates (index.html, single.html, archive.html)
 │   ├── partials/         # Optional: Shared Handlebars partials (header.html, footer.html)
 │   └── screenshot.png    # Optional: Theme preview (also .jpg/.webp); none shipped today
 ```
 
-> **Two rendering paths.** WordJS ships *both* a backend Handlebars template engine
-> (`backend/src/core/themes.ts` + `theme-engine`, which consumes `templates/`, `partials/`,
-> and `functions.js`) **and** the React/Puck public site under `frontend/src/app/(public)/`.
-> The Next.js public site is the primary renderer; it does **not** use a theme's Handlebars
-> templates. What it *does* consume is the active theme's **`style.css`**, injected as a
-> `<link>` tag by `ThemeLoader` (see "Activating a Theme" below). So for styling the live
-> Next.js site, only `style.css` (and its CSS variables) matters; `templates/`/`partials/`/
-> `functions.js` belong to the backend template engine.
+> **One live renderer: Next.js.** The public site is rendered entirely by Next.js
+> (`frontend/src/app/(public)/`) in **both** the split and monolith modes. WordJS still ships a
+> backend Handlebars template engine (`backend/src/core/themes.ts` + `theme-engine`, which can
+> consume `templates/`, `partials/`, and `functions.js`), but its public catch-all is **no longer
+> mounted** (`backend/src/index.ts`): it was unreachable behind the gateway/monolith routing, so it
+> is kept on disk as a marked *legacy* / library path, not the renderer. What the live site consumes
+> from a theme is its **`style.css`** (design tokens + rules), injected as a `<link>` by
+> `ThemeLoader`, plus an optional **`theme.json` `layout`** block and the admin **customizer**
+> overrides (see "Theme integration with the live site" below). So for the live site `style.css` +
+> `theme.json` matter; `templates/`/`partials/`/`functions.js` belong only to the legacy engine.
 >
 > Theme metadata is parsed from `theme.json` by `parseThemeMetadata()`; missing fields fall
 > back to defaults (name = slug, version = `1.0.0`). A `screenshot.{png,jpg,webp}`, if present,
@@ -97,7 +99,7 @@ stays legible against that theme's palette.
   theme's `:root` tokens and custom rules win at equal specificity.
 - In the **editor preview iframe** (`frontend/src/components/PuckEditor.tsx`), the same framework +
   active-theme stylesheet are injected (framework first), so the WYSIWYG canvas matches the live site.
-- The backend Handlebars `wordjs_head` helper (`backend/src/core/theme-engine.ts`) emits the framework
+- *(Legacy engine — not the live renderer.)* The backend Handlebars `wordjs_head` helper (`backend/src/core/theme-engine.ts`) emits the framework
   (`wordjs-ui.css`, before `core.css`). The active theme's `style.css` is linked separately by the theme's
   `header.html` partial via the `get_stylesheet_uri` helper (in the bundled partials that link comes *before*
   `{{wordjs_head}}`, so on the backend Handlebars path the theme stylesheet precedes the framework).
@@ -107,6 +109,45 @@ stays legible against that theme's palette.
 
 All 14 bundled themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
 class reference, see [`documentation/theming.md`](./theming.md).
+
+## Theme integration with the live site
+
+The active theme drives the **entire** live (Next.js) site — not just raw content — through four seams,
+all of which default to today's look so the 14 existing themes render unchanged:
+
+1. **Token-driven chrome.** The fixed React chrome consumes `--wjs-*` tokens instead of hardcoded
+   colors: the header/nav/burger (`Header.tsx`), the footer (`Footer.tsx`), the post/page meta and
+   cards (`PostContent.tsx`), and the blog roll (`app/(public)/page.tsx`). Text on solid fills uses the
+   `--wjs-color-on-*` contrast tokens, so a theme re-skins the whole shell by setting tokens. The chrome
+   also honors the **menu editor** (`menusApi.getByLocation('header'|'footer')`) and the **footer
+   editor** (`footer_text`/`footer_socials`/`footer_copyright`).
+2. **Themed post content.** Rendered post/page bodies are wrapped in `.wjs-content` (the framework's
+   long-form content rules) so headings, links, lists, tables, code, etc. pick up the theme's tokens.
+3. **Widget areas.** The widget editor's sidebars are now rendered: `footer-1` inside the footer, and
+   an opt-in primary `sidebar-1` (see `layout.sidebar` below), both via
+   `PublicSidebar.tsx` → `widgetsApi.renderSidebar` (sanitized). Each area collapses to nothing when it
+   has no assigned widgets, so there is no empty column. Widgets are themed by token-driven
+   `.widget`/`.widget-title`/`.widget-area` rules in `wordjs-ui.css`.
+4. **`theme.json` `layout` (structure config).** A theme may declare a `layout` block, e.g.:
+
+   ```json
+   { "layout": { "containerWidth": "72rem", "sidebar": true } }
+   ```
+
+   `parseThemeMetadata()`/`switchTheme()` surface it into the `active_theme_layout` option (in
+   `PUBLIC_SETTINGS`), and the SSR public layout (`app/(public)/layout.tsx`) honors it — `containerWidth`
+   caps the main column, `sidebar: true` switches content/archive pages to two columns with `sidebar-1`.
+   Omitting the block (all 14 shipped themes) keeps the current single-column, default-width layout.
+
+### Theme customizer (live `--wjs-*` overrides)
+
+`/admin/themes/customize` lets an admin edit the active theme's `--wjs-*` tokens with a live `<iframe>`
+preview. Saving stores the overrides as JSON in the `active_theme_mods` option (admin-gated write,
+public read for SSR). `ThemeTokenOverlay.tsx` (a server component) SSR-injects them as a single
+`<style id="wjs-theme-mods">:root{…}</style>` **after** the theme stylesheet, so overrides win at equal
+specificity with no flash-of-unstyled-content. The overlay is **strictly sanitized** — only keys
+matching `^--wjs-[a-z0-9-]+$` and values free of `;{}:<>` are emitted (no CSS injection). It renders
+nothing when empty, and `switchTheme()` resets it, so changing themes starts from that theme's own look.
 
 ## CSS Variables Reference
 
@@ -254,7 +295,9 @@ Add a `screenshot.png` (400x300px recommended) for the theme picker.
 3. The frontend picks up the new theme on the next load (or when you refocus the public tab)
 
 Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`, which writes
-the `template` and `stylesheet` options and re-initializes the backend theme engine. On the
+the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the
+`active_theme_layout` option, clears any customizer overrides (`active_theme_mods`), and
+re-initializes the (legacy) theme engine. On the
 public site, `frontend/src/components/public/ThemeLoader.tsx` polls `themesApi.list()`, finds the
 active theme, and injects `<link rel="stylesheet" href="/themes/{slug}/style.css?v=…">`
 (id `wjs-theme-stylesheet`). It re-checks on `window` `focus`, so switching the theme in one tab

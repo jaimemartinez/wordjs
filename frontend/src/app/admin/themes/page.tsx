@@ -90,6 +90,12 @@ export default function ThemesPage() {
                     subtitle={t('themes.subtitle')}
                     actions={
                         <>
+                            <a
+                                href="/admin/themes/customize"
+                                className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors"
+                            >
+                                <i className="fa-solid fa-sliders"></i> Customize
+                            </a>
                             <Button
                                 onClick={() => fileInputRef.current?.click()}
                                 disabled={uploading}

@@ -37,6 +37,8 @@ const PUBLIC_SETTINGS = [
     'footer_socials',
     'comments_enabled',
     'site_icon',
+    'active_theme_layout',  // active theme's structure config (JSON) for the SSR public layout
+    'active_theme_mods',    // active theme's live token overrides (JSON) from the customizer
     'users_can_register',
     // 'admin_email' - SECURITY: Removed from public to prevent email harvesting
     'default_role',
