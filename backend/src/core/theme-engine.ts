@@ -1,6 +1,12 @@
 /**
- * WordJS - Theme Engine (Robust)
+ * WordJS - Theme Engine (Robust) — LEGACY / NOT THE PUBLIC RENDERER.
  * Uses Handlebars for rendering and supports recursive partials, components and theme logic.
+ *
+ * The live public site is rendered by the Next.js frontend in both split and monolith mode; this
+ * engine's render() is no longer mounted on any reachable route (see backend/src/index.ts). On the
+ * live site a theme contributes only its `style.css` (--wjs-* tokens), loaded by the frontend's
+ * ThemeLoader. init() is still called on boot/switchTheme and is harmless (loads partials +
+ * sandboxed functions.js); keep this module for that + a potential standalone/monolith fallback.
  */
 
 const fs = require('fs');

@@ -739,3 +739,22 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
 .wjs-content h2, .wjs-content h3, .wjs-content h4 { margin-top: 1.6em; }
 .wjs-content img, .wjs-content figure, .wjs-content video, .wjs-content iframe { border-radius: var(--wjs-radius); }
 .wjs-content > p, .wjs-content > ul, .wjs-content > ol, .wjs-content > blockquote, .wjs-content > pre, .wjs-content > table { margin-bottom: 1.25rem; }
+
+/* ============================================================= WIDGETS ====== */
+/* Output of the widget/sidebar system (admin widget editor → renderSidebar). Text uses `inherit` so a
+ * widget adapts to its container (dark footer or light sidebar); accents/borders use tokens. */
+.widget-area { display: flex; flex-direction: column; gap: 1.5rem; }
+.widget { margin: 0; }
+.widget-title { margin: 0 0 0.75rem; font-size: 1.05rem; font-weight: 700; color: inherit; }
+.widget ul, .widget ol { list-style: none; margin: 0; padding: 0; }
+.widget li { padding: 0.35rem 0; border-bottom: var(--wjs-border-width) solid color-mix(in srgb, currentColor 18%, transparent); }
+.widget li:last-child { border-bottom: 0; }
+.widget a { color: inherit; text-decoration: none; transition: color var(--wjs-transition); }
+.widget a:hover { color: var(--wjs-color-primary); }
+.widget .textwidget { color: inherit; }
+.widget .search-form { display: flex; gap: 0.5rem; }
+.widget .search-form input[type="search"], .widget .search-form input[type="text"] {
+  flex: 1 1 auto; padding: 0.4rem 0.6rem; color: var(--wjs-color-text-main);
+  background: var(--wjs-bg-canvas); border: var(--wjs-border-width) solid var(--wjs-border-subtle); border-radius: var(--wjs-radius);
+}
+@supports not (color: color-mix(in srgb, red, blue)) { .widget li { border-bottom-color: var(--wjs-border-subtle); } }
