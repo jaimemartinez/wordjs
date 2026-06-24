@@ -18,7 +18,7 @@
 WordJS is built with a "Security First" architecture.
 
 ### Active Defenses
-- **Rate Limiting**: Per-IP brute-force protection on login and API endpoints (gateway + backend).
+- **Rate Limiting**: Per-IP brute-force protection on login and API endpoints (backend).
 - **Per-Account Login Lockout**: A single account is locked for 15 minutes after 10 consecutive failed logins — this throttles a distributed/botnet attack that defeats the per-IP limiter.
 - **Helmet Headers**: HSTS, `X-Content-Type-Options`, `X-Frame-Options`, and XSS filtering. (The gateway's helmet CSP is off; the **frontend ships a real Content Security Policy** on every route — see Known Limitations.)
 - **IO Guard**: Recursive filesystem locks to prevent unauthorized plugin access outside their directory.
@@ -26,7 +26,7 @@ WordJS is built with a "Security First" architecture.
 - **SVG Sanitization**: Strips malicious scripts from vector images.
 - **Identity Isolation**: mTLS authentication between Gateway, Backend, and Services.
 - **One-Time Install Token**: The pre-install setup endpoints (`POST /setup/install`, `POST /setup/test-db`) are gated by a one-time token printed to the server console (and mirrored to a `0600` file in the data dir; overridable via `WORDJS_INSTALL_TOKEN`, ≥16 chars), compared in constant time and cleared once installed — preventing pre-install takeover.
-- **Import Identifier Allowlist**: The WXR/JSON `custom_tables` import validates every table and column name against a strict simple-identifier regex and refuses core tables + `sqlite_*` reserved tables before any SQL interpolation.
+- **Import Identifier Allowlist**: The JSON `custom_tables` import validates every table and column name against a strict simple-identifier regex and refuses core tables + `sqlite_*` reserved tables before any SQL interpolation.
 
 ### Authentication & Transport
 - **JWT Signing**: The signing secret never falls back to a public constant. When none is configured, a per-process ephemeral random secret is used (issued tokens stop working after a restart). Configure a real secret via setup for production.
@@ -54,7 +54,7 @@ WordJS is built with a "Security First" architecture.
 ### Known Limitations
 - **CSP**: The **frontend** (admin UI + public pages) ships a Content Security Policy on every route via `next.config.ts` (`default-src 'self'`; `script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:`; `frame-ancestors 'none'`; `object-src 'none'`; `base-uri 'self'`). `blob:` is required so admin plugin bundles (`import(URL.createObjectURL(blob))`) and their icons render; `'unsafe-inline'`/`'unsafe-eval'` remain for Next.js + Puck (the server-side sanitizer is the XSS control). The **gateway's** helmet CSP is still off (`helmet({ contentSecurityPolicy: false })`); tightening both is a documented follow-up.
 - **CSRF**: Protection is **origin/exact-match** based (Origin/Referer + pinned `X-Forwarded-Host`), not per-request CSRF tokens. Token-based CSRF is future work.
-- **Sandbox escapes**: Low-level escapes (`Module._load`, `process.binding`/`_linkedBinding`, native `.node` addons, deferred timers/event-emitter listeners) are blocked at runtime for plugin contexts (`process.dlopen` left open for native addons). The AST scanner does **not** inspect a plugin's `node_modules`, and there are no hard CPU quotas (memory is capped per child in layers — a preventive Windows Job Object cap (`JOB_OBJECT_LIMIT_PROCESS_MEMORY`, default-on, probe-gated, opt-out `config.sandbox.useJobObjectMemoryCap`), an opt-in preventive cgroup v2 cap on Linux (`config.sandbox.useCgroupMemoryCap`), a cross-platform reactive RSS poll, and a loose `RLIMIT_AS` backstop).
+- **Sandbox escapes**: Low-level escapes (`Module._load`, `process.binding`/`_linkedBinding`, `process.dlopen`, native `.node` addons, deferred timers/event-emitter listeners) are blocked at runtime for plugin contexts (loading native addons is denied to every plugin — no trust tier unlocks it). The AST scanner does **not** inspect a plugin's `node_modules`, and there are no hard CPU quotas (memory is capped per child in layers — a preventive Windows Job Object cap (`JOB_OBJECT_LIMIT_PROCESS_MEMORY`, default-on, probe-gated, opt-out `config.sandbox.useJobObjectMemoryCap`), an opt-in preventive cgroup v2 cap on Linux (`config.sandbox.useCgroupMemoryCap`), a cross-platform reactive RSS poll, and a loose `RLIMIT_AS` backstop).
 - **Opt-in kernel hardening (Linux)**: Beyond the in-process escape blocks, an opt-in layer (`config.sandbox.useKernelHardening`, default-off, Linux-only, probe-gated) runs each isolated child through `bubblewrap` (`bwrap`) — dropped uid (unprivileged `nobody` in a rootless user namespace), all capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, read-only fs — plus a seccomp-bpf syscall denylist (pure-JS classic BPF, no native dep). Landlock is intentionally not used. Off by default since `bwrap` presence and rootless-userns support vary by host; any probe failure falls back to the standard isolated launch.
 - **No independent audit yet**: see the posture note above.
 

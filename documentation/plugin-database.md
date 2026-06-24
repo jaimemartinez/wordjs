@@ -28,13 +28,13 @@ module.exports = {
 };
 ```
 
-Métodos del bridge: `wordjs.db.all/get/run`, `wordjs.db.createTable(name, columns)`, `wordjs.db.getType()`, y la propiedad `wordjs.db.tablePrefix` (el prefijo `wjp_<slug>_` de tus tablas). Cada uno exige el permiso correspondiente del manifest (`database:read` / `database:write`).
+Métodos del bridge: `wordjs.db.all/get/run`, `wordjs.db.createTable(name, columns)`, `wordjs.db.getType()`, más la propiedad `wordjs.db.tablePrefix` (el prefijo `wjp_<slug>_` de tus tablas). Cada **método** exige el permiso correspondiente del manifest (`database:read` / `database:write`); `tablePrefix` es una propiedad estática (no exige grant para leerla).
 
 ### Aislamiento de tablas: prefijo por plugin + el core fuera de límites
 
 Cada plugin tiene un **namespace de tablas propio** — el prefijo `wjp_<slug>_` (como `$wpdb->prefix` en WordPress), expuesto en `wordjs.db.tablePrefix` y derivado en `createPluginApi()` (`'wjp_' + slug + '_'`, normalizado a minúsculas/`[A-Za-z0-9]`).
 
-**Todo** plugin está **table-scoped por defecto-deny** — no existe un contraparte "confiable" (la tier *trusted* fue eliminada; `plugin-trust.ts` ya no existe). El host (`assertSqlAllowed` en `plugin-api.ts`) exige que **toda** tabla que la query toque pertenezca al plugin (esté bajo su prefijo), y `assertSqlAllowed(tablePrefix)` se invoca **siempre**, en `db.all/get/run` y `createTable`, sin ninguna ruta de código que levante el scoping. Un token no atribuible o sin prefijo se **rechaza** (fail-closed), no se ignora — así un plugin no puede leer tablas de otro plugin (p.ej. `received_emails` de mail-server) ni del core, incluso una que no esté en la denylist explícita.
+**Todo** plugin está **table-scoped por defecto-deny** — no existe un contraparte "confiable" (la tier *trusted* fue eliminada; `plugin-trust.ts` ya no existe). El host (`assertSqlAllowed` en `plugin-api.ts`) exige que **toda** tabla que la query toque pertenezca al plugin (esté bajo su prefijo), y `assertSqlAllowed(tablePrefix)` se invoca **siempre** en `db.all/get/run`, sin ninguna ruta de código que levante el scoping. `createTable` no pasa por `assertSqlAllowed`, pero impone el mismo confinamiento por prefijo con un chequeo directo del nombre de la tabla (debe empezar por `tablePrefix`) y delega en `createPluginTable`, que valida el identificador y rechaza sentencias apiladas. Un token no atribuible o sin prefijo se **rechaza** (fail-closed), no se ignora — así un plugin no puede leer tablas de otro plugin (p.ej. `received_emails` de mail-server) ni del core, incluso una que no esté en la denylist explícita.
 
 | Tipo de plugin                  | Acceso a BD                                                                 |
 | :------------------------------ | :------------------------------------------------------------------------- |
@@ -65,7 +65,7 @@ Como los plugins ya no pueden leer tablas del core, la info **no secreta** del s
 
 > **Defensa en profundidad (en el hijo):** el proceso aislado también corre `secure-require.ts` (bloquea `worker_threads`/`vm`/`child_process`/módulos de red, `process.binding`, addons nativos) e `io-guard.ts`, que confina el `fs` al **propio dir** del plugin: bloquea escrituras a su código y lecturas de `.env`/secretos; el bloqueo de los **archivos de BD** (`data/wordjs.db` + sidecars) actúa dentro del hijo aislado (`__WORDJS_ISOLATED__`), no en el host (donde el driver del bridge abre legítimamente `data/wordjs.db`), de modo que un plugin no puede leer la BD por fuera del bridge tocando el archivo directamente. Además, `io-guard` **deniega leer el dir de un plugin hermano** — su `package.json`, su `node_modules` o cualquier archivo (solo resuelve el propio árbol del plugin + ancestros compartidos), así que un plugin no puede exfiltrar archivos/secretos de otro plugin ni siquiera fuera de la BD (IO-1).
 
-> **Nota histórica:** `db-migration` ya **no** es un plugin (migraba/tocaba tablas del core y gestionaba procesos del servidor). Ahora es infraestructura del core en `backend/src/core/db-admin/`. Ver [database.md §1.5](./database.md).
+> **Nota histórica:** `db-migration` ya **no** es un plugin (migraba/tocaba tablas del core y gestionaba procesos del servidor). Ahora es infraestructura del core en `backend/src/core/db-admin/`. Ver [database.md §1.4](./database.md).
 
 ## Principio: Sintaxis Única Global
 
@@ -202,7 +202,7 @@ module.exports = {
 
 ## Plugins Actualizados
 
-- ✅ `card-gallery` - Usa el bridge `wordjs.db` y queries estándar
-- ✅ `video-gallery` - Usa el bridge `wordjs.db` y queries estándar
-- ✅ `mail-server` - Plugin **totalmente untrusted** (sandboxed): declara solo `database:read` + `database:write` y guarda **todos** sus datos — incluidas claves DKIM y secretos SMTP del relay — en sus propias tablas `wjp_mail_server_*` (`_received_emails` / `_email_attachments` / `_secrets`), precisamente porque `assertSqlAllowed` deniega cualquier tabla fuera de su prefijo
+- ✅ `card-gallery` - Persiste sus datos vía el bridge `wordjs.options` (clave/valor), no en tablas SQL
+- ✅ `video-gallery` - Persiste sus datos vía el bridge `wordjs.options` (clave/valor), no en tablas SQL
+- ✅ `mail-server` - Plugin **totalmente untrusted** (sandboxed): usa los grants `database:read` + `database:write` (entre otros que pide su manifest) y guarda **todos** sus datos en la BD — incluidas claves DKIM y secretos SMTP del relay — en sus propias tablas `wjp_mail_server_*` (`_received_emails` / `_email_attachments` / `_secrets`), precisamente porque `assertSqlAllowed` deniega cualquier tabla fuera de su prefijo
 - ✅ Todos los plugins existentes - Sintaxis SQLite estándar; todos table-scoped a su propio prefijo (sin acceso a tablas del core)

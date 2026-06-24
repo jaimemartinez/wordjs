@@ -22,7 +22,7 @@ The backend follows a layered architecture inspired by WordPress but implemented
 7.  **Response:** JSON response sent back.
 
 ### 1.2 Database Abstraction
-WordJS loads a database **driver** behind a common interface (`backend/src/drivers/interface.ts`: `connect/get/all/run/exec/close`). Drivers are selected by `db.driver` (in `wordjs-config.json`) via the DB manager in `backend/src/config/database.ts`.
+WordJS loads a database **driver** behind a common interface (`backend/src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). Drivers are selected by the top-level `dbDriver` key (in `wordjs-config.json`) via the DB manager in `backend/src/config/database.ts`.
 *   **Default:** `sqlite-native` (file-based SQLite via `better-sqlite3`), ideal for "Zero Config". File: `backend/data/wordjs-native.db`.
 *   **Automatic fallback:** `sqlite-legacy` (pure-JS WASM `sql.js`, file `backend/data/wordjs.db`) — used only when a SQLite driver fails to load (e.g. the native binary is missing). It reads the same SQLite file format.
 *   **PostgreSQL:** `postgres` driver (the `pg` client), connecting to an external Postgres server (`db: { host, port, user, password, name, ssl }`).
@@ -46,7 +46,7 @@ Authentication is handled via **JWT (JSON Web Tokens)**.
 2.  **Token Usage:**
     *   Primary: the `wordjs_token` HttpOnly cookie is sent automatically by the browser.
     *   Also accepted: `Authorization: Bearer <token>` header.
-    *   Lifecycle: Expiration defaults to 7 days (configurable in `.env`). Refresh via `POST /auth/refresh` (re-issues the cookie).
+    *   Lifecycle: The JWT itself expires in **2 hours** (hardcoded `config.jwt.expiresIn`, not `.env`-configurable). The `wordjs_token` cookie carrying it has a 7-day `maxAge`, so the browser keeps sending the cookie after the token inside it has expired. Refresh via `POST /auth/refresh` (re-issues the cookie).
 3.  **Revocation:** JWTs are revoked via a per-user `token_valid_after` security epoch. `POST /auth/logout` and a password change bump it, immediately invalidating previously issued tokens.
 
 ### 2.2 Permissions Middleware (RBAC)
@@ -100,8 +100,9 @@ WordJS implements a WordPress-style Event-Driven Architecture via `backend/src/c
 
 ### 3.3 Common Hooks
 *   `init`: Fired after system initialization, before server start.
-*   `rest_api_init`: Fired when registering routes (ideal for plugins).
-*   `save_post`: Fired after a post is created/updated.
+*   `wp_insert_post`: Fired after a post is created.
+*   `post_updated`: Fired after a post is updated.
+*   `deleted_post`: Fired after a post is deleted.
 
 ---
 
@@ -162,7 +163,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 ### 6.2.1 Authentication Flow (JWT)
 1. **Login**: `POST /auth/login` -> sets the `wordjs_token` HttpOnly cookie and returns `{ user }`.
 2. **Authorize**: the cookie is sent automatically; an `Authorization: Bearer <token>` header is also accepted.
-3. **Session**: Token expires in 7 days (default). Refresh via `POST /auth/refresh`; `POST /auth/logout` clears the cookie and revokes the token (`token_valid_after`).
+3. **Session**: The JWT expires in **2 hours** (hardcoded, not `.env`-configurable); the `wordjs_token` cookie has a 7-day `maxAge`. Refresh via `POST /auth/refresh`; `POST /auth/logout` clears the cookie and revokes the token (`token_valid_after`).
 
 ### 6.2 Content & Taxonomy
 | Method   | Endpoint            | Auth  | Description                                      |
@@ -402,26 +403,26 @@ Usage in Editor: `[youtube id="dQw4w9WgXcQ"]`
 
 ## 11. Custom Backups & System State 📦
 
-WordJS features a powerful **Full System State Backup** engine located in `backend/src/core/backup.ts`. unlike traditional CMS backups that only save the database, WordJS creates a portable, self-contained snapshot of the entire application.
+WordJS features a **Backup** engine located in `backend/src/core/backup.ts`. Unlike traditional CMS backups that only save the database, WordJS bundles your content and extensions alongside the database. It deliberately does **not** back up code or config: overwriting `src/`, `package.json`, `.env`, or `wordjs-config.json` from a restored (and potentially crafted) zip would be an RCE / JWT-secret-swap primitive, so restore refuses to extract them.
 
 ### 11.1 What is included?
- The backup zip file represents the **entire backend directory state**, ensuring a 1:1 restoration.
-*   **Source Code:** `src/`, `server.js`, `package.json`.
-*   **Content:** `uploads/` (images, videos), `languages/`.
+The backup zip file contains an **allowlist of three content roots** plus the database — not the whole backend tree.
+*   **Content:** `uploads/` (images, videos).
 *   **Extensions:** `plugins/`, `themes/`.
-*   **Configuration:** `.env` (sensitive vars), `wordjs-config.json`.
-*   **Database:** A logical dump (`wordjs-content.json`) is generated and added to ensure data integrity across versions.
+*   **Database (logical):** A logical dump (`wordjs-content.json`) is generated and added to ensure data integrity across versions.
+*   **Database (physical):** For SQLite drivers, a consistent physical snapshot of the live `.db` is also added (as `database/wordjs.db`) to cover tables the logical export does not (analytics, notifications, plugin tables, `schema_migrations`). Postgres backups rely on the logical export only (physical `pg_dump` is not bundled).
 
-**Excluded:**
+**Not included:**
+*   **Code & config:** `src/`, `server.js`, `package.json`, `.env`, `wordjs-config.json` — intentionally excluded (see above). `languages/` is also not backed up.
 *   `node_modules/`: Re-generated via `npm install`.
 *   `backups/`: Preventing recursive loops.
 *   `logs/`, `os-tmp/`, `.git/`.
 
 ### 11.2 Key Functions
-*   `createBackup()`: Scans the root directory, filters exclusions, and generates a timestamped ZIP.
+*   `createBackup()`: Zips the three content roots (`uploads/`, `plugins/`, `themes/`), adds the logical dump and a physical `.db` snapshot, and generates a timestamped ZIP.
 *   `restoreBackup(filename)`:
-    1.  **Physical Restore:** Extracts files, overwriting the current system (code + assets).
-    2.  **Logical Restore:** Parses `wordjs-content.json` and rebuilds the SQLite database using `importSite()`.
+    1.  **Physical Restore:** Extracts files — but **only** entries under the `uploads/`, `plugins/`, and `themes/` allowlist (each path-contained against traversal); any `src/`, config, or other entry is skipped, never overwriting code or config.
+    2.  **Logical Restore:** Parses `wordjs-content.json` and rebuilds the database using `importSite()`. For non-file drivers (e.g. Postgres) the database is wiped first for a clean restore.
 *   `listBackups()`: Returns available backup files from `backend/backups/` (newest first).
 *   `deleteBackup(filename)`: safely removes a backup file.
 *   `pruneBackups(keep?)`: **Retention pruning.** Keeps only the newest `keep` backups and deletes the rest. `createBackup()` calls it automatically after every backup so scheduled/auto backups don't fill the disk unbounded. When `keep` is omitted it is read from the `backup_retention` option (**default 7**); set `backup_retention` to `0` (or any value ≤ 0) to disable pruning and keep all backups.
@@ -430,7 +431,8 @@ WordJS features a powerful **Full System State Backup** engine located in `backe
 
 ### 11.3 Import/Expert (Logical Data Only)
 Located in `backend/src/core/import-export.ts`.
-*   `exportSite(options)`: Generates the JSON dump used inside full backups. Can also return WXR (WordPress XML).
+*   `exportSite(options)`: Generates the JSON dump used inside full backups.
+*   `exportToWXR()`: A separate exporter that returns the WordPress WXR (XML) representation.
 *   `importSite(data, options)`: The engine that consumes the JSON dump to populate the DB.
 
 ---
@@ -443,8 +445,8 @@ The Widgets API (`backend/src/core/widgets.ts`) allows plugins to register dynam
 ```javascript
 const { registerWidget } = require('../../src/core/widgets');
 
-registerWidget('clock_widget', {
-    name: 'Analog Clock',
+// Signature: registerWidget(id, name, options)
+registerWidget('clock_widget', 'Analog Clock', {
     description: 'Displays the current time',
     render: (options) => `<div class="clock">...</div>`
 });
@@ -517,19 +519,18 @@ Run code when something happens (e.g., a post is saved).
 ```javascript
 const { addAction } = require('../../src/core/hooks');
 
-addAction('save_post', (post) => {
-    console.log(`Post saved: ${post.post_title}`);
+addAction('wp_insert_post', (postId, data) => {
+    console.log(`Post saved: ${data.post_title}`);
     // Do custom logic here (e.g. send email)
 });
 ```
 
 ### 7.4 How to... Fetch Data in React (Admin)
-**CRITICAL:** Always include the token!
+**CRITICAL:** The auth token is an **HttpOnly cookie** (`wordjs_token`) — it is **not** in `localStorage` and cannot be read from JS. Send it by passing `credentials: 'include'` so the browser attaches the cookie.
 ```javascript
 const getData = async () => {
-    const token = localStorage.getItem("wordjs_token");
     const res = await fetch('/api/v1/my-plugin/hello', {
-        headers: { Authorization: `Bearer ${token}` }
+        credentials: 'include' // sends the HttpOnly wordjs_token cookie
     });
     const data = await res.json();
     console.log(data);

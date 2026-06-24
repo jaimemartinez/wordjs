@@ -112,7 +112,7 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   now ship as the opt-in bubblewrap layer above, so the child's syscall surface is shrunk "by
   construction". The Landlock LSM is intentionally not added — the read-only mount namespace already
   provides the filesystem confinement Landlock would, and the LSM needs a native dependency.
-- The model has had several red-team passes (8 rounds) plus the OS-isolation pivot; it has
+- The model has had several red-team passes (ten rounds) plus the OS-isolation pivot; it has
   **not had an independent third-party audit**.
 
 **Honest one-liner for the sandbox:** *"Every plugin runs in a separate OS process with
@@ -218,8 +218,8 @@ The repositioning only works if the core is **small, auditable, and obviously ab
 sandbox**. Today the core carries heavyweight infrastructure that dilutes the story and
 enlarges the trust surface:
 
-- **Mail / MTA → optional add-on.** The mail-server runs an SMTP listener on :25 + outbound
-  MX / DKIM delivery. With the trust tier gone, it ships as a normal sandboxed first-party
+- **Mail / MTA → optional add-on.** The mail-server runs an inbound SMTP listener (configurable
+  `smtp_listen_port`, default 2525) + outbound MX delivery on port 25 + DKIM. With the trust tier gone, it ships as a normal sandboxed first-party
   plugin pre-granted the capabilities it declares (`network` for SMTP/MX, `email:provider`).
   It should ship as an **optional add-on**, not a core dependency: direct-MX deliverability is
   an ops liability most users don't want in core, and a high-capability plugin enlarges the

@@ -401,8 +401,7 @@ Core can register "Widgets" (they appear in the `Widgets` admin panel and can be
 
 ```javascript
 const { registerWidget } = require('../../src/core/widgets'); // core / non-isolated context only
-registerWidget('my_weather_widget', {
-    name: 'Weather Widget',
+registerWidget('my_weather_widget', 'Weather Widget', {
     description: 'Shows local weather',
     render: (options) => `<div>It is sunny!</div>`
 });
@@ -461,7 +460,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
 | `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Always creates a `wjp_<slug>_`-prefixed table; core table names blocked. |
-| `wordjs.db.getType()` | `database:read` | `'sqlite'` vs `'postgres'` — branch your DDL. |
+| `wordjs.db.getType()` | `database:read` | Returns an object `{ isPostgres, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, or `'postgres'`) — check `isPostgres`/`isSQLite` to branch your DDL. |
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. |

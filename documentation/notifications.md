@@ -48,7 +48,7 @@ Notifications are stored in the `notifications` table (UUID, `user_id`, `type`, 
 *   `markAsRead(uuid, userId)`, `markAllAsRead(userId)`, and `deleteNotification(uuid, userId)` manage state. The single-item mutators are **owner-scoped** (`WHERE uuid = ? AND (user_id = ? OR user_id = 0)`): a uuid is not a capability, so a caller can only act on their own notification — except a broadcast (`user_id = 0`) which any user may dismiss. They return `true` only when a row the user owns was actually changed (the routes 404 otherwise).
 
 ### REST endpoints (`backend/src/routes/notifications.ts`)
-*   `GET  /api/v1/notifications/stream` — SSE stream (auth via header or query token).
+*   `GET  /api/v1/notifications/stream` — SSE stream (auth via header, cookie, or query token).
 *   `GET  /api/v1/notifications` — list (bounded, as above).
 *   `POST /api/v1/notifications/:uuid/read` — mark one read.
 *   `POST /api/v1/notifications/read-all` — mark all read.
@@ -59,7 +59,7 @@ Notifications are stored in the `notifications` table (UUID, `user_id`, `type`, 
 The frontend connects to the SSE stream at `/api/v1/notifications/stream`. Broadcasts are addressed: a notification with `user_id == 0` goes to all connected clients, otherwise only to clients whose authenticated user matches.
 
 ### Components
-*   **`NotificationCenter.tsx`**: The main UI component in the top bar. It handles receiving events, playing sounds, and managing unread counts.
+*   **`NotificationCenter.tsx`**: The main UI component. It handles receiving events, triggering haptic feedback (`navigator.vibrate`), and managing unread counts.
 *   **`ToastContext.tsx`**: Displays transient "toast" popups for incoming notifications.
 
 ```javascript

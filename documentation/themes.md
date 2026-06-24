@@ -63,13 +63,13 @@ There are **14 shipped themes**:
 | **pop-studio**      | Bold Creative      | Vibrant pink/cyan, big rounded shapes       |
 | **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
-| **vidaParaTodos**   | Corporate          | Clean professional blue; full template set  |
+| **vidaParaTodos**   | Corporate          | Clean professional blue                     |
 
-> **`--wjs-` variable adoption.** All 14 themes ship the full `--wjs-*` token set documented below
-> (dozens of declarations each, including the `--wjs-color-on-*` contrast set). The **default** theme
-> additionally keeps a few older bare aliases (`--primary`, `--text`, `--bg`, `--border`) at the top of
-> its `:root` for backward-compatibility with its legacy rules — but it carries the complete `--wjs-*`
-> set too. Copy any theme as a starting point.
+> **`--wjs-` variable adoption.** All 14 themes ship the full `--wjs-*` token set documented below (dozens
+> of declarations each — e.g. `carbon-terminal` has 71, `default` 53 — including the `--wjs-color-on-*`
+> contrast set). The **default** theme additionally keeps a few older bare aliases (`--primary`,
+> `--primary-dark`, `--text`, `--text-muted`, `--bg`, `--border`) at the top of its `:root` for its legacy
+> rules, but it carries the complete `--wjs-*` set too. Copy any theme as a starting point.
 
 ## The WordJS UI Framework
 
@@ -97,8 +97,10 @@ stays legible against that theme's palette.
   theme's `:root` tokens and custom rules win at equal specificity.
 - In the **editor preview iframe** (`frontend/src/components/PuckEditor.tsx`), the same framework +
   active-theme stylesheet are injected (framework first), so the WYSIWYG canvas matches the live site.
-- The backend Handlebars `wordjs_head` helper (`backend/src/core/theme-engine.ts`) likewise links
-  `wordjs-ui.css` before the theme stylesheet.
+- The backend Handlebars `wordjs_head` helper (`backend/src/core/theme-engine.ts`) emits the framework
+  (`wordjs-ui.css`, before `core.css`). The active theme's `style.css` is linked separately by the theme's
+  `header.html` partial via the `get_stylesheet_uri` helper (in the bundled partials that link comes *before*
+  `{{wordjs_head}}`, so on the backend Handlebars path the theme stylesheet precedes the framework).
 - It is **never** loaded into the admin UI. Selectors are intentionally low-specificity, so themed
   chrome built with utility/Tailwind classes keeps winning; in practice the framework styles raw
   content HTML and offers opt-in classes wherever it's loaded.
@@ -167,7 +169,7 @@ class reference, see [`documentation/theming.md`](./theming.md).
   /* Accordion */
   --puck-accordion-bg: var(--wjs-bg-surface);
   --puck-accordion-border: var(--wjs-border-subtle);
-  --puck-accordion-header-bg: transparent;
+  --puck-accordion-header-bg: var(--wjs-bg-surface);
   
   /* Tabs */
   --puck-tabs-border: var(--wjs-border-subtle);
@@ -175,7 +177,7 @@ class reference, see [`documentation/theming.md`](./theming.md).
   
   /* Pricing */
   --puck-pricing-bg: var(--wjs-bg-surface);
-  --puck-pricing-featured-bg: var(--wjs-color-primary);
+  --puck-pricing-highlight-bg: var(--wjs-color-primary);
   
   /* Search */
   --puck-search-input-bg: var(--wjs-bg-surface);
@@ -256,8 +258,10 @@ the `template` and `stylesheet` options and re-initializes the backend theme eng
 public site, `frontend/src/components/public/ThemeLoader.tsx` polls `themesApi.list()`, finds the
 active theme, and injects `<link rel="stylesheet" href="/themes/{slug}/style.css?v=…">`
 (id `wjs-theme-stylesheet`). It re-checks on `window` `focus`, so switching the theme in one tab
-applies in an open public tab when you return to it. A cache-buster query string forces a fresh
-stylesheet fetch.
+applies in an open public tab when you return to it. The `?v=` query string is a **stable**
+cache-buster (the theme's `version`, falling back to its `slug`) — deliberately deterministic, not
+`Date.now()`, so the href is identical across SSR and hydration; it busts the cache only when the
+theme's version or slug changes.
 
 ## Theme Previews in Admin
 
