@@ -139,14 +139,15 @@
 > | card-gallery | **isolated** | JSON routes + options + admin menu (frontend → namespaced path) |
 > | photo-carousel | **isolated** | routes + options + **async shortcode** (`[carousel]`) |
 > | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
-> | conference-manager | **isolated** | own-table DB + `db.getType`, namespaced routes (pre-granted its declared caps) |
-> | mail-server | **isolated** | SMTP server on :25 + MX delivery in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
+> | conference-manager | **isolated** | own-table DB (`wjp_conference_manager_*`), namespaced routes (pre-granted its declared caps) |
+> | mail-server | **isolated** | inbound SMTP listener (configurable `smtp_listen_port`, default 2525) + outbound MX delivery (to recipient :25) in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
 > | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (runs schema migrations at boot, around the DB lifecycle). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
 >
 > **Net (final): the sandbox is isolated-only.** Every plugin runs in its own OS process; the legacy
 > in-process execution path was removed (`loadActivePlugins`/`activatePlugin` reject non-isolated plugins,
 > `deactivatePlugin` terminates the child). All feature plugins are isolated (verified in-browser
-> serving real data — incl. the mail server's inbox and its SMTP listener on :25). db-migration is no
+> serving real data — incl. the mail server's inbox and its inbound SMTP listener on its configured
+> port (`smtp_listen_port`, default 2525)). db-migration is no
 > longer a plugin at all: its backend moved into core (it manages the database server itself) and its
 > admin UI is a native frontend route reached from a permanent core Sidebar item. **Every** plugin —
 > first-party or uploaded — isolates and is hard-blocked from core tables/secrets regardless of the
@@ -322,7 +323,8 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
 > Node runtime, so the host *grants* the *safe* high-level capabilities a plugin needs over the bridge —
 > per plugin, admin-controlled, default-deny — instead of exempting anything from isolation or handing out
 > raw OS primitives. So:
-- **mail-server**: runs its SMTP server on port 25 and does outbound MX delivery **inside its own OS
+- **mail-server**: runs its inbound SMTP server on its configured port (`smtp_listen_port`, default
+  2525) and does outbound MX delivery (connecting to recipient mail servers on :25) **inside its own OS
   process**. secure-require opens the **egress-guarded** `net`/`tls`/`http`/`https`/`http2`/`dgram`
   (plus raw `dns` for resolution — the connect, not the lookup, is the guarded sink) only when the
   **`network`** capability is granted (resolved host-side at spawn and passed in
@@ -334,7 +336,7 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
   in the plugin's own DB/files (not a core secret option),
   and the bridge grants multipart upload, `provideMail` (`email:provider`), and `notify.registerTransport`
   (`notifications:provider`). It is pre-granted these, but runs fully sandboxed.
-- **conference-manager**: pre-granted `database` (its own `wjp_conference-manager_` tables) + `db.getType()`,
+- **conference-manager**: pre-granted `database` (its own `wjp_conference_manager_` tables) +
   namespaced routes — all over the bridge, no unscoped DB or absolute routes (those no longer exist).
   Isolated.
 - **db-migration**: was **de-pluginized** — it manages the database *server process* and runs at boot,
