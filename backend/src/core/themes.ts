@@ -23,6 +23,7 @@ class Theme {
   screenshot: any;
   path: any;
   templatePath: any;
+  layout: any;
 
   constructor(data: any) {
     this.name = data.name;
@@ -34,6 +35,9 @@ class Theme {
     this.screenshot = data.screenshot || '';
     this.path = data.path;
     this.templatePath = data.templatePath;
+    // Optional structure config from theme.json (e.g. { containerWidth, sidebar, headerStyle }).
+    // The Next.js public layout honors it via the active_theme_layout option (see switchTheme).
+    this.layout = (data.layout && typeof data.layout === 'object') ? data.layout : null;
   }
 
   /**
@@ -160,6 +164,11 @@ async function switchTheme(slug: string) {
   await updateOption('template', slug);
   await updateOption('stylesheet', slug);
 
+  // Expose the active theme's structure config to the (SSR) Next.js public layout, and reset any live
+  // customizer token overrides (they belong to the previous theme's look). Both are read via getSettings.
+  await updateOption('active_theme_layout', theme.layout ? JSON.stringify(theme.layout) : '');
+  await updateOption('active_theme_mods', '');
+
   // Trigger engine re-initialization
   const themeEngine = require('./theme-engine');
   await themeEngine.init();
@@ -183,12 +192,16 @@ async function getAllThemes() {
     description: theme.description,
     author: theme.author,
     screenshot: theme.screenshot,
+    layout: theme.layout,
     active: theme.slug === current
   }));
 }
 
 /**
- * Render a template with data
+ * Render a Handlebars theme template with data.
+ * LEGACY: this is NOT the public renderer — the live public site is rendered by the Next.js frontend
+ * (which consumes a theme only via its style.css tokens). Kept for potential monolith/standalone use;
+ * it currently has no callers.
  */
 async function renderTemplate(templateName: string, data = {}) {
   const themeEngine = require('./theme-engine');

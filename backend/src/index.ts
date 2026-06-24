@@ -400,9 +400,12 @@ app.get('/api', (req: Request, res: Response) => {
 // Internal Routes (Gateway Hooks)
 app.use('/api/internal', require('./routes/internal'));
 
-// Public Frontend - Independent rendering system
-const frontendRoutes = require('./routes/frontend');
-app.use(frontendRoutes);
+// NOTE: the legacy Handlebars public renderer (./routes/frontend → theme-engine) is intentionally
+// NOT mounted. The public site is rendered by the Next.js frontend in BOTH split and monolith mode
+// (the gateway/monolith only route /api,/uploads,/themes,/plugins,/.well-known,/healthz,/readyz,
+// /metrics to the backend; everything else → Next.js). That catch-all was unreachable in both modes;
+// leaving it mounted was a latent footgun (it would shadow backend paths if the prefix list changed).
+// routes/frontend.ts + theme-engine.ts are kept on disk only as a legacy/monolith-render fallback.
 
 // Add analytics route
 app.use('/api/v1/analytics', require('./routes/analytics'));

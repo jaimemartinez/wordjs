@@ -112,7 +112,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 <div className="w-full px-4 py-8">
                     <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
                     <div
-                        className="prose prose-lg max-w-none mx-auto"
+                        className="wjs-content prose prose-lg max-w-none mx-auto"
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />
@@ -121,10 +121,10 @@ export default function PostContent({ post, settings, category, showComments }: 
                 // Post fallback (card style)
                 <article className="max-w-3xl mx-auto py-8">
                     <div className="mb-8 text-center">
-                        <div className="flex items-center justify-center gap-3 text-sm text-gray-500 mb-4">
+                        <div className="flex items-center justify-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                             {category && (
                                 <>
-                                    <span className="font-semibold text-blue-600 uppercase tracking-wide">
+                                    <span className="font-semibold text-[var(--wjs-color-primary,#2563eb)] uppercase tracking-wide">
                                         {decodeURIComponent(category).replace(/-/g, ' ')}
                                     </span>
                                     <span>•</span>
@@ -134,12 +134,12 @@ export default function PostContent({ post, settings, category, showComments }: 
                             <span>•</span>
                             <span>{post.author?.displayName || "Admin"}</span>
                         </div>
-                        <h1 className="text-4xl md:text-5xl font-bold text-gray-900 leading-tight mb-6 text-center">
+                        <h1 className="text-4xl md:text-5xl font-bold text-[var(--wjs-color-heading,#111827)] leading-tight mb-6 text-center">
                             {post.title}
                         </h1>
                     </div>
                     <div
-                        className="prose prose-lg prose-blue mx-auto bg-white p-8 rounded-2xl shadow-sm border border-gray-100"
+                        className="wjs-content prose prose-lg mx-auto p-8 rounded-2xl shadow-sm bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)]"
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />
@@ -148,8 +148,8 @@ export default function PostContent({ post, settings, category, showComments }: 
 
             {commentsAllowed && <CommentsSection postId={post.id} />}
 
-            <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-gray-100 flex justify-between items-center px-4">
-                <Link href="/" className="text-gray-500 hover:text-blue-600 font-medium flex items-center gap-2">
+            <div className="max-w-4xl mx-auto mt-12 pt-8 border-t border-[var(--wjs-border-subtle,#e5e7eb)] flex justify-between items-center px-4">
+                <Link href="/" className="text-[var(--wjs-color-text-muted,#6b7280)] hover:text-[var(--wjs-color-primary,#2563eb)] font-medium flex items-center gap-2">
                     <i className="fa-solid fa-arrow-left"></i> Back to Home
                 </Link>
             </div>
