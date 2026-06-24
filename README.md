@@ -99,8 +99,10 @@ process, reachable only through a permission-checked capability bridge.
   (`.btn`/`.card`/`.alert`/`.table`/`.nav`/a flexbox grid/…) and a utility layer, all driven by
   `--wjs-*` design tokens a theme declares in its own `style.css :root` (with built-in fallbacks).
   It loads on public pages (frontend `ThemeLoader`) and the editor preview iframe (frontend
-  `PuckEditor`), and is linked by the backend Handlebars `wordjs_head` — always **before** the
-  theme's own `style.css`, so the theme wins. See [`documentation/theming.md`](documentation/theming.md).
+  `PuckEditor`), always **before** the theme's own `style.css`, so the theme wins. The active theme
+  drives the whole live (Next.js) site — chrome, post content, and widget areas — plus an optional
+  `theme.json` `layout`, and an admin **customizer** (`/admin/themes/customize`) edits `--wjs-*`
+  tokens live. See [`documentation/themes.md`](documentation/themes.md).
 - **Dynamic roles & permissions**, database-driven.
 - **i18n** for core and plugins (es / en / pt).
 - **Import / export** for full site backup and restore, with **retention pruning** — after
