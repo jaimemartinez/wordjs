@@ -100,11 +100,17 @@ function discoverPuckPlugins() {
                 continue;
             }
 
+            // A plugin can expose MULTIPLE blocks via `export const puckComponents = {...}`, or a
+            // single block via `puckComponentDef` + default export. Detect which by reading the entry.
+            let multi = false;
+            try { multi = /export\s+const\s+puckComponents\b/.test(fs.readFileSync(fullPath, 'utf8')); } catch { /* single */ }
+
             plugins.push({
                 id: manifest.id || folder,
                 folder: folder,
                 PascalName: toPascalCase(manifest.id || folder),
                 importPath: puckPath,
+                multi,
             });
 
         } catch (err) {
@@ -145,8 +151,11 @@ async function generateRegistry() {
         `import * as ${p.PascalName}Puck from "../../../backend/plugins/${p.folder}/${p.importPath}";`
     ).join('\n');
 
-    const exports = includedPlugins.map(p =>
-        `    "${p.PascalName}": {
+    // Emit ONLY the reference that exists on each module (see `multi` detection above) — Turbopack
+    // statically errors on any `import * as X` member that isn't an actual export.
+    const exports = includedPlugins.map(p => p.multi
+        ? `    ...${p.PascalName}Puck.puckComponents,`
+        : `    "${p.PascalName}": {
         ...${p.PascalName}Puck.puckComponentDef,
         render: ${p.PascalName}Puck.default
     },`

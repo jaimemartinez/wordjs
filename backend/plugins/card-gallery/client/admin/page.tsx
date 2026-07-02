@@ -585,7 +585,9 @@ export default function CardGalleryAdminPage() {
                 isOpen={isMediaPickerOpen}
                 onClose={() => setIsMediaPickerOpen(false)}
                 onSelect={(item) => {
-                    setCardForm({ ...cardForm, image: item.guid });
+                    // Store the RELATIVE sourceUrl, not guid (guid embeds the upload-time host/IP and
+                    // breaks when the site is served from another origin). See MediaLibrarySelector.
+                    setCardForm({ ...cardForm, image: item.sourceUrl || item.guid });
                     setIsMediaPickerOpen(false);
                 }}
             />

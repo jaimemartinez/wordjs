@@ -338,6 +338,46 @@ const walk = require('acorn-walk');
  * Static Analysis 2.0: AST-based scan
  * Detects API calls even if split, renamed, or accessed via global.
  */
+// Canonical permission vocabulary: scope -> allowed access tokens. 'network' is scope-only (no
+// access token). Single source of truth for upload validation, the `wordjs check` CLI, and admin
+// permission labels — so a typo'd scope/access is caught in ONE place instead of silently accepted.
+const KNOWN_PERMISSIONS: Record<string, string[]> = {
+    database: ['read', 'write'],
+    filesystem: ['read', 'write'],
+    settings: ['read', 'write'],
+    users: ['read'],
+    email: ['admin', 'provider'],
+    notifications: ['send', 'provider'],
+    express: ['register_route'],
+    admin_menu: ['register'],
+    assets: ['write'],
+    network: [], // scope-only: {scope:'network'} carries no access token
+};
+
+/**
+ * Validate a manifest.permissions array against KNOWN_PERMISSIONS. Returns human-readable problems
+ * (empty = valid). Catches typo'd scopes ('databse') / accesses ('readwrite') that would otherwise
+ * be silently accepted, yielding a dead admin toggle and a cryptic runtime denial.
+ */
+function validateManifestPermissions(permissions: any): string[] {
+    const problems: string[] = [];
+    if (permissions === undefined || permissions === null) return problems;
+    if (!Array.isArray(permissions)) return ['`permissions` must be an array.'];
+    permissions.forEach((p: any, i: number) => {
+        if (!p || typeof p !== 'object') { problems.push(`permissions[${i}] must be an object like {scope, access}.`); return; }
+        if (!(p.scope in KNOWN_PERMISSIONS)) {
+            problems.push(`Unknown permission scope "${p.scope}" (valid: ${Object.keys(KNOWN_PERMISSIONS).join(', ')}).`);
+            return;
+        }
+        const allowed = KNOWN_PERMISSIONS[p.scope];
+        if (allowed.length === 0) return; // scope-only (network)
+        if (!allowed.includes(p.access)) {
+            problems.push(`Permission "${p.scope}" has invalid access "${p.access}" (valid: ${allowed.join(', ')}).`);
+        }
+    });
+    return problems;
+}
+
 function validatePluginPermissions(slug: string, pluginPath: string, manifest: any) {
     const permissions = manifest.permissions || [];
     const missingPermissions = new Set();
@@ -568,7 +608,13 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
     }
 
     if (errors.length > 0) {
-        throw new Error(`🛡️ Security Block: Plugin '${slug}' failed validation:\n\n${errors.join('\n\n')}\n\nPlease update manifest.json or remove the unauthorized code.`);
+        const err: any = new Error(`🛡️ Security Block: Plugin '${slug}' failed validation:\n\n${errors.join('\n\n')}\n\nPlease update manifest.json or remove the unauthorized code.`);
+        // Structured detail so callers (upload validation, the admin activation-reject panel) can tell
+        // a FIXABLE missing-grant apart from a HARD-BLOCKED dangerous call, instead of parsing a string.
+        err.code = 'PLUGIN_VALIDATION_FAILED';
+        err.missingPermissions = Array.from(missingPermissions);
+        err.dangerousCalls = Array.from(dangerousCalls);
+        throw err;
     }
 
     return true;
@@ -583,6 +629,7 @@ class Plugin {
     version: any;
     description: any;
     author: any;
+    homepage: any;
     path: any;
     active: any;
     init: any;
@@ -595,6 +642,7 @@ class Plugin {
         this.version = data.version || '1.0.0';
         this.description = data.description || '';
         this.author = data.author || '';
+        this.homepage = data.homepage || '';
         this.path = data.path;
         this.active = data.active || false;
         this.init = data.init || null;
@@ -664,6 +712,7 @@ function scanPlugins() {
             version: metadata.version || '1.0.0',
             description: metadata.description || '',
             author: metadata.author || '',
+            homepage: metadata.homepage || metadata.repository || '',
             path: pluginDir,
             permissions: metadata.permissions || [],
             // We defer loading 'init' and 'deactivate' hooks until activation/load time
@@ -1129,10 +1178,48 @@ exports.deactivate = function() {
     fs.writeFileSync(path.join(sampleDir, 'index.js'), sampleCode);
 }
 
+/**
+ * Purge a plugin's persisted footprint on uninstall. ALWAYS clears grants (security: otherwise a
+ * re-uploaded slug silently inherits the old, possibly-revoked grants) + crash strikes. When
+ * dropTables is set, also drops the plugin's OWN wjp_<slug>_* tables — the sandbox confines each
+ * plugin to exactly that prefix, so dropping them is complete and can't touch core or another plugin.
+ * Options are intentionally NOT auto-purged: the options bridge is a GLOBAL key space with no
+ * per-plugin namespace, so a plugin's keys can't be identified safely (a plugin.uninstall hook is the
+ * clean path for that). Best-effort: each step is guarded so one failure doesn't abort the rest.
+ */
+async function uninstallPluginData(slug: string, { dropTables = false }: { dropTables?: boolean } = {}) {
+    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [] };
+    try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
+    catch (e: any) { console.warn(`[uninstall ${slug}] removeGrants failed:`, e && e.message); }
+    try { const { clearStrikes } = require('./crash-guard'); clearStrikes(slug); result.strikesCleared = true; }
+    catch (e: any) { console.warn(`[uninstall ${slug}] clearStrikes failed:`, e && e.message); }
+    try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { console.warn(`[uninstall ${slug}] clearAssets failed:`, e && e.message); }
+    if (dropTables) {
+        try {
+            const { dbAsync, getDbType } = require('../config/database');
+            const { isPostgres } = getDbType();
+            // Mirror plugin-worker.js's tablePrefix normalization exactly.
+            const prefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
+            const rows = isPostgres
+                ? await dbAsync.all("SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public'")
+                : await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table'");
+            // Filter in JS by the exact plugin prefix (no LIKE params → no cross-driver escaping pitfalls).
+            const mine = (rows || []).map((r: any) => r.name).filter((n: string) => String(n).toLowerCase().startsWith(prefix));
+            for (const name of mine) {
+                await dbAsync.run(`DROP TABLE IF EXISTS "${String(name).replace(/"/g, '')}"`);
+                result.tablesDropped.push(name);
+            }
+        } catch (e: any) { console.warn(`[uninstall ${slug}] table drop failed:`, e && e.message); }
+    }
+    console.log(`[uninstall ${slug}] grants=${result.grantsRemoved} strikes=${result.strikesCleared} tablesDropped=${result.tablesDropped.length}`);
+    return result;
+}
+
 module.exports = {
     scanPlugins,
     getActivePlugins,
     isPluginActive,
+    uninstallPluginData,
     activatePlugin,
     deactivatePlugin,
     loadActivePlugins,
@@ -1141,6 +1228,9 @@ module.exports = {
     getAllPlugins,
     createSamplePlugin,
     validatePluginPermissions,
+    validateManifestPermissions,
+    KNOWN_PERMISSIONS,
+    fixMiddlewareOrder,
     // Hard Lock + Bundling utilities
     isBundledPlugin,
     checkDependencyConflicts,

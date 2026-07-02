@@ -1,0 +1,93 @@
+/*
+ * __NAME__ — a WordJS theme.
+ *
+ * HOW THEMING WORKS: the WordJS UI framework (backend/public/css/wordjs-ui.css) styles every
+ * HTML element and component from the --wjs-* design tokens below. Your theme overrides the
+ * tokens in :root (this is the FULL token contract, seeded from backend/themes/default/style.css)
+ * and may additionally style the site chrome via the .wjs-header-* / footer hooks.
+ * NEVER edit core to customize a site — everything below is yours.
+ */
+:root {
+  /* --- WordJS UI framework tokens --- */
+  --wjs-color-primary: #2563eb;
+  --wjs-color-primary-dark: #1e40af;
+  --wjs-color-secondary: #64748b;
+  --wjs-color-secondary-dark: #475569;
+  --wjs-color-accent: #8b5cf6;
+  --wjs-color-success: #16a34a;
+  --wjs-color-danger: #dc2626;
+  --wjs-color-warning: #f59e0b;
+  --wjs-color-info: #0ea5e9;
+  --wjs-color-light: #f9fafb;
+  --wjs-color-dark: #1f2937;
+  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  --wjs-bg-canvas: #f9fafb;
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #f3f4f6;
+  --wjs-color-text-main: #1f2937;
+  --wjs-color-text-muted: #6b7280;
+  --wjs-color-heading: #111827;
+  --wjs-color-link: #2563eb;
+  --wjs-color-link-hover: #1e40af;
+  --wjs-border-subtle: #e5e7eb;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(37, 99, 235, 0.3);
+
+  --wjs-font-family-base: 'Inter', -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Inter', -apple-system, sans-serif;
+  --wjs-font-family-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.6;
+  --wjs-heading-weight: 800;
+  --wjs-heading-line-height: 1.2;
+  --wjs-h1: 2.5rem;
+  --wjs-h2: 1.8rem;
+  --wjs-h3: 1.5rem;
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.1rem;
+  --wjs-h6: 1rem;
+
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 8px;
+  --wjs-radius: 12px;
+  --wjs-radius-md: 16px;
+  --wjs-radius-lg: 24px;
+  --wjs-radius-pill: 999px;
+  --wjs-shadow-sm: 0 1px 2px 0 rgba(0,0,0,0.05);
+  --wjs-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+  --wjs-shadow-md: 0 10px 15px -3px rgba(0,0,0,0.1);
+  --wjs-shadow-lg: 0 20px 25px -5px rgba(0,0,0,0.1);
+}
+
+/*
+ * OPTIONAL — site chrome (header nav / footer). The live Next.js site renders the chrome with
+ * stable .wjs-header-* / footer hooks and honors the --wjs-nav-* / --wjs-footer-* tokens.
+ * Uncomment and adjust; see backend/themes/midnight-luxury/style.css for a complete example.
+ *
+ * :root {
+ *   --wjs-nav-font-family: var(--wjs-font-family-base);
+ *   --wjs-nav-font-size: 0.9rem;
+ *   --wjs-nav-font-weight: 500;
+ *   --wjs-nav-text-transform: none;
+ *   --wjs-nav-letter-spacing: normal;
+ *   --wjs-nav-color: #6b7280;
+ *   --wjs-nav-color-hover: #2563eb;
+ *   --wjs-nav-transition: all 0.3s ease;
+ *
+ *   --wjs-footer-bg: #111827;
+ *   --wjs-footer-text-heading: #ffffff;
+ *   --wjs-footer-text-body: #9ca3af;
+ *   --wjs-footer-text-hover: #ffffff;
+ *   --wjs-footer-icon-bg: #1f2937;
+ *   --wjs-footer-icon-color: #ffffff;
+ * }
+ */

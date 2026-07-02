@@ -255,6 +255,13 @@ const wordjs = {
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
     cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
 
+    // Load a script/style from inside your plugin dir onto public pages (needs the 'assets' grant).
+    // spec = { handle, src (relative path in your plugin), inFooter?, strategy?:'async'|'defer', media? }
+    assets: {
+        enqueueScript: (spec) => callHost('assets.enqueueScript', [spec]),
+        enqueueStyle: (spec) => callHost('assets.enqueueStyle', [spec]),
+    },
+
     // SAFE user lookups (gated host-side on users:read). Return a SAFE projection
     // {id,userLogin,username,userEmail,displayName,role} — never user_pass.
     users: {

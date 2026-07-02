@@ -201,8 +201,10 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install)  |
 | `POST` | `/plugins/:slug/activate`   | Admin | Activate a plugin                                   |
 | `POST` | `/plugins/:slug/deactivate` | Admin | Deactivate a plugin                                 |
+| `GET`  | `/plugins/:slug/status`     | Admin | Runtime health of a loaded isolate (state, restarts, last error); `404` if not a loaded isolate |
+| `POST` | `/plugins/:slug/reload`     | Admin | Hot-reload an isolated plugin's child process (re-runs the full AST-scan pipeline) |
 | `POST` | `/plugins/:slug/permissions` | Admin | Set the per-permission grants (Android-style, default-deny). Body `{ granted: ["scope:access", ...], network: boolean }`; re-spawns the isolate so a `network` grant takes effect |
-| `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin                                  |
+| `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin. Body `{ password, dropData }`: password-confirmed, refuses an **active** plugin, always clears grants + crash strikes, and drops the plugin's `wjp_<slug>_` tables only when `dropData` is set |
 | `GET`  | `/themes`                   | Admin | List available themes                               |
 | `POST` | `/themes/:slug/activate`    | Admin | Change active theme                                 |
 | `GET`  | `/setup/status`             | No    | Check if site is installed (not token-gated)        |

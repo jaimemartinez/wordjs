@@ -11,7 +11,8 @@ const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, PLUGINS_DIR } = require('../core/plugins');
+const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, PLUGINS_DIR } = require('../core/plugins');
+const { assertZipWithinBudget } = require('../core/zip-guard');
 const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -48,7 +49,14 @@ const upload = multer({
  * Called when plugins are activated/deactivated
  */
 function regenerateRegistry() {
-    const scriptsDir = path.resolve(__dirname, '../../../admin-next/scripts');
+    // In production the frontend ships as a pre-built .next bundle, so the registries are baked in at
+    // build time — regenerating the source .ts at runtime can't help (and frontend/scripts may not
+    // ship). Only useful in dev, where rewriting the registry sources triggers Next HMR so a newly
+    // activated plugin's admin page / Puck blocks appear WITHOUT the old manual "regenerate + restart".
+    // (The path was '../../../admin-next/scripts' — a directory that does not exist — so this silently
+    // no-op'd on every activate/deactivate. The real generators live in frontend/scripts/.)
+    if (process.env.NODE_ENV === 'production') return;
+    const scriptsDir = path.resolve(__dirname, '../../../frontend/scripts');
     const scripts = [
         'generate-plugin-registry.js',         // Frontend components
         'generate-admin-plugin-registry.js',   // Admin pages
@@ -123,6 +131,15 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         const zip = new AdmZip(zipPath);
         const zipEntries = zip.getEntries();
 
+        // SECURITY: reject a decompression bomb BEFORE extracting (multer only capped the compressed
+        // upload — a ~10MB DEFLATE stream can expand to many GB and fill the disk).
+        try {
+            assertZipWithinBudget(zipEntries, { kind: 'plugin' });
+        } catch (e: any) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({ error: e.message });
+        }
+
         // Basic validation: ensure it extracts into a folder
         // We expect the zip to contain a root folder, e.g. "my-plugin/"
         // If it contains directly files, we might want to create a folder based on filename, 
@@ -180,6 +197,14 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
             }
         } catch { /* PLUGINS_DIR missing — nothing to clobber */ }
 
+        // INTEGRITY: refuse to overwrite a RUNNING plugin's code in place — a botched extract would
+        // corrupt a working plugin and the next reload would swap live code with no warning. The admin
+        // must deactivate first (a real update flow can relax this later with staging + version checks).
+        if (await isPluginActive(intendedSlug)) {
+            fs.unlinkSync(zipPath);
+            return res.status(409).json({ error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` });
+        }
+
         if (rootDirs.size === 1) {
             // Extract as is
             zip.extractAllTo(PLUGINS_DIR, true);
@@ -189,6 +214,30 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
             // This happens if the user zipped files directly without a parent folder
             zip.extractAllTo(potentialDir, true);
             pluginSlug = zipName;
+        }
+
+        // VALIDATE what we just extracted BEFORE reporting success: a plugin must have a well-formed
+        // manifest, be isolated, use only known permissions, and pass the AST scan. Doing it here (not
+        // only at activate) means a junk/dangerous ZIP fails immediately with a clear reason and its
+        // code never lingers on disk. On any failure, remove the extracted dir and 400.
+        const installedDir = path.join(PLUGINS_DIR, pluginSlug);
+        try {
+            const manifestPath = path.join(installedDir, 'manifest.json');
+            if (!fs.existsSync(manifestPath)) throw new Error('Missing manifest.json — this is not a valid WordJS plugin.');
+            const rawManifest = fs.readFileSync(manifestPath, 'utf8');
+            if (rawManifest.length > 64 * 1024) throw new Error('manifest.json is implausibly large (>64KB).');
+            let manifest: any;
+            try { manifest = JSON.parse(rawManifest); } catch { throw new Error('manifest.json is not valid JSON.'); }
+            if (!manifest.name) throw new Error('manifest.json is missing a "name".');
+            if (manifest.isolated !== true) throw new Error('Plugin must declare "isolated": true (all WordJS plugins run sandboxed).');
+            const permProblems = validateManifestPermissions(manifest.permissions);
+            if (permProblems.length) throw new Error(`Invalid permissions:\n- ${permProblems.join('\n- ')}`);
+            // Static AST scan (also re-runs at activation for defense in depth).
+            validatePluginPermissions(pluginSlug, installedDir, manifest);
+        } catch (valErr: any) {
+            try { fs.rmSync(installedDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({ error: valErr.message, details: { missingPermissions: valErr.missingPermissions, dangerousCalls: valErr.dangerousCalls } });
         }
 
         // Cleanup temp file
@@ -212,6 +261,19 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
  *       200:
  *         description: List of active plugins with manifest data
  */
+/**
+ * @swagger
+ * /plugins/assets:
+ *   get:
+ *     summary: Enqueued frontend assets (scripts/styles) for ACTIVE plugins — public, for the site layout
+ *     tags: [Plugins]
+ */
+router.get('/assets', asyncHandler(async (req: Request, res: Response) => {
+    const { getActiveAssets } = require('../core/plugin-assets');
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(await getActiveAssets());
+}));
+
 router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
     // Await getAllPlugins()
     const plugins = await getAllPlugins();
@@ -297,6 +359,9 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // switches. `requestedPermissions` = what the manifest asks for ("scope:access"), the set of switches
     // to show; `grantedPermissions` = what the admin has granted (+ "network"). No trust tier exists.
     const { getGrants } = require('../core/plugin-permissions');
+    // Live runtime health per isolate (running/crashed/crash-looping/restarting + rss/restarts) so the
+    // admin sees the TRUE state, not just the persisted 'active' flag which can lie after a crash.
+    const { getIsolateStatus } = require('../core/plugin-isolate');
     res.json(plugins.map((p: any) => {
         const requested = Array.from(new Set((p.permissions || [])
             .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
@@ -305,8 +370,25 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
             ...p,
             requestedPermissions: requested,
             grantedPermissions: getGrants(p.slug),
+            runtime: p.active ? (getIsolateStatus(p.slug) || null) : null,
         };
     }));
+}));
+
+/**
+ * @swagger
+ * /plugins/{slug}/status:
+ *   get:
+ *     summary: Live runtime health of an isolated plugin
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/:slug/status', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    if (!validateSlug(req.params.slug)) return res.status(400).json({ error: 'Invalid slug' });
+    const { getIsolateStatus } = require('../core/plugin-isolate');
+    const status = getIsolateStatus(req.params.slug);
+    if (!status) return res.status(404).json({ error: 'Plugin is not a loaded isolate.' });
+    res.json(status);
 }));
 
 /**
@@ -360,10 +442,21 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     let result;
     try {
         result = await activatePlugin(req.params.slug);
-    } catch (e) {
+    } catch (e: any) {
         // Activation failed (scan/test/init) — undo the in-memory grant seed so nothing is persisted and
         // a failed-activation plugin holds no grants.
         if (seededDeclared) { try { _setGrantsInMemory(slug, []); } catch { /* */ } }
+        // A STRUCTURED validation failure (AST scan) carries a fixable-vs-blocked split. Surface it as a
+        // 400 with `details` so the admin UI can show a rejection panel instead of one mangled string.
+        if (e && e.code === 'PLUGIN_VALIDATION_FAILED') {
+            return res.status(400).json({
+                message: e.message,
+                details: {
+                    missingPermissions: e.missingPermissions || [],
+                    dangerousCalls: e.dangerousCalls || [],
+                },
+            });
+        }
         throw e;
     }
 
@@ -421,6 +514,43 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
         reloaded,
         message: `Permissions updated for '${slug}' (${granted.length} granted).${reloaded ? ' Isolate reloaded — changes are in effect.' : ' Reactivate the plugin to fully apply.'}`,
     });
+}));
+
+/**
+ * @swagger
+ * /plugins/{slug}/reload:
+ *   post:
+ *     summary: Hot-reload an isolated plugin's child process (e.g. after editing its files)
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Isolate re-spawned (the reload re-runs the full load pipeline, AST scan included)
+ *       404:
+ *         description: Plugin is not a loaded isolated plugin
+ */
+router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    // SECURITY: Validate slug to prevent path traversal
+    if (!validateSlug(req.params.slug as string)) {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+    const slug = req.params.slug as string;
+
+    // Reuse the exact same reload the grants route and the dev watcher use: tear the child process
+    // down and load it again from its original entry file — the full pipeline (AST scan included)
+    // re-runs, so this cannot be used to sidestep the security model.
+    const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+    if (!isIsolated(slug)) {
+        return res.status(404).json({ error: `Plugin '${slug}' is not a loaded isolated plugin (is it active?)` });
+    }
+    await reloadIsolatedPlugin(slug);
+    res.json({ success: true, slug, message: `Isolate for '${slug}' reloaded.` });
 }));
 
 /**
@@ -488,8 +618,8 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
  */
 router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
     const slug = req.params.slug;
-    const { password } = req.body;
-    const { isPluginActive, deactivatePlugin, PLUGINS_DIR } = require('../core/plugins');
+    const { password, dropData } = req.body;
+    const { isPluginActive, deactivatePlugin, PLUGINS_DIR, uninstallPluginData } = require('../core/plugins');
     const User = require('../models/User');
 
     if (!password) {
@@ -519,10 +649,15 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
     try {
         fs.rmSync(pluginPath, { recursive: true, force: true });
 
+        // Purge the plugin's persisted footprint. ALWAYS clear grants (else a re-uploaded slug inherits
+        // old, possibly-revoked grants) + crash strikes; only DROP the plugin's data tables when the
+        // admin explicitly asked (dropData) — WordPress-parity: keep data by default on delete.
+        const cleanup = await uninstallPluginData(slug, { dropTables: !!dropData });
+
         // Regenerate registry to remove traces
         regenerateRegistry();
 
-        res.json({ success: true, message: `Plugin ${slug} deleted successfully` });
+        res.json({ success: true, message: `Plugin ${slug} deleted successfully`, cleanup });
     } catch (err) {
         throw new Error(`Failed to delete plugin: ${err.message}`);
     }

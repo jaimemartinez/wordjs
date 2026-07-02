@@ -1,7 +1,8 @@
 import Link from "next/link";
 import type { Metadata } from "next";
 import HomeContent from "@/components/public/HomeContent";
-import { getSettings, getPostById, getPosts, htmlToText } from "@/lib/server-api";
+import JsonLd from "@/components/public/JsonLd";
+import { getSettings, getPostById, getPosts, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
 
 // Homepage is dynamic: content is fetched server-side per request (no-store), so crawlers and first
 // paint get the real blog roll / static page, not an empty skeleton.
@@ -46,6 +47,11 @@ export default async function HomePage() {
     const settings = await getSettings();
     if (!settings) return <ServiceUnavailable />;
 
+    // WebSite schema (+SearchAction → /search?q=) on the front page enables sitelinks search box
+    // and names the site for rich results.
+    const base = await resolveSiteBase();
+    const siteJsonLd = <JsonLd data={buildWebSiteJsonLd(base, settings.blogname || "WordJS", settings.blogdescription || undefined)} />;
+
     // Static front page (a specific page chosen in Settings)
     const homepageId = settings.homepage_id;
     if (homepageId) {
@@ -53,6 +59,7 @@ export default async function HomePage() {
         if (page) {
             return (
                 <div className="space-y-4">
+                    {siteJsonLd}
                     <HomeContent post={page} />
                 </div>
             );
@@ -65,6 +72,7 @@ export default async function HomePage() {
 
     return (
         <div className="space-y-4">
+            {siteJsonLd}
             <div className="border-b border-[var(--wjs-border-subtle,#e5e7eb)] pb-4 mb-8">
                 <h2 className="text-2xl font-bold text-[var(--wjs-color-heading,#1f2937)]">Latest Posts</h2>
             </div>

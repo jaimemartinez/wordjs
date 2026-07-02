@@ -18,6 +18,58 @@ own findings and fixes; see the [README](README.md) for the honest maturity cave
 
 ### Added
 
+_Adoption & product — getting from zero to a live, editable site:_
+
+- **`npx create-wordjs` one-command bootstrap.** Fetches the latest pre-compiled release, installs
+  runtime deps, starts the single-process server, and prints a clickable install-wizard URL with the
+  security token pre-filled — the Strapi/Payload-style funnel developers expect (`packages/create-wordjs`).
+- **First-run rescue.** A not-yet-installed instance now redirects visitors straight to `/install`
+  (instead of a blank "Service Temporarily Unavailable"); a Node **>= 20.9** preflight fails with a
+  plain-English message instead of a cryptic native-binding crash; and the server console prints a
+  clickable `…/install?token=…` URL the wizard reads and then scrubs from the address bar.
+- **Starter content at install (opt-in, default on).** Seeds a visually-built home page (set as the
+  front page), a welcome post, an About page, and a header menu — so a fresh site shows off the visual
+  editor and token themes immediately instead of "No posts found".
+- **Draft preview on the live site + visual revision diff.** A **Preview** button opens a draft on the
+  real (SSR) site via `?preview=1` (author-only, `noindex`, never leaks to anonymous visitors); the
+  revisions sidebar gains a word-level **Changes** diff (ins/del) with restore.
+- **Content lists that scale.** The Posts/Pages admin lists gained pagination, debounced search,
+  status tabs (All/Published/Drafts/Pending), bulk delete, and per-row View + Duplicate — the old lists
+  silently showed only the first 10 items.
+- **RSS 2.0 feed** at `/feed` (+ `/feed.xml`, `/rss.xml`) with `<link rel="alternate">` auto-discovery.
+- **SEO out of the box, corrected.** Live **JSON-LD** (`WebSite`+`SearchAction` on the home, `BlogPosting`/
+  `WebPage` on content); the sitemap/RSS/preview canonical URLs now match the pages' own `rel=canonical`
+  (`/<slug>` for posts **and** pages — they previously advertised a non-canonical `/blog/<slug>`); and
+  `og:image` now uses the post's real featured image.
+- **Plugin-author DX pack.** A `wordjs` scaffolder CLI (`create plugin`/`create theme`/`pack`), hand-written
+  `wordjs-bridge.d.ts` types for IntelliSense, and dev **hot-reload** (save a file in an active plugin →
+  its sandboxed child re-spawns, AST scan and all) plus an admin `POST /plugins/:slug/reload`.
+
+_Plugin system overhaul — the sandbox made visible, self-healing, and complete:_
+
+- **Runtime supervisor + per-isolate health.** Each active plugin now reports live state
+  (running / restarting / crashed / crash-looping), pid, RSS, uptime, restart count, and the real death
+  reason. A crashed child is **auto-restarted with exponential backoff** (1s→5s→15s→60s) and marked
+  crash-looping after too many failures; the admin Plugins screen shows a status dot + a Restart button;
+  `GET /plugins/:slug/status` exposes the telemetry. A crashed plugin no longer shows a misleading green "active".
+- **True uninstall.** Deleting a plugin now purges its permission **grants** (previously leaked — a
+  re-uploaded slug inherited old, possibly-revoked grants) and crash strikes; an opt-in "Also delete this
+  plugin's data/tables" checkbox drops its own `wjp_<slug>_*` tables (never core or other plugins').
+- **Hardened plugin/theme install.** A decompression-bomb cap (uncompressed size + entry count) on every
+  extract path (plugin/theme upload, backup restore); uploads are validated up front (manifest shape,
+  `isolated: true`, known permission scopes, AST scan) so a bad ZIP fails immediately and never lingers on
+  disk; re-uploading a **currently-active** plugin is refused to avoid corrupting a running one.
+- **Frontend asset enqueue** (`wordjs.assets.enqueueScript/enqueueStyle`, `assets` grant). A structured,
+  sanitized way for a plugin to load a `<script>`/`<style>` from its own directory onto public pages —
+  the raw-HTML head/footer hooks stay hard-denied (stored-XSS), so this unblocks analytics tags, cookie
+  banners and web-component blocks without letting a plugin control markup.
+- **Admin plugin management UX.** Search + Active/Inactive filter, a per-plugin detail drawer
+  (author/homepage/version + requested-vs-granted permission diff + reload), platform-authored permission
+  **risk labels** on the grant screen, and a structured activation-reject panel that separates a fixable
+  missing-grant from hard-blocked forbidden code.
+- **Quieter logs.** The sandbox io-guard's block warnings are now rate-limited/coalesced, so a plugin in a
+  tight denied-fs loop can no longer flood the host log.
+
 - **Theme UI framework (Bootstrap-like, token-driven).** Themes now share one stylesheet
   (`backend/public/css/wordjs-ui.css`) that auto-styles **every** standard HTML element and ships
   Bootstrap-compatible **components** (`.btn`/`.card`/`.alert`/`.badge`/`.table`/`.nav`/`.list-group`/
@@ -25,7 +77,7 @@ own findings and fixes; see the [README](README.md) for the honest maturity cave
   sizing…). Everything is driven by `--wjs-*` design tokens, so a theme re-skins the entire framework
   just by declaring tokens in its `:root` — colors, typography scale, spacing, radius, shadows. Loaded on
   public pages **and the editor preview** (WYSIWYG), never the admin UI; the theme stylesheet loads after
-  the framework so a theme's own rules always win. All 14 bundled themes ship a full canonical token set
+  the framework so a theme's own rules always win. All 13 bundled themes ship a full canonical token set
   tuned to their palette (light/dark/mono/glass/brutalist). See `documentation/theming.md`.
 - **`noImplicitAny` is now enforced (CI-gated).** Every implicit-any site in the backend (~1,276 across
   92 files) is annotated — real types where locally determinable (Express `Request`/`Response`/

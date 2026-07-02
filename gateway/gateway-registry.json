@@ -1,4 +1,39 @@
 {
+  "/api": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ],
+    "metrics": {}
+  },
+  "/uploads": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ],
+    "metrics": {}
+  },
+  "/themes": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ],
+    "metrics": {}
+  },
+  "/plugins": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ],
+    "metrics": {}
+  },
+  "/.well-known": {
+    "name": "backend",
+    "targets": [
+      "https://127.0.0.1:4000"
+    ],
+    "metrics": {}
+  },
   "/": {
     "name": "frontend",
     "targets": [
@@ -45,41 +80,6 @@
     "name": "frontend",
     "targets": [
       "https://127.0.0.1:3001"
-    ],
-    "metrics": {}
-  },
-  "/api": {
-    "name": "backend",
-    "targets": [
-      "https://127.0.0.1:4000"
-    ],
-    "metrics": {}
-  },
-  "/uploads": {
-    "name": "backend",
-    "targets": [
-      "https://127.0.0.1:4000"
-    ],
-    "metrics": {}
-  },
-  "/themes": {
-    "name": "backend",
-    "targets": [
-      "https://127.0.0.1:4000"
-    ],
-    "metrics": {}
-  },
-  "/plugins": {
-    "name": "backend",
-    "targets": [
-      "https://127.0.0.1:4000"
-    ],
-    "metrics": {}
-  },
-  "/.well-known": {
-    "name": "backend",
-    "targets": [
-      "https://127.0.0.1:4000"
     ],
     "metrics": {}
   }
