@@ -109,10 +109,12 @@
 >   / core-table DB, `db.createTable` on core tables, secret-named options, absolute routes
 >   (`opts.absolute`), raw cookie jar / verbatim Set-Cookie/CSP/HSTS/Location, and raw-HTML hooks.
 >
-> **First-party plugins are pre-granted, not privileged:** `mail-server`, `conference-manager`, and the
-> galleries are seeded with grants for the capabilities they declare so they work out of the box, but they
-> run in the same sandbox under the same default-deny checks as anything uploaded. An admin can revoke any
-> grant; changing grants (`POST /plugins/:slug/permissions`, admin-only) **hot-reloads the worker**
+> **First-party plugins are not privileged:** `mail-server`, `conference-manager`, and the galleries run
+> in the same sandbox under the same default-deny checks as anything uploaded. Nothing is granted out of
+> the box: **activating** a plugin grants exactly the capabilities its manifest declares (the admin
+> approves them in the activation dialog, only when the plugin has no prior grant record), and the admin
+> can refine or revoke any grant afterward. Changing grants (`POST /plugins/:slug/permissions`, admin-only)
+> **hot-reloads the worker**
 > (`reloadIsolatedPlugin`) so its network policy re-resolves and the host-capability gates re-evaluate —
 > no server restart. A plugin can **never** grant itself anything; the manifest only requests.
 >
@@ -139,7 +141,7 @@
 > | card-gallery | **isolated** | JSON routes + options + admin menu (frontend → namespaced path) |
 > | photo-carousel | **isolated** | routes + options + **async shortcode** (`[carousel]`) |
 > | video-gallery | **isolated** | routes + options + shortcode (`[vgallery]`) |
-> | conference-manager | **isolated** | own-table DB (`wjp_conference_manager_*`), namespaced routes (pre-granted its declared caps) |
+> | conference-manager | **isolated** | own-table DB (`wjp_conference_manager_*`), namespaced routes (granted its declared caps on activation) |
 > | mail-server | **isolated** | inbound SMTP listener (configurable `smtp_listen_port`, default 2525) + outbound MX delivery (to recipient :25) in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
 > | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (runs schema migrations at boot, around the DB lifecycle). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
 >
@@ -151,8 +153,9 @@
 > longer a plugin at all: its backend moved into core (it manages the database server itself) and its
 > admin UI is a native frontend route reached from a permanent core Sidebar item. **Every** plugin —
 > first-party or uploaded — isolates and is hard-blocked from core tables/secrets regardless of the
-> permissions it requests; capabilities are admin-granted per plugin (default-deny), with first-party
-> plugins merely pre-granted their declared set. There is no privileged tier.
+> permissions it requests; capabilities are admin-granted per plugin (default-deny) — activation grants a
+> plugin only its manifest-declared set (admin-approved, refinable afterward), nothing is pre-seeded, and
+> first-party plugins get no extra privilege. There is no privileged tier.
 > (The host-side guards — io-guard / secure-require / appRegistry anchoring — stay: bridge calls run in
 > plugin context on the host, so they're still load-bearing.)
 >
@@ -218,7 +221,7 @@ native addons — those were removed for everyone; the only thing that distingui
 
 | Model | Examples (today) | Runtime | Capabilities |
 |---|---|---|---|
-| **Single sandbox, per-plugin grants** | every plugin — first-party (conference-manager, mail-server, galleries — pre-granted) and uploaded alike | **isolated** (OS process, `child_process.fork`) | bridge only, default-deny: own `wjp_<slug>_` DB tables, non-secret options, namespaced routes, safe `users:read`/`site` bridges, and admin-grantable `network` / `email:provider` / `notifications:provider`. No unscoped DB, secret options, absolute routes, shell, or native addons — for anyone. |
+| **Single sandbox, per-plugin grants** | every plugin — first-party (conference-manager, mail-server, galleries — granted their declared caps on activation) and uploaded alike | **isolated** (OS process, `child_process.fork`) | bridge only, default-deny: own `wjp_<slug>_` DB tables, non-secret options, namespaced routes, safe `users:read`/`site` bridges, and admin-grantable `network` / `email:provider` / `notifications:provider`. No unscoped DB, secret options, absolute routes, shell, or native addons — for anyone. |
 
 ---
 
@@ -287,7 +290,7 @@ Async by necessity (crosses the boundary). Each maps to a current direct use:
 | `require('config/database').dbAsync.*` | `wordjs.db.query(sql, params)` | `database:*`; **table scoping enforced host-side** (plugin's own tables only — already prototyped by the dbAsync guard) |
 | `require('core/hooks').addAction/doAction` | `wordjs.hooks.addAction(hook, fnId)` / `doAction` | callbacks live in the isolate; host dispatches by id |
 | `getApp().get('/x', handler)` | `wordjs.http.route(method, path, fnId)` | host owns Express; on a request it sends a **plain req subset** to the isolate and awaits a **response descriptor** (status/headers/body) — the isolate never touches the socket |
-| `fs.readFileSync(...)` | `wordjs.fs.read(relPath)` / `write` | `filesystem:*`; paths confined to the plugin's OWN dir + uploads, realpath-checked host-side; io-guard denies sibling-plugin reads (IO-1), `.env`/secret files, and raw DB files in the child |
+| `fs.readFileSync(...)` | `wordjs.fs.read(relPath)` / `write` | `filesystem:*`; paths confined to the plugin's OWN dir only (the shared `uploads/` dir is no longer reachable via the bridge — that was a trusted-tier affordance), realpath-checked host-side; io-guard denies sibling-plugin reads (IO-1), `.env`/secret files, and raw DB files in the child |
 | `nodemailer` / `global.wordjs_send_mail` | `wordjs.mail.send(msg)` | `email:*`; host owns the MTA |
 | `notificationService.send` | `wordjs.notify(n)` | `notifications:send` |
 | `registerAdminMenu(...)` | `wordjs.adminMenu.add(item)` | declarative |
@@ -335,9 +338,10 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
   plugin separately IP-pins its MX delivery against rebinding, in the plugin itself.) The DKIM key lives
   in the plugin's own DB/files (not a core secret option),
   and the bridge grants multipart upload, `provideMail` (`email:provider`), and `notify.registerTransport`
-  (`notifications:provider`). It is pre-granted these, but runs fully sandboxed.
-- **conference-manager**: pre-granted `database` (its own `wjp_conference_manager_` tables) +
-  namespaced routes — all over the bridge, no unscoped DB or absolute routes (those no longer exist).
+  (`notifications:provider`). Activating it grants these declared caps (admin-approved, revocable), but it
+  runs fully sandboxed.
+- **conference-manager**: granted `database` (its own `wjp_conference_manager_` tables) +
+  namespaced routes on activation — all over the bridge, no unscoped DB or absolute routes (those no longer exist).
   Isolated.
 - **db-migration**: was **de-pluginized** — it manages the database *server process* and runs at boot,
   which is core infrastructure, not a feature plugin. Moved to `backend/src/core/db-admin/`; it is no
@@ -353,7 +357,7 @@ time** assets, unaffected by runtime isolation — they keep being bundled (and 
 The phased migration the proposal laid out has all landed; for the record:
 1. ✅ Shipped the `wordjs` bridge API (`src/core/plugin-api.ts`), passed as `init(wordjs)`.
 2. ✅ Ported the bundled plugins' backends to the bridge (galleries, hello-world, test-schema, plus the
-   higher-capability mail-server and conference-manager — all sandboxed, pre-granted their declared caps).
+   higher-capability mail-server and conference-manager — all sandboxed, granted their declared caps on activation).
 3. ✅ Added the isolate runner (`src/core/plugin-isolate.ts` + `plugin-worker.js`), first on
    `worker_threads` (chosen over `isolated-vm` for zero native deps / cross-platform), then **moved to
    `child_process.fork`** for true OS-process isolation (the host always survives a child crash/OOM); the
@@ -396,7 +400,7 @@ shipped (default-on, probe-gated). Kernel resource limits in place today: OPT-IN
   can reach the network (that's the point); the model contains *ungranted* capability, not the
   consequences of what was deliberately granted. It does not sandbox the frontend bundle (plugin React
   components are build-time assets, bundled and reviewed as before); it does not replace code review of
-  first-party plugins (they are pre-granted, so review them as you would any code you ship); and a separate
+  first-party plugins (activating them grants their declared caps, so review them as you would any code you ship); and a separate
   OS process gains an **opt-in** bubblewrap layer (dropped uid + capabilities + `no-new-privs` +
   PID/IPC/UTS namespaces + read-only fs + a **`seccomp` syscall denylist**; `sandbox.useKernelHardening`,
   Linux, default-off, probe-gated). The `Landlock` LSM is not used (the read-only mount namespace already

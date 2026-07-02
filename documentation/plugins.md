@@ -26,8 +26,8 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 
 ```json
 {
+  "id": "hello-world",
   "name": "Hello World",
-  "slug": "hello-world",
   "version": "1.0.0",
   "description": "My first WordJS plugin",
   "author": "Your Name",
@@ -60,31 +60,24 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 
 ### Bundled Plugins (Advanced)
 
-If you want to avoid dependency conflicts entirely, you can **bundle** your plugin's dependencies. A bundled plugin includes its own `node_modules/` or a compiled bundle file, so it doesn't share dependencies with other plugins.
+If you want to avoid dependency conflicts entirely, you can **bundle** your plugin's dependencies so it doesn't share packages with other active plugins. Being "bundled" only tells the core to **skip shared `npm install`/garbage-collection** for this plugin — the backend entry point is still `index.js` (`main.js`/`plugin.js` are also accepted); there is no separate `main` field.
 
-**Methods to create a bundled plugin:**
+**A plugin counts as bundled if any of these is true (`isBundledPlugin`):**
 
 | Method                  | How                                                       |
 | ----------------------- | --------------------------------------------------------- |
 | **Explicit Flag**       | Add `"bundled": true` to `manifest.json`                  |
 | **Own `node_modules/`** | Run `npm install` inside your plugin folder               |
-| **Bundle File**         | Use `esbuild`/`webpack` to create `dist/plugin.bundle.js` |
+| **Own bundle file**     | Ship a `dist/*.bundle.js`                                 |
 
-**Example: Creating a bundled plugin with esbuild:**
-```bash
-cd plugins/my-plugin
-npm install         # Install deps locally
-npx esbuild index.js --bundle --platform=node --outfile=dist/plugin.bundle.js
-```
-
-**Example: manifest.json for bundled plugin:**
+**Example: manifest.json for a bundled plugin:**
 ```json
 {
+  "id": "my-bundled",
   "name": "My Bundled Plugin",
-  "slug": "my-bundled",
   "version": "1.0.0",
-  "bundled": true,
-  "main": "dist/plugin.bundle.js"
+  "isolated": true,
+  "bundled": true
 }
 ```
 

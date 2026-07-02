@@ -17,11 +17,13 @@ This document lists the official plugins available in the WordJS ecosystem and t
 > capability. A `network`-granted plugin is confined to **public IPs only** — the egress guard validates
 > each outbound connection **at connect time** (anti DNS-rebinding) and blocks loopback, link-local
 > (incl. `169.254.169.254` cloud metadata), RFC1918, CGNAT (`100.64/10`), IPv6 ULA/loopback/mapped, and
-> unresolvable hosts (fail-closed). Bundled (first-party) plugins are **not privileged** and are **not
-> pre-granted** anything — no plugin bypasses the sandbox, and every plugin (bundled included) starts
-> **default-deny** until an admin grants each declared capability in `/admin/plugins`. (A one-time boot
-> backfill only grandfathers plugins that were *already active* before the default-deny model landed;
-> fresh activations stay default-deny.) (The old trusted tier and its bypass machinery were removed.) **Every plugin — bundled ones included — is AST-scanned on activation,
+> unresolvable hosts (fail-closed). Bundled (first-party) plugins are **not privileged** — no plugin
+> bypasses the sandbox. Nothing is granted out of the box: **activation** grants a plugin exactly the
+> capabilities its manifest *declares* (the admin approves them in the activation dialog, only if the
+> plugin has no prior grant record), and the admin can refine or revoke every grant afterward in
+> `/admin/plugins`. (A one-time boot backfill only grandfathers plugins that were *already active* before
+> the default-deny model landed; fresh activations get their declared set and nothing more.) (The old
+> trusted tier and its bypass machinery were removed.) **Every plugin — bundled ones included — is AST-scanned on activation,
 > fail-closed:** a file that is loaded but parses as dangerous (or cannot be parsed) blocks activation,
 > and there is no scan-skip for any plugin. The runtime `eval`/`Function` block is opt-in via
 > `config.sandbox.blockCodeGen` (skipped under `ts-node`).
@@ -63,6 +65,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `notify(notification)` | `notify` | Dispatch a core notification. |
 | `adminMenu.add(item)` | `adminMenu.add` | Add a Sidebar item (capped per plugin). |
 | `cron.schedule(ts, recurring, hook, args)` | `cron.schedule` | Schedule a recurring/one-shot hook fire. |
+| `assets.enqueueScript(spec)` / `assets.enqueueStyle(spec)` | `assets.enqueueScript` / `assets.enqueueStyle` | `assets:write` grant. Enqueue a `<script>`/`<style>` from **inside your own plugin dir** onto public pages; the host emits a **sanitized** tag served from `/plugins/<slug>/`. |
 | `slug` | (local) | The plugin's slug string. |
 
 ### Registration methods (dedicated IPC kinds — NOT in the call allowlist)
@@ -130,11 +133,11 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
     IPs are reachable (loopback/RFC1918/link-local/metadata blocked). An **operator-configured
     relay/smarthost is exempt** from the public-only pin, so an internal/LAN smarthost works; `requireTLS`
     defaults ON but is opt-out via the `mail_relay_require_tls` option for a TLS-less internal relay.
-*   **Sandbox:** isolated, like every plugin — no trust bypass. It is **not pre-granted** anything: it runs
-    under the same **default-deny** grant checks and OS-process isolation as anything uploaded, so an admin
-    must grant the capabilities it declares (`network` for raw sockets, `email:provider`,
-    `notifications:provider`, `filesystem`, etc.) in `/admin/plugins` — and can revoke any of them — before it
-    can send/receive mail or open sockets.
+*   **Sandbox:** isolated, like every plugin — no trust bypass. It runs under the same **default-deny**
+    grant checks and OS-process isolation as anything uploaded: **activating** it grants exactly the
+    capabilities it declares (`network` for raw sockets, `email:provider`, `notifications:provider`,
+    `filesystem`, etc.), which the admin sees in the activation dialog and can refine or revoke in
+    `/admin/plugins`. It is not privileged and can be fully de-fanged by revoking those grants.
 
 ---
 
@@ -148,8 +151,8 @@ Complex business logic for managing church conferences.
     *   Hotel & Room assignment
     *   Payment tracking
 *   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item).
-*   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: an admin grants its declared
-    capabilities in `/admin/plugins` (nothing is pre-granted). It
+*   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: activation grants its declared
+    capabilities (admin-approved in the activation dialog, refinable/revocable in `/admin/plugins`). It
     stores its data in its own prefixed tables (no unscoped/core-table access — that capability no longer
     exists), building table names from `db.tablePrefix` and creating them idempotently via `db.createTable`
     (`CREATE TABLE IF NOT EXISTS`). Routes are namespaced under

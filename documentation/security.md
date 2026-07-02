@@ -117,17 +117,20 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
 
 | Scope               | Access  | Description                                                 |
 | :------------------ | :------ | :---------------------------------------------------------- |
-| **`database`**      | `read`  | Allows reading from custom tables using `dbAsync`.          |
-|                     | `write` | Allows INSERT/UPDATE/DELETE operations.                     |
-|                     | `admin` | Full control (DROP/CREATE tables).                          |
+| **`database`**      | `read`  | Allows reading from the plugin's own `wjp_<slug>_` tables using `dbAsync`. |
+|                     | `write` | Allows INSERT/UPDATE/DELETE **and** `createTable` on the plugin's own tables. (There is no `database:admin` / unscoped tier — core tables are always refused.) |
 | **`settings`**      | `read`  | Can read site options via `getOption()`.                    |
 |                     | `write` | Can modify site options via `updateOption()`.               |
 | **`filesystem`**    | `read`  | Read files (e.g., templates, assets) using `fs` or `path`.  |
 |                     | `write` | Write files to disk (Use cautiously).                       |
 | **`network`**       | (grant) | Outbound HTTP/sockets to **public destinations only**. **Blocked by default** (raw `net`/`http`/… and `fetch`/`WebSocket` are trapped); opened only when an admin **grants** the `network` capability (with an exfiltration warning). Even when granted, the egress guard (§1.2) blocks loopback/metadata/private/CGNAT/ULA targets and unix sockets, validated at connect time. |
-| **`email`**         | `provider` | Allows `wordjs.mail` and (with the `email:provider` grant) registering the host-wide mail provider. Still sandboxed — raw SMTP requires the `network` grant. |
+| **`email`**         | `admin` | Allows `wordjs.mail(...)` (send via the registered provider) and admin mail operations. Still sandboxed — raw SMTP requires the `network` grant. |
+|                     | `provider` | Allows registering the host-wide mail provider (`wordjs.provideMail`). |
 | **`notifications`** | `send` / `provider` | `send` allows dispatching alerts via `wordjs.notify`; the `notifications:provider` grant allows registering a notification transport. |
 | **`users`**         | `read`  | Allows the safe-projection user bridges (`wordjs.users.findByEmail/findByLogin/findById/search`). Never exposes `user_pass` or core tables. |
+| **`express`**       | `register_route` | Register HTTP routes (mounted host-side under `/api/v1/plugin/<slug>`). |
+| **`admin_menu`**    | `register` | Add an item to the admin sidebar via `wordjs.adminMenu.add`. |
+| **`assets`**        | `write` | Enqueue front-end scripts/styles via `wordjs.assets.enqueueScript`/`enqueueStyle`. |
 
 > **Capabilities are admin-granted per plugin (default-deny).** A manifest only **requests** a
 > capability; it can never be the sole basis for one. A bridge call works only if the capability is

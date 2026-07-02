@@ -110,7 +110,7 @@ with full trust.
   so the responsive layout matches the live site exactly.
 - **Hooks & filters** event system, with admin-side hook inspection.
 - **Shortcodes** (WordPress-style) for dynamic content, including from plugins.
-- **Themes** with CSS-variable theming (14 first-party themes ship in-repo). The theme
+- **Themes** with CSS-variable theming (13 first-party themes ship in-repo). The theme
   system ships a **token-driven, Bootstrap-like CSS framework** (`backend/public/css/wordjs-ui.css`):
   one shared stylesheet that auto-styles every HTML element plus opt-in components
   (`.btn`/`.card`/`.alert`/`.table`/`.nav`/a flexbox grid/…) and a utility layer, all driven by
