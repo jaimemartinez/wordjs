@@ -112,7 +112,7 @@ class reference, see [`documentation/theming.md`](./theming.md).
 ## Theme integration with the live site
 
 The active theme drives the **entire** live (Next.js) site — not just raw content — through four seams,
-all of which default to today's look so the 14 existing themes render unchanged:
+all of which default to today's look so the 13 existing themes render unchanged:
 
 1. **Token-driven chrome.** The fixed React chrome consumes `--wjs-*` tokens instead of hardcoded
    colors: the header/nav/burger (`Header.tsx`), the footer (`Footer.tsx`), the post/page meta and

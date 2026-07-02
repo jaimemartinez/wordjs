@@ -23,7 +23,7 @@ All public traffic should go through the **Gateway on 3000**; 4000 and 3001 stay
 
 ## 📦 Install
 
-- **Node:** v18 or higher (`backend/package.json` `engines.node >= 18`; CI runs on Node 22).
+- **Node:** v20.9 or higher (every workspace's `package.json` declares `engines.node >= 20.9.0`; CI runs on Node 22). `monolith.js` preflights the running version and exits with a clear message on anything older (Next 16 + native modules need Node 20 LTS or 22 LTS).
 
 Install every workspace's dependencies in one shot from the repo root:
 
@@ -94,7 +94,7 @@ npm run lint           # eslint (flat config)
 npm run format
 ```
 
-`npm test` runs ~174 backend test cases (173 pass, 1 skip) across 20 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
+`npm test` runs ~184 backend test cases (183 pass, 1 skip) across 23 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
 
 The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers (`sqlite-native` and `postgres`, each skipped gracefully when its backend isn't reachable) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 7th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
