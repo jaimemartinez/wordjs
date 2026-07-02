@@ -19,13 +19,15 @@ A WordJS plugin is simply a folder inside `backend/plugins/`.
 
 Follow these steps to create a plugin that shows a message in the admin panel.
 
+> **Fast path:** `node backend/cli/wordjs.js create plugin my-plugin` scaffolds everything below in one command — manifest (`"isolated": true`, requested permissions), a bridge-idiomatic `index.js` (typed via `backend/types/wordjs-bridge.d.ts` for JSDoc IntelliSense), an admin page and a Puck block — and prints the activate/regenerate flow. See `documentation/cli.md` §2. The tutorial below explains what each piece is.
+
 ### Step 1: Create the Folder and Manifest
 Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create a `manifest.json`:
 
 ```json
 {
+  "id": "hello-world",
   "name": "Hello World",
-  "slug": "hello-world",
   "version": "1.0.0",
   "description": "My first WordJS plugin",
   "author": "Your Name",
@@ -58,31 +60,24 @@ Create a folder named `hello-world` inside `backend/plugins/`. Inside it, create
 
 ### Bundled Plugins (Advanced)
 
-If you want to avoid dependency conflicts entirely, you can **bundle** your plugin's dependencies. A bundled plugin includes its own `node_modules/` or a compiled bundle file, so it doesn't share dependencies with other plugins.
+If you want to avoid dependency conflicts entirely, you can **bundle** your plugin's dependencies so it doesn't share packages with other active plugins. Being "bundled" only tells the core to **skip shared `npm install`/garbage-collection** for this plugin — the backend entry point is still `index.js` (`main.js`/`plugin.js` are also accepted); there is no separate `main` field.
 
-**Methods to create a bundled plugin:**
+**A plugin counts as bundled if any of these is true (`isBundledPlugin`):**
 
 | Method                  | How                                                       |
 | ----------------------- | --------------------------------------------------------- |
 | **Explicit Flag**       | Add `"bundled": true` to `manifest.json`                  |
 | **Own `node_modules/`** | Run `npm install` inside your plugin folder               |
-| **Bundle File**         | Use `esbuild`/`webpack` to create `dist/plugin.bundle.js` |
+| **Own bundle file**     | Ship a `dist/*.bundle.js`                                 |
 
-**Example: Creating a bundled plugin with esbuild:**
-```bash
-cd plugins/my-plugin
-npm install         # Install deps locally
-npx esbuild index.js --bundle --platform=node --outfile=dist/plugin.bundle.js
-```
-
-**Example: manifest.json for bundled plugin:**
+**Example: manifest.json for a bundled plugin:**
 ```json
 {
+  "id": "my-bundled",
   "name": "My Bundled Plugin",
-  "slug": "my-bundled",
   "version": "1.0.0",
-  "bundled": true,
-  "main": "dist/plugin.bundle.js"
+  "isolated": true,
+  "bundled": true
 }
 ```
 
@@ -233,12 +228,37 @@ WordJS is highly sophisticated about how it handles React.
 4.  **Activate:** Plugin works instantly using the pre-compiled bundle.
 
 ### The Local Development Workflow (Fast)
-1.  Create your folder directly in `backend/plugins/`.
+1.  Scaffold with `node backend/cli/wordjs.js create plugin my-plugin` (or create the folder by hand in `backend/plugins/`), then restart the backend **once** so the new folder is discovered.
 2.  Refresh the **Plugins** list.
-3.  Click **Activate**.
+3.  Click **Activate** (activation hot-loads the sandboxed child process and grants the manifest's requested permissions — default-deny, refinable in `/admin/plugins`).
 4.  Run `npm run dev` in `frontend` to enable Hot Reload for your plugin source.
+5.  **Backend hot-reload:** while the backend runs with `NODE_ENV=development`, every `.js`/`.json` save inside an active plugin automatically re-spawns its child process (~300 ms debounce; the reload re-runs the AST security scan — see `backend/src/core/plugin-dev-watch.ts`). Manual trigger, any environment (admin): `POST /api/v1/plugins/:slug/reload`.
 
----
+### Upload validation (what the installer checks)
+
+When you upload a plugin ZIP, WordJS validates it **before** reporting success, so a bad archive fails fast with a clear reason and never lingers on disk:
+
+- **Decompression-bomb cap** — the uncompressed size and entry count are bounded (a small ZIP that expands to gigabytes is rejected). Same guard protects theme uploads and backup restores.
+- **Manifest** — must be valid JSON with a `name` and `"isolated": true`.
+- **Permissions** — every `{scope, access}` is checked against the known vocabulary; a typo (`databse`, `readwrite`) is rejected with the valid list.
+- **AST scan** — the same static scan that runs at activation runs here too; forbidden code (`eval`, `child_process`, dynamic `require`, …) is rejected up front.
+- **Live-plugin safety** — re-uploading a slug that is currently **active** is refused (409). Deactivate it first so a botched extract can't corrupt a running plugin.
+
+### Runtime health & auto-restart
+
+Each active plugin runs in its own OS process, and WordJS now **supervises** it:
+
+- The admin **Plugins** screen shows each plugin's live state (running / restarting / crashed / crash-looping), memory (RSS), uptime, restart count, and the last error.
+- If a child crashes at runtime it is **auto-restarted** with exponential backoff (1s → 5s → 15s → 60s). After too many crashes in a short window it is marked **crash-looping** and left stopped (fix it and hit **Reload**).
+- `GET /api/v1/plugins/:slug/status` returns the same telemetry programmatically.
+
+### Uninstalling a plugin (and its data)
+
+Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its folder **and** always purges its permission grants (so a later re-upload of the same slug can't silently inherit old, possibly-revoked grants) and its crash-guard strikes.
+
+By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data/tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables. Only those prefixed tables are dropped — core and other plugins are never touched.
+
+> Options written via `wordjs.options.set` live in a **global** key space with no per-plugin namespace, so they are **not** auto-purged on delete. If your plugin stores option keys, prefix them with your slug and document how to remove them, or clean them up yourself.
 
 ---
 
@@ -473,6 +493,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
 | `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process. |
+| `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` from **inside your plugin dir** onto public pages. `spec = { handle, src (relative path), inFooter?, strategy?:'async'\|'defer', media? }`. The host validates the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
 
 ---
 
@@ -485,7 +506,8 @@ an admin *grants* each one in the **Plugins** admin page (`/admin/plugins`,
 the capability is BOTH declared in the manifest AND granted.
 
 **Grantable capabilities:** `database` (read/write — own tables only), `settings` (read/write — non-secret
-options), `filesystem` (read/write — own dir), `users:read` (the safe user projection), `email:provider`,
+options), `filesystem` (read/write — own dir), `users:read` (the safe user projection), `assets:write`
+(enqueue own scripts/styles on public pages), `email:provider`,
 `notifications:provider` / `notifications:send`, and **`network`** (outbound access to **public IPs only**
 — the egress guard blocks loopback/link-local/`169.254.169.254` metadata/RFC1918/CGNAT/ULA and validates
 the resolved IP at connect time; opt-in, with an exfiltration warning — declare `scope: "network"`).
@@ -502,5 +524,84 @@ grant capabilities to code you have audited.
 > **Removed for good:** there is no shell/`child_process`, native addons, unscoped/core-table DB,
 > secret-named options, absolute routes, raw cookie/header control, raw-HTML hooks, or "trusted" tier —
 > no plugin can obtain any of these by any grant.
+
+---
+
+## 13. Puck Blocks (Visual Editor Components) 🧩
+
+Plugins can add blocks to the visual page builder (Puck). This is how it actually works, end to end.
+
+### 13.1 Declare the entry in `manifest.json`
+
+`frontend.puckComponents` is an **object** with a single `entry` (**not** an array):
+
+```json
+"frontend": {
+    "puckComponents": { "entry": "client/puck/MyPluginPuck.tsx" }
+}
+```
+
+If you omit it, a convention fallback is tried: `client/puck/<Pascal>Puck.tsx`, where `<Pascal>` is the PascalCase of the plugin folder (e.g. `card-gallery` → `CardGalleryPuck.tsx`).
+
+### 13.2 The export contract
+
+`frontend/scripts/generate-puck-plugin-registry.js` reads your entry file and supports exactly two shapes:
+
+**One block** — `export const puckComponentDef` (category/fields/defaultProps) **plus** a default-exported render component. The block is registered under the PascalCase of your manifest `id` (`card-gallery` → `CardGallery`):
+
+```tsx
+// @ts-nocheck
+"use client";
+
+export const puckComponentDef = {
+    category: "My Plugin",
+    fields: {
+        title: { type: "text" as const, label: "Title" }
+    },
+    defaultProps: { title: "Hello" }
+};
+
+export default function MyPluginPuck({ title = "" }) {
+    return <section>{title}</section>;
+}
+```
+
+**Multiple blocks** — a single `export const puckComponents = { ... }` where each value already includes its `render`. Detection is literal: the generator matches `export const puckComponents` in the file text and spreads the object into the registry:
+
+```tsx
+export const puckComponents = {
+    PriceTable: { ...priceTableDef, render: PriceTable },
+    FaqList:    { ...faqListDef,   render: FaqList },
+};
+```
+
+> Export **only** the shape you use. The generated registry does `import * as X` and statically references either `X.puckComponents` **or** `X.puckComponentDef` + `X.default` — referencing a member that isn't a real export is a hard build error under Turbopack.
+
+### 13.3 The activate → regenerate → restart flow
+
+The registry (`frontend/src/lib/puckPluginRegistry.ts`) is **generated, not dynamic**, and includes **active plugins only**:
+
+1. Activate the plugin in `/admin/plugins`.
+2. Run `node frontend/scripts/generate-puck-plugin-registry.js`. It queries `GET /api/v1/plugins/active` on `localhost:3000` to filter — if the backend isn't reachable it falls back to including **all** plugins that have a Puck entry. Regenerate the admin-page registry too: `node frontend/scripts/generate-admin-plugin-registry.js`.
+3. Restart (or let Fast Refresh reload) the frontend dev server; production needs a rebuild.
+
+Your block then appears in the editor's component list and renders both in the editor iframe and on the live SSR site. Deactivating a plugin and regenerating removes its blocks again.
+
+### 13.4 Theming with `--wjs-*` tokens
+
+Blocks render inside the public site **and** the editor iframe — both load `wordjs-ui.css` plus the active theme's token block. Style your block against the tokens **with static fallbacks** so it follows any theme automatically (this is the pattern the bundled `card-gallery` / `photo-carousel` blocks use, via an embedded `<style dangerouslySetInnerHTML>` — zero build step):
+
+```css
+.my-block {
+    background: var(--wjs-bg-surface, #ffffff);
+    color: var(--wjs-color-text-main, #1f2937);
+    border-radius: var(--wjs-radius-lg, 24px);
+    box-shadow: var(--wjs-shadow, 0 4px 6px -1px rgba(0,0,0,0.1));
+}
+```
+
+Two reminders for committed plugin client files: start every `.tsx` with `// @ts-nocheck` (the frontend CI type-checks the generated registries, which import these files directly from `backend/plugins/`), and mark interactive blocks `"use client"`.
+
+> **Scaffold all of this:** `node backend/cli/wordjs.js create plugin my-plugin` generates a working single-block Puck component wired to the manifest — see `documentation/cli.md` §2.
 
 

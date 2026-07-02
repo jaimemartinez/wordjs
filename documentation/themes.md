@@ -48,7 +48,7 @@ themes/
 
 ## Available Themes
 
-There are **14 shipped themes**:
+There are **13 shipped themes**:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
@@ -65,9 +65,8 @@ There are **14 shipped themes**:
 | **pop-studio**      | Bold Creative      | Vibrant pink/cyan, big rounded shapes       |
 | **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
-| **vidaParaTodos**   | Corporate          | Clean professional blue                     |
 
-> **`--wjs-` variable adoption.** All 14 themes ship the full `--wjs-*` token set documented below (dozens
+> **`--wjs-` variable adoption.** All 13 themes ship the full `--wjs-*` token set documented below (dozens
 > of declarations each — e.g. `carbon-terminal` has 71, `default` 53 — including the `--wjs-color-on-*`
 > contrast set). The **default** theme additionally keeps a few older bare aliases (`--primary`,
 > `--primary-dark`, `--text`, `--text-muted`, `--bg`, `--border`) at the top of its `:root` for its legacy
@@ -107,13 +106,13 @@ stays legible against that theme's palette.
   chrome built with utility/Tailwind classes keeps winning; in practice the framework styles raw
   content HTML and offers opt-in classes wherever it's loaded.
 
-All 14 bundled themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
+All 13 bundled themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
 class reference, see [`documentation/theming.md`](./theming.md).
 
 ## Theme integration with the live site
 
 The active theme drives the **entire** live (Next.js) site — not just raw content — through four seams,
-all of which default to today's look so the 14 existing themes render unchanged:
+all of which default to today's look so the 13 existing themes render unchanged:
 
 1. **Token-driven chrome.** The fixed React chrome consumes `--wjs-*` tokens instead of hardcoded
    colors: the header/nav/burger (`Header.tsx`), the footer (`Footer.tsx`), the post/page meta and
@@ -137,7 +136,7 @@ all of which default to today's look so the 14 existing themes render unchanged:
    `parseThemeMetadata()`/`switchTheme()` surface it into the `active_theme_layout` option (in
    `PUBLIC_SETTINGS`), and the SSR public layout (`app/(public)/layout.tsx`) honors it — `containerWidth`
    caps the main column, `sidebar: true` switches content/archive pages to two columns with `sidebar-1`.
-   Omitting the block (all 14 shipped themes) keeps the current single-column, default-width layout.
+   Omitting the block (all 13 shipped themes) keeps the current single-column, default-width layout.
 
 ### Theme customizer (live `--wjs-*` overrides)
 

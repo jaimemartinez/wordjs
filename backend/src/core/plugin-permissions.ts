@@ -92,10 +92,25 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
     return done;
 }
 
+/**
+ * Remove a plugin's grants entirely (on uninstall). Without this, DELETE left stored[slug] in the
+ * plugin_grants option, so re-uploading the same slug silently INHERITED the old (possibly revoked)
+ * grants — a real security surprise. Clears both the in-memory mirror and the persisted option.
+ */
+async function removeGrants(slug: string): Promise<void> {
+    grants.delete(slug);
+    const { getOption, updateOption } = require('./options');
+    const stored = (await getOption('plugin_grants', {})) || {};
+    if (Object.prototype.hasOwnProperty.call(stored, slug)) {
+        delete stored[slug];
+        await updateOption('plugin_grants', stored);
+    }
+}
+
 // Test-only: set a plugin's grants in memory WITHOUT persisting, so unit tests can grant the
 // permissions a default-deny bridge now requires, with no DB dependency.
 function _setGrantsInMemory(slug: string, tokens: string[]): void {
     grants.set(slug, new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
 }
 
-module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory };
+module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory };

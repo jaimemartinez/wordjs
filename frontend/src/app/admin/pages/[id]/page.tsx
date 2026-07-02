@@ -182,6 +182,7 @@ export default function PageEditorPage() {
                 onSave={handleSubmit as any}
                 onCancel={() => router.back()}
                 pageId={pageId || undefined}
+                previewSlug={slug || undefined}
                 onChange={(data) => {
                     // Ignore the first change event which is fired by Puck initialization
                     if (changesCount.current > 0) {

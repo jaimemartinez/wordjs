@@ -79,6 +79,12 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 
 ### How an operator deploys a release
 
+> **Fastest path — `npx create-wordjs`.** The `create-wordjs` bootstrapper (`packages/create-wordjs`, published to npm by the same release pipeline) downloads and unpacks the latest release ZIP for you:
+> ```bash
+> npx create-wordjs my-site
+> ```
+> Then `cd my-site`, `npm run release:install`, and `npm run start:mono` (or `npm start`). The manual download below is the equivalent, step-by-step alternative.
+
 1. Download `wordjs-<tag>.zip` from the GitHub Release and unzip it.
 2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
    ```bash
@@ -106,7 +112,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 
 ## 📋 Prerequisites
 
-- **Node.js:** v18 or higher (CI builds and tests on Node 22).
+- **Node.js:** v20.9 or higher (the `engines` field requires `>=20.9.0`; CI builds and tests on Node 22).
 - **PM2:** (Recommended) A process manager for Node.js to keep your app alive.
   ```bash
   npm install -g pm2
@@ -340,9 +346,9 @@ WordJS is **MIT-licensed** consistently across every package (root, `backend`, `
 
 CI runs on every push and pull request via `.github/workflows/ci.yml`, on **Node 22**, with three parallel jobs:
 
-- **Backend:** strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`).
-- **Gateway:** tests (`npm test`), including the proxy/mTLS integration test.
-- **Frontend:** type check, lint (`npm run lint`), **unit tests** (`npm run test`, vitest — e.g. the XSS sanitizer), and production build (`npm run build`).
+- **Backend:** **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`).
+- **Gateway:** audit gate → tests (`npm test`), including the proxy/mTLS integration test.
+- **Frontend:** audit gate → plugin-registry regeneration → type check → lint (`npm run lint`) → **unit tests** (`npm run test`, vitest — e.g. the XSS sanitizer) → production build (`npm run build`).
 
 > **Note:** Production runs the **compiled** backend — the `server.js` supervisor launches `node dist/index.js` when `dist/` exists, and only falls back to `ts-node` in development or when no build is present. Run `npm run build` before deploying.
 

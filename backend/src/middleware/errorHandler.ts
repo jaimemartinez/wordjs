@@ -39,11 +39,15 @@ function errorHandler(err: any, req: Request, res: Response, next: NextFunction)
 
     // Default error response
     const status = err.status || 500;
-    res.status(status).json({
+    const body: any = {
         code: err.code || 'rest_error',
         message: err.message || 'An error occurred',
         data: { status }
-    });
+    };
+    // Pass through a structured `details` payload (e.g. a plugin validation reject's
+    // missingPermissions/dangerousCalls split) so callers get more than a flattened string.
+    if (err.details !== undefined) body.details = err.details;
+    res.status(status).json(body);
 }
 
 /**

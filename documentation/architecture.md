@@ -219,7 +219,7 @@ On top of per-theme `style.css`, the theme system ships **one shared static styl
 
 - **Driven by `--wjs-*` design tokens** declared in each theme's `style.css :root` (not `theme.json`). The framework carries safe fallbacks, so a theme re-skins everything just by setting tokens. Per-variant `--wjs-color-on-*` tokens hold the max-contrast (black/white) text computed per theme for each solid color.
 - **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor preview iframe** (frontend `PuckEditor.tsx`, for true WYSIWYG) — never the admin chrome. It is linked **before** `core.css` and the theme's own `style.css` so the theme wins at equal specificity. (The *legacy* Handlebars engine links it the same way in `wordjs_head` (`core/theme-engine.ts`), but that public path is no longer mounted — Next.js renders the live site.)
-- All 14 bundled themes tune a full `--wjs-*` token set to their palette (the `default` theme also keeps a few legacy bare aliases like `--primary` for backward-compat). Full reference: **[theming.md](theming.md)**.
+- All 13 bundled themes tune a full `--wjs-*` token set to their palette (the `default` theme also keeps a few legacy bare aliases like `--primary` for backward-compat). Full reference: **[theming.md](theming.md)**.
 
 ---
 

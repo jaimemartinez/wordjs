@@ -1,3 +1,14 @@
+// Preflight: the WordJS stack (Next 16 + native modules) needs Node >= 20.9. Fail with a clear
+// message instead of the cryptic EBADENGINE/native-binding crash a newcomer would hit mid-boot.
+(() => {
+    const [maj, min] = process.versions.node.split('.').map(Number);
+    if (maj < 20 || (maj === 20 && min < 9)) {
+        console.error(`\n✖ WordJS requires Node.js >= 20.9 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 20 LTS or 22 LTS (https://nodejs.org) and try again.\n');
+        process.exit(1);
+    }
+})();
+
 require('dotenv').config();
 const express = require('express');
 const rateLimit = require('express-rate-limit');
@@ -651,6 +662,11 @@ if (cluster.isPrimary) {
 
     app.get('/robots.txt', (req, res, next) => {
         req.url = '/api/v1/seo/robots.txt';
+        next();
+    });
+
+    app.get(['/feed', '/feed.xml', '/rss.xml'], (req, res, next) => {
+        req.url = '/api/v1/seo/feed.xml';
         next();
     });
 

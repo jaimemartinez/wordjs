@@ -20,7 +20,7 @@ function generateMetaTags(post: any, options: SeoOptions = {}) {
 
     const title = post.seo_title || post.title;
     const description = post.seo_description || post.excerpt || '';
-    const canonicalUrl = `${siteUrl}/${post.type === 'page' ? '' : 'blog/'}${post.slug}`;
+    const canonicalUrl = `${siteUrl}/${post.slug}`; // live canonical is /<slug> for posts AND pages
     const ogImage = post.og_image || post.featured_image || `${siteUrl}/images/default-og.jpg`;
 
     const tags: string[] = [];
@@ -70,7 +70,7 @@ function generateJsonLd(post: any, options: SeoOptions = {}) {
     const siteName = options.siteName || 'WordJS';
     const siteDescription = options.siteDescription || '';
 
-    const canonicalUrl = `${siteUrl}/${post.type === 'page' ? '' : 'blog/'}${post.slug}`;
+    const canonicalUrl = `${siteUrl}/${post.slug}`; // live canonical is /<slug> for posts AND pages
 
     // Article schema
     const articleSchema: Record<string, any> = {
@@ -174,9 +174,11 @@ async function generateSitemap(posts: any[], options: SeoOptions = {}) {
 
         if (!slug) continue;
 
-        const url = type === 'page'
-            ? `${siteUrl}/${slug}`
-            : `${siteUrl}/blog/${slug}`;
+        // Live pages declare rel=canonical as `/${slug}` for BOTH posts and pages (see the
+        // (public) routes' canonicalPath) — the sitemap must submit the same URL or Search
+        // Console flags every entry as "duplicate, submitted URL not selected as canonical".
+        void type;
+        const url = `${siteUrl}/${slug}`;
 
         const lastmod = post.postModified || post.updated_at || post.postDate || post.created_at;
         const priority = type === 'page' ? '0.8' : '0.6';
@@ -226,6 +228,46 @@ function escapeHtml(text: any) {
         .replace(/'/g, '&#x27;');
 }
 
+/**
+ * Generate an RSS 2.0 feed for the latest published posts.
+ * URL scheme matches the live pages' rel=canonical: /<slug>.
+ */
+function generateRssFeed(posts: any[], options: { siteUrl?: string; title?: string; description?: string; language?: string } = {}) {
+    const siteUrl = options.siteUrl || '';
+    const rfc822 = (d: any) => { const t = new Date(d); return isNaN(t.getTime()) ? new Date().toUTCString() : t.toUTCString(); };
+
+    let items = '';
+    for (const post of posts) {
+        const status = post.postStatus || post.status;
+        const type = post.postType || post.type;
+        const slug = post.postName || post.slug;
+        if (status !== 'publish' || type !== 'post' || !slug) continue;
+        const url = `${siteUrl}/${slug}`; // must match the page's rel=canonical (see generateSitemap)
+        const title = escapeHtml(post.postTitle || post.title || slug);
+        const rawExcerpt = post.postExcerpt || post.excerpt ||
+            String(post.postContent || post.content || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 280);
+        items += '    <item>\n';
+        items += `      <title>${title}</title>\n`;
+        items += `      <link>${url}</link>\n`;
+        items += `      <guid isPermaLink="true">${url}</guid>\n`;
+        items += `      <pubDate>${rfc822(post.postDate || post.date || post.created_at)}</pubDate>\n`;
+        items += `      <description>${escapeHtml(rawExcerpt)}</description>\n`;
+        items += '    </item>\n';
+    }
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom">
+  <channel>
+    <title>${escapeHtml(options.title || 'WordJS Site')}</title>
+    <link>${siteUrl}/</link>
+    <description>${escapeHtml(options.description || '')}</description>
+    <language>${escapeHtml(options.language || 'en')}</language>
+    <lastBuildDate>${new Date().toUTCString()}</lastBuildDate>
+    <atom:link href="${siteUrl}/feed" rel="self" type="application/rss+xml"/>
+${items}  </channel>
+</rss>`;
+}
+
 module.exports = {
     generateMetaTags,
     generateJsonLd,
@@ -233,5 +275,6 @@ module.exports = {
     generateBreadcrumbSchema,
     generateSitemap,
     generateRobotsTxt,
+    generateRssFeed,
     escapeHtml
 };

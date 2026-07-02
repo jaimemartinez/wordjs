@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const AdmZip = require('adm-zip');
+const { assertZipWithinBudget } = require('./zip-guard');
 const { exportSite, importSite } = require('./import-export');
 const config = require('../config/app');
 const { getOption } = require('./options');
@@ -234,6 +235,10 @@ async function restoreBackup(filename: string) {
 
     const zip = new AdmZip(filepath);
     const zipEntries = zip.getEntries();
+
+    // SECURITY: bound the uncompressed footprint before per-entry getData() (a RAM/disk bomb). A real
+    // backup legitimately holds all uploads, so the cap is generous but finite.
+    assertZipWithinBudget(zipEntries, { kind: 'backup', maxTotalBytes: 2 * 1024 * 1024 * 1024, maxEntries: 100000 });
 
     // 1. Restore ONLY content directories, each entry path-contained. We deliberately do NOT extract
     //    code or config from a backup (src/, node_modules/, package.json, wordjs-config*.json, .env):

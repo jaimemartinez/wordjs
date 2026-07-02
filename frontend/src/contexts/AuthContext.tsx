@@ -123,6 +123,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             let error: string | undefined;
             try {
                 const data = await res.json();
+                // Fresh install: every API call answers 503 setup_required — take the user to the
+                // wizard instead of showing "invalid credentials" on a site that has no users yet.
+                if (res.status === 503 && data?.error === "setup_required") {
+                    window.location.href = "/install";
+                    return { success: false };
+                }
                 error = data?.message || data?.error;
             } catch {
                 // Non-JSON error body — fall back to the generic message in the caller.

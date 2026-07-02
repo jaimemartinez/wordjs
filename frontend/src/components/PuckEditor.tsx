@@ -181,10 +181,12 @@ interface PuckEditorProps {
     onStatusChange?: (status: string) => void;
     saving?: boolean;
     hasChanges?: boolean;
-    onSave?: () => void;
+    onSave?: () => void | Promise<void>;
     onCancel?: () => void;
     config?: Config;
     pageId?: number;
+    /** Slug of the post/page being edited — enables the "Preview" button (/slug?preview=1). */
+    previewSlug?: string;
 }
 
 // Context for Inline Editing
@@ -456,10 +458,19 @@ export default function PuckEditor({
     onSave,
     onCancel,
     config: passedConfig,
-    pageId
+    pageId,
+    previewSlug
 }: PuckEditorProps) {
     const { t } = useI18n();
     const activeConfig = passedConfig || puckConfig;
+
+    // Preview the REAL live page (SSR, active theme) in a new tab. Saves first when there are
+    // unsaved changes so the preview reflects what's on screen; ?preview=1 makes the public route
+    // forward the admin cookie, so drafts render for the author while anonymous visitors still 404.
+    const handlePreview = React.useCallback(async () => {
+        try { if (hasChanges && onSave) await onSave(); } catch { /* preview anyway — user sees last saved state */ }
+        if (previewSlug) window.open(`/${previewSlug}?preview=1`, '_blank', 'noopener');
+    }, [hasChanges, onSave, previewSlug]);
 
     const [data, setData] = useState<Data>(() => {
         const baseData = initialData || {
@@ -680,6 +691,18 @@ export default function PuckEditor({
                         <i className="fa-solid fa-clock-rotate-left"></i>
                     </button>
                 )}
+                {previewSlug && (
+                    <button
+                        type="button"
+                        onClick={handlePreview}
+                        disabled={saving}
+                        className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5"
+                        title="Preview on the live site (drafts stay private to you)"
+                    >
+                        <i className="fa-solid fa-eye text-xs"></i>
+                        Preview
+                    </button>
+                )}
                 {onCancel && (
                     <button
                         type="button"
@@ -713,7 +736,7 @@ export default function PuckEditor({
             }
             return <>{children}</>;
         },
-    }), [onStatusChange, status, onCancel, onSave, saving, hasChanges, activeEditorId]);
+    }), [onStatusChange, status, onCancel, onSave, saving, hasChanges, activeEditorId, previewSlug, handlePreview]);
 
 
 

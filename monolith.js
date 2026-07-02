@@ -16,6 +16,17 @@
  * Usage: node monolith.js [dev|prod]   (default: prod)
  */
 
+// Preflight: Next 16 + the native modules need Node >= 20.9. Failing here with a clear message
+// beats the cryptic EBADENGINE/native-binding crash a newcomer would otherwise hit mid-boot.
+(() => {
+    const [maj, min] = process.versions.node.split('.').map(Number);
+    if (maj < 20 || (maj === 20 && min < 9)) {
+        console.error(`\n✖ WordJS requires Node.js >= 20.9 — you are running ${process.versions.node}.`);
+        console.error('  Install Node 20 LTS or 22 LTS (https://nodejs.org) and try again.\n');
+        process.exit(1);
+    }
+})();
+
 const path = require('path');
 const fs = require('fs');
 
@@ -176,6 +187,7 @@ async function main() {
         // SEO rewrites (gateway parity).
         if (req.url === '/sitemap.xml') req.url = '/api/v1/seo/sitemap.xml';
         else if (req.url === '/robots.txt') req.url = '/api/v1/seo/robots.txt';
+        else if (req.url === '/feed' || req.url === '/feed.xml' || req.url === '/rss.xml') req.url = '/api/v1/seo/feed.xml';
         if (isBackendPath(req.url)) return backendApp(req, res);
         return handle(req, res);
     };

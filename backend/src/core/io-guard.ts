@@ -9,6 +9,23 @@ const path = require('path');
 // also applies to detached plugin code that reaches the real fs.
 const { getEffectivePlugin } = require('./plugin-context');
 
+// Coalesce repeated block warnings. A plugin in a tight fs-probe loop (e.g. a logger retrying a denied
+// write) otherwise floods the host log with thousands of identical lines, drowning everything else.
+// Per message key: emit the first, then at most one "(xN more suppressed)" every SUPPRESS_WINDOW_MS.
+const SUPPRESS_WINDOW_MS = 10000;
+const _warnState = new Map<string, { last: number; suppressed: number }>();
+function throttledWarn(key: string, message: string): void {
+    const now = Date.now();
+    const st = _warnState.get(key);
+    if (!st) { _warnState.set(key, { last: now, suppressed: 0 }); console.warn(message); return; }
+    if (now - st.last >= SUPPRESS_WINDOW_MS) {
+        console.warn(st.suppressed > 0 ? `${message} (${st.suppressed} similar suppressed in the last ${Math.round((now - st.last) / 1000)}s)` : message);
+        st.last = now; st.suppressed = 0;
+    } else {
+        st.suppressed++;
+    }
+}
+
 const ORIGINALS = {
     // Write Ops
     writeFile: fs.writeFile,
@@ -95,7 +112,7 @@ function isPathSafe(targetPath: string, isWrite = false) {
 
     // Block files by name
     if (BLOCKED_FILES.includes(filename)) {
-        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access sensitive file: ${resolved}`);
+        throttledWarn(`${pluginSlug}:sensitive-file`, `[Security Block] Plugin '${pluginSlug}' tried to access sensitive file: ${resolved}`);
         return false;
     }
 
@@ -109,12 +126,12 @@ function isPathSafe(targetPath: string, isWrite = false) {
     const g: any = (typeof global !== 'undefined') ? global : {};
     if (g.__WORDJS_ISOLATED__) {
         if (/\.(db|sqlite|sqlite3)(-wal|-shm|-journal)?$/i.test(filename)) {
-            console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access a database file: ${resolved}`);
+            throttledWarn(`${pluginSlug}:db-file`, `[Security Block] Plugin '${pluginSlug}' tried to access a database file: ${resolved}`);
             return false;
         }
         const cfgDbPaths = getConfiguredDbPaths();
         if (cfgDbPaths.some(db => resolved === db || resolved.startsWith(db + '-'))) {
-            console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access the configured database file: ${resolved}`);
+            throttledWarn(`${pluginSlug}:db-configured`, `[Security Block] Plugin '${pluginSlug}' tried to access the configured database file: ${resolved}`);
             return false;
         }
     }
@@ -122,14 +139,14 @@ function isPathSafe(targetPath: string, isWrite = false) {
     // SECURITY: a plugin must NOT rewrite any manifest.json at runtime — permissions are read
     // live from it, so a self-rewrite would be a permission-escalation primitive. Block all writes.
     if (isWrite && filename === 'manifest.json') {
-        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to write a manifest.json: ${resolved}`);
+        throttledWarn(`${pluginSlug}:manifest`, `[Security Block] Plugin '${pluginSlug}' tried to write a manifest.json: ${resolved}`);
         return false;
     }
 
     // Block any file with secret-like patterns in name
     const sensitivePatterns = ['secret', 'credential', 'private', 'key.pem', 'cert.pem'];
     if (sensitivePatterns.some(pattern => filename.includes(pattern))) {
-        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to access sensitive pattern file: ${resolved}`);
+        throttledWarn(`${pluginSlug}:sensitive-pattern`, `[Security Block] Plugin '${pluginSlug}' tried to access sensitive pattern file: ${resolved}`);
         return false;
     }
 
@@ -191,7 +208,7 @@ function isPathSafe(targetPath: string, isWrite = false) {
     }
 
     if (!isAllowed) {
-        console.warn(`[Security Block] Plugin '${pluginSlug}' tried to ${isWrite ? 'WRITE' : 'READ'} outside safe zones: ${resolved}`);
+        throttledWarn(`${pluginSlug}:outside-${isWrite ? 'write' : 'read'}`, `[Security Block] Plugin '${pluginSlug}' tried to ${isWrite ? 'WRITE' : 'READ'} outside safe zones: ${resolved}`);
         return false;
     }
 

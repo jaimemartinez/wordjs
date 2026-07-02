@@ -108,7 +108,8 @@ router.post('/install', async (req: any, res: Response) => {
         adminEmail,
         adminPassword,
         dbDriver = 'sqlite-native',
-        db: dbConn // Postgres connection {host,port,user,password,database,ssl} when dbDriver==='postgres'
+        db: dbConn, // Postgres connection {host,port,user,password,database,ssl} when dbDriver==='postgres'
+        demoContent = true // seed starter content (welcome post, Puck home page, About, header menu)
     } = req.body;
 
     // --- Validation (this endpoint is public pre-config, so validate server-side too) ---
@@ -339,6 +340,21 @@ router.post('/install', async (req: any, res: Response) => {
 
             // Persist the admin's email as the site admin_email option (was left at the default before).
             await updateOption('admin_email', adminEmailDisplay);
+
+            // Starter content (opt-in from the wizard, default on): a designed Puck home page set as
+            // the front page, a welcome post, an About page and a header menu — so the first thing a
+            // new user sees is the visual editor's output, not "No posts found". Best-effort: the
+            // seeder never throws; a failure must not fail the install.
+            if (demoContent !== false && demoContent !== 'false') {
+                try {
+                    const seededAdmin = await User.findByLogin(adminUser) || await User.findByEmail(adminEmailDisplay);
+                    const { seedStarterContent } = require('../core/starter-content');
+                    const seeded = await seedStarterContent(seededAdmin ? seededAdmin.id : 1, String(siteName));
+                    console.log('🌱 Starter content:', JSON.stringify(seeded));
+                } catch (e: any) {
+                    console.warn('⚠️ Starter content seeding failed (install continues):', e && e.message);
+                }
+            }
 
             const { runCoreTests } = require('../core/plugin-test-runner');
             const testResults = await runCoreTests();

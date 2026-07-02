@@ -95,7 +95,12 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
             // Not JSON (e.g. HTML 500 error): include the raw text snippet.
             errorMessage += `: ${raw.slice(0, 100)}`;
         }
-        throw new Error(errorMessage);
+        const thrown: Error & { details?: unknown; status?: number } = new Error(errorMessage);
+        // Preserve any structured `details` (e.g. a plugin activation reject's
+        // missingPermissions/dangerousCalls) so callers can render more than a flat string.
+        if (error && error.details !== undefined) thrown.details = error.details;
+        thrown.status = res.status;
+        throw thrown;
     }
 
     if (options.responseType === "text") {
@@ -114,6 +119,27 @@ export const apiPost = <T>(endpoint: string, body: unknown) => api<T>(endpoint, 
 export const apiPut = <T>(endpoint: string, body: unknown) => api<T>(endpoint, { method: "PUT", body });
 export const apiDelete = <T>(endpoint: string) => api<T>(endpoint, { method: "DELETE" });
 
+/**
+ * Paged GET: the list endpoints emit X-WP-Total / X-WP-TotalPages headers that `api()`
+ * discards. Same cookie/error semantics; also returns the totals so lists can paginate.
+ */
+export async function apiGetPaged<T>(endpoint: string): Promise<{ data: T; total: number; totalPages: number }> {
+    const res = await fetch(`${API_URL}${endpoint}`, { cache: "no-store", credentials: "include" });
+    if (!res.ok) {
+        let msg = `HTTP ${res.status} ${res.statusText}`;
+        try { const e = await res.json(); msg = e?.message || e?.error || msg; } catch { /* non-JSON body */ }
+        throw new Error(msg);
+    }
+    const data = (await res.json()) as T;
+    const total = parseInt(res.headers.get("X-WP-Total") || "", 10);
+    const totalPages = parseInt(res.headers.get("X-WP-TotalPages") || "", 10);
+    return {
+        data,
+        total: Number.isFinite(total) ? total : (Array.isArray(data) ? (data as unknown[]).length : 0),
+        totalPages: Number.isFinite(totalPages) && totalPages > 0 ? totalPages : 1,
+    };
+}
+
 // Typed API calls
 export interface Post {
     id: number;
@@ -127,6 +153,8 @@ export interface Post {
     author: { id: number; displayName: string };
     commentStatus: string;
     meta?: Record<string, any>;
+    /** Set when the post has a featured image (backend Post.toJSON serializes it with an absolute URL). */
+    featuredMedia?: { id: number; url: string; title?: string };
 }
 
 export interface Category {
@@ -163,6 +191,20 @@ export interface Plugin {
     }[];
     requestedPermissions?: string[];  // "scope:access" tokens the manifest requests (the togglable set)
     grantedPermissions?: string[];    // tokens the admin has granted (subset of requested + optional "network")
+    author?: string;
+    homepage?: string;
+    runtime?: PluginRuntime | null;   // live isolate health when active (null if inactive / not an isolate)
+}
+
+export interface PluginRuntime {
+    state: 'running' | 'restarting' | 'crashed' | 'crash-looping' | 'stopped';
+    pid?: number | null;
+    startedAt?: number;
+    uptimeMs?: number;
+    restarts?: number;
+    lastExitCode?: number | null;
+    lastError?: string | null;
+    rssBytes?: number | null;
 }
 
 export interface Theme {
@@ -227,6 +269,15 @@ export interface Revision {
 
 // API endpoints
 export const postsApi = {
+    /** Paged list with totals (backend caps per_page at 100; status 'any' is privilege-scoped server-side). */
+    listPaged: (opts: { type?: string; status?: string; page?: number; perPage?: number; search?: string } = {}) => {
+        const params = new URLSearchParams({ type: opts.type || "post" });
+        if (opts.status) params.append("status", opts.status);
+        params.append("page", String(opts.page || 1));
+        params.append("per_page", String(opts.perPage || 20));
+        if (opts.search) params.append("search", opts.search);
+        return apiGetPaged<Post[]>(`/posts?${params.toString()}`);
+    },
     list: (type = "post", status?: string) => {
         const params = new URLSearchParams({ type });
         if (status) params.append("status", status);
@@ -281,14 +332,18 @@ export const pluginsApi = {
     list: () => apiGet<Plugin[]>("/plugins"),
     activate: (slug: string) => apiPost(`/plugins/${slug}/activate`, {}),
     deactivate: (slug: string) => apiPost(`/plugins/${slug}/deactivate`, {}),
+    /** Hot-reload a running isolated plugin (re-runs the AST scan, re-registers routes). */
+    reload: (slug: string) => apiPost<{ success: boolean; slug: string; message: string }>(`/plugins/${slug}/reload`, {}),
+    /** Live runtime health of an isolated plugin. */
+    status: (slug: string) => apiGet<PluginRuntime>(`/plugins/${slug}/status`),
 
     // Android-style per-permission grants (default-deny). `granted` = the "scope:access" tokens the admin
     // approves; `network` = grant outbound network to an untrusted plugin.
     setPermissions: (slug: string, granted: string[], network: boolean) =>
         apiPost<{ success: boolean; granted: string[]; network: boolean; reloaded: boolean; message: string }>(`/plugins/${slug}/permissions`, { granted, network }),
-    delete: (slug: string, password?: string) => api<{ success: boolean; message: string }>(`/plugins/${slug}`, {
+    delete: (slug: string, password?: string, dropData?: boolean) => api<{ success: boolean; message: string; cleanup?: any }>(`/plugins/${slug}`, {
         method: "DELETE",
-        body: { password }
+        body: { password, dropData: !!dropData }
     }),
     download: (slug: string) => {
         // Direct window location change for file download

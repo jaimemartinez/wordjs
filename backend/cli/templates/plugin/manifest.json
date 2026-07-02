@@ -1,0 +1,38 @@
+{
+    "id": "__SLUG__",
+    "name": "__NAME__",
+    "version": "0.1.0",
+    "description": "A WordJS plugin scaffolded with `wordjs create plugin`.",
+    "author": "Your Name",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "__SLUG__"
+        },
+        "puckComponents": {
+            "entry": "client/puck/__PASCAL__Puck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "__NAME__",
+        "icon": "fa-puzzle-piece",
+        "href": "/admin/plugin/__SLUG__",
+        "order": 60
+    },
+    "permissions": [
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read this plugin's stored items (options API)."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Save this plugin's items (options API)."
+        }
+    ]
+}

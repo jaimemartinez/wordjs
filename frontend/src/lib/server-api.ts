@@ -99,12 +99,49 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
     }
 }
 
+/**
+ * True when the backend is up but NOT yet installed (it answers every API call with
+ * 503 {error:'setup_required'}). The public layout uses this to send a fresh install to the
+ * /install wizard instead of rendering an empty broken page. Any other state (installed,
+ * backend down, network error) returns false so pages degrade exactly as before.
+ */
+export const checkSetupRequired = cache(async (): Promise<boolean> => {
+    const base = resolveServerBase();
+    try {
+        const res = await fetch(`${base}/settings`, { cache: 'no-store' });
+        if (res.status !== 503) return false;
+        const body = await res.json().catch(() => null);
+        return !!body && body.error === 'setup_required';
+    } catch {
+        return false;
+    }
+});
+
 // ---------------------------------------------------------------------------
 // Request-deduped content loaders (one backend call per (args) per request)
 // ---------------------------------------------------------------------------
 
 export const getSettings = cache((): Promise<Record<string, string> | null> =>
     serverFetch<Record<string, string>>('/settings')
+);
+
+export interface PublicAssets {
+    scripts: { handle: string; src: string; inFooter?: boolean; strategy?: string }[];
+    styles: { handle: string; src: string; media?: string }[];
+}
+
+/** Plugin-enqueued frontend scripts/styles (active plugins only), rendered by the public layout. */
+export const getPublicAssets = cache((): Promise<PublicAssets> =>
+    serverFetch<PublicAssets>('/plugins/assets').then((a) => a || { scripts: [], styles: [] })
+);
+
+/**
+ * Draft-preview loader: forwards the admin's session cookie, so the backend's
+ * GET /posts/slug/:slug (optionalAuth) returns non-published posts to their author /
+ * editors. A separate cache() entry from getPostBySlug keeps the keying correct.
+ */
+export const getPostBySlugPreview = cache((slug: string): Promise<Post | null> =>
+    serverFetch<Post>(`/posts/slug/${encodeURIComponent(slug)}`, { forwardCookies: true })
 );
 
 export const getPostBySlug = cache((slug: string): Promise<Post | null> =>
@@ -156,11 +193,19 @@ export function htmlToText(html: string | undefined | null, max = 160): string {
     return text.slice(0, max - 1).replace(/\s+\S*$/, '').trimEnd() + '…';
 }
 
-/** Best-effort featured/OG image from post meta (only absolute http(s) URLs are trusted). */
+/**
+ * Featured/OG image for a post. Primary source is the REAL featured image the admin UI sets
+ * (post.featuredMedia — Post.toJSON serializes it with an absolute URL); meta keys are a
+ * fallback for imported/legacy content. '/'-relative values are accepted because the root
+ * layout sets metadataBase, which absolutizes them in the rendered tags.
+ */
 function pickOgImage(post: Post): string[] | undefined {
+    if (post.featuredMedia?.url && /^(https?:\/\/|\/)/i.test(post.featuredMedia.url)) {
+        return [post.featuredMedia.url];
+    }
     const m = (post.meta || {}) as Record<string, unknown>;
     const candidate = m.featured_image || m._thumbnail_url || m.thumbnail || m.og_image || m.image;
-    if (typeof candidate === 'string' && /^https?:\/\//i.test(candidate)) return [candidate];
+    if (typeof candidate === 'string' && /^(https?:\/\/|\/)/i.test(candidate)) return [candidate];
     return undefined;
 }
 
@@ -205,4 +250,78 @@ export function buildPostMetadata(
     } as Metadata['twitter'];
 
     return { title, description, alternates: { canonical }, openGraph, twitter };
+}
+
+// ---------------------------------------------------------------------------
+// JSON-LD structured data (rich results). Hand-rendered <script> tags are NOT
+// absolutized by metadataBase, so these builders take an explicit absolute base.
+// ---------------------------------------------------------------------------
+
+/**
+ * Absolute public origin for hand-rendered URLs (JSON-LD). Same trust model as the root
+ * layout's metadataBase: anchor to the CONFIGURED site URL; honor the request host only when
+ * its hostname matches (the Host header is client-controllable — never trust it raw).
+ */
+export const resolveSiteBase = cache(async (): Promise<string> => {
+    const settings = await getSettings();
+    const configuredUrl = settings?.siteurl || settings?.home || settings?.site_url;
+    let configured: URL | undefined;
+    if (configuredUrl && /^https?:\/\//i.test(configuredUrl)) {
+        try { configured = new URL(configuredUrl); } catch { /* malformed — ignore */ }
+    }
+    let base = configured;
+    try {
+        const { headers } = await import('next/headers');
+        const h = await headers();
+        const host = h.get('x-forwarded-host') || h.get('host');
+        const proto = h.get('x-forwarded-proto') || 'https';
+        if (host) {
+            const reqHostname = host.split(':')[0].toLowerCase();
+            const allowed = configured?.hostname.toLowerCase();
+            if (!allowed || reqHostname === allowed) {
+                try { base = new URL(`${proto}://${host}`); } catch { /* keep configured */ }
+            }
+        }
+    } catch { /* not in a request scope */ }
+    return (base ? base.origin : 'http://localhost:3000');
+});
+
+/** WebSite schema with a SearchAction pointing at the built-in /search route. */
+export function buildWebSiteJsonLd(siteUrl: string, siteName: string, description?: string) {
+    return {
+        '@context': 'https://schema.org',
+        '@type': 'WebSite',
+        name: siteName,
+        url: `${siteUrl}/`,
+        ...(description ? { description } : {}),
+        potentialAction: {
+            '@type': 'SearchAction',
+            target: { '@type': 'EntryPoint', urlTemplate: `${siteUrl}/search?q={search_term_string}` },
+            'query-input': 'required name=search_term_string',
+        },
+    };
+}
+
+/** BlogPosting (posts) / WebPage (pages) schema for a single content item. */
+export function buildPostJsonLd(post: Post, siteUrl: string, siteName?: string) {
+    const url = `${siteUrl}/${post.slug || post.id}`;
+    const images = pickOgImage(post)?.map((u) => (u.startsWith('/') ? `${siteUrl}${u}` : u));
+    const description = htmlToText(post.excerpt || post.content || '', 160) || undefined;
+    return {
+        '@context': 'https://schema.org',
+        '@type': post.type === 'page' ? 'WebPage' : 'BlogPosting',
+        headline: post.title,
+        url,
+        mainEntityOfPage: url,
+        ...(description ? { description } : {}),
+        ...(post.date ? { datePublished: post.date } : {}),
+        ...(post.author?.displayName ? { author: { '@type': 'Person', name: post.author.displayName } } : {}),
+        ...(images?.length ? { image: images } : {}),
+        ...(siteName ? { publisher: { '@type': 'Organization', name: siteName } } : {}),
+    };
+}
+
+/** Serialize JSON-LD for a <script> tag, escaping `<` so `</script>` can't break out. */
+export function jsonLdString(obj: unknown): string {
+    return JSON.stringify(obj).replace(/</g, '\\u003c');
 }
