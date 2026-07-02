@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
-import { getPostBySlug, getSettings, buildPostMetadata } from "@/lib/server-api";
+import JsonLd from "@/components/public/JsonLd";
+import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
 
 interface RouteParams {
     slug: string;      // category segment
@@ -23,7 +24,12 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 
 export default async function CategoryPostPage({ params }: { params: Promise<RouteParams> }) {
     const { slug, postSlug } = await params;
-    const [post, settings] = await Promise.all([getPostBySlug(postSlug), getSettings()]);
+    const [post, settings, base] = await Promise.all([getPostBySlug(postSlug), getSettings(), resolveSiteBase()]);
     if (!post) notFound();
-    return <PostContent post={post} settings={settings} category={slug} />;
+    return (
+        <>
+            <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
+            <PostContent post={post} settings={settings} category={slug} />
+        </>
+    );
 }

@@ -337,7 +337,8 @@ export default function BlockEditor({ initialContent, initialBlocks, onChange }:
                                     return {
                                         success: 1,
                                         file: {
-                                            url: media.guid,
+                                            // relative sourceUrl, not guid (guid embeds the upload-time host/IP)
+                                            url: media.sourceUrl || media.guid,
                                         }
                                     };
                                 });
@@ -402,7 +403,8 @@ export default function BlockEditor({ initialContent, initialBlocks, onChange }:
                 onClose={() => setIsMediaPickerOpen(false)}
                 onSelect={(item) => {
                     if (mediaPickerCallback) {
-                        mediaPickerCallback(item.guid);
+                        // relative sourceUrl, not guid (guid embeds the upload-time host/IP)
+                        mediaPickerCallback(item.sourceUrl || item.guid);
                         setMediaPickerCallback(null);
                     }
                 }}

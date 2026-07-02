@@ -20,6 +20,80 @@ const { addShortcode, removeShortcode } = require('./shortcodes');
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
 
+// ── Runtime supervisor + per-isolate health ──────────────────────────────────────────────────
+// The sandbox already CONTAINS a crash (the child dies alone). But a mid-run crash used to silently
+// delete the isolate, 404 its routes, and vanish its admin menu while the plugin still read as green
+// 'active' — invisible and unrecoverable without a manual reload. This makes isolation VISIBLE and
+// SELF-HEALING: we track per-plugin state/pid/rss/restarts + the death reason, auto-restart a crashed
+// child with bounded exponential backoff, and give up (crash-looping) after too many failures.
+//
+// Health is keyed by SLUG (survives reload, which recreates the ephemeral handle), telemetry that is
+// per-child (pid/startedAt/rss) is refreshed on each (re)load.
+type IsolateHealth = {
+    state: 'running' | 'restarting' | 'crashed' | 'crash-looping' | 'stopped';
+    pid: number | null; startedAt: number; restarts: number;
+    lastExitCode: number | null; lastError: string | null; rssBytes: number | null;
+    crashWindow: number[]; // timestamps of recent auto-restarts (crash-loop detection)
+};
+const isolateHealth = new Map<string, IsolateHealth>();
+const restartTimers = new Map<string, NodeJS.Timeout>();
+const stopping = new Set<string>(); // slugs whose exit is an INTENTIONAL unload (skip supervision)
+
+const SUPERVISOR = { backoff: [1000, 5000, 15000, 60000], maxRestarts: 5, windowMs: 5 * 60 * 1000 };
+
+function getHealth(slug: string): IsolateHealth {
+    let h = isolateHealth.get(slug);
+    if (!h) { h = { state: 'stopped', pid: null, startedAt: 0, restarts: 0, lastExitCode: null, lastError: null, rssBytes: null, crashWindow: [] }; isolateHealth.set(slug, h); }
+    return h;
+}
+
+// Bounded exponential-backoff restart of a crashed child; gives up as 'crash-looping' after maxRestarts
+// within the window so a wedged plugin can't thrash the host forever.
+function superviseRestart(slug: string, entryFile: string) {
+    const h = getHealth(slug);
+    const now = Date.now();
+    h.crashWindow = h.crashWindow.filter((t) => now - t < SUPERVISOR.windowMs);
+    if (h.crashWindow.length >= SUPERVISOR.maxRestarts) {
+        h.state = 'crash-looping';
+        console.error(`[Isolate ${slug}] crash-looping: ${h.crashWindow.length} restarts within ${SUPERVISOR.windowMs / 1000}s — giving up. Fix the plugin and reload it manually.`);
+        try {
+            const { addAdminNotice } = require('./plugins');
+            if (typeof addAdminNotice === 'function') addAdminNotice(`Plugin "${slug}" keeps crashing and was stopped. Last error: ${h.lastError || 'unknown'}.`, 'error');
+        } catch { /* notice is best-effort */ }
+        return;
+    }
+    const delay = SUPERVISOR.backoff[Math.min(h.crashWindow.length, SUPERVISOR.backoff.length - 1)];
+    h.state = 'restarting';
+    console.warn(`[Isolate ${slug}] scheduling auto-restart in ${delay}ms (attempt ${h.crashWindow.length + 1}/${SUPERVISOR.maxRestarts}).`);
+    const t = setTimeout(async () => {
+        restartTimers.delete(slug);
+        if (isolates.has(slug)) return; // already back up (e.g. a manual reload beat us to it)
+        h.crashWindow.push(Date.now());
+        h.restarts++;
+        try {
+            await loadIsolatedPlugin(slug, entryFile, { supervised: true });
+            // The restarted child re-registers its routes at the END of the app stack — after the
+            // notFound/errorHandler layers boot appended — so without this they'd all 404 (same reason
+            // reloadIsolatedPlugin calls it). Restore the ordering so recovered routes actually serve.
+            try { require('./plugins').fixMiddlewareOrder(); } catch { /* best-effort */ }
+        }
+        catch (e: any) { h.state = 'crashed'; h.lastError = e && e.message; superviseRestart(slug, entryFile); }
+    }, delay);
+    if (t.unref) t.unref();
+    restartTimers.set(slug, t);
+}
+
+function getIsolateStatus(slug: string) {
+    const h = isolateHealth.get(slug);
+    if (!h) return isolates.has(slug) ? { state: 'running' } : null;
+    return { state: h.state, pid: h.pid, startedAt: h.startedAt, uptimeMs: h.startedAt ? Date.now() - h.startedAt : 0, restarts: h.restarts, lastExitCode: h.lastExitCode, lastError: h.lastError, rssBytes: h.rssBytes };
+}
+function getAllIsolateStatuses() {
+    const out: Record<string, any> = {};
+    for (const slug of isolateHealth.keys()) out[slug] = getIsolateStatus(slug);
+    return out;
+}
+
 // (The former host-side memory watchdog is gone: with child_process each untrusted plugin runs in its
 // OWN OS process, so off-heap growth is the CHILD's rss — bounded per-child in loadIsolatedPlugin —
 // not the host's. A worker_thread shared the host rss and could OOM-crash it; a child cannot.)
@@ -419,6 +493,7 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'fs.read', 'fs.write',
     'mail', 'notify',
     'adminMenu.add', 'cron.schedule',
+    'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',
 ]);
@@ -433,7 +508,7 @@ function callApi(api: any, method: string, args: any[]) {
     return fn.apply(ctx, args);
 }
 
-async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any> {
+async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?: boolean } = {}): Promise<any> {
     // Resolve the memory-cap capabilities ONCE (cached) before building the child, so the spawn path is
     // chosen synchronously inside the executor below. cgroup (preventive) is preferred over rlimit (loose).
     const cgroupOk = await probeCgroupCap();
@@ -561,6 +636,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
         // not the node child). RSS_BUDGET_BYTES is defined above (shared with cgroup memory.max).
         let rssPoll: any = null;
         const killOverBudget = (rssBytes: number) => {
+            getHealth(slug).rssBytes = rssBytes; // single choke point for RSS across all platforms → health surface
             if (rssBytes > RSS_BUDGET_BYTES) {
                 console.error(`[Isolate ${slug}] killed: child rss over budget (${rssBytes} bytes).`);
                 try { child.kill('SIGKILL'); } catch { /* gone */ }
@@ -771,6 +847,14 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             if (msg.kind === 'ready') {
                 settled = true;
                 resolve({ worker, slug });
+            } else if (msg.kind === 'fatal') {
+                // The child hit an unrecoverable condition (guard-install failed, ESM guard unavailable,
+                // memory budget exceeded) and is exiting. These messages were previously DROPPED, so the
+                // death showed only as a bare 'code 1'. Capture the precise reason for the health surface.
+                const reason: string = String(msg.error || 'fatal error in sandbox');
+                getHealth(slug).lastError = reason;
+                console.error(`[Isolate ${slug}] fatal: ${reason}`);
+                if (!settled) { settled = true; reject(new Error(reason)); }
             } else if (msg.kind === 'init-error') {
                 settled = true;
                 reject(new Error(msg.error));
@@ -949,7 +1033,19 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
                 // ALL plugins are namespaced under /api/v1/plugin/<slug> (no route hijack). No trust tier
                 // exists to opt into an absolute path — every plugin's routes are confined to its namespace.
                 const full = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
-                runWithContext(slug, () => app[m](full, ...mw, finalHandler));
+                // Register WITHOUT the plugin's ALS context. appRegistry patches the app/Router route
+                // methods to wrap EVERY handler registered while a plugin is the effective plugin, so an
+                // IN-PROCESS plugin's own handler re-enters its sandbox on each request. But for an
+                // ISOLATED plugin the handlers mounted here are ALL trusted HOST code: the auth middleware
+                // (authenticate/isAdmin — which read the users DB) and finalHandler (which does the IPC to
+                // the child). Wrapping them in the plugin context made authenticate's `User.findById` run
+                // "as the plugin", get denied by the sandbox, and every { auth: true } isolated route 401'd
+                // with "Invalid token." The real plugin code runs in the child process (OS-isolated) and
+                // sets its own context there (plugin-worker.js), so the host middleware MUST run with host
+                // privileges. Registering outside runWithContext leaves getEffectivePlugin() null here, so
+                // appRegistry does not wrap this trusted host code. (No sandbox weakening: the child is
+                // unchanged, and callApi() at bridge time still runs in-context for permission checks.)
+                app[m](full, ...mw, finalHandler);
                 registeredRoutes.push({ m, full });
             } else if (msg.kind === 'route-reply') {
                 rpcSettle(pendingRoute, msg, msg.response);
@@ -1024,18 +1120,41 @@ async function loadIsolatedPlugin(slug: string, entryFile: string): Promise<any>
             // Only act if WE are still the registered isolate — on reload a fresh child has already
             // replaced us, and tearing down here would rip out the new child's registrations.
             const cur = isolates.get(slug);
-            if (cur && cur.worker === worker) { isolates.delete(slug); try { teardown(); } catch { /* */ } }
+            const wasCurrent = cur && cur.worker === worker;
+            if (wasCurrent) { isolates.delete(slug); try { teardown(); } catch { /* */ } }
             if (code !== 0) console.warn(`[Isolate ${slug}] child exited with code ${code}`);
             // child_process: a crash DURING init emits 'exit' (not 'error'); reject the load Promise so it
             // doesn't hang forever if the child died before sending 'ready' / 'init-error'.
-            if (!settled) { settled = true; reject(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`)); }
+            if (!settled) { settled = true; reject(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`)); return; }
+
+            // Settled = the child had been RUNNING, so this is a RUNTIME exit.
+            const h = getHealth(slug);
+            h.lastExitCode = code;
+            if (stopping.has(slug)) { stopping.delete(slug); h.state = 'stopped'; return; } // intentional unload/deactivate/reload
+            if (!wasCurrent) return; // a newer child already replaced us (reload race) — not our crash to supervise
+            h.state = 'crashed';
+            console.warn(`[Isolate ${slug}] child crashed at runtime (code ${code}) — supervising.`);
+            superviseRestart(slug, entryFile);
         });
 
+        // Register the live handle + refresh per-child health telemetry.
         isolates.set(slug, { worker, teardown, entryFile });
+        const h = getHealth(slug);
+        h.state = 'running'; h.pid = (child && child.pid) || null; h.startedAt = Date.now();
+        // A clean MANUAL (re)start (activate / grants-reload / dev-reload / admin restart) resets the
+        // crash accounting; a supervised auto-restart keeps counting toward the crash-loop cap.
+        if (!opts.supervised) { h.crashWindow = []; h.restarts = 0; stopping.delete(slug); }
     });
 }
 
 function unloadIsolatedPlugin(slug: string) {
+    // Mark this stop as INTENTIONAL so the exit handler doesn't mistake it for a crash and auto-restart,
+    // and cancel any pending backoff restart from an earlier crash.
+    stopping.add(slug);
+    const pending = restartTimers.get(slug);
+    if (pending) { clearTimeout(pending); restartTimers.delete(slug); }
+    const health = isolateHealth.get(slug);
+    if (health) health.state = 'stopped';
     const h = isolates.get(slug);
     if (h) {
         try { h.teardown && h.teardown(); } catch (e) { /* */ }
@@ -1052,7 +1171,13 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     if (!h || !h.entryFile) return null;
     const entryFile = h.entryFile;
     unloadIsolatedPlugin(slug);
-    return loadIsolatedPlugin(slug, entryFile);
+    const result = await loadIsolatedPlugin(slug, entryFile);
+    // The reloaded child re-registers its Express routes at the END of the app stack — AFTER the
+    // notFound/errorHandler layers that boot appended — so every one of its routes would answer
+    // rest_no_route 404. The activation path already fixes this ordering after loading; do the
+    // same here (covers the grants-change reload, the admin reload endpoint, and dev hot-reload).
+    try { require('./plugins').fixMiddlewareOrder(); } catch { /* ordering fix is best-effort */ }
+    return result;
 }
 
-module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), assignProcessToJobObject, probeJobObjectCap };
+module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), getIsolateStatus, getAllIsolateStatuses, assignProcessToJobObject, probeJobObjectCap };

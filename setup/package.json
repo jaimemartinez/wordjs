@@ -3,6 +3,9 @@
     "version": "1.0.0",
     "description": "WordJS Cluster Orchestrator - Setup & Migration Utility",
     "license": "MIT",
+    "engines": {
+        "node": ">=20.9.0"
+    },
     "main": "index.js",
     "bin": {
         "wordjs-setup": "index.js"

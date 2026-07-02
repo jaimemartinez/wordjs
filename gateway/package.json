@@ -3,6 +3,9 @@
     "version": "1.0.0",
     "description": "WordJS API Gateway - Security & Proxy Layer",
     "license": "MIT",
+    "engines": {
+        "node": ">=20.9.0"
+    },
     "main": "src/index.js",
     "scripts": {
         "start": "node src/index.js",

@@ -162,7 +162,9 @@ export default function CarouselsPage() {
     };
 
     const handleSelectImage = (media: MediaItem) => {
-        setFormImages([...formImages, { url: media.guid, title: media.title }]);
+        // Store the RELATIVE sourceUrl, not guid (guid embeds the upload-time host/IP and breaks
+        // when the site is served from another origin). See MediaLibrarySelector.
+        setFormImages([...formImages, { url: media.sourceUrl || media.guid, title: media.title }]);
         setIsMediaPickerOpen(false);
     };
 

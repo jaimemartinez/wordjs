@@ -1,7 +1,8 @@
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
-import { getPostBySlug, getPostById, getSettings, buildPostMetadata } from "@/lib/server-api";
+import JsonLd from "@/components/public/JsonLd";
+import { getPostBySlug, getPostById, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
 import type { Post } from "@/lib/api";
 
 interface RouteParams {
@@ -29,7 +30,12 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 
 export default async function SinglePage({ params }: { params: Promise<RouteParams> }) {
     const { slug } = await params;
-    const [page, settings] = await Promise.all([loadPage(slug), getSettings()]);
+    const [page, settings, base] = await Promise.all([loadPage(slug), getSettings(), resolveSiteBase()]);
     if (!page) notFound();
-    return <PostContent post={page} settings={settings} />;
+    return (
+        <>
+            <JsonLd data={buildPostJsonLd(page, base, settings?.blogname)} />
+            <PostContent post={page} settings={settings} />
+        </>
+    );
 }

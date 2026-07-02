@@ -551,6 +551,16 @@ async function initialize() {
         const { loadActivePlugins } = require('./core/plugins');
         await loadActivePlugins();
 
+        // DEV hot-reload: watch each active isolated plugin's dir and re-spawn its child process
+        // on change (re-runs the AST scan). Hard no-op outside development; guarded so a watcher
+        // failure can never break boot.
+        try {
+            const { startPluginDevWatch } = require('./core/plugin-dev-watch');
+            await startPluginDevWatch();
+        } catch (e: any) {
+            console.warn('[plugin-dev-watch] not started:', e && e.message);
+        }
+
         // Start cron system
         const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
         await initDefaultCronEvents();

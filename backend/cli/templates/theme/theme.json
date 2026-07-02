@@ -1,0 +1,10 @@
+{
+  "name": "__NAME__",
+  "version": "1.0.0",
+  "description": "A WordJS theme scaffolded with `wordjs create theme`.",
+  "author": "Your Name",
+  "layout": {
+    "containerWidth": "1100px",
+    "sidebar": false
+  }
+}

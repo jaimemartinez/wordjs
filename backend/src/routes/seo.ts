@@ -9,7 +9,7 @@ const express = require('express');
 const router = express.Router();
 const Post = require('../models/Post');
 const { getOption } = require('../core/options');
-const { generateSitemap, generateRobotsTxt } = require('../core/seo-helper');
+const { generateSitemap, generateRobotsTxt, generateRssFeed } = require('../core/seo-helper');
 const { authenticate } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 
@@ -87,6 +87,39 @@ router.get('/robots.txt', async (req: Request, res: Response) => {
 
 /**
  * @swagger
+ * /seo/feed.xml:
+ *   get:
+ *     summary: RSS 2.0 feed of the latest published posts
+ *     tags: [SEO]
+ *     responses:
+ *       200:
+ *         description: RSS feed
+ *         content:
+ *           application/rss+xml:
+ *             schema:
+ *               type: string
+ */
+router.get('/feed.xml', async (req: Request, res: Response) => {
+    try {
+        const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
+        const title = await getOption('blogname', 'WordJS Site');
+        const description = await getOption('blogdescription', '');
+        const language = await getOption('WPLANG', 'en');
+
+        const posts = await Post.findAll({ type: 'post', status: 'publish', limit: 20 });
+        const xml = generateRssFeed(posts, { siteUrl, title, description, language });
+
+        res.set('Content-Type', 'application/rss+xml; charset=utf-8');
+        res.set('Cache-Control', 'public, max-age=900'); // 15 min
+        res.send(xml);
+    } catch (error) {
+        console.error('RSS feed error:', error);
+        res.status(500).send('Error generating feed');
+    }
+});
+
+/**
+ * @swagger
  * /seo/meta/{postId}:
  *   get:
  *     summary: Get SEO metadata for a post (Admin Preview)
@@ -133,7 +166,7 @@ router.get('/meta/:postId', authenticate, can('edit_posts'), async (req: any, re
             keywords: post.seo_keywords || '',
             og_image: post.og_image || post.featured_image || '',
             noindex: post.noindex || false,
-            canonical: `/${(post.postType || post.type) === 'page' ? '' : 'blog/'}${post.postName || post.slug}`
+            canonical: `/${post.postName || post.slug}` // live canonical is /<slug> for posts AND pages
         });
     } catch (error) {
         console.error('SEO meta error:', error);

@@ -2,29 +2,46 @@
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jaimemartinez/wordjs) [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/dherreraj9805)
 
-**WordJS** is a developer-first, JavaScript-native CMS that brings a WordPress-style
-extension model (plugins, themes, hooks, shortcodes) to a modern stack: a **TypeScript**
-backend, a **Next.js** frontend, and a small custom gateway. Its defining feature is an
-**OS-process plugin sandbox** that runs each third-party plugin in its own isolated operating-system
-process, reachable only through a permission-checked capability bridge.
+### The CMS where a plugin can't take over your site.
 
-> ### ⚠️ Project status / maturity
->
-> WordJS is an **ambitious, primarily solo-maintained project** and is **pre-production**.
-> Treat it as **beta**:
-> - It recently underwent **security hardening** that fixed several critical issues
->   (a CSRF bypass, committed secrets, and XSS sinks). An **independent security audit is
->   strongly recommended before any production or internet-facing deployment.**
-> - The backend **compiles to `dist/` for production** (no `ts-node` at runtime) with a
->   **strict** type-check enforced in CI. The strict core (`strictNullChecks`, etc.) is
->   on, and `noImplicitAny` is now **enforced** (every parameter/variable is annotated — real
->   types where locally determinable, explicit `any` only at genuinely dynamic boundaries). The
->   one remaining sub-flag deliberately **off** is `useUnknownInCatchVariables` (catch bindings stay `any`).
-> - There is **no plugin marketplace or community ecosystem yet**. The repo ships a
->   handful of first-party/example plugins and themes.
->
-> Use it to build, learn, and experiment. Do your own review before trusting it with
-> real data or real users.
+Every CMS lets you extend it. **WordJS is the only one that doesn't have to trust the
+extension.** Each third-party plugin runs in its **own OS-isolated process** with
+**Android-style permissions**: no network, no filesystem outside its own directory, no
+database beyond its own tables, and no secrets — unless an admin explicitly grants each
+capability. A crashing, leaking, or malicious plugin is contained **by the kernel**; it
+can't read password hashes, exfiltrate your config, or take down the host.
+
+The rest of the package is a modern, JavaScript-native CMS with a WordPress-style extension
+model (plugins, themes, hooks, shortcodes): real **SSR & SEO out of the box** (React Server
+Components, `generateMetadata`, sitemap/robots/RSS), a **no-code visual editor** (Puck with
+in-place rich text) in core rather than as a paid add-on, **13 token-driven themes** with a
+live customizer, a **WordPress WXR importer** for switching, and a **one-process deploy** —
+a single Node process with SQLite by default, pre-compiled release ZIPs, no PHP, no MySQL
+server, no build step on the server.
+
+> **Status:** beta, pre-production, primarily solo-maintained. Recent hardening fixed several
+> critical issues; an independent security audit is recommended before any internet-facing
+> deployment. The honest details live in [Project status & maturity](#-project-status--maturity).
+
+---
+
+## ⚖️ How it compares
+
+|  | **WordJS** | WordPress | Ghost | Strapi | Payload |
+|---|---|---|---|---|---|
+| **Plugin isolation** | ✅ OS-process sandbox, kernel-enforced | ❌ full PHP privileges | — (integrations, no plugin runtime) | ❌ in-process | ❌ in-process |
+| **Per-plugin permission grants** | ✅ Android-style, default-deny, admin UI | ❌ | — | ❌ | ❌ |
+| **No-code page builder in core** | ✅ Puck, in-place editing | Blocks in core; full builders are paid | ❌ post editor only | ❌ headless | ❌ headless |
+| **SEO out of the box** | ✅ SSR/RSC + metadata + sitemap/robots/RSS | ✅ via plugins (Yoast et al.) | ✅ | ❌ your frontend's job | ❌ your frontend's job |
+| **Import from WordPress** | ✅ built-in WXR importer | — | ✅ official tooling | ❌ | ❌ |
+| **Deploy footprint** | 1 Node process, SQLite default | PHP + MySQL | Node + MySQL | Node + DB + your frontend | Node + DB (Next-native) |
+| **Stack** | TypeScript + Next.js | PHP | Node + Handlebars | Node | TypeScript + Next.js |
+| **License** | MIT | GPLv2 | MIT | MIT (paid EE) | MIT (paid cloud) |
+| **Ecosystem size** | ⚠️ young — first-party plugins/themes only | 60k+ plugins | large | large marketplace | growing |
+
+The last row is the honest one: WordJS has no marketplace yet. What it has is the row at the
+top — the one no incumbent can retrofit, because their entire ecosystems assume plugins run
+with full trust.
 
 ---
 
@@ -225,9 +242,20 @@ Guides live in [`documentation/`](documentation/):
 
 ## 🚀 Getting Started
 
-> Requires Node.js (>= 18). WordJS can run as **three services** (gateway, backend, frontend)
+> Requires Node.js **>= 20.9** (Node 20 or 22 LTS recommended — Next.js 16 and the native modules need it; Node 18 fails with `EBADENGINE`/native-binding errors). WordJS can run as **three services** (gateway, backend, frontend)
 > or as a **single-process monolith** — see [Run modes](#run-modes-split-or-monolith). The
 > scripts below start everything together either way.
+
+### Fastest — one command
+
+```bash
+npx create-wordjs my-site
+```
+
+Downloads the latest pre-compiled release, installs runtime dependencies, starts the
+single-process server, and opens the install wizard in your browser with the security
+token pre-filled. (First release of the CLI ships with the next tagged version — until
+then, use Option A below.)
 
 ### Option A — download a pre-compiled release (no build step)
 
@@ -317,9 +345,28 @@ tests** (`npm run test`, e.g. the XSS sanitizer), and build.
 
 ---
 
+## 🧭 Project status & maturity
+
+WordJS is an **ambitious, primarily solo-maintained project** and is **pre-production**.
+Treat it as **beta**:
+
+- It recently underwent **security hardening** that fixed several critical issues
+  (a CSRF bypass, committed secrets, and XSS sinks). An **independent security audit is
+  strongly recommended before any production or internet-facing deployment.** The residual
+  risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
+- The backend **compiles to `dist/` for production** (no `ts-node` at runtime) with a
+  **strict type-check enforced in CI** (details under [Backend scripts](#backend-scripts)).
+- There is **no plugin marketplace or community ecosystem yet**. The repo ships a
+  handful of first-party/example plugins and 13 themes.
+
+Use it to build, learn, and experiment. Do your own review before trusting it with
+real data or real users.
+
+---
+
 ## 🛠️ Tech Stack
 
-- **Runtime:** Node.js (>= 18)
+- **Runtime:** Node.js (>= 20.9; Node 20/22 LTS recommended)
 - **Backend:** TypeScript — compiled with `tsc` for production, `ts-node` for dev
 - **Frontend:** Next.js (React 19)
 - **Styling:** Vanilla CSS + Tailwind
