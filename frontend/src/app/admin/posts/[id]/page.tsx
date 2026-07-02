@@ -185,6 +185,7 @@ export default function PostEditorPage() {
                 onSave={handleSubmit as any}
                 onCancel={() => router.back()}
                 pageId={postId || undefined}
+                previewSlug={slug || undefined}
                 onChange={(data) => {
                     // Ignore the first change event which is fired by Puck initialization
                     if (changesCount.current > 0) {

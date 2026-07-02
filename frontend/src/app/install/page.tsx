@@ -44,6 +44,7 @@ export default function InstallPage() {
     // One-time install token printed to the server console/logs while WordJS is not yet installed —
     // authorizes the pre-install setup endpoints so a network-exposed instance can't be hijacked first.
     const [installToken, setInstallToken] = useState("");
+    const [demoContent, setDemoContent] = useState(true);
 
     // Step 2: Database
     const [dbDriver, setDbDriver] = useState<DbDriver>('sqlite-native');
@@ -64,6 +65,17 @@ export default function InstallPage() {
     useEffect(() => {
         // Compute origin after mount to avoid an SSR/client hydration mismatch.
         setSiteUrl(window.location.origin);
+        // Prefill the install token from the clickable ?token= URL the server console prints
+        // (plain URLSearchParams, NOT useSearchParams — this page is statically prerendered).
+        // Scrub it from the address bar right away so it doesn't linger in history.
+        try {
+            const params = new URLSearchParams(window.location.search);
+            const tok = params.get('token');
+            if (tok) {
+                setInstallToken(tok.trim());
+                window.history.replaceState({}, '', window.location.pathname);
+            }
+        } catch { /* no URL access — manual paste still works */ }
         apiGet<{ installed: boolean }>('/setup/status')
             .then(data => { if (data.installed) router.push('/login'); })
             .catch(() => { });
@@ -113,7 +125,8 @@ export default function InstallPage() {
                 dbDriver,
                 ...(dbDriver === 'postgres' ? { db: pgConn() } : {}),
                 frontendUrl: siteUrl || window.location.origin,
-                installToken
+                installToken,
+                demoContent
             });
             if (stageTimer.current) clearInterval(stageTimer.current);
             // Auto-login sets an HttpOnly cookie on the response, so redirectTo can be /admin.
@@ -200,6 +213,13 @@ export default function InstallPage() {
                                         <input type="text" required className={inputCls} value={installToken} onChange={(e) => setInstallToken(e.target.value.trim())} placeholder="Paste the token from your server console" autoComplete="off" spellCheck={false} />
                                         <p className="text-xs text-gray-500 mt-1">For security, WordJS prints a one-time <span className="font-semibold">install token</span> to the server console/logs while it is not yet installed. Paste it here to authorize setup.</p>
                                     </div>
+                                    <label className="flex items-start gap-3 cursor-pointer select-none rounded-lg border border-gray-200 p-3.5 hover:border-gray-300 transition-colors">
+                                        <input type="checkbox" checked={demoContent} onChange={(e) => setDemoContent(e.target.checked)} className="mt-0.5 h-4 w-4 rounded border-gray-300 text-gray-900 focus:ring-gray-400" />
+                                        <span>
+                                            <span className="block text-sm font-semibold text-gray-800">Start with example content</span>
+                                            <span className="block text-xs text-gray-500 mt-0.5">A designed home page (built with the visual editor), a welcome post, an About page and a menu — so your site looks alive from minute one. You can delete it all later.</span>
+                                        </span>
+                                    </label>
                                     {siteUrl && <p className="text-xs text-gray-500">This site will be installed at <span className="font-mono font-semibold">{siteUrl}</span></p>}
                                     <div className="pt-4">
                                         <button type="button" onClick={() => setStep(2)} disabled={!siteName.trim() || !installToken.trim()}

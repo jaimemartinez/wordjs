@@ -73,11 +73,22 @@ function generateInstallToken(): string {
         console.warn('[install-token] could not write token file:', e && e.message);
     }
 
+    // One clickable URL beats hunting a 48-char token in interleaved service logs: the installer
+    // page reads ?token= and prefills it (then scrubs it from the address bar).
+    // Default dev serves HTTPS on :3000 (gateway sslAuto / monolith resolveSSL), but the config's
+    // untouched default says http:// — so only trust siteUrl when the operator actually set it.
+    let siteUrl = 'https://localhost:3000';
+    try {
+        const cfgUrl = require('../config/app').siteUrl;
+        if (cfgUrl && cfgUrl !== 'http://localhost:3000') siteUrl = cfgUrl;
+    } catch { /* pre-config boot — dev default above is right */ }
     console.log('');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-    console.log('🔑 WordJS install token:');
-    console.log(`   ${tok}`);
-    console.log('   Paste this into the installer to complete setup.');
+    console.log('🔑 WordJS is not installed yet — finish setup in your browser:');
+    console.log('');
+    console.log(`   → ${siteUrl.replace(/\/$/, '')}/install?token=${tok}`);
+    console.log('');
+    console.log(`   Install token (if you prefer to paste it): ${tok}`);
     console.log(`   (Also written to ${TOKEN_FILE} (0600) for headless installs;`);
     console.log('    or set WORDJS_INSTALL_TOKEN to supply your own. Held in memory; removed once installed.)');
     console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');

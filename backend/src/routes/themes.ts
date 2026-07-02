@@ -11,6 +11,7 @@ const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
+const { assertZipWithinBudget } = require('../core/zip-guard');
 const {
     getAllThemes,
     switchTheme,
@@ -95,6 +96,14 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
     try {
         const zip = new AdmZip(zipPath);
         const zipEntries = zip.getEntries();
+
+        // SECURITY: reject a decompression bomb before extracting (compressed size was capped by multer).
+        try {
+            assertZipWithinBudget(zipEntries, { kind: 'theme' });
+        } catch (e: any) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({ error: e.message });
+        }
 
         // Get theme folder name from zip
         const zipName = path.parse(req.file.originalname).name;
@@ -191,8 +200,10 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
  *         description: Default theme restored
  */
 router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    createDefaultTheme();
-    res.json({ success: true, message: 'Default theme created in /themes/default' });
+    // Admin explicitly asked to restore the default theme → force overwrite (unlike the boot-time
+    // scaffold in index.ts, which must NOT clobber the curated default/style.css).
+    createDefaultTheme(true);
+    res.json({ success: true, message: 'Default theme restored in /themes/default' });
 }));
 
 /**

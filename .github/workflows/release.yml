@@ -70,3 +70,56 @@ jobs:
 
             Finish setup in the browser (install wizard: pick SQLite or PostgreSQL, create your admin).
             See `INSTALL.md` inside the bundle and `documentation/deployment.md` for details.
+
+            Or skip the manual download entirely:
+
+            ```
+            npx create-wordjs my-site
+            ```
+
+  # Publishes the `create-wordjs` bootstrapper (packages/create-wordjs) to npm so
+  # `npx create-wordjs my-site` always installs the just-released bundle. Runs only on version
+  # tags, AFTER the ZIP asset exists (the CLI downloads releases/latest at runtime).
+  #
+  # Requires the NPM_TOKEN repository secret (an npm automation token with publish rights).
+  # GitHub Actions does not allow `secrets` in a job-level `if:`, so the secret is mirrored into
+  # the job env and each step is gated on it — when the secret is not configured the steps SKIP
+  # cleanly instead of failing the release.
+  npm-publish:
+    name: Publish create-wordjs to npm
+    needs: build-release
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - name: Checkout
+        if: env.NPM_TOKEN != ''
+        uses: actions/checkout@v6
+
+      - name: Setup Node
+        if: env.NPM_TOKEN != ''
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      # Keep the published version in lockstep with the release tag (v1.2.3 -> 1.2.3), so every
+      # tag publishes a fresh version and `npx create-wordjs` matches the ZIP it downloads.
+      - name: Sync package version to the tag
+        if: env.NPM_TOKEN != ''
+        working-directory: packages/create-wordjs
+        run: npm pkg set version="${GITHUB_REF_NAME#v}"
+
+      - name: Publish to npm
+        if: env.NPM_TOKEN != ''
+        working-directory: packages/create-wordjs
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Skipped (NPM_TOKEN not configured)
+        if: env.NPM_TOKEN == ''
+        run: echo "::notice::NPM_TOKEN secret is not configured — skipping the create-wordjs npm publish. Add an npm automation token as the NPM_TOKEN repo secret to enable it."

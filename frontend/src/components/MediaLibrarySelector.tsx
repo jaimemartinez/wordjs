@@ -75,11 +75,15 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                                 `}
                             >
                                 {item.mimeType.startsWith('image/') ? (
+                                    // Preview from the RELATIVE sourceUrl, NOT guid: guid embeds the upload-time
+                                    // host/IP (e.g. https://192.168.1.11:3000/...), so browsing from another origin
+                                    // (localhost / the real domain) makes the thumbnail 404 / fail the cert check and
+                                    // the tile renders blank. sourceUrl is origin-relative and always loads.
                                     <img
                                         src={
                                             item.mediaDetails?.sizes?.thumbnail
-                                                ? item.guid.substring(0, item.guid.lastIndexOf('/') + 1) + item.mediaDetails.sizes.thumbnail.file
-                                                : item.guid
+                                                ? (item.sourceUrl || item.guid).substring(0, (item.sourceUrl || item.guid).lastIndexOf('/') + 1) + item.mediaDetails.sizes.thumbnail.file
+                                                : (item.sourceUrl || item.guid)
                                         }
                                         alt={item.title}
                                         className="w-full h-full object-cover"

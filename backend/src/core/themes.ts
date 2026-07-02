@@ -209,10 +209,21 @@ async function renderTemplate(templateName: string, data = {}) {
 }
 
 /**
- * Create default theme
+ * Create default theme.
+ *
+ * Called on EVERY boot (index.ts) to guarantee a default theme exists. It must therefore be an
+ * idempotent SCAFFOLD, not a clobber: the committed default/style.css carries the curated `--wjs-*`
+ * design tokens (94 lines), but the `styleCss` fallback below is the old token-less version. Writing
+ * it unconditionally stripped the tokens on every restart (the recurring "default theme tokens=0"
+ * corruption — previously misattributed to subagents; it was actually this boot-time write). So the
+ * fallback is only written when the file is MISSING. `force` (used by the admin "restore default
+ * theme" endpoint) overwrites deliberately.
  */
-function createDefaultTheme() {
+function createDefaultTheme(force = false) {
   const defaultDir = path.join(THEMES_DIR, 'default');
+  const writeIfAbsent = (filePath: string, content: string) => {
+    if (force || !fs.existsSync(filePath)) fs.writeFileSync(filePath, content);
+  };
 
   // Ensure directories exist
   if (!fs.existsSync(defaultDir)) fs.mkdirSync(defaultDir, { recursive: true });
@@ -227,7 +238,7 @@ function createDefaultTheme() {
     description: 'The default robust WordJS theme',
     author: 'WordJS'
   };
-  fs.writeFileSync(path.join(defaultDir, 'theme.json'), JSON.stringify(themeJson, null, 2));
+  writeIfAbsent(path.join(defaultDir, 'theme.json'), JSON.stringify(themeJson, null, 2));
 
   // functions.js
   const functionsJs = `/**
@@ -237,7 +248,7 @@ module.exports = () => {
     console.log('🎨 Default theme logic loaded!');
 };
 `;
-  fs.writeFileSync(path.join(defaultDir, 'functions.js'), functionsJs);
+  writeIfAbsent(path.join(defaultDir, 'functions.js'), functionsJs);
 
   // style.css
   const styleCss = `/* Default Theme Styles */
@@ -276,7 +287,7 @@ article h2 a:hover { color: var(--primary); }
 .content { font-size: 1.125rem; }
 .excerpt { font-size: 1.1rem; color: #4b5563; }
 `;
-  fs.writeFileSync(path.join(defaultDir, 'style.css'), styleCss);
+  writeIfAbsent(path.join(defaultDir, 'style.css'), styleCss);
 
   // partials/header.html
   const headerPartial = `<!DOCTYPE html>

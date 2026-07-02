@@ -814,7 +814,9 @@ const baseConfig = {
                                     isOpen={isModalOpen}
                                     onClose={() => setIsModalOpen(false)}
                                     onSelect={(item) => {
-                                        onChange(item.guid);
+                                        // Store the RELATIVE sourceUrl, not guid (guid embeds the upload-time
+                                        // host/IP and breaks when served from another origin).
+                                        onChange(item.sourceUrl || item.guid);
                                         setIsModalOpen(false);
                                     }}
                                 />

@@ -77,7 +77,7 @@ dependencies, then start. The database is created fresh during the install wizar
 with this package.
 
 ## Requirements
-- Node.js >= 18
+- Node.js >= 20.9 (Node 20 or 22 LTS recommended)
 
 ## 1. Install runtime dependencies (no build step)
 \`\`\`

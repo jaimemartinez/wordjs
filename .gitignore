@@ -71,6 +71,11 @@ Thumbs.db
 
 # Client-Specific Content (Restricted)
 backend/themes/vidaParaTodos/
+backend/themes/toscano/
+frontend/public/toscano.html
+backend/plugins/toscano/
+backend/plugins/toscano-platform/
+frontend/src/app/portal/toscano/
 
 
 # Local knowledge-graph cache + scratch files (regenerated; do not track)

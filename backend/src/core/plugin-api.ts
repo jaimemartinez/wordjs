@@ -374,6 +374,20 @@ function createPluginApi(slug: string) {
             }
         },
 
+        // Structured frontend assets: load a <script>/<style> from a path INSIDE the plugin's own dir
+        // onto public pages. NOT raw HTML (those hooks are hard-denied as a stored-XSS primitive) — the
+        // host validates the file exists + can't escape the plugin dir and emits sanitized tags.
+        assets: {
+            async enqueueScript(spec: any) {
+                verifyPermission('assets', 'write');
+                return require('./plugin-assets').enqueue(slug, 'script', spec);
+            },
+            async enqueueStyle(spec: any) {
+                verifyPermission('assets', 'write');
+                return require('./plugin-assets').enqueue(slug, 'style', spec);
+            }
+        },
+
         adminMenu: {
             add(item: any) {
                 const { registerAdminMenu } = require('./adminMenu');

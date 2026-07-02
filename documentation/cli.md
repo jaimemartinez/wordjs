@@ -30,7 +30,48 @@ Run from `backend/`.
 
 > **First-run install token:** when the **backend** boots while the instance is **not yet installed** (i.e. on `npm start` / `npm run dev`, *not* `npm run setup`), it prints a one-time install token to the console (banner `🔑 WordJS install token:`). That token gates the otherwise-unauthenticated pre-install endpoints `POST /setup/install` and `POST /setup/test-db` (supplied via the `x-install-token` header or an `installToken` body field), so a not-yet-installed instance can't be taken over by whoever reaches it first. The token is held **in memory only** — a fresh one is minted on each boot while the instance remains uninstalled. For headless/Docker deploys it is **also** mirrored to a `0600` file at `backend/data/install-token` and can be overridden via the `WORDJS_INSTALL_TOKEN` env var (which must be **≥ 16 chars**, or it is ignored with a warning and a random token is used instead). The file/token is cleared once the instance is installed.
 
-## 2. Role Manager (`cli/force-sync-roles.js`)
+## 2. Plugin & Theme Scaffolder + Packer (`cli/wordjs.js`)
+
+The plugin-author DX tool. Plain Node — no ts-node registration needed. There is deliberately **no root npm alias**; invoke it directly from the **repo root**:
+
+```bash
+node backend/cli/wordjs.js create plugin my-plugin   # scaffold backend/plugins/my-plugin/
+node backend/cli/wordjs.js create theme  my-theme    # scaffold backend/themes/my-theme/
+node backend/cli/wordjs.js pack my-plugin --build    # zip a plugin for distribution
+node backend/cli/wordjs.js help
+```
+
+Templates live in `backend/cli/templates/{plugin,theme}/` with `__SLUG__` / `__PASCAL__` / `__NAME__` placeholders (replaced in file names and contents).
+
+### `create plugin <slug>`
+
+Scaffolds a complete, activatable **isolated** plugin:
+
+| File | What it is |
+| :--- | :--- |
+| `manifest.json` | `id`, `name`, **`"isolated": true`** (required — activation is rejected without it), requested `permissions` with reasons (granted by the admin on activation, default-deny), `frontend.adminPage` `{entry, slug}` and `frontend.puckComponents` `{entry}`. |
+| `index.js` | The isolated-bridge idioms: `exports.init = function (wordjs) { const { options, http, adminMenu } = wordjs; ... }` with a public GET plus admin-gated POST/DELETE route (`{ auth: true, admin: true }`), slug-prefixed options storage, and `adminMenu.add`. JSDoc-typed against `backend/types/wordjs-bridge.d.ts`, so plain-JS authors get full IntelliSense. |
+| `client/admin/page.tsx` | The admin page (starts with `// @ts-nocheck` + `"use client"` — **required** for committed plugin client files: the frontend CI type-checks the generated registries, which import these files directly). |
+| `client/puck/<Pascal>Puck.tsx` | A Puck block: `export const puckComponentDef` + default-exported render, themed via an embedded `<style>` with `--wjs-*` token fallbacks. |
+
+The CLI then prints the required flow: **restart the backend once** (new plugin folders are discovered at boot; from then on activation hot-loads them) → **activate** in `/admin/plugins` → regenerate the frontend registries:
+
+```bash
+node frontend/scripts/generate-admin-plugin-registry.js
+node frontend/scripts/generate-puck-plugin-registry.js
+```
+
+> **Dev hot-reload:** with `NODE_ENV=development` (i.e. `npm run dev`), the backend watches every active isolated plugin's directory (`backend/src/core/plugin-dev-watch.ts`) and re-spawns its child process ~300 ms after a `.js`/`.json` save — the reload re-runs the full load pipeline including the AST security scan, so nothing is bypassed. Manual equivalent (admin-only, works in any environment): `POST /api/v1/plugins/:slug/reload`.
+
+### `create theme <slug>`
+
+Scaffolds `backend/themes/<slug>/` with a `theme.json` (including the `layout` structure config the public shell honors: `containerWidth`, `sidebar`) and a `style.css` pre-seeded with the **full `--wjs-*` token block** — the token contract, copied from `backend/themes/default/style.css` — plus a commented chrome section (`--wjs-nav-*` / `--wjs-footer-*` tokens and the `.wjs-header-*`/footer hooks; see `backend/themes/midnight-luxury/style.css` for a complete real example). Details in `documentation/themes.md` / `documentation/theming.md`.
+
+### `pack <slug> [--build] [--out <dir>]`
+
+Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → Add New) expects — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation). With `--build` it first runs `backend/scripts/build-plugin.js <slug>` to pre-compile the frontend bundles into `dist/`. Output defaults to the current directory (`--out <dir>` to change).
+
+## 3. Role Manager (`cli/force-sync-roles.js`)
 
 **Use case:** You accidentally deleted the Administrator role or permissions are corrupted.
 
@@ -48,7 +89,7 @@ Syncing roles to database...
 Successfully synced roles! Subscribers now have access_admin_panel.
 ```
 
-## 3. Plugin Diagnostic (`cli/check_plugins.js`)
+## 4. Plugin Diagnostic (`cli/check_plugins.js`)
 
 **Use case:** A plugin is causing the server to crash or not loading, and you need to see what's physically active in the DB.
 
@@ -61,13 +102,13 @@ node cli/check_plugins.js
 
 Other handy diagnostics in `cli/` include `list-users.js`, `inspect-roles.js`, `inspect-user.js`, `verify-roles.js`, `verify-activation.js`, and `dump-routes.js` (lists every registered Express endpoint). Those that import `src/config/database` need the `-r ts-node/register` flag.
 
-## 4. Gateway Registry (`gateway/gateway-registry.json`)
+## 5. Gateway Registry (`gateway/gateway-registry.json`)
 
 **Use case:** Troubleshooting service discovery.
 
 This is a **file**, not a script. It contains the current state of the Gateway's known services. Inspecting it helps verify whether the backend/frontend registered successfully.
 
-## 5. Database Files & Maintenance
+## 6. Database Files & Maintenance
 
 The database file depends on the active driver (selected by `dbDriver` in `wordjs-config.json` — see `documentation/database.md`):
 
@@ -83,6 +124,6 @@ You can open any SQLite file with a SQLite CLI or GUI (like *DB Browser for SQLi
 
 Switching DB engines is done at runtime via the **DB-Admin** core module (`backend/src/core/db-admin/`, formerly the `db-migration` plugin), exposed under `/api/v1/db-migration/*` (requires the `manage_options` capability). See `documentation/api.md` § 6.6 for the endpoint list.
 
-## 6. Notes
+## 7. Notes
 
 * **`migrate` vs. engine migration:** `npm run migrate` (root) applies pending DB **schema** migrations via `backend/scripts/migrate.js` (idempotent; also run at boot). Switching DB **engines** (SQLite ↔ PostgreSQL data copy) is a separate runtime operation in the DB-Admin API (`/api/v1/db-migration/*`).
