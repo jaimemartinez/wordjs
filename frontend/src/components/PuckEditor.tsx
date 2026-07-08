@@ -15,6 +15,7 @@ import { hideClasses } from "./puck/VisibilityField";
 import { revisionsApi, Revision, themesApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { trStr } from "@/lib/puckI18n";
 import { sanitizeHTML } from "@/lib/sanitize";
 
 // Viewport switcher + responsive preview frame. The canvas renders in an iframe (#preview-frame; see
@@ -43,6 +44,7 @@ const readBlockClipboard = (): any | null => {
 
 // Undo/redo header buttons. Selectors keep them live; actions go through the store directly.
 function HistoryControls() {
+    const { language } = useI18n();
     const hasPast = usePuck((s: any) => s.history.hasPast);
     const hasFuture = usePuck((s: any) => s.history.hasFuture);
     const getPuck = useGetPuck();
@@ -61,8 +63,8 @@ function HistoryControls() {
     );
     return (
         <div className="flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100">
-            {btn(hasPast, "fa-rotate-left", "Deshacer (Ctrl+Z)", () => getPuck().history.back())}
-            {btn(hasFuture, "fa-rotate-right", "Rehacer (Ctrl+Shift+Z)", () => getPuck().history.forward())}
+            {btn(hasPast, "fa-rotate-left", trStr("Deshacer (Ctrl+Z)", language), () => getPuck().history.back())}
+            {btn(hasFuture, "fa-rotate-right", trStr("Rehacer (Ctrl+Shift+Z)", language), () => getPuck().history.forward())}
         </div>
     );
 }
@@ -633,7 +635,7 @@ export default function PuckEditor({
     pageId,
     previewSlug
 }: PuckEditorProps) {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const activeConfig = passedConfig || puckConfig;
 
     // Preview the REAL live page (SSR, active theme) in a new tab. Saves first when there are
@@ -887,6 +889,7 @@ export default function PuckEditor({
                             { value: "publish", label: t('editor.status.publish') },
                             { value: "pending", label: t('editor.status.pending') },
                         ]}
+                        placeholder={trStr("Select an option", language)}
                         className="!py-1.5 !px-3 !bg-white !border-gray-200 !rounded-md !text-sm font-normal min-w-[100px]"
                     />
                 )}
@@ -906,10 +909,10 @@ export default function PuckEditor({
                         onClick={handlePreview}
                         disabled={saving}
                         className="px-3 py-1.5 border border-gray-300 rounded-md text-sm text-gray-700 hover:bg-gray-50 transition-colors flex items-center gap-1.5"
-                        title="Preview on the live site (drafts stay private to you)"
+                        title={trStr("Preview on the live site (drafts stay private to you)", language)}
                     >
                         <i className="fa-solid fa-eye text-xs"></i>
-                        Preview
+                        {trStr("Preview", language)}
                     </button>
                 )}
                 {onCancel && (
@@ -945,7 +948,7 @@ export default function PuckEditor({
             }
             return <>{children}</>;
         },
-    }), [onStatusChange, status, onCancel, onSave, handleManualSave, saving, hasChanges, activeEditorId, previewSlug, handlePreview]);
+    }), [onStatusChange, status, onCancel, onSave, handleManualSave, saving, hasChanges, activeEditorId, previewSlug, handlePreview, language]);
 
 
 
@@ -1139,7 +1142,7 @@ export default function PuckEditor({
                                         {hasChanges ? (
                                             <span className="text-[11px] font-bold text-amber-500 flex items-center gap-1.5">
                                                 <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                                                {status === "draft" ? "Sin guardar · autoguardado activo" : "Cambios sin publicar"}
+                                                {status === "draft" ? trStr("Sin guardar · autoguardado activo", language) : trStr("Cambios sin publicar", language)}
                                             </span>
                                         ) : savedAt ? (
                                             <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1.5">
@@ -1159,6 +1162,7 @@ export default function PuckEditor({
                                                 { value: "publish", label: t('editor.status.publish') },
                                                 { value: "pending", label: t('editor.status.pending') },
                                             ]}
+                                            placeholder={trStr("Select an option", language)}
                                             className="!py-2.5 !px-4 !bg-gray-50 !border-gray-100 !rounded-xl !text-xs !font-bold !uppercase !tracking-wider min-w-[120px]"
                                         />
                                     </div>
@@ -1264,8 +1268,8 @@ export default function PuckEditor({
                                             <div className="w-16 h-16 mx-auto rounded-2xl bg-editor-primary/10 flex items-center justify-center text-editor-primary mb-4">
                                                 <i className="fa-solid fa-wand-magic-sparkles text-2xl"></i>
                                             </div>
-                                            <h3 className="text-lg font-bold text-gray-800 mb-1">Empieza tu página</h3>
-                                            <p className="text-sm text-gray-500 mb-5">Arrastra un bloque desde la izquierda, o inserta una plantilla para arrancar rápido.</p>
+                                            <h3 className="text-lg font-bold text-gray-800 mb-1">{trStr("Empieza tu página", language)}</h3>
+                                            <p className="text-sm text-gray-500 mb-5">{trStr("Arrastra un bloque desde la izquierda, o inserta una plantilla para arrancar rápido.", language)}</p>
                                             <div className="flex flex-wrap justify-center gap-2">
                                                 {PATTERNS.slice(0, 3).map((p) => (
                                                     <button
@@ -1275,7 +1279,7 @@ export default function PuckEditor({
                                                         className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-50 hover:bg-editor-primary/10 border border-gray-200 hover:border-editor-primary text-xs font-semibold text-gray-700 hover:text-editor-primary transition"
                                                     >
                                                         <i className={`fa-solid ${p.icon}`}></i>
-                                                        {p.name}
+                                                        {trStr(p.name, language)}
                                                     </button>
                                                 ))}
                                             </div>
