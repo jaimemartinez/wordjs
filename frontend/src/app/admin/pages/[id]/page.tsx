@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useRouter, useParams } from "next/navigation";
 import { postsApi, settingsApi } from "@/lib/api";
 import { pageConfig } from "@/components/puckConfig";
+import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
 import { Data } from "@measured/puck";
@@ -13,7 +14,7 @@ import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 
 export default function PageEditorPage() {
-    const { t } = useI18n();
+    const { t, language } = useI18n();
     const router = useRouter();
     const params = useParams();
     const isNew = params.id === "new";
@@ -186,6 +187,8 @@ export default function PageEditorPage() {
         }
     };
 
+    const localizedConfig = useMemo(() => localizeConfig(pageConfig, language), [language]);
+
     if (isLoading) {
         return <PuckEditorSkeleton />;
     }
@@ -193,7 +196,7 @@ export default function PageEditorPage() {
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
             <PuckEditor
-                config={pageConfig}
+                config={localizedConfig}
                 initialData={initialPuckData || { content: [], root: {} }}
                 status={status}
                 onStatusChange={setStatus}
