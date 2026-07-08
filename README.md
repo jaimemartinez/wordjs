@@ -1,6 +1,12 @@
 # WordJS
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jaimemartinez/wordjs) [![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/dherreraj9805)
+[![npm](https://img.shields.io/npm/v/create-wordjs?label=create-wordjs&color=cb3837)](https://www.npmjs.com/package/create-wordjs)
+[![CI](https://github.com/jaimemartinez/wordjs/actions/workflows/ci.yml/badge.svg)](https://github.com/jaimemartinez/wordjs/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/github/license/jaimemartinez/wordjs?color=blue)](LICENSE)
+[![Node](https://img.shields.io/badge/node-%3E%3D20.9-brightgreen)](https://nodejs.org)
+[![Security Policy](https://img.shields.io/badge/security-policy-brightgreen)](SECURITY.md)
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/jaimemartinez/wordjs)
+[![Donate](https://img.shields.io/badge/Donate-PayPal-green.svg)](https://paypal.me/dherreraj9805)
 
 ### The CMS where a plugin can't take over your site.
 
@@ -22,6 +28,16 @@ server, no build step on the server.
 > **Status:** beta, pre-production, primarily solo-maintained. Recent hardening fixed several
 > critical issues; an independent security audit is recommended before any internet-facing
 > deployment. The honest details live in [Project status & maturity](#-project-status--maturity).
+
+### Try it in one command
+
+```bash
+npx create-wordjs my-site
+```
+
+No PHP, no MySQL, no build step — it downloads the pre-compiled release, starts a single Node
+process, and opens the browser install wizard. (The CLI publishes with the next tagged release;
+until then, grab a pre-compiled ZIP — see [Getting Started](#-getting-started).)
 
 ---
 
@@ -399,7 +415,19 @@ exposing it to the internet:**
 
 The plugin sandbox runs **every** plugin in a **separate OS process** with
 defense-in-depth capability guards — a kernel-enforced boundary that contains a child crash,
-OOM, or heap escape to that one process. On Linux, an **opt-in** layer
+OOM, or heap escape to that one process.
+
+**What's enforced, and where** (be precise — it's the difference between a defensible claim and an overclaim):
+
+- **Process isolation + per-child memory cap** — always on, all platforms.
+- **AST static scan at install** (acorn, fail-closed) — always on. It's pattern-based: one layer that raises the cost of obfuscation, **not** a proof.
+- **Capability bridge + DB/secret scoping** — always on. A plugin reaches core only through permission-checked RPC; its storage is its own `wjp_<slug>_` tables; core `users`/`options`/`sessions` and secrets are unreachable.
+- **Egress guard** (only when `network` is granted) — confines outbound to public IPs; blocks loopback, cloud-metadata (`169.254.169.254`), RFC1918/CGNAT/ULA, validated against the **resolved** IP at connect time (anti-DNS-rebinding).
+- **Kernel hardening** (unprivileged uid, dropped caps, `seccomp` denylist, namespaces, read-only fs) — **Linux, opt-in.** Windows gets a Job Object memory cap; macOS relies on process isolation + the bridge.
+
+There is **no independent third-party audit** yet — internal red-team passes only. Don't treat the sandbox as "unbreakable"; treat it as designed to fail closed.
+
+On Linux, an **opt-in** layer
 (`config.sandbox.useKernelHardening`, via [bubblewrap](https://github.com/containers/bubblewrap))
 additionally runs each plugin child as an **unprivileged uid with all capabilities dropped,
 `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (probe-validated per host,
