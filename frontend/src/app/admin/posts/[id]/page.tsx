@@ -31,7 +31,11 @@ export default function PostEditorPage() {
     const [lastSyncedTitle, setLastSyncedTitle] = useState("");
     const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
     const { isDirty, setIsDirty } = useUnsavedChanges();
-    const changesCount = useRef(0);
+    // Puck MAY fire onChange during initialization (migrate/resolveData). Skipping "the first
+    // event" by counting was fragile: when no init event fires, the user's FIRST real change got
+    // swallowed (save stayed disabled, autosave never armed). A short post-mount grace window
+    // ignores init noise without ever eating a human edit.
+    const mountedAtRef = useRef(Date.now());
 
     // Set initial dirty state for new posts
     useEffect(() => {
@@ -123,17 +127,27 @@ export default function PostEditorPage() {
 
     const { alert } = useModal();
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
+    // Once a NEW post is first saved, remember its id — before this, every save created ANOTHER
+    // post (params.id stays "new"). Also lets autosave create the draft once and then update it.
+    const createdIdRef = useRef<number | null>(null);
+
+    const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }) => {
+        const isAutosave = !!(e && "autosave" in e && e.autosave);
+        if (e && "preventDefault" in e) e.preventDefault();
         setSaving(true);
 
         try {
-            const root = puckData.root as any;
+            // Flush any open inline editor and read the LIVE Puck store (same hardening as the page
+            // editor): Puck's onChange deep-equal guard can leave the mirrored state stale.
+            try { (window as any).puckCommitActive?.(); } catch { /* no open editor */ }
+            const liveData = ((window as any).puckGetData?.() ?? puckData);
+            const root = liveData.root as any;
             const finalTitle = root?.props?.title || root?.title || title;
             const finalSlug = root?.props?.slug || root?.slug || slug;
 
             if (!finalTitle) {
-                await alert(t('post.edit.titleRequired'));
+                // A background save must never pop a modal — just wait for a title.
+                if (!isAutosave) await alert(t('post.edit.titleRequired'));
                 setSaving(false);
                 return;
             }
@@ -145,25 +159,35 @@ export default function PostEditorPage() {
                 status,
                 commentStatus,
                 meta: {
-                    _puck_data: puckData, // Save the JSON structure for re-editing
+                    _puck_data: liveData, // Save the JSON structure for re-editing
                     // SEO fields
                     seo_title: root?.props?.seo_title || '',
                     seo_description: root?.props?.seo_description || '',
                     og_image: root?.props?.og_image || '',
                     noindex: root?.props?.noindex === 'true'
-                }
+                },
+                // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
+                ...(isAutosave ? { autosave: true } : {})
             };
 
-            if (postId) {
-                await postsApi.update(postId, postData);
+            const effectiveId = postId ?? createdIdRef.current;
+            if (effectiveId) {
+                await postsApi.update(effectiveId, postData as any);
             } else {
-                await postsApi.create({ ...postData, type: "post" });
+                const created = await postsApi.create({ ...postData, type: "post" } as any);
+                if (created?.id) {
+                    createdIdRef.current = created.id;
+                    // Keep the URL honest without remounting the editor mid-session.
+                    window.history.replaceState(null, "", `/admin/posts/${created.id}`);
+                }
             }
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
         } catch (error: any) {
             console.error("Failed to save post:", error);
-            await alert(`${t('post.edit.saveFailed')}: ${error.message || t('post.edit.unknownError')}`);
+            if (!isAutosave) {
+                await alert(`${t('post.edit.saveFailed')}: ${error.message || t('post.edit.unknownError')}`);
+            }
         } finally {
             setSaving(false);
         }
@@ -187,11 +211,10 @@ export default function PostEditorPage() {
                 pageId={postId || undefined}
                 previewSlug={slug || undefined}
                 onChange={(data) => {
-                    // Ignore the first change event which is fired by Puck initialization
-                    if (changesCount.current > 0) {
+                    // Ignore init-time events only (see mountedAtRef note above).
+                    if (Date.now() - mountedAtRef.current > 800) {
                         setIsDirty(true);
                     }
-                    changesCount.current++;
 
                     setPuckData(data);
                     const root = data.root as any;

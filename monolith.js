@@ -63,7 +63,9 @@ const compression = require('compression');
 
 // Requests with these path prefixes go to the backend Express app; everything else goes to Next.
 // (/healthz is answered directly in dispatch() for liveness; /readyz goes to the backend's deep check.)
-const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/health', '/readyz', '/metrics'];
+// '/public' = backend static assets (wordjs-ui.css framework, shared css/js) — without it the UI
+// framework stylesheet 404s in monolith mode (in split mode the gateway routes /public).
+const BACKEND_PREFIXES = ['/api', '/public', '/uploads', '/themes', '/plugins', '/.well-known', '/health', '/readyz', '/metrics'];
 const isBackendPath = (url) => {
     const u = (url || '/').split('?')[0];
     return BACKEND_PREFIXES.some((p) => u === p || u.startsWith(p + '/'));

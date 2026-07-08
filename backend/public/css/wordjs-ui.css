@@ -758,3 +758,37 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
   background: var(--wjs-bg-canvas); border: var(--wjs-border-width) solid var(--wjs-border-subtle); border-radius: var(--wjs-radius);
 }
 @supports not (color: color-mix(in srgb, red, blue)) { .widget li { border-bottom-color: var(--wjs-border-subtle); } }
+
+/* ================================================= RESPONSIVE VISIBILITY ====== */
+/* Per-block "hide on device" from the visual editor (VisibilityField). The wrapper is
+ * display:contents, so hiding via display:none removes the block without adding a layout box.
+ * Breakpoints match the editor device previews: mobile <768, tablet 768-1023, desktop >=1024. */
+@media (max-width: 767.98px) { .wjs-hide-mobile { display: none !important; } }
+@media (min-width: 768px) and (max-width: 1023.98px) { .wjs-hide-tablet { display: none !important; } }
+@media (min-width: 1024px) { .wjs-hide-desktop { display: none !important; } }
+
+/* ================================================= ENTRANCE ANIMATIONS ====== */
+/* Per-block scroll-reveal from the visual editor (AnimationField). The SSR HTML ships VISIBLE;
+ * live JS sets data-wjs-anim="armed" right before observing and "in" on intersection, so no-JS
+ * visitors and crawlers never see hidden content. Only opacity/transform animate (zero CLS).
+ * Everything is wrapped in prefers-reduced-motion: no-preference — reduced-motion users get the
+ * content instantly with no animation (the JS side skips arming too). */
+@media screen and (prefers-reduced-motion: no-preference) {
+  .wjs-anim[data-wjs-anim="armed"] { opacity: 0; }
+  .wjs-anim[data-wjs-anim="in"] {
+    animation-duration: var(--wjs-anim-dur, 600ms);
+    animation-delay: var(--wjs-anim-delay, 0ms);
+    animation-timing-function: cubic-bezier(0.16, 1, 0.3, 1);
+    animation-fill-mode: both;
+  }
+  .wjs-anim-fade[data-wjs-anim="in"] { animation-name: wjs-anim-fade; }
+  .wjs-anim-fade-up[data-wjs-anim="in"] { animation-name: wjs-anim-fade-up; }
+  .wjs-anim-fade-left[data-wjs-anim="in"] { animation-name: wjs-anim-fade-left; }
+  .wjs-anim-fade-right[data-wjs-anim="in"] { animation-name: wjs-anim-fade-right; }
+  .wjs-anim-zoom[data-wjs-anim="in"] { animation-name: wjs-anim-zoom; }
+}
+@keyframes wjs-anim-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes wjs-anim-fade-up { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: none; } }
+@keyframes wjs-anim-fade-left { from { opacity: 0; transform: translateX(-32px); } to { opacity: 1; transform: none; } }
+@keyframes wjs-anim-fade-right { from { opacity: 0; transform: translateX(32px); } to { opacity: 1; transform: none; } }
+@keyframes wjs-anim-zoom { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
