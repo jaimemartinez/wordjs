@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 🔒 Report a security vulnerability
+    url: https://github.com/jaimemartinez/wordjs/security/policy
+    about: Do NOT open a public issue for security bugs (including plugin sandbox escapes). Disclose privately — see SECURITY.md.
+  - name: 💬 Questions & ideas
+    url: https://github.com/jaimemartinez/wordjs/discussions
+    about: For usage questions, setup help, or to talk through an idea before opening an issue.
