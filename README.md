@@ -39,6 +39,13 @@ No PHP, no MySQL, no build step — it downloads the pre-compiled release, start
 process, and opens the browser install wizard. (The CLI publishes with the next tagged release;
 until then, grab a pre-compiled ZIP — see [Getting Started](#-getting-started).)
 
+### See it in action
+
+Build a page by dragging blocks onto the canvas and editing text in place — the no-code
+visual editor ([Puck](https://puckeditor.com)) ships in **core**, not as a paid add-on.
+
+![WordJS visual editor — dragging blocks onto the canvas to build a page](docs/media/puck-editor-demo.gif)
+
 ---
 
 ## ⚖️ How it compares
