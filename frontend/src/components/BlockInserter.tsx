@@ -12,6 +12,8 @@ import {
     insertUserPattern,
     UserPattern,
 } from "@/lib/puckPatterns";
+import { useI18n } from "@/contexts/I18nContext";
+import { trStr } from "@/lib/puckI18n";
 
 /**
  * BlockInserter — a searchable, categorized, icon-based block palette + a one-click Patterns library,
@@ -104,6 +106,7 @@ function PatternPreview({ items, components }: { items: any[]; components: Recor
 }
 
 export default function BlockInserter({ components }: { components: Record<string, any> }) {
+    const { language } = useI18n();
     const [tab, setTab] = useState<"blocks" | "patterns">("blocks");
     const [query, setQuery] = useState("");
 
@@ -124,9 +127,9 @@ export default function BlockInserter({ components }: { components: Record<strin
         if (saved) {
             setUserPatterns(loadUserPatterns());
             setNewPatternName("");
-            setPatternNotice(`Guardada “${saved.name}”.`);
+            setPatternNotice(`${trStr("Guardada", language)} “${saved.name}”.`);
         } else {
-            setPatternNotice("La página está vacía: añade bloques antes de guardarla como plantilla.");
+            setPatternNotice(trStr("La página está vacía: añade bloques antes de guardarla como plantilla.", language));
         }
         setTimeout(() => setPatternNotice(null), 4000);
     };
@@ -178,8 +181,8 @@ export default function BlockInserter({ components }: { components: Record<strin
             {/* Sticky header: tab toggle + (blocks) search */}
             <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm px-6 pt-5 pb-3 border-b border-gray-100">
                 <div className="flex items-center bg-gray-100 rounded-xl p-1 mb-3">
-                    {tabBtn("blocks", "fa-shapes", "Bloques")}
-                    {tabBtn("patterns", "fa-table-cells-large", "Plantillas")}
+                    {tabBtn("blocks", "fa-shapes", trStr("Bloques", language))}
+                    {tabBtn("patterns", "fa-table-cells-large", trStr("Plantillas", language))}
                 </div>
 
                 {tab === "blocks" && (
@@ -188,15 +191,15 @@ export default function BlockInserter({ components }: { components: Record<strin
                         <input
                             value={query}
                             onChange={(e) => setQuery(e.target.value)}
-                            placeholder="Buscar bloque…"
-                            aria-label="Buscar bloque"
+                            placeholder={trStr("Buscar bloque…", language)}
+                            aria-label={trStr("Buscar bloque", language)}
                             className="w-full pl-9 pr-8 py-2.5 rounded-xl bg-gray-50 border border-gray-200 text-sm text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-editor-primary/30 focus:border-editor-primary transition"
                         />
                         {query && (
                             <button
                                 type="button"
                                 onClick={() => setQuery("")}
-                                title="Limpiar"
+                                title={trStr("Limpiar", language)}
                                 className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
                             >
                                 <i className="fa-solid fa-xmark text-sm"></i>
@@ -219,7 +222,7 @@ export default function BlockInserter({ components }: { components: Record<strin
                                     >
                                         <i className={`fa-solid ${e.icon} text-[11px] text-gray-400`}></i>
                                         <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">
-                                            {e.group}
+                                            {trStr(e.group, language)}
                                         </span>
                                         <span className="text-[10px] text-gray-300 ml-0.5">{e.count}</span>
                                     </div>
@@ -236,7 +239,7 @@ export default function BlockInserter({ components }: { components: Record<strin
                                                     </span>
                                                     {e.item.desc && (
                                                         <span className="block text-[11px] text-gray-400 truncate">
-                                                            {e.item.desc}
+                                                            {trStr(e.item.desc, language)}
                                                         </span>
                                                     )}
                                                 </span>
@@ -252,7 +255,7 @@ export default function BlockInserter({ components }: { components: Record<strin
                     {!hasResults && (
                         <div className="text-center py-10 text-gray-400 text-sm">
                             <i className="fa-solid fa-magnifying-glass text-2xl mb-2 block opacity-40"></i>
-                            Sin resultados para “{query}”.
+                            {trStr("Sin resultados para", language)} “{query}”.
                         </div>
                     )}
                 </div>
@@ -265,14 +268,14 @@ export default function BlockInserter({ components }: { components: Record<strin
                     <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50/60 p-3">
                         <div className="flex items-center gap-2 mb-2">
                             <i className="fa-solid fa-floppy-disk text-[11px] text-gray-400"></i>
-                            <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Guardar como plantilla</span>
+                            <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">{trStr("Guardar como plantilla", language)}</span>
                         </div>
                         <div className="flex gap-1.5">
                             <input
                                 value={newPatternName}
                                 onChange={(e) => setNewPatternName(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === "Enter") handleSavePattern(); }}
-                                placeholder="Nombre (ej. Landing base)"
+                                placeholder={trStr("Nombre (ej. Landing base)", language)}
                                 className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-white border border-gray-200 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-editor-primary/30 focus:border-editor-primary"
                             />
                             <button
@@ -280,10 +283,10 @@ export default function BlockInserter({ components }: { components: Record<strin
                                 onClick={handleSavePattern}
                                 className="px-3 py-2 rounded-lg bg-editor-primary text-white text-xs font-bold hover:opacity-90 transition"
                             >
-                                Guardar
+                                {trStr("Guardar", language)}
                             </button>
                         </div>
-                        <p className="text-[10px] text-gray-400 mt-1.5">Captura la página actual completa para reutilizarla en otras páginas.</p>
+                        <p className="text-[10px] text-gray-400 mt-1.5">{trStr("Captura la página actual completa para reutilizarla en otras páginas.", language)}</p>
                         {patternNotice && <p className="text-[11px] text-editor-primary font-semibold mt-1">{patternNotice}</p>}
                     </div>
 
@@ -292,7 +295,7 @@ export default function BlockInserter({ components }: { components: Record<strin
                         <>
                             <div className="flex items-center gap-2 px-1 pt-1">
                                 <i className="fa-solid fa-user text-[11px] text-gray-400"></i>
-                                <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Mis plantillas</span>
+                                <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">{trStr("Mis plantillas", language)}</span>
                                 <span className="text-[10px] text-gray-300">{userPatterns.length}</span>
                             </div>
                             {userPatterns.map((p) => (
@@ -306,20 +309,20 @@ export default function BlockInserter({ components }: { components: Record<strin
                                         onClick={() => insertUserPattern(p, components)}
                                         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); insertUserPattern(p, components); } }}
                                         className="w-full text-left cursor-pointer"
-                                        title="Insertar al final de la página"
+                                        title={trStr("Insertar al final de la página", language)}
                                     >
                                         <PatternPreview items={p.items} components={components} />
                                         <span className="flex items-center gap-2 px-3 py-2.5 border-t border-gray-100">
                                             <span className="min-w-0 flex-1">
                                                 <span className="block text-sm font-semibold text-gray-800 truncate">{p.name}</span>
-                                                <span className="block text-[11px] text-gray-400">{p.items.length} bloque{p.items.length === 1 ? "" : "s"}</span>
+                                                <span className="block text-[11px] text-gray-400">{p.items.length} {trStr(p.items.length === 1 ? "bloque" : "bloques", language)}</span>
                                             </span>
                                             <i className="fa-solid fa-plus text-gray-300 group-hover:text-editor-primary text-xs transition-colors"></i>
                                         </span>
                                     </div>
                                     <button
                                         type="button"
-                                        title="Eliminar plantilla"
+                                        title={trStr("Eliminar plantilla", language)}
                                         onClick={(e) => { e.stopPropagation(); setUserPatterns(deleteUserPattern(p.id)); }}
                                         className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-white/90 border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-200 opacity-0 group-hover:opacity-100 transition"
                                     >
@@ -333,7 +336,7 @@ export default function BlockInserter({ components }: { components: Record<strin
                     {/* Built-in patterns with live previews */}
                     <div className="flex items-center gap-2 px-1 pt-1">
                         <i className="fa-solid fa-table-cells-large text-[11px] text-gray-400"></i>
-                        <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Plantillas</span>
+                        <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">{trStr("Plantillas", language)}</span>
                     </div>
                     {builtPatterns.map(({ pattern: p, items }) => (
                         // div+role, NOT <button> — see the user-patterns note (nested buttons).
@@ -352,15 +355,15 @@ export default function BlockInserter({ components }: { components: Record<strin
                                     <i className={`fa-solid ${p.icon} text-sm`}></i>
                                 </span>
                                 <span className="min-w-0 flex-1">
-                                    <span className="block text-sm font-semibold text-gray-800">{p.name}</span>
-                                    <span className="block text-[11px] text-gray-400 truncate">{p.description}</span>
+                                    <span className="block text-sm font-semibold text-gray-800">{trStr(p.name, language)}</span>
+                                    <span className="block text-[11px] text-gray-400 truncate">{trStr(p.description, language)}</span>
                                 </span>
                                 <i className="fa-solid fa-plus text-gray-300 group-hover:text-editor-primary text-xs transition-colors"></i>
                             </span>
                         </div>
                     ))}
                     <p className="text-[11px] text-gray-400 text-center pt-2">
-                        Se añaden al final de la página. Luego puedes editarlas.
+                        {trStr("Se añaden al final de la página. Luego puedes editarlas.", language)}
                     </p>
                 </div>
             )}
