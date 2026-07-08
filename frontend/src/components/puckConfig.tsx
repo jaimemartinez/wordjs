@@ -10,9 +10,10 @@ import { t as translate, getStoredLanguage } from "@/lib/i18n";
 
 
 // Plugin Puck Components
-// Plugin Puck Components
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
+import LinkField from "./puck/LinkField";
+import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
 
 // Custom Category Field component
@@ -824,6 +825,7 @@ const baseConfig = {
                         );
                     }
                 },
+                alt: { type: "text", label: "Texto alternativo (SEO / accesibilidad)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -849,8 +851,10 @@ const baseConfig = {
                 };
             },
             defaultProps: {
-                src: "https://via.placeholder.com/600x400",
-                alt: "Image",
+                // Local asset — the old via.placeholder.com default broke offline and leaked a
+                // third-party request from every fresh Image block.
+                src: "/placeholder-image.svg",
+                alt: "",
                 borderRadius: 0,
                 elementId: "",
                 css: {}
@@ -1140,7 +1144,11 @@ const baseConfig = {
             category: "content",
             fields: {
                 label: { type: "text" },
-                href: { type: "text" },
+                href: {
+                    type: "custom",
+                    label: "Enlace",
+                    render: ({ value, onChange }: any) => <LinkField value={value} onChange={onChange} />
+                },
                 variant: {
                     type: "radio",
                     options: [
@@ -1172,7 +1180,7 @@ const baseConfig = {
                 align: "left",
                 css: {}
             },
-            render: ({ label, href, variant, align, css }: any) => {
+            render: ({ label, href, variant, align, css, puck }: any) => {
                 const alignments = {
                     left: "text-left",
                     center: "text-center",
@@ -1184,7 +1192,10 @@ const baseConfig = {
                         <a
                             href={href}
                             className={`button-variant-${variant} transition-all duration-200`}
-                            onClick={(e) => e.preventDefault()}
+                            // Swallow clicks ONLY inside the editor canvas (so selecting the block
+                            // doesn't navigate). On the public site this component hydrates too — an
+                            // unconditional preventDefault made every published button a dead link.
+                            onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
                             style={{
                                 display: 'inline-block',
                                 textDecoration: 'none',
@@ -1762,7 +1773,7 @@ const baseConfig = {
                 quote: "This product has completely transformed how we work. I can't imagine going back to the old way.",
                 author: "Jane Doe",
                 role: "CEO, Acme Inc.",
-                avatar: "https://i.pravatar.cc/100",
+                avatar: "",
                 css: {}
             },
             render: ({ quote, author, role, avatar, css }: any) => (
@@ -1770,7 +1781,15 @@ const baseConfig = {
                     <div style={{ fontSize: "3rem", color: "var(--wjs-color-primary, #2563eb)", marginBottom: "16px", lineHeight: 1 }}>&quot;</div>
                     <p style={{ fontSize: "1.25rem", fontStyle: "italic", color: "var(--wjs-color-text-main, #1a1a1a)", marginBottom: "24px", lineHeight: 1.6 }}>{quote}</p>
                     <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-                        {avatar && <img src={avatar} alt={author} style={{ width: "56px", height: "56px", borderRadius: "50%", objectFit: "cover" }} />}
+                        {avatar ? (
+                            <img src={avatar} alt={author} style={{ width: "56px", height: "56px", borderRadius: "50%", objectFit: "cover" }} />
+                        ) : (
+                            // Initials fallback — the old default pointed at i.pravatar.cc (external
+                            // request + random stranger's face on every fresh testimonial).
+                            <div aria-hidden style={{ width: "56px", height: "56px", borderRadius: "50%", background: "var(--wjs-color-primary, #2563eb)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: "1.25rem" }}>
+                                {(author || "?").trim().charAt(0).toUpperCase()}
+                            </div>
+                        )}
                         <div>
                             <div style={{ fontWeight: 600, color: "var(--wjs-color-text-main, #1a1a1a)" }}>{author}</div>
                             <div style={{ fontSize: "0.875rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>{role}</div>
@@ -1787,7 +1806,11 @@ const baseConfig = {
                 title: { type: "text", label: "Title" },
                 subtitle: { type: "text", label: "Subtitle" },
                 buttonText: { type: "text", label: "Button Text" },
-                buttonLink: { type: "text", label: "Button Link" },
+                buttonLink: {
+                    type: "custom",
+                    label: "Button Link",
+                    render: ({ value, onChange }: any) => <LinkField value={value} onChange={onChange} />
+                },
                 variant: {
                     type: "select",
                     label: "Style",
@@ -2071,9 +2094,504 @@ const baseConfig = {
             }
         },
 
+        // ==========================================
+        // NEW COMPONENTS - Editor overhaul 2026-07
+        // ==========================================
+
+        Hero: {
+            label: "Hero",
+            category: "layout",
+            fields: {
+                title: { type: "text", label: "Título" },
+                subtitle: { type: "textarea", label: "Subtítulo" },
+                bgImage: {
+                    type: "custom",
+                    label: "Imagen de fondo",
+                    render: ({ onChange, value }: any) => {
+                        const [isModalOpen, setIsModalOpen] = useState(false);
+                        return (
+                            <div className="flex flex-col gap-2">
+                                <input
+                                    className="p-2 border rounded text-sm w-full"
+                                    value={value || ""}
+                                    onChange={(e) => onChange(e.target.value)}
+                                    placeholder="URL de la imagen"
+                                />
+                                <button
+                                    type="button"
+                                    className="px-3 py-1 bg-gray-100 hover:bg-gray-200 rounded text-sm text-gray-700 border"
+                                    onClick={() => setIsModalOpen(true)}
+                                >
+                                    {translate('editor.field.selectFromMedia', getStoredLanguage())}
+                                </button>
+                                <MediaPickerModal
+                                    isOpen={isModalOpen}
+                                    onClose={() => setIsModalOpen(false)}
+                                    onSelect={(item) => {
+                                        onChange(item.sourceUrl || item.guid);
+                                        setIsModalOpen(false);
+                                    }}
+                                />
+                            </div>
+                        );
+                    }
+                },
+                overlay: {
+                    type: "select",
+                    label: "Oscurecer fondo",
+                    options: [
+                        { label: "Sin capa", value: "0" },
+                        { label: "Suave (30%)", value: "0.3" },
+                        { label: "Media (50%)", value: "0.5" },
+                        { label: "Fuerte (70%)", value: "0.7" },
+                    ]
+                },
+                height: {
+                    type: "select",
+                    label: "Altura",
+                    options: [
+                        { label: "Compacto (40vh)", value: "40vh" },
+                        { label: "Medio (60vh)", value: "60vh" },
+                        { label: "Grande (80vh)", value: "80vh" },
+                        { label: "Pantalla completa", value: "100vh" },
+                    ]
+                },
+                align: {
+                    type: "radio",
+                    label: "Alineación",
+                    options: [
+                        { label: "Izquierda", value: "flex-start" },
+                        { label: "Centro", value: "center" },
+                    ]
+                },
+                buttons: {
+                    type: "array",
+                    label: "Botones",
+                    arrayFields: {
+                        label: { type: "text", label: "Texto" },
+                        href: {
+                            type: "custom",
+                            label: "Enlace",
+                            render: ({ value, onChange }: any) => <LinkField value={value} onChange={onChange} />
+                        },
+                        variant: {
+                            type: "radio",
+                            options: [
+                                { label: "Primario", value: "primary" },
+                                { label: "Contorno", value: "outline" },
+                            ]
+                        }
+                    }
+                },
+                elementId: { type: "text", label: "ID / Ancla (opcional)" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                title: "Un titular que atrapa",
+                subtitle: "Explica en una frase el valor de tu sitio. Cambia la imagen, la altura y la capa oscura desde el panel.",
+                bgImage: "",
+                overlay: "0.5",
+                height: "60vh",
+                align: "center",
+                buttons: [{ label: "Empezar", href: "#", variant: "primary" }],
+                elementId: "",
+                css: {}
+            },
+            render: ({ title, subtitle, bgImage, overlay, height, align, buttons, elementId, css, puck }: any) => {
+                const dim = parseFloat(overlay || "0") || 0;
+                const hasImage = !!bgImage;
+                const textAlign = align === "center" ? "center" : "left";
+                return (
+                    <section
+                        id={elementId || undefined}
+                        className="wp-block-hero"
+                        style={{
+                            position: "relative",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: align || "center",
+                            minHeight: height || "60vh",
+                            padding: "48px 24px",
+                            backgroundImage: hasImage ? `url(${bgImage})` : undefined,
+                            backgroundSize: "cover",
+                            backgroundPosition: "center",
+                            background: hasImage ? undefined : "linear-gradient(135deg, var(--wjs-color-primary, #2563eb), #111827)",
+                            borderRadius: "var(--wjs-border-radius, 0px)",
+                            overflow: "hidden",
+                            ...css
+                        }}
+                    >
+                        {dim > 0 && (
+                            <div style={{ position: "absolute", inset: 0, background: `rgba(0,0,0,${dim})` }} />
+                        )}
+                        <div style={{ position: "relative", maxWidth: "760px", textAlign: textAlign as any, color: "#fff" }}>
+                            <h1 style={{ fontSize: "clamp(2rem, 5vw, 3.5rem)", fontWeight: 800, lineHeight: 1.1, marginBottom: "1rem", fontFamily: "var(--wjs-font-family, inherit)", textShadow: "0 2px 12px rgba(0,0,0,.35)" }}>{title}</h1>
+                            {subtitle && (
+                                <p style={{ fontSize: "1.25rem", opacity: 0.92, marginBottom: "1.75rem", lineHeight: 1.55, textShadow: "0 1px 8px rgba(0,0,0,.35)" }}>{subtitle}</p>
+                            )}
+                            {buttons?.length > 0 && (
+                                <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", justifyContent: textAlign === "center" ? "center" : "flex-start" }}>
+                                    {buttons.map((b: any, i: number) => (
+                                        <a
+                                            key={i}
+                                            href={b.href || "#"}
+                                            onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+                                            style={{
+                                                display: "inline-block",
+                                                padding: "0.85rem 2rem",
+                                                fontWeight: 700,
+                                                textDecoration: "none",
+                                                borderRadius: "var(--puck-btn-radius, var(--wjs-border-radius, 8px))",
+                                                background: b.variant === "outline" ? "transparent" : "var(--wjs-color-primary, #2563eb)",
+                                                color: "#fff",
+                                                border: b.variant === "outline" ? "2px solid rgba(255,255,255,.85)" : "none",
+                                            }}
+                                        >
+                                            {b.label}
+                                        </a>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+                    </section>
+                );
+            }
+        },
+
+        Quote: {
+            label: "Cita",
+            category: "content",
+            fields: {
+                text: { type: "textarea", label: "Cita" },
+                cite: { type: "text", label: "Autor / fuente" },
+                style: {
+                    type: "radio",
+                    label: "Estilo",
+                    options: [
+                        { label: "Barra lateral", value: "bar" },
+                        { label: "Grande centrada", value: "large" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                text: "El mejor momento para plantar un árbol fue hace veinte años. El segundo mejor momento es ahora.",
+                cite: "Proverbio",
+                style: "bar",
+                css: {}
+            },
+            render: ({ text, cite, style, css }: any) => {
+                if (style === "large") {
+                    return (
+                        <figure className="wp-block-quote" style={{ textAlign: "center", padding: "24px 12px", margin: 0, ...css }}>
+                            <i className="fa-solid fa-quote-left" style={{ fontSize: "1.75rem", color: "var(--wjs-color-primary, #2563eb)", marginBottom: "12px" }}></i>
+                            <blockquote style={{ margin: 0, border: 0, padding: 0, fontSize: "1.6rem", lineHeight: 1.45, fontWeight: 500, fontStyle: "italic", color: "var(--wjs-color-text-heading, #111827)" }}>{text}</blockquote>
+                            {cite && <figcaption style={{ marginTop: "16px", fontSize: ".95rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>— {cite}</figcaption>}
+                        </figure>
+                    );
+                }
+                return (
+                    <figure className="wp-block-quote" style={{ margin: 0, ...css }}>
+                        <blockquote style={{ margin: 0, padding: "8px 0 8px 20px", borderLeft: "4px solid var(--wjs-color-primary, #2563eb)", fontSize: "1.15rem", lineHeight: 1.6, fontStyle: "italic", color: "var(--wjs-color-text-main, #374151)" }}>
+                            {text}
+                            {cite && <footer style={{ marginTop: "10px", fontSize: ".9rem", fontStyle: "normal", color: "var(--wjs-color-text-muted, #6b7280)" }}>— {cite}</footer>}
+                        </blockquote>
+                    </figure>
+                );
+            }
+        },
+
+        Table: {
+            label: "Tabla",
+            category: "content",
+            fields: {
+                header: { type: "text", label: "Cabecera (columnas separadas por | )" },
+                rows: {
+                    type: "array",
+                    label: "Filas",
+                    arrayFields: {
+                        cells: { type: "text", label: "Celdas (separadas por | )" }
+                    }
+                },
+                striped: {
+                    type: "radio",
+                    label: "Filas alternas",
+                    options: [
+                        { label: "Sí", value: "true" },
+                        { label: "No", value: "false" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                header: "Plan | Precio | Soporte",
+                rows: [
+                    { cells: "Básico | 9 € | Email" },
+                    { cells: "Pro | 29 € | Prioritario" },
+                ],
+                striped: "true",
+                css: {}
+            },
+            render: ({ header, rows, striped, css }: any) => {
+                const split = (s: string) => String(s || "").split("|").map((c) => c.trim());
+                const head = split(header);
+                const cols = head.length;
+                return (
+                    <div className="wp-block-table" style={{ overflowX: "auto", ...css }}>
+                        {/* Bare <table> — the WordJS UI framework styles it with theme tokens. */}
+                        <table style={{ width: "100%" }}>
+                            <thead>
+                                <tr>
+                                    {head.map((h, i) => <th key={i}>{h}</th>)}
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {(rows || []).map((r: any, ri: number) => {
+                                    const cells = split(r?.cells);
+                                    return (
+                                        <tr key={ri} style={striped === "true" && ri % 2 === 1 ? { background: "var(--wjs-bg-canvas, #f9fafb)" } : undefined}>
+                                            {Array.from({ length: cols }).map((_, ci) => <td key={ci}>{cells[ci] ?? ""}</td>)}
+                                        </tr>
+                                    );
+                                })}
+                            </tbody>
+                        </table>
+                    </div>
+                );
+            }
+        },
+
+        IconList: {
+            label: "Lista con iconos",
+            category: "content",
+            fields: {
+                items: {
+                    type: "array",
+                    label: "Elementos",
+                    arrayFields: {
+                        icon: { type: "text", label: "Icono FontAwesome (fa-check)" },
+                        title: { type: "text", label: "Título" },
+                        text: { type: "textarea", label: "Descripción" }
+                    }
+                },
+                columns: {
+                    type: "select",
+                    label: "Columnas",
+                    options: [
+                        { label: "1", value: "1" },
+                        { label: "2", value: "2" },
+                        { label: "3", value: "3" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                items: [
+                    { icon: "fa-bolt", title: "Rápido", text: "Describe una ventaja clave en una frase." },
+                    { icon: "fa-shield", title: "Seguro", text: "Describe una ventaja clave en una frase." },
+                    { icon: "fa-heart", title: "Cuidado", text: "Describe una ventaja clave en una frase." },
+                ],
+                columns: "3",
+                css: {}
+            },
+            render: ({ items, columns, css }: any) => (
+                <div className="wp-block-icon-list" style={{ display: "grid", gridTemplateColumns: `repeat(${parseInt(columns || "3", 10)}, 1fr)`, gap: "24px", ...css }}>
+                    {(items || []).map((it: any, i: number) => (
+                        <div key={i} style={{ display: "flex", gap: "14px", alignItems: "flex-start" }}>
+                            <span style={{ width: "42px", height: "42px", borderRadius: "var(--wjs-border-radius, 10px)", background: "color-mix(in srgb, var(--wjs-color-primary, #2563eb) 12%, transparent)", color: "var(--wjs-color-primary, #2563eb)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                                <i className={`fa-solid ${it.icon || "fa-check"}`}></i>
+                            </span>
+                            <span>
+                                <span style={{ display: "block", fontWeight: 700, color: "var(--wjs-color-text-heading, #111827)", marginBottom: "4px" }}>{it.title}</span>
+                                {it.text && <span style={{ display: "block", fontSize: ".95rem", lineHeight: 1.55, color: "var(--wjs-color-text-muted, #6b7280)" }}>{it.text}</span>}
+                            </span>
+                        </div>
+                    ))}
+                </div>
+            )
+        },
+
+        SocialLinks: {
+            label: "Redes sociales",
+            category: "content",
+            fields: {
+                items: {
+                    type: "array",
+                    label: "Redes",
+                    arrayFields: {
+                        network: {
+                            type: "select",
+                            label: "Red",
+                            options: [
+                                { label: "Facebook", value: "facebook" },
+                                { label: "Instagram", value: "instagram" },
+                                { label: "X (Twitter)", value: "x-twitter" },
+                                { label: "LinkedIn", value: "linkedin" },
+                                { label: "YouTube", value: "youtube" },
+                                { label: "TikTok", value: "tiktok" },
+                                { label: "GitHub", value: "github" },
+                                { label: "WhatsApp", value: "whatsapp" },
+                            ]
+                        },
+                        url: { type: "text", label: "URL del perfil" }
+                    }
+                },
+                align: {
+                    type: "radio",
+                    label: "Alineación",
+                    options: [
+                        { label: "Izquierda", value: "flex-start" },
+                        { label: "Centro", value: "center" },
+                        { label: "Derecha", value: "flex-end" },
+                    ]
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                items: [
+                    { network: "instagram", url: "#" },
+                    { network: "facebook", url: "#" },
+                    { network: "x-twitter", url: "#" },
+                ],
+                align: "flex-start",
+                css: {}
+            },
+            render: ({ items, align, css, puck }: any) => (
+                <div className="wp-block-social-links" style={{ display: "flex", gap: "10px", justifyContent: align || "flex-start", ...css }}>
+                    {(items || []).map((it: any, i: number) => (
+                        <a
+                            key={i}
+                            href={it.url || "#"}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            aria-label={it.network}
+                            onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+                            style={{
+                                width: "42px",
+                                height: "42px",
+                                borderRadius: "50%",
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                background: "var(--wjs-bg-surface, #fff)",
+                                border: "1px solid var(--wjs-border-subtle, #e5e7eb)",
+                                color: "var(--wjs-color-text-main, #374151)",
+                                textDecoration: "none",
+                                fontSize: "1.05rem",
+                            }}
+                        >
+                            <i className={`fa-brands fa-${it.network || "link"}`}></i>
+                        </a>
+                    ))}
+                </div>
+            )
+        },
+
+        Stats: {
+            label: "Cifras",
+            category: "content",
+            fields: {
+                items: {
+                    type: "array",
+                    label: "Cifras",
+                    arrayFields: {
+                        value: { type: "text", label: "Valor (ej. 1.200+)" },
+                        label: { type: "text", label: "Etiqueta" }
+                    }
+                },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                items: [
+                    { value: "1.200+", label: "Clientes" },
+                    { value: "98%", label: "Satisfacción" },
+                    { value: "24/7", label: "Soporte" },
+                ],
+                css: {}
+            },
+            render: ({ items, css }: any) => (
+                <div className="wp-block-stats" style={{ display: "grid", gridTemplateColumns: `repeat(${(items || []).length || 1}, 1fr)`, gap: "24px", textAlign: "center", ...css }}>
+                    {(items || []).map((it: any, i: number) => (
+                        <div key={i}>
+                            <div style={{ fontSize: "clamp(1.8rem, 4vw, 3rem)", fontWeight: 800, color: "var(--wjs-color-primary, #2563eb)", lineHeight: 1.1 }}>{it.value}</div>
+                            <div style={{ marginTop: "6px", fontSize: ".95rem", textTransform: "uppercase", letterSpacing: ".06em", color: "var(--wjs-color-text-muted, #6b7280)" }}>{it.label}</div>
+                        </div>
+                    ))}
+                </div>
+            )
+        },
+
+        HTMLEmbed: {
+            label: "HTML personalizado",
+            category: "content",
+            fields: {
+                html: { type: "textarea", label: "Código HTML" },
+                css: {
+                    type: "custom",
+                    label: "Estilos CSS",
+                    render: ({ value, onChange }: any) => (
+                        <CSSPropertiesControl value={value} onChange={onChange} />
+                    )
+                }
+            },
+            defaultProps: {
+                html: "<p>Pega aquí tu HTML. Se limpia automáticamente (sin scripts).</p>",
+                css: {}
+            },
+            render: ({ html, css }: any) => (
+                // Double-sanitized: the backend cleans the `html` meta field on save (PUCK_HTML_FIELDS)
+                // and sanitizeHTML (DOMPurify allowlist, no scripts/handlers) runs again at render.
+                <div
+                    className="wp-block-html-embed"
+                    style={css}
+                    suppressHydrationWarning
+                    dangerouslySetInnerHTML={{ __html: sanitizeHTML(html || "") }}
+                />
+            )
+        },
+
         ...puckPluginComponents,
     }
 };
+
+// Every block (core + plugin) gains the shared fields: per-device visibility + entrance animation.
+(baseConfig as any).components = withSharedBlockFields(baseConfig.components);
 
 export const postConfig: any = {
     ...baseConfig,

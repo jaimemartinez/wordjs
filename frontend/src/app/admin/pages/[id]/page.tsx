@@ -30,7 +30,11 @@ export default function PageEditorPage() {
     const [lastSyncedTitle, setLastSyncedTitle] = useState("");
     const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
     const { isDirty, setIsDirty } = useUnsavedChanges();
-    const changesCount = useRef(0);
+    // Puck MAY fire onChange during initialization (migrate/resolveData). Skipping "the first
+    // event" by counting was fragile: when no init event fires, the user's FIRST real change got
+    // swallowed (save stayed disabled, autosave never armed). A short post-mount grace window
+    // ignores init noise without ever eating a human edit.
+    const mountedAtRef = useRef(Date.now());
 
     // Set initial dirty state for new pages
     useEffect(() => {
@@ -120,8 +124,13 @@ export default function PageEditorPage() {
 
     const { alert } = useModal();
 
-    const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault();
+    // Once a NEW page is first saved, remember its id — before this, every save created ANOTHER
+    // page (params.id stays "new"). Also lets autosave create the draft once and then update it.
+    const createdIdRef = useRef<number | null>(null);
+
+    const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }) => {
+        const isAutosave = !!(e && "autosave" in e && e.autosave);
+        if (e && "preventDefault" in e) e.preventDefault();
         setSaving(true);
 
         try {
@@ -135,7 +144,8 @@ export default function PageEditorPage() {
             const finalSlug = root?.props?.slug || root?.slug || slug;
 
             if (!finalTitle) {
-                await alert(t('page.edit.titleRequired'));
+                // A background save must never pop a modal — just wait for a title.
+                if (!isAutosave) await alert(t('page.edit.titleRequired'));
                 setSaving(false);
                 return;
             }
@@ -148,19 +158,29 @@ export default function PageEditorPage() {
                 type: "page",
                 meta: {
                     _puck_data: liveData
-                }
+                },
+                // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
+                ...(isAutosave ? { autosave: true } : {})
             };
 
-            if (pageId) {
-                await postsApi.update(pageId, pageData);
+            const effectiveId = pageId ?? createdIdRef.current;
+            if (effectiveId) {
+                await postsApi.update(effectiveId, pageData as any);
             } else {
-                await postsApi.create(pageData);
+                const created = await postsApi.create(pageData as any);
+                if (created?.id) {
+                    createdIdRef.current = created.id;
+                    // Keep the URL honest without remounting the editor mid-session.
+                    window.history.replaceState(null, "", `/admin/pages/${created.id}`);
+                }
             }
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
         } catch (error: any) {
             console.error("Failed to save page:", error);
-            await alert(`${t('page.edit.saveFailed')}: ${error.message || t('page.edit.unknownError')}`);
+            if (!isAutosave) {
+                await alert(`${t('page.edit.saveFailed')}: ${error.message || t('page.edit.unknownError')}`);
+            }
         } finally {
             setSaving(false);
         }
@@ -184,11 +204,10 @@ export default function PageEditorPage() {
                 pageId={pageId || undefined}
                 previewSlug={slug || undefined}
                 onChange={(data) => {
-                    // Ignore the first change event which is fired by Puck initialization
-                    if (changesCount.current > 0) {
+                    // Ignore init-time events only (see mountedAtRef note above).
+                    if (Date.now() - mountedAtRef.current > 800) {
                         setIsDirty(true);
                     }
-                    changesCount.current++;
 
                     // Store in ref for saving (no re-render)
                     puckDataRef.current = data;

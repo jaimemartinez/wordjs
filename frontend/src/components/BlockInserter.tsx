@@ -1,8 +1,17 @@
 "use client";
 
-import React, { useMemo, useState } from "react";
-import { Drawer } from "@measured/puck";
-import { PATTERNS, insertPattern } from "@/lib/puckPatterns";
+import React, { useEffect, useMemo, useState } from "react";
+import { Drawer, Render } from "@measured/puck";
+import {
+    PATTERNS,
+    insertPattern,
+    buildPatternBlocks,
+    loadUserPatterns,
+    saveCurrentPageAsPattern,
+    deleteUserPattern,
+    insertUserPattern,
+    UserPattern,
+} from "@/lib/puckPatterns";
 
 /**
  * BlockInserter — a searchable, categorized, icon-based block palette + a one-click Patterns library,
@@ -18,6 +27,7 @@ type Meta = { icon: string; group: string; desc?: string; label?: string };
 
 const BLOCK_META: Record<string, Meta> = {
     // Layout
+    Hero: { icon: "fa-mountain-sun", group: "Diseño", desc: "Cabecera a pantalla con imagen y botones" },
     Section: { icon: "fa-square-full", group: "Diseño", desc: "Sección a todo el ancho" },
     Columns: { icon: "fa-table-columns", group: "Diseño", desc: "Columnas" },
     Grid: { icon: "fa-table-cells", group: "Diseño", desc: "Cuadrícula responsive" },
@@ -31,6 +41,10 @@ const BLOCK_META: Record<string, Meta> = {
     Card: { icon: "fa-id-card", group: "Contenido", desc: "Tarjeta con imagen y texto" },
     Accordion: { icon: "fa-chevron-down", group: "Contenido", desc: "Acordeón / FAQ" },
     Tabs: { icon: "fa-folder", group: "Contenido", desc: "Pestañas" },
+    Quote: { icon: "fa-quote-left", group: "Contenido", desc: "Cita destacada" },
+    Table: { icon: "fa-table", group: "Contenido", desc: "Tabla de datos" },
+    IconList: { icon: "fa-list-check", group: "Contenido", desc: "Lista de ventajas con iconos" },
+    HTMLEmbed: { icon: "fa-code", group: "Contenido", desc: "HTML personalizado (limpio)" },
     // Media
     Image: { icon: "fa-image", group: "Medios", desc: "Imagen" },
     VideoEmbed: { icon: "fa-video", group: "Medios", desc: "Video incrustado" },
@@ -42,6 +56,8 @@ const BLOCK_META: Record<string, Meta> = {
     PricingTable: { icon: "fa-tags", group: "Marketing", desc: "Tabla de precios" },
     Testimonial: { icon: "fa-quote-left", group: "Marketing", desc: "Testimonio" },
     CTABanner: { icon: "fa-bullhorn", group: "Marketing", desc: "Banner de conversión" },
+    Stats: { icon: "fa-chart-simple", group: "Marketing", desc: "Cifras destacadas" },
+    SocialLinks: { icon: "fa-share-nodes", group: "Marketing", desc: "Iconos de redes sociales" },
     // Dynamic
     PostsGrid: { icon: "fa-newspaper", group: "Dinámicos", desc: "Cuadrícula de entradas" },
     CategoryPosts: { icon: "fa-folder-tree", group: "Dinámicos", desc: "Entradas por categoría" },
@@ -64,9 +80,56 @@ type Entry =
     | { kind: "header"; group: string; icon: string; count: number }
     | { kind: "item"; item: Item };
 
+/**
+ * Live miniature of a pattern: the REAL blocks rendered through Puck's <Render> at ~24% scale, so
+ * what you see is exactly what lands on the canvas (theme tokens included). pointer-events-none —
+ * the wrapping button owns the click.
+ */
+function PatternPreview({ items, components }: { items: any[]; components: Record<string, any> }) {
+    const config = useMemo(
+        () => ({ components, root: { render: ({ children }: any) => <div style={{ padding: 16 }}>{children}</div> } }),
+        [components]
+    );
+    const data = useMemo(() => ({ content: items, root: {} }), [items]);
+    if (!items?.length) return null;
+    return (
+        <div className="relative h-[110px] overflow-hidden rounded-t-xl bg-white pointer-events-none select-none">
+            <div className="absolute top-0 left-0 origin-top-left" style={{ width: 1180, transform: "scale(0.236)" }}>
+                <Render config={config as any} data={data as any} />
+            </div>
+            {/* soft fade so cropped previews don't end abruptly */}
+            <div className="absolute inset-x-0 bottom-0 h-6 bg-gradient-to-t from-white to-transparent" />
+        </div>
+    );
+}
+
 export default function BlockInserter({ components }: { components: Record<string, any> }) {
     const [tab, setTab] = useState<"blocks" | "patterns">("blocks");
     const [query, setQuery] = useState("");
+
+    // Patterns tab state: prebuilt preview items (stable per config) + the user's saved patterns.
+    const builtPatterns = useMemo(
+        () => PATTERNS.map((p) => ({ pattern: p, items: buildPatternBlocks(p, components) })).filter((b) => b.items.length),
+        [components]
+    );
+    const [userPatterns, setUserPatterns] = useState<UserPattern[]>([]);
+    const [newPatternName, setNewPatternName] = useState("");
+    const [patternNotice, setPatternNotice] = useState<string | null>(null);
+    useEffect(() => {
+        if (tab === "patterns") setUserPatterns(loadUserPatterns());
+    }, [tab]);
+
+    const handleSavePattern = () => {
+        const saved = saveCurrentPageAsPattern(newPatternName);
+        if (saved) {
+            setUserPatterns(loadUserPatterns());
+            setNewPatternName("");
+            setPatternNotice(`Guardada “${saved.name}”.`);
+        } else {
+            setPatternNotice("La página está vacía: añade bloques antes de guardarla como plantilla.");
+        }
+        setTimeout(() => setPatternNotice(null), 4000);
+    };
 
     const entries = useMemo<Entry[]>(() => {
         const q = query.trim().toLowerCase();
@@ -197,23 +260,104 @@ export default function BlockInserter({ components }: { components: Record<strin
 
             {/* PATTERNS tab */}
             {tab === "patterns" && (
-                <div className="px-6 py-4 space-y-2">
-                    {PATTERNS.map((p) => (
-                        <button
+                <div className="px-6 py-4 space-y-3">
+                    {/* Save the current page as a reusable pattern (stored in this browser). */}
+                    <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50/60 p-3">
+                        <div className="flex items-center gap-2 mb-2">
+                            <i className="fa-solid fa-floppy-disk text-[11px] text-gray-400"></i>
+                            <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Guardar como plantilla</span>
+                        </div>
+                        <div className="flex gap-1.5">
+                            <input
+                                value={newPatternName}
+                                onChange={(e) => setNewPatternName(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") handleSavePattern(); }}
+                                placeholder="Nombre (ej. Landing base)"
+                                className="flex-1 min-w-0 px-2.5 py-2 rounded-lg bg-white border border-gray-200 text-xs text-gray-800 focus:outline-none focus:ring-2 focus:ring-editor-primary/30 focus:border-editor-primary"
+                            />
+                            <button
+                                type="button"
+                                onClick={handleSavePattern}
+                                className="px-3 py-2 rounded-lg bg-editor-primary text-white text-xs font-bold hover:opacity-90 transition"
+                            >
+                                Guardar
+                            </button>
+                        </div>
+                        <p className="text-[10px] text-gray-400 mt-1.5">Captura la página actual completa para reutilizarla en otras páginas.</p>
+                        {patternNotice && <p className="text-[11px] text-editor-primary font-semibold mt-1">{patternNotice}</p>}
+                    </div>
+
+                    {/* User patterns */}
+                    {userPatterns.length > 0 && (
+                        <>
+                            <div className="flex items-center gap-2 px-1 pt-1">
+                                <i className="fa-solid fa-user text-[11px] text-gray-400"></i>
+                                <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Mis plantillas</span>
+                                <span className="text-[10px] text-gray-300">{userPatterns.length}</span>
+                            </div>
+                            {userPatterns.map((p) => (
+                                <div key={p.id} className="relative group rounded-xl border border-gray-200 bg-white overflow-hidden hover:border-editor-primary hover:shadow-sm transition-all">
+                                    {/* div+role, NOT <button>: the live preview renders real blocks
+                                        (Accordion/Tabs/Search) that contain their own buttons, and
+                                        nested <button> is invalid HTML (hydration error). */}
+                                    <div
+                                        role="button"
+                                        tabIndex={0}
+                                        onClick={() => insertUserPattern(p, components)}
+                                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); insertUserPattern(p, components); } }}
+                                        className="w-full text-left cursor-pointer"
+                                        title="Insertar al final de la página"
+                                    >
+                                        <PatternPreview items={p.items} components={components} />
+                                        <span className="flex items-center gap-2 px-3 py-2.5 border-t border-gray-100">
+                                            <span className="min-w-0 flex-1">
+                                                <span className="block text-sm font-semibold text-gray-800 truncate">{p.name}</span>
+                                                <span className="block text-[11px] text-gray-400">{p.items.length} bloque{p.items.length === 1 ? "" : "s"}</span>
+                                            </span>
+                                            <i className="fa-solid fa-plus text-gray-300 group-hover:text-editor-primary text-xs transition-colors"></i>
+                                        </span>
+                                    </div>
+                                    <button
+                                        type="button"
+                                        title="Eliminar plantilla"
+                                        onClick={(e) => { e.stopPropagation(); setUserPatterns(deleteUserPattern(p.id)); }}
+                                        className="absolute top-2 right-2 w-7 h-7 rounded-lg bg-white/90 border border-gray-200 text-gray-400 hover:text-red-500 hover:border-red-200 opacity-0 group-hover:opacity-100 transition"
+                                    >
+                                        <i className="fa-solid fa-trash text-[11px]"></i>
+                                    </button>
+                                </div>
+                            ))}
+                        </>
+                    )}
+
+                    {/* Built-in patterns with live previews */}
+                    <div className="flex items-center gap-2 px-1 pt-1">
+                        <i className="fa-solid fa-table-cells-large text-[11px] text-gray-400"></i>
+                        <span className="text-[11px] font-bold uppercase tracking-widest text-gray-500">Plantillas</span>
+                    </div>
+                    {builtPatterns.map(({ pattern: p, items }) => (
+                        // div+role, NOT <button> — see the user-patterns note (nested buttons).
+                        <div
                             key={p.id}
-                            type="button"
+                            role="button"
+                            tabIndex={0}
                             onClick={() => insertPattern(p, components)}
-                            className="w-full group flex items-center gap-3 px-3 py-3 rounded-xl border border-gray-200 bg-white hover:border-editor-primary hover:shadow-sm hover:-translate-y-px text-left transition-all"
+                            onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); insertPattern(p, components); } }}
+                            className="w-full group rounded-xl border border-gray-200 bg-white overflow-hidden hover:border-editor-primary hover:shadow-sm text-left cursor-pointer transition-all"
+                            title="Insertar al final de la página"
                         >
-                            <span className="w-10 h-10 rounded-lg bg-gray-50 group-hover:bg-editor-primary/10 flex items-center justify-center text-gray-500 group-hover:text-editor-primary transition-colors shrink-0">
-                                <i className={`fa-solid ${p.icon}`}></i>
+                            <PatternPreview items={items} components={components} />
+                            <span className="flex items-center gap-3 px-3 py-2.5 border-t border-gray-100">
+                                <span className="w-8 h-8 rounded-lg bg-gray-50 group-hover:bg-editor-primary/10 flex items-center justify-center text-gray-500 group-hover:text-editor-primary transition-colors shrink-0">
+                                    <i className={`fa-solid ${p.icon} text-sm`}></i>
+                                </span>
+                                <span className="min-w-0 flex-1">
+                                    <span className="block text-sm font-semibold text-gray-800">{p.name}</span>
+                                    <span className="block text-[11px] text-gray-400 truncate">{p.description}</span>
+                                </span>
+                                <i className="fa-solid fa-plus text-gray-300 group-hover:text-editor-primary text-xs transition-colors"></i>
                             </span>
-                            <span className="min-w-0 flex-1">
-                                <span className="block text-sm font-semibold text-gray-800">{p.name}</span>
-                                <span className="block text-[11px] text-gray-400 truncate">{p.description}</span>
-                            </span>
-                            <i className="fa-solid fa-plus text-gray-300 group-hover:text-editor-primary text-xs transition-colors"></i>
-                        </button>
+                        </div>
                     ))}
                     <p className="text-[11px] text-gray-400 text-center pt-2">
                         Se añaden al final de la página. Luego puedes editarlas.
