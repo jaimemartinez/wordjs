@@ -149,7 +149,10 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
                     filename: file,
                     family: finalFamily,
                     variant: variant,
-                    url: `${config.site.url}/uploads/fonts/${file}`,
+                    // Origin-relative (same policy as media sourceUrl): siteUrl embeds the
+                    // upload-era host/IP, so absolute URLs break @font-face on any other origin
+                    // (fonts silently failed to load and text fell back to system serif).
+                    url: `/uploads/fonts/${file}`,
                     size: stats.size,
                     modified: stats.mtime,
                     protected: isProtected
@@ -183,7 +186,7 @@ router.post('/', authenticate, can('manage_options'), upload.single('file'), asy
     res.status(201).json({
         message: 'Font uploaded successfully',
         file: req.file.filename,
-        url: `${config.site.url}/uploads/fonts/${req.file.filename}`
+        url: `/uploads/fonts/${req.file.filename}`
     });
 }));
 

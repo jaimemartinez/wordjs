@@ -4,10 +4,11 @@ import React from "react";
 import { useEditor, EditorContent } from "@tiptap/react";
 import { BubbleMenu } from "@tiptap/react/menus";
 import StarterKit from "@tiptap/starter-kit";
-import { TextStyle, Color, FontSize, FontFamily } from "@tiptap/extension-text-style";
+import { TextStyle, Color, FontSize, FontFamily, BackgroundColor } from "@tiptap/extension-text-style";
 import TextAlign from "@tiptap/extension-text-align";
 import { HexColorPicker } from "react-colorful";
 import { apiGet } from "@/lib/api";
+import { useContentSearch } from "./puck/LinkField";
 
 /**
  * InlineTiptap — in-place rich-text editing for a Text/Heading block.
@@ -369,6 +370,217 @@ function ColorButton({ editor }: { editor: any }) {
     );
 }
 
+// Quick-pick highlight (text background) colors — soft tones that keep text readable.
+const HIGHLIGHT_COLORS: { name: string; value: string }[] = [
+    { name: "Amarillo", value: "#fef08a" },
+    { name: "Verde", value: "#bbf7d0" },
+    { name: "Azul", value: "#bfdbfe" },
+    { name: "Rosa", value: "#fbcfe8" },
+    { name: "Naranja", value: "#fed7aa" },
+    { name: "Gris", value: "#e5e7eb" },
+];
+
+// Highlight (background color) picker — swatches + remove, same interaction as ColorButton.
+function HighlightButton({ editor }: { editor: any }) {
+    const [open, setOpen] = React.useState(false);
+    const ref = React.useRef<HTMLDivElement>(null);
+    const current: string = (editor.getAttributes("textStyle").backgroundColor as string) || "";
+
+    React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e: MouseEvent) => {
+            if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+        };
+        document.addEventListener("mousedown", onDoc, true);
+        return () => document.removeEventListener("mousedown", onDoc, true);
+    }, [open]);
+
+    return (
+        <div ref={ref} className="relative">
+            <button
+                type="button"
+                title="Resaltar texto"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => setOpen((o) => !o)}
+                className={`w-8 h-8 rounded-md flex flex-col items-center justify-center transition ${
+                    open ? "bg-white/15 text-white" : "text-gray-200 hover:bg-white/10"
+                }`}
+            >
+                <i className="fa-solid fa-highlighter text-[13px] leading-none"></i>
+                <span className="block w-4 h-[3px] rounded-full mt-[3px]" style={{ backgroundColor: current || "#e5e7eb" }}></span>
+            </button>
+            {open && (
+                <div
+                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[100001] rounded-xl bg-white shadow-2xl border border-gray-200 p-2.5 w-[152px]"
+                    onMouseDown={(e) => e.preventDefault()}
+                >
+                    <div className="grid grid-cols-3 gap-1.5">
+                        {HIGHLIGHT_COLORS.map((c) => (
+                            <button
+                                key={c.value}
+                                type="button"
+                                title={c.name}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => { editor.chain().focus().setBackgroundColor(c.value).run(); setOpen(false); }}
+                                className={`w-9 h-7 rounded-md transition hover:scale-105 ${
+                                    current.toLowerCase() === c.value ? "ring-2 ring-offset-1 ring-editor-primary" : "ring-1 ring-gray-200"
+                                }`}
+                                style={{ backgroundColor: c.value }}
+                            />
+                        ))}
+                    </div>
+                    <button
+                        type="button"
+                        onMouseDown={(e) => e.preventDefault()}
+                        onClick={() => { editor.chain().focus().unsetBackgroundColor().run(); setOpen(false); }}
+                        className="w-full mt-2 pt-2 border-t border-gray-100 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 text-[11px] font-semibold text-gray-600"
+                    >
+                        <i className="fa-solid fa-ban text-[10px]"></i>
+                        Quitar resaltado
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+}
+
+/**
+ * LinkButton — replaces the old window.prompt() with a popover: URL input, live search over the
+ * site's pages/posts (internal linking without remembering slugs), open-in-new-tab toggle, and
+ * remove-link. The selection is captured when the popover opens (typing in the inputs blurs the
+ * editor) and restored on apply, same pattern as the eyedropper.
+ */
+function LinkButton({ editor }: { editor: any }) {
+    const [open, setOpen] = React.useState(false);
+    const [url, setUrl] = React.useState("");
+    const [newTab, setNewTab] = React.useState(false);
+    const [query, setQuery] = React.useState("");
+    const ref = React.useRef<HTMLDivElement>(null);
+    const selRef = React.useRef<{ from: number; to: number } | null>(null);
+    const { results, searching } = useContentSearch(query);
+
+    React.useEffect(() => {
+        if (!open) return;
+        const onDoc = (e: MouseEvent) => {
+            if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+        };
+        document.addEventListener("mousedown", onDoc, true);
+        return () => document.removeEventListener("mousedown", onDoc, true);
+    }, [open]);
+
+    const openPopover = () => {
+        const { from, to } = editor.state.selection;
+        selRef.current = { from, to };
+        const attrs = editor.getAttributes("link");
+        setUrl((attrs.href as string) || "");
+        setNewTab((attrs.target as string) === "_blank");
+        setQuery("");
+        setOpen(true);
+    };
+
+    const apply = (href: string) => {
+        const chain = editor.chain().focus();
+        if (selRef.current) chain.setTextSelection(selRef.current);
+        if (!href.trim()) {
+            chain.extendMarkRange("link").unsetLink().run();
+        } else {
+            chain.extendMarkRange("link").setLink({ href: href.trim(), target: newTab ? "_blank" : null }).run();
+        }
+        setOpen(false);
+    };
+
+    return (
+        <div ref={ref} className="relative">
+            <button
+                type="button"
+                title="Enlace"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => (open ? setOpen(false) : openPopover())}
+                className={`w-8 h-8 rounded-md flex items-center justify-center text-sm transition ${
+                    editor.isActive("link") || open ? "bg-editor-primary text-white" : "text-gray-200 hover:bg-white/10"
+                }`}
+            >
+                <i className="fa-solid fa-link"></i>
+            </button>
+            {open && (
+                <div
+                    className="absolute top-full left-1/2 -translate-x-1/2 mt-2 z-[100001] w-[280px] rounded-xl bg-white shadow-2xl border border-gray-200 p-2.5"
+                    onMouseDown={(e) => e.preventDefault()}
+                >
+                    <input
+                        autoFocus
+                        type="text"
+                        value={url}
+                        spellCheck={false}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onChange={(e) => setUrl(e.target.value)}
+                        onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); apply(url); } }}
+                        placeholder="https://… o /pagina"
+                        className="w-full px-2.5 py-2 rounded-lg bg-gray-50 border border-gray-200 text-[12px] text-gray-800 focus:outline-none focus:ring-2 focus:ring-editor-primary/30 focus:border-editor-primary"
+                    />
+                    <input
+                        type="text"
+                        value={query}
+                        onMouseDown={(e) => e.stopPropagation()}
+                        onChange={(e) => setQuery(e.target.value)}
+                        placeholder="…o busca en tu contenido"
+                        className="w-full mt-1.5 px-2.5 py-2 rounded-lg bg-gray-50 border border-gray-200 text-[12px] text-gray-800 focus:outline-none focus:ring-2 focus:ring-editor-primary/30 focus:border-editor-primary"
+                    />
+                    {(searching || results.length > 0) && (
+                        <div className="max-h-[150px] overflow-y-auto mt-1">
+                            {searching && <div className="px-2 py-1.5 text-[11px] text-gray-400">Buscando…</div>}
+                            {results.map((r) => (
+                                <button
+                                    key={`${r.type}-${r.id}`}
+                                    type="button"
+                                    onMouseDown={(e) => e.preventDefault()}
+                                    onClick={() => { setUrl(`/${r.slug}`); apply(`/${r.slug}`); }}
+                                    className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-gray-50"
+                                >
+                                    <i className={`fa-solid ${r.type === "page" ? "fa-file" : "fa-newspaper"} text-[10px] text-gray-400 shrink-0`}></i>
+                                    <span className="min-w-0 flex-1">
+                                        <span className="block text-[12px] text-gray-800 truncate">{r.title}</span>
+                                        <span className="block text-[10px] text-gray-400 truncate">/{r.slug}</span>
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+                    )}
+                    <label
+                        className="flex items-center gap-2 mt-2 px-1 text-[11px] font-semibold text-gray-600 cursor-pointer select-none"
+                        onMouseDown={(e) => e.stopPropagation()}
+                    >
+                        <input type="checkbox" checked={newTab} onChange={(e) => setNewTab(e.target.checked)} className="accent-blue-600" />
+                        Abrir en pestaña nueva
+                    </label>
+                    <div className="flex items-center gap-1.5 mt-2 pt-2 border-t border-gray-100">
+                        <button
+                            type="button"
+                            onMouseDown={(e) => e.preventDefault()}
+                            onClick={() => apply(url)}
+                            className="flex-1 inline-flex items-center justify-center gap-1.5 px-2 py-1.5 rounded-lg bg-editor-primary text-white text-[11px] font-semibold hover:opacity-90"
+                        >
+                            <i className="fa-solid fa-check text-[10px]"></i>
+                            Aplicar
+                        </button>
+                        {editor.isActive("link") && (
+                            <button
+                                type="button"
+                                title="Quitar enlace"
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => apply("")}
+                                className="px-2.5 py-1.5 rounded-lg bg-gray-50 hover:bg-gray-100 text-[11px] font-semibold text-gray-600"
+                            >
+                                <i className="fa-solid fa-link-slash text-[10px]"></i>
+                            </button>
+                        )}
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function InlineTiptap({
     html,
     inline = false,
@@ -420,6 +632,7 @@ export default function InlineTiptap({
             }),
             TextStyle,
             Color,
+            BackgroundColor,
             FontSize,
             FontFamily,
             TextAlign.configure({ types: ["paragraph"] }),
@@ -535,19 +748,9 @@ export default function InlineTiptap({
                 <Btn title="Subrayado" icon="fa-underline" active={editor.isActive("underline")} onCmd={() => editor.chain().focus().toggleUnderline().run()} />
                 <Btn title="Tachado" icon="fa-strikethrough" active={editor.isActive("strike")} onCmd={() => editor.chain().focus().toggleStrike().run()} />
                 <Sep />
-                <Btn
-                    title="Enlace"
-                    icon="fa-link"
-                    active={editor.isActive("link")}
-                    onCmd={() => {
-                        const prev = (editor.getAttributes("link").href as string) || "";
-                        const url = window.prompt("URL del enlace:", prev);
-                        if (url === null) return;
-                        if (url === "") editor.chain().focus().extendMarkRange("link").unsetLink().run();
-                        else editor.chain().focus().extendMarkRange("link").setLink({ href: url }).run();
-                    }}
-                />
+                <LinkButton editor={editor} />
                 <ColorButton editor={editor} />
+                <HighlightButton editor={editor} />
                 <Sep />
                 <FontFamilyControl editor={editor} />
                 <FontSizeControl editor={editor} />
@@ -563,6 +766,8 @@ export default function InlineTiptap({
                         <Btn title="Lista numerada" icon="fa-list-ol" active={editor.isActive("orderedList")} onCmd={() => editor.chain().focus().toggleOrderedList().run()} />
                     </>
                 )}
+                <Sep />
+                <Btn title="Limpiar formato" icon="fa-eraser" onCmd={() => editor.chain().focus().unsetAllMarks().run()} />
               </div>
             </BubbleMenu>
 

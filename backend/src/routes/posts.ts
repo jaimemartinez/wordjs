@@ -388,7 +388,8 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         comment_status,
         categories,
         tags,
-        meta
+        meta,
+        autosave
     } = req.body;
 
     // Check if user can publish
@@ -426,8 +427,12 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         }
     }
 
-    // Save revision after ALL updates (including meta) are done
-    saveRevision(postId).catch((err: any) => console.error('Failed to save revision:', err));
+    // Save revision after ALL updates (including meta) are done. Editor autosaves skip this so a
+    // background save every few seconds doesn't churn through the revision cap (default 10) and
+    // wipe the user's meaningful history — explicit saves still snapshot as before.
+    if (autosave !== true) {
+        saveRevision(postId).catch((err: any) => console.error('Failed to save revision:', err));
+    }
 
     const fresh = await Post.findById(postId);
     if (!fresh) {

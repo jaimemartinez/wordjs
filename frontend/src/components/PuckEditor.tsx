@@ -1,6 +1,6 @@
 "use client";
 
-import { Puck, Config, Data, migrate, useGetPuck } from "@measured/puck";
+import { Puck, Config, Data, migrate, useGetPuck, createUsePuck } from "@measured/puck";
 import "@measured/puck/puck.css";
 import "./puck-theme.css";
 import React, { useState, useEffect, useRef } from "react";
@@ -9,8 +9,9 @@ import PublicLayoutShell from "@/components/public/PublicLayoutShell";
 import { puckConfig } from "./puckConfig";
 import RevisionsSidebar from "./RevisionsSidebar";
 import BlockInserter from "./BlockInserter";
-import { PATTERNS, insertPattern } from "@/lib/puckPatterns";
+import { PATTERNS, insertPattern, regenIds } from "@/lib/puckPatterns";
 import InlineTiptap from "./InlineTiptap";
+import { hideClasses } from "./puck/VisibilityField";
 import { revisionsApi, Revision, themesApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -22,6 +23,176 @@ import { sanitizeHTML } from "@/lib/sanitize";
 // breakpoints, matching the live site. (Puck's built-in viewport/zoom is NOT applied by <Puck.Preview>
 // in composition mode, so we size + scale-to-fit ourselves; see PreviewFrame.)
 type ViewportKey = "desktop" | "tablet" | "mobile";
+
+// Selector-based Puck store hook (reactive, unlike useGetPuck) — must render inside <Puck>.
+const usePuck = createUsePuck();
+
+// ---- Block clipboard (copy/paste across pages; ids regenerated on paste via regenIds) ----
+const BLOCK_CLIPBOARD_KEY = "wjs_block_clipboard";
+
+const writeBlockClipboard = (item: any) => {
+    try { localStorage.setItem(BLOCK_CLIPBOARD_KEY, JSON.stringify(item)); } catch { /* storage full/blocked */ }
+};
+const readBlockClipboard = (): any | null => {
+    try {
+        const raw = localStorage.getItem(BLOCK_CLIPBOARD_KEY);
+        const item = raw ? JSON.parse(raw) : null;
+        return item && item.type && item.props ? item : null;
+    } catch { return null; }
+};
+
+// Undo/redo header buttons. Selectors keep them live; actions go through the store directly.
+function HistoryControls() {
+    const hasPast = usePuck((s: any) => s.history.hasPast);
+    const hasFuture = usePuck((s: any) => s.history.hasFuture);
+    const getPuck = useGetPuck();
+    const btn = (enabled: boolean, icon: string, title: string, onClick: () => void) => (
+        <button
+            type="button"
+            title={title}
+            disabled={!enabled}
+            onClick={onClick}
+            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${
+                enabled ? "text-gray-500 hover:text-blue-600 hover:bg-gray-100" : "text-gray-300 cursor-not-allowed"
+            }`}
+        >
+            <i className={`fa-solid ${icon}`}></i>
+        </button>
+    );
+    return (
+        <div className="flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100">
+            {btn(hasPast, "fa-rotate-left", "Deshacer (Ctrl+Z)", () => getPuck().history.back())}
+            {btn(hasFuture, "fa-rotate-right", "Rehacer (Ctrl+Shift+Z)", () => getPuck().history.forward())}
+        </div>
+    );
+}
+
+/**
+ * EditorHotkeys — global keyboard layer (renders nothing). Attached in CAPTURE phase on both the
+ * editor window and the canvas iframe window (cross-realm safe: no instanceof checks):
+ *   Ctrl/Cmd+S save · Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z (or Y) undo/redo · Ctrl/Cmd+D duplicate ·
+ *   Supr delete · Ctrl/Cmd+C/V copy/paste the selected block (localStorage → works across pages).
+ * Block-level keys are ignored while typing (inputs/contenteditable/inline Tiptap active).
+ */
+function EditorHotkeys({ onSave, components }: { onSave?: () => void; components: Record<string, any> }) {
+    const getPuck = useGetPuck();
+    const onSaveRef = useRef(onSave);
+    const componentsRef = useRef(components);
+    React.useEffect(() => {
+        onSaveRef.current = onSave;
+        componentsRef.current = components;
+    });
+
+    React.useEffect(() => {
+        const isTypingTarget = (t: any): boolean =>
+            !!(t && typeof t.closest === "function" &&
+                t.closest('input, textarea, select, [contenteditable="true"], .ProseMirror'));
+        const inlineEditing = () => !!((window as any).puckActiveEditorId);
+
+        const pasteBlock = (sel: { index: number; zone?: string } | null) => {
+            const clip = readBlockClipboard();
+            if (!clip) return;
+            if (!componentsRef.current[clip.type]) return; // block type not available in this config
+            const item = regenIds(clip);
+            getPuck().dispatch({
+                type: "setData",
+                data: (prev: any) => {
+                    const content = [...(prev.content || [])];
+                    // Paste after the selection when it lives in the root content; otherwise append.
+                    const inRoot = sel && (!sel.zone || /(^|:)(default-zone|content)$/.test(sel.zone));
+                    const at = inRoot ? Math.min(sel!.index + 1, content.length) : content.length;
+                    content.splice(at, 0, item);
+                    return { ...prev, content };
+                },
+                recordHistory: true, // make paste undoable (programmatic setData skips history by default)
+            });
+        };
+
+        const onKey = (e: KeyboardEvent) => {
+            const mod = e.ctrlKey || e.metaKey;
+            const key = e.key.toLowerCase();
+
+            if (mod && key === "s") {
+                e.preventDefault();
+                e.stopPropagation();
+                onSaveRef.current?.();
+                return;
+            }
+
+            if (isTypingTarget(e.target) || inlineEditing()) return;
+
+            const puck = getPuck();
+            if (mod && key === "z" && !e.shiftKey) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (puck.history.hasPast) puck.history.back();
+                return;
+            }
+            if ((mod && key === "z" && e.shiftKey) || (mod && key === "y")) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (puck.history.hasFuture) puck.history.forward();
+                return;
+            }
+
+            const sel = puck.appState.ui.itemSelector as { index: number; zone?: string } | null;
+
+            if (mod && key === "v") {
+                e.preventDefault();
+                e.stopPropagation();
+                pasteBlock(sel);
+                return;
+            }
+            if (!sel) return;
+
+            if (e.key === "Delete") {
+                e.preventDefault();
+                e.stopPropagation();
+                puck.dispatch({ type: "remove", index: sel.index, zone: sel.zone ?? "root:default-zone" });
+                return;
+            }
+            if (mod && key === "d") {
+                e.preventDefault();
+                e.stopPropagation();
+                puck.dispatch({ type: "duplicate", sourceIndex: sel.index, sourceZone: sel.zone ?? "root:default-zone" });
+                return;
+            }
+            if (mod && key === "c") {
+                // Don't hijack a real text copy — only act when nothing is text-selected.
+                const winSel = window.getSelection();
+                if (winSel && !winSel.isCollapsed) return;
+                const item = (puck as any).selectedItem;
+                if (item) writeBlockClipboard(item);
+                return;
+            }
+        };
+
+        window.addEventListener("keydown", onKey, true);
+        // The canvas iframe has its own event realm — attach there too (poll until mounted, and
+        // re-check periodically in case the iframe reloads).
+        const attached = new WeakSet<Window>();
+        const hook = () => {
+            const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
+            const win = iframe?.contentWindow;
+            if (win && !attached.has(win)) {
+                try {
+                    win.addEventListener("keydown", onKey, true);
+                    attached.add(win);
+                } catch { /* cross-origin (never expected) */ }
+            }
+        };
+        hook();
+        const t = setInterval(hook, 1000);
+        return () => {
+            clearInterval(t);
+            window.removeEventListener("keydown", onKey, true);
+            const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
+            try { iframe?.contentWindow?.removeEventListener("keydown", onKey, true); } catch { /* gone */ }
+        };
+    }, [getPuck]);
+
+    return null;
+}
 const VIEWPORT_WIDTH: Record<ViewportKey, number> = { desktop: 1280, tablet: 768, mobile: 375 };
 const EDITOR_VIEWPORTS: { key: ViewportKey; icon: string }[] = [
     { key: "desktop", icon: "desktop" },
@@ -181,7 +352,8 @@ interface PuckEditorProps {
     onStatusChange?: (status: string) => void;
     saving?: boolean;
     hasChanges?: boolean;
-    onSave?: () => void | Promise<void>;
+    /** Called with {autosave:true} for background saves (parent should skip alerts/revisions). */
+    onSave?: (opts?: { autosave?: boolean }) => void | Promise<void>;
     onCancel?: () => void;
     config?: Config;
     pageId?: number;
@@ -472,6 +644,37 @@ export default function PuckEditor({
         if (previewSlug) window.open(`/${previewSlug}?preview=1`, '_blank', 'noopener');
     }, [hasChanges, onSave, previewSlug]);
 
+    // ---- Save status + autosave ----
+    // savedAt drives the header indicator; it's only SHOWN when hasChanges is false, so a failed
+    // save (parent keeps isDirty=true) can't display a false "saved" state.
+    const [savedAt, setSavedAt] = useState<Date | null>(null);
+    const [lastSaveWasAuto, setLastSaveWasAuto] = useState(false);
+
+    const handleManualSave = React.useCallback(async () => {
+        if (!onSave) return;
+        await onSave();
+        setSavedAt(new Date());
+        setLastSaveWasAuto(false);
+    }, [onSave]);
+
+    // Autosave: drafts only (a published page must never go live in the background). Fires 8s after
+    // the page first becomes dirty, with a 30s floor between runs; the parent passes autosave:true
+    // through to the API so these background saves skip revision snapshots and validation alerts.
+    const lastAutosaveRef = useRef(0);
+    useEffect(() => {
+        if (status !== "draft" || !onSave || !hasChanges || saving) return;
+        const wait = Math.max(8000, 30000 - (Date.now() - lastAutosaveRef.current));
+        const t = setTimeout(async () => {
+            lastAutosaveRef.current = Date.now();
+            try {
+                await onSave({ autosave: true });
+                setSavedAt(new Date());
+                setLastSaveWasAuto(true);
+            } catch { /* background save — the next manual save surfaces real errors */ }
+        }, wait);
+        return () => clearTimeout(t);
+    }, [status, onSave, hasChanges, saving]);
+
     const [data, setData] = useState<Data>(() => {
         const baseData = initialData || {
             content: [],
@@ -564,7 +767,9 @@ export default function PuckEditor({
         // function form receives Puck's live data). Puck's onChange then syncs our mirror back.
         const dispatch = (window as any).puckDispatch || (window.parent as any)?.puckDispatch;
         if (dispatch) {
-            dispatch({ type: 'setData', data: transform });
+            // recordHistory: inline text commits are debounced (300ms), so entries land in sane
+            // chunks and Ctrl+Z can step back through text edits like any other change.
+            dispatch({ type: 'setData', data: transform, recordHistory: true });
             return;
         }
 
@@ -612,18 +817,22 @@ export default function PuckEditor({
         };
 
         const baseConfig = activeConfig;
+        // Replacing render drops the withSharedBlockFields wrapper, so re-apply the wjs-hide-*
+        // classes here — otherwise "ocultar en móvil" on a Text/Heading previews on the live site
+        // but not in the canvas device preview. (Animations stay off in the editor by design.)
+        const inlineRender = (props: any) => {
+            const cls = hideClasses(props.hide);
+            const inner = <InlineText {...props} id={props.id || props.puck?.id} />;
+            return cls ? <div className={cls} style={{ display: "contents" }}>{inner}</div> : inner;
+        };
         const editorOverrides = {
             Text: {
                 ...baseConfig.components.Text,
-                render: (props: any) => {
-                    return <InlineText {...props} id={props.id || props.puck?.id} />;
-                }
+                render: inlineRender
             },
             Heading: {
                 ...baseConfig.components.Heading,
-                render: (props: any) => {
-                    return <InlineText {...props} id={props.id || props.puck?.id} />;
-                }
+                render: inlineRender
             }
         };
 
@@ -715,7 +924,7 @@ export default function PuckEditor({
                 {onSave && (
                     <button
                         type="button"
-                        onClick={onSave}
+                        onClick={handleManualSave}
                         disabled={saving || (!hasChanges && !activeEditorId)}
                         className={`px-3 py-1.5 rounded-md text-sm transition-colors flex items-center gap-1.5 ${hasChanges
                             ? 'bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white'
@@ -736,7 +945,7 @@ export default function PuckEditor({
             }
             return <>{children}</>;
         },
-    }), [onStatusChange, status, onCancel, onSave, saving, hasChanges, activeEditorId, previewSlug, handlePreview]);
+    }), [onStatusChange, status, onCancel, onSave, handleManualSave, saving, hasChanges, activeEditorId, previewSlug, handlePreview]);
 
 
 
@@ -748,6 +957,7 @@ export default function PuckEditor({
     const [showRevisions, setShowRevisions] = useState(false);
     const [isUiLoaded, setIsUiLoaded] = useState(false);
     const [viewport, setViewport] = useState<ViewportKey>("desktop");
+
 
     const handleRestore = async (revision: Revision) => {
         if (!pageId) return;
@@ -876,6 +1086,8 @@ export default function PuckEditor({
                     iframe={{ enabled: true }}
                 >
                     <div className="flex flex-col h-screen w-full overflow-hidden">
+                        {/* Global keyboard layer: save/undo/redo/duplicate/delete/copy/paste */}
+                        <EditorHotkeys onSave={handleManualSave} components={editorConfig.components} />
 
                         {/* PREMIUM HEADER (h-20) */}
                         <div className="h-20 flex items-center justify-between bg-white/80 backdrop-blur-md px-6 md:px-8 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-6">
@@ -911,6 +1123,9 @@ export default function PuckEditor({
                                         <i className={`fa-solid fa-sliders`}></i>
                                     </button>
                                 </div>
+
+                                {/* Undo / Redo */}
+                                <HistoryControls />
                             </div>
 
                             {/* Center: Viewport Controls */}
@@ -918,6 +1133,22 @@ export default function PuckEditor({
 
                             {/* Right: Actions */}
                             <div className="flex items-center gap-4">
+                                {/* Save-state indicator (autosave keeps drafts safe in the background) */}
+                                {onSave && (
+                                    <div className="hidden xl:flex flex-col items-end leading-tight select-none" aria-live="polite">
+                                        {hasChanges ? (
+                                            <span className="text-[11px] font-bold text-amber-500 flex items-center gap-1.5">
+                                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
+                                                {status === "draft" ? "Sin guardar · autoguardado activo" : "Cambios sin publicar"}
+                                            </span>
+                                        ) : savedAt ? (
+                                            <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1.5">
+                                                <i className="fa-solid fa-circle-check text-[10px]"></i>
+                                                {lastSaveWasAuto ? "Autoguardado" : "Guardado"} {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                                            </span>
+                                        ) : null}
+                                    </div>
+                                )}
                                 {onStatusChange && (
                                     <div className="hidden md:block">
                                         <ModernSelect
@@ -956,7 +1187,7 @@ export default function PuckEditor({
                                     {onSave && (
                                         <button
                                             type="button"
-                                            onClick={onSave}
+                                            onClick={handleManualSave}
                                             disabled={saving || (!hasChanges && !activeEditorId)}
                                             className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${hasChanges
                                                 ? 'bg-gray-900 hover:bg-blue-600 text-white shadow-gray-200 hover:shadow-blue-500/30 hover:-translate-y-0.5'
