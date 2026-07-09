@@ -23,6 +23,35 @@ function isAllowedIframeSrc(src: string | null | undefined): boolean {
     }
 }
 
+// Inline styles: the visual editor's rich text (Tiptap TextStyle / FontSize / Color / BackgroundColor
+// / FontFamily / TextAlign) emits an inline `style` attribute for font size, text color, highlight,
+// font family and alignment. Allowing the RAW `style` attribute is an injection vector (url() beacons
+// for exfiltration/tracking, expression(), position/overlay tricks), so instead we permit ONLY a
+// small allowlist of typographic properties, and only with injection-free values.
+const ALLOWED_STYLE_PROPS = new Set([
+    'color', 'background-color', 'font-size', 'font-family', 'font-weight',
+    'font-style', 'text-decoration', 'text-align', 'line-height', 'text-transform',
+]);
+// Reject any declaration whose value could smuggle a fetch/script/CSS-injection.
+const UNSAFE_STYLE_VALUE = /url\(|expression|javascript:|@import|[<>{}\\]/i;
+function filterInlineStyle(style: string | null | undefined): string {
+    if (!style) return '';
+    return style
+        .split(';')
+        .map((d) => d.trim())
+        .filter(Boolean)
+        .map((decl) => {
+            const idx = decl.indexOf(':');
+            if (idx < 0) return null;
+            const prop = decl.slice(0, idx).trim().toLowerCase();
+            const val = decl.slice(idx + 1).trim();
+            if (!ALLOWED_STYLE_PROPS.has(prop) || !val || UNSAFE_STYLE_VALUE.test(val)) return null;
+            return `${prop}: ${val}`;
+        })
+        .filter(Boolean)
+        .join('; ');
+}
+
 // Configure DOMPurify options
 const SANITIZE_OPTIONS = {
     ALLOWED_TAGS: [
@@ -47,9 +76,10 @@ const SANITIZE_OPTIONS = {
     ],
     ALLOWED_ATTR: [
         // Common
-        // NOTE: the `style` attribute is intentionally NOT allowed on user content (inline-CSS
-        // injection vector); legitimate styling comes from class names / React components.
-        'id', 'class', 'title', 'lang', 'dir',
+        // `style` is allowed but scrubbed to a safe typographic allowlist (ALLOWED_STYLE_PROPS) by the
+        // afterSanitizeAttributes hook below — required for the rich-text editor's font-size/color/
+        // highlight/font-family/align, which are inline styles. Raw arbitrary CSS is NOT permitted.
+        'id', 'class', 'title', 'lang', 'dir', 'style',
         // Links
         'href', 'target', 'rel',
         // Media
@@ -80,6 +110,23 @@ const SANITIZE_OPTIONS = {
 const SERVER_SANITIZE_OPTIONS = {
     allowedTags: SANITIZE_OPTIONS.ALLOWED_TAGS.filter(t => !SANITIZE_OPTIONS.FORBID_TAGS.includes(t)),
     allowedAttributes: { '*': SANITIZE_OPTIONS.ALLOWED_ATTR },
+    // Mirror the client's inline-style allowlist (ALLOWED_STYLE_PROPS): only these typographic
+    // properties survive, and only with values matching these patterns — url()/expression()/@import
+    // never match, so they're dropped. Keeps SSR output identical in spirit to the client hook.
+    allowedStyles: {
+        '*': {
+            'color': [/^#(?:[0-9a-fA-F]{3,8})$/, /^rgb\(/, /^rgba\(/, /^hsl\(/, /^hsla\(/, /^[a-zA-Z]+$/],
+            'background-color': [/^#(?:[0-9a-fA-F]{3,8})$/, /^rgb\(/, /^rgba\(/, /^hsl\(/, /^hsla\(/, /^[a-zA-Z]+$/],
+            'font-size': [/^\d+(?:\.\d+)?(?:px|em|rem|%|pt)$/],
+            'font-family': [/^[\w\s,'"()-]+$/],
+            'font-weight': [/^(?:normal|bold|bolder|lighter|[1-9]00)$/],
+            'font-style': [/^(?:normal|italic|oblique)$/],
+            'text-decoration': [/^(?:none|underline|line-through|overline)(?:\s+\w+)*$/],
+            'text-align': [/^(?:left|right|center|justify)$/],
+            'line-height': [/^[\d.]+(?:px|em|rem|%)?$/],
+            'text-transform': [/^(?:none|uppercase|lowercase|capitalize)$/],
+        },
+    },
     allowedSchemes: ['http', 'https', 'mailto', 'tel'],
     allowedSchemesByTag: { img: ['http', 'https', 'data'], source: ['http', 'https', 'data'] },
     // Restrict <iframe> to the embed-host allowlist (arbitrary src is dropped). <style> is no longer
@@ -123,6 +170,13 @@ function ensureDomPurifyHooks(): void {
             if (node.getAttribute('target').toLowerCase() === '_blank') {
                 node.setAttribute('rel', 'noopener noreferrer');
             }
+        }
+        // Scrub inline styles down to the safe typographic allowlist (see filterInlineStyle). Anything
+        // else — url() beacons, position/overlay tricks, unknown props — is dropped.
+        if (node.getAttribute && node.getAttribute('style')) {
+            const safe = filterInlineStyle(node.getAttribute('style'));
+            if (safe) node.setAttribute('style', safe);
+            else node.removeAttribute('style');
         }
     });
     _hooksRegistered = true;
