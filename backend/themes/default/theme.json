@@ -1,6 +1,6 @@
 {
-  "name": "Default Theme",
-  "version": "1.0.0",
-  "description": "The default robust WordJS theme",
+  "name": "WordJS",
+  "version": "2.0.0",
+  "description": "The default WordJS theme — modern, JavaScript-native, developer-first. Signature indigo→violet gradient, Space Grotesk display type, and a deep-indigo footer.",
   "author": "WordJS"
 }
