@@ -78,7 +78,8 @@ const shouldCompress = (req, res) => {
 };
 
 // Present the SAME public certificate the gateway uses, so switching modes is seamless for the browser.
-function resolveSSL() {
+// async because selfsigned.generate() returns a Promise in v5+ (see the awaited call below).
+async function resolveSSL() {
     if (process.env.WORDJS_HTTP === '1') return null;
     try {
         const ssl = gwConfig.ssl;
@@ -115,7 +116,10 @@ function resolveSSL() {
                     }
                 }
             } catch { /* network enumeration best-effort */ }
-            const pems = selfsigned.generate(
+            // CRITICAL: selfsigned.generate() is ASYNC (returns a Promise) in v5+. Without await,
+            // pems.private/pems.cert are undefined → https.createServer serves no certificate and
+            // every TLS handshake fails (sslv3 alert handshake_failure). Matches cert-manager/gateway.
+            const pems = await selfsigned.generate(
                 [{ name: 'commonName', value: 'localhost' }],
                 { days: 365, keySize: 2048, extensions: [{ name: 'subjectAltName', altNames }] }
             );
@@ -167,7 +171,7 @@ async function main() {
     }
 
     // 4) Public server: cross-cutting middleware (ported from the gateway worker) + path dispatch.
-    const ssl = resolveSSL();
+    const ssl = await resolveSSL();
     const proto = ssl ? 'https' : 'http';
 
     // Raw connect-style chain — deliberately NOT an Express app. The root's Express is v5 while the
