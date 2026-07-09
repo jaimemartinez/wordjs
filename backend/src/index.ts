@@ -78,46 +78,45 @@ app.use(helmet({
 }));
 app.disable('x-powered-by');
 
-// CORS configuration
-// CORS configuration
-app.use(cors({
-    origin: (origin: any, callback: any) => {
-        // Allow requests with no origin (like mobile apps or curl requests)
-        if (!origin) return callback(null, true);
+// CORS — zero-config by design. A request's credentialed cross-origin access is granted only when it
+// is one of:
+//   1) an explicitly CONFIGURED public origin (siteUrl / frontendUrl / gatewayUrl, set post-setup);
+//   2) SAME-ORIGIN — the monolith serves the frontend AND the API from ONE origin (incl. behind a
+//      reverse proxy), so the install wizard and app calls are same-origin. We detect this by matching
+//      the request's Origin hostname to the `Host` header the request arrived on. `Host` is set by the
+//      browser to the REAL target and is a forbidden header for fetch/XHR, so cross-origin JS cannot
+//      forge it: a cross-site attacker's request carries Origin=attacker but Host=victim and never
+//      matches. (Behind a proxy this needs `proxy_set_header Host $host`, which the migration guard
+//      also requires — so no per-deployment CORS config is needed for `npx create-wordjs` + nginx.)
+//   3) localhost, in development only.
+// Reflecting an ARBITRARY origin with credentials:true would be an account-takeover hole, so anything
+// else gets no CORS headers (the browser blocks it). We omit the header instead of throwing, so a
+// blocked cross-origin probe doesn't spam the logs.
+const CORS_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'];
+const CORS_HEADERS = ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token'];
+const hostnameOnly = (v: string): string => { try { return new URL('http://' + v).hostname.toLowerCase(); } catch { return ''; } };
+app.use(cors((req: any, done: any) => {
+    const base = { credentials: true, methods: CORS_METHODS, allowedHeaders: CORS_HEADERS };
+    const allow = () => done(null, { ...base, origin: true });   // reflect this origin + allow credentials
+    const deny = () => done(null, { ...base, origin: false });   // no ACAO → browser blocks (no throw)
 
-        // In development, relax CORS — but ONLY for localhost/127.0.0.1/[::1] origins. Because
-        // credentials:true is set, reflecting an ARBITRARY origin would let any website make
-        // credentialed requests against a dev instance (account takeover); never do that, even in dev.
-        if (config.nodeEnv === 'development') {
-            let host = '';
-            try { host = new URL(origin).hostname.toLowerCase(); } catch { host = ''; }
-            const isLocal = host === 'localhost' || host === '127.0.0.1' || host === '::1';
-            if (isLocal) return callback(null, true);
-            return callback(new Error('Not allowed by CORS'));
-        }
+    const origin: string | undefined = req.headers.origin;
+    if (!origin) return allow(); // no Origin: curl / server-to-server / same-origin navigation — nothing to gate
 
-        // In production, check against allowed domains. Because credentials:true is set,
-        // reflecting an arbitrary origin would allow any site to make credentialed
-        // requests (account takeover). Only allow the configured origins.
-        // Use the canonical config keys: site.url (== siteUrl, the gateway/public origin),
-        // the top-level frontendUrl (Next.js origin), and the top-level gatewayUrl written at
-        // install (full public gateway URL). `config.site` only carries url/name/description —
-        // `config.site.frontendUrl` was undefined, so the real frontend origin was silently
-        // dropped from the allowlist and legitimate credentialed requests were rejected.
-        const allowedOrigins = [
-            config.site.url,
-            config.frontendUrl,
-            config.gatewayUrl,
-        ].filter(Boolean);
-        if (allowedOrigins.indexOf(origin) !== -1) {
-            callback(null, true);
-        } else {
-            callback(new Error('Not allowed by CORS'));
-        }
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Install-Token']
+    // (1) configured public origins
+    if ([config.site.url, config.frontendUrl, config.gatewayUrl].filter(Boolean).indexOf(origin) !== -1) return allow();
+
+    let originHost = '';
+    try { originHost = new URL(origin).hostname.toLowerCase(); } catch { return deny(); }
+
+    // (2) same-origin (Origin host === the Host the request was actually sent to)
+    const hostHeader = hostnameOnly(req.headers.host || '');
+    if (hostHeader && originHost === hostHeader) return allow();
+
+    // (3) dev localhost
+    if (config.nodeEnv === 'development' && (originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1')) return allow();
+
+    return deny();
 }));
 
 // Cookie Parser (for HttpOnly auth cookies)
