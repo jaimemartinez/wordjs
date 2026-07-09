@@ -21,10 +21,14 @@ export default function PublicLayoutShell({
     children,
     layout = {},
     mods,
+    themeSlug,
 }: {
     children: React.ReactNode;
     layout?: Record<string, unknown>;
     mods?: string | Record<string, unknown> | null;
+    // Active-theme slug resolved by the async server layout, so the theme stylesheet is server-rendered
+    // (no FOUC). Omitted by the editor preview, which resolves it client-side + injects its own iframe CSS.
+    themeSlug?: string | null;
 }) {
     const containerWidth = typeof layout.containerWidth === "string" ? layout.containerWidth : null;
     const mainStyle = containerWidth ? { maxWidth: containerWidth } : undefined;
@@ -33,7 +37,7 @@ export default function PublicLayoutShell({
     return (
         <ActivePluginsProvider>
             <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)' }}>
-                <ThemeLoader />
+                <ThemeLoader initialSlug={themeSlug} />
                 <ThemeTokenOverlay mods={mods} />
                 <Header />
                 <main className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>
