@@ -23,7 +23,7 @@ export default async function PublicLayout({
     try { if (settings?.active_theme_layout) layout = JSON.parse(settings.active_theme_layout) || {}; } catch { /* ignore malformed */ }
 
     return (
-        <PublicLayoutShell layout={layout} mods={settings?.active_theme_mods}>
+        <PublicLayoutShell layout={layout} mods={settings?.active_theme_mods} themeSlug={settings?.template || "default"}>
             {/* RSS auto-discovery — React hoists this to <head> on every public page */}
             <link rel="alternate" type="application/rss+xml" title={settings?.blogname || "RSS"} href="/feed" />
             {/* Plugin-enqueued styles + head scripts (validated + served from /plugins/<slug>/; the plugin
