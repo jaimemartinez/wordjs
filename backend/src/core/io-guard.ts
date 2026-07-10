@@ -1,6 +1,16 @@
 /**
  * WordJS - IO Guard
- * Monkey-patches 'fs' to prevent plugins from modifying their own code or system files.
+ *
+ * Monkey-patches 'fs' so plugin code (run in the isolated child) is confined to its own dir + a small
+ * set of safe zones, and can never:
+ *   - read/exfiltrate secret files or the raw DB (BLOCKED_FILES / db-file / secret-pattern checks),
+ *   - rewrite its own manifest.json (permission-escalation primitive), or
+ *   - CREATE or rename/copy a file into an executable code extension (.js/.cjs/.mjs/.node/.wasm/…) —
+ *     which would let a plugin plant runtime code the static AST scanner never vetted, or overwrite its
+ *     own scanned source. See EXECUTABLE_CODE_EXT below and secure-require.ts (require() is likewise
+ *     confined to the plugin's own tree + node_modules so a planted file can't be loaded).
+ *
+ * This is a defence-in-depth backstop; the OS process isolation is the real boundary.
  */
 
 const fs = require('fs');
@@ -46,6 +56,14 @@ const ORIGINALS = {
     truncateSync: fs.truncateSync,
     chmod: fs.chmod,
     chmodSync: fs.chmodSync,
+    // Copy/link ops read a SOURCE and create a DEST — both ends must be confined (a copy of the raw DB
+    // or a hard link to a secret would otherwise be a read-confinement bypass / exfiltration primitive).
+    copyFile: fs.copyFile,
+    copyFileSync: fs.copyFileSync,
+    cp: fs.cp,
+    cpSync: fs.cpSync,
+    link: fs.link,
+    linkSync: fs.linkSync,
 
     // Read Ops
     readFile: fs.readFile,
@@ -76,6 +94,14 @@ function getConfiguredDbPaths(): string[] {
     _cfgDbPaths = Array.from(out);
     return _cfgDbPaths;
 }
+
+// Executable/loadable code extensions. A plugin must never CREATE, overwrite, rename-into, or copy-into
+// one of these ANYWHERE it can write. The AST scanner (plugins.ts) statically vets a plugin's committed
+// code before activation; letting a plugin drop a fresh .js at runtime — directly, or by writing a .txt
+// then renaming/copying it to .js — would be a scanner-evasion + self-code-modification primitive.
+// Data files (.json/.txt/images/etc.) stay writable in the plugin's safe zones. Covers native addons
+// (.node) and WebAssembly (.wasm) which are also loadable code, and TS variants defensively.
+const EXECUTABLE_CODE_EXT = /\.(?:c|m)?jsx?$|\.(?:c|m)?tsx?$|\.node$|\.wasm$/i;
 
 /**
  * Check if a path is safe to access
@@ -140,6 +166,15 @@ function isPathSafe(targetPath: string, isWrite = false) {
     // live from it, so a self-rewrite would be a permission-escalation primitive. Block all writes.
     if (isWrite && filename === 'manifest.json') {
         throttledWarn(`${pluginSlug}:manifest`, `[Security Block] Plugin '${pluginSlug}' tried to write a manifest.json: ${resolved}`);
+        return false;
+    }
+
+    // SECURITY (self-code-modification / scanner-evasion): never let a plugin CREATE or rename/copy a
+    // file into an executable code extension anywhere it can write — not even its own dir. Its committed
+    // code is what the AST scanner vetted; a fresh runtime .js (directly, or written as .txt then renamed
+    // to .js) would run un-scanned. Applies to every write path (write/append/rename-dest/copy-dest).
+    if (isWrite && EXECUTABLE_CODE_EXT.test(filename)) {
+        throttledWarn(`${pluginSlug}:exec-write`, `[Security Block] Plugin '${pluginSlug}' tried to write executable code: ${resolved}`);
         return false;
     }
 
@@ -234,18 +269,27 @@ function patch(methodName: string, isSync = false) {
     ].includes(methodName);
 
     fs[methodName] = function (...args: any[]) {
-        // Different methods have path at different positions
-        let pathsToCheck = [args[0]];
+        // Different methods have path(s) at different positions, with different read/write semantics.
+        // pathsToCheck is a list of [path, isWriteForThisPath] pairs.
+        let pathsToCheck: [any, boolean][] = [[args[0], isWrite]];
 
-        if (methodName.startsWith('rename') || methodName.startsWith('symlink') || methodName.startsWith('link')) {
-            // Check BOTH (Source/Dest or Target/Path)
-            pathsToCheck = [args[0], args[1]];
+        if (methodName.startsWith('copy') || methodName.startsWith('cp') || methodName.startsWith('link')) {
+            // (source, dest): source is READ, dest is WRITTEN. Checking the source with read semantics
+            // still denies a secret/DB source (those blocks ignore the flag) while the dest gets the full
+            // write confinement — including the executable-extension block, which stops copy/hard-link to
+            // '<own>/x.js'. Read semantics on the source avoids over-blocking a legit copy out of a
+            // read-only zone (e.g. node_modules) into a safe write dir.
+            pathsToCheck = [[args[0], false], [args[1], true]];
+        } else if (methodName.startsWith('rename') || methodName.startsWith('symlink')) {
+            // rename modifies BOTH ends; symlink writes the link path. Check both with write semantics
+            // (secret/DB source is still denied regardless, and rename-into-x.js is caught on the dest).
+            pathsToCheck = [[args[0], true], [args[1], true]];
         }
 
-        for (const p of pathsToCheck) {
+        for (const [p, w] of pathsToCheck) {
             if (!p) continue;
             // Validate
-            if (!isPathSafe(p, isWrite)) {
+            if (!isPathSafe(p, w)) {
                 const error: any = new Error(`EACCES: Permission denied, plugin cannot access: ${p}`);
                 error.code = 'EACCES';
                 if (isSync) throw error;
@@ -270,6 +314,9 @@ patch('appendFile'); patch('appendFileSync', true);
 patch('createWriteStream');
 patch('truncate'); patch('truncateSync', true);
 patch('chmod'); patch('chmodSync', true);
+patch('copyFile'); patch('copyFileSync', true);
+patch('cp'); patch('cpSync', true);
+patch('link'); patch('linkSync', true);
 
 // Read Ops
 patch('readFile'); patch('readFileSync', true);

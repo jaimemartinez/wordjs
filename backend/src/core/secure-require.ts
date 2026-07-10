@@ -21,6 +21,24 @@ const egressGuard = require('./egress-guard');
 
 const PLUGINS_DIR = path.resolve(__dirname, '../../plugins');
 const THEMES_DIR = path.resolve(__dirname, '../../themes');
+const ROOT_DIR = path.resolve(__dirname, '../../');
+
+// Dirs a plugin can WRITE to but must never LOAD CODE from. A plugin has no legitimate reason to
+// require() a module out of uploads/data/os-tmp/logs — those hold attachments, the DB, logs and scratch,
+// not modules — so requiring a resolved file under them is a scanner-evasion primitive (write a payload
+// there, then load it). This is defence-in-depth alongside io-guard's executable-extension write block,
+// which already stops such a .js from being created. Both lexical and realpath forms are recorded so a
+// symlink or a symlinked ROOT can't dodge the prefix check. (themes/ and the plugin's OWN dir stay
+// requirable — theme functions.js and a plugin's own modules are legitimate.)
+const NON_REQUIRABLE_DIRS: string[] = (() => {
+    const out = new Set<string>();
+    for (const n of ['uploads', 'data', 'os-tmp', 'logs']) {
+        const p = path.join(ROOT_DIR, n);
+        out.add(p);
+        try { out.add(originalFs.realpathSync(p)); } catch { /* dir may not exist yet */ }
+    }
+    return Array.from(out);
+})();
 
 // Methods that require filesystem:read permission
 const FS_READ_METHODS = [
@@ -482,6 +500,30 @@ function corePolicyFor(request: any, mod: any): any {
     return undefined;
 }
 
+function isUnderNonRequirableDir(resolvedPath: string): boolean {
+    return NON_REQUIRABLE_DIRS.some(dir => resolvedPath === dir || resolvedPath.startsWith(dir + path.sep));
+}
+
+// Fix #3 (scanner-evasion): a plugin/theme module must not require() code out of a writable data dir
+// (uploads/data/os-tmp/logs). Keyed on the REQUIRING module (like corePolicyFor) so core code is
+// unaffected. Only relative/absolute specifiers can reach an on-disk data dir — a bare specifier
+// ('fs', 'lodash') resolves via builtins/node_modules, so skip the resolve cost for those. Defensive:
+// never throws on a resolution failure (falls through to normal loading, where io-guard still applies).
+function guardPluginRequirePath(request: any, mod: any): void {
+    if (typeof request !== 'string') return;
+    if (request[0] !== '.' && !path.isAbsolute(request)) return; // bare specifier → can't reach a data dir
+    const slug = requirerSlug(mod && mod.filename);
+    if (!slug) return; // core (non-plugin) requirer is unrestricted
+    let resolved: string;
+    try { resolved = Module._resolveFilename(request, mod); } catch { return; }
+    if (!path.isAbsolute(resolved)) return; // resolved to a builtin/bare id, not a file
+    let real = resolved;
+    try { real = originalFs.realpathSync(resolved); } catch { /* not yet on disk — check lexical form */ }
+    if (isUnderNonRequirableDir(resolved) || isUnderNonRequirableDir(real)) {
+        throw createSecurityError(slug, `require('${request}')`, 'loading code from a writable data directory (uploads/data/os-tmp/logs) is not permitted');
+    }
+}
+
 function installSecureRequire() {
     // 1. Patch Module.prototype.require (the normal `require('fs')` path).
     Module.prototype.require = function (id: any) {
@@ -489,6 +531,7 @@ function installSecureRequire() {
         if (secure !== undefined) return secure;
         const core = corePolicyFor(id, this);
         if (core !== undefined) return core;
+        guardPluginRequirePath(id, this);
         return originalRequire.apply(this, arguments);
     };
 
@@ -501,6 +544,7 @@ function installSecureRequire() {
         if (secure !== undefined) return secure;
         const core = corePolicyFor(request, _parent);
         if (core !== undefined) return core;
+        guardPluginRequirePath(request, _parent);
         // Block native .node addons for plugins: compiled bindings hand out raw syscalls
         // and bypass every JS-level guard. Resolve the request to catch indirect paths.
         if (typeof request === 'string' && request.endsWith('.node')) {
