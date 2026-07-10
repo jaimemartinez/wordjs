@@ -250,6 +250,69 @@ function isPathSafe(targetPath: string, isWrite = false) {
     return true;
 }
 
+// === PER-PLUGIN DISK WRITE QUOTA ===
+// io-guard governs raw fs; the bridge's byte quota (wordjs.fs.write) is BYPASSED when a plugin writes
+// via require('fs') directly. Path checks confine WHERE a plugin writes but not HOW MUCH — an unbounded
+// createWriteStream/appendFile loop to its own dir (no grant needed) fills the shared volume → ENOSPC on
+// the DB → full-site outage. Meter it here. To avoid false positives on legitimate OVERWRITES, only the
+// GROWING writers (append*/createWriteStream) accumulate toward the cumulative cap; a whole-file writeFile
+// is bounded by the single-write cap alone (its payload IS the resulting file size).
+const SINGLE_WRITE_MAX = 64 * 1024 * 1024;        // 64MB — largest single write/chunk a plugin may make
+const PLUGIN_GROW_QUOTA = 512 * 1024 * 1024;      // 512MB of append/stream growth per ROLLING WINDOW per plugin
+const GROW_WINDOW_MS = 60 * 1000;                 // rolling window: a flood trips fast; slow legit appends never do
+const QUOTA_METHODS = new Set(['writeFile', 'writeFileSync', 'appendFile', 'appendFileSync', 'createWriteStream']);
+// Per-plugin rolling-window accounting for GROWING writes. A lifetime counter would eventually block a
+// legitimate long-running plugin that appends a rotated log; a window (reset when stale) stops a burst
+// disk-fill while never permanently throttling normal slow growth. Shared with the fs.promises path via
+// the exported enforceGrowQuota so both APIs count against the same budget.
+const _grownWindow = new Map<string, { start: number; bytes: number }>();
+
+function quotaErr(slug: string, msg: string): any {
+    const e: any = new Error(`EDQUOT: plugin '${slug}' disk write blocked — ${msg}`);
+    e.code = 'EDQUOT';
+    return e;
+}
+function byteLenOf(data: any): number {
+    if (data == null) return 0;
+    if (typeof data === 'string') return Buffer.byteLength(data);
+    if (Buffer.isBuffer(data)) return data.length;
+    if (data && typeof data.byteLength === 'number') return data.byteLength; // TypedArray/ArrayBuffer/DataView
+    try { return Buffer.byteLength(String(data)); } catch { return 0; }
+}
+function enforceSingleWrite(slug: string, n: number): void {
+    if (n > SINGLE_WRITE_MAX) throw quotaErr(slug, `single write of ${n} bytes exceeds the ${SINGLE_WRITE_MAX}-byte limit`);
+}
+function enforceGrowQuota(slug: string, n: number): void {
+    enforceSingleWrite(slug, n);
+    const now = Date.now();
+    let w = _grownWindow.get(slug);
+    if (!w || now - w.start > GROW_WINDOW_MS) { w = { start: now, bytes: 0 }; _grownWindow.set(slug, w); }
+    if (w.bytes + n > PLUGIN_GROW_QUOTA) throw quotaErr(slug, `append/stream growth quota of ${PLUGIN_GROW_QUOTA} bytes per ${GROW_WINDOW_MS / 1000}s exceeded`);
+    w.bytes += n;
+}
+// Wrap a createWriteStream result so each chunk is metered; on overflow the stream is destroyed with the
+// quota error (surfaced as a normal stream 'error') instead of silently filling the disk.
+function wrapQuotaStream(slug: string, stream: any): any {
+    if (!stream || typeof stream.write !== 'function') return stream;
+    const origWrite = stream.write.bind(stream);
+    const origEnd = stream.end.bind(stream);
+    stream.write = function (chunk: any, enc?: any, cb?: any) {
+        if (chunk != null && typeof chunk !== 'function') {
+            try { enforceGrowQuota(slug, byteLenOf(chunk)); }
+            catch (e) { stream.destroy(e as Error); return false; }
+        }
+        return origWrite(chunk, enc, cb);
+    };
+    stream.end = function (chunk?: any, enc?: any, cb?: any) {
+        if (chunk != null && typeof chunk !== 'function') {
+            try { enforceGrowQuota(slug, byteLenOf(chunk)); }
+            catch (e) { stream.destroy(e as Error); return stream; }
+        }
+        return origEnd(chunk, enc, cb);
+    };
+    return stream;
+}
+
 // === PATCHES ===
 
 function patch(methodName: string, isSync = false) {
@@ -299,6 +362,26 @@ function patch(methodName: string, isSync = false) {
             }
         }
 
+        // Per-plugin write quota (metered only under a plugin context; core/host is unmetered).
+        const quotaSlug = QUOTA_METHODS.has(methodName) ? getEffectivePlugin() : null;
+        if (quotaSlug) {
+            if (methodName === 'createWriteStream') {
+                return wrapQuotaStream(quotaSlug, original.apply(this, args));
+            }
+            try {
+                if (methodName === 'appendFile' || methodName === 'appendFileSync') {
+                    enforceGrowQuota(quotaSlug, byteLenOf(args[1]));
+                } else {
+                    enforceSingleWrite(quotaSlug, byteLenOf(args[1])); // writeFile / writeFileSync (overwrite)
+                }
+            } catch (error: any) {
+                if (isSync) throw error;
+                const cb = args[args.length - 1];
+                if (typeof cb === 'function') { cb(error); return; }
+                throw error;
+            }
+        }
+
         return original.apply(this, args);
     };
 }
@@ -324,5 +407,10 @@ patch('readdir'); patch('readdirSync', true);
 patch('createReadStream');
 
 module.exports = {
-    isPathSafe
+    isPathSafe,
+    // Exported so the fs.promises proxy (secure-require) meters against the SAME per-plugin budget as the
+    // callback/sync fs methods — otherwise a plugin's fs.promises writes bypass the disk quota entirely.
+    enforceSingleWrite,
+    enforceGrowQuota,
+    byteLenOf
 };

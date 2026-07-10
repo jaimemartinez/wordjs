@@ -97,6 +97,33 @@ function validateSlug(slug: string) {
     const safePath = path.resolve(PLUGINS_DIR, slug);
     return safePath.startsWith(path.resolve(PLUGINS_DIR));
 }
+
+// Strict plugin-slug charset. A slug is a SINGLE path segment (starts alnum, then alnum/dash/underscore,
+// max 64) — so it can never be '.', '..', a separator, or resolve to a parent/other directory.
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+function isValidSlug(slug: any): boolean {
+    return typeof slug === 'string' && SLUG_RE.test(slug);
+}
+
+// The SINGLE choke point every slug-derived fs op must go through (download / delete / extract-install).
+// Resolves an untrusted slug to its plugin dir or THROWS (400), guaranteeing the result is a proper CHILD
+// of PLUGINS_DIR — never PLUGINS_DIR itself (which would let a failure-path rmSync wipe every plugin) or
+// an ancestor (which a crafted '..' filename / './'-prefixed zip entry could otherwise reach).
+function resolveSafePluginDir(slug: any): string {
+    if (!isValidSlug(slug)) {
+        const e: any = new Error(`Invalid plugin slug: ${JSON.stringify(slug)}`);
+        e.status = 400;
+        throw e;
+    }
+    const base = path.resolve(PLUGINS_DIR);
+    const dir = path.resolve(base, slug);
+    if (dir === base || !dir.startsWith(base + path.sep)) {
+        const e: any = new Error('Invalid plugin slug: resolves outside the plugins directory');
+        e.status = 400;
+        throw e;
+    }
+    return dir;
+}
 /**
  * @swagger
  * /plugins/upload:
@@ -154,41 +181,77 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         // Simple extraction: extract all to PLUGINS_DIR
         // If the zip creates a folder, great. If not, messy.
         // Let's create a folder based on the zip filename (minus extension) to be safe.
+        // Derive the intended install slug and VALIDATE it before building any path. The slug comes from
+        // the zip's single root dir, or (files-at-root) from the filename. It MUST be a clean single
+        // segment: a crafted filename ('...zip' → path.parse().name === '..') or a './'-prefixed entry
+        // (first segment '.') would otherwise redirect extractAllTo into the host code tree (backend/) or
+        // collapse the target to PLUGINS_DIR itself (a later failure-path rmSync then wipes every plugin).
         const zipName = path.parse(req.file.originalname).name;
-        const potentialDir = path.join(PLUGINS_DIR, zipName);
 
-        // Check if zip has a single root directory
-        const rootDirs = new Set(zipEntries.map((e: any) => e.entryName.split('/')[0]).filter(Boolean));
+        // OS archivers add sibling junk at the zip root (__MACOSX/, .DS_Store, Thumbs.db, desktop.ini) —
+        // ignore it for root detection and skip extracting it, so a valid single-folder plugin isn't
+        // misread as multi-root (which would double-nest it under the filename and fail the manifest check).
+        const isJunkEntry = (raw: string): boolean => {
+            const norm = String(raw).replace(/\\/g, '/');
+            const first = norm.split('/')[0];
+            return first === '__MACOSX' || first === '.git'
+                || /(^|\/)(\.DS_Store|Thumbs\.db|\.AppleDouble|\.Spotlight-V100|desktop\.ini)$/i.test(norm);
+        };
+        const contentEntries = zipEntries.filter((e: any) => !isJunkEntry(e.entryName));
+        if (contentEntries.length === 0) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({ error: 'Zip contains no plugin files.' });
+        }
 
-        // SECURITY: Determine the extraction target, then verify EVERY entry
-        // resolves inside it (Zip Slip: absolute paths, '..', symlink-style escapes).
-        const targetDir = rootDirs.size === 1 ? PLUGINS_DIR : potentialDir;
-        const resolvedTarget = path.resolve(targetDir);
+        // First path segment of every CONTENT entry (normalize backslashes). Reject '.'/'..' tokens
+        // outright — adm-zip preserves a leading './', and split('/')[0] would otherwise yield '.'.
+        const rootDirs = new Set<string>();
+        for (const e of contentEntries) {
+            const first = String(e.entryName).replace(/\\/g, '/').split('/')[0];
+            if (!first) continue;
+            if (first === '.' || first === '..') {
+                fs.unlinkSync(zipPath);
+                return res.status(400).json({ error: 'Malicious zip: entry names contain "." / ".." path segments.' });
+            }
+            rootDirs.add(first);
+        }
 
-        for (const entry of zipEntries) {
-            const dest = path.resolve(targetDir, entry.entryName);
-            const isContained = dest === resolvedTarget || dest.startsWith(resolvedTarget + path.sep);
-            if (!isContained || entry.entryName.indexOf('..') !== -1) {
+        const singleRoot = rootDirs.size === 1;
+        const intendedSlug = (singleRoot ? Array.from(rootDirs)[0] : zipName) as string;
+        if (!isValidSlug(intendedSlug)) {
+            fs.unlinkSync(zipPath);
+            return res.status(400).json({ error: `Refused: '${intendedSlug}' is not a valid plugin folder name (expected a single [A-Za-z0-9_-] segment, no dots or separators).` });
+        }
+        // Guaranteed a proper CHILD of PLUGINS_DIR (throws otherwise). In BOTH shapes the plugin's files
+        // must land under installedDir: single-root entries carry the '<slug>/' prefix and extract to
+        // PLUGINS_DIR; files-at-root extract into installedDir. Confinement is checked against installedDir
+        // either way — so cross-plugin overwrite (my-plugin/../victim/evil.js) is blocked by CONTAINMENT,
+        // not merely by a '..' substring heuristic.
+        const installedDir = resolveSafePluginDir(intendedSlug);
+        const targetDir = singleRoot ? PLUGINS_DIR : installedDir;
+        const confineDir = path.resolve(installedDir);
+
+        // SECURITY: Zip Slip — every content entry must resolve INSIDE the plugin's own dir. Segment-level
+        // '..' check (a filename that merely embeds '..' like 'a..b.min.js' is legitimate and allowed).
+        for (const entry of contentEntries) {
+            const rel = String(entry.entryName).replace(/\\/g, '/');
+            const dest = path.resolve(targetDir, rel);
+            const isContained = dest === confineDir || dest.startsWith(confineDir + path.sep);
+            const hasDotDotSegment = rel.split('/').includes('..');
+            if (!isContained || hasDotDotSegment) {
                 fs.unlinkSync(zipPath);
                 return res.status(400).json({ error: 'Malicious zip file detected (Zip Slip / path traversal)' });
             }
         }
 
-        // SECURITY: an uploaded plugin must NOT claim a reserved system-plugin slug (which would let
-        // it overwrite the bundled one via extractAllTo(..., true)). There is no trust tier anymore, so
-        // this is just a small hardcoded reserved-name list (empty by default).
-        const intendedSlug = (rootDirs.size === 1 ? Array.from(rootDirs)[0] : zipName) as string;
-        // Canonicalize for comparison: a case-insensitive / Unicode-variant filesystem (Windows, macOS)
-        // lets 'Mail-Server' overwrite the bundled 'mail-server' dir. Compare case-insensitively after NFC.
+        // SECURITY: an uploaded plugin must NOT claim a reserved system-plugin slug (empty list by default)
+        // nor clobber an existing plugin by case/Unicode variant. Canonicalize for comparison.
         const canonSlug = String(intendedSlug).normalize('NFC').toLowerCase();
         const RESERVED_SLUGS: string[] = [];
         if (RESERVED_SLUGS.some(s => String(s).normalize('NFC').toLowerCase() === canonSlug)) {
             fs.unlinkSync(zipPath);
             return res.status(409).json({ error: `Refused: '${intendedSlug}' is a reserved system plugin slug and cannot be uploaded or overwritten.` });
         }
-        // Refuse a different-cased / Unicode-variant name that collides with an EXISTING plugin dir
-        // (re-uploading the SAME exact name is still allowed = a normal update; a squat that only
-        // differs by case/normalization is rejected so it can't clobber another plugin by path).
         try {
             const clash = fs.readdirSync(PLUGINS_DIR).find((d: string) => d !== intendedSlug && d.normalize('NFC').toLowerCase() === canonSlug);
             if (clash) {
@@ -198,29 +261,21 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         } catch { /* PLUGINS_DIR missing — nothing to clobber */ }
 
         // INTEGRITY: refuse to overwrite a RUNNING plugin's code in place — a botched extract would
-        // corrupt a working plugin and the next reload would swap live code with no warning. The admin
-        // must deactivate first (a real update flow can relax this later with staging + version checks).
+        // corrupt a working plugin and the next reload would swap live code with no warning.
         if (await isPluginActive(intendedSlug)) {
             fs.unlinkSync(zipPath);
             return res.status(409).json({ error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` });
         }
 
-        if (rootDirs.size === 1) {
-            // Extract as is
-            zip.extractAllTo(PLUGINS_DIR, true);
-            pluginSlug = Array.from(rootDirs)[0] as string;
-        } else {
-            // Extract into a new folder named after zip
-            // This happens if the user zipped files directly without a parent folder
-            zip.extractAllTo(potentialDir, true);
-            pluginSlug = zipName;
+        // Extract ONLY the validated content entries (skips the OS junk) into the contained target.
+        for (const entry of contentEntries) {
+            zip.extractEntryTo(entry, targetDir, /*maintainEntryPath*/ true, /*overwrite*/ true);
         }
+        pluginSlug = intendedSlug;
 
         // VALIDATE what we just extracted BEFORE reporting success: a plugin must have a well-formed
-        // manifest, be isolated, use only known permissions, and pass the AST scan. Doing it here (not
-        // only at activate) means a junk/dangerous ZIP fails immediately with a clear reason and its
-        // code never lingers on disk. On any failure, remove the extracted dir and 400.
-        const installedDir = path.join(PLUGINS_DIR, pluginSlug);
+        // manifest, be isolated, use only known permissions, and pass the AST scan. On any failure,
+        // remove the extracted dir (installedDir is guaranteed a proper child of PLUGINS_DIR) and 400.
         try {
             const manifestPath = path.join(installedDir, 'manifest.json');
             if (!fs.existsSync(manifestPath)) throw new Error('Missing manifest.json — this is not a valid WordJS plugin.');
@@ -618,6 +673,11 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
  */
 router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
     const slug = req.params.slug;
+    // Reject a traversal slug (%2f-decoded '../…') BEFORE any fs op — path.join(PLUGINS_DIR, '../../data')
+    // would otherwise let an admin confused-deputy rmSync an arbitrary host directory.
+    if (!isValidSlug(slug)) {
+        return res.status(400).json({ message: 'Invalid plugin slug' });
+    }
     const { password, dropData } = req.body;
     const { isPluginActive, deactivatePlugin, PLUGINS_DIR, uninstallPluginData } = require('../core/plugins');
     const User = require('../models/User');
@@ -639,8 +699,8 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
         return res.status(400).json({ message: 'Cannot delete an active plugin. Deactivate it first.' });
     }
 
-    // 2. Locate directory
-    const pluginPath = path.join(PLUGINS_DIR, slug);
+    // 2. Locate directory (resolveSafePluginDir guarantees a proper child of PLUGINS_DIR)
+    const pluginPath = resolveSafePluginDir(slug);
     if (!fs.existsSync(pluginPath)) {
         return res.status(404).json({ message: 'Plugin not found' });
     }
@@ -693,8 +753,14 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
  */
 router.get('/:slug/download', authenticateAllowQuery, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const slug = req.params.slug;
-    const { PLUGINS_DIR } = require('../core/plugins');
-    const pluginPath = path.join(PLUGINS_DIR, slug);
+    // Reject a traversal slug BEFORE building a path — without this, '..%2f..%2f..%2fdata/download'
+    // decodes to slug='../../../data' and addLocalFolder zips + streams the DB, JWT secret and .env.
+    let pluginPath: string;
+    try {
+        pluginPath = resolveSafePluginDir(slug);
+    } catch {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
 
     if (!fs.existsSync(pluginPath)) {
         return res.status(404).json({ error: 'Plugin not found' });
@@ -747,13 +813,15 @@ router.post('/sample', authenticate, isAdmin, asyncHandler(async (req: Request, 
  *       200:
  *         description: List of menu items
  */
-router.get('/menus', authenticate, asyncHandler(async (req: any, res: Response) => {
+// isAdmin: the admin menu (labels + /admin/* route paths of every active plugin) is control-plane
+// metadata — gate it like the rest of this file, not authenticate-only, so a logged-in non-admin
+// (e.g. a self-registered subscriber) can't enumerate it or trigger plugin menu filters as itself.
+router.get('/menus', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
     const { getAdminMenuItems } = require('../core/adminMenu');
     const { getActivePlugins } = require('../core/plugins');
     const { applyFiltersSync } = require('../core/hooks');
 
     const allMenus = getAdminMenuItems();
-    console.log(`DEBUG: /menus - allMenus count: ${allMenus.length}`);
     // Await async getActivePlugins
     const activePlugins = await getActivePlugins();
 
@@ -763,8 +831,6 @@ router.get('/menus', authenticate, asyncHandler(async (req: any, res: Response) 
     // 2. Apply filters to allows plugins to hide/modify items per user
     activeMenus = applyFiltersSync('admin_menu_items', activeMenus, { user: req.user });
 
-    console.log('DEBUG: /plugins/menus response:', JSON.stringify(activeMenus, null, 2));
-
     res.json(activeMenus);
 }));
 
@@ -773,3 +839,6 @@ const bundleRoutes = require('./plugin-bundles');
 router.use('/', bundleRoutes);
 
 module.exports = router;
+// Exposed for unit tests of the path-traversal guards (the router remains the default export).
+module.exports.isValidSlug = isValidSlug;
+module.exports.resolveSafePluginDir = resolveSafePluginDir;

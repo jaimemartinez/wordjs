@@ -20,6 +20,79 @@ const { addShortcode, removeShortcode } = require('./shortcodes');
 const WORKER_FILE = path.join(__dirname, 'plugin-worker.js');
 const isolates = new Map<string, any>();
 
+// Reaper for plugin multipart temp uploads. The per-request cleanup in finalHandler unlinks the file on
+// the happy path; this sweeps files ORPHANED by a host crash/restart (or a handler that never responded)
+// so os-tmp/wordjs-uploads can't accumulate unbounded. Started lazily when the first multipart route is
+// registered; the interval is unref'd so it never keeps the process alive.
+let _uploadReaperStarted = false;
+function startUploadReaper(): void {
+    if (_uploadReaperStarted) return;
+    _uploadReaperStarted = true;
+    const os = require('os');
+    const fsm = require('fs');
+    const dir = path.join(os.tmpdir(), 'wordjs-uploads');
+    const MAX_AGE_MS = 60 * 60 * 1000; // reap temp uploads older than 1h (well past any 10MB in-flight upload)
+    const sweep = () => {
+        fsm.readdir(dir, (err: any, files: string[]) => {
+            if (err) return; // dir may not exist yet
+            const cutoff = Date.now() - MAX_AGE_MS;
+            for (const f of files) {
+                const fp = path.join(dir, f);
+                fsm.stat(fp, (e: any, st: any) => { if (!e && st.isFile() && st.mtimeMs < cutoff) fsm.unlink(fp, () => { /* best effort */ }); });
+            }
+        });
+    };
+    sweep(); // catch orphans left by a previous run immediately
+    const t = setInterval(sweep, 30 * 60 * 1000);
+    if (t.unref) t.unref();
+}
+
+// Forward a child's piped stdout/stderr to the host, slug-TAGGED and RATE-LIMITED, so a plugin
+// console.log flood can't fill the operator's log sink (the IPC guards sit on a separate fd and don't
+// cover the inherited stdio). Line-buffered; beyond the per-window byte budget, output is dropped with a
+// single notice until the window rolls. Best-effort — never throws into the spawn path.
+function attachLogLimiter(slug: string, child: any): void {
+    const TAG = `[plugin ${slug}] `;
+    const MAX_BYTES_PER_WINDOW = 512 * 1024; // 512KB per 10s per stream
+    const WINDOW_MS = 10000;
+    const makeSink = (out: NodeJS.WritableStream) => {
+        let buf = '';
+        let windowStart = Date.now();
+        let windowBytes = 0, dropped = 0, notified = false;
+        return (chunk: Buffer) => {
+            try {
+                const now = Date.now();
+                if (now - windowStart > WINDOW_MS) {
+                    windowStart = now; windowBytes = 0; notified = false;
+                    if (dropped) { out.write(`${TAG}(rate limit: dropped ${dropped} bytes)\n`); dropped = 0; }
+                }
+                buf += chunk.toString('utf8');
+                let nl: number;
+                while ((nl = buf.indexOf('\n')) >= 0) {
+                    const line = buf.slice(0, nl + 1);
+                    buf = buf.slice(nl + 1);
+                    const bytes = Buffer.byteLength(line); // real bytes, not UTF-16 code units
+                    if (windowBytes >= MAX_BYTES_PER_WINDOW) {
+                        dropped += bytes;
+                        if (!notified) { out.write(`${TAG}output rate-limited\n`); notified = true; }
+                        continue;
+                    }
+                    windowBytes += bytes;
+                    out.write(TAG + line);
+                }
+                if (buf.length > 65536) { // flush an over-long partial line so we don't buffer unbounded
+                    const bytes = Buffer.byteLength(buf);
+                    if (windowBytes < MAX_BYTES_PER_WINDOW) { out.write(TAG + buf + '\n'); windowBytes += bytes; }
+                    else dropped += bytes;
+                    buf = '';
+                }
+            } catch { /* logging must never destabilize the host */ }
+        };
+    };
+    try { if (child.stdout) child.stdout.on('data', makeSink(process.stdout)); } catch { /* */ }
+    try { if (child.stderr) child.stderr.on('data', makeSink(process.stderr)); } catch { /* */ }
+}
+
 // ── Runtime supervisor + per-isolate health ──────────────────────────────────────────────────
 // The sandbox already CONTAINS a crash (the child dies alone). But a mid-run crash used to silently
 // delete the isolate, 404 its routes, and vanish its admin menu while the plugin still read as green
@@ -546,7 +619,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         const RSS_BUDGET_BYTES = 768 * 1024 * 1024;   // resident budget — cgroup memory.max AND the /proc poll
         // structured-clone IPC (serialization 'advanced') preserves Buffer/Date/Map; the JSON default
         // (and a raw JSON channel) would lose them — match the worker_threads postMessage fidelity.
-        const IPC_STDIO: any = ['inherit', 'inherit', 'inherit', 'ipc']; // inherit stdio for plugin logs
+        // PIPE the child's stdout/stderr (was 'inherit') so a plugin console.log flood can't stream
+        // straight to the operator's (possibly unbounded) log sink → disk-fill. attachLogLimiter forwards
+        // them slug-tagged through a per-plugin rate/volume cap. stdin stays inherited; fd3 = ipc.
+        const IPC_STDIO: any = ['inherit', 'pipe', 'pipe', 'ipc'];
         // OPT-IN kernel hardening: when active (Linux + probe passed), launch node THROUGH bwrap so the
         // child runs unprivileged (nobody) with dropped caps / no-new-privs / PID-IPC-UTS namespaces /
         // read-only fs. APP_ROOT (backend/) is the single writable bind so plugin storage keeps working.
@@ -616,6 +692,8 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         if (jobCapOk && process.platform === 'win32' && child.pid) {
             assignProcessToJobObject(child.pid, RSS_BUDGET_BYTES).catch(() => { /* poll remains the cap */ });
         }
+        // Forward + rate-limit the child's piped stdout/stderr (see IPC_STDIO above).
+        attachLogLimiter(slug, child);
         // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
         const worker: any = {
             postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
@@ -700,7 +778,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                         if (rssBytes >= 0) killOverBudget(rssBytes);
                     } catch { /* unparseable → skip this tick */ }
                 });
-            }, 1000);
+                // macOS has NO preventive kernel cap (cgroup=Linux, Job Object=win32), so this reactive
+                // poll is the only resident cap there — tighten its window vs Windows (which has the Job
+                // Object preventive cap) so a fast synchronous allocation balloon is caught sooner.
+            }, process.platform === 'darwin' ? 400 : 1000);
             if (rssPoll.unref) rssPoll.unref();
         }
         child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); });
@@ -974,10 +1055,21 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                         try { maxFileSize = require('../config/app').uploads.maxFileSize || maxFileSize; } catch { /* default */ }
                         const up = multer({ dest: path.join(os.tmpdir(), 'wordjs-uploads'), limits: { fileSize: maxFileSize, files: 1 } });
                         mw.push(up.single(String(msg.opts.multipart)));
+                        startUploadReaper(); // sweep crash-orphaned temp uploads (the per-request unlink handles the happy path)
                     } catch (e: any) { console.warn(`[Isolate ${slug}] multipart unavailable:`, e && e.message); }
                 }
                 const cookieNs = `wjp_${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}_`;
                 const finalHandler = async (req: any, res: any) => {
+                    // Delete the multer temp file once the response completes. The isolate only receives the
+                    // path (never owns the file), so nothing else would ever unlink it → unbounded os-tmp
+                    // disk-fill. Fire on both finish and close (client abort), once.
+                    if (req.file && req.file.path) {
+                        const tmpPath = req.file.path;
+                        let cleaned = false;
+                        const cleanup = () => { if (cleaned) return; cleaned = true; require('fs').unlink(tmpPath, () => { /* best effort */ }); };
+                        res.on('finish', cleanup);
+                        res.on('close', cleanup);
+                    }
                     // (#2) Never hand the host's HttpOnly auth JWT (wordjs_token) to a plugin's handler —
                     // the authenticated identity is already provided via reqData.user, so the raw token is
                     // not needed. ALWAYS strip auth/session cookies before forwarding (no trust exemption).
@@ -1109,7 +1201,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             for (const { hook, type, shim } of registeredHooks) {
                 try { type === 'filter' ? hooks.removeFilter(hook, shim) : hooks.removeAction(hook, shim); } catch { /* */ }
             }
-            for (const tag of registeredShortcodes) { try { removeShortcode(tag); } catch { /* */ } }
+            // Unregister IN the plugin's context so the shortcodes owner-guard applies: a tag the plugin
+            // tried to squat (refused at add time, but still tracked here) is owned by core/another plugin,
+            // so removeShortcode safely skips it instead of deleting a victim's shortcode from host context.
+            for (const tag of registeredShortcodes) { try { runWithContext(slug, () => removeShortcode(tag)); } catch { /* */ } }
             if (providedMail && (global as any).wordjs_send_mail) { try { delete (global as any).wordjs_send_mail; } catch { /* */ } }
             try { require('./notifications').unregisterPluginTransports(slug); } catch { /* */ }
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }

@@ -201,6 +201,13 @@ async function runCronInner() {
     const now = Date.now();
     const events = await getOption('cron', {});
 
+    // Defense-in-depth for the 'cron' option (writes are already blocked through the options bridge):
+    // if the stored blob is ever poisoned, an event may carry a pluginSlug pointing at another plugin.
+    // Resolve the currently-active plugins once; an event whose pluginSlug is set but NOT active is
+    // skipped (its code isn't even loaded — running its hooks in a foreign context would be the exploit).
+    let activeSet: Set<string> | null = null;
+    try { activeSet = new Set(await require('./plugins').getActivePlugins()); } catch { activeSet = null; }
+
     // Snapshot timestamps once so we don't iterate over reschedules created in this pass.
     const timestamps = Object.keys(events);
     // Track the (timestamp,key) pairs we executed so we can delete them from the FRESH copy below,
@@ -221,6 +228,13 @@ async function runCronInner() {
                 // context — so a plugin cannot schedule a CORE hook with attacker args to trigger core
                 // code. Core-scheduled events (no pluginSlug) dispatch normally.
                 if (event.pluginSlug) {
+                    if (activeSet && !activeSet.has(String(event.pluginSlug))) {
+                        // Don't run it (its code isn't loaded) AND remove it from the store — leaving it
+                        // would warn + re-skip every tick forever and hold a slot toward MAX_CRON_EVENTS_TOTAL.
+                        console.warn(`Cron: removing event '${event.hook}' for unknown/inactive plugin '${event.pluginSlug}'.`);
+                        executed.push({ timestamp, key });
+                        continue;
+                    }
                     await doActionForPlugin(event.hook, event.pluginSlug, ...(event.args || []));
                 } else {
                     await doAction(event.hook, ...(event.args || []));

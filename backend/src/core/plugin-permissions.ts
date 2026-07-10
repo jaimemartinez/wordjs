@@ -23,6 +23,18 @@ let loaded = false;
 /** The literal token used for the network grant (no access level). */
 const NETWORK_TOKEN = 'network';
 
+// A grant token is either the literal 'network' or a "<scope>:<access>" pair. Validating the SHAPE at
+// load time is defense-in-depth: even if the plugin_grants option is ever poisoned by some path other
+// than the admin setGrants API (which sanitizes), a blob can't smuggle in a structurally-bogus token
+// (SQL, path, whitespace, object). We match the general scope:access shape rather than a hardcoded list
+// of access verbs — the real verbs vary by scope (read/write/admin/provider/send/register_route/register,
+// per KNOWN_PERMISSIONS) and a narrow list silently DROPS legitimate grants (e.g. notifications:send) on
+// reload. The write is already blocked at the options bridge; this only rejects malformed entries.
+const VALID_GRANT_TOKEN = /^[a-z][a-z0-9_.-]*:[a-z][a-z0-9_-]*$/;
+function isValidGrantToken(t: string): boolean {
+    return t === NETWORK_TOKEN || VALID_GRANT_TOKEN.test(t);
+}
+
 /** Load the persisted grants into memory. Call once at boot, after the DB is up. */
 async function loadGrants(): Promise<void> {
     try {
@@ -31,7 +43,14 @@ async function loadGrants(): Promise<void> {
         grants.clear();
         if (stored && typeof stored === 'object') {
             for (const [slug, list] of Object.entries(stored)) {
-                if (Array.isArray(list)) grants.set(String(slug), new Set(list.map(String)));
+                if (!Array.isArray(list)) continue;
+                const clean: string[] = [];
+                for (const raw of list) {
+                    const t = String(raw).toLowerCase().trim();
+                    if (isValidGrantToken(t)) clean.push(t);
+                    else console.warn(`[PluginPermissions] Dropping malformed grant token '${raw}' for plugin '${slug}' from plugin_grants.`);
+                }
+                grants.set(String(slug), new Set(clean));
             }
         }
         loaded = true;
