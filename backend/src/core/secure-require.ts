@@ -715,6 +715,36 @@ function installSecureRequire() {
 /**
  * Create secure version of fs/promises
  */
+// Per-plugin disk write quota for the fs.promises path. io-guard's patch() only wraps the callback/sync
+// fs methods, so fs.promises.writeFile/appendFile (and FileHandle.write) would otherwise bypass the disk
+// quota and re-open the raw-fs disk-fill DoS. Meter them against io-guard's SAME per-plugin budget.
+function meterPromiseWrite(slug: string, prop: string, args: any[]): void {
+    let io: any = null;
+    try { io = require('./io-guard'); } catch { return; }
+    if (!io || typeof io.enforceGrowQuota !== 'function') return;
+    if (prop === 'appendFile') { io.enforceGrowQuota(slug, io.byteLenOf(args[1])); return; }
+    if (prop === 'writeFile') {
+        const opts = args[2];
+        const append = opts && typeof opts === 'object' && /^a/.test(String(opts.flag || '')); // {flag:'a'} = growth
+        if (append) io.enforceGrowQuota(slug, io.byteLenOf(args[1]));
+        else io.enforceSingleWrite(slug, io.byteLenOf(args[1]));
+    }
+}
+// A FileHandle (from fs.promises.open) exposes write/writeFile/appendFile that also skip io-guard — meter
+// them too so `const fh = await fsp.open(p,'a'); fh.write(hugeBuf)` can't dodge the quota.
+function wrapFileHandle(slug: string, fh: any): any {
+    if (!fh || typeof fh !== 'object') return fh;
+    let io: any = null;
+    try { io = require('./io-guard'); } catch { return fh; }
+    if (!io || typeof io.enforceGrowQuota !== 'function') return fh;
+    for (const name of ['write', 'writeFile', 'appendFile']) {
+        const orig = fh[name];
+        if (typeof orig !== 'function') continue;
+        fh[name] = function (...a: any[]) { io.enforceGrowQuota(slug, io.byteLenOf(a[0])); return orig.apply(fh, a); };
+    }
+    return fh;
+}
+
 function createSecureFsPromises() {
     // Use the captured RAW fs (not require('fs'), which returns the proxy in plugin context
     // and would make secureFs.promises -> createSecureFsPromises -> require('fs').promises recurse).
@@ -741,9 +771,14 @@ function createSecureFsPromises() {
             if (isRead || isWrite) {
                 return async function (...args: any[]) {
                     const targetPath = args[0];
+                    // Meter disk writes (own-dir writes bypass the callback-fs io-guard patch). Throws
+                    // EDQUOT past the budget, before the write is attempted. 'open' writes no data here —
+                    // its returned FileHandle is metered via wrapFileHandle below.
+                    if (isWrite && prop !== 'open' && prop !== 'openSync') meterPromiseWrite(pluginSlug, String(prop), args);
 
                     if (isPathWithinPluginDir(pluginSlug, targetPath)) {
-                        return originalMethod.apply(target, args);
+                        const r = await originalMethod.apply(target, args);
+                        return prop === 'open' ? wrapFileHandle(pluginSlug, r) : r;
                     }
 
                     const permission = isWrite ? 'write' : 'read';
@@ -751,7 +786,8 @@ function createSecureFsPromises() {
                         throw createSecurityError(pluginSlug, `fs.promises.${prop}`, targetPath);
                     }
 
-                    return originalMethod.apply(target, args);
+                    const r = await originalMethod.apply(target, args);
+                    return prop === 'open' ? wrapFileHandle(pluginSlug, r) : r;
                 };
             }
 

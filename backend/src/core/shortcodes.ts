@@ -7,16 +7,38 @@ const { escAttr, escUrl } = require('./formatting');
 
 // Registered shortcodes
 const shortcodes = new Map();
+// Owner of each registered tag: a plugin slug, or null for core (no plugin on the stack). Registration
+// is a GLOBAL, site-wide namespace, so without ownership it is last-writer-wins — an untrusted plugin
+// could re-register a core tag (or another plugin's) and silently replace its rendered output on every
+// page that uses it (stored defacement / content-integrity attack). We refuse cross-owner overwrites.
+const shortcodeOwners = new Map<string, string | null>();
+
+// Resolve the effective plugin (or null = core) of the CURRENT call, lazily to avoid an init-time cycle.
+function currentOwner(): string | null {
+    try { return require('./plugin-context').getEffectivePlugin() || null; }
+    catch { return null; }
+}
 
 /**
  * Register a shortcode
  * Equivalent to add_shortcode()
- * 
+ *
  * @param {string} tag - Shortcode tag
  * @param {Function} callback - Function(attrs, content, tag) => string
  */
 function addShortcode(tag: string, callback: Function) {
+    const owner = currentOwner();
+    if (shortcodes.has(tag)) {
+        const existing = shortcodeOwners.get(tag) ?? null;
+        // Same owner may re-register (update); core (owner=null) may always (re)claim a tag. But a plugin
+        // must NOT overwrite a tag owned by core or by a DIFFERENT plugin.
+        if (owner !== null && existing !== owner) {
+            console.warn(`[Security Block] Plugin '${owner}' tried to override shortcode '[${tag}]' owned by '${existing ?? 'core'}' — refused.`);
+            return;
+        }
+    }
     shortcodes.set(tag, callback);
+    shortcodeOwners.set(tag, owner);
 }
 
 /**
@@ -24,7 +46,15 @@ function addShortcode(tag: string, callback: Function) {
  * Equivalent to remove_shortcode()
  */
 function removeShortcode(tag: string) {
+    // A plugin may only remove a tag it owns; core may remove any. Prevents one plugin unregistering
+    // another plugin's / core's shortcode.
+    const owner = currentOwner();
+    if (owner !== null && shortcodes.has(tag) && (shortcodeOwners.get(tag) ?? null) !== owner) {
+        console.warn(`[Security Block] Plugin '${owner}' tried to remove shortcode '[${tag}]' owned by '${shortcodeOwners.get(tag) ?? 'core'}' — refused.`);
+        return;
+    }
     shortcodes.delete(tag);
+    shortcodeOwners.delete(tag);
 }
 
 /**
