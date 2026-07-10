@@ -46,6 +46,45 @@ function isBlockedV4(a: string): boolean {
 }
 
 /**
+ * Parse an IPv6 literal to its canonical 16 bytes, or null if unparseable. Handles '::' compression
+ * and an embedded trailing IPv4 (e.g. ::ffff:1.2.3.4). Input is assumed already validated by
+ * net.isIP()===6. CRITICAL: we must classify by NUMERIC bytes, not textual shape — the loopback string
+ * '::1' has infinitely many spellings ('0:0:0:0:0:0:0:1', '0::1', '::01', …) and IPv4-mapped metadata
+ * '::ffff:169.254.169.254' likewise ('0:0:0:0:0:ffff:a9fe:a9fe'), all of which a string match misses.
+ */
+function ipv6ToBytes(input: string): number[] | null {
+    let s = input.toLowerCase();
+    // Split an embedded trailing dotted-IPv4 into two hextets so the rest parses as pure hex groups.
+    const v4m = s.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+    if (v4m) {
+        const oct = v4m[1].split('.').map((n) => parseInt(n, 10));
+        if (oct.length !== 4 || oct.some((n) => isNaN(n) || n < 0 || n > 255)) return null;
+        const tail = (((oct[0] << 8) | oct[1]).toString(16)) + ':' + (((oct[2] << 8) | oct[3]).toString(16));
+        s = s.slice(0, s.length - v4m[1].length) + tail;
+    }
+    const halves = s.split('::');
+    if (halves.length > 2) return null;                 // more than one '::' is illegal
+    const head = halves[0] ? halves[0].split(':') : [];
+    let groups: string[];
+    if (halves.length === 2) {
+        const tail = halves[1] ? halves[1].split(':') : [];
+        const fill = 8 - head.length - tail.length;
+        if (fill < 0) return null;
+        groups = [...head, ...new Array(fill).fill('0'), ...tail];
+    } else {
+        groups = head;
+    }
+    if (groups.length !== 8) return null;
+    const bytes: number[] = [];
+    for (const g of groups) {
+        if (!/^[0-9a-f]{1,4}$/.test(g)) return null;
+        const v = parseInt(g, 16);
+        bytes.push((v >> 8) & 255, v & 255);
+    }
+    return bytes.length === 16 ? bytes : null;
+}
+
+/**
  * True if an IP (literal) must NOT be reached by plugin egress. Callers pass RESOLVED IPs (the
  * validating lookup) or IP literals from connect args. Anything that isn't a parseable public IP is
  * blocked (fail closed).
@@ -57,19 +96,26 @@ export function isBlockedIp(ip: string): boolean {
     const fam = realNet.isIP(a);
     if (fam === 4) return isBlockedV4(a);
     if (fam === 6) {
-        const lower = a.toLowerCase();
-        if (lower === '::1' || lower === '::') return true;     // loopback / unspecified
-        if (lower.startsWith('fe80')) return true;             // fe80::/10 link-local
-        if (/^f[cd][0-9a-f]{2}:/.test(lower)) return true;     // fc00::/7 unique-local
-        if (/^ff[0-9a-f]{2}:/.test(lower)) return true;        // ff00::/8 multicast
-        const m = lower.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/); // IPv4-mapped (dotted)
-        if (m) return isBlockedV4(m[1]);
-        const h = lower.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);       // IPv4-mapped (hex)
-        if (h) {
-            const hi = parseInt(h[1], 16), lo = parseInt(h[2], 16);
-            return isBlockedV4(`${(hi >> 8) & 255}.${hi & 255}.${(lo >> 8) & 255}.${lo & 255}`);
+        const b = ipv6ToBytes(a);
+        if (!b) return true;                                       // unparseable → fail closed
+        const first10Zero = b.slice(0, 10).every((x) => x === 0);
+        // ::/96 (IPv4-compatible + ::/::1) and ::ffff:0:0/96 (IPv4-mapped) — apply the IPv4 rules to the
+        // embedded address. This catches EVERY spelling of ::1 (→0.0.0.1, blocked by 0/8) and of
+        // ::ffff:169.254.169.254 (→link-local), plus :: (→0.0.0.0), regardless of textual form.
+        if (first10Zero && ((b[10] === 0xff && b[11] === 0xff) || (b[10] === 0 && b[11] === 0))) {
+            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
         }
-        return false; // a public-looking IPv6
+        // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 address a translator routes to — on an
+        // IPv6-only cloud VPC this reaches v4 metadata/loopback (64:ff9b::a9fe:a9fe = 169.254.169.254).
+        // Block only when the embedded v4 is itself private (public NAT64 targets stay allowed).
+        if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
+            return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
+        }
+        if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
+        if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;  // fec0::/10 deprecated site-local (RFC 3879)
+        if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 unique-local (ULA)
+        if (b[0] === 0xff) return true;                           // ff00::/8 multicast
+        return false;                                             // a public-looking IPv6
     }
     return true; // not a valid IP literal → block
 }

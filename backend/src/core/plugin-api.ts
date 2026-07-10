@@ -52,7 +52,16 @@ const PROTECTED_OPTION_NAMES = new Set([
     'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home',
     // 'trusted_plugins' drives the trust system — writing it self-promotes a plugin to the privileged
     // tier on next boot (full sandbox escape). Off-limits to untrusted plugins.
-    'trusted_plugins', 'trusted_plugin', 'trustedsystemplugins'
+    'trusted_plugins', 'trusted_plugin', 'trustedsystemplugins',
+    // 'plugin_grants' IS the permission-grant store (plugin-permissions.loadGrants reads it verbatim at
+    // boot). A plugin with settings:write could otherwise options.set('plugin_grants', {self:[...all...]})
+    // and self-escalate to every capability the admin never approved — a full default-deny escape.
+    'plugin_grants',
+    // 'cron' is the scheduled-events blob. Writing it raw injects hook callbacks (spoofed/omitted
+    // pluginSlug runs core & cross-plugin handlers) and bypasses the capacity caps that only sit on the
+    // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to
+    // dodge the supervisor. All off-limits to untrusted plugins.
+    'cron', 'plugin_strikes', 'plugin_health'
 ]);
 // Protected for EVERY plugin now (no trusted bypass). Secret/security-critical options are never
 // readable/writable through the generic options bridge; safe non-secret reads go via the `site` bridge.
@@ -406,4 +415,4 @@ function createPluginApi(slug: string) {
     };
 }
 
-module.exports = { createPluginApi };
+module.exports = { createPluginApi, isProtectedOption };

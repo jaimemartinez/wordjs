@@ -508,6 +508,20 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
                     dangerousCalls.add(name);
                 }
 
+                // Indirect eval / Function: `(0, eval)(x)` / `(0, Function)(y)`. The comma-expression
+                // callee is a SequenceExpression whose runtime value is its LAST element — a codegen
+                // primitive the bare-name check above misses (name is '' for a SequenceExpression callee).
+                if (node.callee.type === 'SequenceExpression') {
+                    // Unwrap nested comma-expressions ((0,(0,eval))('x')) to the terminal value.
+                    let last: any = node.callee;
+                    while (last && last.type === 'SequenceExpression' && last.expressions.length) {
+                        last = last.expressions[last.expressions.length - 1];
+                    }
+                    if (last && last.type === 'Identifier' && (last.name === 'eval' || last.name === 'Function')) {
+                        dangerousCalls.add(`Indirect ${last.name}() call (obfuscation risk)`);
+                    }
+                }
+
                 // Function constructor reached indirectly, e.g. (()=>{}).constructor('code')() or
                 // [].constructor.constructor('code') — builds executable code at runtime, bypassing the
                 // literal eval/Function name check above.
@@ -591,8 +605,20 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
             // defense; this is the static backstop.)
             VariableDeclarator(node: any) {
                 if (node.init && node.init.type === 'Identifier' &&
-                    ['process', 'global', 'globalThis', 'require', 'module'].includes(node.init.name)) {
+                    ['process', 'global', 'globalThis', 'require', 'module', 'eval', 'Function'].includes(node.init.name)) {
+                    // `const p = process` / `const e = eval` / `const F = Function` — binding a restricted
+                    // global or a codegen primitive to a local dodges the direct name checks above.
                     dangerousCalls.add(`Aliasing restricted global '${node.init.name}' (obfuscation risk)`);
+                }
+                // `const F = [].constructor.constructor` aliases the Function constructor (constructor OF a
+                // constructor) without ever naming it — then F('code')() runs arbitrary code while the call
+                // callee is just an Identifier. Flag the DOUBLE .constructor.constructor init specifically
+                // (a single .constructor, e.g. `this.constructor`, is common and benign → no false positive).
+                if (node.init && node.init.type === 'MemberExpression' && node.init.property &&
+                    node.init.property.type === 'Identifier' && node.init.property.name === 'constructor' &&
+                    node.init.object && node.init.object.type === 'MemberExpression' && node.init.object.property &&
+                    node.init.object.property.type === 'Identifier' && node.init.object.property.name === 'constructor') {
+                    dangerousCalls.add(`Aliasing Function constructor via .constructor.constructor (obfuscation risk)`);
                 }
             }
         });
