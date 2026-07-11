@@ -50,6 +50,10 @@ let classifier = null;    // bayes classifier
 let saveBayes = null;     // persists the classifier
 let transporter = null;
 let smtpServer = null;
+// Inbound listener status surfaced to the admin: which port we actually bound and whether we had to
+// fall back off the standard MX port 25 (so the UI can tell the operator inbound-from-internet needs
+// a port map / privilege grant instead of failing silently). Reset on every initSMTPServer().
+let inboundStatus = { requestedPort: null, boundPort: null, degraded: false, reason: null, _triedFallback: false };
 let queueInterval = null;  // scheduled/retry queue timer id (cleared on deactivate)
 
 // === User lookups via the SAFE host bridge (grant: users:read) ===
@@ -342,7 +346,11 @@ function bareIp(addr) {
  */
 async function initSMTPServer() {
     const siteDomain = await getSiteDomain();
-    const port = parseInt(await getOption('smtp_listen_port', '2525'), 10);
+    // Default to 25 — the ONLY port the world delivers mail to (the MX record implies :25). This makes
+    // inbound work with zero config wherever the process may bind it (Windows; Linux once node has
+    // CAP_NET_BIND_SERVICE via create-wordjs/setcap; any host running privileged). Where it CAN'T bind
+    // 25 we fall back to 2525 below and report it — never a silent no-inbound.
+    let port = parseInt(await getOption('smtp_listen_port', '25'), 10);
     const catchAllRaw = await getOption('smtp_catch_all', '0');
 
     if (smtpServer) {
@@ -545,15 +553,45 @@ async function initSMTPServer() {
         }
     });
 
-    smtpServer.listen(port, () => {
-        console.log(`   ✓ Inbound SMTP Server listening on port ${port} (Domain: ${siteDomain})`);
-    });
+    inboundStatus = { requestedPort: port, boundPort: null, degraded: false, reason: null };
+
+    // Probe-then-bind. Rebinding a net.Server after a listen error is unreliable, so instead of trying
+    // to recover from a failed bind we TEST whether the standard port 25 is bindable first, with a
+    // throwaway socket. If it isn't (EACCES = no CAP_NET_BIND_SERVICE/root on Linux; EADDRINUSE = another
+    // MTA already on 25), fall back to the unprivileged 2525 and record WHY — the listener still comes up
+    // (local + relay mail keep working) and the admin UI can tell the operator inbound-from-internet
+    // needs the port-25 bind granted or 25 mapped to 2525. A non-25 operator override is respected as-is.
+    if (port === 25) {
+        const probe = await new Promise((resolve) => {
+            let net;
+            try { net = require('net'); } catch (e) { return resolve({ ok: false, code: 'ENONET' }); }
+            const tester = net.createServer();
+            tester.once('error', (e) => resolve({ ok: false, code: e.code }));
+            tester.once('listening', () => tester.close(() => resolve({ ok: true })));
+            try { tester.listen(25, '0.0.0.0'); } catch (e) { resolve({ ok: false, code: e && e.code }); }
+        });
+        if (!probe.ok) {
+            inboundStatus.degraded = true;
+            inboundStatus.reason = probe.code === 'EACCES'
+                ? 'binding port 25 was denied — on Linux node needs CAP_NET_BIND_SERVICE (run create-wordjs, or: sudo setcap cap_net_bind_service=+ep $(readlink -f $(which node))) or run privileged'
+                : (probe.code === 'EADDRINUSE'
+                    ? 'port 25 is already in use by another mail server — stop it, or map 25 → 2525'
+                    : `could not bind port 25 (${probe.code || 'unknown error'})`);
+            port = 2525;
+        }
+    }
 
     smtpServer.on('error', err => {
-        if (err.code === 'EADDRINUSE') {
-            console.warn(`   ⚠️  Inbound SMTP Server could not start: Port ${port} is busy.`);
+        console.error('   ✗ Inbound SMTP Server error:', err.message);
+    });
+
+    smtpServer.listen(port, () => {
+        inboundStatus.boundPort = port;
+        if (inboundStatus.degraded) {
+            console.warn(`   ⚠️  Inbound SMTP: could not bind port 25 (${inboundStatus.reason}). Fell back to ${port}. Internet mail is delivered to port 25, so EXTERNAL inbound will NOT arrive until you grant the port-25 bind or map 25 → ${port}. Local + relay mail are unaffected.`);
         } else {
-            console.error('   ✗ Inbound SMTP Server error:', err.message);
+            const note = port === 25 ? '' : ` — NON-STANDARD: internet mail expects port 25, so map 25 → ${port}`;
+            console.log(`   ✓ Inbound SMTP Server listening on port ${port} (Domain: ${siteDomain})${note}`);
         }
     });
 }
@@ -1621,7 +1659,14 @@ exports.init = async function (bridge) {
         res.json({
             mail_from_email: await getOption('mail_from_email', ''),
             mail_from_name: await getOption('mail_from_name', ''),
-            smtp_listen_port: await getOption('smtp_listen_port', '2525'),
+            smtp_listen_port: await getOption('smtp_listen_port', '25'),
+            // Live inbound listener status so the UI can surface a real state instead of a silent
+            // no-inbound: the port we ACTUALLY bound, whether we had to fall back off the standard 25,
+            // and why. inbound_ok = bound on the standard MX port (external inbound can work).
+            inbound_bound_port: inboundStatus.boundPort,
+            inbound_degraded: inboundStatus.degraded,
+            inbound_reason: inboundStatus.reason,
+            inbound_ok: inboundStatus.boundPort === 25,
             smtp_catch_all: await getOption('smtp_catch_all', '0'),
             mail_helo_host: await getOption('mail_helo_host', ''),
             // Relay / smarthost (optional). Without these exposed the relay path was unreachable and
