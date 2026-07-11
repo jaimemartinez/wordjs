@@ -5,6 +5,7 @@
     "description": "Manage SMTP settings and send automated emails",
     "author": "WordJS",
     "isolated": true,
+    "claimPorts": [25],
     "backend": {
         "entry": "index.js"
     },

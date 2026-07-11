@@ -1445,6 +1445,66 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
         catch (e) { setDnsCheck({ error: true }); }
         finally { setCheckingDns(false); }
     };
+
+    // One-click, EXPLICITLY-CONFIRMED fix for the port-25 squatter (usually the distro's preinstalled
+    // Postfix/Exim bound to loopback). The heavy lifting is host-side (core port-conflicts + admin
+    // routes); this just shows WHO holds the port, asks consent for a PERMANENT disable, and refreshes.
+    const { confirm: confirmFreePort } = useModal();
+    const [freeingPort, setFreeingPort] = useState(false);
+    const [freePortMsg, setFreePortMsg] = useState<string | null>(null);
+    const askFreePortConsent = async (conflict: any) => {
+        const label = conflict?.occupant?.label || 'The conflicting service';
+        const scope = conflict?.occupant?.loopbackOnly
+            ? `${label} only listens on localhost, so it is NOT receiving internet mail — disabling it is safe.`
+            : `CAREFUL: ${label} is listening on public interfaces and may be receiving real mail for this server.`;
+        return confirmFreePort(
+            `${label} is holding port 25, which WordJS needs to receive internet mail.\n\n${scope}\n\nWordJS will PERMANENTLY disable ${label} (systemctl disable --now — it will NOT come back after a reboot) and restart the mail listener so it takes port 25. Continue?`,
+            'Free port 25',
+            true
+        );
+    };
+    const freeInboundPort = async () => {
+        setFreePortMsg(null);
+        setFreeingPort(true);
+        try {
+            const info = await api('/plugins/mail-server/port-conflicts') as any;
+            const conflict = (info?.conflicts || []).find((c: any) => c.port === 25);
+            // Not fixable OR not even inspectable (non-Linux, ss missing): the reason IS the answer —
+            // show it and do nothing else (no consent skipped, no pointless plugin restart).
+            if (conflict?.reason && !(conflict.inUse && conflict.canFree)) {
+                setFreePortMsg(conflict.reason);
+                return;
+            }
+            // Consent BEFORE disabling anything; the flag travels with the request so the server never
+            // disables a service on a stale snapshot (it re-checks and demands consent: TOCTOU-safe).
+            let allowDisable = false;
+            if (conflict?.inUse && conflict?.canFree) {
+                if (!(await askFreePortConsent(conflict))) return;
+                allowDisable = true;
+            }
+            try {
+                await api('/plugins/mail-server/free-port', { method: 'POST', body: { port: 25, allowDisable } });
+            } catch (e: any) {
+                // The squatter (re)appeared between snapshot and POST — server refused without consent.
+                // Ask now, with the server's FRESH conflict, and retry carrying the consent.
+                const details = e && e.details;
+                if (details && details.code === 'CONSENT_REQUIRED') {
+                    if (!(await askFreePortConsent(details.conflict))) return;
+                    await api('/plugins/mail-server/free-port', { method: 'POST', body: { port: 25, allowDisable: true } });
+                } else {
+                    throw e;
+                }
+            }
+            // MERGE the refetch (the loader merges too): a full replace would wipe unsaved form edits
+            // (e.g. a relay password typed but not yet saved) from this same settings screen.
+            const fresh = await api('/plugin/mail-server/settings') as any;
+            setSettings((prev: any) => ({ ...prev, ...fresh }));
+        } catch (e: any) {
+            setFreePortMsg((e && e.message) || 'Failed to free port 25.');
+        } finally {
+            setFreeingPort(false);
+        }
+    };
     return (
         <div className="max-w-2xl mx-auto pt-10 pb-20">
             <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">Server &amp; Deliverability</h2>
@@ -1478,6 +1538,19 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                                             <code className="block text-[12px] font-mono text-amber-900/70 bg-amber-100/60 rounded-lg px-3 py-2 leading-relaxed whitespace-pre-wrap break-words">
                                                 {settings.inbound_reason}
                                             </code>
+                                        ) : null}
+                                        <div>
+                                            <button
+                                                type="button"
+                                                onClick={freeInboundPort}
+                                                disabled={freeingPort}
+                                                className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold uppercase tracking-wide transition-colors disabled:opacity-50"
+                                            >
+                                                {freeingPort ? (<><i className="fa-solid fa-circle-notch fa-spin mr-2"></i>Freeing port 25…</>) : (<><i className="fa-solid fa-unlock mr-2"></i>Free port 25 automatically</>)}
+                                            </button>
+                                        </div>
+                                        {freePortMsg ? (
+                                            <div className="text-[12px] text-amber-900/80 whitespace-pre-wrap">{freePortMsg}</div>
                                         ) : null}
                                     </div>
                                 </div>

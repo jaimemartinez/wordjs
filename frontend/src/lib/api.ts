@@ -207,6 +207,22 @@ export interface PluginRuntime {
     rssBytes?: number | null;
 }
 
+// A manifest-claimed port and who (if anyone) is squatting it. `canFree` = WordJS can permanently
+// disable the occupant (known system MTA, running as root) after explicit admin confirmation.
+export interface PluginPortConflict {
+    port: number;
+    inUse: boolean;
+    canFree: boolean;
+    occupant?: {
+        process: string;
+        pids: number[];
+        loopbackOnly: boolean;
+        service?: string;
+        label?: string;
+    };
+    reason?: string;
+}
+
 export interface Theme {
     name: string;
     slug: string;
@@ -336,6 +352,13 @@ export const pluginsApi = {
     reload: (slug: string) => apiPost<{ success: boolean; slug: string; message: string }>(`/plugins/${slug}/reload`, {}),
     /** Live runtime health of an isolated plugin. */
     status: (slug: string) => apiGet<PluginRuntime>(`/plugins/${slug}/status`),
+    /** Who is squatting the ports this plugin's manifest claims (e.g. the distro MTA on 25)? */
+    portConflicts: (slug: string) => apiGet<{ slug: string; conflicts: PluginPortConflict[] }>(`/plugins/${slug}/port-conflicts`),
+    /** Admin-confirmed fix: permanently disable the known system MTA holding a claimed port, then reload
+     * the plugin. `allowDisable` carries the modal consent — without it the server only reloads (and
+     * refuses to disable anything with a 409 CONSENT_REQUIRED). */
+    freePort: (slug: string, port: number, allowDisable = false) =>
+        apiPost<{ success: boolean; freed: boolean; alreadyFree?: boolean; port: number; service?: string; label?: string; reloaded: boolean }>(`/plugins/${slug}/free-port`, { port, allowDisable }),
 
     // Android-style per-permission grants (default-deny). `granted` = the "scope:access" tokens the admin
     // approves; `network` = grant outbound network to an untrusted plugin.
