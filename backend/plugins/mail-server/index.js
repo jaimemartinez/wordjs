@@ -490,10 +490,10 @@ async function initSMTPServer() {
                                 fromAddress: fromAddr,
                                 fromName: fromName,
                                 toAddress: user ? user.userEmail : addr.address,
-                                subject: (isSpam ? '[SPAM] ' : '') + parsed.subject,
-                                bodyText: parsed.text,
-                                bodyHtml: parsed.html,
-                                rawContent: parsed.textAsHtml || parsed.text,
+                                subject: (isSpam ? '[SPAM] ' : '') + (parsed.subject || '(no subject)'),
+                                bodyText: parsed.text || '',
+                                bodyHtml: parsed.html || '',
+                                rawContent: parsed.textAsHtml || parsed.text || '',
                                 attachments: parsed.attachments,
                                 isTrash: isSpam ? 1 : 0 // Auto-trash spam
                             });
