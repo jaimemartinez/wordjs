@@ -40,7 +40,7 @@ WordJS is built with a "Security First" architecture.
 - **Token-Gated Metrics**: The Prometheus endpoint `GET /metrics` is **disabled (returns 404) unless a scrape token is configured** (`config.metrics.token` / `METRICS_TOKEN`); scrapes must present `Authorization: Bearer <token>`, compared in constant time (mismatch → 401). It is never exposed without a token.
 
 ### Plugin Sandbox (Isolated-Only)
-- **OS-Process Isolation**: Every plugin runs in a **separate OS process** (`child_process.fork`; a `worker_threads` transport remains as a fallback) and reaches core ONLY through the permission-checked `wordjs` capability bridge, RPC'd over IPC — it never touches raw `fs` / `child_process` / `dbAsync` / secrets. A crash, OOM, or heap escape is contained to the child and the host always survives. Bridge dispatch enforces an **exact method allowlist**; registration / mail-provider / notify-transport / route flow only through dedicated trust-gated IPC kinds.
+- **OS-Process Isolation**: Every plugin runs in a **separate OS process** (`child_process.fork`, wrapped in a transport-agnostic Worker-like adapter — `worker_threads` itself is a **blocked** module inside plugins) and reaches core ONLY through the permission-checked `wordjs` capability bridge, RPC'd over IPC — it never touches raw `fs` / `child_process` / `dbAsync` / secrets. A crash, OOM, or heap escape is contained to the child and the host always survives. Bridge dispatch enforces an **exact method allowlist**; registration / mail-provider / notify-transport / route flow only through dedicated trust-gated IPC kinds.
 - **No Trust Tier — Per-Capability Grants (default-deny)**: There is **no** trusted tier; every plugin is sandboxed and the admin grants each bridge capability individually in `/admin/plugins` (Android-style, default-deny, persisted server-side and never self-declarable). A plugin gets **nothing** until an operator approves it. First-party plugins are pre-granted only their **declared** capabilities and are not privileged. No plugin bypasses DB scoping, the IO Guard, or these grants.
 - **Outbound-Network Confinement**: A plugin has **no** outbound network unless an admin grants the `network` capability. While not granted, `fetch`/`WebSocket` and the raw `net`/`tls`/`http`/`https`/`http2`/`dgram` modules are blocked. When granted, egress is confined to **public destinations only** by a connect-time guard that blocks loopback, link-local (incl. `169.254.169.254` cloud-metadata), RFC1918, CGNAT (`100.64/10`), IPv6 ULA/loopback, IPv4-mapped-v6, `0.0.0.0/8` (this-host), and multicast/reserved ranges; denies IPC / unix-socket paths; fails closed on unresolvable hosts; and re-validates the **actual resolved IP at connect time** (anti DNS-rebinding) and across redirect hops — so a network-granted plugin still cannot SSRF the metadata endpoint or internal services.
 - **Secret Scrubbing**: Sandboxed plugins receive `config/app` and `dbAsync` views with credential-like fields stripped and core credential/role/option tables (`users`, `options`, …) refused.
@@ -70,9 +70,10 @@ Our team is committed to addressing security issues promptly.
 
 ## 📝 Supported Versions
 
-WordJS is pre-production; only the latest `main` is supported. There is no LTS line yet.
+WordJS is pre-production; only the latest `main` and the current `1.2.x` release line are supported. There is no LTS line yet.
 
-| Version  | Supported | Notes                                          |
-| :------- | :-------- | :--------------------------------------------- |
-| `main`   | ✅         | Latest development line (the only one patched) |
-| tagged   | ⚠️        | Best-effort; upgrade to latest `main` first    |
+| Version  | Supported | Notes                                             |
+| :------- | :-------- | :------------------------------------------------ |
+| `main`   | ✅         | Latest development line (the only one patched)    |
+| `1.2.x`  | ✅         | Current release line (latest tag `v1.2.3`)        |
+| < `1.2`  | ⚠️        | Best-effort; upgrade to `1.2.x` or latest `main`  |

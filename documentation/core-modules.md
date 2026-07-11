@@ -108,6 +108,51 @@ When an admin grants a plugin the `network` permission, the raw socket modules (
 
 ---
 
+## 4c. Isolated Plugin Host 🧬
+
+**Location:** `backend/src/core/plugin-isolate.ts` (+ `backend/src/core/plugin-worker.js`)
+
+Loads any plugin marked `"isolated": true` in its manifest into a **separate OS process** via `child_process.fork` (real OS-level isolation, no native deps) rather than a worker thread — an untrusted plugin can't touch the host heap, and an off-heap OOM in one plugin can't take down the CMS.
+
+*   **Host-side shims:** the host registers hooks/routes/menus on behalf of the child and RPCs each call into the child process (`serialization: 'advanced'` to preserve fidelity across the channel); the real callbacks live in the child.
+*   **Reload:** `reloadIsolatedPlugin(slug)` tears down and re-forks a plugin; it **must** call `require('./plugins').fixMiddlewareOrder()` afterwards so recovered routes are re-mounted before the catch-all 404 (otherwise every reloaded route returns `rest_no_route`).
+*   **Least privilege:** the child's network gates (`net`/`tls`/`dns`/`http`/…/`fetch`/`WebSocket`) are opened **only** when `network` is granted — `child_process`/`fs`/`vm` are never handed through. `secure-require`, `io-guard` and `egress-guard` all run **inside** this child.
+
+---
+
+## 4d. Module Confinement 🚪
+
+**Location:** `backend/src/core/secure-require.ts`
+
+`installSecureRequire()` locks down what plugin code can pull in at runtime (loaded eagerly inside the isolated child, before any plugin is on the stack).
+
+*   **Require confinement:** patches `require`/`Module._load`; `guardPluginRequirePath()` blocks `require()` of paths under **writable data dirs** (a load-your-own-dropped-code primitive) and non-requirable dirs, and the ESM `import()` path is guarded too.
+*   **Raw-binding block:** `process.binding` is blocked for plugins, and `process.dlopen` is blocked for **all** plugins (a native `.node` addon would run outside every JS-level guard).
+*   **Scoped DB:** `guardPluginSql()` refuses queries that touch core credential/secret tables, so a plugin's DB handle can't read the host's users/options secrets.
+
+---
+
+## 4e. Filesystem Guard 📁
+
+**Location:** `backend/src/core/io-guard.ts`
+
+Monkey-patches `fs` inside the isolated child so plugin code is confined to its own dir plus a few safe zones. A plugin **cannot**:
+
+*   rewrite its own `manifest.json` (a permission-escalation primitive), read the raw DB files or secret-named files;
+*   **create/rename/copy a file into an executable code extension** — `EXECUTABLE_CODE_EXT` covers `.js/.cjs/.mjs/.jsx/.ts/.tsx/.node/.wasm` (kills write-`.txt`-then-rename-`.js` scanner evasion). Data files (`.json`/`.txt`/images) stay writable.
+*   **Copy/link ends are both checked:** `copyFile`/`copyFileSync`/`cp`/`link`/`linkSync`/`symlink` validate **source-read AND dest-write**, closing the copy-the-DB / hard-link-a-secret exfiltration hole.
+*   **Per-plugin disk-write quota:** raw `writeFile`/`appendFile`/`createWriteStream` growth is capped (a single-write byte cap plus `PLUGIN_GROW_QUOTA` = 512 MB of append/stream growth per rolling window per plugin), surfaced as a normal stream error rather than silently filling the disk.
+
+---
+
+## 4f. ZIP Extraction Guard 🗜️
+
+**Location:** `backend/src/core/zip-guard.ts`
+
+`assertZipWithinBudget(entries, opts)` is the decompression-bomb / resource-DoS defense on the plugin-upload path (`routes/plugins.ts`). It throws an `Error` (`.code = 'ZIP_BUDGET_EXCEEDED'`) **before** extraction if an archive's declared uncompressed size exceeds `maxTotalBytes` (default **200 MB**) or its entry count exceeds `maxEntries` (default **5000**).
+
+---
+
 ## 5. Hook System & Live Registry 🪝
 
 **Location:** `backend/src/core/hooks.ts`
@@ -176,6 +221,10 @@ These WordPress-style core services back most CMS configuration.
 *   **Concurrency-safe writes:** `runCron()` snapshots due events, then re-reads a **fresh** copy of the `cron` option before writing back, applying only its own deletes/reschedules — so a concurrent `scheduleEvent()` between read and write isn't clobbered.
 *   **Isolation-aware:** a plugin-scheduled event records its `pluginSlug` and is dispatched via `doActionForPlugin` (only that plugin's callbacks). Core-scheduled events (no slug) dispatch normally. Recurrence intervals are resolved at run time from the live `schedules` map, so custom schedules registered later still recur.
 *   Built-in jobs include `wordjs_version_check` (daily), `wordjs_db_maintenance` (weekly), `wordjs_scheduled_backup` (driven by the `backup_schedule` / `backup_time` / `backup_day` options) and `wordjs_cert_renewal` (twicedaily — the ACME/Let's Encrypt renewal check, which only renews when the cert is within its renewal window).
+*   **Multi-node safe:** `runCron()` executes inside `distLock.runAsLeader('wordjs:cron', …)` (see Distributed Lock) so only one node in a cluster fires due events per tick.
+
+### Distributed Lock (`backend/src/core/dist-lock.ts`)
+*   A DB-backed leader lease (works on SQLite or Postgres) so cluster-wide singleton work runs on exactly one node. `runAsLeader(name, { ttlMs, renewMs }, fn)` acquires `name`, heartbeats to renew the lease while `fn` runs, and releases on completion; if the holder dies, the lease expires within `ttlMs` and another node can take over. Also exposes `tryAcquire / renew / release / acquireBlocking`.
 
 ### Notifications
 

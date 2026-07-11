@@ -85,7 +85,7 @@ A single process on one port (`:3000`) via the repo-root entrypoint **`monolith.
 
 - `helmet`
 - `compression` (skipping SSE)
-- SEO rewrites — `/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `/api/v1/seo/robots.txt`
+- SEO rewrites — `/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `/api/v1/seo/robots.txt`, and the RSS feed (`/feed`, `/feed.xml`, `/rss.xml`) → `/api/v1/seo/feed.xml`
 - `X-Forwarded-Host` pinning for CSRF
 
 It serves **one HTTPS port**, reusing the gateway's certificate (with HTTP fallback). A **loopback-only HTTP listener** serves the frontend's server-side (SSR) API calls.

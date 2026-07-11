@@ -38,7 +38,7 @@ await wordjs.notify({
 });
 ```
 
-Every `send()` is gated by `verifyPermission('notifications', 'send')`, so an untrusted plugin cannot dispatch notifications unless its manifest declares the scope.
+Every `send()` is gated by `verifyPermission('notifications', 'send')`, so a plugin cannot dispatch notifications unless its manifest **declares** the `notifications: send` scope **and** an admin has **granted** it (default-deny, Android-style — declaring alone is not enough).
 
 ## Persistence & retrieval
 

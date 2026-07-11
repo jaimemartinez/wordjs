@@ -94,7 +94,7 @@ npm run lint           # eslint (flat config)
 npm run format
 ```
 
-`npm test` runs ~184 backend test cases (183 pass, 1 skip) across 23 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
+`npm test` runs ~203 backend test cases (202 pass, 1 skip) across 25 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
 
 The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers (`sqlite-native` and `postgres`, each skipped gracefully when its backend isn't reachable) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 7th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
@@ -177,7 +177,7 @@ The default. The **gateway** (`:3000` public, a Node `cluster` reverse-proxy) si
 
 ### Monolith (1 process, 1 port)
 
-The repo-root entrypoint **`monolith.js`** mounts the backend Express app (**with** its isolated plugins — each runs in its own forked OS process, never in-process) **and** the Next.js request handler **in-process** — no loopback proxy, no Node `cluster`, and no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `…/robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port reusing the gateway's certificate** (HTTP fallback), plus a **loopback-only HTTP listener** for the frontend's server-side (SSR) API calls.
+The repo-root entrypoint **`monolith.js`** mounts the backend Express app (**with** its isolated plugins — each runs in its own forked OS process, never in-process) **and** the Next.js request handler **in-process** — no loopback proxy, no Node `cluster`, and no gateway `/register`. The gateway's still-needed cross-cutting concerns are re-implemented as **local middleware**: `helmet`, `compression` (skipping SSE), SEO rewrites (`/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `…/robots.txt`), and `X-Forwarded-Host` pinning for CSRF. It serves **one HTTPS port reusing the gateway's certificate** (HTTP fallback; set **`WORDJS_HTTP=1`** to force the public port to plain HTTP — `resolveSSL()` returns no cert), plus a **loopback-only HTTP listener** for the frontend's server-side (SSR) API calls.
 
 ```bash
 npm run dev:mono     # dev: Next dev HMR + ts-node backend

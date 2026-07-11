@@ -177,8 +177,8 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`    | `/categories`       | No    | List all categories                              |
 | `POST`   | `/categories`       | Admin | Create a new category                            |
 | `GET`    | `/tags`             | No    | List all tags                                    |
-| `GET`    | `/media`            | JWT   | List library items                               |
-| `POST`   | `/media`            | Admin | Upload a new media file                          |
+| `GET`    | `/media`            | Opt.  | List library items (optional auth)               |
+| `POST`   | `/media`            | `upload_files` | Upload a new media file                 |
 
 > † `edit_posts` is held by authors/editors/admins; `PUT`/`DELETE` additionally require **ownership** of the post **or** `edit_others_posts` / `delete_others_posts` (see the access notes below).
 
@@ -205,6 +205,8 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST` | `/plugins/:slug/reload`     | Admin | Hot-reload an isolated plugin's child process (re-runs the full AST-scan pipeline) |
 | `POST` | `/plugins/:slug/permissions` | Admin | Set the per-permission grants (Android-style, default-deny). Body `{ granted: ["scope:access", ...], network: boolean }`; re-spawns the isolate so a `network` grant takes effect |
 | `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin. Body `{ password, dropData }`: password-confirmed, refuses an **active** plugin, always clears grants + crash strikes, and drops the plugin's `wjp_<slug>_` tables only when `dropData` is set |
+| `GET`  | `/plugins/:slug/download`   | Admin | Download an installed plugin as a ZIP (`authenticateAllowQuery`: cookie/Bearer **or** a `?token=` query param) |
+| `GET`  | `/plugins/menus`            | Admin | Admin-menu items contributed by active plugins (control-plane metadata; `authenticate` + `isAdmin`) |
 | `GET`  | `/themes`                   | Admin | List available themes                               |
 | `POST` | `/themes/:slug/activate`    | Admin | Change active theme                                 |
 | `GET`  | `/setup/status`             | No    | Check if site is installed (not token-gated)        |

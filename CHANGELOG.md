@@ -6,6 +6,101 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+Focus: **plugin-sandbox security hardening** — a fresh adversarial red-team of the sandbox surfaced
+weaknesses that were almost entirely HOST-SIDE (the admin upload/extraction path, which runs on the
+real filesystem outside the child's io-guard, and the options bridge). The child sandbox itself held.
+Still self-audited, not independently audited.
+
+### Security
+
+- **Plugin self-code-modification / read-confinement closed in the io-guard (#132).** The io-guard now
+  patches `copyFile`/`copyFileSync`/`cp`/`cpSync`/`link`/`linkSync` (previously **unpatched**) —
+  source is read-checked and destination write-checked — so a plugin can neither copy a secret /
+  out-of-zone file OUT (a bypass that dodged the `readFile` block) nor copy/hard-link a file into an
+  executable name. It also **refuses to create, overwrite, or rename/copy a file into an executable
+  code extension** (`.js`/`.cjs`/`.mjs`/`.node`/`.wasm` + TS variants) **anywhere a plugin can write,
+  including its own dir** — the AST scanner only vets committed code, so a runtime-planted `.js`
+  (directly, or "write `.txt` then rename to `.js`") would otherwise run un-scanned; data files
+  (`.json`/`.txt`/images) stay writable. `secure-require` additionally denies a plugin/theme module
+  `require()`-ing code out of a writable data dir (uploads/data/os-tmp/logs).
+- **Host RCE via crafted upload closed (#133, critical).** A ZIP named `…zip` made
+  `path.parse().name === '..'`, so a multi-root archive redirected extraction to `backend/` and planted
+  a host-`require()`d module. The derived slug is now validated (strict single segment) **before** any
+  `path.join`, and only validated content entries are extracted (per-entry, junk-filtered) into a
+  guaranteed child of the plugin's own dir.
+- **Permission self-escalation closed (#133, critical).** A `settings:write` plugin could
+  `options.set('plugin_grants', …)` and self-grant every capability at the next boot. `plugin_grants`,
+  `cron`, `plugin_strikes`, and `plugin_health` are now protected option names in the options bridge
+  (alongside `roles`/`active_plugins`/`siteurl`/…, `core/plugin-api.ts`), and `loadGrants`
+  shape-validates tokens (`core/plugin-permissions.ts`).
+- **SSRF numeric-IPv6 bypass closed (#133, critical).** The egress filter matched textual IPv6 shape,
+  so full-form `::1` and IPv4-mapped `::ffff:169.254.169.254` slipped through to loopback/metadata. It
+  now parses a real 16-byte address (handles `::`, embedded IPv4, NAT64 `64:ff9b::/96`, and deprecated
+  `fec0::/10` site-local) before range-checking (`core/egress-guard.ts`).
+- **Unauthenticated download/delete traversal closed (#133).** `GET /plugins/:slug/download` and
+  `DELETE /plugins/:slug` now validate the slug through a shared `resolveSafePluginDir()`, so a `%2f`
+  path could no longer exfiltrate the DB or delete arbitrary directories.
+- **Raw-fs disk-fill DoS closed (#133).** The io-guard confined WHERE a plugin writes but not HOW MUCH;
+  a **per-plugin write quota** (single-write cap + rolling append/stream window) now applies in the
+  io-guard AND the `fs.promises` proxy + `FileHandle` (the promises path bypassed the callback-fs patch).
+- **Assorted (#133):** `cron` writes drop events whose `pluginSlug` isn't an active plugin; Multer temp
+  uploads are unlinked on response finish plus a startup reaper; child stdout/stderr flow through a
+  slug-tagged rate limiter; the AST scanner now flags aliased/indirect `eval` and the `Function`
+  constructor; and macOS ZIP junk (`__MACOSX`/`.DS_Store`) is tolerated so valid uploads aren't
+  rejected.
+
+## [1.2.3] - 2026-07-09
+
+### Fixed
+
+- **Safe inline styles are kept so rich-text formatting renders.** The visual editor emits font size,
+  text color, highlight, font family, and alignment as inline `style` (Tiptap TextStyle/FontSize/Color/
+  BackgroundColor/FontFamily/TextAlign); the sanitizer had dropped the `style` attribute wholesale (a
+  prior XSS hardening), so those formats showed while editing but vanished on the non-editing canvas and
+  the public page. `style` is now allowed but scrubbed to a typographic allowlist (`color`,
+  `background-color`, `font-size`, `font-family`, `font-weight`, `font-style`, `text-decoration`,
+  `text-align`, `line-height`, `text-transform`) with injection-free values — `url()`/`expression()`/
+  `@import` and any unknown property are stripped, on both the DOMPurify (client) and `sanitize-html`
+  (SSR) paths (`frontend/src/lib/sanitize.ts`).
+
+### Added
+
+- **The default theme is now WordJS's own visual identity** — a signature indigo→violet gradient,
+  Space Grotesk display + Inter body + JetBrains Mono, a light canvas and a deep-indigo footer — styling
+  the live (Next.js) chrome via the existing `.wjs-header-*`/`.wjs-footer-*` hooks and `--wjs-*` tokens.
+
+### Changed
+
+- **The active theme's stylesheet is server-rendered (no FOUC).** The public site had loaded the theme
+  `style.css` via a `"use client"` loader in a `useEffect`, so the first paint carried only the fallback
+  `default` stylesheet and swapped the real theme in after hydration — a flash of the wrong theme is gone.
+
+## [1.2.2] - 2026-07-08
+
+### Fixed
+
+- **Zero-config CORS behind a reverse proxy.** Production CORS only allowed the configured origins
+  (`siteUrl`/`frontendUrl`/`gatewayUrl`), so a fresh install behind a reverse proxy rejected every
+  credentialed API call (and the install wizard's own same-origin calls) until the operator hand-edited
+  `siteUrl`. A request is now also allowed when its `Origin` hostname matches the `Host` header it
+  arrived on — the monolith serves frontend + API from one origin, so app/wizard calls are always
+  same-origin. `Host` is a browser-set forbidden fetch header, so a cross-site attacker can't forge the
+  match (no takeover hole); disallowed origins now get no CORS header instead of a thrown error (ending
+  the log spam). Needs `proxy_set_header Host $host` (the migration guard already requires it)
+  (`backend/src/index.ts`).
+
+## [1.2.1] - 2026-07-08
+
+### Fixed
+
+- **Monolith self-signed HTTPS serves a certificate.** `selfsigned` v5 made `generate()` async, but the
+  monolith's `resolveSSL()` called it **without `await`**, so key/cert were `undefined` and
+  `https.createServer` served no certificate — every fresh self-signed HTTPS install failed the TLS
+  handshake (`sslv3 alert handshake_failure`). `resolveSSL()` is now `async` and awaits the call, matching
+  cert-manager and the gateway (`monolith.js`).
+
+## [1.2.0] - 2026-07-08
+
 Focus: **a single sandboxed plugin model — the "trusted" tier is gone.** Every plugin runs in the
 OS-process sandbox; capabilities are admin-granted per plugin (Android-style, default-deny). No plugin
 bypasses the sandbox anymore. This builds on the move from a worker-thread (heap) boundary to a separate
@@ -17,6 +112,15 @@ below). WordJS remains pre-production and **self-audited, not independently audi
 own findings and fixes; see the [README](README.md) for the honest maturity caveats.
 
 ### Added
+
+_Visual editor:_
+
+- **Editor overhaul.** Undo/redo with keyboard shortcuts and block cut/copy/paste, autosave (drafts,
+  where `autosave: true` skips a revision), a link popover with content search, highlight and
+  clear-formatting, several new blocks, per-device (desktop/tablet/mobile) visibility, block entrance
+  animations, and Patterns 2.0 (live previews + save-as-pattern).
+- **The Puck visual editor is internationalized** — its chrome strings are localized rather than
+  English-only.
 
 _Adoption & product — getting from zero to a live, editable site:_
 

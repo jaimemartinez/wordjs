@@ -30,7 +30,29 @@ Run from `backend/`.
 
 > **First-run install token:** when the **backend** boots while the instance is **not yet installed** (i.e. on `npm start` / `npm run dev`, *not* `npm run setup`), it prints a one-time install token to the console (banner `🔑 WordJS install token:`). That token gates the otherwise-unauthenticated pre-install endpoints `POST /setup/install` and `POST /setup/test-db` (supplied via the `x-install-token` header or an `installToken` body field), so a not-yet-installed instance can't be taken over by whoever reaches it first. The token is held **in memory only** — a fresh one is minted on each boot while the instance remains uninstalled. For headless/Docker deploys it is **also** mirrored to a `0600` file at `backend/data/install-token` and can be overridden via the `WORDJS_INSTALL_TOKEN` env var (which must be **≥ 16 chars**, or it is ignored with a warning and a random token is used instead). The file/token is cleared once the instance is installed.
 
-## 2. Plugin & Theme Scaffolder + Packer (`cli/wordjs.js`)
+## 2. One-Command Site Bootstrap (`npx create-wordjs`)
+
+The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT, currently `v1.2.3`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
+
+```bash
+npx create-wordjs my-site
+```
+
+It (1) looks up the **latest pre-compiled release ZIP** from GitHub (`jaimemartinez/wordjs`, following the release-asset redirect), (2) extracts it into `my-site/` and installs the runtime dependencies (`npm run release:install` in the extracted bundle), then (3) mints a one-time install token and starts the monolith (`npm run start:mono`), printing a clickable `https://localhost:3000/install?token=…` URL — the browser install wizard takes over (pick SQLite / PostgreSQL, create the admin).
+
+The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 random bytes = 48 hex chars; the backend accepts it because it is ≥ 16 chars — see § 1). A fresh release bundle ships **without** `gateway/gateway-config.json` (secrets are never bundled), so the CLI seeds a minimal `{ "ssl": true }` there to enable **self-signed HTTPS** on `:3000` (never overwriting an existing config); pass `--http` to serve plain HTTP (`WORDJS_HTTP=1`) instead. Plain Node, no TypeScript — the only runtime dependency is `adm-zip`. Requires **Node ≥ 20.9** and refuses to run into a non-empty target directory.
+
+| Option | Purpose |
+| :--- | :--- |
+| `--zip <path-or-url>` | Use a local release ZIP (or a direct ZIP URL) instead of the GitHub API — handy offline or when rate-limited. |
+| `--version <tag>` | Install a specific release tag (e.g. `v1.0.0`) instead of the latest (a bare `1.0.0` is accepted and prefixed with `v`). |
+| `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
+| `--no-start` | Scaffold + install dependencies only; don't start the server. |
+| `-h`, `--help` | Show usage. |
+
+> Unlike the backend `cli/*` scripts below, `create-wordjs` is **not** run from the repo — it is a standalone npm bin invoked via `npx` on an end-user machine to *produce* a WordJS install. The in-repo scaffolders (§ 3, for plugin/theme *authors*) are a different tool.
+
+## 3. Plugin & Theme Scaffolder + Packer (`cli/wordjs.js`)
 
 The plugin-author DX tool. Plain Node — no ts-node registration needed. There is deliberately **no root npm alias**; invoke it directly from the **repo root**:
 
@@ -71,7 +93,7 @@ Scaffolds `backend/themes/<slug>/` with a `theme.json` (including the `layout` s
 
 Zips `backend/plugins/<slug>` into `<slug>.zip` with a single `<slug>/` root folder — the exact layout `POST /api/v1/plugins/upload` (Admin → Plugins → Add New) expects — excluding `node_modules/`, `data/`, `.git/` and `os-tmp/` (dependencies reinstall automatically on activation). With `--build` it first runs `backend/scripts/build-plugin.js <slug>` to pre-compile the frontend bundles into `dist/`. Output defaults to the current directory (`--out <dir>` to change).
 
-## 3. Role Manager (`cli/force-sync-roles.js`)
+## 4. Role Manager (`cli/force-sync-roles.js`)
 
 **Use case:** You accidentally deleted the Administrator role or permissions are corrupted.
 
@@ -89,7 +111,7 @@ Syncing roles to database...
 Successfully synced roles! Subscribers now have access_admin_panel.
 ```
 
-## 4. Plugin Diagnostic (`cli/check_plugins.js`)
+## 5. Plugin Diagnostic (`cli/check_plugins.js`)
 
 **Use case:** A plugin is causing the server to crash or not loading, and you need to see what's physically active in the DB.
 
@@ -102,13 +124,13 @@ node cli/check_plugins.js
 
 Other handy diagnostics in `cli/` include `list-users.js`, `inspect-roles.js`, `inspect-user.js`, `verify-roles.js`, `verify-activation.js`, and `dump-routes.js` (lists every registered Express endpoint). Those that import `src/config/database` need the `-r ts-node/register` flag.
 
-## 5. Gateway Registry (`gateway/gateway-registry.json`)
+## 6. Gateway Registry (`gateway/gateway-registry.json`)
 
 **Use case:** Troubleshooting service discovery.
 
 This is a **file**, not a script. It contains the current state of the Gateway's known services. Inspecting it helps verify whether the backend/frontend registered successfully.
 
-## 6. Database Files & Maintenance
+## 7. Database Files & Maintenance
 
 The database file depends on the active driver (selected by `dbDriver` in `wordjs-config.json` — see `documentation/database.md`):
 
@@ -124,6 +146,6 @@ You can open any SQLite file with a SQLite CLI or GUI (like *DB Browser for SQLi
 
 Switching DB engines is done at runtime via the **DB-Admin** core module (`backend/src/core/db-admin/`, formerly the `db-migration` plugin), exposed under `/api/v1/db-migration/*` (requires the `manage_options` capability). See `documentation/api.md` § 6.6 for the endpoint list.
 
-## 7. Notes
+## 8. Notes
 
 * **`migrate` vs. engine migration:** `npm run migrate` (root) applies pending DB **schema** migrations via `backend/scripts/migrate.js` (idempotent; also run at boot). Switching DB **engines** (SQLite ↔ PostgreSQL data copy) is a separate runtime operation in the DB-Admin API (`/api/v1/db-migration/*`).
