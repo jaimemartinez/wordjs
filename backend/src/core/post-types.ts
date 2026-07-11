@@ -58,7 +58,10 @@ const defaultPostTypes = {
             edit: 'Edit Media'
         },
         public: true,
-        showInMenu: true,
+        // The canonical Media entry is the Media Library menu (→ /admin/media) registered in
+        // initCoreMenus. Keeping showInMenu here too produced a SECOND "Media" item pointing at
+        // /admin/posts?type=attachment — a confusing duplicate. Attachments are managed in the library.
+        showInMenu: false,
         showInRest: true,
         hasArchive: false,
         supports: ['title', 'author', 'comments'],

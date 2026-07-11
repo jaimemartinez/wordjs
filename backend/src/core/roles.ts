@@ -97,7 +97,6 @@ async function loadRoles() {
         }
     }
     _rolesCacheLoadedAt = Date.now(); // stamp freshness on every (re)load
-    console.log(`DEBUG: Roles loaded into cache. Count: ${Object.keys(_rolesCache || {}).length}`);
     return _rolesCache;
 }
 

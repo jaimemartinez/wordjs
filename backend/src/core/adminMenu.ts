@@ -20,7 +20,6 @@ function registerAdminMenu(pluginSlug: string, item: any) {
     if (!adminMenuItems.has(pluginSlug)) {
         adminMenuItems.set(pluginSlug, []);
     }
-    console.log(`DEBUG: Registering menu for ${pluginSlug}: ${item.label}`);
 
     // Check if this exact href is already registered for this plugin
     const existingItems = adminMenuItems.get(pluginSlug);
@@ -79,7 +78,6 @@ function getAdminMenuItems() {
  * Initialize Core Admin Menus (Dashboard, Posts, Settings, etc.)
  */
 function initCoreMenus() {
-    console.log('DEBUG: initCoreMenus() called');
     const { getPostTypes } = require('./post-types');
 
     // 1. Dashboard
