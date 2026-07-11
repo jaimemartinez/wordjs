@@ -1010,7 +1010,23 @@ function buildDnsRecords(domain, selector, publicKeyPem) {
     // INVALID at many providers. Offer the quoted-segment form ("seg1" "seg2") operators can paste as-is.
     const chunkTxt = (v) => { const p = []; for (let i = 0; i < v.length; i += 255) p.push('"' + v.slice(i, i + 255) + '"'); return p.join(' '); };
     const dkimValue = `v=DKIM1; k=rsa; p=${pubDer}`;
+    const mailHost = `mail.${domain}`;
     return {
+        // MX + A are what make INBOUND work — without them the internet has nowhere to deliver mail for
+        // this domain. MX points at the mail host; that host needs an A record resolving to the server IP.
+        mx: {
+            host: domain,
+            type: 'MX',
+            value: mailHost,
+            priority: 10,
+            note: `Routes inbound mail for @${domain} to your server. The value (${mailHost}) needs its own A record below. (Prefer the bare domain as your mail host? Point MX at ${domain} and skip the A record.)`
+        },
+        a: {
+            host: mailHost,
+            type: 'A',
+            value: 'YOUR_SERVER_PUBLIC_IP',
+            note: `Point this at your server's PUBLIC IPv4 so ${mailHost} resolves. Replace YOUR_SERVER_PUBLIC_IP with the address the internet reaches your server on (skip if MX points at the bare domain and it already has an A record).`
+        },
         dkim: {
             host: `${selector}._domainkey.${domain}`,
             type: 'TXT',
