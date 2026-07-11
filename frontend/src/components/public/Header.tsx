@@ -5,13 +5,20 @@ import { useEffect, useState, useRef } from "react";
 
 interface HeaderProps {
     disableSticky?: boolean;
+    // SSR-provided chrome data (live site): when present the Header renders from it in the initial HTML
+    // and SKIPS the client fetch — no per-visitor double-fetch of menu+settings. Omitted by the editor
+    // preview, which falls back to fetching client-side.
+    initialMenu?: any[];
+    initialSettings?: Record<string, any>;
 }
 
-export default function Header({ disableSticky = false }: HeaderProps) {
+export default function Header({ disableSticky = false, initialMenu, initialSettings }: HeaderProps) {
+    const hasSSR = initialSettings !== undefined;
     const [isScrolled, setIsScrolled] = useState(false);
-    const [menuItems, setMenuItems] = useState<any[]>([]);
-    const [logoUrl, setLogoUrl] = useState<string | null>(null);
-    const [siteTitle, setSiteTitle] = useState("");
+    const [menuItems, setMenuItems] = useState<any[]>(() =>
+        initialMenu ? [...initialMenu].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)) : []);
+    const [logoUrl, setLogoUrl] = useState<string | null>(initialSettings?.site_logo || null);
+    const [siteTitle, setSiteTitle] = useState<string>(initialSettings?.blogname || "");
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
     const headerRef = useRef<HTMLElement>(null);
 
@@ -49,23 +56,14 @@ export default function Header({ disableSticky = false }: HeaderProps) {
     }, []);
 
     const fetchData = async () => {
-        console.log("Header: fetching data...");
         try {
             const { menusApi, settingsApi } = await import("@/lib/api");
 
             // Parallel fetch
             const [menu, settings] = await Promise.all([
-                menusApi.getByLocation('header').catch((e) => {
-                    console.error("Header: menu fetch failed", e);
-                    return null;
-                }),
-                settingsApi.get().catch((e) => {
-                    console.error("Header: settings fetch failed", e);
-                    return null;
-                })
+                menusApi.getByLocation('header').catch(() => null),
+                settingsApi.get().catch(() => null)
             ]);
-
-            console.log("Header: data received", { menu, settings });
 
             if (menu && menu.items) {
                 setMenuItems(menu.items.sort((a: any, b: any) => a.order - b.order));
@@ -76,13 +74,15 @@ export default function Header({ disableSticky = false }: HeaderProps) {
                 if (settings.blogname) setSiteTitle(settings.blogname);
             }
 
-        } catch (error) {
-            console.log("Error loading header data", error);
-        }
+        } catch { /* header renders with whatever it has (empty chrome degrades gracefully) */ }
     };
 
     useEffect(() => {
+        // Live site: the server already provided menu+settings as props → skip the client fetch.
+        // Editor preview (no SSR props): fetch client-side as before.
+        if (hasSSR) return;
         fetchData();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
     const handleNavClick = (e: React.MouseEvent<HTMLAnchorElement>, url: string) => {

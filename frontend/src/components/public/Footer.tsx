@@ -26,19 +26,9 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
         }
 
         const loadFooterData = async () => {
-            console.log("Loading Footer Data...");
             try {
-                const settingsData = await settingsApi.get().catch(err => {
-                    console.error("Settings API failed", err);
-                    return {};
-                });
-
-                const menuData = await menusApi.getByLocation('footer').catch(err => {
-                    console.error("Menus API failed", err);
-                    return null;
-                });
-
-                console.log("Footer Menu Data:", menuData);
+                const settingsData = await settingsApi.get().catch(() => ({}));
+                const menuData = await menusApi.getByLocation('footer').catch(() => null);
 
                 if (settingsData) {
                     setSettings(settingsData);
@@ -57,10 +47,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
                 }
 
                 if (menuData && menuData.items) {
-                    console.log("Setting footer menu items:", menuData.items);
                     setFooterMenu(menuData.items);
-                } else {
-                    console.log("No menu items found for footer");
                 }
             } catch (err) {
                 console.error("Critical error loading footer:", err);
