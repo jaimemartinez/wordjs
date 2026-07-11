@@ -270,7 +270,8 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         });
     }
 
-    const { email, displayName, password, url, role } = req.body;
+    const { email, displayName, password, url } = req.body;
+    let role = req.body.role;
 
     const updateData: any = { email, displayName, password, url };
 
@@ -281,6 +282,15 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     //  - Validate the requested role against the known roles allow-list (no mass-assignment of a bogus
     //    or non-existent role).
     //  - Promoting someone to `administrator` is reserved for callers who are already administrators.
+    //  - The user form ALWAYS resends the target's CURRENT role, even when the caller never touched it.
+    //    Resending an unchanged role is a NO-OP, not a role change, so strip it here for EVERY edit —
+    //    otherwise the guards below 403 legitimate saves: a self-edit hit "cannot change your own role"
+    //    (blocking the admin from saving their own profile at all), and an edit_users delegate WITHOUT
+    //    promote_users hit "not allowed to change user roles" when merely editing someone's display name.
+    //    A genuinely CHANGED role still runs the full guard chain.
+    if (role && user.getRole && role === user.getRole()) {
+        role = undefined;
+    }
     if (role !== undefined && role !== null && role !== '') {
         if (isOwn) {
             return res.status(403).json({
