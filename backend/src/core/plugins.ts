@@ -504,7 +504,15 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
                     }
                 }
 
-                if (['eval', 'Function', 'exec', 'execSync', 'spawn', 'fork'].includes(name)) {
+                // `/re/.exec(s)` is RegExp.prototype.exec (a benign string match), NOT child_process.exec —
+                // the scanner only sees the method name `exec`. Exempt the regex-LITERAL form specifically
+                // (a very common idiom that was falsely blocking legitimate plugins). `someVar.exec()` stays
+                // flagged: we can't statically prove it isn't a child_process handle.
+                const isRegexLiteralExec = name === 'exec'
+                    && node.callee.type === 'MemberExpression'
+                    && node.callee.object && node.callee.object.type === 'Literal' && !!node.callee.object.regex;
+
+                if (!isRegexLiteralExec && ['eval', 'Function', 'exec', 'execSync', 'spawn', 'fork'].includes(name)) {
                     dangerousCalls.add(name);
                 }
 
