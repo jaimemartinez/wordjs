@@ -11,11 +11,14 @@ import { pluginHooks } from '../../../../frontend/src/lib/plugin-hooks';
  * This component is registered via the Hook system.
  * It adds the "Professional Mail Account" toggle to the core User Form.
  */
-// Internal state for the plugin to track if autoEmail is active
+// Module-level LIVE MIRROR of the currently-mounted form's "auto professional email" toggle.
+// It exists only so the email-input filter below (registered once at module load, so it can't read
+// React state) can see the toggle. It is written by the mounted component's effect and is NOT used
+// to seed any form's initial state — so toggle state no longer leaks across separate form instances.
 let isAutoEmailActive = true;
 
 const UserFormExtension = ({ data }: { data: any }) => {
-    const { formData, setFormData, isNew } = data;
+    const { formData, setFormData, isNew } = data || {};
     const [domain, setDomain] = useState("wordjs.com");
 
     // Determine handled domain
@@ -25,13 +28,21 @@ const UserFormExtension = ({ data }: { data: any }) => {
         }
     }, []);
 
+    // Guard every field this component dereferences so it renders safely when mail data is missing.
+    const username = (formData?.username || '');
+    const currentEmail = (formData?.email || '');
+
     // Initial check: if editing, is the current email already professional?
-    const professionalEmail = `${formData.username.toLowerCase()}@${domain.toLowerCase()}`;
-    const initialAutoValue = isNew ? isAutoEmailActive : (formData.email.toLowerCase() === professionalEmail);
+    const professionalEmail = `${username.toLowerCase()}@${domain.toLowerCase()}`;
 
-    const [autoEmail, setAutoEmail] = useState(initialAutoValue);
+    // Seed the toggle from THIS form's own data — never from the module-global mirror. Reading the
+    // global to seed a NEW form was the leak (a fresh "Add user" inherited the last form's toggle).
+    const [autoEmail, setAutoEmail] = useState(
+        isNew ? true : (currentEmail.toLowerCase() === professionalEmail)
+    );
 
-    // Sync internal static state for filters
+    // One-way live mirror into the module bridge consumed by the email-input filter. Overwritten by
+    // whichever form is currently mounted, so it no longer carries state between form instances.
     useEffect(() => {
         isAutoEmailActive = autoEmail;
         pluginHooks.notify();
@@ -39,16 +50,16 @@ const UserFormExtension = ({ data }: { data: any }) => {
 
     // Sync email when username changes and autoEmail is on
     useEffect(() => {
-        if (autoEmail && formData.username) {
-            const nextEmail = `${formData.username.toLowerCase()}@${domain}`;
-            if (formData.email !== nextEmail) {
-                setFormData((prev: any) => ({
+        if (autoEmail && username) {
+            const nextEmail = `${username.toLowerCase()}@${domain}`;
+            if (currentEmail !== nextEmail) {
+                setFormData?.((prev: any) => ({
                     ...prev,
                     email: nextEmail
                 }));
             }
         }
-    }, [formData.username, autoEmail, domain, setFormData, formData.email]);
+    }, [username, autoEmail, domain, setFormData, currentEmail]);
 
     return (
         <div className="flex items-center justify-between p-4 bg-purple-50 rounded-xl border border-purple-100 mb-2">
@@ -73,13 +84,13 @@ export const registerUserFormExtension = () => {
     pluginHooks.addAction('user_form_before_email', (data) => <UserFormExtension data={data} />);
 
     // 2. Filter the core email input properties
-    pluginHooks.addFilter('user_form_email_input_props', (props, { isNew }) => {
+    pluginHooks.addFilter('user_form_email_input_props', (props = {}, _data = {}) => {
         if (!isAutoEmailActive) return props;
 
         return {
             ...props,
             readOnly: true,
-            className: props.className + " bg-gray-100 text-gray-400 border-dashed cursor-not-allowed font-mono",
+            className: (props.className || '') + " bg-gray-100 text-gray-400 border-dashed cursor-not-allowed font-mono",
             placeholder: "Generated automatically..."
         };
     });

@@ -85,6 +85,15 @@ const getSignature = (user: any) => {
     return `\n\n--\n${name}\n${email}`;
 };
 
+// Human-readable file size for attachment chips.
+const formatBytes = (bytes: any) => {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    if (n < 1024) return `${n} B`;
+    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+    return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+};
+
 export default function MailServerAdmin() {
     // Data State
     const [folder, setFolder] = useState<'inbox' | 'sent' | 'settings' | 'starred' | 'archive' | 'drafts' | 'trash'>('inbox');
@@ -132,6 +141,7 @@ export default function MailServerAdmin() {
     const [sending, setSending] = useState(false);
     const [message, setMessage] = useState<{ type: 'success' | 'error', text: string } | null>(null);
     const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+    const [loadError, setLoadError] = useState(false);
 
     const { user } = useAuth();
     const editorRef = useRef<HTMLDivElement>(null);
@@ -155,6 +165,7 @@ export default function MailServerAdmin() {
                 setSettings(prev => ({ ...prev, ...(data as any) }));
                 loadDnsRecords();
             } else {
+                setLoadError(false);
                 const endpoint = query
                     ? `/plugin/mail-server/emails/search?q=${encodeURIComponent(query)}`
                     : `/plugin/mail-server/emails?folder=${folder}`;
@@ -164,6 +175,7 @@ export default function MailServerAdmin() {
             }
         } catch (error) {
             console.error("Failed to load data:", error);
+            setLoadError(true);
         } finally {
             setLoading(false);
         }
@@ -214,6 +226,19 @@ export default function MailServerAdmin() {
         return () => window.removeEventListener('wordjs:notification' as any, handleNotification);
     }, [folder, loadData]);
 
+    // Auto-dismiss the global feedback toast.
+    useEffect(() => {
+        if (message) {
+            const t = setTimeout(() => setMessage(null), 4000);
+            return () => clearTimeout(t);
+        }
+    }, [message]);
+
+    // Clear stale feedback when switching folders/views.
+    useEffect(() => {
+        setMessage(null);
+    }, [folder]);
+
     // Auto-save Draft
     useEffect(() => {
         if (!composing || (!newMail.to && !newMail.subject && !newMail.body)) return;
@@ -229,8 +254,10 @@ export default function MailServerAdmin() {
                         isHtml: true,
                         replyToId,
                         id: draftId,
-                        // Append signature if enabled
-                        body: newMail.useSignature ? newMail.body + getSignature(user) : newMail.body
+                        // Store the RAW body only. The signature is applied purely as a send-time
+                        // transform (see handleSend) — baking it into the draft here caused it to be
+                        // appended a second time when the draft was reopened and then sent.
+                        body: newMail.body
                     }
                 }) as any;
                 if (res.success && res.id) {
@@ -270,6 +297,7 @@ export default function MailServerAdmin() {
 
     const handleSend = async (e: React.FormEvent) => {
         e.preventDefault();
+        if (!newMail.to.trim()) { setMessage({ type: 'error', text: 'Please add at least one recipient.' }); return; }
         setSending(true);
         setMessage(null);
         try {
@@ -387,7 +415,7 @@ export default function MailServerAdmin() {
             cc: "",
             bcc: "",
             subject: `Fwd: ${email.subject.replace(/^(re|fwd):\s*/i, '')}`,
-            body: `\n\n\n---------- Forwarded message ---------\nFrom: ${email.from_name || email.from_address} <${email.from_address}>\nDate: ${new Date(email.date_received).toLocaleString()}\nSubject: ${email.subject}\nTo: ${email.to_address}\n\n${email.body_text}`,
+            body: `<br/><br/><br/>---------- Forwarded message ---------<br/><strong>From:</strong> ${email.from_name || email.from_address} &lt;${email.from_address}&gt;<br/><strong>Date:</strong> ${new Date(email.date_received).toLocaleString()}<br/><strong>Subject:</strong> ${email.subject}<br/><strong>To:</strong> ${email.to_address}<br/><br/>${email.body_html || (email.body_text || '').replace(/\n/g, '<br/>')}`,
             attachments: (email as any).attachments || [],
             useSignature: true
         });
@@ -490,6 +518,8 @@ export default function MailServerAdmin() {
                 attachments: (email as any).attachments || [],
                 useSignature: true
             });
+            setShowCc(!!email.cc_address);
+            setShowBcc(!!email.bcc_address);
             setReplyToId(email.thread_id || null);
             setDraftId(email.id);
             setComposing(true);
@@ -518,6 +548,22 @@ export default function MailServerAdmin() {
     // --- RENDER ---
     return (
         <div className="flex w-full h-full bg-[#f8fafc] text-slate-800 font-sans overflow-hidden shadow-2xl relative">
+
+            {/* GLOBAL FEEDBACK TOAST — renders in every view (above the composer's z-[6000]) */}
+            {message && (
+                <div className={`fixed top-4 right-4 z-[7000] max-w-sm flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm font-bold animate-in fade-in slide-in-from-top-2 ${message.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                    <i className={`fa-solid ${message.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'} mt-0.5`}></i>
+                    <span className="flex-1 leading-snug">{message.text}</span>
+                    <button
+                        type="button"
+                        onClick={() => setMessage(null)}
+                        className={`shrink-0 -mr-1 -mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center transition-colors ${message.type === 'success' ? 'hover:bg-emerald-100 text-emerald-500' : 'hover:bg-red-100 text-red-500'}`}
+                        title="Dismiss"
+                    >
+                        <i className="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
+            )}
 
             {/* COLUMN 1: DARK BRAND SIDEBAR (Responsive Drawer) */}
             {/* Mobile Overlay */}
@@ -566,25 +612,25 @@ export default function MailServerAdmin() {
                         icon="fa-paper-plane"
                         label="Sent"
                         active={folder === 'sent'}
-                        onClick={() => { setFolder('sent'); setSelectedEmail(null); }}
+                        onClick={() => { setFolder('sent'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                     />
                     <SidebarLink
                         icon="fa-file-lines" // Changed to file-lines
                         label="Drafts"
                         active={folder === 'drafts'}
-                        onClick={() => { setFolder('drafts'); setSelectedEmail(null); }}
+                        onClick={() => { setFolder('drafts'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                     />
                     <SidebarLink
                         icon="fa-box-archive"
                         label="Archive"
                         active={folder === 'archive'}
-                        onClick={() => { setFolder('archive'); setSelectedEmail(null); }}
+                        onClick={() => { setFolder('archive'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                     />
                     <SidebarLink
                         icon="fa-trash"
                         label="Trash"
                         active={folder === 'trash'}
-                        onClick={() => { setFolder('trash'); setSelectedEmail(null); }}
+                        onClick={() => { setFolder('trash'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                     />
 
                     {folder === 'trash' && emails.length > 0 && (
@@ -602,10 +648,9 @@ export default function MailServerAdmin() {
                         icon="fa-star"
                         label="Starred"
                         active={folder === 'starred'}
-                        onClick={() => { setFolder('starred'); setSelectedEmail(null); }}
+                        onClick={() => { setFolder('starred'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                         iconColor="text-amber-400"
                     />
-                    <SidebarLink icon="fa-triangle-exclamation" label="Important" active={false} iconColor="text-orange-400" />
 
                     {user?.role === 'administrator' && (
                         <div className="pt-8 mt-auto">
@@ -613,31 +658,37 @@ export default function MailServerAdmin() {
                                 icon="fa-sliders"
                                 label="Server Admin"
                                 active={folder === 'settings'}
-                                onClick={() => { setFolder('settings'); setSelectedEmail(null); }}
+                                onClick={() => { setFolder('settings'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                             />
                         </div>
                     )}
                 </nav>
 
-                {/* User Profile Mini */}
-                <div className="mt-auto px-6 pt-6 border-t border-slate-800/50 flex items-center gap-3 cursor-pointer group hover:bg-white/5 mx-3 rounded-xl transition-colors pb-2">
-                    <div className="w-9 h-9 rounded-lg bg-slate-800 overflow-hidden ring-1 ring-white/10 group-hover:ring-indigo-500/50 transition-all">
+                {/* User Profile Mini (informational — not an interactive menu) */}
+                <div className="mt-auto px-6 pt-6 border-t border-slate-800/50 flex items-center gap-3 mx-3 rounded-xl pb-2">
+                    <div className="w-9 h-9 rounded-lg bg-slate-800 overflow-hidden ring-1 ring-white/10">
                         {/* Placeholder Avatar */}
                         <div className="w-full h-full flex items-center justify-center bg-gradient-to-tr from-slate-700 to-slate-600 text-xs font-bold text-slate-300">
                             {user?.username?.charAt(0).toUpperCase()}
                         </div>
                     </div>
                     <div className="flex-1 min-w-0">
-                        <div className="text-sm font-bold text-slate-200 truncate group-hover:text-white">{user?.displayName || user?.username}</div>
+                        <div className="text-sm font-bold text-slate-200 truncate">{user?.displayName || user?.username}</div>
                         <div className="text-[10px] text-slate-500 truncate">{(user as any)?.userEmail}</div>
                     </div>
-                    <i className="fa-solid fa-chevron-right text-slate-600 text-xs"></i>
                 </div>
             </aside>
 
             {folder === 'settings' ? (
                 // SETTINGS VIEW (Full Width)
-                <div className="flex-1 bg-white overflow-y-auto p-12">
+                <div className="flex-1 bg-white overflow-y-auto p-6 md:p-12">
+                    {/* Mobile top bar with hamburger so Settings isn't a navigation trap */}
+                    <div className="md:hidden mb-6 flex items-center gap-2">
+                        <button onClick={() => setMobileMenuOpen(true)} className="p-2 -ml-2 text-slate-500 hover:text-slate-900">
+                            <i className="fa-solid fa-bars text-lg"></i>
+                        </button>
+                        <span className="font-bold text-slate-700">Server Admin</span>
+                    </div>
                     <SettingsView
                         settings={settings}
                         setSettings={setSettings}
@@ -662,7 +713,7 @@ export default function MailServerAdmin() {
                     {/* COLUMN 2: MESSAGE LIST */}
                     <div className={`
                         bg-white border-r border-slate-200 flex flex-col z-10 shadow-sm relative transition-all duration-300
-                        ${selectedEmail ? 'hidden lg:flex lg:w-[400px]' : 'flex w-full md:flex-1 lg:w-[400px] lg:flex-none'}
+                        ${selectedEmail ? 'hidden lg:flex lg:w-[340px] lg:flex-none lg:flex-shrink-0' : 'flex w-full md:flex-1 lg:w-[340px] lg:flex-none lg:flex-shrink-0'}
                     `}>
                         {/* Header & Search */}
                         <div className="h-20 px-4 md:px-6 flex items-center border-b border-slate-100 bg-white/90 backdrop-blur-sm sticky top-0 z-20 gap-3">
@@ -682,7 +733,7 @@ export default function MailServerAdmin() {
                                     className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 pl-10 pr-10 text-sm font-medium text-slate-700 placeholder:text-slate-400 focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all outline-none"
                                 />
                                 <button
-                                    onClick={() => loadData()}
+                                    onClick={() => loadData(searchQuery)}
                                     className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-violet-600 transition-colors"
                                     title="Refresh"
                                 >
@@ -698,11 +749,36 @@ export default function MailServerAdmin() {
                                     <i className="fa-solid fa-circle-notch fa-spin text-3xl mb-4 text-violet-400"></i>
                                     <span className="text-sm font-medium">Loading messages...</span>
                                 </div>
-                            ) : emails.length === 0 ? (
-                                <div className="flex flex-col items-center justify-center h-64 text-slate-400 opacity-60">
-                                    <i className="fa-solid fa-inbox text-4xl mb-4"></i>
-                                    <span className="text-sm font-medium">All caught up</span>
+                            ) : loadError ? (
+                                <div className="flex flex-col items-center justify-center h-64 text-slate-500 px-6 text-center">
+                                    <i className="fa-solid fa-triangle-exclamation text-4xl mb-4 text-red-400"></i>
+                                    <span className="text-sm font-bold text-slate-700">Couldn't load messages</span>
+                                    <span className="text-xs text-slate-400 mt-1 mb-4">Something went wrong while fetching this folder.</span>
+                                    <button
+                                        onClick={() => loadData(searchQuery)}
+                                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-black transition-colors"
+                                    >
+                                        <i className="fa-solid fa-rotate-right"></i>
+                                        Retry
+                                    </button>
                                 </div>
+                            ) : emails.length === 0 ? (
+                                (() => {
+                                    let icon = 'fa-inbox';
+                                    let text = 'All caught up';
+                                    if (searchQuery) { icon = 'fa-magnifying-glass'; text = `No results for "${searchQuery}"`; }
+                                    else if (folder === 'trash') { icon = 'fa-trash'; text = 'Trash is empty'; }
+                                    else if (folder === 'drafts') { icon = 'fa-file-lines'; text = 'No drafts yet'; }
+                                    else if (folder === 'sent') { icon = 'fa-paper-plane'; text = 'No sent messages'; }
+                                    else if (folder === 'archive') { icon = 'fa-box-archive'; text = 'Archive is empty'; }
+                                    else if (folder === 'starred') { icon = 'fa-star'; text = 'No starred messages'; }
+                                    return (
+                                        <div className="flex flex-col items-center justify-center h-64 text-slate-400 opacity-60 px-6 text-center">
+                                            <i className={`fa-solid ${icon} text-4xl mb-4`}></i>
+                                            <span className="text-sm font-medium break-words">{text}</span>
+                                        </div>
+                                    );
+                                })()
                             ) : (
                                 <div className="p-2 space-y-1">
                                     {emails.map(email => (
@@ -731,6 +807,11 @@ export default function MailServerAdmin() {
                                                 <div className={`text-xs truncate flex-1 ${!email.is_read ? 'text-slate-900 font-bold' : 'text-slate-600'}`}>
                                                     {email.subject}
                                                 </div>
+                                                {email.thread_count > 1 && (
+                                                    <span className="flex-shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 tabular-nums" title={`${email.thread_count} messages in this conversation`}>
+                                                        <i className="fa-solid fa-layer-group text-[8px] mr-0.5"></i>{email.thread_count}
+                                                    </span>
+                                                )}
                                             </div>
                                             <div className="text-[11px] text-slate-400 leading-relaxed line-clamp-2 font-medium">
                                                 {email.is_archived === 1 && <span className="inline-block px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 text-[9px] mr-1.5 font-bold uppercase tracking-wider">Archived</span>}
@@ -776,7 +857,6 @@ export default function MailServerAdmin() {
                                             className={folder === 'trash' ? "text-red-500 hover:bg-red-50 hover:text-red-600" : ""}
                                         />
                                         <div className="w-px h-6 bg-slate-200 mx-1 md:mx-2 self-center flex-shrink-0"></div>
-                                        <ActionButton icon="fa-solid fa-envelope-open" tooltip="Mark as Unread" />
                                         <ActionButton
                                             icon={`fa-star ${selectedEmail.is_starred ? 'fa-solid text-amber-400' : 'fa-regular'}`}
                                             onClick={() => handleStar(selectedEmail)}
@@ -792,7 +872,7 @@ export default function MailServerAdmin() {
                                 </div>
 
                                 {/* Content */}
-                                <div className="flex-1 overflow-y-auto p-10 custom-scrollbar">
+                                <div className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
                                     <h1 className="text-3xl font-bold text-slate-900 mb-8 leading-tight select-text tracking-tight">
                                         {selectedEmail.subject}
                                     </h1>
@@ -829,6 +909,24 @@ export default function MailServerAdmin() {
                                                                 <div className="whitespace-pre-wrap font-sans break-words">{msg.body_text || <span className="text-slate-400 italic">(No content)</span>}</div>
                                                             )}
                                                         </div>
+
+                                                        {/* Attachments (only surfaced on the fetched single-message view) */}
+                                                        {msg.id === selectedEmail.id && selectedEmail.attachments?.length > 0 && (
+                                                            <div className="mt-4 flex flex-wrap gap-2">
+                                                                {selectedEmail.attachments.map((att: any) => (
+                                                                    <a
+                                                                        key={att.id}
+                                                                        href={`/api/v1/plugin/mail-server/attachments/${att.id}`}
+                                                                        download
+                                                                        className="flex items-center gap-2 px-3 py-2 bg-white border border-slate-200 rounded-xl shadow-sm text-xs font-medium text-slate-700 hover:border-violet-300 hover:text-violet-600 hover:shadow transition-all no-underline"
+                                                                    >
+                                                                        <i className="fa-solid fa-paperclip text-slate-400"></i>
+                                                                        <span className="max-w-[180px] truncate">{att.filename || 'attachment'}</span>
+                                                                        {formatBytes(att.size) && <span className="text-[10px] text-slate-400">{formatBytes(att.size)}</span>}
+                                                                    </a>
+                                                                ))}
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             </div>
@@ -916,9 +1014,10 @@ export default function MailServerAdmin() {
                                 <div className="flex-1 relative">
                                     <input
                                         autoFocus
+                                        required
                                         value={newMail.to}
                                         onChange={(e) => setNewMail({ ...newMail, to: e.target.value })}
-                                        className="w-full py-2 bg-transparent outline-none text-sm font-bold text-slate-900 placeholder:text-slate-300 group-focus-within:placeholder:text-slate-400"
+                                        className="w-full py-2 pr-16 bg-transparent outline-none text-sm font-bold text-slate-900 placeholder:text-slate-300 group-focus-within:placeholder:text-slate-400"
                                         placeholder="Recipient"
                                     />
                                     <div className="absolute right-0 top-1/2 -translate-y-1/2 flex gap-2 text-[10px] font-bold text-slate-400">
@@ -1061,8 +1160,6 @@ export default function MailServerAdmin() {
                                         />
                                         <i className="fa-solid fa-paperclip text-sm"></i>
                                     </label>
-                                    <i className="fa-regular fa-image hover:text-violet-600 cursor-pointer transition-colors text-sm" title="Insert Image"></i>
-                                    <i className="fa-regular fa-face-smile hover:text-violet-600 cursor-pointer transition-colors text-sm" title="Emoji"></i>
 
                                     <div className="w-px h-4 bg-slate-200 mx-2"></div>
                                     <button type="button" onClick={discardDraft} className="hover:text-red-500 transition-colors mr-2" title="Discard Draft"><i className="fa-solid fa-trash text-sm"></i></button>
@@ -1273,13 +1370,6 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
         <div className="max-w-2xl mx-auto pt-10 pb-20">
             <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">Server &amp; Deliverability</h2>
             <p className="text-slate-500 mb-10 text-lg">Configure your server's outbound identity, security, and DNS.</p>
-
-            {message && (
-                <div className={`mb-8 p-4 rounded-xl flex items-center gap-3 text-sm font-bold shadow-sm ${message.type === 'success' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' : 'bg-red-50 text-red-700 border border-red-100'}`}>
-                    <i className={`fa-solid ${message.type === 'success' ? 'fa-check' : 'fa-circle-exclamation'}`}></i>
-                    {message.text}
-                </div>
-            )}
 
             {/* SMTP + Identity */}
             <div className="bg-white rounded-[1.5rem] border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/40">
