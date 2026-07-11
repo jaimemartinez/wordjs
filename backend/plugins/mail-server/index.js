@@ -1785,6 +1785,65 @@ exports.init = async function (bridge) {
         });
     });
 
+    // GET /api/v1/plugin/mail-server/security/dns-check — resolve the domain's LIVE DNS and compare it
+    // to what WordJS expects, so the operator can confirm each record is actually published + correct
+    // (not just eyeball it). Needs the `network` grant (same DNS resolver the outbound path already uses).
+    route('get', '/security/dns-check', { auth: true, admin: true }, async (req, res) => {
+        const priv = await getOption('mail_security_dkim_private_key', '');
+        let domain = await getOption('mail_security_dkim_domain', '');
+        if (!domain) { try { domain = await getSiteDomain(); } catch (e) { domain = ''; } }
+        const selector = await getOption('mail_security_dkim_selector', 'default');
+        let publicKeyPem = '';
+        if (priv) { try { publicKeyPem = crypto.createPublicKey(priv).export({ type: 'spki', format: 'pem' }); } catch (e) { } }
+        if (!domain) return res.status(400).json({ error: 'Set a sending domain (generate DKIM) before checking DNS.' });
+
+        const expected = buildDnsRecords(domain, selector, publicKeyPem);
+        const mailHost = `mail.${domain}`;
+        // A provider may split a TXT into multiple quoted strings; DNS returns them as an array to join.
+        const txt = async (name) => {
+            try { return (await dns.resolveTxt(name)).map(parts => parts.join('')); } catch (e) { return null; }
+        };
+        const pOf = (s) => { const m = /p=([a-z0-9+/=]+)/i.exec(String(s || '').replace(/\s+/g, '')); return m ? m[1].toLowerCase() : ''; };
+        const results = {};
+
+        // MX → must point at our mail host (or the bare domain if that's the operator's choice).
+        try {
+            const mx = await dns.resolveMx(domain);
+            const hosts = mx.map(m => String(m.exchange || '').replace(/\.$/, '').toLowerCase());
+            const want = [mailHost.toLowerCase(), domain.toLowerCase()];
+            results.mx = { status: hosts.length === 0 ? 'missing' : (hosts.some(h => want.includes(h)) ? 'ok' : 'mismatch'), found: hosts.join(', ') || null };
+        } catch (e) { results.mx = { status: 'missing', found: null }; }
+
+        // A → the mail host must resolve to an address.
+        try {
+            const ips = await dns.resolve4(mailHost);
+            results.a = { status: ips && ips.length ? 'ok' : 'missing', found: (ips || []).join(', ') || null };
+        } catch (e) { results.a = { status: 'missing', found: null }; }
+
+        // SPF → a TXT on the domain with v=spf1.
+        { const recs = await txt(domain); const spf = (recs || []).find(r => /v=spf1/i.test(r)); results.spf = { status: spf ? 'ok' : 'missing', found: spf || null }; }
+
+        // DMARC → a TXT on _dmarc.<domain> with v=DMARC1.
+        { const recs = await txt(`_dmarc.${domain}`); const d = (recs || []).find(r => /v=DMARC1/i.test(r)); results.dmarc = { status: d ? 'ok' : 'missing', found: d || null }; }
+
+        // DKIM → the published p= key MUST equal the one WordJS generated (the strongest check).
+        if (publicKeyPem) {
+            const recs = await txt(`${selector}._domainkey.${domain}`);
+            const dk = (recs || []).find(r => /v=DKIM1/i.test(r) || /p=/i.test(r));
+            const foundP = pOf(dk), wantP = pOf(expected.dkim.value);
+            results.dkim = {
+                status: !dk ? 'missing' : (foundP && foundP === wantP ? 'ok' : 'mismatch'),
+                found: dk ? (String(dk).slice(0, 48) + (String(dk).length > 48 ? '…' : '')) : null,
+                detail: (dk && foundP !== wantP) ? 'A DKIM record is published but its key does NOT match the one WordJS generated — re-copy the current DKIM value above.' : undefined
+            };
+        } else {
+            results.dkim = { status: 'nokey', found: null, detail: 'Generate a DKIM key first, then publish and re-check.' };
+        }
+
+        // PTR (reverse DNS) is set with the IP/hosting provider, not the domain's zone — not checkable here.
+        res.json({ domain, checkedAt: new Date().toISOString(), results });
+    });
+
     // POST /api/v1/plugin/mail-server/security/dkim/generate — create a DKIM keypair + return DNS records
     route('post', '/security/dkim/generate', { auth: true, admin: true }, async (req, res) => {
         try {
