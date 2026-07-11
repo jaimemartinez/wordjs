@@ -379,7 +379,7 @@ module.exports = function createEmailStore(db) {
 
         async update(id, data) {
             const {
-                toAddress, ccAddress, bccAddress, subject, bodyText, bodyHtml, rawContent,
+                messageId, toAddress, ccAddress, bccAddress, subject, bodyText, bodyHtml, rawContent,
                 isSent, isDraft, isTrash, scheduledAt
             } = data;
 
@@ -391,6 +391,7 @@ module.exports = function createEmailStore(db) {
             // (so non-content updates like retry's toAddress rewrite don't re-sort the list).
             let contentChanged = false;
 
+            if (messageId !== undefined) { fields.push("message_id = ?"); params.push(messageId); }
             if (toAddress !== undefined) { fields.push("to_address = ?"); params.push(toAddress); }
             if (ccAddress !== undefined) { fields.push("cc_address = ?"); params.push(ccAddress); contentChanged = true; }
             if (bccAddress !== undefined) { fields.push("bcc_address = ?"); params.push(bccAddress); contentChanged = true; }
@@ -440,6 +441,16 @@ module.exports = function createEmailStore(db) {
             }
 
             return rows;
+        },
+
+        // Look up a message by its RFC Message-ID header value. Used to thread an inbound reply back
+        // into its conversation (the reply's In-Reply-To/References echo the original's Message-ID).
+        async findByMessageId(messageId) {
+            if (!messageId) return null;
+            return await db.get(
+                `SELECT * FROM ${T_EMAILS} WHERE message_id = ? ORDER BY id ASC LIMIT 1`,
+                [String(messageId).trim()]
+            );
         },
 
         async findAllByUser(email, folder = 'inbox', limit = 50, offset = 0) {
