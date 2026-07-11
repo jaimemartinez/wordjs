@@ -1803,7 +1803,7 @@ exports.init = async function (bridge) {
         const txt = async (name) => {
             try { return (await dns.resolveTxt(name)).map(parts => parts.join('')); } catch (e) { return null; }
         };
-        const pOf = (s) => { const m = /p=([a-z0-9+/=]+)/i.exec(String(s || '').replace(/\s+/g, '')); return m ? m[1].toLowerCase() : ''; };
+        const pOf = (s) => { const m = String(s || '').replace(/\s+/g, '').match(/p=([a-z0-9+/=]+)/i); return m ? m[1].toLowerCase() : ''; };
         const results = {};
 
         // MX → must point at our mail host (or the bare domain if that's the operator's choice).
