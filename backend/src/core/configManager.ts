@@ -30,6 +30,10 @@ function saveConfig(config: any) {
         const current = getConfig() || {};
         const newConfig = { ...current, ...config, updatedAt: new Date().toISOString() };
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+        // Refresh the in-memory runtime config (siteUrl → CSRF/CORS allowed-origins, etc.) so a persisted
+        // change takes effect WITHOUT a process restart. Otherwise a just-completed setup keeps its
+        // boot-time siteUrl and every POST from the configured origin is CSRF-blocked until restart.
+        try { require('../config/app').reloadFromFile?.(); } catch (e) { /* config not yet loaded (pre-boot) */ }
         return true;
     } catch (e) {
         console.error('Failed to write config file:', e);
