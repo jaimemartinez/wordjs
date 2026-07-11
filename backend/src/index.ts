@@ -220,6 +220,10 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml', '.shtm', '.js', '.mjs', '.cjs', '.xml', '.svgz']);
 app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
     dotfiles: 'deny',
+    // Media filenames are UUID-unique (never overwritten at the same URL), so they are safe to cache
+    // aggressively + immutable — a re-upload gets a new URL. Huge repeat-visit / Core-Web-Vitals win.
+    maxAge: '365d',
+    immutable: true,
     setHeaders: (res: Response, filePath: string) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         const ext = path.extname(filePath).toLowerCase();
@@ -235,12 +239,15 @@ app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
     }
 }));
 // app.use('/admin', express.static(path.resolve('./admin'))); // Removed legacy admin
-app.use('/themes', express.static(path.resolve('./themes'), { dotfiles: 'deny' }));
-app.use('/plugins', express.static(path.resolve('./plugins'), { dotfiles: 'deny' }));
-// Serve .well-known (ACME support) - Allow dotfiles
+// Theme/plugin assets CAN change in place on update, so cache 1h (not immutable) — the browser reuses
+// them for an hour, then ETag-revalidates (cheap 304). Big win without risking stale code after an update.
+app.use('/themes', express.static(path.resolve('./themes'), { dotfiles: 'deny', maxAge: '1h' }));
+app.use('/plugins', express.static(path.resolve('./plugins'), { dotfiles: 'deny', maxAge: '1h' }));
+// Serve .well-known (ACME support) - Allow dotfiles. NEVER cache challenge tokens (short-lived, per-order).
 app.use('/.well-known', express.static(path.resolve('./public/.well-known'), { dotfiles: 'allow' }));
 
-app.use('/public', express.static(path.resolve('./public'), { dotfiles: 'deny' }));
+// Framework assets (wordjs-ui.css etc.) change only on a WordJS update → 1d + ETag revalidation.
+app.use('/public', express.static(path.resolve('./public'), { dotfiles: 'deny', maxAge: '1d' }));
 
 // Request logging in development
 if (config.nodeEnv === 'development') {
