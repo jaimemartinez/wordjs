@@ -307,6 +307,13 @@ module.exports = function createEmailStore(db) {
                 parentId = 0, threadId = 0, scheduledAt = null
             } = data;
 
+            // better-sqlite3 (and the pg driver) only bind numbers/strings/bigints/buffers/null — never
+            // undefined, boolean, Date or object. mailparser yields `false` for a missing text/html part
+            // and may omit messageId/subject entirely, so a raw bind of a received message throws
+            // "SQLite3 can only bind ..." at end-of-DATA and the whole inbound message is dropped with a
+            // 450 (INBOUND-BIND). Normalize every free-text column to a bindable string first.
+            const str = (v) => (v === undefined || v === null || v === false) ? '' : (typeof v === 'string' ? v : String(v));
+
             const result = await db.run(`
                 INSERT INTO ${T_EMAILS} (
                     message_id, from_address, from_name, to_address, cc_address, bcc_address, subject, body_text, body_html, raw_content,
@@ -314,7 +321,7 @@ module.exports = function createEmailStore(db) {
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
-                messageId, fromAddress, fromName, toAddress, ccAddress, bccAddress, subject, bodyText, bodyHtml, rawContent,
+                str(messageId), str(fromAddress), str(fromName), str(toAddress), str(ccAddress), str(bccAddress), str(subject), str(bodyText), str(bodyHtml), str(rawContent),
                 isSent, isDraft, isArchived, isStarred, isTrash, parentId, threadId, scheduledAt
             ]);
 
