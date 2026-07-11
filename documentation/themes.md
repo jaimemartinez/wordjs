@@ -52,7 +52,7 @@ There are **13 shipped themes**:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
-| **default**         | Clean, Modern      | Blue primary, white background              |
+| **default** (WordJS)| Clean, Modern      | Indigo→violet gradient, Space Grotesk, deep-indigo footer |
 | **neo-digital**     | Cyberpunk/Terminal | Green glow, monospace fonts, dark mode      |
 | **brutalist-paper** | Neo-brutalist      | Sharp corners, bold borders, offset shadows |
 | **soft-glass**      | Glassmorphism      | Blur effects, transparency, pastels         |
@@ -67,10 +67,9 @@ There are **13 shipped themes**:
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 
 > **`--wjs-` variable adoption.** All 13 themes ship the full `--wjs-*` token set documented below (dozens
-> of declarations each — e.g. `carbon-terminal` has 71, `default` 53 — including the `--wjs-color-on-*`
-> contrast set). The **default** theme additionally keeps a few older bare aliases (`--primary`,
-> `--primary-dark`, `--text`, `--text-muted`, `--bg`, `--border`) at the top of its `:root` for its legacy
-> rules, but it carries the complete `--wjs-*` set too. Copy any theme as a starting point.
+> of declarations each — e.g. `carbon-terminal` has 71, `default` 70 — including the `--wjs-color-on-*`
+> contrast set). The **default** theme's `:root` is entirely `--wjs-*` (no older bare `--primary`/`--text`
+> aliases remain). Copy any theme as a starting point.
 
 ## The WordJS UI Framework
 
@@ -297,13 +296,16 @@ Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`
 the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the
 `active_theme_layout` option, clears any customizer overrides (`active_theme_mods`), and
 re-initializes the (legacy) theme engine. On the
-public site, `frontend/src/components/public/ThemeLoader.tsx` polls `themesApi.list()`, finds the
-active theme, and injects `<link rel="stylesheet" href="/themes/{slug}/style.css?v=…">`
-(id `wjs-theme-stylesheet`). It re-checks on `window` `focus`, so switching the theme in one tab
-applies in an open public tab when you return to it. The `?v=` query string is a **stable**
-cache-buster (the theme's `version`, falling back to its `slug`) — deliberately deterministic, not
-`Date.now()`, so the href is identical across SSR and hydration; it busts the cache only when the
-theme's version or slug changes.
+public site, `frontend/src/components/public/ThemeLoader.tsx` receives the active-theme slug resolved
+on the **server** (`app/(public)/layout.tsx` → `getSettings().theme`) as `initialSlug`, so the first
+SSR paint already carries the right stylesheet (no FOUC). It injects
+`<link rel="stylesheet" href="/themes/{slug}/style.css?v={slug}">` (id `wjs-theme-stylesheet`). The
+client effect only re-checks via `themesApi.list()` on `window` `focus` (and resolves the slug once
+if the server gave none, e.g. the editor preview), so switching the theme in one tab applies in an
+open public tab when you return to it. The `?v=` query string is simply the **theme slug** — a
+deterministic, non-`Date.now()` value identical across SSR and hydration, so it changes only when you
+switch themes; edits to a theme's `style.css` revalidate through `express.static`'s ETag/Last-Modified
+instead.
 
 ## Theme Previews in Admin
 
