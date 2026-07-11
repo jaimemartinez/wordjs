@@ -57,6 +57,16 @@ interface ServerFetchOptions {
      * keeps the response from becoming per-user. Opt in only for routes that must reflect the session.
      */
     forwardCookies?: boolean;
+    /**
+     * PERF: seconds to keep this PUBLIC read in Next's Data Cache (ISR). With it set, the same backend
+     * call is reused across requests for `revalidate` seconds instead of hitting the backend + DB on
+     * every render — the single biggest lever on public-page speed. Next 15 no longer caches `fetch`
+     * by default, so caching is strictly opt-in. IGNORED when forwardCookies is true (per-user reads
+     * must never be shared) — those stay `no-store`.
+     */
+    revalidate?: number;
+    /** Cache tags for precise on-demand purging via `revalidateTag()` when content changes. */
+    tags?: string[];
 }
 
 /**
@@ -89,8 +99,14 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
         /* not in a request scope (e.g. build prerender) — proceed without forwarded headers */
     }
 
+    // Per-user reads (cookie-forwarded) must NEVER be cached/shared → no-store. Public reads opt into
+    // Next's Data Cache when the caller passed a `revalidate` window (ISR), else stay dynamic (no-store).
+    const cacheInit: RequestInit = options.forwardCookies || options.revalidate == null
+        ? { cache: 'no-store' }
+        : ({ next: { revalidate: options.revalidate, tags: options.tags } } as RequestInit);
+
     try {
-        const res = await fetch(`${base}${endpoint}`, { headers, cache: 'no-store' });
+        const res = await fetch(`${base}${endpoint}`, { headers, ...cacheInit });
         if (!res.ok) return null;
         return (await res.json()) as T;
     } catch {
@@ -121,8 +137,10 @@ export const checkSetupRequired = cache(async (): Promise<boolean> => {
 // Request-deduped content loaders (one backend call per (args) per request)
 // ---------------------------------------------------------------------------
 
+// Site settings change rarely and are read on EVERY page (title, theme, menus, SEO, chrome) — the single
+// hottest read. Cache 60s + tag so the ~N-per-render backend calls collapse to one until it changes.
 export const getSettings = cache((): Promise<Record<string, string> | null> =>
-    serverFetch<Record<string, string>>('/settings')
+    serverFetch<Record<string, string>>('/settings', { revalidate: 60, tags: ['settings'] })
 );
 
 export interface PublicAssets {
@@ -132,7 +150,7 @@ export interface PublicAssets {
 
 /** Plugin-enqueued frontend scripts/styles (active plugins only), rendered by the public layout. */
 export const getPublicAssets = cache((): Promise<PublicAssets> =>
-    serverFetch<PublicAssets>('/plugins/assets').then((a) => a || { scripts: [], styles: [] })
+    serverFetch<PublicAssets>('/plugins/assets', { revalidate: 120, tags: ['plugin-assets'] }).then((a) => a || { scripts: [], styles: [] })
 );
 
 /**
@@ -145,15 +163,15 @@ export const getPostBySlugPreview = cache((slug: string): Promise<Post | null> =
 );
 
 export const getPostBySlug = cache((slug: string): Promise<Post | null> =>
-    serverFetch<Post>(`/posts/slug/${encodeURIComponent(slug)}`)
+    serverFetch<Post>(`/posts/slug/${encodeURIComponent(slug)}`, { revalidate: 30, tags: ['posts', `post:${slug}`] })
 );
 
 export const getPostById = cache((id: number): Promise<Post | null> =>
-    serverFetch<Post>(`/posts/${id}`)
+    serverFetch<Post>(`/posts/${id}`, { revalidate: 30, tags: ['posts', `post:${id}`] })
 );
 
 export const getPosts = cache((type = 'post', status = 'publish'): Promise<Post[] | null> =>
-    serverFetch<Post[]>(`/posts?type=${encodeURIComponent(type)}&status=${encodeURIComponent(status)}`)
+    serverFetch<Post[]>(`/posts?type=${encodeURIComponent(type)}&status=${encodeURIComponent(status)}`, { revalidate: 30, tags: ['posts', `posts:${type}`] })
 );
 
 /** Search published posts + pages server-side. Tolerates both `Post[]` and `{ posts: Post[] }` shapes. */
