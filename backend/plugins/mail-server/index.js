@@ -475,6 +475,28 @@ async function initSMTPServer() {
                         || '';
                     const fromName = parsed.from?.value?.[0]?.name || '';
 
+                    // Thread an inbound reply back into its conversation (THREAD-XREF): a reply's
+                    // In-Reply-To / References headers echo the Message-ID of a message we already have
+                    // (e.g. the Sent copy we delivered with that exact Message-ID). Resolve them and
+                    // inherit that message's thread so the reply lands in the same árbol instead of
+                    // starting a new one. Falls back to 0 (its own new thread) when nothing matches.
+                    let inboundThreadId = 0;
+                    try {
+                        const refIds = []
+                            .concat(parsed.inReplyTo || [])
+                            .concat(parsed.references || [])
+                            .join(' ')
+                            .split(/\s+/)
+                            .map(s => s.trim())
+                            .filter(Boolean);
+                        for (const rid of refIds) {
+                            const parent = await Email.findByMessageId(rid);
+                            if (parent) { inboundThreadId = parent.thread_id || parent.id; break; }
+                        }
+                    } catch (e) {
+                        console.error('[MailServer] Inbound thread lookup failed:', e.message);
+                    }
+
                     for (const addr of toAddresses) {
                         if (!addr || !addr.address) continue;
                         const [recName, recDomain] = addr.address.split('@');
@@ -494,6 +516,7 @@ async function initSMTPServer() {
                                 bodyText: parsed.text || '',
                                 bodyHtml: parsed.html || '',
                                 rawContent: parsed.textAsHtml || parsed.text || '',
+                                threadId: inboundThreadId,
                                 attachments: parsed.attachments,
                                 isTrash: isSpam ? 1 : 0 // Auto-trash spam
                             });
@@ -646,6 +669,11 @@ async function sendMail(data) {
     const threadId = data.threadId || 0;
     const draftId = data.draftId || 0;
 
+    // One stable Message-ID reused for BOTH the stored Sent record AND the on-the-wire Message-ID
+    // header. When the remote party replies, their In-Reply-To/References echo this exact value, so the
+    // inbound handler can look it up and thread the reply back into this conversation (THREAD-XREF).
+    const outboundMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${(fromEmail.split('@')[1] || 'wordjs')}>`;
+
     // DKIM Config
     const dkimKey = await getOption('mail_security_dkim_private_key', '');
     const dkimDomain = await getOption('mail_security_dkim_domain', '');
@@ -674,6 +702,7 @@ async function sendMail(data) {
         } else if (draftId) {
             console.log(`[MailServer] Updating draft ${draftId} to Sent status.`);
             await Email.update(draftId, {
+                messageId: outboundMessageId,
                 toAddress: toAttendees.join(', '),
                 ccAddress: ccAttendees.join(', '),
                 bccAddress: bccAttendees.join(', '),
@@ -688,7 +717,7 @@ async function sendMail(data) {
         } else {
             console.log(`[MailServer] Creating new Sent email record.`);
             const sentRec = await Email.create({
-                messageId: `<sent-${Date.now()}@wordjs.com>`,
+                messageId: outboundMessageId,
                 fromAddress: fromEmail.toLowerCase(),
                 fromName: fromName,
                 toAddress: toAttendees.join(', '),
@@ -800,7 +829,7 @@ async function sendMail(data) {
 
     if (externalRecipients.length > 0) {
         const attachments = (data.attachments || []).map(a => ({ filename: a.filename, path: a.path }));
-        const mailObj = { fromEmail, fromName, subject: data.subject, text: data.text, html: data.html, attachments };
+        const mailObj = { fromEmail, fromName, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId };
 
         if (transporter) {
             // Relay/smarthost path (used only if a relay is configured).
@@ -810,6 +839,7 @@ async function sendMail(data) {
                     const info = await transporter.sendMail({
                         envelope: { from: fromEmail, to: extR },
                         from: `"${fromName}" <${fromEmail}>`, to: extR,
+                        messageId: outboundMessageId,
                         subject: data.subject, text: data.text, html: data.html, attachments, dkim: dkimOptions
                     });
                     delivered.push({ recipient: extR, via: 'relay', response: info.response });
@@ -1015,6 +1045,7 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 envelope: { from: mail.fromEmail, to: recipient },
                 from: `"${mail.fromName}" <${mail.fromEmail}>`,
                 to: recipient,
+                messageId: mail.messageId,
                 subject: mail.subject,
                 text: mail.text,
                 html: mail.html,
