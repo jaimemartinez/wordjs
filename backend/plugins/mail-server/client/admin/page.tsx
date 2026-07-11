@@ -1377,14 +1377,32 @@ const DNS_PROVIDER_GUIDE = {
     }
 };
 
-function DnsRecordRow({ title, record }: { title: string; record?: DnsRecord }) {
+function DnsRecordRow({ title, record, step, check }: { title: string; record?: DnsRecord; step?: number; check?: any }) {
     if (!record) return null;
+    const statusStyles: any = {
+        ok: { cls: 'bg-emerald-50 text-emerald-600 border-emerald-200', icon: 'fa-circle-check', label: 'Verified' },
+        missing: { cls: 'bg-amber-50 text-amber-600 border-amber-200', icon: 'fa-clock', label: 'Not found yet' },
+        mismatch: { cls: 'bg-red-50 text-red-600 border-red-200', icon: 'fa-triangle-exclamation', label: "Doesn't match" },
+        nokey: { cls: 'bg-slate-100 text-slate-500 border-slate-200', icon: 'fa-key', label: 'No DKIM key yet' },
+    };
+    const s = check ? statusStyles[check.status] : null;
     return (
         <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
             <div className="flex items-center justify-between gap-2 mb-2">
-                <div className="flex items-center gap-2 min-w-0">
+                <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                    {step !== undefined && (
+                        <span className="shrink-0 inline-flex items-center justify-center w-5 h-5 rounded-full bg-violet-600 text-white text-[10px] font-black">{step}</span>
+                    )}
                     <span className="text-xs font-black uppercase tracking-wider text-slate-700">{title}</span>
                     <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-slate-200 text-slate-600 font-mono">{record.type}</span>
+                    {s && (
+                        <span
+                            title={check.status === 'missing' ? 'DNS changes can take a few minutes to propagate' : undefined}
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold border ${s.cls}`}
+                        >
+                            <i className={`fa-solid ${s.icon}`}></i>{s.label}
+                        </span>
+                    )}
                 </div>
                 {record.value && <CopyButton value={record.value} label="Copy value" />}
             </div>
@@ -1408,12 +1426,25 @@ function DnsRecordRow({ title, record }: { title: string; record?: DnsRecord }) 
                 </div>
             )}
             {record.note && <p className="text-[11px] text-slate-500 mt-2 leading-relaxed">{record.note}</p>}
+            {check?.status === 'mismatch' && check?.detail && (
+                <p className="text-[11px] text-red-600 mt-2 leading-relaxed">
+                    <i className="fa-solid fa-triangle-exclamation mr-1"></i>{check.detail}
+                </p>
+            )}
         </div>
     );
 }
 
 function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo, dnsLoading, onRefreshDns, onGenerateDkim, generatingDkim, testTo, setTestTo, onSendTest, testing, testResult }: any) {
     const [dnsProvider, setDnsProvider] = useState('generic');
+    const [dnsCheck, setDnsCheck] = useState<any>(null);
+    const [checkingDns, setCheckingDns] = useState(false);
+    const runDnsCheck = async () => {
+        setCheckingDns(true);
+        try { const r = await api('/plugin/mail-server/security/dns-check') as any; setDnsCheck(r); }
+        catch (e) { setDnsCheck({ error: true }); }
+        finally { setCheckingDns(false); }
+    };
     return (
         <div className="max-w-2xl mx-auto pt-10 pb-20">
             <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">Server &amp; Deliverability</h2>
@@ -1578,10 +1609,30 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                         <i className="fa-solid fa-globe text-indigo-500"></i>
                         DNS Records to Publish
                     </h3>
-                    <button type="button" onClick={onRefreshDns} disabled={dnsLoading} className="text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-50" title="Refresh records">
-                        <i className={`fa-solid fa-rotate-right ${dnsLoading ? 'fa-spin' : ''}`}></i>
-                    </button>
+                    <div className="flex items-center gap-2">
+                        <button
+                            type="button"
+                            onClick={runDnsCheck}
+                            disabled={checkingDns}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[11px] font-bold border transition-colors bg-white text-violet-600 border-violet-200 hover:bg-violet-50 hover:border-violet-300 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <i className={`fa-solid ${checkingDns ? 'fa-circle-notch fa-spin' : 'fa-shield-halved'}`}></i>
+                            {checkingDns ? 'Checking…' : dnsCheck && !dnsCheck.error ? 'Re-check' : 'Verify DNS'}
+                        </button>
+                        <button type="button" onClick={onRefreshDns} disabled={dnsLoading} className="text-slate-400 hover:text-indigo-600 transition-colors disabled:opacity-50" title="Refresh records">
+                            <i className={`fa-solid fa-rotate-right ${dnsLoading ? 'fa-spin' : ''}`}></i>
+                        </button>
+                    </div>
                 </div>
+                {dnsCheck && !dnsCheck.error && (
+                    <div className="px-8 py-2.5 border-b border-slate-100 bg-slate-50/30 flex items-center gap-2 text-[11px] text-slate-500">
+                        <i className="fa-solid fa-shield-halved text-emerald-500"></i>
+                        <span>
+                            <strong className="text-slate-700">{['mx', 'a', 'spf', 'dkim', 'dmarc'].filter((k) => dnsCheck.results?.[k]?.status === 'ok').length}</strong> of 5 records verified
+                            {dnsCheck.checkedAt && <> · checked {new Date(dnsCheck.checkedAt).toLocaleTimeString()}</>}
+                        </span>
+                    </div>
+                )}
                 <div className="p-8 grid gap-4">
                     {dnsLoading && !dnsInfo ? (
                         <div className="flex flex-col items-center justify-center py-10 text-slate-400">
@@ -1593,12 +1644,12 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                             <p className="text-xs text-slate-500 leading-relaxed -mt-1">
                                 Publish these at your DNS provider for domain <code className="font-mono text-slate-700">{dnsInfo.domain || '(set a domain)'}</code>. Sending HELO host: <code className="font-mono text-slate-700">{dnsInfo.heloHost}</code>.
                             </p>
-                            <DnsRecordRow title="MX" record={dnsInfo.records?.mx} />
-                            <DnsRecordRow title="A" record={dnsInfo.records?.a} />
-                            <DnsRecordRow title="SPF" record={dnsInfo.records?.spf} />
-                            <DnsRecordRow title="DKIM" record={dnsInfo.records?.dkim} />
-                            <DnsRecordRow title="DMARC" record={dnsInfo.records?.dmarc} />
-                            <DnsRecordRow title="PTR" record={dnsInfo.records?.ptr} />
+                            <DnsRecordRow step={1} title="MX" record={dnsInfo.records?.mx} check={dnsCheck?.results?.mx} />
+                            <DnsRecordRow step={2} title="A" record={dnsInfo.records?.a} check={dnsCheck?.results?.a} />
+                            <DnsRecordRow step={3} title="SPF" record={dnsInfo.records?.spf} check={dnsCheck?.results?.spf} />
+                            <DnsRecordRow step={4} title="DKIM" record={dnsInfo.records?.dkim} check={dnsCheck?.results?.dkim} />
+                            <DnsRecordRow step={5} title="DMARC" record={dnsInfo.records?.dmarc} check={dnsCheck?.results?.dmarc} />
+                            <DnsRecordRow step={6} title="PTR" record={dnsInfo.records?.ptr} />
 
                             {/* How to add these at your DNS provider */}
                             <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-5 mt-2">
