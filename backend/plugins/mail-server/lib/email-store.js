@@ -337,8 +337,10 @@ module.exports = function createEmailStore(db) {
             if (attachment.content) {
                 // Buffer (incoming)
                 const randomName = crypto.randomBytes(16).toString('hex');
-                const ext = path.extname(attachment.filename || '') || '.bin';
-                storageName = randomName + ext;
+                // Never persist the sender-supplied extension — an inbound attachment named x.js / .wasm /
+                // .node trips io-guard's executable-write block and would throw out the ENTIRE message. The
+                // real filename is kept in the DB `filename` column; on disk it's an opaque .bin blob.
+                storageName = randomName + '.bin';
                 const fullPath = path.join(UPLOAD_DIR, storageName);
 
                 await fs.writeFile(fullPath, attachment.content);
@@ -346,8 +348,10 @@ module.exports = function createEmailStore(db) {
             } else if (attachment.path) {
                 // File path (outgoing/upload)
                 const randomName = crypto.randomBytes(16).toString('hex');
-                const ext = path.extname(attachment.filename || '') || '.bin';
-                storageName = randomName + ext;
+                // Never persist the sender-supplied extension — an inbound attachment named x.js / .wasm /
+                // .node trips io-guard's executable-write block and would throw out the ENTIRE message. The
+                // real filename is kept in the DB `filename` column; on disk it's an opaque .bin blob.
+                storageName = randomName + '.bin';
                 const fullPath = path.join(UPLOAD_DIR, storageName);
 
                 // Check if source exists before copying
@@ -457,12 +461,22 @@ module.exports = function createEmailStore(db) {
                 params = [likeEmail, likeEmail, likeEmail];
             }
 
+            // Thread-collapse: pick ONE representative row per thread. A bare-column GROUP BY (SELECT *
+            // … GROUP BY thread_key) returns an arbitrary/stale row on SQLite and is ILLEGAL on Postgres
+            // (500s the whole listing). Instead aggregate first (thread_key → newest row id + count),
+            // then JOIN back to fetch that row's real columns. The representative is the highest id in the
+            // thread (newest-inserted), deterministic on both drivers.
+            const threadKey = "CASE WHEN thread_id > 0 THEN thread_id ELSE id END";
             return await db.all(`
-                SELECT *, COUNT(*) as thread_count
-                FROM ${T_EMAILS}
-                WHERE ${whereClause}
-                GROUP BY CASE WHEN thread_id > 0 THEN thread_id ELSE id END
-                ORDER BY MAX(date_received) DESC
+                SELECT e.*, t.thread_count
+                FROM ${T_EMAILS} e
+                JOIN (
+                    SELECT ${threadKey} AS tkey, MAX(id) AS rep_id, COUNT(*) AS thread_count
+                    FROM ${T_EMAILS}
+                    WHERE ${whereClause}
+                    GROUP BY ${threadKey}
+                ) t ON e.id = t.rep_id
+                ORDER BY e.date_received DESC, e.id DESC
                 LIMIT ? OFFSET ?
             `, [...params, limit, offset]);
         },
@@ -492,9 +506,15 @@ module.exports = function createEmailStore(db) {
                 params = [likeEmail, likeEmail, likeEmail];
             }
 
+            // Count the SAME collapsed unit findAllByUser lists (one per thread), not raw rows — otherwise
+            // the total exceeds the visible items and pagination renders empty trailing pages.
+            const threadKey = "CASE WHEN thread_id > 0 THEN thread_id ELSE id END";
             const row = await db.get(`
-                SELECT COUNT(*) as count FROM ${T_EMAILS}
-                WHERE ${whereClause}
+                SELECT COUNT(*) as count FROM (
+                    SELECT 1 FROM ${T_EMAILS}
+                    WHERE ${whereClause}
+                    GROUP BY ${threadKey}
+                ) sub
             `, params);
             return row ? row.count : 0;
         },
@@ -547,10 +567,13 @@ module.exports = function createEmailStore(db) {
         },
 
         async emptyTrash(userEmail) {
+            // Must match the trash-folder predicate in findAllByUser/countByUser (to/cc/bcc/from), else
+            // cc/bcc-only messages show in Trash but survive Empty Trash as unclearable residue.
+            const likeEmail = `%${userEmail}%`;
             const emails = await db.all(`
                 SELECT id FROM ${T_EMAILS}
-                WHERE (to_address LIKE ? OR from_address = ?) AND is_trash = 1
-            `, [`%${userEmail}%`, userEmail]);
+                WHERE (to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_trash = 1
+            `, [likeEmail, likeEmail, likeEmail, userEmail]);
 
             for (const e of emails) {
                 await this.deletePermanently(e.id);
