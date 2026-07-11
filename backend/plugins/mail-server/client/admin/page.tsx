@@ -32,7 +32,7 @@ type Email = {
     raw_content?: string;
 };
 
-type DnsRecord = { host?: string; type: string; value?: string; note?: string };
+type DnsRecord = { host?: string; type: string; value?: string; priority?: number; note?: string };
 type DnsInfo = {
     domain: string;
     selector: string;
@@ -1336,6 +1336,47 @@ function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }
     );
 }
 
+const DNS_PROVIDER_GUIDE = {
+    cloudflare: {
+        label: 'Cloudflare',
+        where: 'dash.cloudflare.com → pick your domain → DNS → Records → “Add record”.',
+        fields: 'Type · Name · (Content, or “Mail server” for MX) · Priority (MX only) · TTL (Auto).',
+        tips: [
+            'Name is the sub-part only — Cloudflare appends your domain. Use @ for the root.',
+            'For MX and TXT records leave Proxy status as “DNS only” (grey cloud).',
+            'Cloudflare auto-splits long TXT values (DKIM), so paste the value as one string.'
+        ]
+    },
+    hostinger: {
+        label: 'Hostinger',
+        where: 'hPanel → Domains → your domain → DNS / Nameservers → “Manage DNS records” → “Add Record”.',
+        fields: 'Type · Name (host) · Points to / Value · Priority (MX) · TTL.',
+        tips: ['Use @ in Name for the root domain.', 'Paste the value exactly as shown; no surrounding quotes needed.']
+    },
+    godaddy: {
+        label: 'GoDaddy',
+        where: 'GoDaddy account → Domain Portfolio → your domain → DNS → “Add New Record”.',
+        fields: 'Type · Name (Host) · Value / Points to · Priority (MX) · TTL.',
+        tips: ['Use @ in Name/Host for the root domain.', 'Default TTL (1 hour) is fine.']
+    },
+    namecheap: {
+        label: 'Namecheap',
+        where: 'Domain List → “Manage” your domain → Advanced DNS → “Add New Record”.',
+        fields: 'Type (Namecheap has a dedicated “MX Record” type) · Host · Value / Target · Priority · TTL.',
+        tips: ['Use @ in Host for the root domain.', 'For MX pick the “MX Record” type; enter the Priority in its own field.']
+    },
+    generic: {
+        label: 'Other',
+        where: 'Open your registrar/DNS host’s DNS management (a.k.a. “DNS zone editor” / “Manage DNS”).',
+        fields: 'Type · Host/Name · Value/Content/Points-to · Priority (MX) · TTL.',
+        tips: [
+            'Host/Name = the record’s host with your domain removed. Use @ for the root domain.',
+            'e.g. for _dmarc.example.com enter “_dmarc”; for example.com enter “@”; for default._domainkey.example.com enter “default._domainkey”.',
+            'Value/Content/Points-to = the record’s value. MX also needs a Priority (use 10).'
+        ]
+    }
+};
+
 function DnsRecordRow({ title, record }: { title: string; record?: DnsRecord }) {
     if (!record) return null;
     return (
@@ -1354,6 +1395,12 @@ function DnsRecordRow({ title, record }: { title: string; record?: DnsRecord }) 
                     <CopyButton value={record.host} label="Copy host" />
                 </div>
             )}
+            {(record.priority !== undefined && record.priority !== null) && (
+                <div className="flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-bold uppercase text-slate-400 w-12 shrink-0">Priority</span>
+                    <code className="text-xs text-slate-700 font-mono">{record.priority}</code>
+                </div>
+            )}
             {record.value && (
                 <div className="flex items-start gap-2">
                     <span className="text-[10px] font-bold uppercase text-slate-400 w-12 shrink-0 mt-0.5">Value</span>
@@ -1366,6 +1413,7 @@ function DnsRecordRow({ title, record }: { title: string; record?: DnsRecord }) 
 }
 
 function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo, dnsLoading, onRefreshDns, onGenerateDkim, generatingDkim, testTo, setTestTo, onSendTest, testing, testResult }: any) {
+    const [dnsProvider, setDnsProvider] = useState('generic');
     return (
         <div className="max-w-2xl mx-auto pt-10 pb-20">
             <h2 className="text-3xl font-bold text-slate-900 mb-3 tracking-tight">Server &amp; Deliverability</h2>
@@ -1545,10 +1593,50 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                             <p className="text-xs text-slate-500 leading-relaxed -mt-1">
                                 Publish these at your DNS provider for domain <code className="font-mono text-slate-700">{dnsInfo.domain || '(set a domain)'}</code>. Sending HELO host: <code className="font-mono text-slate-700">{dnsInfo.heloHost}</code>.
                             </p>
-                            <DnsRecordRow title="DKIM" record={dnsInfo.records?.dkim} />
+                            <DnsRecordRow title="MX" record={dnsInfo.records?.mx} />
+                            <DnsRecordRow title="A" record={dnsInfo.records?.a} />
                             <DnsRecordRow title="SPF" record={dnsInfo.records?.spf} />
+                            <DnsRecordRow title="DKIM" record={dnsInfo.records?.dkim} />
                             <DnsRecordRow title="DMARC" record={dnsInfo.records?.dmarc} />
                             <DnsRecordRow title="PTR" record={dnsInfo.records?.ptr} />
+
+                            {/* How to add these at your DNS provider */}
+                            <div className="rounded-2xl border border-violet-200 bg-violet-50/50 p-5 mt-2">
+                                <div className="flex items-start gap-2 mb-4">
+                                    <i className="fa-solid fa-circle-info text-violet-500 mt-0.5"></i>
+                                    <p className="text-xs text-slate-600 leading-relaxed">
+                                        Most providers want the host <strong>without your domain</strong> — use <code className="font-mono text-slate-700">@</code> for the root (e.g. <code className="font-mono text-slate-700">{dnsInfo.domain || 'example.com'}</code>).
+                                    </p>
+                                </div>
+                                <div className="flex flex-wrap gap-2 mb-4">
+                                    {Object.keys(DNS_PROVIDER_GUIDE).map((key) => (
+                                        <button
+                                            key={key}
+                                            type="button"
+                                            onClick={() => setDnsProvider(key)}
+                                            className={`px-3 py-1.5 rounded-full text-[11px] font-bold border transition-colors ${dnsProvider === key ? 'bg-violet-600 text-white border-violet-600' : 'bg-white text-slate-500 border-slate-200 hover:text-violet-600 hover:border-violet-300'}`}
+                                        >
+                                            {DNS_PROVIDER_GUIDE[key].label}
+                                        </button>
+                                    ))}
+                                </div>
+                                <div className="rounded-xl border border-slate-200 bg-white p-4">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <i className="fa-solid fa-book text-violet-500"></i>
+                                        <span className="text-xs font-black uppercase tracking-wider text-slate-700">How to add these at {DNS_PROVIDER_GUIDE[dnsProvider].label}</span>
+                                    </div>
+                                    <p className="text-xs text-slate-600 leading-relaxed mb-1.5"><span className="font-bold text-slate-500">Where:</span> {DNS_PROVIDER_GUIDE[dnsProvider].where}</p>
+                                    <p className="text-xs text-slate-600 leading-relaxed mb-3"><span className="font-bold text-slate-500">Fields you'll fill:</span> {DNS_PROVIDER_GUIDE[dnsProvider].fields}</p>
+                                    <ul className="grid gap-1.5">
+                                        {DNS_PROVIDER_GUIDE[dnsProvider].tips.map((tip, i) => (
+                                            <li key={i} className="flex items-start gap-2 text-[11px] text-slate-500 leading-relaxed">
+                                                <i className="fa-solid fa-circle-check text-violet-400 mt-0.5 text-[10px]"></i>
+                                                <span>{tip}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            </div>
                         </>
                     ) : (
                         <div className="flex flex-col items-center justify-center py-10 text-slate-400">
