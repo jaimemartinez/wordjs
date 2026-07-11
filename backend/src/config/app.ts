@@ -281,4 +281,22 @@ const config: AppConfig = {
     }
 };
 
+// Refresh the request-time runtime fields from wordjs-config.json WITHOUT a process restart. Called after
+// the config is persisted (setup install, settings save) so a just-set siteUrl is honored immediately by
+// CSRF / CORS / the allowed-origins list. Without this, config.site.url keeps its boot-time value and every
+// POST from the freshly-configured origin is CSRF-blocked ("rest_csrf_invalid") until the process restarts.
+function reloadFromFile() {
+    try {
+        const fresh = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+        if (fresh.siteUrl) { config.site.url = fresh.siteUrl; (config as any).siteUrl = fresh.siteUrl; }
+        if (fresh.frontendUrl) (config as any).frontendUrl = fresh.frontendUrl;
+        if (fresh.siteName) config.site.name = fresh.siteName;
+        if (fresh.siteDescription) config.site.description = fresh.siteDescription;
+        return true;
+    } catch (e) {
+        return false;
+    }
+}
+(config as any).reloadFromFile = reloadFromFile;
+
 module.exports = config;

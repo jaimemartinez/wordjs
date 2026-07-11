@@ -78,10 +78,11 @@ const UserFormExtension = ({ data }: { data: any }) => {
     );
 };
 
-// Register the hooks
+// Register the hooks. The stable `key` (4th arg) makes this idempotent: if register() runs more than once
+// (layout remount, StrictMode), the toggle/filter is REPLACED, not stacked — no more duplicate switches.
 export const registerUserFormExtension = () => {
     // 1. Add the toggle UI
-    pluginHooks.addAction('user_form_before_email', (data) => <UserFormExtension data={data} />);
+    pluginHooks.addAction('user_form_before_email', (data) => <UserFormExtension data={data} />, 10, 'mail-server:user-form-toggle');
 
     // 2. Filter the core email input properties
     pluginHooks.addFilter('user_form_email_input_props', (props = {}, _data = {}) => {
@@ -93,5 +94,5 @@ export const registerUserFormExtension = () => {
             className: (props.className || '') + " bg-gray-100 text-gray-400 border-dashed cursor-not-allowed font-mono",
             placeholder: "Generated automatically..."
         };
-    });
+    }, 10, 'mail-server:email-input-props');
 };

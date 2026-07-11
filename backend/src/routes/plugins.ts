@@ -608,6 +608,88 @@ router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Req
     res.json({ success: true, slug, message: `Isolate for '${slug}' reloaded.` });
 }));
 
+// Ports a plugin declares it needs to bind (manifest `claimPorts: [25]`). Only these are eligible
+// for the consensual port-liberation flow below — the endpoints can never act on arbitrary ports.
+function getClaimedPorts(slug: string): number[] {
+    try {
+        const manifestPath = path.join(PLUGINS_DIR, slug, 'manifest.json');
+        if (!fs.existsSync(manifestPath)) return [];
+        const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+        if (!Array.isArray(manifest.claimPorts)) return [];
+        return manifest.claimPorts.filter((p: any) => Number.isInteger(p) && p > 0 && p < 65536);
+    } catch {
+        return [];
+    }
+}
+
+/**
+ * @swagger
+ * /plugins/{slug}/port-conflicts:
+ *   get:
+ *     summary: Who is squatting the ports this plugin's manifest claims, and can WordJS free them?
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.get('/:slug/port-conflicts', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    if (!validateSlug(req.params.slug as string)) {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+    const slug = req.params.slug as string;
+    const claimPorts = getClaimedPorts(slug);
+    const { detectPortConflict } = require('../core/port-conflicts');
+    const conflicts = [];
+    for (const port of claimPorts) {
+        conflicts.push(await detectPortConflict(port));
+    }
+    res.json({ slug, conflicts });
+}));
+
+/**
+ * @swagger
+ * /plugins/{slug}/free-port:
+ *   post:
+ *     summary: Permanently disable the known system MTA holding a manifest-claimed port (admin-confirmed), then reload the plugin so it can bind it
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    if (!validateSlug(req.params.slug as string)) {
+        return res.status(400).json({ error: 'Invalid plugin slug' });
+    }
+    const slug = req.params.slug as string;
+    const port = req.body?.port;
+    // The port MUST be one the plugin's manifest claims — this endpoint is a targeted fix for a
+    // declared need, not a generic service-stopping API (core/port-conflicts additionally only ever
+    // touches its known-MTA allowlist).
+    if (!Number.isInteger(port) || !getClaimedPorts(slug).includes(port)) {
+        return res.status(400).json({ error: 'Port is not declared in this plugin\'s manifest claimPorts.' });
+    }
+    const { freeClaimedPort } = require('../core/port-conflicts');
+    const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+    try {
+        // allowDisable = the admin's explicit modal confirmation travels WITH the request. Without it
+        // the core refuses to disable anything (CONSENT_REQUIRED below) — so a stale client snapshot
+        // can never turn into an unconsented systemctl disable (TOCTOU).
+        const result = await freeClaimedPort(port, { allowDisable: req.body?.allowDisable === true });
+        // Reload the (running) plugin so its own bind logic can take the freed port right away.
+        let reloaded = false;
+        if (isIsolated(slug)) {
+            await reloadIsolatedPlugin(slug);
+            reloaded = true;
+        }
+        res.json({ success: true, ...result, reloaded });
+    } catch (e: any) {
+        // `details` is the one structured field the frontend api() helper preserves on thrown errors —
+        // carry the machine-readable code + fresh conflict there so the client can re-prompt consent.
+        if (e && e.code === 'CONSENT_REQUIRED') return res.status(409).json({ error: e.message, code: e.code, details: { code: e.code, conflict: e.conflict } });
+        if (e && e.code === 'PORT_NOT_FREEABLE') return res.status(409).json({ error: e.message, code: e.code });
+        if (e && (e.code === 'PORT_STILL_IN_USE' || e.code === 'DISABLE_FAILED')) return res.status(502).json({ error: e.message, code: e.code });
+        throw e;
+    }
+}));
+
 /**
  * @swagger
  * /plugins/{slug}/deactivate:

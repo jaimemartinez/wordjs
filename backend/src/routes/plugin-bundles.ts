@@ -48,9 +48,19 @@ router.get('/:slug/bundle', async (req: Request, res: Response) => {
         });
     }
 
-    // Set cache headers (bundles are versioned via manifest)
+    // CACHE CORRECTNESS: the bundle URL is UNVERSIONED (`/:slug/bundle?type=admin`) but its content
+    // changes on every plugin rebuild/update. A prior `max-age=31536000` (1 year, immutable) meant an
+    // updated plugin's new UI was invisible to already-cached clients for a YEAR. Use a validator
+    // (ETag from size+mtime) + `no-cache` so the browser MUST revalidate: it gets a tiny 304 when the
+    // bundle is unchanged (still fast) and the fresh bytes the moment the file changes.
     res.setHeader('Content-Type', 'application/javascript');
-    res.setHeader('Cache-Control', 'public, max-age=31536000'); // 1 year
+    const stat = fs.statSync(bundlePath);
+    const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'no-cache');
+    if (req.headers['if-none-match'] === etag) {
+        return res.status(304).end();
+    }
 
     // Stream the file
     const stream = fs.createReadStream(bundlePath);
@@ -109,8 +119,16 @@ router.get('/:slug/bundle/css', async (req: Request, res: Response) => {
         return res.send('');
     }
 
+    // Same unversioned-URL cache trap as the JS bundle above — revalidate via ETag instead of a
+    // year-long immutable cache, so an updated plugin's CSS reaches already-cached clients.
     res.setHeader('Content-Type', 'text/css');
-    res.setHeader('Cache-Control', 'public, max-age=31536000');
+    const stat = fs.statSync(cssPath);
+    const etag = `W/"${stat.size.toString(16)}-${Math.floor(stat.mtimeMs).toString(16)}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Cache-Control', 'no-cache');
+    if (req.headers['if-none-match'] === etag) {
+        return res.status(304).end();
+    }
 
     const stream = fs.createReadStream(cssPath);
     stream.pipe(res);
