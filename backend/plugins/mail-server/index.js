@@ -742,6 +742,16 @@ async function sendMail(data) {
 
                 localRecipients.add(recipient);
 
+                // Self-delivery: when the sender is also the recipient (e.g. replying to a message you
+                // sent yourself), the Sent copy already represents this message for that user. Creating a
+                // second "received" copy gives the thread two rows with the same thread_id, so the message
+                // shows up TWICE in the conversation view (and redundantly in the sender's own inbox).
+                // Skip the inbox copy for self-sends — the Sent record already covers it. (SELF-DUP)
+                if (recipient.toLowerCase() === fromEmail.toLowerCase()) {
+                    console.log(`[MailServer] Self-delivery to ${recipient} — skipping duplicate inbox copy.`);
+                    continue;
+                }
+
                 // Local delivery: Create a copy in the recipient's inbox
                 const inboxEmail = await Email.create({
                     messageId: `<local-${Date.now()}-${Math.random()}@wordjs.com>`,
