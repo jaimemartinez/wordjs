@@ -328,6 +328,15 @@ function isTrustedSmtpSession(session) {
     return false;
 }
 
+// Normalize an IPv4-mapped IPv6 address ('::ffff:1.2.3.4') to bare IPv4. A dual-stack SMTP listener
+// reports the connecting IP in this mapped form, which SPF (matches no mechanism → softfail) and DNSBL
+// (lookup errors) both choke on — rejecting essentially EVERY real IPv4 sender. Strip the prefix once.
+function bareIp(addr) {
+    if (typeof addr !== 'string') return addr;
+    const m = addr.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/i);
+    return m ? m[1] : addr;
+}
+
 /**
  * Initialize the Inbound SMTP Server
  */
@@ -355,26 +364,29 @@ async function initSMTPServer() {
             // Loopback / authenticated senders are trusted (this is our own relay path).
             if (isTrustedSmtpSession(session)) return callback();
 
-            // Default ON: only an explicit operator override ('0') disables the check.
+            // DNSBL is default-ON but only an explicit operator override ('0') disables it.
+            const ip = bareIp(session.remoteAddress);
             getOption('mail_security_dnsbl_enabled', '1').then(enabled => {
                 if (enabled === '0') return callback();
 
                 const dnsbl = require('dnsbl');
-                dnsbl.lookup(session.remoteAddress, 'zen.spamhaus.org').then(listed => {
+                dnsbl.lookup(ip, 'zen.spamhaus.org').then(listed => {
                     if (listed) {
-                        console.warn(`[Security][DNSBL] IP ${session.remoteAddress} blocked by DNSBL — rejecting`);
+                        console.warn(`[Security][DNSBL] IP ${ip} blocked by DNSBL — rejecting`);
                         return callback(new Error('554 Connection rejected: your IP is listed on a DNS blocklist'));
                     }
                     callback();
                 }).catch((e) => {
-                    // FAIL CLOSED: a DNSBL lookup error must not silently admit an unverified external IP.
-                    console.warn(`[Security][DNSBL] lookup error for ${session.remoteAddress}: ${e.message} — rejecting (fail closed)`);
-                    callback(new Error('451 Temporary failure: unable to verify sender reputation, try again later'));
+                    // FAIL OPEN: Spamhaus Zen refuses queries from public/cloud resolvers, so a lookup error
+                    // is the COMMON case — rejecting on it would blackhole ALL inbound mail. Log and accept;
+                    // SPF + the Bayesian filter still apply. Only a POSITIVE listing rejects.
+                    console.warn(`[Security][DNSBL] lookup error for ${ip}: ${e.message} — accepting (fail open)`);
+                    callback();
                 });
             }).catch((e) => {
-                // The option lookup itself failed — fail closed for the external sender.
-                console.warn(`[Security][DNSBL] option lookup error: ${e.message} — rejecting (fail closed)`);
-                callback(new Error('451 Temporary failure, try again later'));
+                // The option lookup itself failed — accept (fail open) rather than blackhole inbound.
+                console.warn(`[Security][DNSBL] option lookup error: ${e.message} — accepting (fail open)`);
+                callback();
             });
         },
 
@@ -389,7 +401,7 @@ async function initSMTPServer() {
             getOption('mail_security_spf_enabled', '1').then(async (enabled) => {
                 if (enabled === '0') return callback();
 
-                const ip = session.remoteAddress;
+                const ip = bareIp(session.remoteAddress); // '::ffff:1.2.3.4' → '1.2.3.4' so SPF matches
                 const mailFrom = (address && address.address) || '';
                 const domain = mailFrom.split('@')[1] || '';
 
@@ -904,11 +916,17 @@ async function getHeloName() {
  */
 function buildDnsRecords(domain, selector, publicKeyPem) {
     const pubDer = (publicKeyPem || '').replace(/-----[^-]+-----/g, '').replace(/\s+/g, '');
+    // A DNS TXT string is capped at 255 chars; the RSA-2048 DKIM value is ~410, so a single string is
+    // INVALID at many providers. Offer the quoted-segment form ("seg1" "seg2") operators can paste as-is.
+    const chunkTxt = (v) => { const p = []; for (let i = 0; i < v.length; i += 255) p.push('"' + v.slice(i, i + 255) + '"'); return p.join(' '); };
+    const dkimValue = `v=DKIM1; k=rsa; p=${pubDer}`;
     return {
         dkim: {
             host: `${selector}._domainkey.${domain}`,
             type: 'TXT',
-            value: `v=DKIM1; k=rsa; p=${pubDer}`
+            value: dkimValue,
+            valueChunked: dkimValue.length > 255 ? chunkTxt(dkimValue) : dkimValue,
+            note: dkimValue.length > 255 ? 'Exceeds the 255-char DNS TXT limit. Most providers auto-split; if yours does not, paste the quoted-segment form.' : undefined
         },
         spf: {
             host: domain,
@@ -1553,6 +1571,15 @@ exports.init = async function (bridge) {
             smtp_listen_port: await getOption('smtp_listen_port', '2525'),
             smtp_catch_all: await getOption('smtp_catch_all', '0'),
             mail_helo_host: await getOption('mail_helo_host', ''),
+            // Relay / smarthost (optional). Without these exposed the relay path was unreachable and
+            // delivery was stuck on direct-MX port 25 (blocked by most cloud/residential hosts). The relay
+            // PASSWORD is a secret and is never returned — only whether one is stored (mail_pass_set).
+            mail_server: await getOption('mail_server', ''),
+            mail_port: await getOption('mail_port', '587'),
+            mail_secure: await getOption('mail_secure', '0'),
+            mail_user: await getOption('mail_user', ''),
+            mail_pass_set: (await getOption('mail_pass', '')) ? true : false,
+            mail_relay_require_tls: await getOption('mail_relay_require_tls', '1'),
             mail_security_dkim_domain: await getOption('mail_security_dkim_domain', ''),
             mail_security_dkim_selector: await getOption('mail_security_dkim_selector', 'default'),
             mail_security_dkim_enabled: (await getOption('mail_security_dkim_private_key', '')) ? '1' : '0',
@@ -1570,15 +1597,24 @@ exports.init = async function (bridge) {
             'mail_from_email', 'mail_from_name',
             'smtp_listen_port', 'smtp_catch_all',
             'mail_helo_host',
+            // Relay / smarthost (mail_user/mail_pass route to the encrypted secrets table via isSecretOption).
+            'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
             'mail_security_dkim_domain', 'mail_security_dkim_selector',
             'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject'
         ];
 
         for (const f of fields) {
-            if (req.body[f] !== undefined) await updateOption(f, req.body[f]);
+            if (req.body[f] === undefined) continue;
+            // Don't wipe the stored relay password when the field is left blank on a normal save — the UI
+            // only sends mail_pass when the admin is actually (re)setting it.
+            if (f === 'mail_pass' && req.body[f] === '') continue;
+            await updateOption(f, req.body[f]);
         }
 
+        // Re-init BOTH the inbound listener AND the outbound relay transport so relay/port changes take
+        // effect immediately (previously only initSMTPServer ran, so relay edits needed a full reload).
         await initSMTPServer();
+        await initTransporter();
         res.json({ success: true, message: 'Server settings updated' });
     });
 
@@ -1586,21 +1622,29 @@ exports.init = async function (bridge) {
     route('post', '/test', { auth: true, admin: true }, async (req, res) => {
         try {
             const to = (req.body && req.body.to) || req.user.userEmail;
+            // A LOCAL recipient (any local account's address) is delivered straight to the DB inbox and
+            // never touches MX / DKIM / port 25 — so a green result there proves NOTHING about real
+            // deliverability. Detect it and tell the admin plainly instead of a misleading "success".
+            const localUser = await User.findByEmail(to).catch(() => null);
             const result = await sendMail({
                 to,
                 subject: 'WordJS Mail Server — delivery test',
-                text: 'If you received this, direct MX delivery is working.',
-                html: '<p>If you received this, <strong>direct MX delivery</strong> is working.</p>'
+                text: 'If you received this, outbound delivery is working.',
+                html: '<p>If you received this, <strong>outbound delivery</strong> is working.</p>'
             });
-            // Report exactly what happened so the admin can diagnose (MX hit, SMTP response, or error).
+            const externalAttempted = (result.delivered && result.delivered.length) || (result.failed && result.failed.length);
+            const localOnly = !!localUser && !externalAttempted;
+            let message;
+            if (localOnly) {
+                message = `Delivered to the LOCAL mailbox of ${to} only — external MX / DKIM / port 25 were NOT exercised. Enter an OFF-domain address (e.g. a Gmail account) to test real internet deliverability.`;
+            } else if (result.success) {
+                message = 'Test message accepted by the recipient mail server (external delivery succeeded).';
+            } else {
+                message = 'Delivery failed — check rDNS/SPF/DKIM/DMARC and that outbound port 25 (or a configured relay) is reachable.';
+            }
             res.status(result.success ? 200 : 207).json({
-                success: result.success,
-                to,
-                delivered: result.delivered,
-                failed: result.failed,
-                message: result.success
-                    ? 'Test message accepted by the recipient mail server'
-                    : 'Delivery failed — check rDNS/SPF/DKIM/DMARC and that outbound port 25 is open'
+                success: result.success, to, localOnly,
+                delivered: result.delivered, failed: result.failed, message
             });
         } catch (error) {
             res.status(500).json({ error: error.message });

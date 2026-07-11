@@ -1167,7 +1167,11 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                 // requires an explicit admin grant of the notifications:provider capability (default-deny).
                 if (isGrantedFor(slug, 'notifications', 'provider')) {
                     try {
-                        require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification));
+                        // Register IN the plugin's ALS context (like the shortcode registration above) so
+                        // notifications.registerTransport records pluginSlug=<slug>. Without this it stored
+                        // pluginSlug=null, so unregisterPluginTransports(slug) never matched it on unload and
+                        // every later notify() RPC'd a DEAD worker and hung to the 30s timeout.
+                        runWithContext(slug, () => require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification)));
                     } catch (e: any) { console.warn(`[Isolate ${slug}] notify transport register failed:`, e && e.message); }
                 } else {
                     console.warn(`[Isolate ${slug}] notify.registerTransport denied: the notifications:provider permission is not granted (grant it in /admin/plugins).`);
