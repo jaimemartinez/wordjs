@@ -142,19 +142,20 @@ async function generateRegistry() {
         .map(p => `    "${p.id}": () => import("../../../backend/plugins/${p.folder}/${p.componentPath}"),`)
         .join('\n');
 
-    // 2. Generate Hooks
+    // 2. Generate Hooks — emitted as an ARRAY of promises so loadPluginHooks can report async
+    // chunk-load failures to its caller (a bare fire-and-forget .then() hides them forever).
     const hooksImports = includedPlugins
         .filter(p => p.hooksPath)
         .map(p => `
-            import("../../../backend/plugins/${p.folder}/${p.hooksPath}").then(m => {
-                // Auto-register any export starting with 'register'
-                Object.keys(m).forEach(key => {
-                    const exportFn = (m as any)[key];
-                    if (key.startsWith('register') && typeof exportFn === 'function') {
-                        try { exportFn(); } catch(e) { console.error('Error in hook ${p.id}:', e); }
-                    }
-                });
-            });`)
+        import("../../../backend/plugins/${p.folder}/${p.hooksPath}").then(m => {
+            // Auto-register any export starting with 'register'
+            Object.keys(m).forEach(key => {
+                const exportFn = (m as any)[key];
+                if (key.startsWith('register') && typeof exportFn === 'function') {
+                    try { exportFn(); } catch(e) { console.error('Error in hook ${p.id}:', e); }
+                }
+            });
+        }),`)
         .join('\n');
 
     const content = `"use client";
@@ -276,10 +277,19 @@ export function getRegisteredPlugins(): string[] {
 /**
  * Initialize Plugin Hooks (e.g., extensions, form modifiers)
  */
-export function loadPluginHooks() {
-    if (typeof window === 'undefined') return;
-    
+export function loadPluginHooks(): Promise<void> {
+    if (typeof window === 'undefined') return Promise.resolve();
+    const loaders: Promise<any>[] = [
     ${hooksImports}
+    ];
+    // A failed hook chunk must be VISIBLE to the caller: initPlugins un-latches its run-once guard on
+    // rejection so a later mount retries (hook registration is idempotent via keys, so retrying the
+    // already-loaded plugins is safe). allSettled: one broken plugin never blocks the others.
+    return Promise.allSettled(loaders).then((results) => {
+        const failed = results.filter(r => r.status === 'rejected') as PromiseRejectedResult[];
+        failed.forEach(f => console.error('Plugin hook bundle failed to load:', f.reason));
+        if (failed.length) throw new Error(failed.length + ' plugin hook bundle(s) failed to load');
+    });
 }
 `;
 
