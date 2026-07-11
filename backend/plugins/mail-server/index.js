@@ -581,10 +581,22 @@ function isValidEmail(email) {
     const domain = email.split('@')[1] || '';
     // Strip optional [ ] around address literals (RFC 5321 domain-literal form).
     const bareDomain = domain.replace(/^\[/, '').replace(/\]$/, '');
-    if (bareDomain.toLowerCase() === 'localhost') return false;
-    if (net.isIP(bareDomain)) return false; // any IPv4/IPv6 literal as the domain
+    // Reject any IPv4/IPv6 literal as the domain — PURE JS (not net.isIP): this runs on EVERY send,
+    // including purely-LOCAL delivery, but net.isIP requires the `net` module which secure-require blocks
+    // for a plugin WITHOUT the network grant → it threw "require('net') not permitted" and broke every
+    // send (even local). An IPv4 dotted-quad, or any colon-bearing host (IPv6), is an address literal.
+    if (/^\d{1,3}(\.\d{1,3}){3}$/.test(bareDomain) || bareDomain.indexOf(':') !== -1) return false;
 
-    // Standard RFC 5322 simplified validation. A real (FQDN) domain must contain a dot.
+    // Single-label domains (localhost, an intranet hostname) are ACCEPTED: they only ever resolve to a
+    // LOCAL user (written straight to the DB inbox), and external direct delivery to such a domain is
+    // separately refused in deliverDirect (+ the resolved-IP-must-be-public pin) — so there's no SSRF
+    // here. Requiring an FQDN dot previously broke internal delivery to the DEFAULT @localhost accounts
+    // (admin@localhost et al), so the admin couldn't even send to themselves. (The doc has always said
+    // "admin@localhost and similar are accepted for internal testing"; the code now matches it.)
+    if (bareDomain && bareDomain.indexOf('.') === -1) {
+        return /^[^\s@]+@[^\s@]+$/.test(email);
+    }
+    // FQDN domain: standard RFC 5322 simplified validation (must contain a dot).
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     return emailRegex.test(email);
 }
