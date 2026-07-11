@@ -156,7 +156,7 @@ export default function MailServerAdmin() {
                 loadDnsRecords();
             } else {
                 const endpoint = query
-                    ? `/plugin/mail-server/emails/search?q=${query}`
+                    ? `/plugin/mail-server/emails/search?q=${encodeURIComponent(query)}`
                     : `/plugin/mail-server/emails?folder=${folder}`;
 
                 const res = await api(endpoint) as any;
@@ -182,7 +182,7 @@ export default function MailServerAdmin() {
             if (newMail.to.length >= 2 && !newMail.to.includes('@')) {
                 setSearching(true);
                 try {
-                    const data = await api(`/plugin/mail-server/users/search?q=${newMail.to}`) as any;
+                    const data = await api(`/plugin/mail-server/users/search?q=${encodeURIComponent(newMail.to)}`) as any;
                     setSuggestions(Array.isArray(data) ? data : []);
                 } catch (error) {
                     console.error("Search failed:", error);
@@ -338,7 +338,9 @@ export default function MailServerAdmin() {
         setGeneratingDkim(true);
         setMessage(null);
         try {
-            await api('/plugin/mail-server/security/dkim/generate', { method: 'POST', body: { domain, selector } });
+            // force:true when a key already exists — the backend 409s a rotation without it, so the
+            // confirmed "Regenerate" above would otherwise fail. First-time generation sends no force.
+            await api('/plugin/mail-server/security/dkim/generate', { method: 'POST', body: { domain, selector, force: dnsInfo?.dkimConfigured ? true : undefined } });
             setMessage({ type: 'success', text: 'DKIM key generated. Publish the new DNS record below.' });
             await loadDnsRecords();
         } catch (error: any) {
@@ -1300,6 +1302,41 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                 </div>
             </div>
 
+            {/* Relay / Smarthost (optional) */}
+            <div className="bg-white rounded-[1.5rem] border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/40 mt-8">
+                <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50">
+                    <h3 className="font-bold text-slate-800 flex items-center gap-2">
+                        <i className="fa-solid fa-tower-broadcast text-sky-500"></i>
+                        Relay / Smarthost <span className="text-xs font-medium text-slate-400 ml-1">optional</span>
+                    </h3>
+                </div>
+                <div className="p-8 grid gap-8">
+                    <p className="text-[12px] text-slate-500 leading-relaxed -mt-2">
+                        Leave blank to deliver <strong>direct-to-MX on port 25</strong>. Most cloud, VPS and residential hosts
+                        <strong> block outbound port 25</strong> — point at an SMTP relay (SendGrid, Mailgun, Amazon SES, your ISP,
+                        or a LAN smarthost) to deliver through it instead. The password is stored <strong>encrypted</strong>.
+                    </p>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <SettingInput label="Relay Host" value={settings.mail_server || ''} onChange={(v: string) => setSettings({ ...settings, mail_server: v })} placeholder="smtp.sendgrid.net" />
+                        <SettingInput label="Port" value={settings.mail_port || ''} onChange={(v: string) => setSettings({ ...settings, mail_port: v })} placeholder="587" />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <SettingInput label="Username" value={settings.mail_user || ''} onChange={(v: string) => setSettings({ ...settings, mail_user: v })} placeholder="apikey" />
+                        <SettingInput
+                            label={settings.mail_pass_set ? 'Password (stored — leave blank to keep)' : 'Password'}
+                            value={settings.mail_pass || ''}
+                            onChange={(v: string) => setSettings({ ...settings, mail_pass: v })}
+                            placeholder={settings.mail_pass_set ? '••••••••' : 'relay password / API key'}
+                            type="password"
+                        />
+                    </div>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <SettingInput label="Encryption" value={settings.mail_secure || '0'} onChange={(v: string) => setSettings({ ...settings, mail_secure: v })} type="select" options={[{ label: 'STARTTLS (587 / 25)', value: '0' }, { label: 'Implicit TLS (465)', value: '1' }]} />
+                        <SettingInput label="Require STARTTLS" value={settings.mail_relay_require_tls || '1'} onChange={(v: string) => setSettings({ ...settings, mail_relay_require_tls: v })} type="select" options={[{ label: 'Yes (recommended)', value: '1' }, { label: 'No — internal TLS-less relay only', value: '0' }]} />
+                    </div>
+                </div>
+            </div>
+
             {/* Security */}
             <div className="bg-white rounded-[1.5rem] border border-slate-200 overflow-hidden shadow-xl shadow-slate-200/40 mt-8">
                 <div className="px-8 py-6 border-b border-slate-100 bg-slate-50/50 flex justify-between items-center">
@@ -1417,9 +1454,9 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                     </p>
 
                     {testResult && (
-                        <div className={`mt-5 rounded-xl border p-4 text-sm ${testResult.success ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
-                            <div className={`flex items-center gap-2 font-bold ${testResult.success ? 'text-emerald-700' : 'text-red-700'}`}>
-                                <i className={`fa-solid ${testResult.success ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>
+                        <div className={`mt-5 rounded-xl border p-4 text-sm ${testResult.localOnly ? 'bg-amber-50 border-amber-200' : testResult.success ? 'bg-emerald-50 border-emerald-100' : 'bg-red-50 border-red-100'}`}>
+                            <div className={`flex items-center gap-2 font-bold ${testResult.localOnly ? 'text-amber-700' : testResult.success ? 'text-emerald-700' : 'text-red-700'}`}>
+                                <i className={`fa-solid ${testResult.localOnly ? 'fa-triangle-exclamation' : testResult.success ? 'fa-circle-check' : 'fa-circle-exclamation'}`}></i>
                                 {testResult.message}
                             </div>
                             {testResult.delivered && testResult.delivered.length > 0 && (
