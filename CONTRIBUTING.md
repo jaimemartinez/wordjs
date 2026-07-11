@@ -50,8 +50,11 @@ CI runs three gates — **Backend (typecheck + test)**, **Frontend (lint + build
 cd backend && npm test          # node --test over src/tests/*.test.ts
 cd backend && npm run typecheck  # tsc --noEmit
 
-# Frontend
-cd frontend && npm run build     # lints + builds (same as CI)
+# Frontend (CI runs these as separate steps)
+cd frontend && npx tsc --noEmit  # type check (next build skips this)
+cd frontend && npm run lint      # eslint .
+cd frontend && npm run test      # vitest run
+cd frontend && npm run build     # next build
 
 # Gateway
 cd gateway && npm test

@@ -36,8 +36,8 @@ npx create-wordjs my-site
 ```
 
 No PHP, no MySQL, no build step — it downloads the pre-compiled release, starts a single Node
-process, and opens the browser install wizard. (The CLI publishes with the next tagged release;
-until then, grab a pre-compiled ZIP — see [Getting Started](#-getting-started).)
+process, and opens the browser install wizard. (Prefer a manual download? Grab a pre-compiled
+ZIP instead — see [Getting Started](#-getting-started).)
 
 ### See it in action
 
@@ -277,8 +277,7 @@ npx create-wordjs my-site
 
 Downloads the latest pre-compiled release, installs runtime dependencies, starts the
 single-process server, and opens the install wizard in your browser with the security
-token pre-filled. (First release of the CLI ships with the next tagged version — until
-then, use Option A below.)
+token pre-filled. (Prefer to download the bundle yourself? Use Option A below.)
 
 ### Option A — download a pre-compiled release (no build step)
 

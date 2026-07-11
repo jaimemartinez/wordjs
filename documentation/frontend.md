@@ -39,10 +39,11 @@ The public site is **real server-side rendering (SSR)**, not client-only skeleto
 ### Server data layer: `src/lib/server-api.ts`
 A **server-only** module (must never be imported from a `"use client"` file). It:
 
-*   **Resolves the backend base URL** for SSR fetches (`resolveServerBase()`): monolith uses the loopback origin (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); split mode reads the backend port from `wordjs-config.json` (default `4000`); `INTERNAL_API_URL` overrides both.
+*   **Resolves the backend base URL** for SSR fetches (`resolveServerBase()`): monolith (`WORDJS_MODE === 'mono'`) uses the loopback origin (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); otherwise (split) an `INTERNAL_API_URL` (full `.../api/v1`) wins, and failing that it reads the backend port from `wordjs-config.json` (default `4000`, local file preferred over `../backend`).
 *   **Deduplicates requests** — the single-resource content loaders (`getSettings`, `getPostBySlug`, `getPostById`, `getPosts`) are wrapped in React `cache()`, so `generateMetadata()` and the page body share a single request-scoped backend call instead of fetching the same post twice. (`searchPosts()` is a plain async function — it issues two parallel fetches per call and is not memoized.) Fetches use `cache: 'no-store'` (per-request, fresh content).
 *   **Forwards the public host** — `serverFetch()` relays the inbound `x-forwarded-host` / `x-forwarded-proto` to the backend. Because SSR fetches hit the loopback origin, without this the backend's host-based logic (the **Site-URL/migration guard**, **CSRF origin** check, **canonical/OpenGraph** URLs) would see `localhost:4000` instead of the public host and reject SSR requests (e.g. `409 migration_required`).
 *   **Builds SEO metadata** — `buildPostMetadata()` (title, description, canonical, OpenGraph/Twitter) and `htmlToText()` (tag-stripping excerpt builder for `<meta>` values). These are server-safe and do **not** call the `"use client"` sanitizer.
+*   **Builds JSON-LD structured data** — `buildWebSiteJsonLd()` (WebSite + SearchAction) and `buildPostJsonLd()` (BlogPosting/WebPage), emitted via the `src/components/public/JsonLd.tsx` component with `jsonLdString()` escaping `<` so `</script>` can't break out. These hand-rendered `<script>` tags are **not** absolutized by `metadataBase`, so they take an explicit absolute base from `resolveSiteBase()` (same host-allowlist trust model as `metadataBase` — configured site URL, request host honored only when its hostname matches).
 
 ### Content renderers (client components fed server-fetched props)
 The actual content markup lives in **client components** that receive the already-fetched `post` as a prop from the Server Component: `src/components/public/PostContent.tsx` (single post / page / category-post) and `src/components/public/HomeContent.tsx` (static home page). Because the data arrives as a prop (not via a browser-only `useEffect` fetch), these **render on the server during SSR** — real HTML body and sanitized content reach the crawler — and then **hydrate** the interactive bits (photo carousels, comments, locale-aware dates, plugin `[shortcode]` embeds).
@@ -206,6 +207,18 @@ WordJS integrates **Puck** (by Measured) as its visual page builder.
 | **PostsGrid**     | Display recent posts | `count`, `columns`, `css`                                          |
 | **CategoryPosts** | Posts by category    | `categorySlug`, `count`, `layout`, `css`                          |
 | **SearchBar**     | Search input         | `placeholder`, `buttonText`, `searchPage`, `align`, `width`, `css` |
+
+#### Other Built-in Components
+
+| Component       | Description                          | Key Properties                                                     |
+| --------------- | ------------------------------------ | ------------------------------------------------------------------ |
+| **Hero**        | Hero banner w/ background + overlay  | `title`, `subtitle`, `bgImage`, `overlay`, `height`, `align`, `buttons`, `elementId`, `css` |
+| **Quote**       | Blockquote / pull-quote              | `text`, `cite`, `style`, `css`                                    |
+| **Table**       | Data table                           | `header`, `rows`, `striped`, `css`                                |
+| **IconList**    | Icon feature list                    | `items`, `columns`, `css`                                         |
+| **SocialLinks** | Social profile links                 | `items`, `align`, `css`                                           |
+| **Stats**       | Stat / metric counters               | `items`, `css`                                                    |
+| **HTMLEmbed**   | Raw HTML block (sanitized on render) | `html`, `css`                                                     |
 
 ### Component Security
 
