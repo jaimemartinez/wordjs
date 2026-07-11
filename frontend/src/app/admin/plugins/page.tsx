@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { pluginsApi, Plugin } from "@/lib/api";
+import { pluginsApi, Plugin, PluginPortConflict } from "@/lib/api";
 import { permMeta, PermissionRisk } from "@/lib/permissionMeta";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan } from "react-icons/fa";
+import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 
 // ---------------------------------------------------------------------------
@@ -75,6 +75,10 @@ export default function PluginsPage() {
 
     const [deleteModalOpen, setDeleteModalOpen] = useState(false);
     const [permissionModalOpen, setPermissionModalOpen] = useState(false);
+    // Post-activation consensual port fix: a known distro MTA squatting a manifest-claimed port
+    // (e.g. Postfix on 25). Set → modal explaining the PERMANENT disable, admin confirms or cancels.
+    const [portConflictPrompt, setPortConflictPrompt] = useState<{ plugin: Plugin; conflict: PluginPortConflict } | null>(null);
+    const [freeingPort, setFreeingPort] = useState(false);
     const [pluginToDelete, setPluginToDelete] = useState<Plugin | null>(null);
     const [pluginToActivate, setPluginToActivate] = useState<Plugin | null>(null);
     const [password, setPassword] = useState("");
@@ -200,14 +204,30 @@ export default function PluginsPage() {
 
     const confirmActivate = async () => {
         if (!pluginToActivate) return;
-        const name = pluginToActivate.name;
+        const plugin = pluginToActivate;
+        const name = plugin.name;
         try {
-            await pluginsApi.activate(pluginToActivate.slug);
+            await pluginsApi.activate(plugin.slug);
             setPermissionModalOpen(false);
             setPluginToActivate(null);
             loadPlugins();
             refreshMenus();
             addToast(t('plugins.activated'), "success");
+            // Zero-config assist: if this plugin claims a system port (manifest claimPorts, e.g. mail
+            // on 25) and a known distro MTA is squatting it, offer a one-click consensual fix instead
+            // of silently leaving the plugin on a degraded fallback port.
+            try {
+                const { conflicts } = await pluginsApi.portConflicts(plugin.slug);
+                const fixable = (conflicts || []).find(c => c.inUse && c.canFree);
+                if (fixable) {
+                    setPortConflictPrompt({ plugin, conflict: fixable });
+                } else {
+                    // Squatted but NOT auto-fixable (unknown occupant, not root, …): the admin still
+                    // needs to know — surface the reason instead of silently discarding it.
+                    const blocked = (conflicts || []).find(c => c.inUse && !c.canFree);
+                    if (blocked?.reason) addToast(`${plugin.name} ${t('plugins.freeport.blocked')} ${blocked.reason}`, "warning", 0);
+                }
+            } catch { /* informational check — never block a successful activation on it */ }
         } catch (error: any) {
             console.error("Failed to activate plugin:", error);
             const details = error && error.details;
@@ -224,6 +244,29 @@ export default function PluginsPage() {
                 // Persistent toast (duration: 0) so user can read the security error
                 addToast("Activation failed: " + (error.message || "Unknown error"), "error", 0);
             }
+        }
+    };
+
+    // Admin confirmed the modal: permanently disable the squatting MTA and reload the plugin so it
+    // binds the freed port. The backend re-validates everything (known-MTA allowlist, manifest claim)
+    // and only disables when the request carries this modal's consent (allowDisable).
+    const confirmFreePort = async () => {
+        if (!portConflictPrompt) return;
+        const { plugin, conflict } = portConflictPrompt;
+        setFreeingPort(true);
+        try {
+            const res = await pluginsApi.freePort(plugin.slug, conflict.port, true);
+            setPortConflictPrompt(null);
+            // Tell the admin what ACTUALLY happened — the squatter may have vanished on its own.
+            if (res.freed) {
+                addToast(`${res.label || conflict.occupant?.label || 'Service'} ${t('plugins.freeport.success')} ${plugin.name} ${t('plugins.freeport.success.post')} ${conflict.port}.`, "success");
+            } else {
+                addToast(`${t('plugins.freeport.already')} ${plugin.name} ${t('plugins.freeport.success.post')} ${conflict.port}.`, "success");
+            }
+        } catch (error: any) {
+            addToast(`${t('plugins.freeport.error')} ${conflict.port}: ` + (error.message || "Unknown error"), "error", 0);
+        } finally {
+            setFreeingPort(false);
         }
     };
 
@@ -303,6 +346,56 @@ export default function PluginsPage() {
                 <div className="absolute top-10 right-10 w-96 h-96 bg-purple-400/20 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-2000"></div>
                 <div className="absolute -bottom-8 left-20 w-96 h-96 bg-pink-400/20 rounded-full mix-blend-multiply filter blur-3xl opacity-30 animate-blob animation-delay-4000"></div>
             </div>
+
+            {/* Port-conflict fix modal: a known distro MTA is squatting a port this plugin claims.
+                Explains exactly WHAT will be disabled, that it is PERMANENT, and asks for consent. */}
+            {portConflictPrompt && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl transform transition-all scale-100 border border-white/20">
+                        <div className="flex items-center gap-4 mb-6 text-amber-600">
+                            <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
+                                <FaUnlock className="text-xl" />
+                            </div>
+                            <h3 className="text-xl font-bold text-gray-900">{t('plugins.freeport.title')} {portConflictPrompt.conflict.port}?</h3>
+                        </div>
+
+                        <div className="mb-6 text-gray-600 leading-relaxed space-y-3 text-sm">
+                            <p>
+                                <strong className="text-gray-900">{portConflictPrompt.conflict.occupant?.label || '?'}</strong>{' '}
+                                {t('plugins.freeport.holding')} <strong className="text-gray-900">{portConflictPrompt.conflict.port}</strong>;{' '}
+                                <strong className="text-gray-900">{portConflictPrompt.plugin.name}</strong> {t('plugins.freeport.needs')}
+                            </p>
+                            <p>
+                                {portConflictPrompt.conflict.occupant?.loopbackOnly
+                                    ? t('plugins.freeport.loopback')
+                                    : <><strong className="text-red-600">{t('plugins.freeport.public')}</strong></>}
+                            </p>
+                            <p className="p-3 rounded-xl border border-amber-200 bg-amber-50 text-amber-800">
+                                {t('plugins.freeport.permanent.pre')} <strong>{portConflictPrompt.conflict.occupant?.label || '—'}</strong>
+                                {' '}(<code className="text-[11px]">systemctl disable --now {portConflictPrompt.conflict.occupant?.service}</code>){' '}
+                                {t('plugins.freeport.permanent.post')}
+                            </p>
+                        </div>
+
+                        <div className="flex justify-end gap-3 pt-2">
+                            <button
+                                onClick={() => setPortConflictPrompt(null)}
+                                disabled={freeingPort}
+                                className="px-5 py-2.5 text-gray-600 hover:text-gray-900 font-medium hover:bg-gray-100 rounded-xl transition-all disabled:opacity-50"
+                            >
+                                {t('cancel')}
+                            </button>
+                            <button
+                                onClick={confirmFreePort}
+                                disabled={freeingPort}
+                                className="px-5 py-2.5 bg-amber-600 hover:bg-amber-700 text-white font-bold rounded-xl transition-all disabled:opacity-50 flex items-center gap-2"
+                            >
+                                {freeingPort ? (<><FaSyncAlt className="animate-spin" /> {t('plugins.freeport.freeing')}</>) : (<><FaUnlock /> {t('plugins.freeport.confirm')}</>)}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Delete Confirmation Modal */}
             {deleteModalOpen && (
