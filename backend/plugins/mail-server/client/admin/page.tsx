@@ -102,7 +102,7 @@ export default function MailServerAdmin() {
     const [settings, setSettings] = useState<Record<string, string>>({
         mail_from_email: "",
         mail_from_name: "",
-        smtp_listen_port: "2525",
+        smtp_listen_port: "25",
         smtp_catch_all: "0",
         mail_helo_host: "",
         mail_security_dkim_domain: "",
@@ -1380,15 +1380,63 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                     </h3>
                 </div>
                 <div className="p-8 grid gap-8">
+                    {/* Inbound listener status */}
+                    {(settings.inbound_bound_port !== null && settings.inbound_bound_port !== undefined) ? (
+                        settings.inbound_ok ? (
+                            <div className="flex items-center gap-3 rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-emerald-700">
+                                <i className="fa-solid fa-circle-check text-emerald-500 text-lg"></i>
+                                <span className="text-sm font-semibold">Receiving on port 25 — ready to accept mail from the internet.</span>
+                            </div>
+                        ) : settings.inbound_degraded ? (
+                            <div className="rounded-2xl border border-amber-200 bg-amber-50 px-5 py-4 text-amber-800">
+                                <div className="flex items-start gap-3">
+                                    <i className="fa-solid fa-triangle-exclamation text-amber-500 text-lg mt-0.5"></i>
+                                    <div className="grid gap-2">
+                                        <span className="text-sm font-semibold">
+                                            Listening on port {settings.inbound_bound_port} — NOT the standard port 25. Inbound internet mail will NOT arrive until you fix this:
+                                        </span>
+                                        {settings.inbound_reason ? (
+                                            <code className="block text-[12px] font-mono text-amber-900/70 bg-amber-100/60 rounded-lg px-3 py-2 leading-relaxed whitespace-pre-wrap break-words">
+                                                {settings.inbound_reason}
+                                            </code>
+                                        ) : null}
+                                    </div>
+                                </div>
+                            </div>
+                        ) : null
+                    ) : (
+                        <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 px-5 py-4 text-slate-500">
+                            <i className="fa-solid fa-circle-info text-slate-400 text-lg"></i>
+                            <span className="text-sm font-medium">Inbound listener status unavailable.</span>
+                        </div>
+                    )}
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                         <SettingInput label="From Email (Default)" value={settings.mail_from_email} onChange={(v: string) => setSettings({ ...settings, mail_from_email: v })} placeholder="noreply@example.com" type="email" />
                         <SettingInput label="From Name (Default)" value={settings.mail_from_name} onChange={(v: string) => setSettings({ ...settings, mail_from_name: v })} placeholder="My Site" />
                     </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                        <SettingInput label="SMTP Listen Port" value={settings.smtp_listen_port} onChange={(v: string) => setSettings({ ...settings, smtp_listen_port: v })} placeholder="2525" />
-                        <SettingInput label="HELO / EHLO Host" value={settings.mail_helo_host} onChange={(v: string) => setSettings({ ...settings, mail_helo_host: v })} placeholder="mail.example.com" />
-                    </div>
+                    <SettingInput label="HELO / EHLO Host" value={settings.mail_helo_host} onChange={(v: string) => setSettings({ ...settings, mail_helo_host: v })} placeholder="mail.example.com" />
                     <SettingInput label="Catch-All Mode" value={settings.smtp_catch_all} onChange={(v: string) => setSettings({ ...settings, smtp_catch_all: v })} type="select" options={[{ label: 'Disabled (Strict)', value: '0' }, { label: 'Enabled (Catch All)', value: '1' }]} />
+
+                    {/* Advanced */}
+                    <div className="border-t border-slate-100 pt-6">
+                        <h4 className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mb-4 flex items-center gap-2">
+                            <i className="fa-solid fa-sliders text-slate-300"></i>
+                            Advanced
+                        </h4>
+                        <div className="max-w-xs">
+                            <label className="block text-[13px] font-semibold text-slate-500 mb-1.5">Inbound listen port (advanced)</label>
+                            <input
+                                type="text"
+                                value={settings.smtp_listen_port || ''}
+                                onChange={(e) => setSettings({ ...settings, smtp_listen_port: e.target.value })}
+                                placeholder="25"
+                                className="w-full px-3 py-2 text-sm border border-slate-200 rounded-lg bg-slate-50/60 text-slate-600 focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 outline-none transition-all"
+                            />
+                            <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                                Defaults to 25 — the port the internet delivers mail to. Leave it unless you're deliberately mapping ports at the OS/proxy level (e.g. 25 → 2525).
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
 

@@ -324,6 +324,14 @@ async function main() {
     console.log('   • Stop the server:  press Ctrl+C in this window.');
     console.log(`   • Start it later:   cd ${opts.dir} && npm run start:mono`);
     console.log('     (a fresh install URL is printed on every start until setup is finished)');
+    if (process.platform === 'linux') {
+        console.log('');
+        console.log('   • RECEIVING email from the internet? WordJS listens on port 25 (the MX port).');
+        console.log('     Binding a port below 1024 as a non-root user needs a one-time grant — run once:');
+        console.log('        sudo setcap cap_net_bind_service=+ep "$(readlink -f "$(command -v node)")"');
+        console.log('     Without it, inbound falls back to port 2525 (sending + local mail still work);');
+        console.log('     the admin Email → Server Admin screen shows the live listener status either way.');
+    }
     console.log(line + '\n');
 
     const child = spawn('npm run start:mono', {
