@@ -22,6 +22,10 @@ export default function PublicLayoutShell({
     layout = {},
     mods,
     themeSlug,
+    settings,
+    headerMenu,
+    footerMenu,
+    footerSocials,
 }: {
     children: React.ReactNode;
     layout?: Record<string, unknown>;
@@ -29,6 +33,13 @@ export default function PublicLayoutShell({
     // Active-theme slug resolved by the async server layout, so the theme stylesheet is server-rendered
     // (no FOUC). Omitted by the editor preview, which resolves it client-side + injects its own iframe CSS.
     themeSlug?: string | null;
+    // SSR-resolved chrome data (live site) forwarded to Header/Footer so they render nav/logo in the
+    // initial HTML and skip their per-visitor client fetch. All omitted by the editor preview → the
+    // chrome falls back to fetching client-side (unchanged).
+    settings?: Record<string, any>;
+    headerMenu?: any[];
+    footerMenu?: any[];
+    footerSocials?: any[];
 }) {
     const containerWidth = typeof layout.containerWidth === "string" ? layout.containerWidth : null;
     const mainStyle = containerWidth ? { maxWidth: containerWidth } : undefined;
@@ -39,11 +50,11 @@ export default function PublicLayoutShell({
             <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)' }}>
                 <ThemeLoader initialSlug={themeSlug} />
                 <ThemeTokenOverlay mods={mods} />
-                <Header />
+                <Header initialMenu={headerMenu} initialSettings={settings} />
                 <main className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>
                     <SidebarLayout enabled={sidebar}>{children}</SidebarLayout>
                 </main>
-                <Footer />
+                <Footer previewSettings={settings} previewMenu={footerMenu} previewSocials={footerSocials} />
             </div>
         </ActivePluginsProvider>
     );

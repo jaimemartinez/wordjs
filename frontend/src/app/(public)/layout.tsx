@@ -5,7 +5,7 @@
 // tree (Next.js forbids async components inside a client tree). See PublicLayoutShell for the rationale.
 import { redirect } from "next/navigation";
 import PublicLayoutShell from "@/components/public/PublicLayoutShell";
-import { getSettings, getPublicAssets, checkSetupRequired } from "@/lib/server-api";
+import { getSettings, getPublicAssets, getMenuByLocation, checkSetupRequired } from "@/lib/server-api";
 
 export default async function PublicLayout({
     children,
@@ -17,13 +17,35 @@ export default async function PublicLayout({
     // this cannot loop. Backend-down and installed states return false and render as before.
     if (await checkSetupRequired()) redirect("/install");
 
-    const settings = (await getSettings().catch(() => null)) as Record<string, string> | null;
-    const assets = await getPublicAssets().catch(() => ({ scripts: [], styles: [] }));
+    // Fetch chrome data on the SERVER, in parallel, all cached (ISR) — so the Header/Footer render their
+    // nav/logo in the initial HTML and each visitor's browser no longer re-fetches settings+menus on
+    // hydration (a per-visit double-fetch that also delayed the chrome paint).
+    const [settings, assets, headerMenu, footerMenu] = await Promise.all([
+        getSettings().catch(() => null) as Promise<Record<string, string> | null>,
+        getPublicAssets().catch(() => ({ scripts: [], styles: [] })),
+        getMenuByLocation('header').catch(() => null),
+        getMenuByLocation('footer').catch(() => null),
+    ]);
     let layout: Record<string, unknown> = {};
     try { if (settings?.active_theme_layout) layout = JSON.parse(settings.active_theme_layout) || {}; } catch { /* ignore malformed */ }
+    // Footer social links live in a JSON-encoded setting; parse here so the footer gets them via props.
+    let footerSocials: any[] = [];
+    try {
+        const raw = (settings as Record<string, unknown> | null)?.footer_socials;
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        if (Array.isArray(parsed)) footerSocials = parsed;
+    } catch { /* malformed — render without socials */ }
 
     return (
-        <PublicLayoutShell layout={layout} mods={settings?.active_theme_mods} themeSlug={settings?.template || "default"}>
+        <PublicLayoutShell
+            layout={layout}
+            mods={settings?.active_theme_mods}
+            themeSlug={settings?.template || "default"}
+            settings={settings || undefined}
+            headerMenu={headerMenu?.items}
+            footerMenu={footerMenu?.items}
+            footerSocials={footerSocials}
+        >
             {/* RSS auto-discovery — React hoists this to <head> on every public page */}
             <link rel="alternate" type="application/rss+xml" title={settings?.blogname || "RSS"} href="/feed" />
             {/* Plugin-enqueued styles + head scripts (validated + served from /plugins/<slug>/; the plugin

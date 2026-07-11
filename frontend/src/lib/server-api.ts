@@ -154,6 +154,16 @@ export const getPublicAssets = cache((): Promise<PublicAssets> =>
 );
 
 /**
+ * A location menu (header/footer/…) for the public chrome, fetched on the SERVER so the Header/Footer
+ * render their nav in the initial SSR HTML instead of each visitor re-fetching it client-side on
+ * hydration. Cached + tagged like the other public reads.
+ */
+export const getMenuByLocation = cache((location: string): Promise<{ items: MenuItem[] } | null> =>
+    serverFetch<{ items: MenuItem[] }>(`/menus/location/${encodeURIComponent(location)}`, { revalidate: 60, tags: ['menus', `menu:${location}`] })
+);
+export interface MenuItem { id: number | string; title: string; url: string; order?: number; }
+
+/**
  * Draft-preview loader: forwards the admin's session cookie, so the backend's
  * GET /posts/slug/:slug (optionalAuth) returns non-published posts to their author /
  * editors. A separate cache() entry from getPostBySlug keeps the keying correct.
