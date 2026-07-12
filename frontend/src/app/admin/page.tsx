@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { postsApi, usersApi, commentsApi, systemApi, api, Comment, SystemStatus } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -76,8 +77,14 @@ const HealthIndicator = ({ label, status, detail, icon }: { label: string, statu
 };
 
 export default function DashboardPage() {
-    const { user, can } = useAuth();
+    const { user, can, isLoading } = useAuth();
+    const router = useRouter();
     const { t } = useI18n();
+
+    // Access gate: the dashboard is for content managers. A subscriber (no edit_posts) must never see
+    // dashboard data — not even by typing the URL. Redirect them to their own account page. The layout
+    // only checks access_admin_panel (which subscribers have), so this per-page gate is required.
+    const allowed = can('edit_posts');
 
     // Core Dashboard State
     const [stats, setStats] = useState<Stats>({ posts: 0, pages: 0, comments: 0, users: 0 });
@@ -90,12 +97,16 @@ export default function DashboardPage() {
     const [chartPeriod, setChartPeriod] = useState<'weekly' | 'monthly'>('weekly');
 
     useEffect(() => {
-        loadData();
-    }, []);
+        if (!isLoading && !allowed) router.replace('/admin/account');
+    }, [isLoading, allowed, router]);
 
     useEffect(() => {
-        loadAnalytics();
-    }, [chartPeriod]);
+        if (allowed) loadData();
+    }, [allowed]);
+
+    useEffect(() => {
+        if (allowed) loadAnalytics();
+    }, [chartPeriod, allowed]);
 
     const loadAnalytics = async () => {
         try {
@@ -138,6 +149,9 @@ export default function DashboardPage() {
             setLoading(false);
         }
     };
+
+    // Don't render dashboard content for users without access (redirect is in flight).
+    if (!allowed) return null;
 
     return (
         <div className="p-8 md:p-12 pb-20 space-y-12 animate-in fade-in duration-700 bg-gray-50 h-full w-full overflow-auto">

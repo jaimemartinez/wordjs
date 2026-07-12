@@ -1903,6 +1903,17 @@ exports.init = async function (bridge) {
         }
 
         // PTR (reverse DNS) is set with the IP/hosting provider, not the domain's zone — not checkable here.
+
+        // Persist the GENERIC `mail_delivery_ready` flag that core's password-recovery feature
+        // ("olvidé mi contraseña") gates on — it is NOT a mail-server-specific option; any mail plugin
+        // sets it to '1' when it is configured to deliver externally. For this self-hosted MTA that means
+        // all deliverability records resolve (MX/A/SPF/DKIM/DMARC). Reflects the LAST real check;
+        // re-checking after fixing a record clears/sets it accordingly.
+        try {
+            const allOk = ['mx', 'a', 'spf', 'dmarc', 'dkim'].every(k => results[k] && results[k].status === 'ok');
+            await updateOption('mail_delivery_ready', allOk ? '1' : '0');
+        } catch (e) { /* best-effort — never fail the check because the flag couldn't be saved */ }
+
         res.json({ domain, checkedAt: new Date().toISOString(), results });
     });
 
@@ -2001,7 +2012,10 @@ exports.init = async function (bridge) {
         label: 'Email Center',
         icon: 'fa-envelope',
         order: 90,
-        cap: 'access_admin_panel'
+        cap: 'access_admin_panel',
+        // Only a user whose account email is on the site domain has a WordJS inbox here; core hides this
+        // per-user webmail from everyone else via the generic requiresProfessionalMailbox flag.
+        requiresProfessionalMailbox: true
     });
 
     // Expose sendMail utility for other plugins (host installs a shim for wordjs.mail / global.wordjs_send_mail).

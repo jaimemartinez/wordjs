@@ -324,6 +324,15 @@ export const usersApi = {
     delete: (id: number) => apiDelete(`/users/${id}`),
 };
 
+// Public password-recovery endpoints (unauthenticated). Available only when the mail server is active
+// and its DNS is fully verified — the login page probes `passwordResetAvailable` before offering it.
+export const authApi = {
+    passwordResetAvailable: () => apiGet<{ available: boolean }>("/auth/password-reset-available"),
+    forgotPassword: (login: string) => apiPost<{ ok: boolean; message: string }>("/auth/forgot-password", { login }),
+    resetPassword: (data: { uid: number; token: string; password: string }) =>
+        apiPost<{ ok: boolean; message: string }>("/auth/reset-password", data),
+};
+
 export const commentsApi = {
     list: (params: { post?: number; status?: string; page?: number; per_page?: number } = {}) => {
         const query = new URLSearchParams();

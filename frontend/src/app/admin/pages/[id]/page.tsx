@@ -12,6 +12,7 @@ import { Data } from "@measured/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { useAuth } from "@/contexts/AuthContext";
 
 export default function PageEditorPage() {
     const { t, language } = useI18n();
@@ -19,6 +20,15 @@ export default function PageEditorPage() {
     const params = useParams();
     const isNew = params.id === "new";
     const pageId = isNew ? null : Number(params.id);
+
+    // Access gate: the page editor is for content managers. A subscriber (no edit_posts) can't save
+    // anyway (POST/PUT /posts is capability-gated) but the editor UI still opened by direct URL — block
+    // it and send them to their account page. (authLoading avoids a redirect before caps are known.)
+    const { can, isLoading: authLoading } = useAuth();
+    const allowedToEdit = can('edit_posts');
+    useEffect(() => {
+        if (!authLoading && !allowedToEdit) router.replace('/admin/account');
+    }, [authLoading, allowedToEdit, router]);
 
     const [title, setTitle] = useState("");
     const [slug, setSlug] = useState("");
@@ -188,6 +198,11 @@ export default function PageEditorPage() {
     };
 
     const localizedConfig = useMemo(() => localizeConfig(pageConfig, language), [language]);
+
+    // Never mount the editor for a user without edit rights (redirect to /admin/account is in flight).
+    if (!allowedToEdit) {
+        return <PuckEditorSkeleton />;
+    }
 
     if (isLoading) {
         return <PuckEditorSkeleton />;
