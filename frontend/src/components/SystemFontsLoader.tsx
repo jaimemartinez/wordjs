@@ -2,48 +2,21 @@
 
 import { useEffect } from "react";
 import { apiGet } from "@/lib/api";
+import { buildFontFaceCss, type WjsFont } from "@/lib/fontFaceCss";
 
+// Client-side @font-face injector. The public <head> already carries these faces from SSR (see
+// app/layout.tsx) so first paint is correct; this refreshes them on the client to pick up fonts
+// uploaded after the SSR cache window and to cover the admin editor. Uses the SAME builder as SSR so
+// the declarations are identical (no divergence in weight/format between server and client).
 export function SystemFontsLoader() {
     useEffect(() => {
         const loadFonts = async () => {
             try {
                 // Use apiGet wrapper which handles auth and base URL
-                const fonts = await apiGet<any[]>('/fonts');
+                const fonts = await apiGet<WjsFont[]>('/fonts');
 
-                // Group fonts by family
-                const fontStyles: string[] = [];
-
-                fonts.forEach((font: any) => {
-                    let fontWeight = '400'; // Default Regular
-                    let fontStyle = 'normal';
-                    const fontFamily = font.family;
-
-                    // Generic weight/style mapping
-                    const variantLower = font.variant ? font.variant.toLowerCase() : '';
-
-                    if (variantLower.includes('thin')) fontWeight = '100';
-                    else if (variantLower.includes('extra light') || variantLower.includes('extralight')) fontWeight = '200';
-                    else if (variantLower.includes('light')) fontWeight = '300';
-                    else if (variantLower.includes('medium')) fontWeight = '500';
-                    else if (variantLower.includes('semi bold') || variantLower.includes('semibold')) fontWeight = '600';
-                    else if (variantLower.includes('extra bold') || variantLower.includes('extrabold')) fontWeight = '800';
-                    else if (variantLower.includes('black')) fontWeight = '900';
-                    else if (variantLower.includes('bold')) fontWeight = '700';
-
-                    if (variantLower.includes('italic')) fontStyle = 'italic';
-
-                    fontStyles.push(`
-                        @font-face {
-                            font-family: '${fontFamily}';
-                            src: url('${font.url}') format('truetype');
-                            font-weight: ${fontWeight};
-                            font-style: ${fontStyle};
-                            font-display: swap;
-                        }
-                    `);
-                });
-
-                if (fontStyles.length > 0) {
+                const css = buildFontFaceCss(fonts);
+                if (css) {
                     const styleId = 'system-fonts-loader';
                     let styleEl = document.getElementById(styleId);
 
@@ -53,7 +26,7 @@ export function SystemFontsLoader() {
                         document.head.appendChild(styleEl);
                     }
 
-                    styleEl.textContent = fontStyles.join('\n');
+                    styleEl.textContent = css;
                 }
 
             } catch (error: any) {
