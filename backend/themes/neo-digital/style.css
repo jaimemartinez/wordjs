@@ -497,3 +497,69 @@ footer .w-10:hover {
     border-radius: 0 !important;
     text-transform: uppercase;
 }
+
+/* ===== Mobile (auto responsive pass) ===== */
+@media (max-width: 767.98px) {
+
+    /* Glow blobs: 600px/500px fixed decorations are larger than a 375px
+       viewport and blur(120px) is expensive on mobile GPUs. Shrink them and
+       lighten the blur — same ambient look, phone-sized. */
+    .glow-blob {
+        width: 300px;
+        height: 300px;
+        filter: blur(80px);
+    }
+
+    .glow-blob-2 {
+        width: 260px;
+        height: 260px;
+        right: -100px;
+        filter: blur(80px);
+    }
+
+    /* Cards are full-width on mobile: the sticky touch-hover
+       translate(-4px,-4px) pushes the left border past the viewport edge.
+       Keep the hard brutalist shadow, drop the shift. */
+    .wp-block-card:hover {
+        transform: none;
+        box-shadow: 6px 6px 0px var(--wjs-color-primary);
+    }
+
+    /* Uppercase + tracked button labels can outgrow full-width buttons at
+       375px: allow wrapping and relax (not remove) the tracking. */
+    .wp-block-button a {
+        white-space: normal;
+        letter-spacing: 0.05em;
+    }
+
+    .wp-block-cta-banner a {
+        white-space: normal;
+        letter-spacing: 1px;
+    }
+
+    /* Pricing featured tier: the block's inline transform: scale(1.05)
+       overflows a full-width single-column card. The 2px border + glow
+       (styled above) already convey the emphasis on mobile.
+       !important is required to beat the inline style. */
+    .wp-block-pricing>div[style*="scale(1.05)"] {
+        transform: none !important;
+    }
+
+    /* Header divider gutters: 20px each side of the logo/actions borders is
+       too wide in a 375px header — halve, keep the terminal divider lines. */
+    .wjs-header-logo {
+        padding-left: 10px;
+    }
+
+    .wjs-header-actions {
+        padding-right: 10px;
+    }
+}
+/* ===== Narrow-desktop/tablet header fit (auto responsive pass) ===== */
+/* At 768-991px the inline nav is shown but this theme's display typography makes the header row
+ * wider than its container (links clipped by the fixed header). Let the row wrap to a second line
+ * instead — desktop >=992px keeps the single-line masthead. */
+@media (max-width: 991.98px) {
+  .wjs-header-container { flex-wrap: wrap; }
+  .wjs-header-nav { flex-wrap: wrap; justify-content: center; }
+}

@@ -367,3 +367,43 @@ footer .w-10:hover {
   letter-spacing: 0.1em;
   font-weight: 700 !important;
 }
+
+/* ===== Mobile (auto responsive pass) ===== */
+/* The theme's signature is uppercase labels with wide letter-spacing.
+   At 375px a long label widened ~10-15% by tracking can push past the
+   viewport if the block keeps it on one line. Keep the uppercase Swiss
+   look; just ease tracking slightly and always allow wrapping. */
+@media (max-width: 767.98px) {
+
+  /* CTA button: widest tracking in the theme (0.15em). Slightly tighter
+     on mobile and guaranteed to wrap instead of overflowing. Desktop rule
+     has no !important on these properties, so this later override wins. */
+  .wp-block-cta-banner a {
+    letter-spacing: 0.1em;
+    white-space: normal;
+    max-width: 100%;
+  }
+
+  /* Uppercase + tracked buttons (accordion headers, tabs, search):
+     never let a long label force a single unbreakable line. */
+  .wp-block-accordion .accordion-item button,
+  .wp-block-tabs button,
+  .wp-block-search button {
+    white-space: normal;
+    max-width: 100%;
+  }
+
+  /* Tab strip: if the block lays tabs out as a single flex row, let the
+     uppercase/tracked tabs wrap onto extra rows instead of widening the
+     page. No-op when the strip is not a flex container. */
+  .wp-block-tabs>div:first-child {
+    flex-wrap: wrap;
+  }
+
+  /* Nav links in the mobile drawer keep the 0.15em tracking (it fits a
+     ~340px drawer comfortably at 0.875rem), but must be allowed to wrap
+     in case the chrome sets nowrap on horizontal nav links. */
+  .wjs-header-nav a {
+    white-space: normal;
+  }
+}
