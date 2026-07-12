@@ -39,22 +39,33 @@ const crypto = require('crypto');
 const { spawn, spawnSync } = require('child_process');
 
 const HELP = `
-create-wordjs — bootstrap a WordJS site with one command
+create-wordjs — bootstrap or upgrade a WordJS site with one command
 
 Usage:
-  npx create-wordjs <dir> [options]
+  npx create-wordjs <dir> [options]            Create a new site
+  npx create-wordjs upgrade [dir] [options]    Upgrade an existing site (dir defaults to .)
 
 Options:
   --zip <path-or-url>   Use a local release ZIP (or a direct ZIP URL) instead of asking GitHub.
-  --version <tag>       Install a specific release tag (e.g. v1.0.0) instead of the latest.
-  --http                Serve plain HTTP instead of self-signed HTTPS (sets WORDJS_HTTP=1).
-  --no-start            Scaffold + install dependencies only; don't start the server.
+  --version <tag>       Install/upgrade to a specific release tag (e.g. v1.0.0) instead of the latest.
+  --http                Serve plain HTTP instead of self-signed HTTPS (sets WORDJS_HTTP=1). (create)
+  --no-start            Scaffold + install dependencies only; don't start the server. (create)
+  --yes, -y             Skip the confirmation prompt (required when upgrading non-interactively).
+  --force               Re-apply even if already on the target version. (upgrade)
+  --no-install          Swap the code only; skip 'npm run release:install'. (upgrade)
   -h, --help            Show this help.
 
 Examples:
   npx create-wordjs my-site
   npx create-wordjs my-site --version v1.0.0
-  npx create-wordjs my-site --zip ./wordjs-v1.0.0.zip --no-start
+  npx create-wordjs upgrade                     # from inside your site directory
+  npx create-wordjs upgrade ./my-site --yes
+  npx create-wordjs upgrade --version v1.5.2
+
+Upgrading preserves your database (backend/data), uploads (backend/uploads), config
+(wordjs-config.json + gateway secrets) and any user-installed plugins; it replaces the app code and
+runs the dependency install. Database schema migrations apply automatically the next time the server
+starts — then restart WordJS (e.g. 'systemctl restart wordjs', or stop it and 'npm run start:mono').
 `;
 
 function fail(message, hint) {
@@ -65,7 +76,9 @@ function fail(message, hint) {
 }
 
 function parseArgs(argv) {
-    const opts = { dir: null, zip: null, version: null, http: false, start: true };
+    const opts = { mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true };
+    // First positional "upgrade" selects the upgrade command (npx create-wordjs upgrade [dir]).
+    if (argv[0] === 'upgrade') { opts.mode = 'upgrade'; argv = argv.slice(1); }
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '-h' || a === '--help') { console.log(HELP); process.exit(0); }
@@ -73,11 +86,17 @@ function parseArgs(argv) {
         else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. v1.0.0).'); }
         else if (a === '--http') opts.http = true;
         else if (a === '--no-start') opts.start = false;
+        else if (a === '--yes' || a === '-y') opts.yes = true;
+        else if (a === '--force') opts.force = true;
+        else if (a === '--no-install') opts.install = false;
         else if (a.startsWith('-')) fail(`Unknown option: ${a}`, 'Run with --help to see the available options.');
         else if (!opts.dir) opts.dir = a;
         else fail(`Unexpected extra argument: ${a}`);
     }
-    if (!opts.dir) fail('Please specify a directory for your new site.', 'Example: npx create-wordjs my-site');
+    if (!opts.dir) {
+        if (opts.mode === 'upgrade') opts.dir = '.'; // upgrade defaults to the current directory
+        else fail('Please specify a directory for your new site.', 'Example: npx create-wordjs my-site');
+    }
     if (opts.version && /^\d/.test(opts.version)) opts.version = 'v' + opts.version; // accept "1.0.0" for "v1.0.0"
     return opts;
 }
@@ -226,10 +245,192 @@ function ensureHttpsConfig(targetDir) {
     }
 }
 
+// --- upgrade -----------------------------------------------------------------------------------
+
+function confirm(question) {
+    return new Promise((resolve) => {
+        const rl = require('readline').createInterface({ input: process.stdin, output: process.stdout });
+        rl.question(question, (ans) => { rl.close(); resolve(/^y(es)?$/i.test(String(ans).trim())); });
+    });
+}
+
+// Paths (relative to the install root) that hold USER STATE and must survive an upgrade untouched.
+// `node_modules` at any depth is skipped separately (deps are re-synced by release:install).
+const PRESERVE_ON_UPGRADE = new Set([
+    'backend/data',                 // the database (+ WAL/SHM, ssl/, imports/)
+    'backend/uploads',              // user uploads / media / fonts
+    'backend/wordjs-config.json',   // site config + secrets
+    'backend/.env',
+    '.env',
+    'gateway/gateway-config.json',  // gateway TLS/secrets
+    'wordjs-config.json',
+]);
+// Pure build outputs (no user data): removed before the copy so the new build fully REPLACES the old
+// one — a merge would leave orphaned chunks from the previous version behind.
+const CLEAN_REPLACE_ON_UPGRADE = ['frontend/.next', 'backend/dist', 'gateway/dist'];
+
+// Recursively copy `src` over `dest`, creating dirs as needed. Never deletes files that aren't in
+// `src` (so user-installed plugins and other extra files survive). Skips node_modules and the
+// preserve-list so user state is never overwritten.
+function copyMerge(src, dest, rel = '') {
+    for (const name of fs.readdirSync(src)) {
+        const relPath = rel ? `${rel}/${name}` : name;
+        if (name === 'node_modules') continue;
+        if (PRESERVE_ON_UPGRADE.has(relPath)) continue;
+        const s = path.join(src, name);
+        const d = path.join(dest, name);
+        const st = fs.lstatSync(s);
+        if (st.isDirectory()) {
+            if (!fs.existsSync(d)) fs.mkdirSync(d, { recursive: true });
+            copyMerge(s, d, relPath);
+        } else {
+            fs.copyFileSync(s, d);
+        }
+    }
+}
+
+// Download (or use a local/URL) release ZIP and extract it into a fresh temp dir. Returns the
+// extracted app root + a cleanup fn. Reuses the same resolution the create flow uses.
+async function obtainReleaseToTemp(opts) {
+    let tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-upgrade-'));
+    const cleanup = () => { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ } };
+    try {
+        let zipPath;
+        let tag = opts.version || null;
+        if (opts.zip && !/^https?:\/\//i.test(opts.zip)) {
+            zipPath = path.resolve(process.cwd(), opts.zip);
+            if (!fs.existsSync(zipPath)) fail(`ZIP not found: ${zipPath}`);
+        } else {
+            let url = opts.zip;
+            let name = 'wordjs.zip';
+            if (!url) {
+                console.log(opts.version ? `  Looking up release ${opts.version} of ${REPO}…` : `  Looking up the latest release of ${REPO}…`);
+                const asset = await resolveReleaseAsset(opts.version);
+                url = asset.url; name = asset.name; tag = asset.tag;
+                console.log(`  Found ${asset.tag} → ${asset.name}`);
+            }
+            zipPath = path.join(tmpDir, name);
+            await download(url, zipPath, name);
+        }
+        const extractDir = path.join(tmpDir, 'extracted');
+        fs.mkdirSync(extractDir, { recursive: true });
+        extractZip(zipPath, extractDir);
+        return { extractDir, tag, cleanup };
+    } catch (e) {
+        cleanup();
+        throw e;
+    }
+}
+
+async function upgrade(opts) {
+    const installDir = path.resolve(process.cwd(), opts.dir);
+    const pkgPath = path.join(installDir, 'package.json');
+    const cfgPath = path.join(installDir, 'backend', 'wordjs-config.json');
+
+    // Verify this is a real, configured WordJS install (not an empty dir or the wrong folder).
+    if (!fs.existsSync(pkgPath) || !fs.existsSync(cfgPath)) {
+        fail(`"${opts.dir}" does not look like a WordJS install.`,
+            'Run this from your site directory (it must contain backend/wordjs-config.json), or pass the path: npx create-wordjs upgrade <dir>.');
+    }
+    let curPkg = {};
+    try { curPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { /* handled below */ }
+    if (!curPkg.scripts || !curPkg.scripts['release:install'] || !curPkg.scripts['start:mono']) {
+        fail(`"${opts.dir}" has a package.json but not the WordJS release scripts.`, 'Are you pointing at the right site directory?');
+    }
+    const curVersion = curPkg.version || 'unknown';
+
+    console.log('\n🚀 create-wordjs upgrade\n');
+    console.log(`  Site: ${installDir}`);
+    console.log(`  Current version: v${curVersion}`);
+
+    // Fetch the target release into a temp dir and read its version.
+    const { extractDir, tag, cleanup } = await obtainReleaseToTemp(opts);
+    try {
+        const newPkgPath = path.join(extractDir, 'package.json');
+        let newPkg = {};
+        try { newPkg = JSON.parse(fs.readFileSync(newPkgPath, 'utf8')); } catch { /* handled below */ }
+        if (!newPkg.scripts || !newPkg.scripts['release:install'] || !newPkg.scripts['start:mono']) {
+            fail('The downloaded ZIP does not look like a WordJS release bundle.', `Expected a wordjs-*.zip from https://github.com/${REPO}/releases.`);
+        }
+        const newVersion = newPkg.version || (tag ? String(tag).replace(/^v/, '') : 'unknown');
+        console.log(`  Target version:  v${newVersion}${tag ? ` (${tag})` : ''}`);
+
+        if (curVersion === newVersion && !opts.force) {
+            console.log(`\n✅ Already on v${curVersion}. Nothing to upgrade.  (use --force to re-apply the same version)\n`);
+            return;
+        }
+
+        // Confirm before mutating an existing install.
+        if (!opts.yes) {
+            if (process.stdin.isTTY) {
+                const ok = await confirm(`\n  Upgrade this site v${curVersion} → v${newVersion}? Your database, uploads and config are preserved. [y/N] `);
+                if (!ok) { console.log('  Aborted — nothing changed.\n'); return; }
+            } else {
+                fail('Refusing to upgrade non-interactively without confirmation.',
+                    'Re-run with --yes to proceed (your database, uploads and config are preserved).');
+            }
+        }
+
+        // Snapshot the small critical config files (belt-and-suspenders; the DB/uploads are never
+        // touched by the overlay because they are in the preserve-list).
+        const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const backupDir = path.join(installDir, `.upgrade-backup-${stamp}`);
+        try {
+            fs.mkdirSync(backupDir, { recursive: true });
+            for (const rel of ['backend/wordjs-config.json', 'gateway/gateway-config.json', 'package.json']) {
+                const from = path.join(installDir, rel);
+                if (fs.existsSync(from)) {
+                    const to = path.join(backupDir, rel.replace(/[/\\]/g, '__'));
+                    fs.copyFileSync(from, to);
+                }
+            }
+            console.log(`\n  Backed up config to ${path.relative(installDir, backupDir) || backupDir}`);
+        } catch (e) {
+            console.warn(`  (could not write config backup: ${e.message} — continuing; your DB/uploads/config are still preserved in place)`);
+        }
+
+        // Clean-replace the build outputs so no stale chunks linger, then overlay the rest.
+        for (const rel of CLEAN_REPLACE_ON_UPGRADE) {
+            const target = path.join(installDir, rel);
+            const fromRelease = path.join(extractDir, rel);
+            if (fs.existsSync(fromRelease) && fs.existsSync(target)) {
+                fs.rmSync(target, { recursive: true, force: true });
+            }
+        }
+        console.log('  Applying new code (preserving data, uploads, config and custom plugins)…');
+        copyMerge(extractDir, installDir);
+
+        if (!opts.http) ensureHttpsConfig(installDir);
+
+        // Re-sync dependencies (a new version may add/upgrade packages). Skippable for a code-only swap.
+        if (opts.install) {
+            console.log('\n📦 Syncing runtime dependencies (npm run release:install)…\n');
+            runNpmScript('release:install', installDir);
+        } else {
+            console.log('\n  --no-install: skipped dependency sync. Run "npm run release:install" yourself if deps changed.');
+        }
+
+        const line = '━'.repeat(64);
+        console.log(`\n${line}`);
+        console.log(`✅ Upgraded WordJS: v${curVersion} → v${newVersion}.`);
+        console.log('');
+        console.log('   Your database, uploads and config were preserved. Restart the server to apply it —');
+        console.log('   database schema migrations run automatically on the next start:');
+        console.log('      • systemd:   sudo systemctl restart wordjs');
+        console.log(`      • otherwise: stop it, then  cd ${opts.dir === '.' ? installDir : opts.dir} && npm run start:mono`);
+        console.log('');
+        console.log('   Rollback: re-run with --version <old-tag> (your data stays intact).');
+        console.log(line + '\n');
+    } finally {
+        cleanup();
+    }
+}
+
 // --- main ---------------------------------------------------------------------------------------
 
 async function main() {
     const opts = parseArgs(process.argv.slice(2));
+    if (opts.mode === 'upgrade') return upgrade(opts);
     const targetDir = path.resolve(process.cwd(), opts.dir);
 
     // Refuse to scribble over anything that already exists (an existing EMPTY dir is fine).
