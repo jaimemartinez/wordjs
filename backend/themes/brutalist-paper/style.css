@@ -429,3 +429,73 @@ footer .w-10:hover {
     text-transform: uppercase;
     font-weight: 900;
 }
+
+/* ===== Mobile (auto responsive pass) ===== */
+/* 767.98px matches the chrome's md breakpoint (768px), where the inline
+   .wjs-header-nav is swapped for the hamburger drawer. */
+@media (max-width: 767.98px) {
+
+    /* CRITICAL: the chrome's mobile hamburger button lives INSIDE
+       .wjs-header-actions, which the desktop masthead rule hides with
+       display:none !important. Without this override the theme has NO
+       navigation at all below 768px. */
+    .wjs-header-actions {
+        display: flex !important;
+    }
+
+    /* The stacked newspaper masthead (logo above nav) only makes sense while
+       the inline nav is visible. Below 768px the nav is in the drawer, so a
+       tall masthead just wastes ~40% of the viewport. Return to a compact
+       single row: logo left, hamburger right. Also restore the horizontal
+       padding that the desktop rule zeroed out (padding: 1rem 0). */
+    .wjs-header-container {
+        flex-direction: row !important;
+        gap: 0.75rem !important;
+        padding: 0.75rem 1rem !important;
+    }
+
+    /* Logo: from gigantic centered masthead (2.5rem !important + full-width
+       rule underneath) to a compact left-aligned title. The ink underline
+       (text-decoration) stays — that is the brutalist mark; only the
+       masthead-sized border/padding goes. Needs !important to beat the
+       desktop !important size. */
+    .wjs-header-logo {
+        order: 0 !important;
+        width: auto;
+        justify-content: flex-start;
+        font-size: 1.5rem !important;
+        border-bottom: none;
+        padding-bottom: 0;
+        margin-bottom: 0;
+    }
+
+    /* Body offset was 280px to clear the tall fixed desktop masthead; the
+       compact mobile header is ~120px tall (header py + row + 3px border),
+       plus slack for a two-line site title. */
+    body {
+        padding-top: 140px !important;
+    }
+
+    /* The featured pricing card ships an inline transform: scale(1.05).
+       Once the pricing columns stack full-width on mobile, the extra 5%
+       pokes past the viewport edge (horizontal scroll). Drop the scale —
+       the red background + heavier border already mark it as featured —
+       and keep the poster shadow chunky but proportionate. (!important is
+       required to beat the inline style.) */
+    .wp-block-pricing>div[style*="scale(1.05)"] {
+        transform: none !important;
+        box-shadow: 6px 6px 0px #000000;
+    }
+
+    /* 10px hard poster shadow reads as clutter at 375px; keep it thick but
+       proportionate (brutalist stays brutalist, just smaller paper). */
+    .wp-block-cta-banner {
+        box-shadow: 6px 6px 0px #000000;
+    }
+
+    /* Tab labels are uppercase + bold and cannot hyphenate; let the tab
+       strip wrap to a second row instead of forcing sideways overflow. */
+    .wp-block-tabs>div:first-child {
+        flex-wrap: wrap;
+    }
+}

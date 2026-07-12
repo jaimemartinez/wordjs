@@ -793,14 +793,41 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
  * tables and long unbroken strings (URLs, emails) must degrade to container-level scroll /
  * word wrapping instead of forcing body-level horizontal scroll on small viewports. */
 @media (max-width: 767.98px) {
-  /* Authors can't wrap raw content tables in .table-responsive — make the table itself the
-   * horizontal scroll container (the standard fix for rendered markdown/content tables). */
-  .wjs-content table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  /* Long unbreakable strings in post bodies and widget output wrap instead of overflowing. */
-  .wjs-content, .widget-area { overflow-wrap: break-word; }
   /* Long page lists otherwise push past the viewport (.nav/.breadcrumb already wrap). */
   .pagination { flex-wrap: wrap; }
+
+  /* Mobile type scale for visual-editor headings. Their inline style reads the framework-owned
+   * --wjs-hN-size ALIASES (no theme defines them — see the alias block in :root), so capping the
+   * alias here shrinks oversized desktop headings on phones while min() respects any theme whose
+   * heading token is already smaller than the cap. Inline styles pick up the new value because
+   * custom properties resolve at use time. */
+  :root {
+    --wjs-h1-size: min(var(--wjs-h1), 2.25rem);
+    --wjs-h2-size: min(var(--wjs-h2), 1.75rem);
+    --wjs-h3-size: min(var(--wjs-h3), 1.5rem);
+    --wjs-h4-size: min(var(--wjs-h4), 1.25rem);
+    --wjs-h5-size: min(var(--wjs-h5), 1.125rem);
+    --wjs-h6-size: min(var(--wjs-h6), 1rem);
+  }
+  /* Classic-content headings get the same cap (plain specificity — a theme that deliberately
+   * forces its own mobile sizes still wins). */
+  .wjs-content h1 { font-size: min(var(--wjs-h1), 2.25rem); }
+  .wjs-content h2 { font-size: min(var(--wjs-h2), 1.75rem); }
+  .wjs-content h3 { font-size: min(var(--wjs-h3), 1.5rem); }
 }
+
+/* ================================================= CONTENT CONTAINMENT ====== */
+/* At EVERY width (not just phones): a wide table, a <pre> or an unbreakable string (long URL,
+ * token, word) must never widen the page — a 1600px word overflows a tablet or desktop container
+ * just as it overflows a phone. These only bite when content actually exceeds its container, so
+ * normal desktop rendering is unaffected. Covers BOTH content paths: classic .wjs-content and the
+ * visual editor's .puck-content / .wp-block-*. (Was mobile-only, which left 768px+ unprotected.) */
+.wjs-content table, .puck-content table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.wjs-content pre, .puck-content pre { max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.wjs-content, .widget-area { overflow-wrap: break-word; }
+.puck-content, .wp-block-text, .wp-block-heading, .wp-block-card { overflow-wrap: break-word; word-break: break-word; }
+/* Media inside visual-editor content can never exceed its container. */
+.puck-content img, .puck-content video, .puck-content iframe { max-width: 100%; height: auto; }
 
 /* ================================================= RESPONSIVE VISIBILITY ====== */
 /* Per-block "hide on device" from the visual editor (VisibilityField). The wrapper is

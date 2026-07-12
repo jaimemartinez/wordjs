@@ -355,3 +355,19 @@ footer .w-10:hover {
   border-radius: var(--wjs-radius-md) !important;
 }
 .wp-block-audio-player div:first-child > div:first-child { background: var(--wjs-gradient) !important; color: #ffffff !important; }
+
+/* ===== Mobile (auto responsive pass) ===== */
+@media (max-width: 767.98px) {
+  /* Featured pricing tier: the block flags it with an inline
+     `transform: scale(1.05)` — a deliberate pop-out in the desktop
+     multi-column row, but once the tiers stack into a single column the
+     enlarged card bleeds into the container gutters and overlaps the
+     cards stacked above/below it. Flatten the scale on small screens;
+     the tier keeps its gradient border + violet glow (the desktop rule
+     above still matches on the same style attribute), so it stays
+     visually "featured" without breaking the layout. !important is
+     required to beat the inline style. */
+  .wp-block-pricing > div[style*="scale(1.05)"] {
+    transform: none !important;
+  }
+}

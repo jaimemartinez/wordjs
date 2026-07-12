@@ -463,3 +463,41 @@ footer .w-10:hover {
 .wp-block-search button:hover {
   background: var(--wjs-color-primary-dark) !important;
 }
+
+/* ===== Mobile (auto responsive pass) ===== */
+@media (max-width: 767.98px) {
+
+  /* Nav drawer links: the desktop small-caps treatment (uppercase + 0.18em
+     tracking, both !important) makes long labels very wide; tighten the
+     tracking a touch and let labels wrap inside the 375px drawer.
+     !important required to beat the base rule's !important. */
+  .wjs-header-nav a {
+    letter-spacing: 0.12em !important;
+    white-space: normal !important;
+    overflow-wrap: break-word;
+  }
+
+  /* Drop cap: 3.1em (~50px) overwhelms a phone-width first paragraph —
+     keep the editorial flourish, scale it to the narrower column. */
+  article > p:first-of-type::first-letter {
+    font-size: 2.5em;
+  }
+
+  /* Accordion titles / tab labels: uppercase + 0.08em tracking widens long
+     labels; relax tracking and let them wrap instead of pushing width. */
+  .wp-block-accordion .accordion-item button,
+  .wp-block-tabs button {
+    letter-spacing: 0.04em;
+    white-space: normal;
+  }
+
+  /* CTA + search buttons: the framework's button base sets
+     white-space: nowrap and the theme adds uppercase + wide tracking, so a
+     long label can exceed 375px. Allow wrapping and ease the tracking. */
+  .wp-block-cta-banner a,
+  .wp-block-search button {
+    letter-spacing: 0.08em;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+}
