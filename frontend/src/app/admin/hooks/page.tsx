@@ -135,7 +135,7 @@ export default function HooksPage() {
 
     return (
         <div className="p-8 max-w-7xl mx-auto h-full overflow-y-auto">
-            <div className="flex justify-between items-center mb-8">
+            <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
                 <div>
                     <h1 className="text-3xl font-bold text-slate-800 flex items-center gap-3">
                         <i className="fa-solid fa-microscope text-indigo-600"></i>
@@ -190,7 +190,7 @@ export default function HooksPage() {
 
             {/* Controls */}
             <div className="bg-white rounded-2xl p-4 shadow-sm border border-slate-100 mb-8 flex flex-col md:flex-row gap-4 justify-between items-center sticky top-4 z-10 w-full">
-                <div className="flex p-1 bg-slate-100 rounded-xl">
+                <div className="flex p-1 bg-slate-100 rounded-xl max-w-full overflow-x-auto">
                     <button
                         onClick={() => setActiveTab('actions')}
                         className={`px-6 py-2 rounded-lg text-sm font-bold transition-all ${activeTab === 'actions' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}

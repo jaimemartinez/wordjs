@@ -65,7 +65,7 @@ function ConferenceManagerContent() {
         <div className="h-full flex flex-col overflow-hidden">
             <div className="flex-shrink-0 p-6 pb-0">
                 <div className="mb-8">
-                    <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
                         <div>
                             <div className="flex items-center gap-3 mb-2">
                                 <button
@@ -414,7 +414,7 @@ function ConferenceList({ onManage }: { onManage: (conf: Conference) => void }) 
                                 </div>
                                 <p className="text-[10px] text-gray-400 italic ml-1">{t('slug.help')}</p>
                             </div>
-                            <div className="grid grid-cols-2 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                 <div className="space-y-2">
                                     <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('conference.start.date')}</label>
                                     <div className="relative">
@@ -834,7 +834,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                         className="fixed inset-0 z-[60]"
                                         onClick={() => setShowLocationDropdown(false)}
                                     ></div>
-                                    <div className="absolute z-[70] mt-3 bg-white border border-gray-100 rounded-3xl shadow-2xl overflow-hidden min-w-[320px] animate-in slide-in-from-top-2 duration-200">
+                                    <div className="absolute z-[70] mt-3 bg-white border border-gray-100 rounded-3xl shadow-2xl overflow-hidden min-w-[240px] sm:min-w-[320px] animate-in slide-in-from-top-2 duration-200">
                                         <div className="p-4 border-b border-gray-50 flex items-center justify-between gap-3 bg-gray-50/50">
                                             <div className="text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('filter.by.location')}</div>
                                             <div className="flex gap-2">
@@ -1109,7 +1109,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                             ) : (
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
                                     {fields.map(field => (
-                                        <div key={field.id} className={field.type === 'notes' || field.type === 'textarea' ? 'col-span-2' : ''}>
+                                        <div key={field.id} className={field.type === 'notes' || field.type === 'textarea' ? 'md:col-span-2' : ''}>
                                             <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-1.5">
                                                 {field.label} {field.is_required ? <span className="text-rose-500">*</span> : ''}
                                             </label>
@@ -1323,7 +1323,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
-            <div className="flex justify-between items-center bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div>
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('hotels.and.rooms')}</h2>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Gestión de alojamiento y disponibilidad</p>
@@ -2045,7 +2045,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     </div>
                                 )}
 
-                                <div className="grid grid-cols-2 gap-5">
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
                                     <div className="space-y-1.5 relative">
                                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">{t('field.type')}</label>
                                         <button
@@ -2667,7 +2667,7 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                 </div>
             </div>
 
-            <div className="flex justify-between items-center bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center justify-between bg-gray-50/50 p-8 rounded-[32px] border-2 border-white shadow-sm">
                 <div>
                     <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter">{t('locations')}</h2>
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Sedes regionales y grupos locales</p>

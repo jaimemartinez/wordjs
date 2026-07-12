@@ -365,7 +365,7 @@ export default function DbMigrationPage() {
             </div>
 
             {/* Notifications */}
-            <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 pointer-events-none">
+            <div className="fixed bottom-6 right-6 z-50 flex flex-col gap-3 pointer-events-none max-w-[calc(100vw-3rem)]">
                 {result && (
                     <div className="pointer-events-auto p-4 bg-emerald-500 text-white shadow-2xl shadow-emerald-500/30 rounded-2xl animate-in slide-in-from-right fade-in flex items-center gap-4 max-w-md border border-emerald-400">
                         <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center">

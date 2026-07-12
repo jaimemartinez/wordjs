@@ -254,7 +254,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
            relative group`;
 
     const panelClasses = variant === 'floating'
-        ? "absolute bottom-20 right-0 w-[420px] max-h-[640px] flex flex-col bg-white/95 backdrop-blur-xl rounded-[40px] border border-white/40 shadow-[0_40px_100px_-20px_rgba(0,0,0,0.2)] overflow-hidden animate-in fade-in zoom-in-95 slide-in-from-bottom-10 duration-500 ease-out origin-bottom-right z-[100]"
+        ? "absolute bottom-20 right-0 w-[420px] max-w-[calc(100vw-3rem)] max-h-[640px] flex flex-col bg-white/95 backdrop-blur-xl rounded-[40px] border border-white/40 shadow-[0_40px_100px_-20px_rgba(0,0,0,0.2)] overflow-hidden animate-in fade-in zoom-in-95 slide-in-from-bottom-10 duration-500 ease-out origin-bottom-right z-[100]"
         : `fixed top-2 bottom-2 left-2 right-2 md:top-6 md:bottom-6 md:right-auto md:ml-6 md:w-[420px] flex flex-col bg-white/98 backdrop-blur-3xl rounded-[32px] md:rounded-[40px] border border-gray-100/50 shadow-[0_30px_90px_-20px_rgba(0,0,0,0.18)] overflow-hidden animate-in fade-in slide-in-from-left-6 md:slide-in-from-left-6 duration-400 cubic-bezier(0.16, 1, 0.3, 1) z-[9999] ${isCollapsed ? "md:left-24" : "md:left-80"}`;
 
     return (
@@ -288,9 +288,9 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
 
             {isOpen && (
                 <div className={panelClasses}>
-                    <div className="px-10 py-8 flex items-center justify-between bg-white/50 border-b border-gray-50/50 flex-shrink-0">
+                    <div className="px-6 sm:px-10 py-8 flex items-center justify-between bg-white/50 border-b border-gray-50/50 flex-shrink-0">
                         <div className="flex flex-col gap-1">
-                            <h3 className="text-2xl font-black text-gray-900 tracking-tight flex items-center gap-3">
+                            <h3 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-3">
                                 Notifications
                                 {unreadCount > 0 && (
                                     <span className="flex h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]"></span>
@@ -363,7 +363,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                                 </div>
                                                 <div className="flex-1 min-w-0 flex flex-col gap-1.5">
                                                     <div className="flex items-start justify-between gap-4">
-                                                        <span className={`text-[17px] leading-tight transition-colors ${n.is_read ? 'font-medium text-gray-600' : 'font-black text-gray-900 group-hover:text-blue-600'}`}>
+                                                        <span className={`text-[17px] leading-tight break-words transition-colors ${n.is_read ? 'font-medium text-gray-600' : 'font-black text-gray-900 group-hover:text-blue-600'}`}>
                                                             {n.title}
                                                         </span>
                                                         <span className="text-[11px] font-black text-gray-300 uppercase tracking-tighter pt-1">

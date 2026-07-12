@@ -350,7 +350,7 @@ export default function PluginsPage() {
             {/* Port-conflict fix modal: a known distro MTA is squatting a port this plugin claims.
                 Explains exactly WHAT will be disabled, that it is PERMANENT, and asks for consent. */}
             {portConflictPrompt && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
                     <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl transform transition-all scale-100 border border-white/20">
                         <div className="flex items-center gap-4 mb-6 text-amber-600">
                             <div className="w-12 h-12 rounded-full bg-amber-100 flex items-center justify-center flex-shrink-0">
@@ -399,7 +399,7 @@ export default function PluginsPage() {
 
             {/* Delete Confirmation Modal */}
             {deleteModalOpen && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
                     <div className="bg-white rounded-2xl p-8 max-w-md w-full shadow-2xl transform transition-all scale-100 border border-white/20">
                         <div className="flex items-center gap-4 mb-6 text-red-600">
                             <div className="w-12 h-12 rounded-full bg-red-100 flex items-center justify-center flex-shrink-0">
@@ -466,7 +466,7 @@ export default function PluginsPage() {
 
             {/* Activation Rejection Modal — structured (missing grants vs hard-blocked dangerous calls) */}
             {rejection && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
                     <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-white/20 max-h-[85vh] flex flex-col">
                         <div className="p-8 pb-4 flex-shrink-0">
                             <div className="flex items-center gap-4 text-red-600">
@@ -636,7 +636,7 @@ export default function PluginsPage() {
 
             {/* Plugin Permissions Modal (activation consent) */}
             {permissionModalOpen && pluginToActivate && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
                     <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl transform transition-all scale-100 border border-white/20 max-h-[85vh] flex flex-col">
 
                         {/* Header - Fixed */}
@@ -700,7 +700,7 @@ export default function PluginsPage() {
 
             {/* Manage Permissions Modal — Android-style per-permission grants (default-deny) */}
             {permsModalPlugin && (
-                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-50 animate-in fade-in duration-200">
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
                     <div className="bg-white rounded-2xl max-w-lg w-full shadow-2xl border border-white/20 max-h-[85vh] flex flex-col">
                         <div className="p-8 pb-4 flex-shrink-0">
                             <div className="flex items-center gap-4 text-blue-600">
