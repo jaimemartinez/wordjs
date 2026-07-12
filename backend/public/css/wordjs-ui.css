@@ -91,6 +91,35 @@
   /* Layout */
   --wjs-container-max: 1140px;
   --wjs-transition: 0.15s ease-in-out;
+
+  /* --- Visual-editor (Puck) block aliases ------------------------------------------------
+   * The Puck block renderer references these token NAMES, but the canonical framework/theme
+   * tokens are named differently (e.g. heading size is `--wjs-h1`, not `--wjs-h1-size`). With
+   * no matching token AND no fallback, a heading's `font-size: var(--wjs-h1-size)` collapsed to
+   * the inherited 16px — Puck headings rendered tiny and text ignored the theme. Map the block
+   * names to the canonical tokens here as DEFAULTS; because custom properties resolve at use
+   * time, a theme that overrides the canonical token (e.g. `--wjs-h1`) still flows through. */
+  --wjs-h1-size: var(--wjs-h1);
+  --wjs-h2-size: var(--wjs-h2);
+  --wjs-h3-size: var(--wjs-h3);
+  --wjs-h4-size: var(--wjs-h4);
+  --wjs-h5-size: var(--wjs-h5);
+  --wjs-h6-size: var(--wjs-h6);
+  --wjs-h1-weight: var(--wjs-heading-weight);
+  --wjs-h2-weight: var(--wjs-heading-weight);
+  --wjs-h3-weight: var(--wjs-heading-weight);
+  --wjs-h4-weight: var(--wjs-heading-weight);
+  --wjs-h5-weight: var(--wjs-heading-weight);
+  --wjs-h6-weight: var(--wjs-heading-weight);
+  --wjs-font-family: var(--wjs-font-family-base);
+  --wjs-color-text-heading: var(--wjs-color-heading);
+  --wjs-color-text-dim: var(--wjs-color-text-muted);
+  --wjs-color-primary-text: var(--wjs-color-on-primary);
+  --wjs-foreground: var(--wjs-color-text-main);
+  --wjs-bg-surface-hover: var(--wjs-bg-surface);
+  --wjs-border-radius: var(--wjs-radius);
+  --wjs-space-md: var(--wjs-spacer);
+  --wjs-space-sm: calc(var(--wjs-spacer) * 0.5);
 }
 
 /* ------------------------------------------------------------------ REBOOT - */
