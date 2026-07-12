@@ -36,6 +36,19 @@ export default function ThemeLoader({ initialSlug }: { initialSlug?: string | nu
         return () => window.removeEventListener("focus", onFocus);
     }, [initialSlug]);
 
+    // Evict the PREVIOUS theme's stylesheet when the slug changes at runtime (admin activated another
+    // theme → focus-refresh above). React treats `precedence` stylesheets as add-only: rendering the
+    // new href inserts a new <link> but the old one is never removed, so BOTH themes' CSS stayed
+    // applied and whichever loaded last won the cascade (wrong colors/typography until a full reload).
+    // React no longer renders the stale href after this re-render, so removing the orphaned node is
+    // safe — nothing re-inserts it.
+    useEffect(() => {
+        document.querySelectorAll('link[rel="stylesheet"][href*="/themes/"]').forEach((l) => {
+            const href = l.getAttribute("href") || "";
+            if (!href.includes(`/themes/${slug}/`)) l.remove();
+        });
+    }, [slug]);
+
     // Stable, deterministic href (identical across SSR + hydration): keyed by slug, not Date.now().
     // express.static serves theme CSS with ETag/Last-Modified, so content updates revalidate fresh.
     //

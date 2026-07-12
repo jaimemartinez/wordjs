@@ -387,3 +387,26 @@ footer .w-10:hover {
   color: #000 !important;
   border-radius: 8px !important;
 }
+
+/* ===== Mobile (auto responsive pass) ===== */
+@media (max-width: 767.98px) {
+
+  /* Nav links: the desktop 0.2em tracking + uppercase (declared !important
+     above) can push long menu labels past a 375px hamburger drawer.
+     Tighten the tracking slightly and allow labels to wrap — the uppercase
+     luxury look is kept, but a label can never widen the drawer. */
+  .wjs-header-nav a {
+    letter-spacing: 0.1em !important;
+    white-space: normal !important;
+    overflow-wrap: break-word;
+  }
+
+  /* Featured pricing tier: the block ships an inline transform: scale(1.05)
+     that this theme targets for its gold-border treatment. Once tiers stack
+     full-width on mobile, that 5% up-scale makes the card wider than the
+     viewport (horizontal overflow). Neutralize the scale on small screens
+     only — the gold border + glow still distinguish the featured tier. */
+  .wp-block-pricing>div[style*="scale(1.05)"] {
+    transform: none !important;
+  }
+}

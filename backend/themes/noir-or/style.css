@@ -453,3 +453,40 @@ footer .w-10:hover {
   border-color: var(--wjs-color-primary-dark) !important;
   color: #14110F !important;
 }
+
+/* ===== Mobile (auto responsive pass) ===== */
+@media (max-width: 767.98px) {
+
+  /* Nav links (drawer): 0.22em tracking + uppercase can push long labels
+     past a 375px viewport. Tighten the tracking (still airy, still luxury)
+     and let long items wrap instead of widening the drawer. !important is
+     needed because the desktop rule uses it; scoped to the nav only. */
+  .wjs-header-nav a {
+    letter-spacing: 0.12em !important;
+    white-space: normal !important;
+    overflow-wrap: break-word;
+  }
+
+  /* Accordion headers + tab buttons: uppercase 0.16em-tracked labels get
+     cramped on narrow screens — reduce tracking, guarantee wrapping. */
+  .wp-block-accordion .accordion-item button,
+  .wp-block-tabs button {
+    letter-spacing: 0.1em !important;
+    white-space: normal !important;
+  }
+
+  /* Tab strip: if several tracked uppercase tabs exceed the viewport,
+     wrap them onto extra rows (inert unless the block lays tabs out
+     with flex, which it does). */
+  .wp-block-tabs>div:first-child {
+    flex-wrap: wrap !important;
+  }
+
+  /* CTA + search actions: uppercase with 0.14–0.18em tracking — tighten
+     so button labels fit narrow layouts and wrap rather than overflow. */
+  .wp-block-cta-banner a,
+  .wp-block-search button {
+    letter-spacing: 0.1em !important;
+    white-space: normal !important;
+  }
+}

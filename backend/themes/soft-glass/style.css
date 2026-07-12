@@ -364,3 +364,26 @@ footer a:hover {
   border-radius: 20px !important;
   box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
 }
+
+/* ===== Mobile (auto responsive pass) ===== */
+@media (max-width: 767.98px) {
+
+  /* Featured pricing tier: the block applies an inline scale(1.05).
+     When tiers stack full-width on small screens the scaled card
+     paints ~2.5% past the viewport edge and adds horizontal scroll.
+     The gradient background above already marks it as featured, so
+     drop the scale on mobile. !important is required to beat the
+     inline style; the selector keeps it tightly scoped. */
+  .wp-block-pricing>div[style*="scale(1.05)"] {
+    transform: none !important;
+  }
+
+  /* The body gradient uses `fixed` attachment, which iOS Safari
+     ignores and Android repaints on every scroll frame — costly on
+     top of this theme's backdrop-filter glass layers. Let it scroll
+     with the page on mobile; for a soft full-page gradient the
+     visual difference is negligible. */
+  body {
+    background-attachment: scroll !important;
+  }
+}
