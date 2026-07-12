@@ -163,8 +163,14 @@ class User {
         await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)',
             [userId, 'role', role]);
 
-        // Insert Capabilities (based on role)
-        // ... handled by roles system usually, but store primitive role here
+        // Optional personal/recovery email (coexists with the primary/professional email; used for
+        // password recovery + external notifications). Stored as meta because a user has ONE primary
+        // email column; update() already forwards data.meta, but create() must persist it here.
+        const personalEmail = data.personalEmail || (data.meta && data.meta.personal_email);
+        if (personalEmail) {
+            await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)',
+                [userId, 'personal_email', String(personalEmail).trim().toLowerCase()]);
+        }
 
         return await User.findById(userId);
     }
@@ -425,6 +431,10 @@ class User {
             display_name: this.displayName, // Legacy expectation
             role: this.role || 'subscriber',
             capabilities: this.getCapabilities(),
+            // Personal / recovery email (coexists with the primary/professional email). Surfaced as a
+            // top-level field for the user form; also present in `meta.personal_email`. It is deliberately
+            // NON-sensitive (a mere contact address) so it is not stripped by SENSITIVE_META above.
+            personalEmail: (this.meta && this.meta.personal_email) || null,
             meta: safeMeta
         };
     }

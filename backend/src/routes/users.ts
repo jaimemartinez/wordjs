@@ -168,7 +168,7 @@ router.get('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
  *         description: Forbidden
  */
 router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
-    const { username, email, password, displayName, role = 'subscriber' } = req.body;
+    const { username, email, password, displayName, role = 'subscriber', personalEmail } = req.body;
 
     if (!username || !email || !password) {
         return res.status(400).json({
@@ -178,13 +178,19 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
         });
     }
 
+    // Optional personal/recovery email (coexists with the primary email; used for password recovery).
+    if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(personalEmail).trim())) {
+        return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
+    }
+
     try {
         const user = await User.create({
             username,
             email,
             password,
             displayName,
-            role
+            role,
+            personalEmail
         });
 
         res.status(201).json(user.toJSON());
@@ -272,8 +278,18 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
 
     const { email, displayName, password, url } = req.body;
     let role = req.body.role;
+    const personalEmail = req.body.personalEmail;
 
     const updateData: any = { email, displayName, password, url };
+
+    // Optional personal/recovery email (coexists with the primary/professional email). Stored as meta;
+    // update() forwards updateData.meta.personal_email via updateMeta.
+    if (personalEmail !== undefined) {
+        if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(personalEmail).trim())) {
+            return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
+        }
+        updateData.meta = { personal_email: String(personalEmail).trim().toLowerCase() };
+    }
 
     // SECURITY: role changes.
     //  - WordPress forbids editing your OWN role regardless of capability (otherwise a user holding the
@@ -423,15 +439,28 @@ router.delete('/:id', authenticate, isAdmin, asyncHandler(async (req: any, res: 
  *         description: Profile updated
  */
 router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => {
-    const { email, displayName, password, url } = req.body;
+    const { email, displayName, password, url, personalEmail, currentPassword } = req.body;
 
-    const updated = await User.update(req.user.id, {
-        email,
-        displayName,
-        password,
-        url
-    });
+    // Changing your OWN password requires your CURRENT password — defends against a hijacked session /
+    // CSRF silently resetting it. User.update() stamps token_valid_after (revoking all sessions), so a
+    // caller who doesn't know the current password must never reach that.
+    if (password) {
+        if (String(password).length < 8) {
+            return res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
+        }
+        try { await User.authenticate(req.user.userLogin, String(currentPassword || '')); }
+        catch { return res.status(403).json({ code: 'rest_bad_current_password', message: 'Current password is incorrect.', data: { status: 403 } }); }
+    }
 
+    // Optional personal/recovery email (coexists with the primary email; used for password recovery).
+    if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(personalEmail).trim())) {
+        return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
+    }
+
+    const updateData: any = { email, displayName, password, url };
+    if (personalEmail !== undefined) updateData.meta = { personal_email: String(personalEmail).trim().toLowerCase() };
+
+    const updated = await User.update(req.user.id, updateData);
     res.json(updated.toJSON());
 }));
 
