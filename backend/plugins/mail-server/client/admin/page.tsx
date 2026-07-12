@@ -156,8 +156,12 @@ export default function MailServerAdmin() {
         } catch (e) { }
     };
 
-    const loadData = useCallback(async (query = "") => {
-        setLoading(true);
+    // Tracks the query behind the CURRENT view (empty = folder listing, set = search results) so a
+    // background poll / focus-refresh reloads exactly what the user is looking at without clobbering it.
+    const activeQueryRef = useRef("");
+    const loadData = useCallback(async (query = "", silent = false) => {
+        activeQueryRef.current = query;
+        if (!silent) setLoading(true); // silent refresh (poll / focus / post-send) skips the spinner flicker
         loadStats();
         try {
             if (folder === 'settings') {
@@ -175,9 +179,9 @@ export default function MailServerAdmin() {
             }
         } catch (error) {
             console.error("Failed to load data:", error);
-            setLoadError(true);
+            if (!silent) setLoadError(true); // a failed background poll must not blank the current view
         } finally {
-            setLoading(false);
+            if (!silent) setLoading(false);
         }
     }, [folder]);
 
@@ -219,12 +223,34 @@ export default function MailServerAdmin() {
 
             // Refresh if we are in inbox and get a new email
             if (folder === 'inbox' && notif.type === 'email') {
-                loadData();
+                loadData(activeQueryRef.current, true);
             }
         };
         window.addEventListener('wordjs:notification' as any, handleNotification);
         return () => window.removeEventListener('wordjs:notification' as any, handleNotification);
     }, [folder, loadData]);
+
+    // Auto-refresh the mailbox so newly RECEIVED or SENT mail appears WITHOUT a manual page refresh.
+    // The SSE notification path above only fires for inbound mail while in the inbox (and only if the
+    // event is actually delivered), so this is the reliable fallback: a light SILENT poll of the current
+    // view every 15s plus an immediate refresh the moment the tab regains focus. Paused while composing,
+    // on the settings view, or when the tab is hidden — no wasted requests in the background.
+    useEffect(() => {
+        if (folder === 'settings') return;
+        const tick = () => {
+            if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+            if (composing) return;
+            loadData(activeQueryRef.current, true);
+        };
+        const id = setInterval(tick, 15000);
+        window.addEventListener('focus', tick);
+        document.addEventListener('visibilitychange', tick);
+        return () => {
+            clearInterval(id);
+            window.removeEventListener('focus', tick);
+            document.removeEventListener('visibilitychange', tick);
+        };
+    }, [folder, composing, loadData]);
 
     // Auto-dismiss the global feedback toast.
     useEffect(() => {
@@ -321,7 +347,8 @@ export default function MailServerAdmin() {
             setShowScheduleInput(false);
             setReplyToId(null);
             setDraftId(null);
-            if (folder === 'sent') loadData();
+            // Reflect the just-sent message immediately (Sent list + counts) without a manual refresh.
+            loadData(activeQueryRef.current, true);
         } catch (error: any) {
             setMessage({ type: 'error', text: error.message || 'Failed to send' });
         } finally {
