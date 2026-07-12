@@ -53,7 +53,7 @@ let smtpServer = null;
 // Inbound listener status surfaced to the admin: which port we actually bound and whether we had to
 // fall back off the standard MX port 25 (so the UI can tell the operator inbound-from-internet needs
 // a port map / privilege grant instead of failing silently). Reset on every initSMTPServer().
-let inboundStatus = { requestedPort: null, boundPort: null, degraded: false, reason: null, _triedFallback: false };
+let inboundStatus = { requestedPort: null, boundPort: null, degraded: false, reason: null, _triedFallback: false, proxyIps: [] };
 let queueInterval = null;  // scheduled/retry queue timer id (cleared on deactivate)
 
 // === User lookups via the SAFE host bridge (grant: users:read) ===
@@ -341,6 +341,26 @@ function bareIp(addr) {
     return m ? m[1] : addr;
 }
 
+// Parse the admin's trusted-proxy IP allowlist for PROXY protocol (v1). Only connections FROM these
+// EXACT IPs get their PROXY header parsed (real client IP rescued); every other sender is treated as
+// direct, so enabling this never breaks normal inbound mail. We NEVER pass useProxy:true — trusting a
+// client-sent PROXY header from any origin would let an attacker forge their source IP (e.g. claim
+// 127.0.0.1 → hit the loopback "trusted" bypass and skip DNSBL/SPF entirely). The listener binds
+// dual-stack (::), so an IPv4 proxy peer is reported as ::ffff:<ip> — add that mapped form too, or
+// smtp-server's exact-match allowlist (useProxy.includes(socket.remoteAddress)) would miss it.
+function parseTrustedProxyIps(raw) {
+    const out = new Set();
+    for (const tok of String(raw || '').split(/[\s,;]+/)) {
+        const ip = tok.trim();
+        if (!ip) continue;
+        const v = net.isIP(ip); // 4, 6, or 0 (invalid — hostname, wildcard, "true", …)
+        if (v === 0) continue;  // drop non-IPs here; the settings route validates + reports them
+        out.add(ip);
+        if (v === 4) out.add('::ffff:' + ip);
+    }
+    return [...out];
+}
+
 /**
  * Initialize the Inbound SMTP Server
  */
@@ -357,7 +377,15 @@ async function initSMTPServer() {
         smtpServer.close();
     }
 
+    // PROXY protocol (v1): when inbound mail reaches us THROUGH a TCP proxy (nginx `stream` with
+    // proxy_protocol on;, HAProxy send-proxy), the real client IP is otherwise lost — every connection
+    // looks like it came from the proxy. Trust the proxy's PROXY header ONLY from these exact IPs; the
+    // parsed client IP then flows into session.remoteAddress, so DNSBL/SPF/logging see the real sender.
+    const trustedProxyIps = parseTrustedProxyIps(await getOption('smtp_proxy_ips', ''));
+
     smtpServer = new SMTPServer({
+        // Only ever an explicit IP allowlist, never `true` (see parseTrustedProxyIps for why).
+        ...(trustedProxyIps.length ? { useProxy: trustedProxyIps } : {}),
         authOptional: true,
         disabledCommands: ['AUTH'],
 
@@ -553,7 +581,7 @@ async function initSMTPServer() {
         }
     });
 
-    inboundStatus = { requestedPort: port, boundPort: null, degraded: false, reason: null };
+    inboundStatus = { requestedPort: port, boundPort: null, degraded: false, reason: null, proxyIps: trustedProxyIps };
 
     // Probe-then-bind. Rebinding a net.Server after a listen error is unreliable, so instead of trying
     // to recover from a failed bind we TEST whether the standard port 25 is bindable first, with a
@@ -1676,6 +1704,9 @@ exports.init = async function (bridge) {
             mail_from_email: await getOption('mail_from_email', ''),
             mail_from_name: await getOption('mail_from_name', ''),
             smtp_listen_port: await getOption('smtp_listen_port', '25'),
+            // PROXY protocol trusted-proxy IPs (comma-separated) + whether it's actually active now.
+            smtp_proxy_ips: await getOption('smtp_proxy_ips', ''),
+            smtp_proxy_active: (inboundStatus.proxyIps && inboundStatus.proxyIps.length) ? true : false,
             // Live inbound listener status so the UI can surface a real state instead of a silent
             // no-inbound: the port we ACTUALLY bound, whether we had to fall back off the standard 25,
             // and why. inbound_ok = bound on the standard MX port (external inbound can work).
@@ -1707,9 +1738,20 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/settings
     route('post', '/settings', { auth: true, admin: true }, async (req, res) => {
+        // Validate the trusted-proxy allowlist BEFORE persisting: plain IPs only (no hostnames, no
+        // wildcards, never "true"). This is the same guarantee parseTrustedProxyIps enforces at bind
+        // time, surfaced to the admin as a clear error instead of silently dropping a typo.
+        if (req.body.smtp_proxy_ips !== undefined) {
+            const toks = String(req.body.smtp_proxy_ips).split(/[\s,;]+/).map(s => s.trim()).filter(Boolean);
+            const bad = toks.filter(t => net.isIP(t) === 0);
+            if (bad.length) {
+                return res.status(400).json({ error: `Trusted proxy IPs must be plain IP addresses (no hostnames or wildcards). Invalid: ${bad.slice(0, 5).join(', ')}` });
+            }
+        }
+
         const fields = [
             'mail_from_email', 'mail_from_name',
-            'smtp_listen_port', 'smtp_catch_all',
+            'smtp_listen_port', 'smtp_proxy_ips', 'smtp_catch_all',
             'mail_helo_host',
             // Relay / smarthost (mail_user/mail_pass route to the encrypted secrets table via isSecretOption).
             'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
