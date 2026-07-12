@@ -5,7 +5,8 @@ import "./globals.css";
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
 import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
-import { getSettings } from "@/lib/server-api";
+import { getSettings, getFonts } from "@/lib/server-api";
+import { buildFontFaceCss } from "@/lib/fontFaceCss";
 
 const inter = Inter({ subsets: ["latin"] });
 
@@ -56,11 +57,18 @@ export async function generateMetadata(): Promise<Metadata> {
     return meta;
 }
 
-export default function RootLayout({
+export default async function RootLayout({
     children,
 }: {
     children: React.ReactNode;
 }) {
+    // Emit the installed fonts' @font-face rules into the INITIAL SSR <head>, so a page whose blocks
+    // reference a custom font (via block css.fontFamily or a Tiptap inline `font-family` span) paints
+    // in that font on first render instead of the theme fallback. Without this the faces were injected
+    // only by SystemFontsLoader's client useEffect (below) — a flash of fallback, and a permanent
+    // fallback whenever client JS was slow/blocked. getFonts is request-deduped + ISR-cached (300s).
+    const fontFaceCss = buildFontFaceCss(await getFonts());
+
     return (
         <html lang="en" suppressHydrationWarning>
             <head>
@@ -68,6 +76,9 @@ export default function RootLayout({
                     rel="stylesheet"
                     href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css"
                 />
+                {fontFaceCss && (
+                    <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss }} />
+                )}
             </head>
             <body className={inter.className} suppressHydrationWarning>
                 <ModalProvider>

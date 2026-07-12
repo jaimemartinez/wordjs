@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
+import { authApi } from "@/lib/api";
 
 function LoginForm() {
     const [username, setUsername] = useState("");
@@ -10,8 +11,18 @@ function LoginForm() {
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(false);
+    // "Forgot password?" is only offered when self-service reset can actually deliver mail (probe below).
+    const [resetAvailable, setResetAvailable] = useState(false);
     const { login } = useAuth();
     const router = useRouter();
+
+    useEffect(() => {
+        let active = true;
+        authApi.passwordResetAvailable()
+            .then((r) => { if (active) setResetAvailable(!!r?.available); })
+            .catch(() => { /* probe failed — leave the link hidden */ });
+        return () => { active = false; };
+    }, []);
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -91,6 +102,14 @@ function LoginForm() {
                     >
                         {loading ? "Logging in..." : "Login"}
                     </button>
+
+                    {resetAvailable && (
+                        <div className="text-center">
+                            <a href="/reset-password" className="text-sm text-blue-600 hover:text-blue-700 font-medium">
+                                Forgot your password?
+                            </a>
+                        </div>
+                    )}
                 </form>
 
                 <div className="mt-6 text-center">

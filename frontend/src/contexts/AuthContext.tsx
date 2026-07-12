@@ -10,6 +10,7 @@ interface User {
     displayName: string;
     role: string;
     capabilities: string[];
+    personalEmail?: string | null;
 }
 
 interface LoginResult {

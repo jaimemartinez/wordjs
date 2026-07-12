@@ -37,7 +37,12 @@ function registerAdminMenu(pluginSlug: string, item: any) {
             icon: item.icon || 'fa-puzzle-piece',
             order: item.order || 100,
             cap: item.cap || item.capability || null,
-            section: item.section || 'core'
+            section: item.section || 'core',
+            // Generic visibility flag: mark an item that is only meaningful to a user who owns a
+            // PROFESSIONAL mailbox on the site domain (e.g. a per-user webmail inbox). Core's
+            // GET /plugins/menus hides it from everyone else. Slug-agnostic — ANY plugin can set it,
+            // so it is not tied to the bundled mail-server.
+            requiresProfessionalMailbox: !!item.requiresProfessionalMailbox
         });
     }
 }

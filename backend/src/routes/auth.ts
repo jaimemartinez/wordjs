@@ -11,6 +11,7 @@ const { authenticate, generateToken, verifyToken } = require('../middleware/auth
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
 const config = require('../config/app');
+const crypto = require('crypto');
 
 // Per-account login lockout: the per-IP rate limiter is defeated by a botnet/proxy pool targeting a
 // single account, and there was no account-level throttle. Lock an account for a cooldown after N
@@ -340,6 +341,138 @@ router.post('/logout', asyncHandler(async (req: any, res: Response) => {
     } catch { /* invalid/expired token — nothing to revoke */ }
     res.clearCookie('wordjs_token', { path: '/' });
     res.json({ success: true, message: 'Logged out successfully' });
+}));
+
+// ---------------------------------------------------------------------------------------------------
+// Password recovery ("olvidé mi contraseña")
+//
+// Self-service reset is offered ONLY when a mail provider is active AND declares itself able to deliver
+// — an operator without working outbound mail can't deliver the link, so the flow would strand users.
+// The reset link is delivered to the user's RECOVERY address: their personal_email, or their primary
+// email when that is external (and therefore reachable). A professional @site-domain mailbox is NEVER
+// used — a locked-out user can't read their own WordJS inbox. All responses are uniform (anti-enum).
+// ---------------------------------------------------------------------------------------------------
+const RESET_TTL_MS = 30 * 60 * 1000; // 30 minutes
+
+// Readiness is checked GENERICALLY — no mail plugin slug is hardcoded, so swapping mail-server for any
+// other provider keeps recovery working without touching core. A plugin becomes the provider by calling
+// wordjs.provideMail() (which sets global.wordjs_send_mail, and which the host DELETES when that plugin
+// unloads — so this fails closed on deactivation), and declares itself configured to deliver externally
+// by setting the shared `mail_delivery_ready` option to '1' (a self-hosted MTA sets it once its DNS
+// verifies; an external SMTP/relay would set it once its credentials validate).
+async function mailReady(): Promise<boolean> {
+    try {
+        if (typeof (global as any).wordjs_send_mail !== 'function') return false;
+        return String(await getOption('mail_delivery_ready', '0')) === '1';
+    } catch {
+        return false;
+    }
+}
+
+async function siteDomainName(): Promise<string> {
+    try { return new URL(await getOption('siteurl', await getOption('home', 'http://localhost'))).hostname.toLowerCase(); }
+    catch { return ''; }
+}
+
+// The address we can actually reach for recovery, or '' if none (professional mailbox is unreachable
+// while locked out, so it is never a target).
+async function recoveryTarget(user: any): Promise<string> {
+    const personal = String((await User.getMeta(user.id, 'personal_email')) || '').trim().toLowerCase();
+    if (personal) return personal;
+    const primary = String(user.userEmail || '').trim().toLowerCase();
+    const dom = primary.split('@')[1] || '';
+    const site = await siteDomainName();
+    if (dom && dom !== site) return primary; // external primary address → reachable
+    return '';
+}
+
+/**
+ * GET /auth/password-reset-available
+ * Public probe so the login page shows "Forgot password?" only when self-service reset can actually work.
+ */
+router.get('/password-reset-available', asyncHandler(async (_req: any, res: Response) => {
+    res.json({ available: await mailReady() });
+}));
+
+/**
+ * POST /auth/forgot-password
+ * Body: { login } (username or account email). ALWAYS 200 — never reveals whether the account exists
+ * or has a reachable recovery address (anti-enumeration). Rate-limited by authLimiter in index.ts.
+ */
+router.post('/forgot-password', asyncHandler(async (req: any, res: Response) => {
+    const login = String((req.body && req.body.login) || '').trim();
+    const ok = () => res.json({ ok: true, message: 'If an account with a recovery email exists, a reset link has been sent.' });
+    if (!login) return ok();
+    if (!(await mailReady())) return ok();
+
+    let user: any = null;
+    try { user = await User.findByLogin(login); } catch { user = null; }
+    if (!user && login.includes('@')) { try { user = await User.findByEmail(login); } catch { user = null; } }
+    if (!user) return ok();
+
+    const to = await recoveryTarget(user);
+    if (!to) return ok();
+
+    // Mint a single-use token; persist only its SHA-256 hash + expiry (never the raw token).
+    const raw = crypto.randomBytes(32).toString('hex');
+    const hash = crypto.createHash('sha256').update(raw).digest('hex');
+    await User.updateMeta(user.id, 'password_reset_hash', hash);
+    await User.updateMeta(user.id, 'password_reset_expires', String(Date.now() + RESET_TTL_MS));
+
+    const base = String((await getOption('siteurl', await getOption('home', config.siteUrl || 'http://localhost'))) || 'http://localhost').replace(/\/+$/, '');
+    const link = `${base}/reset-password?uid=${user.id}&token=${raw}`;
+    const siteName = await getOption('blogname', 'WordJS');
+
+    try {
+        (global as any).wordjs_send_mail({
+            to,
+            subject: `Password reset for ${siteName}`,
+            text: `Someone requested a password reset for your ${siteName} account (${user.userLogin}).\n\nReset your password (this link is valid for 30 minutes):\n${link}\n\nIf you did not request this, you can safely ignore this email — your password will not change.`,
+            html: `<p>Someone requested a password reset for your <strong>${siteName}</strong> account (<code>${user.userLogin}</code>).</p>`
+                + `<p><a href="${link}">Reset your password</a> — this link is valid for 30 minutes.</p>`
+                + `<p>If you did not request this, you can safely ignore this email; your password will not change.</p>`
+        });
+    } catch { /* swallow send errors — keep the response uniform, don't leak mail-infra state */ }
+
+    return ok();
+}));
+
+/**
+ * POST /auth/reset-password
+ * Body: { uid, token, password }. Consumes the single-use token and revokes all existing sessions.
+ * Rate-limited by authLimiter in index.ts.
+ */
+router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
+    const uid = parseInt((req.body && req.body.uid), 10);
+    const token = String((req.body && req.body.token) || '');
+    const password = String((req.body && req.body.password) || '');
+
+    const bad = () => res.status(400).json({ code: 'rest_invalid_reset', message: 'This reset link is invalid or has expired. Please request a new one.', data: { status: 400 } });
+    if (!uid || !token || !password) return bad();
+    if (password.length < 8) return res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
+    if (password.length > 72) return res.status(400).json({ code: 'rest_invalid_param', message: 'Password must not exceed 72 characters.', data: { status: 400 } });
+
+    let user: any = null;
+    try { user = await User.findById(uid); } catch { user = null; }
+    if (!user) return bad();
+
+    const storedHash = String((await User.getMeta(uid, 'password_reset_hash')) || '');
+    const expires = parseInt(String((await User.getMeta(uid, 'password_reset_expires')) || '0'), 10) || 0;
+    if (!storedHash || Date.now() > expires) return bad();
+
+    // Constant-time compare of the SHA-256 hashes to avoid a timing oracle on the token.
+    const givenHash = crypto.createHash('sha256').update(token).digest('hex');
+    const a = Buffer.from(givenHash, 'hex');
+    const b = Buffer.from(storedHash, 'hex');
+    if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return bad();
+
+    // User.update() bcrypt-hashes the password AND stamps token_valid_after (revokes every session);
+    // then consume the single-use token so the link cannot be replayed.
+    await User.update(uid, { password });
+    await User.updateMeta(uid, 'password_reset_hash', '');
+    await User.updateMeta(uid, 'password_reset_expires', '0');
+
+    res.json({ ok: true, message: 'Your password has been reset. You can now log in with your new password.' });
 }));
 
 module.exports = router;
