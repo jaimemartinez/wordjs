@@ -537,12 +537,22 @@ async function initSMTPServer() {
                         if (!addr || !addr.address) continue;
                         const [recName, recDomain] = addr.address.split('@');
 
-                        let user = await User.findByEmail(addr.address);
-                        if (!user && recDomain === siteDomain) {
-                            user = await User.findByLogin(recName);
+                        // Only ACCEPT/store inbound mail for OUR domain. A recipient on any external
+                        // domain (a user's personal gmail.com, or a foreign address) must never be
+                        // captured into a WordJS inbox, and catch-all stays scoped to @siteDomain (never a
+                        // blanket accept-anything that would hoard mail meant for other providers). A user
+                        // only has an inbox when their own configured email is on our domain (professional
+                        // mailbox); a personal-email user has none.
+                        const isLocalDomain = !!(recDomain && recDomain === siteDomain);
+                        let user = null;
+                        if (isLocalDomain) {
+                            const candidate = await User.findByEmail(addr.address) || await User.findByLogin(recName);
+                            if (candidate && String(candidate.userEmail || '').toLowerCase().split('@')[1] === siteDomain) {
+                                user = candidate;
+                            }
                         }
 
-                        if (user || catchAllRaw === '1') {
+                        if (user || (isLocalDomain && catchAllRaw === '1')) {
                             await Email.create({
                                 messageId: parsed.messageId,
                                 fromAddress: fromAddr,
@@ -819,11 +829,21 @@ async function sendMail(data) {
         try {
             console.log(`[MailServer] Checking recipient: ${recipient}`);
             const [rName, rDomain] = recipient.split('@');
-            let localUser = await User.findByEmail(recipient);
-
-            if (!localUser && rDomain === siteDomain) {
-                console.log(`[MailServer] Searching by login for ${rName}...`);
-                localUser = await User.findByLogin(rName);
+            // A recipient is LOCAL (delivered into a WordJS inbox) ONLY when it is a corporate mailbox on
+            // OUR domain. A user's PERSONAL email (e.g. gmail.com) MUST be delivered OUT to that provider,
+            // never captured locally — a user without a professional @domain mailbox has no WordJS inbox;
+            // their personal address is only for things like password recovery / external notifications.
+            // (Previously `User.findByEmail(recipient)` matched regardless of domain, so mail to a user's
+            // personal address was stored in WordJS instead of being sent to Gmail/etc.)
+            let localUser = null;
+            if (rDomain && rDomain === siteDomain) {
+                const candidate = await User.findByEmail(recipient) || await User.findByLogin(rName);
+                // A user only has a WordJS inbox when their OWN configured email is on our domain (i.e.
+                // the professional mailbox is enabled). If their email is a personal address (gmail.com),
+                // they have no inbox even when a @domain address maps to their username — deliver out.
+                if (candidate && String(candidate.userEmail || '').toLowerCase().split('@')[1] === siteDomain) {
+                    localUser = candidate;
+                }
             }
 
             if (localUser) {
