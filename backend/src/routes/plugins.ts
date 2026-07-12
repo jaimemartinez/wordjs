@@ -898,7 +898,14 @@ router.post('/sample', authenticate, isAdmin, asyncHandler(async (req: Request, 
 // isAdmin: the admin menu (labels + /admin/* route paths of every active plugin) is control-plane
 // metadata — gate it like the rest of this file, not authenticate-only, so a logged-in non-admin
 // (e.g. a self-registered subscriber) can't enumerate it or trigger plugin menu filters as itself.
-router.get('/menus', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+// NOTE: authenticate (NOT isAdmin). This route feeds the sidebar's plugin menu items. Gating it to
+// administrators hid EVERY plugin menu item from non-admin admin-panel users (editors, authors,
+// subscribers) — so a plugin's per-user UI (e.g. the mail plugin's webmail, whose data routes are
+// already scoped per user via findAllByUser / canUserAccess) was unreachable for them. Visibility is
+// now per-CAPABILITY: each item is returned only if the caller holds its capability, exactly like the
+// frontend's can(item.cap) filter. Items that declare NO capability keep the old admin-only default
+// (manage_options), so nothing previously hidden becomes visible unless it opted into a broader cap.
+router.get('/menus', authenticate, asyncHandler(async (req: any, res: Response) => {
     const { getAdminMenuItems } = require('../core/adminMenu');
     const { getActivePlugins } = require('../core/plugins');
     const { applyFiltersSync } = require('../core/hooks');
@@ -910,10 +917,17 @@ router.get('/menus', authenticate, isAdmin, asyncHandler(async (req: any, res: R
     // 1. Filter menus to only include those from active plugins or core
     let activeMenus = allMenus.filter((menu: any) => menu.plugin === 'core' || activePlugins.includes(menu.plugin));
 
-    // 2. Apply filters to allows plugins to hide/modify items per user
+    // 2. Apply filters to allow plugins to hide/modify items per user
     activeMenus = applyFiltersSync('admin_menu_items', activeMenus, { user: req.user });
 
-    res.json(activeMenus);
+    // 3. Per-capability visibility. req.user is the host User model (has .can()); unspecified caps
+    //    default to manage_options (admin-only) to preserve the prior admin-only behavior.
+    const visibleMenus = activeMenus.filter((menu: any) => {
+        const requiredCap = menu.cap || menu.capability || 'manage_options';
+        return typeof req.user.can === 'function' && req.user.can(requiredCap);
+    });
+
+    res.json(visibleMenus);
 }));
 
 // Mount bundle routes for pre-compiled plugin frontends
