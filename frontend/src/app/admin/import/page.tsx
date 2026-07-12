@@ -94,7 +94,7 @@ export default function ImportPage() {
                 <div className="text-4xl text-blue-500 mb-3"><i className="fa-solid fa-file-arrow-up"></i></div>
                 {file ? (
                     <div>
-                        <p className="font-semibold text-gray-800">{file.name}</p>
+                        <p className="font-semibold text-gray-800 break-words">{file.name}</p>
                         <p className="text-sm text-gray-500">{fmtBytes(file.size)} · click to choose a different file</p>
                     </div>
                 ) : (

@@ -121,7 +121,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 // Post fallback (card style)
                 <article className="max-w-3xl mx-auto py-8">
                     <div className="mb-8 text-center">
-                        <div className="flex items-center justify-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
+                        <div className="flex flex-wrap items-center justify-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                             {category && (
                                 <>
                                     <span className="font-semibold text-[var(--wjs-color-primary,#2563eb)] uppercase tracking-wide">

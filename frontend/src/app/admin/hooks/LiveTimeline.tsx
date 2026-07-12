@@ -98,8 +98,8 @@ export default function LiveTimeline() {
     return (
         <div className="bg-slate-900 rounded-2xl overflow-hidden shadow-2xl border border-slate-700 font-mono text-xs h-[600px] flex flex-col items-stretch">
             {/* Toolbar */}
-            <div className="bg-slate-800 p-3 flex items-center justify-between border-b border-slate-700">
-                <div className="flex items-center gap-4">
+            <div className="bg-slate-800 p-3 flex flex-wrap items-center justify-between gap-2 border-b border-slate-700">
+                <div className="flex flex-wrap items-center gap-4 gap-y-2">
                     <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-[10px] font-bold uppercase tracking-wider transition-colors ${isConnected ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-red-500/10 text-red-500 border border-red-500/20'}`}>
                         <div className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 animate-pulse' : 'bg-red-500'}`}></div>
                         {isConnected ? 'Live Connection' : 'Disconnected'}

@@ -551,7 +551,7 @@ export default function MailServerAdmin() {
 
             {/* GLOBAL FEEDBACK TOAST — renders in every view (above the composer's z-[6000]) */}
             {message && (
-                <div className={`fixed top-4 right-4 z-[7000] max-w-sm flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm font-bold animate-in fade-in slide-in-from-top-2 ${message.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                <div className={`fixed top-4 right-4 z-[7000] max-w-[calc(100vw-2rem)] sm:max-w-sm flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm font-bold animate-in fade-in slide-in-from-top-2 ${message.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
                     <i className={`fa-solid ${message.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'} mt-0.5`}></i>
                     <span className="flex-1 leading-snug">{message.text}</span>
                     <button
@@ -1128,7 +1128,7 @@ export default function MailServerAdmin() {
                             )}
 
                             {/* Footer */}
-                            <div className="px-6 py-4 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between">
+                            <div className="px-6 py-4 bg-slate-50/50 border-t border-slate-100 flex items-center justify-between flex-wrap gap-y-2">
                                 <div className="flex gap-4 text-slate-400">
                                     <label className="cursor-pointer hover:text-violet-600 transition-colors flex items-center gap-2">
                                         <input

@@ -281,7 +281,7 @@ export default function DashboardPage() {
                     {/* Chart/Graph */}
                     <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-10 relative overflow-hidden group hover:shadow-2xl transition-all duration-500">
                         <div className="absolute top-0 right-0 w-64 h-64 bg-gray-50 rounded-full blur-[80px] opacity-50 pointer-events-none"></div>
-                        <div className="flex items-center justify-between mb-8 relative z-10">
+                        <div className="flex flex-wrap items-center justify-between gap-y-3 mb-8 relative z-10">
                             <div>
                                 <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">{t('dashboard.activity.overview')}</h2>
                                 <p className="text-[10px] font-bold uppercase tracking-widest text-gray-400 mt-1">{t('dashboard.traffic.engagement')}</p>

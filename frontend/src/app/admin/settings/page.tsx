@@ -299,7 +299,7 @@ export default function SettingsPage() {
                                     <button
                                         type="button"
                                         onClick={() => setSettings({ ...settings, users_can_register: settings.users_can_register === "1" ? "0" : "1" })}
-                                        className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.users_can_register === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
+                                        className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.users_can_register === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
                                     >
                                         <span
                                             className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.users_can_register === "1" ? 'translate-x-6' : 'translate-x-1'}`}
@@ -335,7 +335,7 @@ export default function SettingsPage() {
                                 <button
                                     type="button"
                                     onClick={() => setSettings({ ...settings, comments_enabled: settings.comments_enabled === "1" ? "0" : "1" })}
-                                    className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 ${settings.comments_enabled === "1" ? 'bg-amber-500' : 'bg-gray-200'}`}
+                                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 ${settings.comments_enabled === "1" ? 'bg-amber-500' : 'bg-gray-200'}`}
                                 >
                                     <span
                                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.comments_enabled === "1" ? 'translate-x-6' : 'translate-x-1'}`}
@@ -356,7 +356,7 @@ export default function SettingsPage() {
                                 <button
                                     type="button"
                                     onClick={() => setSettings({ ...settings, comment_registration: settings.comment_registration === "1" ? "0" : "1" })}
-                                    className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${settings.comment_registration === "1" ? 'bg-emerald-500' : 'bg-gray-200'}`}
+                                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${settings.comment_registration === "1" ? 'bg-emerald-500' : 'bg-gray-200'}`}
                                 >
                                     <span
                                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.comment_registration === "1" ? 'translate-x-6' : 'translate-x-1'}`}
@@ -386,7 +386,7 @@ export default function SettingsPage() {
                                 <button
                                     type="button"
                                     onClick={() => setSettings({ ...settings, redis_cache_enabled: settings.redis_cache_enabled === "1" ? "0" : "1" })}
-                                    className={`relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.redis_cache_enabled === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
+                                    className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.redis_cache_enabled === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
                                 >
                                     <span
                                         className={`inline-block h-5 w-5 transform rounded-full bg-white transition-transform duration-200 ease-in-out ${settings.redis_cache_enabled === "1" ? 'translate-x-6' : 'translate-x-1'}`}

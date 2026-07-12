@@ -132,7 +132,7 @@ export default function CommentsPage() {
                         description={t('comments.empty.description')}
                     />
                 ) : (
-                    <div className="overflow-hidden">
+                    <div className="overflow-x-auto">
                         <table className="min-w-full divide-y divide-gray-200">
                             <thead className="bg-gray-50">
                                 <tr>
@@ -154,9 +154,9 @@ export default function CommentsPage() {
                                                 />
                                                 <div>
                                                     <div className="text-sm font-medium text-gray-900">{comment.author}</div>
-                                                    <div className="text-xs text-gray-500">{comment.authorEmail}</div>
+                                                    <div className="text-xs text-gray-500 break-all">{comment.authorEmail}</div>
                                                     {comment.authorUrl && (
-                                                        <a href={comment.authorUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline">
+                                                        <a href={comment.authorUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-blue-500 hover:underline break-all">
                                                             {comment.authorUrl}
                                                         </a>
                                                     )}
@@ -165,7 +165,7 @@ export default function CommentsPage() {
                                             </div>
                                         </td>
                                         <td className="px-6 py-4">
-                                            <div className="text-sm text-gray-900 mb-2">
+                                            <div className="text-sm text-gray-900 mb-2 break-words">
                                                 <div dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
                                             </div>
                                             {/* Actions */}

@@ -74,7 +74,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
 
                         {settings.footer_text && (
                             <div
-                                className="text-[var(--wjs-color-text-footer-dim,gray)] max-w-sm whitespace-pre-line prose prose-invert prose-sm"
+                                className="text-[var(--wjs-color-text-footer-dim,gray)] max-w-sm whitespace-pre-line break-words prose prose-invert prose-sm"
                                 suppressHydrationWarning
                                 dangerouslySetInnerHTML={{ __html: sanitizeHTML(settings.footer_text) }}
                             />
@@ -126,7 +126,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
                 {/* Copyright Line */}
                 {settings.footer_copyright && (
                     <div
-                        className="border-t border-[var(--wjs-border-subtle,rgb(31,41,55))] pt-8 text-center text-[var(--wjs-color-text-footer-dim,gray)] text-sm [&>a]:text-[var(--wjs-color-primary,blue)] [&>a:hover]:underline"
+                        className="border-t border-[var(--wjs-border-subtle,rgb(31,41,55))] pt-8 text-center text-[var(--wjs-color-text-footer-dim,gray)] text-sm break-words [&>a]:text-[var(--wjs-color-primary,blue)] [&>a:hover]:underline"
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(settings.footer_copyright) }}
                     />

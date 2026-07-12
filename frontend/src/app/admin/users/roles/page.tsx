@@ -115,7 +115,7 @@ export default function RolesPage() {
 
     return (
         <div className="max-w-6xl mx-auto p-8">
-            <div className="flex justify-between items-center mb-8">
+            <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
                 <div>
                     <h1 className="text-3xl font-black text-gray-900 tracking-tight">{t('roles.title')}</h1>
                     <p className="text-gray-500 mt-1">{t('roles.subtitle')}</p>
@@ -184,7 +184,7 @@ export default function RolesPage() {
                     {editingSlug !== null ? (
                         <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-8 sticky top-8">
                             <form onSubmit={handleSave}>
-                                <div className="flex justify-between items-center mb-8">
+                                <div className="flex flex-wrap justify-between items-center gap-3 mb-8">
                                     <h2 className="text-xl font-bold text-gray-900">
                                         {editingSlug === "" ? t('roles.createNewRole') : t('roles.editing').replace('{name}', roles[editingSlug]?.name ?? '')}
                                     </h2>

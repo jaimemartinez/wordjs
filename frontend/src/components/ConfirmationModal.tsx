@@ -35,7 +35,7 @@ export default function ConfirmationModal({
                     </div>
                     {/* pre-line: callers pass multi-paragraph disclosures (\n\n) — collapsing them into one
                         run-on paragraph buries safety-critical lines (e.g. the port-25 "CAREFUL" warning). */}
-                    <p className="text-gray-600 mb-6 leading-relaxed whitespace-pre-line">
+                    <p className="text-gray-600 mb-6 leading-relaxed whitespace-pre-line break-words">
                         {message}
                     </p>
                     <div className="flex justify-end gap-3">

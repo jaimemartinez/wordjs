@@ -129,7 +129,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                         <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Renew the Let&apos;s Encrypt certificate automatically before it expires.</p>
                     </div>
                 </div>
-                <div className={`relative inline-flex h-8 w-14 items-center rounded-full transition-colors ${cfg.enabled ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-700'}`}>
+                <div className={`relative inline-flex h-8 w-14 shrink-0 items-center rounded-full transition-colors ${cfg.enabled ? 'bg-amber-500' : 'bg-gray-300 dark:bg-gray-700'}`}>
                     <span className={`inline-block h-6 w-6 transform rounded-full bg-white transition-transform duration-200 ${cfg.enabled ? 'translate-x-7' : 'translate-x-1'}`} />
                 </div>
             </div>
