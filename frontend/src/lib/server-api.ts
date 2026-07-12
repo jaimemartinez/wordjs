@@ -154,6 +154,16 @@ export const getPublicAssets = cache((): Promise<PublicAssets> =>
 );
 
 /**
+ * Installed fonts, fetched on the SERVER so their @font-face rules can be emitted into the initial
+ * SSR <head> (see app/layout.tsx). Previously fonts were injected only client-side (SystemFontsLoader
+ * useEffect), so a public page's first paint had the inline `font-family` but no matching face and fell
+ * back to the theme font until hydration — a font changed in the editor appeared unreflected on public.
+ */
+export const getFonts = cache((): Promise<import('./fontFaceCss').WjsFont[]> =>
+    serverFetch<import('./fontFaceCss').WjsFont[]>('/fonts', { revalidate: 300, tags: ['fonts'] }).then((f) => f || [])
+);
+
+/**
  * A location menu (header/footer/…) for the public chrome, fetched on the SERVER so the Header/Footer
  * render their nav in the initial SSR HTML instead of each visitor re-fetching it client-side on
  * hydration. Cached + tagged like the other public reads.

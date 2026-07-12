@@ -171,6 +171,7 @@ export interface User {
     displayName: string;
     role: string;
     capabilities: string[];
+    personalEmail?: string | null;
 }
 
 export interface Role {
@@ -317,7 +318,19 @@ export const usersApi = {
     get: (id: number) => apiGet<User>(`/users/${id}`),
     create: (data: Partial<User> & { password: string }) => apiPost<User>("/users", data),
     update: (id: number, data: Partial<User>) => apiPut<User>(`/users/${id}`, data),
+    // Self-service update for the logged-in user (any role). Changing the password requires currentPassword.
+    updateMe: (data: { displayName?: string; personalEmail?: string; password?: string; currentPassword?: string }) =>
+        apiPut<User>("/users/me", data),
     delete: (id: number) => apiDelete(`/users/${id}`),
+};
+
+// Public password-recovery endpoints (unauthenticated). Available only when the mail server is active
+// and its DNS is fully verified — the login page probes `passwordResetAvailable` before offering it.
+export const authApi = {
+    passwordResetAvailable: () => apiGet<{ available: boolean }>("/auth/password-reset-available"),
+    forgotPassword: (login: string) => apiPost<{ ok: boolean; message: string }>("/auth/forgot-password", { login }),
+    resetPassword: (data: { uid: number; token: string; password: string }) =>
+        apiPost<{ ok: boolean; message: string }>("/auth/reset-password", data),
 };
 
 export const commentsApi = {
