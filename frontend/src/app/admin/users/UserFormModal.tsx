@@ -22,6 +22,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
         displayName: "",
         role: "subscriber",
         password: "",
+        personalEmail: "",
     });
     const [saving, setSaving] = useState(false);
     const [, setHookTick] = useState(0);
@@ -36,6 +37,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                 displayName: user.displayName || "",
                 role: user.role,
                 password: "", // Don't load password
+                personalEmail: user.personalEmail || "",
             });
         }
         // Listen for plugin hook changes
@@ -111,6 +113,17 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                                     readOnly: false
                                 }, { formData, isNew })}
                             />
+                        </div>
+                        <div>
+                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Personal / Recovery Email</label>
+                            <input
+                                type="email"
+                                value={formData.personalEmail}
+                                onChange={(e) => setFormData({ ...formData, personalEmail: e.target.value })}
+                                placeholder="name@gmail.com"
+                                className="w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium"
+                            />
+                            <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">External address for password recovery &amp; notifications. Independent of the professional mailbox — used even when a corporate <span className="font-mono">@domain</span> mailbox is enabled.</p>
                         </div>
                         <div>
                             <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Display Name</label>

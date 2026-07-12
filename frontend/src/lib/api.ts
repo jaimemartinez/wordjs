@@ -171,6 +171,7 @@ export interface User {
     displayName: string;
     role: string;
     capabilities: string[];
+    personalEmail?: string | null;
 }
 
 export interface Role {
@@ -317,6 +318,9 @@ export const usersApi = {
     get: (id: number) => apiGet<User>(`/users/${id}`),
     create: (data: Partial<User> & { password: string }) => apiPost<User>("/users", data),
     update: (id: number, data: Partial<User>) => apiPut<User>(`/users/${id}`, data),
+    // Self-service update for the logged-in user (any role). Changing the password requires currentPassword.
+    updateMe: (data: { displayName?: string; personalEmail?: string; password?: string; currentPassword?: string }) =>
+        apiPut<User>("/users/me", data),
     delete: (id: number) => apiDelete(`/users/${id}`),
 };
 
