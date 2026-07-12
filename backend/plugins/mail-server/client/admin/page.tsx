@@ -1588,6 +1588,26 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                                 Defaults to 25 — the port the internet delivers mail to. Leave it unless you're deliberately mapping ports at the OS/proxy level (e.g. 25 → 2525).
                             </p>
                         </div>
+
+                        <div className="max-w-md mt-6">
+                            <label className="block text-[13px] font-semibold text-slate-500 mb-1.5">Trusted proxy IPs — PROXY protocol</label>
+                            <input
+                                type="text"
+                                value={settings.smtp_proxy_ips || ''}
+                                onChange={(e) => setSettings({ ...settings, smtp_proxy_ips: e.target.value })}
+                                placeholder="10.8.0.1, 2001:db8::1"
+                                className="w-full px-3 py-2 text-sm font-mono border border-slate-200 rounded-lg bg-slate-50/60 text-slate-600 focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 outline-none transition-all"
+                            />
+                            {settings.smtp_proxy_active ? (
+                                <p className="text-[11px] text-emerald-600 mt-2 font-medium">
+                                    <i className="fa-solid fa-shield-halved mr-1"></i>
+                                    PROXY protocol active — the real sender IP is read from these proxies for SPF, DNSBL and logging.
+                                </p>
+                            ) : null}
+                            <p className="text-[11px] text-slate-400 mt-2 leading-relaxed">
+                                Only set this if inbound mail reaches WordJS <strong>through a TCP proxy</strong> — e.g. nginx <code className="text-[10px] bg-slate-100 px-1 rounded">stream</code> with <code className="text-[10px] bg-slate-100 px-1 rounded">proxy_protocol on;</code> or HAProxy <code className="text-[10px] bg-slate-100 px-1 rounded">send-proxy</code>. List the proxy's own IP(s), comma-separated. WordJS reads the real client IP from the PROXY v1 header <strong>only</strong> on connections from these exact IPs — never from anyone else, so a sender can't forge their source IP. Leave blank for direct delivery.
+                            </p>
+                        </div>
                     </div>
                 </div>
             </div>
