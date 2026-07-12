@@ -18,7 +18,7 @@ interface SidebarMenuItem {
 
 // Core menu items - labels will be translated in component
 const coreMenuItems: SidebarMenuItem[] = [
-    { href: "/admin", label: "nav.dashboard", icon: "fa-chart-pie", cap: "read" },
+    { href: "/admin", label: "nav.dashboard", icon: "fa-chart-pie", cap: "edit_posts" },
     { href: "/admin/posts", label: "nav.posts", icon: "fa-pen-to-square", cap: "edit_posts" },
     { href: "/admin/pages", label: "nav.pages", icon: "fa-file-lines", cap: "edit_pages" },
     { href: "/admin/media", label: "nav.media", icon: "fa-images", cap: "upload_files" },
@@ -39,6 +39,9 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/security", label: "Security", icon: "fa-lock", cap: "manage_options" },
     { href: "/admin/hooks", label: "Hooks Registry", icon: "fa-microscope", cap: "manage_options" },
     { href: "/admin/db-migration", label: "DB Migration", icon: "fa-database", cap: "manage_options" },
+    // Self-service account (change password + personal/recovery email). cap 'read' → every logged-in
+    // user, including subscribers who have no other admin access.
+    { href: "/admin/account", label: "nav.account", icon: "fa-user-gear", cap: "read" },
 ];
 
 interface SidebarProps {

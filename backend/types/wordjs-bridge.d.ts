@@ -91,6 +91,12 @@ export interface WordJSAdminMenuItem {
     order?: number;
     /** Capability required to see the item. */
     cap?: string;
+    /**
+     * When true, core hides this item from any user who does NOT own a professional mailbox on the
+     * site domain (their account email is not `@<site-domain>`). Use it for per-user features that are
+     * empty/meaningless without such a mailbox — e.g. a webmail inbox. Administrators always see it.
+     */
+    requiresProfessionalMailbox?: boolean;
     [key: string]: any;
 }
 
