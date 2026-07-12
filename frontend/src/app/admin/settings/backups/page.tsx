@@ -204,8 +204,8 @@ export default function BackupsPage() {
                         </p>
                     </div>
 
-                    <div className="flex items-center gap-4">
-                        <div className="flex items-center gap-4 bg-gray-50 p-2 rounded-2xl border border-gray-100">
+                    <div className="flex flex-wrap items-center gap-4">
+                        <div className="flex flex-wrap items-center gap-4 bg-gray-50 p-2 rounded-2xl border border-gray-100">
                             <div className="w-56">
                                 <Select
                                     value={schedule}

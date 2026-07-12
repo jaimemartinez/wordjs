@@ -107,7 +107,7 @@ export default function CategoriesPage() {
                                                 {t('categories.slug') || "Slug"}
                                             </th>
                                             <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">
-                                                {t('categories.count') || "Count"}
+                                                {t('categories.post.count') || "Count"}
                                             </th>
                                             <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">
                                                 {t('actions')}

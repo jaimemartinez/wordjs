@@ -339,7 +339,7 @@ export default function CarouselsPage() {
                                         <span className="text-xs text-gray-400">Drag to reorder</span>
                                     </div>
 
-                                    <div className="grid grid-cols-4 gap-4 mb-4">
+                                    <div className="grid grid-cols-3 sm:grid-cols-4 gap-4 mb-4">
                                         {formImages.map((img, index) => (
                                             <div
                                                 key={index}
@@ -439,7 +439,7 @@ export default function CarouselsPage() {
                                                         placeholder="Detailed description or message..."
                                                     />
                                                 </div>
-                                                <div className="grid grid-cols-2 gap-4">
+                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                                                     <div>
                                                         <label className="block text-xs font-bold text-gray-400 uppercase mb-1.5">Button Text</label>
                                                         <input
@@ -525,7 +525,7 @@ export default function CarouselsPage() {
                                 </div>
                             </div>
 
-                            <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50">
+                            <div className="p-6 border-t border-gray-100 flex flex-wrap justify-end gap-3 bg-gray-50/50">
                                 <button
                                     onClick={() => setIsEditing(false)}
                                     className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"

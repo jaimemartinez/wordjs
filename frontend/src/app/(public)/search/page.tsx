@@ -32,7 +32,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                     Search Results
                 </h1>
                 {query && (
-                    <p className="text-lg text-[var(--wjs-color-text-muted,#6b7280)]">
+                    <p className="text-lg text-[var(--wjs-color-text-muted,#6b7280)] break-words">
                         {results.length} result{results.length !== 1 ? "s" : ""} for &quot;{query}&quot;
                     </p>
                 )}
@@ -46,7 +46,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                         name="q"
                         defaultValue={query}
                         placeholder="Search again..."
-                        className="flex-1 px-5 py-4 text-lg border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-xl bg-[var(--wjs-bg-surface,#fff)] focus:outline-none focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent transition-all"
+                        className="flex-1 min-w-0 px-5 py-4 text-lg border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-xl bg-[var(--wjs-bg-surface,#fff)] focus:outline-none focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent transition-all"
                     />
                     <button
                         type="submit"
@@ -82,7 +82,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                     <h2 className="text-2xl font-semibold mb-3 text-[var(--wjs-color-text-main,#1a1a1a)]">
                         No Results Found
                     </h2>
-                    <p className="text-[var(--wjs-color-text-muted,#6b7280)] mb-6">
+                    <p className="text-[var(--wjs-color-text-muted,#6b7280)] mb-6 break-words">
                         We couldn&apos;t find anything matching &quot;{query}&quot;.
                     </p>
                     <p className="text-sm text-[var(--wjs-color-text-muted,#9ca3af)]">

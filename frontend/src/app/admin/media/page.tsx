@@ -57,7 +57,7 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
                         </div>
                         <div>
                             <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-2">URL</span>
-                            <div className="bg-gray-50 rounded-xl p-3 border border-gray-100break-all text-xs font-mono text-gray-500 select-all border border-gray-200">
+                            <div className="bg-gray-50 rounded-xl p-3 border break-all text-xs font-mono text-gray-500 select-all border border-gray-200">
                                 {item.guid}
                             </div>
                         </div>

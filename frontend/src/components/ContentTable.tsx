@@ -224,7 +224,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                                         <span className="text-sm font-bold text-gray-500">{new Date(post.date).toLocaleDateString()}</span>
                                     </td>
                                     <td className="px-6 py-6 text-right">
-                                        <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity translate-x-4 group-hover:translate-x-0 duration-300">
+                                        <div className="flex items-center justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity translate-x-0 md:translate-x-4 md:group-hover:translate-x-0 duration-300">
                                             <a href={viewHref(post)} target="_blank" rel="noopener noreferrer"
                                                 className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
                                                 title={post.status === 'publish' ? 'View' : 'Preview draft'}>

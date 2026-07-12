@@ -86,7 +86,7 @@ export default async function HomePage() {
                     {published.map((post) => (
                         <article key={post.id} className="group bg-[var(--wjs-bg-surface,#ffffff)] rounded-2xl shadow-sm hover:shadow-md transition-all duration-300 border border-[var(--wjs-border-subtle,#f3f4f6)] overflow-hidden">
                             <div className="p-8">
-                                <div className="flex items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
+                                <div className="flex flex-wrap items-center gap-3 text-sm text-[var(--wjs-color-text-muted,#6b7280)] mb-4">
                                     <span className="bg-[var(--wjs-bg-muted,#eff6ff)] text-[var(--wjs-color-primary,#1d4ed8)] px-3 py-1 rounded-full font-medium">Article</span>
                                     <span>•</span>
                                     <span>{post.date ? new Date(post.date).toLocaleDateString() : ''}</span>

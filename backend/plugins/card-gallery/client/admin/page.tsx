@@ -237,7 +237,7 @@ export default function CardGalleryAdminPage() {
 
                 {/* Create Modal */}
                 {isCreatingGallery && (
-                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 animate-in fade-in duration-200">
+                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4 animate-in fade-in duration-200">
                         <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-in zoom-in-95 duration-200">
                             <h3 className="text-xl font-bold mb-4">Nueva Galería</h3>
                             <input
@@ -333,8 +333,8 @@ export default function CardGalleryAdminPage() {
                     >
                         <i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>
                     </button>
-                    <div>
-                        <h1 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-1">{selectedGallery?.name}</h1>
+                    <div className="min-w-0">
+                        <h1 className="text-4xl font-black text-gray-900 italic tracking-tighter mb-1 break-words">{selectedGallery?.name}</h1>
                         <p className="text-xs font-bold uppercase tracking-widest text-gray-400">
                             Gestionando tarjetas
                         </p>
@@ -557,7 +557,7 @@ export default function CardGalleryAdminPage() {
                             </div>
                         </div>
 
-                        <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50 sticky bottom-0">
+                        <div className="p-6 border-t border-gray-100 flex flex-wrap justify-end gap-3 bg-gray-50/50 sticky bottom-0">
                             <button
                                 onClick={() => { setEditingCardIndex(null); setIsNewCard(false); }}
                                 className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"

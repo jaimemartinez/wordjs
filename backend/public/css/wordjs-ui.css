@@ -759,6 +759,20 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
 }
 @supports not (color: color-mix(in srgb, red, blue)) { .widget li { border-bottom-color: var(--wjs-border-subtle); } }
 
+/* ================================================ MOBILE OVERFLOW GUARDS ====== */
+/* <768px only — desktop rendering is untouched. Content HTML is author-supplied, so wide
+ * tables and long unbroken strings (URLs, emails) must degrade to container-level scroll /
+ * word wrapping instead of forcing body-level horizontal scroll on small viewports. */
+@media (max-width: 767.98px) {
+  /* Authors can't wrap raw content tables in .table-responsive — make the table itself the
+   * horizontal scroll container (the standard fix for rendered markdown/content tables). */
+  .wjs-content table { display: block; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  /* Long unbreakable strings in post bodies and widget output wrap instead of overflowing. */
+  .wjs-content, .widget-area { overflow-wrap: break-word; }
+  /* Long page lists otherwise push past the viewport (.nav/.breadcrumb already wrap). */
+  .pagination { flex-wrap: wrap; }
+}
+
 /* ================================================= RESPONSIVE VISIBILITY ====== */
 /* Per-block "hide on device" from the visual editor (VisibilityField). The wrapper is
  * display:contents, so hiding via display:none removes the block without adding a layout box.

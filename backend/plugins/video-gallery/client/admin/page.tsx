@@ -175,7 +175,7 @@ export default function VideosAdminPage() {
 
                 {/* Create Modal */}
                 {isCreatingGallery && (
-                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+                    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
                         <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl">
                             <h3 className="text-xl font-bold mb-4">Nueva Galería</h3>
                             <input
@@ -244,7 +244,7 @@ export default function VideosAdminPage() {
                                 </button>
 
                                 <div className="mt-auto pt-4 border-t border-gray-100 flex justify-between items-center text-sm">
-                                    <span className="text-gray-400 text-xs font-mono">ID: {g.id}</span>
+                                    <span className="text-gray-400 text-xs font-mono truncate">ID: {g.id}</span>
                                     <span className="text-blue-600 font-medium group-hover:translate-x-1 transition-transform">Gestionar &rarr;</span>
                                 </div>
                             </Card>
@@ -449,7 +449,7 @@ export default function VideosAdminPage() {
                                 )}
                             </div>
 
-                            <div className="grid grid-cols-2 gap-6">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
                                 <div>
                                     <label className="block text-xs font-bold text-gray-500 uppercase tracking-wide mb-2">Texto del Botón</label>
                                     <input
@@ -482,7 +482,7 @@ export default function VideosAdminPage() {
                             </div>
                         </div>
 
-                        <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50/50">
+                        <div className="p-6 border-t border-gray-100 flex flex-wrap justify-end gap-3 bg-gray-50/50">
                             <button
                                 onClick={() => setEditingVideo(null)}
                                 className="px-6 py-3 border border-gray-200 rounded-xl text-gray-600 font-medium hover:bg-white hover:border-gray-300 transition-colors shadow-sm"

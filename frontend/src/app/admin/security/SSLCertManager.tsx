@@ -328,7 +328,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
 
             {/* Logs Console */}
             {logs.length > 0 && (
-                <div className="bg-slate-900 rounded-xl p-4 font-mono text-sm max-h-60 overflow-y-auto">
+                <div className="bg-slate-900 rounded-xl p-4 font-mono text-sm max-h-60 overflow-y-auto break-words">
                     {logs.map((l, i) => (
                         <div key={i} className="text-green-400 mb-1 last:mb-0">{l}</div>
                     ))}
@@ -348,7 +348,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                         </div>
                         <div className="bg-white p-3 rounded border">
                             <span className="text-xs text-gray-500 block mb-1">Host / Name</span>
-                            <code className="font-bold select-all">{dnsData.txtRecord}</code>
+                            <code className="font-bold break-all select-all">{dnsData.txtRecord}</code>
                         </div>
                         <div className="md:col-span-2 bg-white p-3 rounded border">
                             <span className="text-xs text-gray-500 block mb-1">Value / Content</span>
