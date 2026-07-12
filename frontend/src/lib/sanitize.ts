@@ -6,6 +6,23 @@
 
 import DOMPurify from 'dompurify';
 
+// Load sanitize-html at SSR RUNTIME. This file is "use client", but sanitizeHTML() also runs during
+// SERVER rendering of client components. A plain `require('sanitize-html')` here is rewritten by
+// webpack: in the compiled production build the server bundle's require resolved to a broken/absent
+// module and THREW, so every SSR call fell into its catch and stripped ALL tags from Puck content —
+// bold, font-size and font-family were silently lost on the public site (dev worked, prod did not,
+// because `next dev` doesn't bundle the same way). `__non_webpack_require__` is webpack's designated
+// "leave this to the runtime require" escape hatch, so the real node module loads and is never bundled
+// into the client. Cached after first load. Falls back to eval-require, then the bundler's require.
+declare const __non_webpack_require__: ((id: string) => any) | undefined;
+let _sanitizeHtmlLib: any = null;
+function loadSanitizeHtml(): any {
+    if (_sanitizeHtmlLib) return _sanitizeHtmlLib;
+    try { if (typeof __non_webpack_require__ === 'function') return (_sanitizeHtmlLib = __non_webpack_require__('sanitize-html')); } catch { /* try next */ }
+    try { return (_sanitizeHtmlLib = (eval('require') as NodeRequire)('sanitize-html')); } catch { /* try next */ }
+    return (_sanitizeHtmlLib = require('sanitize-html'));
+}
+
 // Allowlist of iframe embed hosts (mirrors the backend posts.ts sanitize()). Arbitrary iframe src is
 // NOT permitted — only these hosts — and every surviving iframe is forced to carry a sandbox attribute.
 // CSP `frame-src 'self'` (next.config.ts) is the backstop if anything slips past this list.
@@ -193,7 +210,7 @@ export function sanitizeHTML(dirty: string): string {
         // Server-side (SSR): sanitize with sanitize-html so the initial HTML is safe BEFORE hydration.
         // Returning raw here was an XSS window (the payload ran before the client could sanitize).
         try {
-            return require('sanitize-html')(dirty, SERVER_SANITIZE_OPTIONS);
+            return loadSanitizeHtml()(dirty, SERVER_SANITIZE_OPTIONS);
         } catch {
             return dirty.replace(/<[^>]*>/g, ''); // fail closed
         }
@@ -210,7 +227,7 @@ export function sanitizeHTMLCustom(dirty: string, options: object): string {
     if (typeof window === 'undefined') {
         // Custom options are DOMPurify-shaped; on the server fall back to the base allowlist (still safe).
         try {
-            return require('sanitize-html')(dirty, SERVER_SANITIZE_OPTIONS);
+            return loadSanitizeHtml()(dirty, SERVER_SANITIZE_OPTIONS);
         } catch {
             return dirty.replace(/<[^>]*>/g, '');
         }
@@ -228,7 +245,7 @@ export function stripHTML(dirty: string): string {
         // Server-side: use sanitize-html (allow nothing) rather than a regex strip, which is bypassable
         // (e.g. `<scr<script>ipt>`). Fail closed to a regex strip only if the lib is unavailable.
         try {
-            return require('sanitize-html')(dirty, { allowedTags: [], allowedAttributes: {} });
+            return loadSanitizeHtml()(dirty, { allowedTags: [], allowedAttributes: {} });
         } catch {
             return dirty.replace(/<[^>]*>/g, '');
         }
