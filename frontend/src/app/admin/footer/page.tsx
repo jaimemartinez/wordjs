@@ -198,7 +198,7 @@ export default function FooterSettingsPage() {
             <div className="relative flex-1 w-full bg-gray-50/50 overflow-hidden flex flex-col min-h-0 md:flex-row">
 
                 {/* SETTINGS SIDEBAR (Left) */}
-                <div className="flex flex-col w-[400px] bg-white z-30 shadow-[4px_0_24px_-4px_rgba(0,0,0,0.05)] border-r border-gray-100 relative">
+                <div className="flex flex-col min-h-0 w-full md:w-[400px] bg-white z-30 shadow-[4px_0_24px_-4px_rgba(0,0,0,0.05)] border-r border-gray-100 relative">
                     {/* Gradient Border Line */}
                     <div className="absolute top-0 bottom-0 right-0 w-px bg-gradient-to-b from-gray-100 via-gray-200 to-gray-100"></div>
 
@@ -329,7 +329,7 @@ export default function FooterSettingsPage() {
                 </div>
 
                 {/* DEVICE PREVIEW AREA (Right) */}
-                <div className="flex-1 relative overflow-hidden bg-gray-100/50 h-full min-h-0 flex flex-col items-center p-4 md:py-10 md:px-12">
+                <div className="flex-1 relative overflow-hidden bg-gray-100/50 h-full min-h-[320px] md:min-h-0 flex flex-col items-center p-4 md:py-10 md:px-12">
                     {/* Dotted Background Pattern */}
                     <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 1px)', backgroundSize: '24px 24px' }}></div>
 

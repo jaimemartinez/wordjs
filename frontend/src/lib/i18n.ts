@@ -620,6 +620,33 @@ export const translations: Record<Language, Record<string, string>> = {
         'settings.redis.protip.label': 'Consejo:',
         'settings.redis.protip': 'Redis está activo. Si no tienes un servidor Redis instalado en tu host, el sistema recurrirá automáticamente a la base de datos sin mostrar errores.',
         'settings.saved.success': '¡Cambios guardados correctamente!',
+
+        // Categorías (antes sin traducir: la clave cruda aparecía en pantalla)
+        'categories.title': 'Categorías',
+        'categories.count': 'categorías',
+        'categories.post.count': 'Recuento',
+        'categories.add': 'Añadir categoría',
+        'categories.add.first': 'Crea tu primera categoría para organizar el contenido.',
+        'categories.delete.message': '¿Eliminar esta categoría?',
+        'categories.delete.title': 'Eliminar categoría',
+        'categories.name': 'Nombre',
+        'categories.name.placeholder': 'Nombre de la categoría',
+        'categories.not.found': 'Aún no hay categorías',
+        'categories.slug': 'Slug',
+        // UI suelta antes sin traducir
+        'common.close': 'Cerrar',
+        'no.results': 'Nada coincide con tus filtros.',
+        'users.delete.title': 'Eliminar usuario',
+        'users.not.found': 'No se encontraron usuarios',
+        // Modal de permisos de plugins (solo existía en inglés)
+        'plugins.confirm.activate': 'Confirmar y activar',
+        'plugins.extend.functionality': 'Extiende la funcionalidad de tu sitio',
+        'plugins.loading': 'Cargando tus plugins...',
+        'plugins.no.plugins.found': 'No hay plugins instalados',
+        'plugins.safe.to.activate': 'Seguro para activar',
+        'plugins.no.permissions': 'Este plugin no solicita permisos especiales del sistema.',
+        'plugins.requests.permissions': 'El plugin solicita los siguientes permisos para funcionar:',
+        'plugins.installing': 'Instalando...',
     },
     en: {
         // General
@@ -1244,6 +1271,24 @@ export const translations: Record<Language, Record<string, string>> = {
         'settings.redis.protip.label': 'Pro Tip:',
         'settings.redis.protip': 'Redis is active. If you don\'t have a Redis server installed on your host, the system will automatically fall back to the database without showing errors.',
         'settings.saved.success': 'Changes saved successfully!',
+
+        // Categories admin (previously untranslated: the raw key showed on screen)
+        'categories.title': 'Categories',
+        'categories.count': 'categories',
+        'categories.post.count': 'Count',
+        'categories.add': 'Add Category',
+        'categories.add.first': 'Create your first category to organize content.',
+        'categories.delete.message': 'Delete this category?',
+        'categories.delete.title': 'Delete Category',
+        'categories.name': 'Name',
+        'categories.name.placeholder': 'Category name',
+        'categories.not.found': 'No categories yet',
+        'categories.slug': 'Slug',
+        // Misc previously-untranslated UI
+        'common.close': 'Close',
+        'no.results': 'Nothing matches your filters.',
+        'users.delete.title': 'Delete User',
+        'users.not.found': 'No users found',
     },
     pt: {
         // General
@@ -1859,6 +1904,33 @@ export const translations: Record<Language, Record<string, string>> = {
         'settings.redis.protip.label': 'Dica:',
         'settings.redis.protip': 'O Redis está ativo. Se você não tiver um servidor Redis instalado no seu host, o sistema usará automaticamente o banco de dados sem exibir erros.',
         'settings.saved.success': 'Alterações salvas com sucesso!',
+
+        // Categorias (antes sem tradução: a chave bruta aparecia na tela)
+        'categories.title': 'Categorias',
+        'categories.count': 'categorias',
+        'categories.post.count': 'Contagem',
+        'categories.add': 'Adicionar categoria',
+        'categories.add.first': 'Crie sua primeira categoria para organizar o conteúdo.',
+        'categories.delete.message': 'Excluir esta categoria?',
+        'categories.delete.title': 'Excluir categoria',
+        'categories.name': 'Nome',
+        'categories.name.placeholder': 'Nome da categoria',
+        'categories.not.found': 'Ainda não há categorias',
+        'categories.slug': 'Slug',
+        // UI solta antes sem tradução
+        'common.close': 'Fechar',
+        'no.results': 'Nada corresponde aos seus filtros.',
+        'users.delete.title': 'Excluir usuário',
+        'users.not.found': 'Nenhum usuário encontrado',
+        // Modal de permissões de plugins (existia apenas em inglês)
+        'plugins.confirm.activate': 'Confirmar e ativar',
+        'plugins.extend.functionality': 'Estenda a funcionalidade do seu site',
+        'plugins.loading': 'Carregando seus plugins...',
+        'plugins.no.plugins.found': 'Nenhum plugin instalado',
+        'plugins.safe.to.activate': 'Seguro para ativar',
+        'plugins.no.permissions': 'Este plugin não solicita permissões especiais do sistema.',
+        'plugins.requests.permissions': 'O plugin solicita as seguintes permissões para funcionar:',
+        'plugins.installing': 'Instalando...',
     },
 };
 

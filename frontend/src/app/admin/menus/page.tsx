@@ -441,7 +441,7 @@ export default function MenusPage() {
                                 </p>
                             </div>
                             {activeMenu && (
-                                <div className="flex gap-4">
+                                <div className="flex flex-wrap gap-4">
                                     {[
                                         { key: 'header', label: t('menus.mainMenu') },
                                         { key: 'footer', label: t('menus.footerMenu') }

@@ -312,7 +312,7 @@ export default function WidgetsPage() {
                     </div>
 
                     {/* Sidebars Column */}
-                    <div className="col-span-2 space-y-6">
+                    <div className="md:col-span-2 space-y-6">
                         {sidebars.map(sidebar => (
                             <SidebarContainer
                                 key={sidebar.id}

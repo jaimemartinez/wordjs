@@ -88,15 +88,15 @@ export default function CommentsSection({ postId }: { postId: number }) {
                                     className="w-10 h-10 rounded-full"
                                 />
                             </div>
-                            <div className="flex-1">
+                            <div className="flex-1 min-w-0">
                                 <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
-                                    <div className="flex justify-between items-start mb-2">
-                                        <h4 className="font-bold text-gray-900">{comment.author}</h4>
-                                        <span className="text-xs text-gray-500">
+                                    <div className="flex justify-between items-start mb-2 gap-2">
+                                        <h4 className="font-bold text-gray-900 break-words min-w-0">{comment.author}</h4>
+                                        <span className="text-xs text-gray-500 shrink-0">
                                             {new Date(comment.date).toLocaleDateString()}
                                         </span>
                                     </div>
-                                    <div className="prose prose-sm text-gray-700 max-w-none" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
+                                    <div className="prose prose-sm text-gray-700 max-w-none break-words" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
                                 </div>
                             </div>
                         </div>
