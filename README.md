@@ -21,7 +21,8 @@ The rest of the package is a modern, JavaScript-native CMS with a WordPress-styl
 model (plugins, themes, hooks, shortcodes): real **SSR & SEO out of the box** (React Server
 Components, `generateMetadata`, sitemap/robots/RSS), a **no-code visual editor** (Puck with
 in-place rich text) in core rather than as a paid add-on, **13 token-driven themes** with a
-live customizer, a **WordPress WXR importer** for switching, and a **one-process deploy** —
+live customizer, a built-in **plugin marketplace** (25 first-party plugins, one-click
+sha256-verified installs), a **WordPress WXR importer** for switching, and a **one-process deploy** —
 a single Node process with SQLite by default, pre-compiled release ZIPs, no PHP, no MySQL
 server, no build step on the server.
 
@@ -60,11 +61,12 @@ visual editor ([Puck](https://puckeditor.com)) ships in **core**, not as a paid 
 | **Deploy footprint** | 1 Node process, SQLite default | PHP + MySQL | Node + MySQL | Node + DB + your frontend | Node + DB (Next-native) |
 | **Stack** | TypeScript + Next.js | PHP | Node + Handlebars | Node | TypeScript + Next.js |
 | **License** | MIT | GPLv2 | MIT | MIT (paid EE) | MIT (paid cloud) |
-| **Ecosystem size** | ⚠️ young — first-party plugins/themes only | 60k+ plugins | large | large marketplace | growing |
+| **Ecosystem size** | ⚠️ young — built-in marketplace, 25 first-party plugins, no third-party authors yet | 60k+ plugins | large | large marketplace | growing |
 
-The last row is the honest one: WordJS has no marketplace yet. What it has is the row at the
-top — the one no incumbent can retrofit, because their entire ecosystems assume plugins run
-with full trust.
+The last row is the honest one: WordJS now ships a built-in plugin marketplace with one-click,
+sha256-verified installs — but all 25 plugins in it are first-party, and there is no third-party
+author community yet. What it has is the row at the top — the one no incumbent can retrofit,
+because their entire ecosystems assume plugins run with full trust.
 
 ---
 
@@ -113,6 +115,17 @@ with full trust.
   via pure-JS PowerShell P/Invoke, probe-gated; opt out via `sandbox.useJobObjectMemoryCap`); a
   **reactive host-side RSS poll** that `SIGKILL`s a child over budget (Linux `/proc`, Windows
   `tasklist`, macOS `ps`); and a loose `RLIMIT_AS` virtual backstop plus a `--max-old-space-size` JS-heap cap.
+- **Plugin marketplace (first-party).** The admin plugins page has a **Marketplace tab** with
+  one-click installs from a curated catalog of **25 first-party plugins** (contact forms,
+  newsletter, events calendar, online store, bookings, donations, event tickets, FAQ, polls,
+  testimonials, SEO helpers, and more). Plugin sources live in `marketplace/plugins/`, outside
+  the core build; `npm run build:marketplace` packs them into a committed catalog + zips
+  (`marketplace/dist/`, also attached to GitHub Releases), served to installs from the repo or
+  any admin-configured HTTPS/local source. Downloads are **sha256-verified** against the catalog
+  and go through the **same hardened install pipeline** as manual zip uploads (zip-bomb budget,
+  Zip Slip, slug validation, manifest + AST scan) — a marketplace plugin is sandboxed and
+  permission-gated exactly like any other. All catalog plugins are first-party today;
+  third-party submissions and review are roadmap.
 - **Real server-side rendering.** The public routes (home, posts, pages, search) are async
   React Server Components that fetch on the server (`frontend/src/lib/server-api.ts`), so the
   initial HTML sent to crawlers and the first paint already contain the real title/body —
@@ -133,6 +146,9 @@ with full trust.
   so the responsive layout matches the live site exactly.
 - **Hooks & filters** event system, with admin-side hook inspection.
 - **Shortcodes** (WordPress-style) for dynamic content, including from plugins.
+- **YouTube videos plugin** (bundled): point it at a channel to get a synced video list —
+  keyless via the channel's RSS feed, or via the YouTube Data API with a key — plus a Puck
+  **carousel block** with filtering for embedding the videos on any page.
 - **Themes** with CSS-variable theming (13 first-party themes ship in-repo). The theme
   system ships a **token-driven, Bootstrap-like CSS framework** (`backend/public/css/wordjs-ui.css`):
   one shared stylesheet that auto-styles every HTML element plus opt-in components
@@ -142,7 +158,10 @@ with full trust.
   `PuckEditor`), always **before** the theme's own `style.css`, so the theme wins. The active theme
   drives the whole live (Next.js) site — chrome, post content, and widget areas — plus an optional
   `theme.json` `layout`, and an admin **customizer** (`/admin/themes/customize`) edits `--wjs-*`
-  tokens live. See [`documentation/themes.md`](documentation/themes.md).
+  tokens live. A theme's optional server-side `functions.js` runs in the **same OS-isolated
+  sandbox as plugins** (loaded via `loadIsolatedPlugin('theme:<slug>')`), so its hooks/shortcodes
+  reach core only through the permission-checked bridge — theme code never runs in-process on the
+  host. See [`documentation/themes.md`](documentation/themes.md).
 - **Dynamic roles & permissions**, database-driven.
 - **i18n** for core and plugins (es / en / pt).
 - **Import / export** for full site backup and restore, with **retention pruning** — after
@@ -163,7 +182,9 @@ with full trust.
 - **Gateway** with Node `cluster` (one worker per CPU, automatic respawn on crash),
   load-balancing, periodic upstream **health checks** that evict failing targets, an
   **mTLS-secured internal control channel**, and **SSE-aware proxying** (compression
-  disabled and 1-hour timeouts for event streams).
+  disabled and 1-hour timeouts for event streams). It also acts as the **cluster CA**: for
+  [separate-mode](documentation/separate-mode.md) deployments it mints single-use, role-bound
+  **join tokens** and signs each remote node an mTLS identity over a dedicated enrollment listener.
 - **TLS**: automatic **Let's Encrypt** certificates via `acme-client` (**HTTP-01** and
   **DNS-01** challenges), plus **manual certificate upload** and a self-signed fallback for
   local development. ACME **auto-renewal works in monolith mode too** — in embedded mode the
@@ -207,15 +228,15 @@ graph TD
 - **[Frontend](frontend/):** The public site and the Next.js admin interface (including the
   Puck visual builder).
 
-### Run modes (split or monolith)
+### Run modes (monolith, split, or separate)
 
-The same codebase runs two ways, **switchable at any time** — both modes share the same
-`backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`, secrets, and
-the same public origin (`https://localhost:3000`), so there is no migration to switch. They
-are mutually exclusive (both bind the public port).
+The same codebase runs three ways, **switchable at any time** — the monolith and single-host
+split share the same `backend/wordjs-config.json`, the same database, `uploads`/`themes`/`plugins`,
+secrets, and the same public origin (`https://localhost:3000`), so there is no migration to switch
+between them. Monolith and split are mutually exclusive (both bind the public port).
 
-- **Split (default) — three processes:** the gateway + backend + frontend shown above, started
-  together by `npm run dev` / `npm start`. The gateway adds Node `cluster`, health-checks, and
+- **Split (default) — three processes on one host:** the gateway + backend + frontend shown above,
+  started together by `npm run dev` / `npm start`. The gateway adds Node `cluster`, health-checks, and
   load-balancing — best when you want to scale services independently.
 - **Monolith — one process, one port:** everything runs in a single Node process on `:3000`
   via [`monolith.js`](monolith.js) (`npm run dev:mono`, or
@@ -224,6 +245,13 @@ are mutually exclusive (both bind the public port).
   service-registration); the gateway's still-needed cross-cutting concerns (TLS, security
   headers, compression, SEO rewrites) are handled locally. Simplest to deploy (one process
   behind a single reverse proxy or a small VM/container).
+- **Separate — the three services on different machines:** the same split, spread across a gateway
+  box, a backend box, and a frontend box, joined into one cluster over **mutual TLS**. The gateway
+  is the cluster CA; `node scripts/cluster.js init` mints it, and per-node **single-use, role-bound
+  join tokens** (`node scripts/cluster.js token <backend|frontend>`) let each new machine enroll
+  (`node scripts/node-join.js …`) — the gateway signs the node an mTLS identity, so no cert is ever
+  hand-copied. See the [**Separate-mode guide**](documentation/separate-mode.md) for the full
+  enrollment walkthrough.
 
 ```mermaid
 graph LR
@@ -254,6 +282,7 @@ Guides live in [`documentation/`](documentation/):
 - 🗃️ **[Plugin Database Access](documentation/plugin-database.md)** — the table-scoped `wjp_<slug>_` plugin DB handle.
 - 📥 **[Migrating from WordPress](documentation/wordpress-import.md)** — import a WordPress WXR export (authors, terms, posts/pages, comments).
 - 🚀 **[Deployment Guide](documentation/deployment.md)** — incl. **Releases & distribution** (downloadable pre-compiled bundles).
+- 🧩 **[Separate Mode](documentation/separate-mode.md)** — run the gateway, backend, and frontend on **different machines**, joined over mTLS via cluster join tokens (`cluster init` / `cluster token` / `node-join`).
 - 🌐 **[Multi-Node Operations](documentation/multi-node.md)** — dist-lock leases, Redis coherence, and what's deferred.
 - 🔐 **[Security Policy](SECURITY.md)** — vulnerability reporting and active defenses.
 - 🛡️ **[Security Architecture](documentation/security.md)** — deeper defenses reference (sandbox, capability grants, CSRF, JWT revocation).
@@ -265,9 +294,11 @@ Guides live in [`documentation/`](documentation/):
 
 ## 🚀 Getting Started
 
-> Requires Node.js **>= 20.9** (Node 20 or 22 LTS recommended — Next.js 16 and the native modules need it; Node 18 fails with `EBADENGINE`/native-binding errors). WordJS can run as **three services** (gateway, backend, frontend)
-> or as a **single-process monolith** — see [Run modes](#run-modes-split-or-monolith). The
-> scripts below start everything together either way.
+> Requires Node.js **>= 20.9** (Node 20 or 22 LTS recommended — Next.js 16 and the native modules need it; Node 18 fails with `EBADENGINE`/native-binding errors). WordJS can run as **three services** (gateway, backend, frontend) on
+> one host, as a **single-process monolith**, or with the three services on **separate machines**
+> joined by cluster join tokens — see [Run modes](#run-modes-monolith-split-or-separate) and the
+> [Separate-mode guide](documentation/separate-mode.md). The scripts below start everything
+> together on a single host.
 
 ### Fastest — one command
 
@@ -378,8 +409,10 @@ Treat it as **beta**:
   risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
 - The backend **compiles to `dist/` for production** (no `ts-node` at runtime) with a
   **strict type-check enforced in CI** (details under [Backend scripts](#backend-scripts)).
-- There is **no plugin marketplace or community ecosystem yet**. The repo ships a
-  handful of first-party/example plugins and 13 themes.
+- The ecosystem is **entirely first-party**. A built-in **plugin marketplace** now ships
+  (25 first-party plugins with sha256-verified one-click installs), alongside the bundled
+  plugins and 13 themes — but there is **no third-party plugin community or public
+  submission/review pipeline yet**.
 
 Use it to build, learn, and experiment. Do your own review before trusting it with
 real data or real users.
@@ -451,8 +484,10 @@ plugin needing a port `<1024` won't bind it under hardening.) Further hardening 
 
 Planned, **not yet implemented**:
 
-- **🧩 Curated plugin marketplace** — an installable ecosystem where "sandboxed & reviewed"
-  is a verifiable trust badge (see [POSITIONING.md](POSITIONING.md)).
+- **🧩 Third-party marketplace submissions** — the built-in marketplace ships today with 25
+  first-party plugins; opening it to community authors, with a review pipeline where
+  "sandboxed & reviewed" is a verifiable trust badge, is the next step
+  (see [POSITIONING.md](POSITIONING.md)).
 - **☁️ Media CDN integration** — S3-compatible object storage.
 - **🌐 Multi-site** — manage multiple domains/sites from one install.
 - **🛡️ Kernel-level plugin hardening** — OS-process isolation ships, and an **opt-in** Linux

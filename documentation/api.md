@@ -155,7 +155,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 - **Authentication**: `/auth` - Login, Register, Session management.
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
 - **Users**: `/users`, `/roles` - Role-Based Access Control.
-- **System**: `/settings`, `/plugins`, `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/system/certs`.
+- **System**: `/settings`, `/plugins`, `/marketplace` (plugin catalog — see §6.3.1), `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8).
 - **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
@@ -164,6 +164,20 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 1. **Login**: `POST /auth/login` -> sets the `wordjs_token` HttpOnly cookie and returns `{ user }`.
 2. **Authorize**: the cookie is sent automatically; an `Authorization: Bearer <token>` header is also accepted.
 3. **Session**: The JWT expires in **2 hours** (hardcoded, not `.env`-configurable); the `wordjs_token` cookie has a 7-day `maxAge`. Refresh via `POST /auth/refresh`; `POST /auth/logout` clears the cookie and revokes the token (`token_valid_after`).
+
+**Auth endpoints** (`backend/src/routes/auth.ts`, base path `/api/v1/auth`):
+
+| Method | Endpoint                    | Auth | Description                                                        |
+| :----- | :-------------------------- | :--- | :----------------------------------------------------------------- |
+| `POST` | `/login`                    | No   | Log in (`username`/`email` + `password`); sets the HttpOnly cookie |
+| `POST` | `/register`                 | No   | Self-registration; `403 rest_cannot_register` unless the `users_can_register` option is enabled |
+| `GET`  | `/me`                       | Yes  | Current authenticated user                                         |
+| `POST` | `/validate`                 | Yes  | Validate the current token                                         |
+| `POST` | `/refresh`                  | Yes  | Re-issue the JWT/cookie                                            |
+| `POST` | `/logout`                   | No   | Clear the cookie and bump `token_valid_after` (revokes all tokens) |
+| `GET`  | `/password-reset-available` | No   | Public probe: whether self-service password reset can work (mail configured + reachable recovery address model) |
+| `POST` | `/forgot-password`          | No   | Body `{ login }` (username or email). **Always returns 200** (anti-enumeration); emails a single-use reset link (30-min TTL; only the SHA-256 of the token is stored). Rate-limited by the auth limiter |
+| `POST` | `/reset-password`           | No   | Body `{ uid, token, password }`. Consumes the single-use token (constant-time hash compare) and revokes all existing sessions; `400 rest_invalid_reset` / `rest_weak_password` on failure |
 
 ### 6.2 Content & Taxonomy
 | Method   | Endpoint            | Auth  | Description                                      |
@@ -174,11 +188,19 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST`   | `/posts`            | `edit_posts`       | Create a new post/page                          |
 | `PUT`    | `/posts/:id`        | `edit_posts`†      | Update a post (own, or `edit_others_posts`)     |
 | `DELETE` | `/posts/:id`        | `edit_posts`†      | Trash/delete a post (own, or `delete_others_posts`) |
-| `GET`    | `/categories`       | No    | List all categories                              |
-| `POST`   | `/categories`       | Admin | Create a new category                            |
-| `GET`    | `/tags`             | No    | List all tags                                    |
-| `GET`    | `/media`            | Opt.  | List library items (optional auth)               |
+| `GET`/`POST` | `/posts/:id/meta` | Opt. / Auth | Read / set post meta (per-post access checks in the handler) |
+| `GET`    | `/categories`, `/categories/:id` | Opt. | List / get categories                 |
+| `POST`/`PUT`/`DELETE` | `/categories(/:id)` | `manage_categories` | Create / update / delete a category |
+| `GET`    | `/tags`, `/tags/:id` | Opt. | List / get tags                                   |
+| `POST`/`PUT`/`DELETE` | `/tags(/:id)` | `manage_categories` | Create / update / delete a tag   |
+| `GET`    | `/comments`, `/comments/:id` | Opt. | List / get comments                       |
+| `POST`   | `/comments`         | Opt.  | Create a comment (guests allowed; see note below)  |
+| `PUT`    | `/comments/:id`     | `edit_comments` | Edit a comment                           |
+| `DELETE` | `/comments/:id`     | `moderate_comments` | Delete a comment                     |
+| `POST`   | `/comments/:id/approve`, `/comments/:id/spam` | `moderate_comments` | Moderate a comment |
+| `GET`    | `/media`, `/media/:id` | Opt. | List / get library items (optional auth)        |
 | `POST`   | `/media`            | `upload_files` | Upload a new media file                 |
+| `PUT`/`DELETE` | `/media/:id`  | `upload_files` | Update metadata / delete a media item    |
 
 > † `edit_posts` is held by authors/editors/admins; `PUT`/`DELETE` additionally require **ownership** of the post **or** `edit_others_posts` / `delete_others_posts` (see the access notes below).
 
@@ -192,12 +214,32 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 
 > **User updates (`PUT /users/:id`):** authorization is layered (`backend/src/routes/users.ts`). Editing **another** user requires `edit_users`; a non-administrator **cannot edit an administrator** account (`403 rest_forbidden`, AUTH-1). On a **role change**: you cannot change your **own** role (`403 rest_cannot_edit_own_role`); changing a role requires `promote_users`; the role is validated against the roles allow-list (`400 rest_invalid_role`); only an administrator may assign the **administrator** role; and a non-administrator `promote_users` delegate cannot assign any role that grants `*` or a capability the caller lacks (privilege-amplification, AUTH-A1).
 
+### 6.2.2 Users & Account 👤
+Base path: `/api/v1/users` (`backend/src/routes/users.ts`). `PUT /me` is declared **before** `/:id` so the literal path `me` is never captured by the id route.
+
+| Method   | Endpoint    | Auth         | Description                                                       |
+| :------- | :---------- | :----------- | :---------------------------------------------------------------- |
+| `GET`    | `/`         | `list_users` | List users                                                        |
+| `GET`    | `/me`       | Yes          | Current user's profile                                            |
+| `PUT`    | `/me`       | Yes          | Update own profile (`email`, `displayName`, `url`, `personalEmail` recovery address). **Changing your own password requires `currentPassword`** (`403 rest_bad_current_password`; min 8 chars); a successful change revokes all sessions |
+| `GET`    | `/:id`      | Yes          | Get a user (self, or `list_users` for others)                     |
+| `POST`   | `/`         | Admin        | Create a user (`username`, `email`, `password`, optional `role`)  |
+| `PUT`    | `/:id`      | Yes†         | Update a user — layered authorization, see the note above         |
+| `DELETE` | `/:id`      | Admin        | Delete a user                                                     |
+
 ### 6.3 System & Extensions
 | Method | Endpoint                  | Auth  | Description                           |
 | :----- | :------------------------ | :---- | :------------------------------------ |
 | `GET`  | `/settings`               | No    | Get public site settings (name, desc) |
+| `GET`  | `/settings/all`           | Admin | Get all settings (admin view)         |
+| `GET`  | `/settings/:key`          | No    | Get a single (public) setting         |
 | `PUT`  | `/settings`               | Admin | Update site settings                  |
-| `GET`  | `/plugins`                  | Admin | List all installed plugins                          |
+| `PUT`  | `/settings/:key`          | Admin | Update a single setting               |
+| `GET`  | `/plugins`                  | Admin | List all installed plugins (annotated with requested/granted permissions + live isolate runtime state) |
+| `GET`  | `/plugins/registry`         | No    | Manifest registry of **active** plugins (feeds the public frontend) |
+| `GET`  | `/plugins/active`           | No    | Array of active plugin slugs                        |
+| `GET`  | `/plugins/assets`           | No    | Enqueued frontend scripts/styles of active plugins (cached 60s) |
+| `GET`  | `/plugins/:slug/bundle` (+`/manifest`, `/css`) | No | Pre-compiled client bundle of a plugin (`routes/plugin-bundles.ts`, mounted under `/plugins`) |
 | `POST` | `/plugins/upload`           | Admin | Install a plugin from ZIP (AST-scanned at install)  |
 | `POST` | `/plugins/:slug/activate`   | Admin | Activate a plugin                                   |
 | `POST` | `/plugins/:slug/deactivate` | Admin | Deactivate a plugin                                 |
@@ -206,9 +248,16 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `POST` | `/plugins/:slug/permissions` | Admin | Set the per-permission grants (Android-style, default-deny). Body `{ granted: ["scope:access", ...], network: boolean }`; re-spawns the isolate so a `network` grant takes effect |
 | `DELETE` | `/plugins/:slug`          | Admin | Uninstall a plugin. Body `{ password, dropData }`: password-confirmed, refuses an **active** plugin, always clears grants + crash strikes, and drops the plugin's `wjp_<slug>_` tables only when `dropData` is set |
 | `GET`  | `/plugins/:slug/download`   | Admin | Download an installed plugin as a ZIP (`authenticateAllowQuery`: cookie/Bearer **or** a `?token=` query param) |
-| `GET`  | `/plugins/menus`            | Admin | Admin-menu items contributed by active plugins (control-plane metadata; `authenticate` + `isAdmin`) |
-| `GET`  | `/themes`                   | Admin | List available themes                               |
+| `GET`  | `/plugins/:slug/port-conflicts` | Admin | Which process holds the ports the plugin's manifest claims, and whether WordJS can free them |
+| `POST` | `/plugins/:slug/free-port`  | Admin | Body `{ port, allowDisable }`: disable the known system MTA squatting a **manifest-claimed** port (explicit consent required, else `409 CONSENT_REQUIRED`), then reload the plugin |
+| `POST` | `/plugins/sample`           | Admin | Generate the `hello-world` sample plugin            |
+| `GET`  | `/plugins/menus`            | Auth  | Admin-menu items contributed by active plugins. Any logged-in user; visibility is filtered **per capability** (`item.cap`, default `manage_options`), so non-admin roles only see items whose capability they hold |
+| `GET`  | `/themes`                   | No    | List available themes (public)                      |
+| `POST` | `/themes/upload`            | Admin | Install a theme from ZIP                            |
 | `POST` | `/themes/:slug/activate`    | Admin | Change active theme                                 |
+| `POST` | `/themes/default`           | Admin | Restore (force-overwrite) the default theme         |
+| `DELETE` | `/themes/:slug`           | Admin | Delete a theme                                      |
+| `GET`  | `/themes/:slug/download`    | Admin | Download a theme as a ZIP                           |
 | `GET`  | `/setup/status`             | No    | Check if site is installed (not token-gated)        |
 | `POST` | `/setup/test-db`            | Token | Validate a DB connection before install (install-token gated) |
 | `POST` | `/setup/install`            | Token | Run the installation wizard (install-token gated)   |
@@ -216,11 +265,21 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`  | `/export/wxr`               | Admin | Export as WordPress WXR (XML)                       |
 | `POST` | `/import`                   | Admin | Import a site from JSON (file upload or `data`)     |
 
-> **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.ts`, distinct from the logical `/export` above.
+> **Note:** A full **system-state backup** (code + assets + DB dump as a ZIP) is a separate engine under `/api/v1/backups/*` and `backend/src/core/backup.ts`, distinct from the logical `/export` above. All backup routes are admin-only (`backend/src/routes/backups.ts`): `GET /backups` (list), `POST /backups` (create), `GET /backups/:filename/download`, `POST /backups/:filename/restore`, `DELETE /backups/:filename`.
 
 > **Install token (pre-install setup):** `POST /setup/install` and `POST /setup/test-db` run before the instance is configured (unauthenticated, CSRF-exempt), so they are gated by a **one-time install token** (`backend/src/core/install-token.ts`) — supply it via the `x-install-token` header or an `installToken` body field (constant-time compared; `403` on mismatch). The token is printed to the server console at boot, mirrored to a `0600` file in the data dir, and overridable via the `WORDJS_INSTALL_TOKEN` env var (≥ 16 chars). Both endpoints also early-return `400` once the site is installed, and the on-disk token mirror is cleared after a successful install. `GET /setup/status` is **not** token-gated; `POST /setup/migrate` instead requires admin username/password.
 
 > **Plugin permissions (default-deny):** `POST /plugins/:slug/permissions` is the admin's source of truth for grants. An undeclared scope has no effect — `hasPermission` requires **both** the manifest declaration **and** the grant. Activating a plugin with no prior grant record pre-grants exactly its manifest-**declared** permissions, persisted only **after** activation + AST-scan succeed (a plugin that fails its scan leaves behind no grant record).
+
+### 6.3.1 Plugin Marketplace 🛒
+Base path: `/api/v1/marketplace` (`backend/src/routes/marketplace.ts`). Plugins are distributed **outside** the core build: the catalog is a `marketplace-index.json` (+ one ZIP per plugin) built by `backend/scripts/build-marketplace.js` from `marketplace/plugins/` and published in the repo (`marketplace/dist/`, served raw from GitHub) and as release assets. Both routes are admin-only (`authenticate` + `isAdmin`).
+
+| Method | Endpoint   | Auth  | Description                                                                 |
+| :----- | :--------- | :---- | :-------------------------------------------------------------------------- |
+| `GET`  | `/catalog` | Admin | Catalog annotated with local state (`installed`, `active`, `installedVersion`, `updateAvailable`). `?refresh=1` bypasses the 5-minute in-memory cache. `502` if the catalog can't be fetched |
+| `POST` | `/install` | Admin | Body `{ id }`: downloads the catalog entry's ZIP, **sha256-verifies** it against the catalog, and installs it through the **same pipeline as `POST /plugins/upload`** (`installPluginFromZip`: zip-bomb budget, Zip Slip, slug validation, manifest + AST scan). `404` if the id isn't in the catalog; `400` on filename/sha256 failure; `502` on download failure |
+
+> **Catalog source resolution:** the `marketplace_source` option may point to an `http(s)` URL (fetched server-side, `https` only — `http` allowed for localhost dev) or a local directory (dev / air-gapped). When unset, the repo-local `marketplace/dist/` is used if present, else the published GitHub catalog. Downloaded ZIPs are capped at 10MB and catalog filenames are validated against a strict `<slug>-<version>.zip` shape.
 
 ### 6.4 Analytics System 📊
 | Method | Endpoint           | Auth  | Description                        |
@@ -236,11 +295,15 @@ Base path: `/api/v1/system/certs`
 | :----- | :---------------- | :---- | :------------------------------------------ |
 | `GET`  | `/config`         | Admin | Get current SSL status and certificate info |
 | `POST` | `/config`         | Admin | Update SSL toggle or Gateway port           |
+| `POST` | `/check`          | Admin | Ensure a gateway certificate exists (generates self-signed if missing) |
 | `POST` | `/auto-provision` | Admin | Request Let's Encrypt HTTP-01 certificate   |
 | `POST` | `/dns-start`      | Admin | Start DNS-01 challenge (returns TXT record) |
 | `POST` | `/dns-check`      | Admin | Verify DNS TXT record propagation           |
 | `POST` | `/dns-finish`     | Admin | Complete DNS-01 challenge and save cert     |
 | `POST` | `/upload-custom`  | Admin | Upload custom `.pem` files                  |
+| `GET`  | `/acme-config`    | Admin | Auto-renewal settings (no secrets) + last renewal outcome + next scheduled run |
+| `POST` | `/acme-config`    | Admin | Persist auto-renewal settings (email/domains/staging/challenge type); enabling kicks a background renewal check |
+| `POST` | `/renew-now`      | Admin | Force an immediate renewal attempt (bypasses the not-due/disabled gates) |
 
 ### 6.6 Database Admin / Engine Migration 🗄️
 Base path: `/api/v1/db-migration`. This is **core infrastructure** (formerly the `db-migration` plugin, now `backend/src/core/db-admin/`) — it manages the DB lifecycle and migrates content between engines (e.g. SQLite ↔ PostgreSQL). All routes require `authenticate` + the `manage_options` capability.

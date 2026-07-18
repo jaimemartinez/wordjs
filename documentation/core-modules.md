@@ -117,6 +117,7 @@ Loads any plugin marked `"isolated": true` in its manifest into a **separate OS 
 *   **Host-side shims:** the host registers hooks/routes/menus on behalf of the child and RPCs each call into the child process (`serialization: 'advanced'` to preserve fidelity across the channel); the real callbacks live in the child.
 *   **Reload:** `reloadIsolatedPlugin(slug)` tears down and re-forks a plugin; it **must** call `require('./plugins').fixMiddlewareOrder()` afterwards so recovered routes are re-mounted before the catch-all 404 (otherwise every reloaded route returns `rest_no_route`).
 *   **Least privilege:** the child's network gates (`net`/`tls`/`dns`/`http`/…/`fetch`/`WebSocket`) are opened **only** when `network` is granted — `child_process`/`fs`/`vm` are never handed through. `secure-require`, `io-guard` and `egress-guard` all run **inside** this child.
+*   **Themes ride the same isolate:** a theme's `functions.js` is **no longer** required in the host process. `theme-engine.ts` loads it through this same layer under the pseudo-slug **`theme:<slug>`** (`loadIsolatedPlugin('theme:<slug>')`), so any hooks/shortcodes/mail the theme registers flow through the identical RPC bridge and run under `secure-require` + `io-guard`. This closed the in-process-theme RCE cluster — a theme now gets **no** more host access than an isolated plugin.
 
 ---
 
@@ -149,7 +150,21 @@ Monkey-patches `fs` inside the isolated child so plugin code is confined to its 
 
 **Location:** `backend/src/core/zip-guard.ts`
 
-`assertZipWithinBudget(entries, opts)` is the decompression-bomb / resource-DoS defense on the plugin-upload path (`routes/plugins.ts`). It throws an `Error` (`.code = 'ZIP_BUDGET_EXCEEDED'`) **before** extraction if an archive's declared uncompressed size exceeds `maxTotalBytes` (default **200 MB**) or its entry count exceeds `maxEntries` (default **5000**).
+`assertZipWithinBudget(entries, opts)` is the decompression-bomb / resource-DoS defense on the plugin-install path (`routes/plugins.ts` — both manual uploads and marketplace installs, which reuse the same pipeline). It throws an `Error` (`.code = 'ZIP_BUDGET_EXCEEDED'`) **before** extraction if an archive's declared uncompressed size exceeds `maxTotalBytes` (default **200 MB**) or its entry count exceeds `maxEntries` (default **5000**).
+
+---
+
+## 4g. Plugin Marketplace 🛒
+
+**Location:** `backend/src/routes/marketplace.ts` (route) + `backend/scripts/build-marketplace.js` (catalog builder)
+
+One-click install of first-party plugins distributed **outside** the core build. The builder (`npm run build:marketplace` from the repo root) packs every plugin under `marketplace/plugins/<slug>/` into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` (id/name/version/category/permissions/size + **sha256** per zip). The `dist/` output is **committed**, so plugin releases are decoupled from core releases.
+
+### Logic
+*   **Source resolution** (`resolveSource()`): the `marketplace_source` option wins (an `http(s)` URL fetched server-side, or a local directory for dev/air-gapped installs); unset, it uses the repo-local `marketplace/dist/` when present (dev), else the default `raw.githubusercontent.com/.../main/marketplace/dist` URL. Remote sources must be **https** (or `http://localhost` in dev); a tagged-release asset URL can pin a fixed catalog.
+*   **Endpoints** (both `authenticate` + `isAdmin`): `GET /api/v1/marketplace/catalog` returns the catalog annotated with installed/active/`updateAvailable` state per entry (5-minute in-memory cache, `?refresh=1` busts it); `POST /api/v1/marketplace/install` takes a catalog `id`.
+*   **Install hardening:** the catalog `file` name must match a strict `SAFE_FILE_RE` (no path smuggling from a hostile catalog; local reads are additionally resolved-path-confined to the dist dir), the download is size-capped (**10 MB**, mirroring the upload route's multer cap), and the bytes are **sha256-verified** against the catalog entry before install.
+*   **Shared pipeline:** the verified zip is written to a temp file and handed to `installPluginFromZip()` from `routes/plugins.ts` — the exact pipeline manual uploads use (zip-bomb budget via `zip-guard`, Zip Slip/slug validation, squat refusal, manifest + AST scan) — so the marketplace adds no new install surface beyond the catalog fetch. Installed plugins land inactive with **default-deny** grants (§4a).
 
 ---
 
@@ -258,3 +273,20 @@ The Puck page tree (`_puck_data`) is stored verbatim in `post_meta` and rendered
 *   **Operator override:** a `WORDJS_INSTALL_TOKEN` env value is honored **only if ≥ 16 chars** (else ignored with a warning, falling back to the random token).
 *   **Enforcement:** `routes/setup.ts` rejects any `/install` or `/test-db` request whose `x-install-token` header or `installToken` body field fails `verifyInstallToken()` (constant-time, **fail-closed** when no token was generated).
 *   **Lifecycle:** the token is held **in memory** (lost on restart, re-minted while uninstalled); `clearInstallTokenFile()` removes the on-disk mirror once the instance is installed.
+
+---
+
+## 10. Cluster Certificate Authority 🪪
+
+**Location:** `gateway/src/cluster-ca.js`
+
+The cluster CA is the trust root for **separate mode** — the three services running on **different machines**, joined into one cluster over mutual TLS (see **[separate-mode.md](./separate-mode.md)** for the operator guide). It lives in the **gateway** because the gateway is the cluster's CA: it mints and signs every node's identity, and the CA **private key never leaves the gateway box** (kept `0600`).
+
+### Responsibilities
+*   **`ensureClusterCA()`** creates the cluster CA (self-signed root) on first use and returns its key/cert; it is idempotent, so re-running `cluster init` reuses the existing CA.
+*   **`issueIdentity({ cn, sans, … })`** mints the gateway's own identity/service certs (server+client, CN = role) directly from the CA — used at `init` for the gateway and, historically, the local split-mode certs.
+*   **`signCsr({ csrPem, cn, … })`** signs a **CSR** a joining node generated, **forcing `CN = role`** from the validated join token (the CSR's own subject is ignored) — this is the enrollment path.
+*   **`caFingerprint()`** exposes the CA's SHA-256 fingerprint, which `node-join` verifies against `--ca-hash` as a MITM guard before trusting the returned CA.
+*   **`tokenStore(file)`** persists the **single-use, role-bound, TTL** join tokens (`cluster token <role>` mints, `node-join` burns on first use; `revoke-tokens` burns all).
+
+> The gateway runs a **separate** token-enrollment HTTPS listener on `gatewayEnrollPort` (default **3101**) that does **not** request a client cert (a brand-new node has none yet); it accepts `POST /enroll {role, token, csr}`, validates the token, signs via `signCsr`, and returns `{cert, cluster-ca, bootstrap config}`. The strict mTLS `/register` control plane on `gatewayInternalPort` (3100) is unchanged. See `scripts/cluster.js` / `scripts/node-join.js` (documented in **[cli.md](./cli.md)**).

@@ -47,6 +47,11 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   **not privileged** — same sandbox, same grant checks. Shell/`child_process`, native addons,
   AST-scan skip, raw cookie/header control, raw-HTML hooks, unscoped/core-table DB, and
   secret-named options were **removed** — no plugin can be granted them.
+- **Themes are contained too.** A theme's optional server-side `functions.js` now runs in the
+  **same OS-isolated sandbox** as plugins (`theme-engine.ts` → `loadIsolatedPlugin('theme:<slug>')`),
+  AST-pre-scanned and reaching core only through the same permission-checked bridge. Theme code no
+  longer executes in-process on the host — closing the former in-process-theme RCE surface, so the
+  "an extension can't compromise your site" thesis holds for *both* plugins and themes.
 
 **Defense-in-depth, all present in code:**
 - **AST static scanner** at install (`validatePluginPermissions` in `plugins.ts`, via `acorn`
@@ -166,6 +171,15 @@ channel (the marketplace) where "sandboxed" is a feature buyers pay a premium fo
 The sandbox + AST scanner are the *enabling technology* for a marketplace where **"safe to
 install" is a verifiable claim**, not a vibe.
 
+**The marketplace *mechanism* now ships in OSS** (no longer a proposal): a curated catalog of
+**25 first-party plugins** (`marketplace/plugins/` → committed catalog + zips built by
+`backend/scripts/build-marketplace.js`, served from the repo or a release / any admin-configured
+source), a Plugins → Marketplace admin tab with one-click installs, **sha256-verified** downloads
+routed through the *same* hardened upload pipeline (zip guards + AST scan;
+`backend/src/routes/marketplace.ts`), and per-capability grant disclosure at install. What
+follows below — the trust badge, the third-party review pipeline, and the revenue model — is the
+commercial layer to build on top of that shipped mechanism.
+
 - **"Sandboxed & Reviewed" trust badge.** A plugin earns it by: (a) passing the AST static
   scan clean (fail-closed), (b) running in the sandbox with a minimal, sensible capability set
   (core tables off-limits, no network unless it genuinely needs it) — verified, not
@@ -176,7 +190,8 @@ install" is a verifiable claim**, not a vibe.
   the manifest is the source of truth, we render a plain-language "this plugin can: read
   settings, write its own tables, render a shortcode — it CANNOT: read your users, access
   secrets, make network calls" panel *before install*. This is the App-Store-permissions
-  experience CMSs have never had.
+  experience CMSs have never had. (A first cut ships: the Marketplace tab's install confirmation
+  lists each capability the plugin *requests*, risk-annotated; grants stay default-deny.)
 - **Review pipeline (mostly automated).** AST scan on upload → capability diff on every
   version bump (flag a plugin that newly requests `network` / `filesystem` / absolute routes)
   → human spot-check for badge tier. The scanner does the heavy lifting; humans gate the
@@ -246,7 +261,7 @@ enlarges the trust surface:
 
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
-| **Ecosystem from zero** | The marketplace pitch needs plugins; we have a handful of first-party plugins and no third-party authors. A safe marketplace with nothing in it sells nothing. | Seed with high-quality first-party + a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
+| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **25 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem. | First-party seeding is done (25 catalog plugins across commerce / marketing / content / SEO); next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
 | **Kernel-surface hardening gap** | Plugins run in a separate OS process (host-crash / heap-escape closed), and an opt-in Linux layer (bubblewrap) drops uid + caps and adds no-new-privs / namespaces / read-only-fs / a **seccomp syscall denylist**. The child's syscall surface is now shrunk by construction (not just JS guards). A skeptical security buyer will probe this. | Opt-in deprivileging + seccomp layer shipped (Linux); a default-on preventive Windows Job Object memory cap shipped (the Win32 cgroup analog); remaining: an independent audit; message §2 honestly; never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
 | **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + default-deny capability grants are the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
@@ -261,9 +276,11 @@ enlarges the trust surface:
 The sandbox is **genuinely differentiated and genuinely implemented** — isolated OS processes
 for *every* plugin, a permission-checked bridge, admin-granted default-deny capabilities (no
 trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-table lockdown.
-We win by being honest about the remaining kernel-level hardening while shipping the curated
-marketplace and hosted offering that turn "your plugins can't compromise your site" into the
-product. The work to get there is **ecosystem, an external audit, the kernel-level hardening on
+We win by being honest about the remaining kernel-level hardening while building on the
+marketplace mechanism that now ships (a curated, sha256-verified catalog of 25 first-party
+plugins installed through the hardened pipeline) and the hosted offering that turn "your plugins
+can't compromise your site" into the product. The work to get there is **a third-party
+ecosystem (review pipeline + badge), an external audit, the kernel-level hardening on
 hosted, and a deliberately shrunken minimal-capability core** (cut MTA / ACME,
 pick one DB). The license question is resolved (MIT).
 
@@ -278,4 +295,5 @@ pick one DB). The license question is resolved (MIT).
 - `backend/src/core/plugin-permissions.ts` — per-plugin capability grants (Android-style, default-deny)
 - `backend/src/core/plugins.ts` (`validatePluginPermissions`) — AST static scanner (acorn, fail-closed)
 - `backend/src/core/io-guard.ts` — `.env` / secret-file fs backstop
+- `backend/src/routes/marketplace.ts` + `backend/scripts/build-marketplace.js` — the shipped marketplace (catalog fetch, sha256 verify, install via the standard upload pipeline)
 - `documentation/plugin-isolation-proposal.md` — the soft-vs-hard boundary analysis

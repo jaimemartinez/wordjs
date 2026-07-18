@@ -190,7 +190,8 @@ Internally, the backend `src/index.ts` skips its self-listen and gateway self-re
 ### Which to choose
 
 - **Monolith** — the simplest single-artifact deploy: one VM/container, TLS via its built-in HTTPS or a single reverse proxy in front.
-- **Split** — scale the services independently and get the gateway's clustering, health-checks, and load-balancing.
+- **Split** — scale the services independently and get the gateway's clustering, health-checks, and load-balancing (all three on **one** host).
+- **Separate mode** — the split spread across **different** machines, joined via gateway-minted join tokens (mTLS). See [Separate mode (multi-node)](#-separate-mode-multi-node) above.
 
 ---
 
@@ -204,6 +205,23 @@ npm run migrate   # node setup/index.js --migrate
 ```
 
 `npm run migrate` delegates to `backend/scripts/migrate.js`: it applies any pending DB **schema** migrations to the configured database without booting the server (compiled `dist/` if present, else ts-node on `src/`). It is **idempotent** — the same migrations also run automatically at boot — so it's safe to run ahead of a rollout in a deploy pipeline. It does **not** switch DB *drivers* (the SQLite ↔ PostgreSQL data copy); that is a separate runtime operation in the admin **DB Migration** route (`/api/v1/db-migration/*`).
+
+---
+
+## 🌐 Separate mode (multi-node)
+
+Beyond the on-one-host **split** and single-process **monolith** above, the three services can run on **different machines**, joined into one cluster over mutual TLS. Instead of hand-copying certs, the gateway acts as the cluster CA and issues each node an identity via a **single-use join token** (kubeadm-style). Two **root** scripts drive it:
+
+```bash
+# On the gateway machine (mints the cluster CA + a role-bound token):
+npm run cluster init                 # = node scripts/cluster.js init
+npm run cluster token backend        # print the paste-ready node-join command
+
+# On the new backend/frontend machine (one tokened /enroll call → mTLS identity):
+npm run node:join -- --role backend --gateway <gw-ip> --token <token> --ca-hash <sha256> --advertise <this-ip> --start
+```
+
+The joining node generates a CSR, calls the gateway's token-enrollment listener (`gatewayEnrollPort`, default **3101** — separate from the strict mTLS `/register` listener on 3100), and receives a signed `CN=<role>` cert + the cluster CA + bootstrap config; it then registers over mTLS and the gateway starts proxying to it. The **canonical guide** is **[separate-mode.md](separate-mode.md)**; the scripts are detailed in **[cli.md](cli.md)** § 6a and the trust root in **[core-modules.md](core-modules.md)** § 10.
 
 ---
 
@@ -234,7 +252,7 @@ Behaviour: **idempotent / re-runnable** — existing users (by login/email), ter
 
 Every job first runs an **audit gate** (`npm audit --omit=dev --audit-level=high`) that fails on any high/critical **production** dependency CVE, then:
 
-- **Backend:** audit gate → strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers.
+- **Backend:** audit gate → strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers → **marketplace catalog freshness** (re-runs `node backend/scripts/build-marketplace.js` and fails on any `git diff` in `marketplace/dist/` — the build is deterministic, so a plugin change committed without a rebuilt catalog fails CI; fix with `npm run build:marketplace` and commit the result).
 - **Gateway:** audit gate → tests (proxy + mTLS integration).
 - **Frontend:** audit gate → **generate plugin registries** (`generate-plugin-registry.js` + `generate-admin-plugin-registry.js` + `generate-puck-plugin-registry.js`, so type-check/lint/build only reference the checked-out plugins) → strict typecheck (`tsc --noEmit`) → lint → **vitest** (`npm run test`) → production build (`next build`).
 
@@ -251,11 +269,13 @@ npm run install:all     # install every workspace (needs dev deps — the build 
 npm run bundle-release   # = node scripts/make-release.js
 ```
 
-`scripts/make-release.js` builds the frontend (`next build` → `.next`), compiles the backend (`tsc` → `dist/`), bundles the plugins (`node scripts/build-plugin.js --all`), then zips **everything except** `node_modules`, secrets, and local config (`wordjs-config.json`, certs, DB, logs) into **`release/wordjs-compiled-release.zip`** (with a self-contained `INSTALL.md` written into the bundle).
+`scripts/make-release.js` builds the frontend (`next build` → `.next`), compiles the backend (`tsc` → `dist/`), bundles the plugins (`node scripts/build-plugin.js --all`), then zips **everything except** `node_modules`, secrets, local config (`wordjs-config.json`, certs, DB, logs) and the `marketplace/` tree (marketplace plugins are distributed as separate release assets, never inside the core bundle) into **`release/wordjs-compiled-release.zip`** (with a self-contained `INSTALL.md` written into the bundle).
+
+Marketplace plugins (sources under `marketplace/plugins/`) are packaged separately by `npm run build:marketplace` (= `node backend/scripts/build-marketplace.js`), which emits **deterministic** per-plugin zips plus `marketplace-index.json` (sha256 per entry, fixed zip timestamps, no generated-at field) into the **committed** `marketplace/dist/` — the catalog the admin **Marketplace** tab consumes (see `documentation/deployment.md`). CI enforces that the committed catalog is in sync with the sources (see § CI above).
 
 The recipient unzips, then — **no build step** — runs `npm run release:install` (installs runtime deps only, `--omit=dev`), starts with `npm run start:mono` (single process, default `https://localhost:3000`) or `npm start` (3-service split), and finishes in the browser install wizard (pick SQLite or PostgreSQL, create the admin). No secrets ship; they're generated locally at install.
 
-In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs the same `install:all` + `bundle-release` and publishes a GitHub Release with `wordjs-<tag>.zip` attached; `workflow_dispatch` builds the same bundle as a workflow artifact only (no Release).
+In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs the same `install:all` + `bundle-release`, then `npm run build:marketplace`, and publishes a GitHub Release with `wordjs-<tag>.zip` **plus the marketplace assets** (`marketplace/dist/*` — one zip per plugin + `marketplace-index.json`) attached; `workflow_dispatch` builds the same bundles as workflow artifacts only (`wordjs-compiled-release` + `wordjs-marketplace`, no Release). On version tags a second job publishes `create-wordjs` to npm (version synced to the tag; skipped cleanly when the `NPM_TOKEN` secret is not configured).
 
 ---
 

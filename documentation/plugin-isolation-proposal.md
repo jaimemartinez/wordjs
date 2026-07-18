@@ -133,6 +133,20 @@
 > its admin-menu entries dropped — so no stale shim can RPC a dead worker. Teardown is idempotent and
 > also runs as a crash safety-net on worker `exit`.
 >
+> **Themes now isolate too (SHIPPED, 2026-07-18).** The proposal only covered plugins, but a theme's
+> `functions.js` was executed **in-process on the host** — with no runtime `eval`/`Function`/dynamic-`import`
+> guard, a hostile theme was a full host-RCE path that no static scan can fully close (the in-process-theme
+> escape cluster). It now runs in the **same child_process isolate** as a plugin:
+> `backend/src/core/theme-engine.ts → loadThemeLogic()` AST-pre-scans `functions.js` (via
+> `validatePluginPermissions`, fail-closed) and then calls
+> `loadIsolatedPlugin('theme:<slug>', logicPath)` — the isolate layer already namespaces `theme:` slugs, so
+> the theme reaches core through the **same** capability bridge, secure-require/io-guard guards, and per-RPC
+> limits described above. A theme switch tears down the prior worker first (`unloadIsolatedPlugin`).
+> Theme-registered Handlebars helpers still execute host-side at render time, so `render()` re-anchors them
+> to the theme's context (`runWithContext('theme:<slug>', …)`) — otherwise a helper would run with an empty
+> ALS store (treated as trusted core) and dodge the context-gated guards. Bundled themes' `functions.js`
+> only `console.log`, so nothing host-side regressed.
+>
 > **Per-plugin tier (final — 7 of 8 isolated):**
 > | Plugin | Tier | Why |
 > |---|---|---|
@@ -144,6 +158,11 @@
 > | conference-manager | **isolated** | own-table DB (`wjp_conference_manager_*`), namespaced routes (granted its declared caps on activation) |
 > | mail-server | **isolated** | inbound SMTP listener (configurable `smtp_listen_port`, default 2525) + outbound MX delivery (to recipient :25) in the worker (granted `network`); Email model → own-table `db`, DKIM key in own DB/files, multipart upload, `provideMail` (`email:provider`) + `notify.registerTransport` (`notifications:provider`) |
 > | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (runs schema migrations at boot, around the DB lifecycle). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
+>
+> (The table above is the inventory at the time the model was finalized. Every plugin added since —
+> the bundled `youtube-videos` (granted `network` for its YouTube RSS/Data-API fetches) and all 25
+> marketplace plugins (`marketplace/plugins/`, installed sha256-verified through the same zip
+> pipeline) — follows the same isolated-only model; there is no other tier for them to be in.)
 >
 > **Net (final): the sandbox is isolated-only.** Every plugin runs in its own OS process; the legacy
 > in-process execution path was removed (`loadActivePlugins`/`activatePlugin` reject non-isolated plugins,

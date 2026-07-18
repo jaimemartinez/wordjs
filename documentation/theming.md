@@ -8,8 +8,9 @@ just by declaring **design tokens** (`--wjs-*` CSS custom properties) in its own
 
 ```
 public page / editor preview
-  └─ <link href="/public/css/wordjs-ui.css">     ← the framework (base elements + components + utilities)
-  └─ <link href="/themes/<slug>/style.css">       ← the theme: its :root tokens + any custom rules
+  └─ <link href="/public/css/wordjs-ui.css?v=…">      ← the framework (base elements + components + utilities)
+  └─ <link href="/themes/<slug>/style.css?v=…">       ← the theme: its :root tokens + any custom rules
+  └─ <style id="wjs-theme-mods">:root{…}</style>      ← optional admin customizer overrides (last, wins)
 ```
 
 - **`backend/public/css/wordjs-ui.css`** is one static stylesheet, shared by every theme. Every value it
@@ -21,6 +22,10 @@ public page / editor preview
   classes keeps winning, and in practice the framework styles raw content HTML and offers opt-in classes.
 - WYSIWYG: the page editor injects the same framework + active-theme stylesheet into its preview iframe,
   so the canvas matches the live site.
+- Admins can override individual tokens live in the **theme customizer** (`/admin/themes/customize`).
+  The overrides are saved in the `active_theme_mods` option and SSR-injected as an inline
+  `<style id="wjs-theme-mods">:root{…}</style>` **after** the theme stylesheet, so they win at equal
+  specificity. Switching themes clears them.
 
 ## Design tokens (`--wjs-*`)
 
@@ -66,6 +71,17 @@ only if you want a specific on-color.
 `--wjs-font-family-base`, `--wjs-font-family-heading`, `--wjs-font-family-mono`,
 `--wjs-font-size-base` (`1rem`), `--wjs-line-height-base` (`1.6`), `--wjs-heading-weight` (`700`),
 `--wjs-heading-line-height` (`1.2`), and the heading scale `--wjs-h1`…`--wjs-h6` (`2.5rem` → `1rem`).
+
+### Alias tokens (visual-editor block names)
+
+The framework `:root` also defines **21 alias tokens** that map the token names referenced by the
+visual-editor (Puck) block renderer onto the canonical tokens above: `--wjs-h{1..6}-size` →
+`--wjs-h{1..6}`, `--wjs-h{1..6}-weight` → `--wjs-heading-weight`, plus `--wjs-font-family`,
+`--wjs-color-text-heading`, `--wjs-color-text-dim`, `--wjs-color-primary-text` (→
+`--wjs-color-on-primary`), `--wjs-foreground`, `--wjs-bg-surface-hover`, `--wjs-border-radius`,
+`--wjs-space-md`, and `--wjs-space-sm`. Themes should override the **canonical** tokens (e.g.
+`--wjs-h1`, not `--wjs-h1-size`) — custom properties resolve at use time, so the aliases pick up the
+theme's values automatically.
 
 ### Spacing & shape
 `--wjs-spacer` (`1rem`, the base unit for every spacing utility), `--wjs-radius-sm`/`--wjs-radius`/
@@ -130,6 +146,24 @@ Bootstrap-compatible names:
 - **Sizing** — `.w-{25,50,75,100,auto}`, `.h-*`, `.mw-100`, `.vh-100`, `.min-vh-100`.
 - **Misc** — `.shadow{,-sm,-lg,-none}`, `.position-*`, `.overflow-*`, `.opacity-*`, `.float-*`,
   `.visually-hidden`, `.img-fluid`, `.img-thumbnail`, `.clearfix`.
+
+## Responsive behavior
+
+The framework is responsive by default, and all bundled themes are verified at mobile/tablet/desktop
+on top of it:
+
+- **Mobile type scale** — below `768px` the visual-editor heading sizes are capped through the
+  `--wjs-hN-size` aliases (`min(var(--wjs-hN), cap)`), and `.wjs-content h1–h3` get the same caps, so
+  oversized desktop headings shrink on phones while a smaller theme scale still wins.
+- **Content containment (every width)** — wide tables and `pre` blocks scroll inside their own
+  container, and long unbreakable strings (URLs, tokens) wrap, in both `.wjs-content` and the visual
+  editor's `.puck-content` / `.wp-block-*`, so author content never forces body-level horizontal
+  scroll.
+- **Device visibility** — the editor's per-block "hide on device" renders as `.wjs-hide-mobile` /
+  `.wjs-hide-tablet` / `.wjs-hide-desktop` (breakpoints `<768` / `768–1023` / `≥1024`).
+
+Themes add their own scoped media queries where their design needs them (several bundled themes ship
+narrow-viewport header-fit rules).
 
 ## Long-form content
 
