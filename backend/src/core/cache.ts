@@ -72,6 +72,18 @@ async function get(key: string) {
  */
 async function set(key: string, value: any, ttl = 3600) {
     if (!redisAvailable || !enabledBySettings) return false;
+    // getOption() serves `option:<name>` cache entries BEFORE the DB, so an in-process theme calling
+    // require('core/cache').set('option:wordjs_user_roles', {v:{subscriber:{capabilities:['*']}}}) forges
+    // the resolved value of any security-critical option = privilege escalation (#20). Core's own option
+    // caching runs in a null context (getOption wraps its body in runWithContext(null)), so this only
+    // blocks plugin/theme code writing the reserved `option:` namespace.
+    try {
+        if (String(key).startsWith('option:') && require('./plugin-context').getEffectivePlugin()) {
+            throw new Error('🛡️ Writing the option cache namespace is not permitted from plugin/theme context.');
+        }
+    } catch (e: any) {
+        if (e && /not permitted/.test(String(e.message))) throw e; // re-throw our own denial; ignore require hiccups
+    }
     try {
         const serialized = JSON.stringify(value);
         if (ttl) {

@@ -6,7 +6,8 @@ The Frontend (`frontend/`) is a **Next.js** application serving both the public 
 
 *   **App Router:** Uses the modern Next.js App Router (`src/app`).
 *   **Public Site:** `src/app/(public)/` - Server-rendered blog posts, pages, search, and themes (see **Public Site Rendering (SSR)** below).
-*   **Admin Dashboard:** `src/app/admin/` - Management interface.
+*   **Admin Dashboard:** `src/app/admin/` - Management interface. Includes the self-service `/admin/account` page, reachable by **every** logged-in user (including subscribers): profile + personal/recovery email and change-own-password.
+*   **Other top-level routes:** `/login`, `/install`, `/migration`, `/reset-password` (the forgot-password flow), and `/portal` (plugin-provided public portals).
 
 ## Gateway Integration
 
@@ -14,9 +15,12 @@ The frontend registers itself with the Gateway automatically on startup.
 This is handled in **`src/instrumentation.ts`** (`register()`, Node runtime only):
 
 1.  Next.js starts and calls `register()`.
-2.  Reads config, preferring a local `wordjs-config.json` (distributed deploy) and falling back to `../backend/wordjs-config.json` (monolith) for the gateway host/ports, `gatewaySecret`, and `frontendUrl`.
-3.  If cluster mTLS certs are present (`certs/` locally or `../backend/certs`), it POSTs to the gateway's **internal** port over HTTPS with the client cert; otherwise it falls back to plain HTTP on the public gateway port.
-4.  Sends `POST /register` with its route prefixes: `/`, `/admin`, `/login`, `/install`, `/migration`, `/portal`, `/_next` (authenticated by `x-gateway-secret`). It retries every 5s until the gateway accepts.
+2.  Reads config, preferring a local `wordjs-config.json` (distributed deploy) and falling back to `../backend/wordjs-config.json` (monolith) for the gateway host/ports (`gatewayHost`, `gatewayInternalPort`, `gatewayPort`), `gatewaySecret`, and `frontendUrl`.
+3.  Resolves the **advertised** URL it hands the gateway (`https://<hostname>:<port>`). The hostname defaults to `127.0.0.1` (co-located); it takes the host of `frontendUrl` if set, and an explicit **`advertiseHost`** wins over both. On a **separate machine** you must set `advertiseHost` to this node's routable address — otherwise the gateway records `127.0.0.1` and proxies `/` back to its own loopback instead of the real frontend node.
+4.  If cluster mTLS certs are present (`certs/` locally or `../backend/certs`), it POSTs to the gateway's **internal** port over HTTPS with the client cert; otherwise it falls back to plain HTTP on the public gateway port.
+5.  Sends `POST /register` with its route prefixes: `/`, `/admin`, `/login`, `/install`, `/migration`, `/portal`, `/_next` (authenticated by `x-gateway-secret`). It retries every 5s until the gateway accepts.
+
+> **Separate mode.** When the three services live on **different machines**, the frontend node first joins the cluster (mints its mTLS identity from a gateway-issued join token) via `scripts/node-join.js`, which also writes its `wordjs-config.json` (`advertiseHost`, `gatewayHost`, `internalApiUrl`, `gatewaySecret`, …). See [`documentation/separate-mode.md`](./separate-mode.md) for the full enrollment flow.
 
 ## Visual Editing (Puck)
 
@@ -29,7 +33,7 @@ WordJS uses **Puck** for its visual editor.
 *   **Internal Port:** `3001` (default).
 *   **Public Access:** Accessed via Gateway on port `3000` (or `80`/`443` in prod).
 
-The browser calls a **relative** `/api/v1` path (`frontend/src/lib/api.ts`), so it reaches the backend through the gateway automatically — there is **no** client-side API-URL env var to set. Server-side rendering resolves the backend base on the server from `WORDJS_MONO_ORIGIN` (monolith) or `wordjs-config.json` (split), with an optional `INTERNAL_API_URL` override.
+The browser calls a **relative** `/api/v1` path (`frontend/src/lib/api.ts`), so it reaches the backend through the gateway automatically — there is **no** client-side API-URL env var to set. Server-side rendering resolves the backend base **on the server** (see the SSR data layer below) across all three run modes: **monolith** hits the in-process backend's loopback origin (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); **split** (same host) reads the backend port from `wordjs-config.json` and hits `http://localhost:<port>`; **separate machine** points SSR at `internalApiUrl` (config) / `INTERNAL_API_URL` (env) — typically the gateway's public origin, whose cluster-CA-signed cert the frontend trusts because `start-frontend.js` sets `NODE_EXTRA_CA_CERTS` to `certs/cluster-ca.crt`.
 
 
 ## Public Site Rendering (SSR) 🌐
@@ -39,8 +43,9 @@ The public site is **real server-side rendering (SSR)**, not client-only skeleto
 ### Server data layer: `src/lib/server-api.ts`
 A **server-only** module (must never be imported from a `"use client"` file). It:
 
-*   **Resolves the backend base URL** for SSR fetches (`resolveServerBase()`): monolith (`WORDJS_MODE === 'mono'`) uses the loopback origin (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); otherwise (split) an `INTERNAL_API_URL` (full `.../api/v1`) wins, and failing that it reads the backend port from `wordjs-config.json` (default `4000`, local file preferred over `../backend`).
-*   **Deduplicates requests** — the single-resource content loaders (`getSettings`, `getPostBySlug`, `getPostById`, `getPosts`) are wrapped in React `cache()`, so `generateMetadata()` and the page body share a single request-scoped backend call instead of fetching the same post twice. (`searchPosts()` is a plain async function — it issues two parallel fetches per call and is not memoized.) Fetches use `cache: 'no-store'` (per-request, fresh content).
+*   **Resolves the backend base URL** for SSR fetches (`resolveServerBase()`, mirrored by `lib/api.ts`' `getBaseUrl()` so every SSR path agrees): monolith (`WORDJS_MODE === 'mono'`) uses the loopback origin (`WORDJS_MONO_ORIGIN`, default `http://127.0.0.1:4000`); otherwise an `INTERNAL_API_URL` (full `.../api/v1`) env override wins; failing that it reads `wordjs-config.json` (local file preferred over `../backend`) — a `internalApiUrl` key (separate-machine: the gateway's reachable API base, trusted via `NODE_EXTRA_CA_CERTS`) is used as-is, else it builds `http://localhost:<port>` from the backend `port` (default `4000`).
+*   **Deduplicates requests** — the content loaders (`getSettings`, `getPublicAssets`, `getFonts`, `getMenuByLocation`, `getPostBySlug`, `getPostBySlugPreview`, `getPostById`, `getPosts`, plus `checkSetupRequired`/`resolveSiteBase`) are wrapped in React `cache()`, so `generateMetadata()` and the page body share a single request-scoped backend call instead of fetching the same resource twice. (`searchPosts()` is a plain async function — it issues two parallel fetches per call and is not memoized.)
+*   **Caches public reads (ISR), never per-user reads** — `serverFetch()` opts a **public** read into Next's Data Cache when the caller passes a `revalidate` window (with cache `tags` for on-demand `revalidateTag()` purging) — e.g. `getSettings` 60s, `getPosts`/`getPostBySlug` 30s, `getFonts` 300s — collapsing repeat backend hits until the content changes. Next 15 no longer caches `fetch` by default, so this is strictly opt-in. Reads that forward the session cookie (`forwardCookies`, e.g. `getPostBySlugPreview`) or pass no `revalidate` stay `cache: 'no-store'` — per-user content must never be shared.
 *   **Forwards the public host** — `serverFetch()` relays the inbound `x-forwarded-host` / `x-forwarded-proto` to the backend. Because SSR fetches hit the loopback origin, without this the backend's host-based logic (the **Site-URL/migration guard**, **CSRF origin** check, **canonical/OpenGraph** URLs) would see `localhost:4000` instead of the public host and reject SSR requests (e.g. `409 migration_required`).
 *   **Builds SEO metadata** — `buildPostMetadata()` (title, description, canonical, OpenGraph/Twitter) and `htmlToText()` (tag-stripping excerpt builder for `<meta>` values). These are server-safe and do **not** call the `"use client"` sanitizer.
 *   **Builds JSON-LD structured data** — `buildWebSiteJsonLd()` (WebSite + SearchAction) and `buildPostJsonLd()` (BlogPosting/WebPage), emitted via the `src/components/public/JsonLd.tsx` component with `jsonLdString()` escaping `<` so `</script>` can't break out. These hand-rendered `<script>` tags are **not** absolutized by `metadataBase`, so they take an explicit absolute base from `resolveSiteBase()` (same host-allowlist trust model as `metadataBase` — configured site URL, request host honored only when its hostname matches).
@@ -64,7 +69,7 @@ The theme system ships a single token-driven, Bootstrap-like CSS framework. The 
 
 *   **What it is:** `backend/public/css/wordjs-ui.css` (served at `/public/css/wordjs-ui.css`) — one shared static stylesheet that auto-styles every HTML element plus Bootstrap-compatible components (`.btn`/`.card`/`.alert`/`.badge`/`.table`/`.nav`/`.list-group`/`.pagination`/`.progress`/`.modal`/`.dropdown` and a flexbox grid `.container`/`.row`/`.col-*`) and a utility layer (spacing/display/flex/text/colors/borders/sizing/shadow).
 *   **Driven by `--wjs-*` design tokens** declared in each theme's `style.css :root` (not `theme.json`). The framework has fallbacks, so a theme re-skins everything just by setting tokens. All 13 bundled themes ship a full `--wjs-*` token set tuned to their palette (including per-variant `--wjs-color-on-*` max-contrast text tokens).
-*   **Public load order (`src/components/public/ThemeLoader.tsx`):** the `<link id="wjs-ui-framework" href="/public/css/wordjs-ui.css">` is emitted **first**, then the active theme's `style.css?v=…` (`id="wjs-theme-stylesheet"`). Because the framework loads before the theme, the theme's `:root` tokens and custom rules override it at equal specificity. The framework is static so it always renders (even while the active theme is still resolving), which also avoids an unstyled flash.
+*   **Public load order (`src/components/public/ThemeLoader.tsx`):** the `<link id="wjs-ui-framework" href="/public/css/wordjs-ui.css?v=…">` is emitted **first**, then the active theme's `style.css?v=…` (`id="wjs-theme-stylesheet"`); both hrefs are cache-busted with `ASSET_VERSION`. Because the framework loads before the theme, the theme's `:root` tokens and custom rules override it at equal specificity. **No FOUC:** the active slug is resolved on the **server** (the public layout's `getSettings()` passes it down as `initialSlug`) so the first server-rendered paint already carries the correct theme, and both `<link>`s carry a React 19 **`precedence`** attribute — without it React leaves them in the body as non-render-blocking, so the page painted with fallback token values and restyled once the CSS loaded. The client only re-resolves on tab focus (to pick up a theme switch made in the admin) and then evicts the previous theme's `<link>` (precedence stylesheets are add-only, so React never removes the stale one itself).
 *   **Editor preview (`src/components/PuckEditor.tsx`):** a `useEffect` injects the same two links — framework first, then the active theme's `style.css` — into the Puck preview **iframe** (`.puck-container iframe`) for true WYSIWYG. The injection is idempotent and id-guarded, so it's a safe no-op if the public layout already added them. Only the iframe canvas is themed; Puck's editing chrome stays outside it.
 *   **Customizer overlay (`src/components/public/ThemeTokenOverlay.tsx`):** a Server Component emits a sanitized `<style id="wjs-theme-mods">:root{…}</style>` from the active theme's `active_theme_mods` overrides (set by the admin customizer at `/admin/themes/customize`) **after** the theme stylesheet, so live `--wjs-*` edits win with no FOUC. Only `^--wjs-[a-z0-9-]+$` keys and injection-safe values (no `;{}:<>`) are emitted.
 *   **Theme structure (`src/app/(public)/layout.tsx`):** the (now async) public layout reads `active_theme_layout` (from `theme.json`'s `layout`) via `getSettings()` and applies `containerWidth` + an opt-in two-column `sidebar-1` (`SidebarLayout.tsx`). The chrome (`Header`/`Footer`/`PostContent`/blog roll) consumes `--wjs-*` tokens and post bodies use `.wjs-content`, so the active theme drives the whole live look. See [themes.md → Theme integration](themes.md#theme-integration-with-the-live-site).
@@ -81,9 +86,9 @@ The app uses React Contexts to manage global state:
 
 ## System Components
 
-### `SystemFontsLoader`
-**Location:** `src/components/SystemFontsLoader.tsx`
-Injects font faces dynamically based on the site's configuration. It prevents FOUT (Flash of Unstyled Text) by loading fonts before the main content matches.
+### Installed fonts — SSR `@font-face` + `SystemFontsLoader`
+**Location:** `src/lib/fontFaceCss.ts` + `src/components/SystemFontsLoader.tsx`
+The `@font-face` rules for WordJS-installed fonts are built by the shared, isomorphic `buildFontFaceCss()` (`src/lib/fontFaceCss.ts` — numeric weight parsed from the variant label, `format()` hint derived from the file extension, family names escaped). The root layout (`src/app/layout.tsx`) injects them into the **initial SSR `<head>`** (fonts fetched via the request-deduped, ISR-cached `getFonts()` from `server-api.ts`), so a page whose blocks reference a custom font paints in that font on first render — previously the faces were injected only client-side, so first paint fell back to the theme font (permanently, if client JS was blocked). `SystemFontsLoader` is the client-side refresher: it re-fetches `/fonts` and injects the **same builder's** output, picking up fonts uploaded after the SSR cache window and covering the admin editor.
 
 ### `InlineTiptap` (in-place text editor)
 **Location:** `src/components/InlineTiptap.tsx`
@@ -241,6 +246,15 @@ Plugins can inject custom blocks into Puck via the frontend plugin registry.
 2. The build auto-generates `src/lib/puckPluginRegistry.ts`, which exports `puckPluginComponents` — a map merged into the core Puck config so plugin blocks appear alongside the built-in ones.
 
 ---
+
+## Plugin Marketplace (admin) 🛒
+
+`/admin/plugins` now has two tabs — **Installed** and **Marketplace** (`src/app/admin/plugins/page.tsx`, `tab: 'installed' | 'marketplace'`).
+
+*   **`MarketplaceTab.tsx`** (`src/app/admin/plugins/MarketplaceTab.tsx`) browses the plugin catalog with search + category filters, showing each entry's version, size, requested permissions (rendered via `permMeta` from `src/lib/permissionMeta.ts`) and installed/active/update state; the catalog source (remote URL or local dir) is surfaced in the tab.
+*   **API client:** `marketplaceApi` in `src/lib/api.ts` — `catalog(refresh?)` → `GET /marketplace/catalog`, `install(id)` → `POST /marketplace/install`.
+*   **Install flow:** a confirm dialog previews the plugin's requested permissions, then the backend downloads the zip **server-side**, verifies its **sha256** against the catalog entry and runs the exact same security pipeline as a manual upload. The plugin then appears in the **Installed** tab **inactive** with **default-deny** grants, where the admin activates it and grants its capabilities.
+*   **Registries:** marketplace-installed plugins flow through the same auto-generated registries as bundled ones — `src/lib/pluginRegistry.ts` (admin pages, hybrid dev/prod loading) and `src/lib/puckPluginRegistry.ts` (Puck blocks) — via the standard activate → regenerate → restart flow.
 
 ## RBAC & Sidebar Filtering
 

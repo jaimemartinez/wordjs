@@ -221,6 +221,17 @@ WordJS is highly sophisticated about how it handles React.
 
 ## 5. How to Install and Activate
 
+### The Marketplace (one click)
+First-party plugins distributed outside the core build live in the **Marketplace** tab of
+`/admin/plugins`. Installing from there downloads the plugin ZIP from the catalog
+(`marketplace/dist/marketplace-index.json`, built by `npm run build:marketplace` from
+`marketplace/plugins/` and served from the repo or a GitHub release), **verifies its sha256**
+against the catalog entry, and hands it to the **same upload pipeline** described below
+(zip-bomb budget, manifest check, AST scan) — a marketplace install is not privileged in any way.
+Backend API: `GET /api/v1/marketplace/catalog` / `POST /api/v1/marketplace/install` (admin-only);
+the catalog source is configurable via the `marketplace_source` option. See
+**[Plugins Reference §10](plugins-reference.md)** for the catalog.
+
 ### The Distribution Workflow (Standard)
 1.  **Build:** Run `node scripts/build-plugin.js my-plugin`.
 2.  **Zip:** Compress your plugin folder (including the new `dist/` folder).
@@ -512,9 +523,11 @@ options), `filesystem` (read/write — own dir), `users:read` (the safe user pro
 — the egress guard blocks loopback/link-local/`169.254.169.254` metadata/RFC1918/CGNAT/ULA and validates
 the resolved IP at connect time; opt-in, with an exfiltration warning — declare `scope: "network"`).
 
-First-party plugins (`mail-server`, `conference-manager`, the galleries, …) are **pre-granted** the
-capabilities they declare for a working out-of-box experience, but they are **not privileged** — they run
-in the same sandbox under the same checks as anything you upload.
+There is no first-party pre-seeding: **activation** grants a plugin exactly the capabilities its
+manifest declares (idempotent — only when the plugin has no prior grant record), and that applies
+identically to first-party plugins (`mail-server`, `conference-manager`, the galleries, …) and
+anything you upload. First-party plugins are **not privileged** — they run in the same sandbox under
+the same checks.
 
 Changing a plugin's grants **hot-reloads its child process** so the bridge gates re-evaluate and a
 `network` change takes effect — no server restart. Granting a higher-risk capability (`network`,

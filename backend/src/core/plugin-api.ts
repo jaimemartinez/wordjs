@@ -61,7 +61,16 @@ const PROTECTED_OPTION_NAMES = new Set([
     // pluginSlug runs core & cross-plugin handlers) and bypasses the capacity caps that only sit on the
     // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to
     // dodge the supervisor. All off-limits to untrusted plugins.
-    'cron', 'plugin_strikes', 'plugin_health'
+    'cron', 'plugin_strikes', 'plugin_health',
+    // 'marketplace_source' is the base URL the HOST fetches the plugin catalog + zips from. A plugin with
+    // settings:write could point it at http://127.0.0.1:… / cloud-metadata and drive host-side SSRF that
+    // bypasses the plugin egress guard (options are global, not namespaced) (audit MEDIUM).
+    'marketplace_source', 'marketplace_url', 'marketplace_catalog_url',
+    // 'template'/'stylesheet' select the ACTIVE THEME. A settings:write plugin could otherwise point them
+    // at '../plugins/<own-slug>' and, because theme-engine.init() require()s the selected dir's
+    // functions.js IN-PROCESS on the host, re-introduce in-process execution (DoS / prototype pollution /
+    // mail-provider hijack) that OS isolation exists to prevent (#16). Off-limits to plugins.
+    'template', 'stylesheet', 'active_theme_layout', 'active_theme_mods', 'theme_mods'
 ]);
 // Protected for EVERY plugin now (no trusted bypass). Secret/security-critical options are never
 // readable/writable through the generic options bridge; safe non-secret reads go via the `site` bridge.
@@ -77,12 +86,108 @@ const PROTECTED_TABLES = new Set(['users', 'user_meta', 'usermeta', 'options', '
 // statements ('SELECT 1; DROP TABLE x'). Then require the statement to START with one of the caller's
 // allowed verbs (positive allowlist). Comments are stripped first so they can't act as whitespace to
 // evade. Trusted plugins skip this entirely (see callers).
-function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: string) {
-    const lower = String(sql || '')
-        .replace(/\/\*[\s\S]*?\*\//g, ' ')   // /* block comments */ (used as whitespace to evade)
-        .replace(/--[^\n]*/g, ' ')           // -- line comments
-        .trim()
-        .toLowerCase();
+// Single-pass SQL lexer: walk the raw string ONCE, recognizing `--`/`/* */` comments and `'…'` string
+// literals IN CONTEXT — so their contents can NEVER be seen as SQL structure (a `/*` inside a literal is
+// literal text; a `'` inside a comment is comment text; earlier sequential regex passes let one splice the
+// other, #2), and emitting `"…"`/`[…]`/`` `…` `` quoted identifiers as ONE opaque WORD token (so a quoted
+// `")"` alias can't inject a phantom `)` that underflows the walker's scope stack, #1). Returns { toks,
+// cleaned }: toks = [{k:'p'|'w', v}] for the table walker; cleaned = lowercased text with comments + string
+// literals blanked to a space (for the keyword denylists + multi-statement/verb checks). Bounded O(n).
+type SqlTok = { k: string; v: string; q?: boolean };
+function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
+    const s = String(sql || '');
+    const toks: SqlTok[] = [];
+    let cleaned = '';
+    const n = s.length;
+    let i = 0;
+    const isWord = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '_' || c === '$' || c === '.';
+    while (i < n) {
+        const c = s[i];
+        if (c === '-' && s[i + 1] === '-') { i += 2; while (i < n && s[i] !== '\n') i++; cleaned += ' '; continue; }        // -- line comment
+        if (c === '/' && s[i + 1] === '*') { i += 2; while (i < n && !(s[i] === '*' && s[i + 1] === '/')) i++; i += 2; cleaned += ' '; continue; } // /* block */
+        if (c === "'") { // string literal ('' escapes a quote) — content is NEVER structure/keywords/tables
+            i++;
+            while (i < n) { if (s[i] === "'") { if (s[i + 1] === "'") { i += 2; continue; } i++; break; } i++; }
+            cleaned += ' '; continue;
+        }
+        if (c === '"' || c === '`' || c === '[') { // quoted identifier → ONE opaque word token, TAGGED q:true
+            const close = c === '[' ? ']' : c;
+            i++; let id = '';
+            while (i < n) { if (s[i] === close) { if (close !== ']' && s[i + 1] === close) { id += close; i += 2; continue; } i++; break; } id += s[i]; i++; }
+            const lid = id.toLowerCase();
+            // q:true marks this as a QUOTED identifier — it is ALWAYS a name (table / alias / column), NEVER a
+            // keyword. Without the tag, `... AS "order"` collapses to the token `order` and the walker treats
+            // it as the ENDER keyword ORDER, disarming a following comma cross-join (#1 round-7).
+            toks.push({ k: 'w', v: lid, q: true });
+            cleaned += ' ' + lid + ' ';
+            continue;
+        }
+        if (c === '(' || c === ')' || c === ',') { toks.push({ k: 'p', v: c }); cleaned += c; i++; continue; }
+        if (isWord(c)) { let w = ''; while (i < n && isWord(s[i])) { w += s[i]; i++; } const lw = w.toLowerCase(); toks.push({ k: 'w', v: lw }); cleaned += lw; continue; }
+        cleaned += c; i++; // operators / whitespace / ';' preserved for the denylist + multi-statement check
+    }
+    return { toks, cleaned };
+}
+
+// Extract every TABLE reference by WALKING the lexed token stream. A table token sits right after
+// FROM/JOIN/INTO/UPDATE/USING/TABLE, or after a comma while still inside a FROM/USING table-list — at ANY
+// paren depth (a subquery/derived table has its own from-list, via the paren stack). CAPTURE EVERY table-slot
+// identifier and let the caller prefix-check it — there is NO name-based exemption to poison. (Earlier a CTE
+// exemption existed so an unprefixed `FROM cte` wouldn't be flagged; but every attempt to identify "a real
+// CTE" was defeated — a WITH inside a derived-table/WHERE subquery is out of scope, and a `<ident> AS (`
+// detector also matched WINDOW clauses and aliased-subquery column lists (#1/#2, rounds 5-7). So instead a
+// CTE reference must simply use the plugin's own wjp_<slug>_ prefix like any table — then it passes the
+// prefix check with no exemption at all.) Quoted-identifier tokens (q) are ALWAYS names, never keywords.
+function collectTableTokens(toks: SqlTok[]): string[] {
+    const OPENERS_FROM = new Set(['from', 'join', 'using']); // starts/continues a FROM table-list (comma → new table)
+    const OPENERS_ONE = new Set(['into', 'update', 'table']); // single-table target (INSERT INTO / UPDATE / *TABLE)
+    const ENDERS = new Set(['where', 'group', 'having', 'order', 'limit', 'offset', 'window', 'returning', 'values', 'set', 'union', 'intersect', 'except', 'select', 'with']);
+    const out: string[] = [];
+    const stack: { fromClause: boolean; expectTable: boolean }[] = [];
+    let fromClause = false, expectTable = false;
+    for (const tk of toks) {
+        if (tk.k === 'p') {
+            // A paren opened in a table slot / FROM list is itself a table-or-subquery: propagate fromClause
+            // in so an intra-paren comma cross-join `FROM (a , b)` re-arms expectTable; restore on `)`.
+            if (tk.v === '(') { const innerFrom: boolean = expectTable || fromClause; stack.push({ fromClause, expectTable: false }); fromClause = innerFrom; continue; }
+            if (tk.v === ')') { const st = stack.pop() || { fromClause: false, expectTable: false }; fromClause = st.fromClause; expectTable = st.expectTable; continue; }
+            if (tk.v === ',') { if (fromClause) expectTable = true; continue; }
+            continue;
+        }
+        const quoted = tk.q === true; // a quoted identifier is a NAME, never a keyword/opener/ENDER
+        const t = tk.v;
+        if (expectTable) {
+            if (!quoted && (t === 'if' || t === 'not' || t === 'exists')) continue;           // CREATE/DROP TABLE IF [NOT] EXISTS <name>
+            if (!quoted && ENDERS.has(t)) { expectTable = false; fromClause = false; continue; } // `(SELECT…/VALUES…)` = subquery, not a table
+            out.push(t);                                                                       // CAPTURE — no exemption; the caller prefix-checks it
+            expectTable = false;
+            continue;
+        }
+        if (!quoted && OPENERS_FROM.has(t)) { fromClause = true; expectTable = true; }
+        else if (!quoted && OPENERS_ONE.has(t)) { expectTable = true; }
+        else if (!quoted && t === 'on') { expectTable = false; }                              // keep fromClause: `JOIN y ON a=b , z` — z is still a cross-join
+        else if (!quoted && t === 'as') { /* alias marker — ignore */ }
+        else if (!quoted && ENDERS.has(t)) { fromClause = false; expectTable = false; }
+        // else (incl. ANY quoted token in a non-table slot = alias/column): ignore, and do NOT disarm fromClause
+    }
+    return out;
+}
+
+function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: string, slug?: string) {
+    const raw = String(sql || '');
+    // Bound the RAW input BEFORE ANY processing: legitimate plugin SQL is small, and an unbounded string is
+    // a cheap way to force super-linear work in the HOST process (the guard runs host-side for isolated
+    // plugins too) — an event-loop DoS (#23). Cap FIRST so nothing (not even the lexer or a regex on the
+    // comment/literal text) ever runs on an unbounded string.
+    if (raw.length > 20000) {
+        throw new Error(`🛡️ Plugin DB access denied: SQL statement too long.`);
+    }
+    // ONE lexer pass recognizes comments + string literals + quoted identifiers TOGETHER, so attacker text
+    // inside any of them can't splice out structure (the comment-vs-literal ordering bug #2 and the
+    // quoted-identifier phantom-paren #1). `cleaned` = lowercased, comments/literals blanked; `toks` feeds
+    // the table walker. Everything below runs on this clean output, never the raw string.
+    const { toks, cleaned } = lexSql(raw);
+    const lower = cleaned.trim();
 
     if (/\battach\b/.test(lower) || /\bdetach\b/.test(lower) || /\bpragma\b/.test(lower)) {
         throw new Error(`🛡️ Plugin DB access denied: ATTACH/DETACH/PRAGMA are not permitted.`);
@@ -122,44 +227,53 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     // default-deny — a plugin can't read another plugin's tables (e.g. mail-server's received_emails)
     // or any core table, even one not in PROTECTED_TABLES.
     if (tablePrefix) {
-        // Normalize SQL identifier delimiters — SQLite [brackets], plus "double" and `back` quotes — to
-        // spaces so a delimiter-quoted name like [posts] / "posts" can't slip past attribution. (Leave
-        // ' string literals alone.) Then every table-introducing keyword must be followed by a table
-        // identifier OWNED by this plugin (prefixed); FAIL-CLOSED — an unattributable/non-prefixed token
-        // is denied, not ignored.
-        const norm = lower.replace(/[[\]"`]/g, ' ');
         // RETURNING is the scalar-exfil channel for a DELETE/UPDATE...USING that joins another table (and
         // an untrusted plugin gets inserted ids via lastID anyway) — deny it outright for untrusted SQL.
-        if (/\breturning\b/.test(norm)) {
+        if (/\breturning\b/.test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: RETURNING is not permitted; use a separate SELECT.`);
         }
-        // Comma lists after FROM or USING are implicit cross-joins that smuggle a second table past the
-        // single-token attribution below — require explicit JOIN instead.
-        if (/\b(?:from|using)\s+[a-z_][\w$.]*\s*,/.test(norm)) {
-            throw new Error(`🛡️ Plugin DB access denied: comma joins are not permitted; use explicit JOIN.`);
-        }
-        // Include USING (Postgres DELETE ... USING <table>) in the table-introducing keywords, else a
-        // table referenced only there escapes the per-plugin prefix attribution.
-        const tableRe = /\b(?:from|join|into|update|using|table(?:\s+if\s+not\s+exists)?)\s+([^\s(;]+)/g;
-        let m;
-        while ((m = tableRe.exec(norm))) {
-            const tok = m[1];
-            // A subquery `FROM (SELECT ...)` puts '(' right after the keyword → no token captured here;
-            // its inner FROM is matched separately. Any captured token must be a prefixed identifier.
+        // Every TABLE the query references (at any depth, in any clause, via any keyword/comma) must be a
+        // table this plugin OWNS. The lexed token-walker catches the comma-join / subquery / UNION / FROM(x)
+        // / quoted-alias evasions. FAIL-CLOSED: any non-prefixed table token is denied.
+        ensureAllPrefixesClaimed(); // complete the CLAIMED_PREFIXES set so longest-prefix ownership is load-order-independent
+        for (const tok of collectTableTokens(toks)) {
             if (!/^[a-z_][a-z0-9_$.]*$/.test(tok) || !tok.startsWith(tablePrefix)) {
                 throw new Error(`🛡️ Plugin DB access denied: table '${tok}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
+            }
+            // AUTHORITATIVE creator check (#12): if this exact table has a RECORDED creator, only that
+            // creator may touch it — defeating a prefix-extension squat (attacker slug 'events-ticket'
+            // whose prefix is a longer match for the victim 'events' table wjp_events_ticket_types).
+            const creator = TABLE_CREATORS.get(tok);
+            if (slug && creator && creator !== slug) {
+                throw new Error(`🛡️ Plugin DB access denied: table '${tok}' was created by plugin '${creator}', not this plugin.`);
+            }
+            // startsWith is ambiguous when one plugin's prefix is a prefix of another's (wjp_event_ ⊂
+            // wjp_event_tickets_orders): the real owner is the plugin whose CLAIMED prefix is the LONGEST
+            // match. If a longer-prefixed sibling owns this table, deny even though our own prefix matches.
+            for (const [p, s] of CLAIMED_PREFIXES) {
+                if (p.length > tablePrefix.length && tok.startsWith(p)) {
+                    throw new Error(`🛡️ Plugin DB access denied: table '${tok}' belongs to plugin '${s}', not this plugin.`);
+                }
             }
         }
         // INDEX DDL: CREATE [UNIQUE] INDEX <name> ON <table> (...) / DROP INDEX <name>. The generic
         // table matcher above misses the `ON <table>` target and the index name, so scope them too.
-        if (/\bindex\b/.test(norm)) {
-            const onTbl = norm.match(/\bon\s+([^\s(;]+)/);
+        if (/\bindex\b/.test(lower)) {
+            const onTbl = lower.match(/\bon\s+([^\s(;]+)/);
             if (onTbl && (!/^[a-z_][a-z0-9_$.]*$/.test(onTbl[1]) || !onTbl[1].startsWith(tablePrefix))) {
                 throw new Error(`🛡️ Plugin DB access denied: index target '${onTbl[1]}' is not owned by this plugin.`);
             }
-            const idxName = norm.match(/\b(?:create(?:\s+unique)?\s+index|drop\s+index)(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;]+)/);
+            const idxName = lower.match(/\b(?:create(?:\s+unique)?\s+index|drop\s+index)(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;]+)/);
             if (idxName && (!/^[a-z_][a-z0-9_$.]*$/.test(idxName[1]) || !idxName[1].startsWith(tablePrefix))) {
                 throw new Error(`🛡️ Plugin DB access denied: index name '${idxName[1]}' must use the '${tablePrefix}' prefix.`);
+            }
+        }
+        // VIEW / TRIGGER object names (missed by the table matcher + the INDEX case) must be prefixed too,
+        // else a plugin squats an unprefixed object in the shared namespace or shadows another's.
+        if (/\b(?:view|trigger)\b/.test(lower)) {
+            const obj = lower.match(/\b(?:create(?:\s+temp(?:orary)?)?\s+(?:view|trigger)|drop\s+(?:view|trigger))(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;]+)/);
+            if (obj && (!/^[a-z_][a-z0-9_$.]*$/.test(obj[1]) || !obj[1].startsWith(tablePrefix))) {
+                throw new Error(`🛡️ Plugin DB access denied: view/trigger name '${obj[1]}' must use the '${tablePrefix}' prefix.`);
             }
         }
     }
@@ -183,10 +297,95 @@ function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, al
 /**
  * Build the `wordjs` capability object for a plugin. `slug` is the plugin (or `theme:<slug>`).
  */
+// A normalized table prefix -> the slug that first claimed it. Two DIFFERENT slugs that normalize to the
+// same prefix would share physical tables; the second one is refused (see below).
+const CLAIMED_PREFIXES = new Map<string, string>();
+
+// Longest-prefix table ownership needs EVERY installed plugin/theme prefix known — but per-plugin claims
+// happen lazily as each loads, so a plugin querying during boot (before a nested-prefix sibling has
+// claimed) could read the sibling's tables (audit HIGH #12). Eagerly seed the full set from disk ONCE at
+// module load (no plugin context is active here, so fs is unrestricted → load-order-independent).
+// Ownership must survive UNINSTALL-with-keep-data: WordJS deletes a plugin's DIRECTORY on uninstall but
+// KEEPS its wjp_<slug>_ tables unless the admin opts to drop them (WordPress parity). A dir-only prefix
+// seed would then forget the orphan's prefix, so a still-installed sibling whose prefix NESTS under it
+// (wjp_event_ ⊂ wjp_event_tickets_) could read the orphan's tables (#12). Persist every claimed prefix to
+// a plugin-untouchable on-disk registry (its basename is in io-guard's BLOCKED_FILES → no plugin can
+// read/overwrite it) that is NEVER pruned on uninstall, and seed CLAIMED_PREFIXES from it too. Sync fs in
+// host context (no plugin on the stack here) → unrestricted, and no async/query race.
+const PREFIX_REGISTRY_FILE = path.join(ROOT_DIR, 'data', 'wjp-prefix-registry.json');
+// AUTHORITATIVE table ownership: prefix-longest-match is squattable — a plugin whose slug is a prefix-
+// EXTENSION of a victim's table (victim 'events' owns wjp_events_ticket_types; attacker slug 'events-ticket'
+// → prefix wjp_events_ticket_ is a LONGER match) would be handed ownership it never created (#12). Record
+// the EXACT creator of every table the moment it's created; on access, a table with a recorded creator is
+// readable ONLY by that creator, regardless of prefix math. Stored in the same plugin-untouchable registry
+// under '@<table>' keys (a real prefix starts with 'wjp_', never '@', so the two namespaces never collide).
+const TABLE_CREATORS = new Map<string, string>();
+function loadPersistedPrefixes(): void {
+    try {
+        const obj = JSON.parse(require('fs').readFileSync(PREFIX_REGISTRY_FILE, 'utf8'));
+        if (obj && typeof obj === 'object') {
+            for (const [k, slug] of Object.entries(obj)) {
+                if (typeof k !== 'string') continue;
+                if (k[0] === '@') { if (!TABLE_CREATORS.has(k.slice(1))) TABLE_CREATORS.set(k.slice(1), String(slug)); }
+                else if (k.startsWith('wjp_') && !CLAIMED_PREFIXES.has(k)) CLAIMED_PREFIXES.set(k, String(slug));
+            }
+        }
+    } catch { /* registry absent/unreadable — the dir seed still applies */ }
+}
+function persistRegistry(key: string, slug: string): void {
+    try {
+        const fsm = require('fs');
+        let obj: any = {};
+        try { obj = JSON.parse(fsm.readFileSync(PREFIX_REGISTRY_FILE, 'utf8')) || {}; } catch { obj = {}; }
+        if (obj[key] === slug) return; // already recorded
+        obj[key] = slug;
+        try { fsm.mkdirSync(path.dirname(PREFIX_REGISTRY_FILE), { recursive: true }); } catch { /* dir may exist */ }
+        fsm.writeFileSync(PREFIX_REGISTRY_FILE, JSON.stringify(obj));
+    } catch { /* best effort — in-memory + dir seed remain the fallback */ }
+}
+function persistPrefix(prefix: string, slug: string): void { persistRegistry(prefix, slug); }
+// Record `table` as created by `slug` (idempotent, in-memory + on disk). First-creator wins.
+function recordTableCreator(table: string, slug: string): void {
+    const t = String(table).toLowerCase();
+    if (TABLE_CREATORS.has(t)) return;
+    TABLE_CREATORS.set(t, slug);
+    persistRegistry('@' + t, slug);
+}
+
+let _allPrefixesClaimed = false;
+function ensureAllPrefixesClaimed() {
+    if (_allPrefixesClaimed) return;
+    _allPrefixesClaimed = true;
+    try {
+        const fs = require('fs');
+        const toPrefix = (slug: string) => ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
+        for (const dir of [PLUGINS_DIR, path.join(ROOT_DIR, 'themes')]) {
+            let names: string[];
+            try { names = fs.readdirSync(dir); } catch { continue; }
+            for (const name of names) {
+                if (typeof name !== 'string' || name.startsWith('.')) continue;
+                try { if (!fs.statSync(path.join(dir, name)).isDirectory()) continue; } catch { continue; }
+                const pfx = toPrefix(name);
+                if (!CLAIMED_PREFIXES.has(pfx)) CLAIMED_PREFIXES.set(pfx, name);
+            }
+        }
+        loadPersistedPrefixes(); // + orphan prefixes whose dir was removed but whose tables persist
+    } catch { /* best effort — the per-createPluginApi claims below still populate it */ }
+}
+ensureAllPrefixesClaimed();
+
 function createPluginApi(slug: string) {
     // Per-plugin table namespace (like WordPress $wpdb->prefix). Untrusted plugins may only create
     // and query tables under this prefix (enforced in createTable + assertSqlAllowed).
     const tablePrefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
+    // Reject a slug whose prefix a DIFFERENT slug already claimed (acme-shop / acme_shop / acme.shop all
+    // normalize to wjp_acme_shop_) — otherwise the two plugins silently share each other's tables.
+    const claimant = CLAIMED_PREFIXES.get(tablePrefix);
+    if (claimant && claimant !== slug) {
+        throw new Error(`🛡️ Plugin '${slug}' table prefix '${tablePrefix}' collides with already-loaded plugin '${claimant}'. Rename the plugin slug.`);
+    }
+    CLAIMED_PREFIXES.set(tablePrefix, slug);
+    persistPrefix(tablePrefix, slug); // survive this plugin's later uninstall-with-keep-data (#12)
     return {
         slug,
 
@@ -219,22 +418,27 @@ function createPluginApi(slug: string) {
             // lookups use the safe `users` bridge (projection only, never user_pass).
             async all(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
+                assertSqlAllowed(sql, ['select', 'with'], tablePrefix, slug);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.all(sql, params);
             },
             async get(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
-                assertSqlAllowed(sql, ['select', 'with'], tablePrefix);
+                assertSqlAllowed(sql, ['select', 'with'], tablePrefix, slug);
                 const { dbAsync } = require('../config/database');
                 return dbAsync.get(sql, params);
             },
             // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER) — always scoped to own tables.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
-                assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix);
+                assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix, slug);
                 const { dbAsync } = require('../config/database');
-                return dbAsync.run(sql, params);
+                const res = await dbAsync.run(sql, params);
+                // Record ownership of any table this CREATE just made (the guard above already forced it under
+                // the plugin's own prefix), so a later prefix-extension squatter can't claim it (#12).
+                const m = String(sql).toLowerCase().match(/\bcreate\s+(?:temp(?:orary)?\s+)?table\s+(?:if\s+not\s+exists\s+)?["[`]?([a-z_][a-z0-9_$.]*)/);
+                if (m) recordTableCreator(m[1], slug);
+                return res;
             },
             // Create a table — ALWAYS under the plugin's own prefix (no trusted bypass), so it can't
             // create or shadow core / other plugins' tables.
@@ -244,7 +448,9 @@ function createPluginApi(slug: string) {
                     throw new Error(`🛡️ Plugin tables must be named with the '${tablePrefix}' prefix (use wordjs.db.tablePrefix).`);
                 }
                 const { createPluginTable } = require('../config/database');
-                return createPluginTable(name, columns);
+                const r = await createPluginTable(name, columns);
+                recordTableCreator(name, slug); // authoritative creator record (#12)
+                return r;
             },
             // Which SQL dialect is active (so a plugin can branch on Postgres vs SQLite DDL).
             getType() {
@@ -252,6 +458,22 @@ function createPluginApi(slug: string) {
                 const { getDbType } = require('../config/database');
                 return getDbType();
             }
+        },
+
+        // CSPRNG bridge (SAFE — no data access, no permission gate). Plugins that need unguessable
+        // tokens/access codes must use this instead of Math.random (predictable, state-reconstructable).
+        crypto: {
+            randomToken(bytes = 16) {
+                const n = Math.min(Math.max(Math.floor(Number(bytes) || 16), 8), 64);
+                return require('crypto').randomBytes(n).toString('hex');
+            },
+            randomInt(min: number, max: number) {
+                const lo = Math.ceil(Number(min)), hi = Math.floor(Number(max));
+                if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo || (hi - lo) > 1e9) {
+                    throw new Error('crypto.randomInt: invalid range');
+                }
+                return require('crypto').randomInt(lo, hi); // uniform in [lo, hi)
+            },
         },
 
         hooks: {

@@ -1,0 +1,142 @@
+/* Image Lightbox — WordJS plugin public styles (unique class prefix: wjs-ilb-) */
+
+.wjs-ilb-zoomable {
+    cursor: zoom-in;
+}
+
+.wjs-ilb-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 2147483000;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    background: rgba(8, 9, 12, 0.92);
+    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: blur(4px);
+    opacity: 0;
+    transition: opacity 0.22s ease;
+}
+
+.wjs-ilb-overlay.wjs-ilb-open {
+    opacity: 1;
+}
+
+.wjs-ilb-figure {
+    margin: 0;
+    max-width: 94vw;
+    max-height: 90vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+}
+
+.wjs-ilb-img {
+    max-width: 94vw;
+    max-height: 82vh;
+    width: auto;
+    height: auto;
+    object-fit: contain;
+    border-radius: 10px;
+    box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.wjs-ilb-caption {
+    color: rgba(255, 255, 255, 0.88);
+    font-size: 14px;
+    line-height: 1.5;
+    text-align: center;
+    max-width: 80vw;
+    padding: 0 12px;
+}
+
+.wjs-ilb-btn {
+    position: absolute;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 48px;
+    height: 48px;
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.1);
+    color: #fff;
+    font-size: 28px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s ease, transform 0.15s ease;
+    -webkit-user-select: none;
+    user-select: none;
+}
+
+.wjs-ilb-btn:hover {
+    background: rgba(255, 255, 255, 0.22);
+    transform: scale(1.06);
+}
+
+.wjs-ilb-btn:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.7);
+    outline-offset: 2px;
+}
+
+.wjs-ilb-prev {
+    left: 18px;
+    top: 50%;
+    margin-top: -24px;
+}
+
+.wjs-ilb-next {
+    right: 18px;
+    top: 50%;
+    margin-top: -24px;
+}
+
+.wjs-ilb-close {
+    top: 18px;
+    right: 18px;
+    font-size: 24px;
+}
+
+.wjs-ilb-counter {
+    position: absolute;
+    top: 26px;
+    left: 22px;
+    color: rgba(255, 255, 255, 0.6);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+}
+
+/* Single image on the page → no cycle, hide navigation */
+.wjs-ilb-single .wjs-ilb-prev,
+.wjs-ilb-single .wjs-ilb-next,
+.wjs-ilb-single .wjs-ilb-counter {
+    display: none;
+}
+
+@media (max-width: 640px) {
+    .wjs-ilb-btn {
+        width: 40px;
+        height: 40px;
+        font-size: 22px;
+    }
+    .wjs-ilb-prev { left: 8px; }
+    .wjs-ilb-next { right: 8px; }
+    .wjs-ilb-close { top: 10px; right: 10px; }
+    .wjs-ilb-counter { top: 18px; left: 14px; }
+    .wjs-ilb-img {
+        max-width: 96vw;
+        max-height: 78vh;
+        border-radius: 6px;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .wjs-ilb-overlay,
+    .wjs-ilb-btn {
+        transition: none;
+    }
+}

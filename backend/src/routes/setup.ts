@@ -416,16 +416,42 @@ router.post('/migrate', async (req: any, res: Response) => {
     }
 
     try {
+        // Why this endpoint MUST stay reachable pre-auth: during a domain move the Installation/Migration Guard
+        // (index.ts) 409s every non-/setup route — including /auth/login — while siteUrl != detected host, so an
+        // admin CANNOT obtain a session to bootstrap out of the mismatch. /setup/migrate is the CSRF-exempt,
+        // guard-bypassed path that repairs siteUrl, so requiring an authenticated admin session here would break
+        // the very flow it exists for. It therefore authenticates raw credentials, which made it a password
+        // ORACLE (#26): wrong password → 401, correct NON-admin password → 403, correct admin password → 200 were
+        // all DISTINGUISHABLE, giving an unthrottled brute-force oracle (per #25 we deliberately never call
+        // recordLoginFail here, so account lockout never trips it).
+        //
+        // #26 fix WITHOUT reintroducing #25's DoS:
+        //   (a) still respect an existing per-account lock set by the real /auth/login (isLoginLocked below) but
+        //       NEVER recordLoginFail from this unauthenticated path (that shared-lock write was #25's DoS lever);
+        //   (b) collapse the wrong-password AND correct-non-admin branches into ONE uniform 401 (identical status
+        //       + body), so the ONLY distinguishable outcome is a correct ADMINISTRATOR credential — which is the
+        //       legitimate migration path, not information an attacker profits from;
+        //   (c) this route is additionally throttled by the strict authLimiter (10/hr/IP, mounted in index.ts on
+        //       /setup/migrate), far tighter than the setupLimiter (20/15min) guarding the pre-install endpoints.
+        // clearLoginFails on a SUCCESSFUL admin auth stays (it requires the correct password, so it's not an
+        // unauthenticated lever).
+        const auth = require('./auth');
+        const lockId = await auth.resolveLockIdentifier(username);
+        if (await auth.isLoginLocked(lockId)) {
+            return res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
+        }
         const User = require('../models/User');
-        const user = await User.authenticate(username, password);
+        let user: any = null;
+        try { user = await User.authenticate(username, password); } catch { user = null; }
 
-        if (!user) {
+        // UNIFORM response for BOTH wrong password (user === null) and correct-password-non-admin (#26): same
+        // status + body so neither is distinguishable from the other — only a correct administrator credential
+        // proceeds past this point. NO recordLoginFail here (#25: an unauthenticated caller must not drive the
+        // shared per-account lockout).
+        if (!user || user.getRole() !== 'administrator') {
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-
-        if (user.getRole() !== 'administrator') {
-            return res.status(403).json({ error: 'Permission denied. Only administrators can migrate the site.' });
-        }
+        await auth.clearLoginFails(lockId);
 
         // Fix: Trust upstream Gateway protocol
         const protocol = req.get('x-forwarded-proto') || req.protocol;
@@ -511,7 +537,9 @@ router.post('/migrate', async (req: any, res: Response) => {
                 console.error('❌ Failed to regenerate certificates during migration:', e.message);
             }
 
-            res.json({ success: true, newConfig });
+            // Return ONLY the safe, caller-relevant fields — NOT the whole config, which carries
+            // jwtSecret / gatewaySecret / dbPassword (audit MEDIUM: the full config was echoed back).
+            res.json({ success: true, siteUrl: newConfig.siteUrl, frontendUrl: newConfig.frontendUrl });
         } else {
             res.status(500).json({ error: 'Failed to save new configuration' });
         }

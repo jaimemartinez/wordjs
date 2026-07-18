@@ -4,9 +4,9 @@ WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** 
 
 ---
 
-## 🧭 Deployment Modes: Split vs Monolith
+## 🧭 Deployment Modes: Split, Monolith & Separate
 
-The **same codebase** runs two ways, and you can switch **at any time** — there is **no migration**. Both modes share the same `backend/wordjs-config.json`, the same database, the same `uploads`/`themes`/`plugins`, the same secrets, and the same public origin (default `https://localhost:3000`). They are **mutually exclusive** because both bind the public port (default `3000`), so run one or the other.
+The **same codebase** runs as **two mutually-exclusive process models** — **Split** and **Monolith** — and you can switch between them **at any time** with **no migration**. Both share the same `backend/wordjs-config.json`, the same database, the same `uploads`/`themes`/`plugins`, the same secrets, and the same public origin (default `https://localhost:3000`). They are **mutually exclusive** because both bind the public port (default `3000`), so run one or the other. A third topology, **Separate**, is Split spread across **different machines** (joined by gateway-minted join tokens — see below).
 
 In **both** modes, plugins marked `"isolated": true` run **in a separate OS process** (`child_process.fork`) behind the `wordjs` capability bridge — that behavior is identical. See **[Plugin Sandbox & Memory Caps](#-plugin-sandbox--memory-caps)** for the operator-facing knobs.
 
@@ -26,6 +26,18 @@ A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **ba
 - **Prod:** `npm run start:mono` (runs the compiled build)
 
 > **How it works internally:** `monolith.js` sets `WORDJS_EMBEDDED=1` (and `WORDJS_MODE=mono`); the backend's `src/index.ts` detects this, skips its own self-listen and gateway self-register, and exposes `initialize()` for in-process mounting.
+
+### Separate (split across different machines)
+
+**Split** can also run with the three services on **different hosts** — a gateway box, a backend box, and a frontend box — joined into one cluster. Because the tiers talk over **mutual TLS**, each node needs a cert signed by a shared cluster CA; WordJS bootstraps that trust with **single-use join tokens** (like `kubeadm join`) instead of hand-copying certs:
+
+1. **Gateway (the cluster CA):** `node scripts/cluster.js init --host <gateway-ip>` mints the CA (CA key kept `0600` on the gateway), issues the gateway's identity + a cluster-CA-signed public cert, writes a multi-node `gateway/gateway-config.json` (`gatewayInternalBind`, `gatewayEnrollPort` default **3101**), and clears the registry.
+2. **Mint a token per node:** `node scripts/cluster.js token backend` / `… token frontend` prints the exact `node-join` command (with the gateway address, enroll port, token, and CA fingerprint).
+3. **On each node:** `node scripts/node-join.js --role … --gateway … --token … --ca-hash … --advertise …` makes one `POST /enroll` call, receives a signed `CN=<role>` cert + the cluster CA + bootstrap config, writes `<role>/certs/*` and `<role>/wordjs-config.json`, and starts the service, which registers over mTLS.
+
+One backend + one frontend per gateway needs **no** shared database or filesystem — SQLite stays on the single backend and the frontend reaches uploads through the gateway. Scaling a role to **N** replicas is a further step (Postgres + Redis + shared FS). Full step-by-step: **[separate-mode.md](separate-mode.md)**; horizontal scaling: **[multi-node.md](multi-node.md)**.
+
+- **Dev/Prod:** the same `npm start` (split) on each machine — `node-join --start` launches it for you.
 
 ### Which one should I pick?
 
@@ -60,7 +72,7 @@ A `v*` tag triggers **`.github/workflows/release.yml`**, which runs `npm run ins
 1. Builds the **frontend** (`next build` → `.next`).
 2. Compiles the **backend** to `dist/` (`tsc`), so the bundle runs without `ts-node`.
 3. Builds the **plugin frontend bundles** (`backend/scripts/build-plugin.js --all`).
-4. Writes a self-contained `INSTALL.md` and writes the ZIP as `release/wordjs-compiled-release.zip`, zipping everything **except** `node_modules`, `.git`/`.github`, the `release/` folder, local config (`wordjs-config.json`, `gateway-config.json`), `.env`, logs, and debug/CLI scripts.
+4. Writes a self-contained `INSTALL.md` and writes the ZIP as `release/wordjs-compiled-release.zip`, zipping everything **except** `node_modules`, `.git`/`.github`, the `release/` folder, local config (`wordjs-config.json`, `gateway-config.json`), `.env`, logs, debug/CLI scripts, and the `marketplace/` tree (marketplace plugins ship as separate release assets, never inside the core bundle).
 
 Beyond those, the packager applies a **security-anchored secret filter** so no credentials or runtime state can leak into a bundle:
 
@@ -69,13 +81,18 @@ Beyond those, the packager applies a **security-anchored secret filter** so no c
 - **Each plugin's own `plugins/<slug>/data/` directory** — e.g. `mail-server`'s AES-GCM root key (`.mailenc`).
 - Any **config backup** carrying `jwtSecret`/`gatewaySecret`/`dbPassword` — both `*-config.json` and any basename containing `wordjs-config` / `gateway-config` (so `wordjs-config.backup.json` is caught, not just `wordjs-config.json`).
 
-The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag>.zip` (copied from `wordjs-compiled-release.zip` on tag pushes) attached, with auto-generated release notes. A manual **`workflow_dispatch`** run builds the same bundle but uploads it only as a **workflow artifact** named `wordjs-compiled-release` (the un-versioned `wordjs-compiled-release.zip`) — no Release is created — which is handy for testing the packaging.
+After the core bundle, the workflow runs `npm run build:marketplace` (`backend/scripts/build-marketplace.js`), which packs every plugin under `marketplace/plugins/` into per-plugin zips plus a `marketplace-index.json` catalog (sha256 per entry) in `marketplace/dist/`.
+
+The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag>.zip` (copied from `wordjs-compiled-release.zip` on tag pushes) attached **plus the marketplace assets** (`marketplace/dist/*`), with auto-generated release notes. A manual **`workflow_dispatch`** run builds the same bundles but uploads them only as **workflow artifacts** (`wordjs-compiled-release` — the un-versioned `wordjs-compiled-release.zip` — and `wordjs-marketplace`) — no Release is created — which is handy for testing the packaging.
 
 ### What the bundle contains
 
 - **Pre-compiled** frontend (`.next`), backend (`dist/`), and plugin bundles — recipients **do not build or compile anything**.
 - **No secrets.** `jwtSecret`, `gatewaySecret`, and the DB password are **generated locally during install** and written to `backend/wordjs-config.json` — they never ship and are never committed. The packager's secret filter (above) additionally strips any `*.key`/`*.pem`/`*.mailenc`, the cert/TLS dirs, each plugin's `plugins/<slug>/data/`, and config backups so even a stray local secret can't be bundled.
 - **No data.** The database is created fresh by the install wizard; no `database.sqlite` (or any `*.db`/`*.sqlite`/`*.sqlite3`) is included.
+- **No marketplace plugins.** Optional plugins are installed post-deploy from the admin **Marketplace** tab (see below), not shipped in the bundle.
+
+> **Plugin marketplace at runtime.** The admin **Plugins → Marketplace** tab lists a catalog the backend fetches **server-side** (`backend/src/routes/marketplace.ts`). With no configuration it uses the committed catalog at `https://raw.githubusercontent.com/jaimemartinez/wordjs/main/marketplace/dist` — so the server needs outbound HTTPS to `raw.githubusercontent.com` for the tab to work (a dev/full checkout with a local `marketplace/dist/` uses that instead). The `marketplace_source` option (admin-configurable) overrides the source: an `https://` URL — e.g. pin a fixed catalog snapshot at `https://github.com/jaimemartinez/wordjs/releases/download/vX.Y.Z`, since tagged releases attach the same assets — or a **local directory** for air-gapped installs. Downloads are **sha256-verified** against the catalog entry and installed through the **same pipeline as manual zip uploads** (size cap, Zip-Slip/zip-bomb guards, manifest + AST scan), so the marketplace adds no new install surface beyond the catalog fetch itself.
 
 ### How an operator deploys a release
 
@@ -346,7 +363,7 @@ WordJS is **MIT-licensed** consistently across every package (root, `backend`, `
 
 CI runs on every push and pull request via `.github/workflows/ci.yml`, on **Node 22**, with three parallel jobs:
 
-- **Backend:** **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`).
+- **Backend:** **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`). The job ends with a **marketplace catalog freshness** gate: it re-runs `node backend/scripts/build-marketplace.js` (deterministic output) and fails if the committed `marketplace/dist/` differs — run `npm run build:marketplace` and commit the result to fix.
 - **Gateway:** audit gate → tests (`npm test`), including the proxy/mTLS integration test.
 - **Frontend:** audit gate → plugin-registry regeneration → type check → lint (`npm run lint`) → **unit tests** (`npm run test`, vitest — e.g. the XSS sanitizer) → production build (`npm run build`).
 

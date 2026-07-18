@@ -68,8 +68,21 @@ class ThemeEngine {
     }
 
     async init() {
-        const themeSlug = await getOption('template', 'default');
+        const themeSlug = String(await getOption('template', 'default') || 'default');
+
+        // CONTAINMENT (#16): the 'template' option selects which directory's functions.js is require()d
+        // IN-PROCESS on the host. A settings:write plugin (or any writer) could set it to '../plugins/evil'
+        // to run arbitrary in-process code from outside THEMES_DIR. Require a single safe path segment and
+        // re-assert the resolved path stays under THEMES_DIR before doing anything with it.
+        if (!/^[a-zA-Z0-9._-]+$/.test(themeSlug) || themeSlug === '.' || themeSlug === '..') {
+            console.error(`❌ Theme slug '${themeSlug}' is not a safe single path segment — refusing to load.`);
+            return;
+        }
         const themePath = path.join(THEMES_DIR, themeSlug);
+        if (!path.resolve(themePath).startsWith(path.resolve(THEMES_DIR) + path.sep)) {
+            console.error(`❌ Theme path '${themePath}' escaped the themes dir — refusing to load.`);
+            return;
+        }
 
         if (!fs.existsSync(themePath)) {
             console.error(`❌ Theme ${themeSlug} not found at ${themePath}`);
@@ -84,7 +97,7 @@ class ThemeEngine {
         };
 
         this.loadPartials();
-        this.loadThemeLogic();
+        await this.loadThemeLogic();
     }
 
     loadPartials() {
@@ -101,59 +114,41 @@ class ThemeEngine {
         this.partialsLoaded = true;
     }
 
-    loadThemeLogic() {
+    async loadThemeLogic() {
         const logicPath = path.join(this.activeTheme.path, 'functions.js');
-        if (fs.existsSync(logicPath)) {
-            try {
-                const { runWithContext } = require('./plugin-context');
-
-                // We sandbox the theme logic using 'theme:slug' to trigger special handling in plugin-context/io-guard
-                const contextSlug = `theme:${this.activeTheme.slug}`;
-
-                // SECURITY: AST Scan the theme for dangerous calls (child_process, eval, etc.)
-                const { validatePluginPermissions } = require('./plugins');
-
-                // Define the permissions we allow for themes (Strict)
-                // If a theme needs more, it must add a manifest.json
-                let manifest = {
-                    permissions: [
-                        { scope: 'settings', access: 'read' },
-                        { scope: 'content', access: 'read' }
-                    ]
-                };
-
-                // Try to load actual manifest if exists
-                const manifestPath = path.join(this.activeTheme.path, 'manifest.json');
-                if (fs.existsSync(manifestPath)) {
-                    try {
-                        manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-                    } catch (e) {
-                        console.warn(`[Theme] Failed to parse manifest for ${this.activeTheme.slug}:`, e.message);
-                    }
-                }
-
-                try {
-                    validatePluginPermissions(this.activeTheme.slug, this.activeTheme.path, manifest);
-                } catch (securityError) {
-                    console.error(`🚨 Security Block: Theme '${this.activeTheme.slug}' contains unsafe code and was blocked.`);
-                    console.error(securityError.message);
-                    return; // STOP loading
-                }
-
-                // Clear cache if previously loaded
-                delete require.cache[require.resolve(logicPath)];
-
-                const themeLogic = require(logicPath);
-
-                if (typeof themeLogic === 'function') {
-                    // Execute inside the security context
-                    runWithContext(contextSlug, () => {
-                        themeLogic();
-                    });
-                }
-            } catch (e) {
-                console.error(`❌ Error loading theme functions.js:`, e.message);
+        if (!fs.existsSync(logicPath)) return;
+        const themeSlug = this.activeTheme.slug;
+        const isoSlug = `theme:${themeSlug}`;
+        try {
+            // Static AST pre-scan (defense in depth). The REAL containment is the OS isolation below.
+            const { validatePluginPermissions } = require('./plugins');
+            let manifest: any = { permissions: [{ scope: 'settings', access: 'read' }, { scope: 'content', access: 'read' }] };
+            const manifestPath = path.join(this.activeTheme.path, 'manifest.json');
+            if (fs.existsSync(manifestPath)) {
+                try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); }
+                catch (e) { console.warn(`[Theme] Failed to parse manifest for ${themeSlug}:`, e.message); }
             }
+            try {
+                validatePluginPermissions(themeSlug, this.activeTheme.path, manifest);
+            } catch (securityError) {
+                console.error(`🚨 Security Block: Theme '${themeSlug}' contains unsafe code and was blocked.`);
+                console.error(securityError.message);
+                return; // STOP loading
+            }
+
+            // OS-ISOLATION (2026-07-18, user-approved architecture): run functions.js in a CHILD PROCESS
+            // exactly like an isolated plugin — NOT in-process. Theme code on the host main thread had NO
+            // runtime eval/Function/dynamic-import guard, so a malicious theme achieved host RCE that NO
+            // static scan can fully prevent (audit #6/#7/#8/#9/#20 — the in-process theme cluster). The
+            // isolated worker gives OS-level containment; any hooks/shortcodes/mail the theme registers flow
+            // through the SAME RPC bridge isolated plugins use (the isolate layer already namespaces theme:
+            // slugs). Bundled themes' functions.js only console.log, so nothing host-side breaks; Handlebars
+            // helpers remain built-in and host-side (they are not registered from functions.js).
+            const { loadIsolatedPlugin, unloadIsolatedPlugin, isIsolated } = require('./plugin-isolate');
+            if (isIsolated(isoSlug)) { try { await unloadIsolatedPlugin(isoSlug); } catch { /* stale worker */ } } // theme switch: tear down the old worker first
+            await loadIsolatedPlugin(isoSlug, logicPath);
+        } catch (e) {
+            console.error(`❌ Error loading theme functions.js (isolated):`, (e as any) && (e as any).message);
         }
     }
 
@@ -182,7 +177,12 @@ class ThemeEngine {
             theme: this.activeTheme
         };
 
-        return template(context);
+        // Render INSIDE the theme's security context: a theme-registered Handlebars helper executes HERE
+        // (detached from loadThemeLogic's context), so without this it runs with an EMPTY ALS store =
+        // "core"/trusted, and the option/cache/env context-gated guards don't fire against it (#20). Wrapping
+        // template() re-anchors those helpers to the theme slug so secure-require + the guards apply.
+        const { runWithContext } = require('./plugin-context');
+        return runWithContext(`theme:${this.activeTheme.slug}`, () => template(context));
     }
 }
 

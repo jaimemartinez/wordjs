@@ -6,8 +6,11 @@ export async function register() {
         const path = await import('path');
 
         const registerWithGateway = () => {
-            // Hostname and port assumption
-            const hostname = '127.0.0.1';
+            // Advertised host/port the gateway proxies to. Defaults to loopback (co-located), but a
+            // frontend on a SEPARATE machine must advertise its routable address via config.advertiseHost
+            // (or the host of config.frontendUrl) — otherwise the gateway records 127.0.0.1 and proxies
+            // '/' back to its own loopback instead of the real frontend node.
+            let hostname = '127.0.0.1';
             let port = '3001';
 
             // Try to read config
@@ -34,10 +37,14 @@ export async function register() {
                         try {
                             const url = new URL(config.frontendUrl);
                             if (url.port) port = url.port;
+                            if (url.hostname) hostname = url.hostname;
                         } catch (e: any) {
                             console.warn('[Frontend Instrumentation] Failed to parse frontendUrl:', e.message);
                         }
                     }
+                    // advertiseHost (explicit) wins over the frontendUrl host — this is the routable
+                    // address the gateway on another machine uses to reach this frontend.
+                    if (config.advertiseHost) hostname = config.advertiseHost;
                 }
             } catch (e: any) {
                 console.warn('[Frontend Instrumentation] Failed to load/parse wordjs-config.json:', e.message);

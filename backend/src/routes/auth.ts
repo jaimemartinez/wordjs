@@ -29,6 +29,18 @@ const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const _loginFails = new Map(); // key -> { count, firstFailAt, lockedUntil }
 const _loginKey = (u: any) => String(u || '').trim().toLowerCase();
 
+// Resolve a submitted identifier (username OR email) to the account's canonical user_login, so the
+// per-account lockout counter can't be DOUBLED by alternating the two forms — both authenticate the same
+// account yet keyed two distinct buckets before (audit LOW). Falls back to the raw identifier when no
+// account matches (a nonexistent-user probe is still rate-limited under its own key).
+async function resolveLockIdentifier(identifier: any) {
+    try {
+        const User = require('../models/User');
+        const u = (await User.findByLogin(identifier)) || (await User.findByEmail(identifier));
+        return u ? u.userLogin : identifier;
+    } catch { return identifier; }
+}
+
 // Lazily-resolved shared store client (null on single-node or if Redis isn't configured).
 function _lockStore() {
     try {
@@ -262,7 +274,8 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
         });
     }
 
-    if (await isLoginLocked(username)) {
+    const lockId = await resolveLockIdentifier(username);
+    if (await isLoginLocked(lockId)) {
         return res.status(429).json({
             code: 'rest_account_locked',
             message: 'Account temporarily locked due to too many failed attempts. Try again later.',
@@ -272,13 +285,13 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
 
     try {
         const user = await User.authenticate(username, password);
-        await clearLoginFails(username);
+        await clearLoginFails(lockId);
         const token = generateToken(user);
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
 
         res.json({ user: user.toJSON() });
     } catch (error) {
-        await recordLoginFail(username);
+        await recordLoginFail(lockId);
         return res.status(401).json({
             code: 'rest_invalid_credentials',
             message: 'Invalid username or password.',
@@ -476,3 +489,9 @@ router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
 }));
 
 module.exports = router;
+// Exposed so other credential-checking endpoints (e.g. /setup/migrate) share the SAME per-account
+// lockout — otherwise they become an unthrottled password oracle that bypasses this one (audit MEDIUM).
+module.exports.isLoginLocked = isLoginLocked;
+module.exports.recordLoginFail = recordLoginFail;
+module.exports.clearLoginFails = clearLoginFails;
+module.exports.resolveLockIdentifier = resolveLockIdentifier;

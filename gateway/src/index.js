@@ -26,6 +26,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { createProxyServer, createUpstreamAgent } = require('./proxy-config');
+const clusterCa = require('./cluster-ca');
 
 // --- LOGGER SETUP ---
 const logger = winston.createLogger({
@@ -181,6 +182,7 @@ if (cluster.isPrimary) {
         for (let i = 0; i < maxWorkers; i++) cluster.fork();
 
         startInternalServer();
+        startEnrollServer();
         maybeStartAcmeHttpListener();
     })();
 
@@ -537,6 +539,72 @@ if (cluster.isPrimary) {
         } else {
             logger.warn(`[Gateway] [Internal] ⚠️ mTLS certificates not found. Server NOT STARTED.`);
         }
+    }
+
+    // Token-enrollment listener (bootstrap trust). A brand-new backend/frontend node has no client cert
+    // yet, so it cannot use the mTLS /register path above. Instead it makes ONE tokened call here: it
+    // presents a single-use join token (minted by `cluster:token`) plus a CSR, and receives a signed
+    // CN=<role> identity cert + the cluster CA back. From then on it uses that identity for mTLS
+    // registration/health/proxy. This is a SEPARATE https listener that does NOT request a client cert
+    // (the enrolling node has none) — the token is the authorization; the mTLS /register server stays
+    // strict (rejectUnauthorized:true) and untouched.
+    function startEnrollServer() {
+        const CA_CRT = path.resolve(__dirname, '../certs/cluster-ca.crt');
+        const CA_KEY = path.resolve(__dirname, '../certs/cluster-ca.key');
+        const SRV_KEY = path.resolve(__dirname, '../certs/gateway-internal.key');
+        const SRV_CRT = path.resolve(__dirname, '../certs/gateway-internal.crt');
+        if (![CA_CRT, CA_KEY, SRV_KEY, SRV_CRT].every((p) => fs.existsSync(p))) {
+            logger.warn('[Gateway] [Enroll] ⚠️ cluster CA/identity not found — token enrollment DISABLED. Run: node scripts/cluster.js init');
+            return;
+        }
+        const https = require('https');
+        const caCertPem = fs.readFileSync(CA_CRT, 'utf8');
+        const caKeyPem = fs.readFileSync(CA_KEY, 'utf8');
+        const store = clusterCa.tokenStore(path.resolve(__dirname, '../cluster-tokens.json'));
+
+        const enrollApp = express();
+        enrollApp.use(express.json({ limit: '64kb' }));
+        // Tokens are high-entropy + single-use + TTL-bound; a modest rate limit caps brute-force noise.
+        enrollApp.use(rateLimit({ windowMs: 60000, max: 30, standardHeaders: true, legacyHeaders: false }));
+
+        enrollApp.get('/enroll/health', (req, res) => res.json({ ok: true, role: 'gateway-enroll' }));
+        enrollApp.post('/enroll', (req, res) => {
+            const { role, token, advertiseHost, csr } = req.body || {};
+            if (!role || !token || !csr) return res.status(400).json({ error: 'role, token and csr are required' });
+            if (!['backend', 'frontend'].includes(role)) return res.status(400).json({ error: 'invalid role' });
+            const chk = store.consume(token, role);
+            if (!chk.ok) {
+                logger.warn(`[Gateway] [Enroll] REJECT ${role} from ${req.socket.remoteAddress}: ${chk.reason}`);
+                return res.status(403).json({ error: chk.reason });
+            }
+            try {
+                // SECURITY: CN is forced to the token's role (not taken from the CSR); SANs come from the
+                // node's advertised host (and any host the token pinned) so the gateway can verify the
+                // backend's server cert when it later health-checks/proxies to it.
+                const sans = [advertiseHost, chk.host].filter(Boolean);
+                const certPem = clusterCa.signCsr({ caKeyPem, caCertPem, csrPem: csr, cn: role, sans });
+                logger.info(`[Gateway] [Enroll] ISSUED CN=${role} advertiseHost=${advertiseHost || '-'} to ${req.socket.remoteAddress}`);
+                return res.json({
+                    cert: certPem,
+                    ca: caCertPem,
+                    config: {
+                        gatewaySecret: GATEWAY_SECRET,
+                        gatewayPort: config.gatewayPort || 3000,
+                        gatewayInternalPort: config.gatewayInternalPort || 3100,
+                        siteUrl: config.siteUrl || null
+                    }
+                });
+            } catch (e) {
+                logger.error(`[Gateway] [Enroll] signing failed: ${e.message}`);
+                return res.status(500).json({ error: 'certificate signing failed' });
+            }
+        });
+
+        const enrollPort = config.gatewayEnrollPort || ((config.gatewayInternalPort || 3100) + 1);
+        const bind = config.gatewayInternalBind || '127.0.0.1';
+        const srv = https.createServer({ key: fs.readFileSync(SRV_KEY), cert: fs.readFileSync(SRV_CRT) }, enrollApp);
+        srv.on('error', (e) => logger.error(`[Gateway] [Enroll] listener error on ${bind}:${enrollPort}: ${e.message}`));
+        srv.listen(enrollPort, bind, () => logger.info(`[Gateway] [Enroll] 🎟️  token-enrollment server on ${bind}:${enrollPort}`));
     }
 
 } else {

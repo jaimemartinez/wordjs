@@ -1,0 +1,63 @@
+{
+    "id": "digital-downloads",
+    "name": "Digital Downloads",
+    "version": "1.0.0",
+    "description": "Sell or give away downloadable products (files hosted in the media library). Delivery is a token-gated reveal: buyers get an expiring, limited-use download link by email or on screen. Free products deliver instantly with an email; paid orders stay pending until the admin marks them paid (the link is then auto-emailed).",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "downloads"
+        },
+        "puckComponents": {
+            "entry": "client/puck/DigitalDownloadsPuck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "Descargas Digitales",
+        "icon": "fa-download",
+        "href": "/admin/plugin/downloads",
+        "order": 73
+    },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read products and orders (download tokens, usage counters) from the plugin's own tables."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create the plugin's tables and write products, orders, sales/download counters and token usage."
+        },
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the plugin's configuration option (currency symbol, manual-payment instructions, link expiry) and the site URL for building download links."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Store the plugin's configuration option."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Public routes for the product grid, order creation and token-gated download; admin routes for products/orders/config management."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the 'Descargas Digitales' entry to the admin sidebar."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Email buyers their download link (or order-received notice) and notify the admin about new pending orders."
+        }
+    ]
+}

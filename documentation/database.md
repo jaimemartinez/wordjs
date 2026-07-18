@@ -33,7 +33,7 @@ Uses the `pg` client (connection **Pool**) via `backend/src/drivers/postgres.ts`
 Uses a pure JavaScript WASM build of SQLite (`sql.js`) via `backend/src/drivers/sqlite-legacy.ts`.
 *   **Use Case:** Restricted hosting environments (some shared hosting, strictly locked-down containers) where the native binary cannot load.
 *   **Trade-off:** Slower than Native for heavy writes, and it uses the older **synchronous** driver shape (the DB Manager adapts it). It reads/writes the **same SQLite file format**.
-*   **Data file:** stores its database at `backend/data/wordjs.db` (the config default `dbPath`). Although the file *format* is identical to Native, the two SQLite drivers use **different files by default** — see [§1.7 SQLite Drivers Use Different Files](#17-sqlite-drivers-use-different-files).
+*   **Data file:** stores its database at `backend/data/wordjs.db` (the config layer defaults `dbPath` **per driver** — `./data/wordjs.db` only when `sqlite-legacy` is configured, `./data/wordjs-native.db` otherwise; `backend/src/config/app.ts`). Although the file *format* is identical to Native, the two SQLite drivers use **different files by default** — see [§1.7 SQLite Drivers Use Different Files](#17-sqlite-drivers-use-different-files).
 
 ### 1.2 The Driver Interface & Conformance Suite
 
@@ -323,7 +323,7 @@ Post listing (`Post.findAllWithRelations`) **batch-loads** post meta for the who
 
 Plugins should generally stick to `post_meta` or `user_meta` for storing extra data. For high-performance needs they can create their **own** tables.
 
-Plugins do this through the permission-checked `wordjs` capability bridge (`wordjs.db.createTable(...)` / `wordjs.db.run(...)`), **not** by reaching into the raw driver. Sandboxed (untrusted) plugins are **table-scoped**: any SQL referencing a core table (`users`, `user_meta`, `options`, `roles`, `sessions`, …) is rejected, and they cannot create a table whose name collides with a core table. The full rules, the driver-agnostic type aliases (`INT_PK`, `DATETIME`, …), and examples live in **[plugin-database.md](./plugin-database.md)**.
+Plugins do this through the permission-checked `wordjs` capability bridge (`wordjs.db.createTable(...)` / `wordjs.db.run(...)`), **not** by reaching into the raw driver. Plugin SQL is **table-scoped by prefix (default-deny)**: every table a query touches must be one the plugin owns under its `wjp_<slug>_` prefix (`wordjs.db.tablePrefix`), so core tables (`users`, `user_meta`, `options`, `roles`, `sessions`, …) and other plugins' tables are unreachable, and `createTable` refuses non-prefixed names. Two practical consequences of the guard: **`ON CONFLICT … DO UPDATE` upserts are rejected** (use UPDATE-then-INSERT instead — the core `updateOption` upsert in §2.5 is core-only), and the bridge exposes only `get`/`all`/`run`/`createTable` — **no `transaction()`**, so multi-statement plugin writes are not atomic. The full rules, the driver-agnostic type aliases (`INT_PK`, `DATETIME`, …), and examples live in **[plugin-database.md](./plugin-database.md)**.
 
 ## 4. Adding a New Database Driver
 

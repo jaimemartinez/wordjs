@@ -278,8 +278,17 @@ router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => 
         if (String(password).length < 8) {
             return res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
         }
-        try { await User.authenticate(req.user.userLogin, String(currentPassword || '')); }
-        catch { return res.status(403).json({ code: 'rest_bad_current_password', message: 'Current password is incorrect.', data: { status: 403 } }); }
+        // Gate this sudo re-auth with the SAME shared per-account lockout as /auth/login — otherwise a
+        // hijacked session brute-forces the current password unthrottled (only the loose apiLimiter applies)
+        // (audit #26 — unthrottled password oracle). This path is authenticated/session-scoped, so RECORDING
+        // failures here correctly throttles the oracle without the unauthenticated-DoS of #25.
+        const auth = require('./auth');
+        const lockId = await auth.resolveLockIdentifier(req.user.userLogin);
+        if (await auth.isLoginLocked(lockId)) {
+            return res.status(429).json({ code: 'rest_account_locked', message: 'Too many failed attempts. Try again later.', data: { status: 429 } });
+        }
+        try { await User.authenticate(req.user.userLogin, String(currentPassword || '')); await auth.clearLoginFails(lockId); }
+        catch { await auth.recordLoginFail(lockId); return res.status(403).json({ code: 'rest_bad_current_password', message: 'Current password is incorrect.', data: { status: 403 } }); }
     }
 
     // Optional personal/recovery email (coexists with the primary email; used for password recovery).
@@ -318,12 +327,21 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
 
     // SECURITY (privilege hierarchy / account takeover): editing ANOTHER user mutates their email +
     // password below. `edit_users` is a delegable capability, so without this a non-administrator could
-    // reset an ADMINISTRATOR's password/email and seize the account. An administrator account may only be
-    // edited by an administrator (or its owner). (AUTH-1)
-    if (!isOwn && user.getRole && user.getRole() === 'administrator' && req.user.getRole() !== 'administrator') {
+    // reset a privileged user's password/email and seize the account. Protect ANY effectively-omnipotent
+    // target — not just the literal 'administrator' role: a custom role carrying the '*' wildcard or the
+    // user/role/options-management caps is just as dangerous (audit MEDIUM). Only an administrator (or the
+    // account's owner) may edit such an account. (AUTH-1)
+    const targetIsPrivileged = !!(user.getRole && (
+        user.getRole() === 'administrator' ||
+        (typeof user.can === 'function' && (
+            user.can('*') || user.can('edit_users') || user.can('promote_users') ||
+            user.can('manage_options') || user.can('manage_roles')
+        ))
+    ));
+    if (!isOwn && targetIsPrivileged && req.user.getRole() !== 'administrator') {
         return res.status(403).json({
             code: 'rest_forbidden',
-            message: 'Only an administrator can edit an administrator account.',
+            message: 'Only an administrator can edit a privileged account.',
             data: { status: 403 }
         });
     }

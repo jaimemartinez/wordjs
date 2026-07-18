@@ -54,6 +54,7 @@ Además del default-deny por prefijo, `assertSqlAllowed` rechaza (defensa en pro
 - **Comma-joins** (`FROM a, b`): cross-join implícito que cuela una segunda tabla — usa `JOIN` explícito.
 - **`USING`** (el `DELETE ... USING <tabla>` de Postgres): se incluye en la atribución por prefijo para que una tabla referida ahí no escape el scoping.
 - **`RETURNING`**: canal de exfiltración escalar — denegado; usa un `SELECT` aparte (el `lastID` de inserciones ya está disponible).
+- **`ON CONFLICT ... DO UPDATE` (upsert)**: la palabra `update` dentro de la cláusula dispara el matcher de atribución de tablas (captura `set` como "tabla" sin prefijo) y la query se **deniega**. `ON CONFLICT ... DO NOTHING` sí pasa. Para un upsert en un plugin usa el patrón **UPDATE-then-INSERT**: primero `UPDATE`, y si `changes === 0`, haz el `INSERT`.
 - **Tablas del core como denylist explícita** (`PROTECTED_TABLES`: `users`, `user_meta`, `options`, `roles`, `sessions`, …) — redundante con el prefijo, como segunda barrera.
 - **DDL de índices** (`CREATE [UNIQUE] INDEX … ON <tabla>` / `DROP INDEX <nombre>`): tanto la tabla destino del `ON` **como el nombre del índice** deben empezar por el prefijo `wjp_<slug>_` del plugin; si no, la query se deniega (el matcher genérico de tablas no ve el destino del `ON` ni el nombre del índice, así que se scopean aparte).
 
@@ -209,4 +210,6 @@ module.exports = {
 - ✅ `card-gallery` - Persiste sus datos vía el bridge `wordjs.options` (clave/valor), no en tablas SQL
 - ✅ `video-gallery` - Persiste sus datos vía el bridge `wordjs.options` (clave/valor), no en tablas SQL
 - ✅ `mail-server` - Plugin **totalmente untrusted** (sandboxed): usa los grants `database:read` + `database:write` (entre otros que pide su manifest) y guarda **todos** sus datos en la BD — incluidas claves DKIM y secretos SMTP del relay — en sus propias tablas `wjp_mail_server_*` (`_received_emails` / `_email_attachments` / `_secrets`), precisamente porque `assertSqlAllowed` deniega cualquier tabla fuera de su prefijo
-- ✅ Todos los plugins existentes - Sintaxis SQLite estándar; todos table-scoped a su propio prefijo (sin acceso a tablas del core)
+- ✅ `youtube-videos` - Guarda la clave de la YouTube Data API en su **propia tabla** `wjp_youtube_videos_*` (no en options, que otros plugins pueden leer); su "upsert" de settings usa el patrón **UPDATE-then-INSERT** porque el guard deniega `ON CONFLICT ... DO UPDATE`
+- ✅ `conference-manager` - Tablas propias `wjp_conference_manager_*` vía `db.tablePrefix` + `db.createTable`; ojo: el bridge de BD **no expone transacciones**, así que las actualizaciones que dependen de otra fila se hacen con un solo `UPDATE` con subquery
+- ✅ Todos los plugins existentes (incluidos los 25 del marketplace) - Sintaxis SQLite estándar; todos table-scoped a su propio prefijo (sin acceso a tablas del core)

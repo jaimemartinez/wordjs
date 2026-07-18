@@ -42,6 +42,10 @@ function resolveServerBase(): string {
         }
         if (fs.existsSync(configPath)) {
             const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+            // Separate-machine frontend: internalApiUrl points SSR at the backend's reachable API base
+            // (typically the gateway's public origin, whose cert is issued from the cluster CA the
+            // frontend trusts via NODE_EXTRA_CA_CERTS). Same effect as the env, but config-file driven.
+            if (cfg.internalApiUrl) return String(cfg.internalApiUrl).replace(/\/+$/, '');
             if (cfg.port) backendPort = cfg.port;
         }
     } catch {

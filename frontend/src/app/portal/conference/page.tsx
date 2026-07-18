@@ -38,6 +38,91 @@ interface Inscription {
     amount_paid: number;
 }
 
+// The registration form is the source of truth: attendee data lives in real columns named after each
+// field (custom_data fallback for legacy rows). These read a field's value + build a display name —
+// same helpers as the admin list so both views follow the form (no hardcoded person columns).
+const fieldVal = (person: any, field: any) => {
+    const v = person?.[field.name];
+    if (v !== undefined && v !== null && v !== '') return v;
+    const cd = person?.custom_data?.[field.name];
+    return (cd !== undefined && cd !== null && cd !== '') ? cd : '';
+};
+const personDisplayName = (person: any, fields: any[]) => {
+    const fl = fields || [];
+    // Prefer the fields tagged with the name roles; fall back to the first 1-2 form fields.
+    const named = ['first_name', 'last_name']
+        .map((role) => fl.find((f: any) => f.role === role))
+        .filter(Boolean)
+        .map((f: any) => fieldVal(person, f))
+        .filter((v: any) => v !== '' && v != null);
+    const parts = named.length ? named : fl.map((f: any) => fieldVal(person, f)).filter((v: any) => v !== '' && v != null).slice(0, 2);
+    const name = parts.join(' ').trim();
+    return name || `#${person?.id ?? ''}`;
+};
+
+// Combobox for the GROUPING field: search/pick an existing group (with member preview) or create a
+// new one. Module-level (never define a component inside a component — it steals input focus).
+function GroupPicker({ field, value, onChange, groups }: any) {
+    const [open, setOpen] = useState(false);
+    const val = value == null ? '' : String(value);
+    const lower = val.trim().toLowerCase();
+    const list = groups || [];
+    const filtered = lower ? list.filter((g: any) => g.name.toLowerCase().includes(lower)) : list;
+    const exact = list.find((g: any) => g.name.toLowerCase() === lower);
+    return (
+        <div className="relative">
+            <input
+                type="text"
+                required={!!field.is_required}
+                className="w-full border rounded-lg p-2.5"
+                placeholder="Buscar grupo existente o escribir uno nuevo…"
+                value={val}
+                onChange={(e) => onChange(e.target.value)}
+                onFocus={() => setOpen(true)}
+                onBlur={() => setTimeout(() => setOpen(false), 180)}
+                autoComplete="off"
+            />
+            {open && (
+                <div className="absolute z-40 left-0 right-0 mt-1 bg-white border border-gray-200 rounded-lg shadow-xl max-h-64 overflow-y-auto">
+                    {filtered.length === 0 && !val && (
+                        <div className="px-3 py-2 text-xs text-gray-400">Aún no hay grupos en esta localidad. Escribe para crear el primero.</div>
+                    )}
+                    {filtered.map((g: any) => (
+                        <button
+                            type="button"
+                            key={g.name}
+                            onMouseDown={(e) => { e.preventDefault(); onChange(g.name); setOpen(false); }}
+                            className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-gray-50 last:border-0"
+                        >
+                            <div className="flex items-center justify-between gap-2">
+                                <span className="font-medium text-gray-800 truncate">{g.name}</span>
+                                <span className="text-[11px] text-gray-400 whitespace-nowrap">{g.count} {g.count === 1 ? 'persona' : 'personas'}</span>
+                            </div>
+                            {g.members && g.members.length > 0 && (
+                                <div className="text-[11px] text-gray-400 truncate mt-0.5">{g.members.map((m: any) => m.name).join(', ')}</div>
+                            )}
+                        </button>
+                    ))}
+                    {val.trim() && !exact && (
+                        <button
+                            type="button"
+                            onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}
+                            className="w-full text-left px-3 py-2 text-blue-600 hover:bg-blue-50 font-medium text-sm border-t border-gray-100"
+                        >
+                            <i className="fa-solid fa-plus mr-2"></i>Crear grupo «{val.trim()}»
+                        </button>
+                    )}
+                </div>
+            )}
+            {exact && exact.members && exact.members.length > 0 && (
+                <div className="mt-1.5 text-xs text-gray-600 bg-blue-50/60 rounded-lg px-3 py-2 border border-blue-100">
+                    <span className="font-semibold">En «{exact.name}» ({exact.count}):</span> {exact.members.map((m: any) => m.name).join(', ')}
+                </div>
+            )}
+        </div>
+    );
+}
+
 function LocationPortalContent() {
     const { addToast } = useToast();
     // Auth State. The portal session is an HttpOnly, host-namespaced + path-scoped cookie
@@ -68,6 +153,7 @@ function LocationPortalContent() {
     // Dynamic Form Data
     const [formData, setFormData] = useState<Record<string, any>>({});
     const [fields, setFields] = useState<any[]>([]);
+    const [groups, setGroups] = useState<any[]>([]);
 
     // Payment State
     const [selectedIds, setSelectedIds] = useState<number[]>([]);
@@ -95,6 +181,24 @@ function LocationPortalContent() {
         }
     }, [selectedConference]);
 
+    // Load the dynamic form fields for a conference and seed formData. Extracted so BOTH the login
+    // flow and session-restore can call it — without it, registering after a refresh showed
+    // "no fields configured" and a disabled submit button.
+    const loadFields = async (confId: number | string) => {
+        try {
+            const res = await fetch(`/api/v1/plugin/conference-manager/public/fields?conference_id=${confId}`);
+            if (!res.ok) return;
+            const fieldsData = await res.json();
+            setFields(fieldsData);
+            const initial: any = {};
+            fieldsData.forEach((f: any) => {
+                const opts = (f.options || '').split(',').map((o: string) => o.trim()).filter(Boolean);
+                initial[f.name] = f.type === 'number' ? 0 : (f.type === 'select' ? (opts[0] || '') : '');
+            });
+            setFormData(initial);
+        } catch (e) { console.error(e); }
+    };
+
     const verifyToken = async () => {
         setLoading(true);
         try {
@@ -107,6 +211,7 @@ function LocationPortalContent() {
                 setMyLocation(data);
                 setStep('dashboard');
                 loadInscriptions();
+                if (data.conference_id) loadFields(data.conference_id); // so registration works after refresh
             } else {
                 // If not logged in, load the conferences for the login screen
                 loadConferences();
@@ -121,28 +226,31 @@ function LocationPortalContent() {
     const loadConferences = async () => {
         try {
             const res = await fetch('/api/v1/plugin/conference-manager/public/list');
-            if (res.ok) {
-                const data = await res.json();
-                setConferences(data);
+            if (!res.ok) {
+                setError('No se pudieron cargar las conferencias. Inténtalo de nuevo más tarde.');
+                return;
+            }
+            const data = await res.json();
+            setConferences(data);
 
-                if (typeof window !== 'undefined') {
-                    const params = new URLSearchParams(window.location.search);
-                    const slug = params.get('slug');
-                    if (slug) {
-                        const found = data.find((c: Conference) => c.slug === slug);
-                        if (found) {
-                            setSelectedConference(found.id.toString());
-                            setIsConferenceLocked(true);
-                        } else {
-                            setError('La conferencia solicitada no está disponible o el formulario no ha sido publicado.');
-                        }
-                    } else if (data.length === 0) {
-                        setError('No hay conferencias disponibles en este momento.');
+            if (typeof window !== 'undefined') {
+                const params = new URLSearchParams(window.location.search);
+                const slug = params.get('slug');
+                if (slug) {
+                    const found = data.find((c: Conference) => c.slug === slug);
+                    if (found) {
+                        setSelectedConference(found.id.toString());
+                        setIsConferenceLocked(true);
+                    } else {
+                        setError('La conferencia solicitada no está disponible o el formulario no ha sido publicado.');
                     }
+                } else if (data.length === 0) {
+                    setError('No hay conferencias disponibles en este momento.');
                 }
             }
         } catch (e) {
             console.error(e);
+            setError('Error de conexión al cargar las conferencias.');
         }
     };
 
@@ -151,18 +259,7 @@ function LocationPortalContent() {
             const res = await fetch(`/api/v1/plugin/conference-manager/public/locations?conference_id=${confId}`);
             if (res.ok) {
                 setLocations(await res.json());
-                // Also load fields
-                const fieldsRes = await fetch(`/api/v1/plugin/conference-manager/public/fields?conference_id=${confId}`);
-                if (fieldsRes.ok) {
-                    const fieldsData = await fieldsRes.json();
-                    setFields(fieldsData);
-                    // Initialize formData
-                    const initial: any = {};
-                    fieldsData.forEach((f: any) => {
-                        initial[f.name] = f.type === 'number' ? 0 : (f.type === 'select' ? f.options.split(',')[0].trim() : '');
-                    });
-                    setFormData(initial);
-                }
+                loadFields(confId); // shared loader — guards NULL options, seeds formData
             } else if (res.status === 403) {
                 const err = await res.json();
                 addToast(err.error, 'error');
@@ -181,27 +278,37 @@ function LocationPortalContent() {
                 body: JSON.stringify({ location_id: selectedLocation, code }),
                 credentials: 'include'
             });
-            const data = await res.json();
+            // Parse defensively — a 500/HTML/proxy error must not throw before we can read the status.
+            const data = await res.json().catch(() => ({}));
             if (res.ok && data.success) {
                 setToken(data.token);
                 setMyLocation(data.location);
                 setStep('dashboard');
                 loadInscriptions();
+                if (data.location?.conference_id) loadFields(data.location.conference_id);
             } else {
-                addToast(data.error || 'Login failed', 'error');
+                addToast(data.error || 'No se pudo iniciar sesión. Verifica el código.', 'error');
             }
         } catch {
-            addToast('Connection error', 'error');
+            addToast('Error de conexión', 'error');
         } finally {
             setLoading(false);
         }
     };
 
-    const logout = () => {
-        // Since we are using HttpOnly cookies, we should ideally have a logout endpoint 
-        // to clear the cookie. For now, we'll just clear the state.
+    const logout = async () => {
+        // Clear the HttpOnly cookie server-side so a refresh on a shared device doesn't re-login.
+        try {
+            await fetch('/api/v1/plugin/conference-manager/portal/logout', {
+                method: 'POST',
+                credentials: 'include',
+                headers: portalAuthHeaders()
+            });
+        } catch { /* clearing local state below is enough to log out this tab */ }
         setToken(null);
         setMyLocation(null);
+        setInscriptions([]);
+        setSelectedIds([]);
         setStep('login');
         loadConferences();
     };
@@ -214,6 +321,18 @@ function LocationPortalContent() {
             });
             if (res.ok) setInscriptions(await res.json());
         } catch (e) { console.error(e); }
+        loadGroups();
+    };
+
+    // Existing groups (of the grouping field) for this location, with members — powers the group picker.
+    const loadGroups = async () => {
+        try {
+            const res = await fetch('/api/v1/plugin/conference-manager/portal/groups', {
+                credentials: 'include',
+                headers: portalAuthHeaders()
+            });
+            if (res.ok) { const d = await res.json(); setGroups(d.groups || []); }
+        } catch (e) { /* non-critical */ }
     };
 
     const handleCreateInscription = async (e: React.FormEvent) => {
@@ -232,16 +351,17 @@ function LocationPortalContent() {
                 // Reset form with initials
                 const initial: any = {};
                 fields.forEach(f => {
-                    initial[f.name] = f.type === 'number' ? 0 : (f.type === 'select' ? f.options.split(',')[0].trim() : '');
+                    const opts = (f.options || '').split(',').map((o: string) => o.trim()).filter(Boolean);
+                    initial[f.name] = f.type === 'number' ? 0 : (f.type === 'select' ? (opts[0] || '') : '');
                 });
                 setFormData(initial);
                 loadInscriptions();
             } else {
-                const err = await res.json();
+                const err = await res.json().catch(() => ({}));
                 addToast(err.error || 'Error', 'error');
             }
         } catch {
-            addToast('Connection error', 'error');
+            addToast('Error de conexión', 'error');
         } finally {
             setLoading(false);
         }
@@ -250,6 +370,15 @@ function LocationPortalContent() {
     const handleBulkPayment = async (e: React.FormEvent) => {
         e.preventDefault();
         if (selectedIds.length === 0) return;
+        const amt = Number(paymentForm.amount_per_person);
+        if (!Number.isFinite(amt) || amt <= 0) {
+            addToast('El monto debe ser mayor que cero.', 'error');
+            return;
+        }
+        if (!paymentForm.proof) {
+            addToast('El comprobante es obligatorio.', 'error');
+            return;
+        }
         setLoading(true);
         try {
             const res = await fetch('/api/v1/plugin/conference-manager/portal/payments/bulk', {
@@ -257,7 +386,7 @@ function LocationPortalContent() {
                 headers: portalAuthHeaders({ 'Content-Type': 'application/json' }),
                 body: JSON.stringify({
                     inscription_ids: selectedIds,
-                    amount_per_person: Number(paymentForm.amount_per_person),
+                    amount_per_person: amt,
                     method: paymentForm.method,
                     reference: paymentForm.reference,
                     proof: paymentForm.proof
@@ -265,15 +394,18 @@ function LocationPortalContent() {
                 credentials: 'include'
             });
 
+            const data = await res.json().catch(() => ({}));
             if (res.ok) {
-                addToast('Pagos registrados correctamente', 'success');
+                // Report what actually applied — the backend now returns applied/skipped counts.
+                const applied = data.applied ?? selectedIds.length;
+                const skipped = data.skipped ?? 0;
+                addToast(skipped > 0 ? `Se registraron ${applied} pagos (${skipped} omitidos) — pendientes de validación.` : 'Pagos registrados — pendientes de validación por un administrador.', skipped > 0 ? 'warning' : 'success');
                 setShowPaymentModal(false);
                 setSelectedIds([]);
                 setPaymentForm({ amount_per_person: '', method: 'Efectivo', reference: '', proof: '' });
                 loadInscriptions();
             } else {
-                const err = await res.json();
-                addToast(err.error || 'Error al procesar pagos', 'error');
+                addToast(data.error || 'Error al procesar pagos', 'error');
             }
         } catch {
             addToast('Error de conexión', 'error');
@@ -285,7 +417,12 @@ function LocationPortalContent() {
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
-
+        // Cap the receipt photo — the data URL is embedded in the JSON body (and stored per row).
+        if (file.size > 1024 * 1024) {
+            addToast('La imagen es demasiado grande (máx. 1 MB).', 'error');
+            e.target.value = '';
+            return;
+        }
         const reader = new FileReader();
         reader.onloadend = () => {
             setPaymentForm({ ...paymentForm, proof: reader.result as string });
@@ -362,7 +499,7 @@ function LocationPortalContent() {
                             >
                                 <option value="">Seleccione su localidad</option>
                                 {locations.map(l => (
-                                    <option key={l.id} value={l.id}>{l.name} ({l.responsible_name})</option>
+                                    <option key={l.id} value={l.id}>{l.name}</option>
                                 ))}
                             </select>
                         </div>
@@ -504,16 +641,17 @@ function LocationPortalContent() {
                                                 className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                             />
                                         </th>
-                                        <th className="px-6 py-3">Nombre</th>
-                                        <th className="px-6 py-3">Contacto</th>
-                                        <th className="px-6 py-3">Estado</th>
+                                        <th className="px-6 py-3">Participante</th>
+                                        {fields.map((field) => (
+                                            <th key={field.name} className="px-6 py-3 whitespace-nowrap">{field.label}</th>
+                                        ))}
                                         <th className="px-6 py-3">Pago</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {inscriptions.length === 0 ? (
                                         <tr>
-                                            <td colSpan={4} className="px-6 py-8 text-center text-gray-500">
+                                            <td colSpan={fields.length + 3} className="px-6 py-8 text-center text-gray-500">
                                                 No hay participantes registrados en esta localidad.
                                             </td>
                                         </tr>
@@ -531,18 +669,15 @@ function LocationPortalContent() {
                                                         className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                                                     />
                                                 </td>
-                                                <td className="px-6 py-4 font-medium text-gray-900">
-                                                    {i.first_name} {i.last_name}
-                                                    <div className="text-xs text-gray-400 font-normal">{i.gender === 'M' ? 'Hombre' : 'Mujer'} • {i.email}</div>
+                                                <td className="px-6 py-4 font-medium text-gray-900 whitespace-nowrap">
+                                                    {/* Display name follows the form — first 1-2 field values. */}
+                                                    {personDisplayName(i, fields)}
                                                 </td>
-                                                <td className="px-6 py-4 text-gray-500">
-                                                    {i.phone || '-'}
-                                                </td>
-                                                <td className="px-6 py-4">
-                                                    <span className="px-2 py-1 rounded-full text-xs font-medium bg-yellow-100 text-yellow-800">
-                                                        {i.status}
-                                                    </span>
-                                                </td>
+                                                {fields.map((field) => (
+                                                    <td key={field.name} className="px-6 py-4 text-gray-600 whitespace-nowrap">
+                                                        {String(fieldVal(i, field) || '') || '-'}
+                                                    </td>
+                                                ))}
                                                 <td className="px-6 py-4">
                                                     <div className="flex flex-col">
                                                         <span className={`px-2 py-1 rounded-full text-xs font-medium w-fit ${i.payment_status === 'paid' ? 'bg-green-100 text-green-800' :
@@ -566,25 +701,32 @@ function LocationPortalContent() {
                             <form onSubmit={handleCreateInscription} className="max-w-2xl mx-auto space-y-6">
                                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                                     {fields.length === 0 ? (
-                                        <div className="col-span-2 text-center p-10 bg-gray-50 rounded-xl border border-dashed border-gray-300">
+                                        <div className="md:col-span-2 text-center p-10 bg-gray-50 rounded-xl border border-dashed border-gray-300">
                                             <i className="fa-solid fa-triangle-exclamation text-yellow-500 text-3xl mb-3"></i>
                                             <p className="text-gray-600 font-medium">No hay campos configurados para este formulario.</p>
                                         </div>
                                     ) : (
                                         fields.map((field) => (
-                                            <div key={field.name} className={field.width === 50 ? 'col-span-1' : 'col-span-2'}>
+                                            <div key={field.name} className={field.width === 50 ? 'col-span-1' : 'md:col-span-2'}>
                                                 <label className="block text-sm font-medium text-gray-700 mb-1">
                                                     {field.label} {field.is_required ? '*' : ''}
                                                 </label>
-                                                {field.type === 'select' ? (
+                                                {field.is_group ? (
+                                                    <GroupPicker
+                                                        field={field}
+                                                        value={formData[field.name]}
+                                                        onChange={(v: string) => setFormData({ ...formData, [field.name]: v })}
+                                                        groups={groups}
+                                                    />
+                                                ) : field.type === 'select' ? (
                                                     <select
                                                         required={!!field.is_required}
                                                         className="w-full border rounded-lg p-2.5 bg-white"
                                                         value={formData[field.name] || ''}
                                                         onChange={(e) => setFormData({ ...formData, [field.name]: e.target.value })}
                                                     >
-                                                        {field.options.split(',').map((opt: string) => (
-                                                            <option key={opt.trim()} value={opt.trim()}>{opt.trim()}</option>
+                                                        {(field.options || '').split(',').map((o: string) => o.trim()).filter(Boolean).map((opt: string) => (
+                                                            <option key={opt} value={opt}>{opt}</option>
                                                         ))}
                                                     </select>
                                                 ) : field.type === 'textarea' ? (
@@ -651,6 +793,8 @@ function LocationPortalContent() {
                                     <input
                                         required
                                         type="number"
+                                        min="0"
+                                        step="any"
                                         className="w-full border-2 border-gray-100 rounded-xl px-10 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold"
                                         value={paymentForm.amount_per_person}
                                         onChange={e => setPaymentForm({ ...paymentForm, amount_per_person: e.target.value })}
@@ -684,7 +828,7 @@ function LocationPortalContent() {
                             </div>
 
                             <div className="space-y-1.5">
-                                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Comprobante de Pago</label>
+                                <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Comprobante de Pago <span className="text-rose-500">*</span></label>
                                 <div className="border-2 border-dashed border-gray-200 rounded-xl p-4 transition-colors hover:border-blue-400 relative overflow-hidden group">
                                     <input
                                         type="file"
@@ -694,7 +838,7 @@ function LocationPortalContent() {
                                     />
                                     {paymentForm.proof ? (
                                         <div className="flex items-center gap-3">
-                                            <img src={paymentForm.proof} className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
+                                            <img src={paymentForm.proof} alt="Comprobante de pago" className="w-12 h-12 rounded-lg object-cover border border-gray-200" />
                                             <div className="flex-1 min-w-0">
                                                 <p className="text-xs font-bold text-blue-600 truncate">Imagen cargada correctamente</p>
                                                 <p className="text-[10px] text-gray-400 italic">Haz clic para cambiar</p>
@@ -710,6 +854,7 @@ function LocationPortalContent() {
                                         </div>
                                     )}
                                 </div>
+                                <p className="text-[10px] text-gray-400 italic ml-1">Obligatorio. El pago quedará <b>pendiente de validación</b> por un administrador.</p>
                             </div>
 
                             <div className="flex items-center justify-end gap-3 pt-6">
@@ -722,7 +867,7 @@ function LocationPortalContent() {
                                 </button>
                                 <button
                                     type="submit"
-                                    disabled={loading || !paymentForm.amount_per_person}
+                                    disabled={loading || !paymentForm.amount_per_person || !paymentForm.proof}
                                     className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50"
                                 >
                                     {loading ? 'Procesando...' : 'Confirmar Pago'}
