@@ -9,10 +9,10 @@
  */
 
 import { useEffect, useMemo, useState } from "react";
-import { marketplaceApi, MarketplaceEntry } from "@/lib/api";
+import { marketplaceApi, MarketplaceEntry, MarketplaceSourceStatus } from "@/lib/api";
 import { permMeta } from "@/lib/permissionMeta";
 import { useToast } from "@/contexts/ToastContext";
-import { FaSearch, FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore } from "react-icons/fa";
+import { FaSearch, FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaTrash, FaPlus } from "react-icons/fa";
 import { Button, EmptyState } from "@/components/ui";
 
 const permToken = (p: { scope: string; access?: string }) =>
@@ -33,6 +33,13 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
     const [category, setCategory] = useState<string>("all");
     const [installing, setInstalling] = useState<Record<string, boolean>>({});
     const [confirmEntry, setConfirmEntry] = useState<MarketplaceEntry | null>(null);
+    // Configurable catalog sources (managed from the UI — no hard-coded URL).
+    const [sourcesStatus, setSourcesStatus] = useState<MarketplaceSourceStatus[]>([]);
+    const [showSources, setShowSources] = useState(false);
+    const [srcList, setSrcList] = useState<string[]>([]);
+    const [defaultSrc, setDefaultSrc] = useState("");
+    const [newSrc, setNewSrc] = useState("");
+    const [savingSrc, setSavingSrc] = useState(false);
 
     const load = async (refresh = false) => {
         setLoading(true);
@@ -42,10 +49,50 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
             setEntries(data.plugins || []);
             setSource(data.source);
             setIsLocal(data.isLocal);
+            setSourcesStatus(data.sources || []);
         } catch (e: any) {
             setError(e?.message || "No se pudo cargar el catálogo.");
         } finally {
             setLoading(false);
+        }
+    };
+
+    // Open the sources editor, pre-filled with the configured list (or the default when none is set yet).
+    const openSources = async () => {
+        setShowSources(true);
+        try {
+            const s = await marketplaceApi.getSources();
+            setDefaultSrc(s.default);
+            setSrcList(s.configured.length ? s.configured : [s.default]);
+        } catch (e: any) {
+            addToast(e?.message || "No se pudieron cargar las fuentes.", "error");
+        }
+    };
+
+    const addSource = () => {
+        const v = newSrc.trim().replace(/\/+$/, "");
+        if (!v) return;
+        if (!/^https:\/\//i.test(v) && !/^http:\/\/localhost/i.test(v)) {
+            addToast("La fuente debe ser una URL https://", "error");
+            return;
+        }
+        setNewSrc("");
+        if (!srcList.includes(v)) setSrcList((l) => [...l, v]);
+    };
+    const removeSource = (u: string) => setSrcList((l) => l.filter((x) => x !== u));
+
+    const saveSources = async (list = srcList) => {
+        setSavingSrc(true);
+        try {
+            const res = await marketplaceApi.setSources(list);
+            setSrcList(res.configured.length ? res.configured : [res.default]);
+            addToast(list.length ? "Fuentes del marketplace guardadas." : "Fuentes restablecidas al valor por defecto.", "success");
+            setShowSources(false);
+            await load(true);
+        } catch (e: any) {
+            addToast(e?.message || "No se pudieron guardar las fuentes.", "error");
+        } finally {
+            setSavingSrc(false);
         }
     };
 
@@ -127,18 +174,76 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                         </button>
                     ))}
                 </div>
-                <button
-                    onClick={() => load(true)}
-                    title="Actualizar catálogo"
-                    className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white border border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300 hover:scale-105 active:scale-95 transition-all shadow-sm ml-auto"
-                >
-                    <FaSyncAlt className="text-xs" />
-                </button>
+                <div className="flex items-center gap-2 ml-auto">
+                    <button
+                        onClick={() => (showSources ? setShowSources(false) : openSources())}
+                        title="Configurar fuentes del marketplace"
+                        className={`w-10 h-10 flex items-center justify-center rounded-2xl border transition-all shadow-sm hover:scale-105 active:scale-95 ${showSources ? "bg-blue-50 border-blue-200 text-blue-600" : "bg-white border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300"}`}
+                    >
+                        <FaCog className="text-xs" />
+                    </button>
+                    <button
+                        onClick={() => load(true)}
+                        title="Actualizar catálogo"
+                        className="w-10 h-10 flex items-center justify-center rounded-2xl bg-white border border-slate-200/60 text-slate-500 hover:text-slate-850 hover:border-slate-300 hover:scale-105 active:scale-95 transition-all shadow-sm"
+                    >
+                        <FaSyncAlt className="text-xs" />
+                    </button>
+                </div>
             </div>
 
+            {/* Configurable catalog sources — the admin points WordJS at any number of marketplaces
+                (official or private https catalogs); the list is merged, earlier entries win. */}
+            {showSources && (
+                <div className="mb-8 bg-white/70 backdrop-blur-md border border-slate-200/60 rounded-[24px] p-6 shadow-sm animate-in fade-in slide-in-from-top-2 duration-200">
+                    <div className="flex items-center justify-between mb-2">
+                        <h3 className="font-extrabold text-slate-900 text-sm flex items-center gap-2"><FaCog className="text-blue-500 text-xs" /> Fuentes del marketplace</h3>
+                        <button onClick={() => setShowSources(false)} className="text-slate-400 hover:text-slate-700 text-[11px] font-bold uppercase tracking-wider">Cerrar</button>
+                    </div>
+                    <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
+                        Agregá uno o varios catálogos (URLs <span className="font-mono">https</span>). WordJS los combina — los primeros tienen prioridad ante ids repetidos. Dejá la lista vacía para volver al catálogo oficial.
+                    </p>
+                    <div className="space-y-2 mb-4">
+                        {srcList.map((u, i) => {
+                            const st = sourcesStatus.find((s) => s.url === u);
+                            return (
+                                <div key={u} className="flex items-center gap-2 bg-slate-50 border border-slate-150 rounded-xl px-3 py-2">
+                                    <span className="text-[10px] font-mono text-slate-400 w-4 shrink-0">{i + 1}</span>
+                                    <span className="flex-1 font-mono text-[11px] text-slate-700 truncate" title={u}>{u}</span>
+                                    {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
+                                    {st && (st.ok
+                                        ? <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">{st.count ?? 0}</span>
+                                        : <span title={st.error} className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 shrink-0">error</span>)}
+                                    <button onClick={() => removeSource(u)} title="Quitar" className="text-slate-300 hover:text-rose-500 text-[11px] px-1 shrink-0"><FaTrash /></button>
+                                </div>
+                            );
+                        })}
+                        {srcList.length === 0 && <div className="text-[11px] text-slate-400 italic px-1">Sin fuentes — se usará el catálogo oficial por defecto.</div>}
+                    </div>
+                    <div className="flex items-center gap-2 mb-4">
+                        <input
+                            value={newSrc}
+                            onChange={(e) => setNewSrc(e.target.value)}
+                            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSource(); } }}
+                            placeholder="https://mi-marketplace.com/catalog"
+                            className="flex-1 px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-[11px] font-mono outline-none focus:ring-4 focus:ring-blue-500/10 focus:border-blue-500 transition-all"
+                        />
+                        <Button onClick={addSource} className="shrink-0"><FaPlus className="mr-1.5 text-[10px]" /> Agregar</Button>
+                    </div>
+                    <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
+                        <button onClick={() => saveSources([])} disabled={savingSrc} className="text-[11px] font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50">Restablecer al default</button>
+                        <Button onClick={() => saveSources()} disabled={savingSrc}>{savingSrc ? "Guardando…" : "Guardar fuentes"}</Button>
+                    </div>
+                </div>
+            )}
+
             <p className="text-[10px] font-semibold text-slate-450/80 mb-6 bg-slate-50 border border-slate-150/60 px-4 py-2.5 rounded-xl inline-block shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
-                Fuente: <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? "catálogo local" : source}</span> · {entries.length} plugins ·
-                Los plugins se instalan desactivados y con permisos denegados por defecto.
+                {sourcesStatus.length > 1
+                    ? <>{sourcesStatus.length} fuentes</>
+                    : <>Fuente: <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? "catálogo local" : (source || "por defecto")}</span></>}
+                {" · "}{entries.length} plugins
+                {sourcesStatus.some((s) => !s.ok) && <span className="text-rose-500 font-bold"> · {sourcesStatus.filter((s) => !s.ok).length} fuente(s) con error</span>}
+                {" · "}Los plugins se instalan desactivados y con permisos denegados por defecto.
             </p>
 
             {filtered.length === 0 ? (

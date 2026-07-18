@@ -51,9 +51,10 @@ class Email {
 
         // Helper: Check if column exists to avoid "duplicate column" errors
         const columnExists = async (table: string, col: string) => {
-            const { isPostgres } = getDbType();
+            const { isPostgres, isMySQL } = getDbType();
             try {
-                if (isPostgres) {
+                if (isPostgres || isMySQL) {
+                    // Both expose an information_schema; PRAGMA table_info is SQLite-only.
                     const res = await dbAsync.get(
                         "SELECT column_name FROM information_schema.columns WHERE table_name = ? AND column_name = ?",
                         [table, col]

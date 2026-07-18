@@ -1279,12 +1279,14 @@ async function uninstallPluginData(slug: string, { dropTables = false }: { dropT
     if (dropTables) {
         try {
             const { dbAsync, getDbType } = require('../config/database');
-            const { isPostgres } = getDbType();
+            const { isPostgres, isMySQL } = getDbType();
             // Mirror plugin-worker.js's tablePrefix normalization exactly.
             const prefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
             const rows = isPostgres
                 ? await dbAsync.all("SELECT tablename AS name FROM pg_tables WHERE schemaname = 'public'")
-                : await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table'");
+                : isMySQL
+                    ? await dbAsync.all("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()")
+                    : await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table'");
             // Filter in JS by the exact plugin prefix (no LIKE params → no cross-driver escaping pitfalls).
             const mine = (rows || []).map((r: any) => r.name).filter((n: string) => String(n).toLowerCase().startsWith(prefix));
             for (const name of mine) {

@@ -421,6 +421,7 @@ export interface MarketplaceEntry {
     file: string;
     size: number;
     sha256: string;
+    source?: string; // which configured source (URL) this entry came from
     // Annotations added by the backend against the local install:
     installed: boolean;
     active: boolean;
@@ -428,10 +429,24 @@ export interface MarketplaceEntry {
     updateAvailable: boolean;
 }
 
+export interface MarketplaceSourceStatus {
+    url: string;
+    isLocal: boolean;
+    ok: boolean;
+    count?: number;
+    added?: number;
+    error?: string;
+}
+
+export type MarketplaceSources = { configured: string[]; default: string; usingDefault: boolean };
+
 export const marketplaceApi = {
     catalog: (refresh = false) =>
-        apiGet<{ source: string; isLocal: boolean; count: number; plugins: MarketplaceEntry[] }>(`/marketplace/catalog${refresh ? '?refresh=1' : ''}`),
+        apiGet<{ source: string; isLocal: boolean; sources: MarketplaceSourceStatus[]; count: number; plugins: MarketplaceEntry[] }>(`/marketplace/catalog${refresh ? '?refresh=1' : ''}`),
     install: (id: string) => apiPost<{ success: boolean; message: string; slug: string }>(`/marketplace/install`, { id }),
+    // Configurable catalog sources (managed from the Marketplace UI — no hard-coded URL).
+    getSources: () => apiGet<MarketplaceSources>(`/marketplace/sources`),
+    setSources: (sources: string[]) => apiPut<MarketplaceSources>(`/marketplace/sources`, { sources }),
 };
 
 export interface Theme {

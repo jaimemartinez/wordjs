@@ -24,7 +24,7 @@ class Analytics {
                 visitor_ip VARCHAR(64), -- Anonymized hash likely
                 user_id VARCHAR(36), -- NULL if guest
                 metadata TEXT, -- JSON extra data
-                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         `);
 

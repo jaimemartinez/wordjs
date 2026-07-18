@@ -29,16 +29,19 @@ const crypto = require('crypto');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { getOption } = require('../core/options');
+const { getOption, updateOption } = require('../core/options');
 const { getAllPlugins } = require('../core/plugins');
 const { installPluginFromZip } = require('./plugins');
 
 const INDEX_FILE = 'marketplace-index.json';
-// The catalog lives IN the repo (committed marketplace/dist/), so plugin releases are decoupled
-// from core releases: merging a plugin update to main updates every site's catalog immediately.
-// Tagged releases ALSO attach a snapshot of these assets, so a site can pin a fixed catalog by
-// setting marketplace_source to https://github.com/jaimemartinez/wordjs/releases/download/vX.Y.Z.
-const DEFAULT_REMOTE = 'https://raw.githubusercontent.com/jaimemartinez/wordjs/main/marketplace/dist';
+// The catalog is published as GitHub RELEASE ASSETS (marketplace-index.json + one zip per plugin,
+// attached by .github/workflows/release.yml — build:marketplace runs there). `releases/latest/download/`
+// always resolves to the newest release, so a site tracks the latest published catalog by default.
+// Pin a specific catalog by setting the marketplace_source option to a fixed release, e.g.
+// https://github.com/jaimemartinez/wordjs/releases/download/v1.6.1  (or any https catalog / local dir).
+// NOTE: this must match where release.yml actually uploads the assets — a raw.githubusercontent.com
+// /main/marketplace/dist URL 404s because marketplace/dist is a build output and is NOT committed.
+const DEFAULT_REMOTE = 'https://github.com/jaimemartinez/wordjs/releases/latest/download';
 // Repo-local dist (present in dev checkouts / self-hosted full clones).
 const LOCAL_DIST = path.resolve(__dirname, '../../../marketplace/dist');
 const MAX_ZIP_BYTES = 10 * 1024 * 1024; // mirror the upload route's multer cap
@@ -49,15 +52,35 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 // separators. The slug segment mirrors routes/plugins.ts isValidSlug.
 const SAFE_FILE_RE = /^[A-Za-z0-9_-]+-[A-Za-z0-9][A-Za-z0-9.-]*\.zip$/;
 
-async function resolveSource(): Promise<{ source: string; isLocal: boolean }> {
-    const configured = String((await getOption('marketplace_source', '')) || '').trim();
-    if (configured) {
-        return { source: configured.replace(/\/+$/, ''), isLocal: !/^https?:\/\//i.test(configured) };
+const MAX_SOURCES = 12;
+
+/** Read the admin-configured marketplace source list (option `marketplace_sources`, a JSON array). */
+async function readConfiguredSources(): Promise<string[]> {
+    const raw = await getOption('marketplace_sources', null);
+    let list: any[] = [];
+    if (Array.isArray(raw)) list = raw;
+    else if (typeof raw === 'string' && raw.trim()) { try { const p = JSON.parse(raw); if (Array.isArray(p)) list = p; } catch { /* ignore */ } }
+    return list.map((s) => String(s || '').trim().replace(/\/+$/, '')).filter(Boolean);
+}
+
+/**
+ * Resolve the ORDERED list of catalog sources to browse/install from. Precedence:
+ *   1. The admin-configured list (option `marketplace_sources`, managed from the Marketplace UI — no
+ *      hard-coded URL; the admin points WordJS at any number of catalogs, official or private).
+ *   2. The legacy single option `marketplace_source` (back-compat).
+ *   3. The repo-local dist (dev / full checkout).
+ *   4. The built-in default (GitHub release assets) — a starting point, fully overridable.
+ * A source is https (fetched) or a local dir (read); the UI only ever writes https URLs.
+ */
+async function resolveSources(): Promise<{ url: string; isLocal: boolean }[]> {
+    const configured = await readConfiguredSources();
+    if (configured.length) {
+        return configured.slice(0, MAX_SOURCES).map((url) => ({ url, isLocal: !/^https?:\/\//i.test(url) }));
     }
-    if (fs.existsSync(path.join(LOCAL_DIST, INDEX_FILE))) {
-        return { source: LOCAL_DIST, isLocal: true };
-    }
-    return { source: DEFAULT_REMOTE, isLocal: false };
+    const single = String((await getOption('marketplace_source', '')) || '').trim().replace(/\/+$/, '');
+    if (single) return [{ url: single, isLocal: !/^https?:\/\//i.test(single) }];
+    if (fs.existsSync(path.join(LOCAL_DIST, INDEX_FILE))) return [{ url: LOCAL_DIST, isLocal: true }];
+    return [{ url: DEFAULT_REMOTE, isLocal: false }];
 }
 
 /** Only https (or localhost http for dev) — the fetch runs from the HOST, so keep it boring. */
@@ -94,17 +117,38 @@ async function loadCatalog(source: string, isLocal: boolean): Promise<any[]> {
     return list;
 }
 
-// In-memory catalog cache (keyed by source) so browsing the tab doesn't hammer GitHub.
-let catalogCache: { key: string; at: number; list: any[] } | null = null;
+// In-memory catalog cache (keyed by the ordered source set) so browsing doesn't re-hammer the network.
+let catalogCache: { key: string; at: number; merged: any[]; sources: any[] } | null = null;
 
-async function getCatalog(refresh = false): Promise<{ list: any[]; source: string; isLocal: boolean }> {
-    const { source, isLocal } = await resolveSource();
-    if (!refresh && catalogCache && catalogCache.key === source && Date.now() - catalogCache.at < CACHE_TTL_MS) {
-        return { list: catalogCache.list, source, isLocal };
+async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: any[] }> {
+    const srcs = await resolveSources();
+    const key = srcs.map((s) => s.url).join('|');
+    if (!refresh && catalogCache && catalogCache.key === key && Date.now() - catalogCache.at < CACHE_TTL_MS) {
+        return { merged: catalogCache.merged, sources: catalogCache.sources };
     }
-    const list = await loadCatalog(source, isLocal);
-    catalogCache = { key: source, at: Date.now(), list };
-    return { list, source, isLocal };
+    // Fetch EVERY source and merge. Dedup by id — earlier sources win (list order = priority). A source
+    // that fails is reported (ok:false) but never fails the whole catalog, so one bad URL can't hide the rest.
+    const seen = new Set<string>();
+    const merged: any[] = [];
+    const sources: any[] = [];
+    for (const s of srcs) {
+        try {
+            const list = await loadCatalog(s.url, s.isLocal);
+            let added = 0;
+            for (const e of list) {
+                const id = String(e.id || '');
+                if (!id || seen.has(id)) continue;
+                seen.add(id);
+                merged.push({ ...e, source: s.url }); // each entry remembers its source (used at install)
+                added++;
+            }
+            sources.push({ url: s.url, isLocal: s.isLocal, ok: true, count: list.length, added });
+        } catch (e: any) {
+            sources.push({ url: s.url, isLocal: s.isLocal, ok: false, error: e && e.message });
+        }
+    }
+    catalogCache = { key, at: Date.now(), merged, sources };
+    return { merged, sources };
 }
 
 /**
@@ -117,10 +161,10 @@ async function getCatalog(refresh = false): Promise<{ list: any[]; source: strin
 router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     try {
         const refresh = String((req.query as any).refresh || '') === '1';
-        const { list, source, isLocal } = await getCatalog(refresh);
+        const { merged, sources } = await getCatalog(refresh);
         const installed = await getAllPlugins();
         const bySlug = new Map<string, any>(installed.map((p: any) => [String(p.slug || p.id), p]));
-        const annotated = list.map((e: any) => {
+        const annotated = merged.map((e: any) => {
             const local = bySlug.get(String(e.id));
             return {
                 ...e,
@@ -130,7 +174,9 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
                 updateAvailable: !!(local && local.version && e.version && String(local.version) !== String(e.version)),
             };
         });
-        res.json({ source, isLocal, count: annotated.length, plugins: annotated });
+        // `source`/`isLocal` are kept for back-compat (the primary source); `sources` carries per-source status.
+        const first = sources[0] || {};
+        res.json({ source: first.url || '', isLocal: !!first.isLocal, sources, count: annotated.length, plugins: annotated });
     } catch (e: any) {
         res.status(502).json({ error: e.message });
     }
@@ -148,15 +194,17 @@ router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request,
     if (!id) return res.status(400).json({ error: 'Falta el id del plugin.' });
 
     let entry: any;
-    let source: string, isLocal: boolean;
     try {
-        const cat = await getCatalog(false);
-        source = cat.source; isLocal = cat.isLocal;
-        entry = cat.list.find((e: any) => String(e.id) === id);
+        const { merged } = await getCatalog(false);
+        entry = merged.find((e: any) => String(e.id) === id);
     } catch (e: any) {
         return res.status(502).json({ error: e.message });
     }
     if (!entry) return res.status(404).json({ error: `El plugin "${id}" no está en el catálogo.` });
+
+    // Install from the SAME source the entry was listed under (each merged entry carries its source).
+    const source = String(entry.source || '');
+    const isLocal = !/^https?:\/\//i.test(source);
 
     const file = String(entry.file || '');
     if (!SAFE_FILE_RE.test(file)) {
@@ -195,6 +243,41 @@ router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request,
     fs.writeFileSync(tmpPath, buf);
     const result = await installPluginFromZip(tmpPath, file);
     res.status(result.status).json(result.body);
+}));
+
+/**
+ * @swagger
+ * /marketplace/sources:
+ *   get:
+ *     summary: Get the admin-configured marketplace source URLs (+ the built-in default)
+ *     tags: [Plugins]
+ *   put:
+ *     summary: Replace the marketplace source URLs (admin). Each must be https (or http://localhost).
+ *     tags: [Plugins]
+ */
+router.get('/sources', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
+    const configured = await readConfiguredSources();
+    res.json({ configured, default: DEFAULT_REMOTE, usingDefault: configured.length === 0 });
+}));
+
+router.put('/sources', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const arr = (req.body || {}).sources;
+    if (!Array.isArray(arr)) return res.status(400).json({ error: 'sources debe ser un arreglo de URLs.' });
+    const clean: string[] = [];
+    for (const raw of arr) {
+        const s = String(raw || '').trim().replace(/\/+$/, '');
+        if (!s) continue;
+        // UI-managed sources must be https (or http://localhost for dev). Arbitrary local-dir sources are
+        // NOT settable from the UI — that would let an admin point the server's catalog reader at any path.
+        try { assertSaneRemote(s); } catch (e: any) {
+            return res.status(400).json({ error: `Fuente inválida "${s}": ${e && e.message}` });
+        }
+        if (!clean.includes(s)) clean.push(s);
+        if (clean.length >= MAX_SOURCES) break;
+    }
+    await updateOption('marketplace_sources', clean);
+    catalogCache = null; // force a fresh merge on the next browse
+    res.json({ configured: clean, default: DEFAULT_REMOTE, usingDefault: clean.length === 0 });
 }));
 
 module.exports = router;
