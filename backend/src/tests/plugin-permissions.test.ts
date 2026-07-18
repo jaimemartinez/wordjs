@@ -67,17 +67,20 @@ test('network grant: off by default, on after granting', () => {
     assert.equal(perms.isNetworkGranted(SLUG), true);
 });
 
-// No trust tier: even a bundled plugin (mail-server) gets NOTHING without an explicit grant — there
+// No trust tier: even a bundled plugin (card-gallery) gets NOTHING without an explicit grant — there
 // is no bypass. It only gains a capability once an admin grants it (and the manifest declares it).
+// hasPermission reads the plugin's manifest from backend/plugins/<slug>/, so this fixture must be a
+// plugin that ships BUNDLED there (marketplace plugins live under marketplace/plugins/ and are not
+// present until installed). card-gallery declares database:write in its manifest.
 test('no trust tier: even a bundled plugin needs grants (no bypass)', async () => {
-    perms._setGrantsInMemory('mail-server', []); // no grants
-    await runWithContext('mail-server', async () => {
-        assert.equal(hasPermission('database', 'read'), false);
+    perms._setGrantsInMemory('card-gallery', []); // no grants
+    await runWithContext('card-gallery', async () => {
+        assert.equal(hasPermission('database', 'write'), false);
         assert.equal(hasPermission('email', 'admin'), false);
     });
-    perms._setGrantsInMemory('mail-server', ['database:read']);
-    await runWithContext('mail-server', async () => {
-        assert.equal(hasPermission('database', 'read'), true);  // granted now
-        assert.equal(hasPermission('email', 'admin'), false);   // still not granted
+    perms._setGrantsInMemory('card-gallery', ['database:write']);
+    await runWithContext('card-gallery', async () => {
+        assert.equal(hasPermission('database', 'write'), true);  // granted now
+        assert.equal(hasPermission('email', 'admin'), false);    // still not granted
     });
 });
