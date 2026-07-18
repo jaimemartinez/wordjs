@@ -6,17 +6,16 @@
  * List of popups with stats (views/clicks/CTR), single-active toggle, and an editor modal with
  * triggers, frequency capping, optional date window, a "re-show to everybody" version bump and
  * an inline preview of the popup card.
+ *
+ * Visual identity (shared premium admin system) lives in the plugin's OWN stylesheet
+ * (client/admin/admin.css, injected by the host admin shell and scoped to
+ * .plugin-admin-popups) — the markup below only uses cf-* classes.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/popup-builder";
-
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnPrimary = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhost = "px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50";
 
 const TRIGGER_OPTIONS = [
     { value: "delay", label: "Retardo (segundos)" },
@@ -46,20 +45,45 @@ function fmtDate(s) {
     return isNaN(d.getTime()) ? s : d.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
 }
 
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconMegaphone = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="m3 11 18-5v12L3 14v-3z" />
+        <path d="M11.6 16.8a3 3 0 1 1-5.8-1.6" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconPower = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 2v10" />
+        <path d="M18.4 6.6a9 9 0 1 1-12.77.04" />
+    </svg>
+);
+
 // Miniature live preview of the popup card, driven by the editor form values.
 function PopupPreview({ form }) {
     return (
-        <div className="rounded-2xl bg-gray-900/90 p-6 flex items-center justify-center">
-            <div className="relative bg-white rounded-2xl shadow-2xl max-w-[280px] w-full p-5 text-center">
-                <span className="absolute top-2 right-2 w-6 h-6 rounded-full bg-gray-100 text-gray-500 text-sm flex items-center justify-center">×</span>
+        <div className="cf-preview-stage">
+            <div className="cf-preview-card">
+                <span className="cf-preview-close" aria-hidden="true">×</span>
                 {form.image_url ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={form.image_url} alt="" decoding="async" className="w-full rounded-xl mb-3 object-cover max-h-32" />
+                    <img src={form.image_url} alt="" decoding="async" className="cf-preview-img" />
                 ) : null}
-                <h3 className="font-black text-gray-900 text-base leading-snug mb-1">{form.title || "Título del popup"}</h3>
-                {form.body ? <p className="text-xs text-gray-500 whitespace-pre-line mb-3">{form.body}</p> : <p className="text-xs text-gray-300 mb-3">Texto del popup…</p>}
+                <h3 className="cf-preview-title">{form.title || "Título del popup"}</h3>
+                {form.body ? <p className="cf-preview-body">{form.body}</p> : <p className="cf-preview-body is-placeholder">Texto del popup…</p>}
                 {form.button_label ? (
-                    <span className="inline-block px-4 py-2 bg-gray-900 text-white rounded-xl text-xs font-bold">{form.button_label}</span>
+                    <span className="cf-preview-cta">{form.button_label}</span>
                 ) : null}
             </div>
         </div>
@@ -122,93 +146,96 @@ function EditorModal({ popup, onClose, onSaved }) {
     const valueLabel = form.trigger_type === "scroll" ? "% de scroll" : "Segundos";
 
     return (
-        <div className="fixed inset-0 z-50 bg-gray-900/50 backdrop-blur-sm flex items-start justify-center overflow-y-auto p-4 sm:p-8">
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl p-6 sm:p-8 my-4">
-                <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-xl font-black text-gray-900 italic tracking-tighter">
-                        {isEdit ? "Editar popup" : "Nuevo popup"}
-                    </h2>
-                    <button type="button" onClick={onClose} className="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold transition-all">×</button>
-                </div>
+        <div className="cf-overlay">
+            <div className="cf-letter is-wide" role="dialog" aria-modal="true" aria-label={isEdit ? "Editar popup" : "Nuevo popup"}>
+                <div className="cf-letter-body">
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.35rem" }}>
+                        <h2 className="cf-editor-title" style={{ marginBottom: 0 }}>
+                            {isEdit ? <IconPen /> : <IconPlus />}
+                            {isEdit ? "Editar popup" : "Nuevo popup"}
+                        </h2>
+                        <button type="button" onClick={onClose} aria-label="Cerrar" className="cf-iconbtn">✕</button>
+                    </div>
 
-                <form onSubmit={save} className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    <div className="space-y-4">
-                        <div>
-                            <label className={labelCls}>Título *</label>
-                            <input type="text" value={form.title} onChange={(e) => set("title", e.target.value)} className={inputCls} placeholder="¡Oferta de verano!" required />
-                        </div>
-                        <div>
-                            <label className={labelCls}>Texto</label>
-                            <textarea value={form.body} onChange={(e) => set("body", e.target.value)} className={`${inputCls} min-h-[90px]`} placeholder="Describe la promoción o el anuncio…" />
-                        </div>
-                        <div>
-                            <label className={labelCls}>URL de la imagen (opcional)</label>
-                            <input type="text" value={form.image_url} onChange={(e) => set("image_url", e.target.value)} className={inputCls} placeholder="/uploads/promo.jpg o https://…" />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
+                    <form onSubmit={save} className="cf-modal-grid">
+                        <div className="cf-stack">
                             <div>
-                                <label className={labelCls}>Texto del botón</label>
-                                <input type="text" value={form.button_label} onChange={(e) => set("button_label", e.target.value)} className={inputCls} placeholder="Ver oferta" />
+                                <label className="cf-label" htmlFor="pb-title">Título *</label>
+                                <input id="pb-title" type="text" value={form.title} onChange={(e) => set("title", e.target.value)} className="cf-input" placeholder="¡Oferta de verano!" required />
                             </div>
                             <div>
-                                <label className={labelCls}>URL del botón</label>
-                                <input type="text" value={form.button_url} onChange={(e) => set("button_url", e.target.value)} className={inputCls} placeholder="/tienda o https://…" />
+                                <label className="cf-label" htmlFor="pb-body">Texto</label>
+                                <textarea id="pb-body" value={form.body} onChange={(e) => set("body", e.target.value)} className="cf-input" placeholder="Describe la promoción o el anuncio…" />
                             </div>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
                             <div>
-                                <label className={labelCls}>Disparador</label>
-                                <select value={form.trigger_type} onChange={(e) => set("trigger_type", e.target.value)} className={inputCls}>
-                                    {TRIGGER_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                <label className="cf-label" htmlFor="pb-image">URL de la imagen (opcional)</label>
+                                <input id="pb-image" type="text" value={form.image_url} onChange={(e) => set("image_url", e.target.value)} className="cf-input" placeholder="/uploads/promo.jpg o https://…" />
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.8rem" }}>
+                                <div>
+                                    <label className="cf-label" htmlFor="pb-btn-label">Texto del botón</label>
+                                    <input id="pb-btn-label" type="text" value={form.button_label} onChange={(e) => set("button_label", e.target.value)} className="cf-input" placeholder="Ver oferta" />
+                                </div>
+                                <div>
+                                    <label className="cf-label" htmlFor="pb-btn-url">URL del botón</label>
+                                    <input id="pb-btn-url" type="text" value={form.button_url} onChange={(e) => set("button_url", e.target.value)} className="cf-input" placeholder="/tienda o https://…" />
+                                </div>
+                            </div>
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.8rem" }}>
+                                <div>
+                                    <label className="cf-label" htmlFor="pb-trigger">Disparador</label>
+                                    <select id="pb-trigger" value={form.trigger_type} onChange={(e) => set("trigger_type", e.target.value)} className="cf-select">
+                                        {TRIGGER_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                    </select>
+                                </div>
+                                {form.trigger_type !== "exit" && (
+                                    <div>
+                                        <label className="cf-label" htmlFor="pb-trigger-value">{valueLabel}</label>
+                                        <input id="pb-trigger-value" type="number" min={0} max={form.trigger_type === "scroll" ? 100 : undefined} value={form.trigger_value} onChange={(e) => set("trigger_value", e.target.value)} className="cf-input" />
+                                    </div>
+                                )}
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="pb-frequency">Frecuencia</label>
+                                <select id="pb-frequency" value={form.frequency} onChange={(e) => set("frequency", e.target.value)} className="cf-select">
+                                    {FREQ_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
                                 </select>
                             </div>
-                            {form.trigger_type !== "exit" && (
+                            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.8rem" }}>
                                 <div>
-                                    <label className={labelCls}>{valueLabel}</label>
-                                    <input type="number" min={0} max={form.trigger_type === "scroll" ? 100 : undefined} value={form.trigger_value} onChange={(e) => set("trigger_value", e.target.value)} className={inputCls} />
+                                    <label className="cf-label" htmlFor="pb-starts">Mostrar desde (opcional)</label>
+                                    <input id="pb-starts" type="datetime-local" value={form.starts_at} onChange={(e) => set("starts_at", e.target.value)} className="cf-input" />
                                 </div>
+                                <div>
+                                    <label className="cf-label" htmlFor="pb-ends">Mostrar hasta (opcional)</label>
+                                    <input id="pb-ends" type="datetime-local" value={form.ends_at} onChange={(e) => set("ends_at", e.target.value)} className="cf-input" />
+                                </div>
+                            </div>
+                            <label className="cf-check">
+                                <input type="checkbox" checked={form.activate} onChange={(e) => set("activate", e.target.checked)} />
+                                Activar este popup al guardar (desactiva los demás)
+                            </label>
+                            {isEdit && (
+                                <label className="cf-check">
+                                    <input type="checkbox" checked={form.bump} onChange={(e) => set("bump", e.target.checked)} />
+                                    Volver a mostrar a todos (reinicia la frecuencia de los visitantes)
+                                </label>
                             )}
                         </div>
-                        <div>
-                            <label className={labelCls}>Frecuencia</label>
-                            <select value={form.frequency} onChange={(e) => set("frequency", e.target.value)} className={inputCls}>
-                                {FREQ_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-                            </select>
-                        </div>
-                        <div className="grid grid-cols-2 gap-3">
-                            <div>
-                                <label className={labelCls}>Mostrar desde (opcional)</label>
-                                <input type="datetime-local" value={form.starts_at} onChange={(e) => set("starts_at", e.target.value)} className={inputCls} />
-                            </div>
-                            <div>
-                                <label className={labelCls}>Mostrar hasta (opcional)</label>
-                                <input type="datetime-local" value={form.ends_at} onChange={(e) => set("ends_at", e.target.value)} className={inputCls} />
-                            </div>
-                        </div>
-                        <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer select-none">
-                            <input type="checkbox" checked={form.activate} onChange={(e) => set("activate", e.target.checked)} />
-                            Activar este popup al guardar (desactiva los demás)
-                        </label>
-                        {isEdit && (
-                            <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer select-none">
-                                <input type="checkbox" checked={form.bump} onChange={(e) => set("bump", e.target.checked)} />
-                                Volver a mostrar a todos (reinicia la frecuencia de los visitantes)
-                            </label>
-                        )}
-                    </div>
 
-                    <div className="space-y-4">
-                        <div>
-                            <span className={labelCls}>Vista previa</span>
-                            <PopupPreview form={form} />
+                        <div className="cf-stack">
+                            <div>
+                                <span className="cf-label">Vista previa</span>
+                                <PopupPreview form={form} />
+                            </div>
+                            {error && <div role="alert" className="cf-flash is-error" style={{ marginBottom: 0 }}>{error}</div>}
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem" }}>
+                                <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
+                                <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                            </div>
                         </div>
-                        {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600">{error}</div>}
-                        <div className="flex items-center justify-end gap-3">
-                            <button type="button" onClick={onClose} className={btnGhost}>Cancelar</button>
-                            <button type="submit" disabled={busy} className={btnPrimary}>{busy ? "Guardando…" : "Guardar"}</button>
-                        </div>
-                    </div>
-                </form>
+                    </form>
+                </div>
             </div>
         </div>
     );
@@ -217,49 +244,51 @@ function EditorModal({ popup, onClose, onSaved }) {
 // A single popup row card in the list.
 function PopupCard({ popup, busy, onToggle, onEdit, onDelete }) {
     return (
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-5 sm:p-6">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-                <div className="min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-black text-gray-900 truncate">{popup.title}</h3>
+        <div className="cf-card-item">
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}>
+                <div style={{ minWidth: 0 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <h3 className="cf-form-name">{popup.title}</h3>
                         {popup.enabled ? (
-                            <span className="px-2.5 py-1 rounded-full bg-green-100 text-green-700 text-[10px] font-black uppercase tracking-widest">Activo</span>
+                            <span className="cf-pill is-on">Activo</span>
                         ) : (
-                            <span className="px-2.5 py-1 rounded-full bg-gray-100 text-gray-400 text-[10px] font-black uppercase tracking-widest">Inactivo</span>
+                            <span className="cf-pill is-off">Inactivo</span>
                         )}
                     </div>
-                    <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mt-1">
+                    <p className="cf-meta">
                         {triggerSummary(popup)} · {FREQ_LABELS[popup.frequency] || popup.frequency} · v{popup.version}
                     </p>
                     {(popup.starts_at || popup.ends_at) && (
-                        <p className="text-[11px] text-gray-400 mt-1">
+                        <p className="cf-meta">
                             {popup.starts_at ? `Desde ${fmtDate(popup.starts_at)}` : ""}
                             {popup.starts_at && popup.ends_at ? " · " : ""}
                             {popup.ends_at ? `Hasta ${fmtDate(popup.ends_at)}` : ""}
                         </p>
                     )}
                 </div>
-                <div className="flex items-center gap-4 text-center">
-                    <div>
-                        <p className="text-lg font-black text-gray-900">{popup.views}</p>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Vistas</p>
+                <div className="cf-stats">
+                    <div className="cf-stat">
+                        <p className="cf-stat-value">{popup.views}</p>
+                        <p className="cf-stat-label">Vistas</p>
                     </div>
-                    <div>
-                        <p className="text-lg font-black text-gray-900">{popup.clicks}</p>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">Clics</p>
+                    <div className="cf-stat">
+                        <p className="cf-stat-value">{popup.clicks}</p>
+                        <p className="cf-stat-label">Clics</p>
                     </div>
-                    <div>
-                        <p className="text-lg font-black text-blue-600">{popup.ctr}%</p>
-                        <p className="text-[9px] font-black uppercase tracking-widest text-gray-400">CTR</p>
+                    <div className="cf-stat">
+                        <p className="cf-stat-value is-accent">{popup.ctr}%</p>
+                        <p className="cf-stat-label">CTR</p>
                     </div>
                 </div>
             </div>
-            <div className="flex flex-wrap items-center justify-end gap-2 mt-4">
-                <button type="button" disabled={busy} onClick={() => onToggle(popup)} className={popup.enabled ? btnGhost : "px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50"}>
-                    {popup.enabled ? "Desactivar" : "Activar"}
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1rem" }}>
+                <button type="button" disabled={busy} onClick={() => onToggle(popup)} className={popup.enabled ? "cf-btn-ghost" : "cf-btn-ok"}>
+                    <IconPower /> {popup.enabled ? "Desactivar" : "Activar"}
                 </button>
-                <button type="button" disabled={busy} onClick={() => onEdit(popup)} className={btnGhost}>Editar</button>
-                <button type="button" disabled={busy} onClick={() => onDelete(popup)} className="px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
+                <button type="button" disabled={busy} onClick={() => onEdit(popup)} className="cf-btn-ghost">
+                    <IconPen /> Editar
+                </button>
+                <button type="button" disabled={busy} onClick={() => onDelete(popup)} className="cf-btn-danger">
                     Eliminar
                 </button>
             </div>
@@ -322,39 +351,45 @@ export default function PopupBuilderAdminPage() {
     };
 
     return (
-        <div className="max-w-4xl mx-auto p-4 sm:p-8">
-            <div className="flex flex-wrap items-center justify-between gap-4 mb-8">
+        <div className="cf-shell">
+            {/* header: stamp + title + primary action */}
+            <div className="cf-header" style={{ flexWrap: "wrap" }}>
+                <div className="cf-stamp" aria-hidden="true"><IconMegaphone /></div>
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Popups</h1>
-                    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
+                    <h1 className="cf-title">Popups</h1>
+                    <p className="cf-subtitle">
                         Anuncios y promociones en todo el sitio · uno activo a la vez
                     </p>
                 </div>
-                <button type="button" onClick={() => setEditing(null)} className={btnPrimary}>Nuevo popup</button>
+                <button type="button" onClick={() => setEditing(null)} className="cf-btn" style={{ marginLeft: "auto" }}>
+                    <IconPlus /> Nuevo popup
+                </button>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             {message && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-6 ${/Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
+                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
 
             {loading ? (
-                <p className="text-sm text-gray-400">Cargando…</p>
+                <p className="cf-meta">Cargando…</p>
             ) : popups.length === 0 ? (
-                <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-10 text-center">
-                    <p className="text-sm text-gray-400 mb-4">Todavía no hay popups. Crea el primero para mostrar un anuncio en el sitio público.</p>
-                    <button type="button" onClick={() => setEditing(null)} className={btnPrimary}>Crear popup</button>
+                <div className="cf-empty">
+                    <IconMegaphone />
+                    <span>Todavía no hay popups. Crea el primero para mostrar un anuncio en el sitio público.</span>
+                    <button type="button" onClick={() => setEditing(null)} className="cf-btn"><IconPlus /> Crear popup</button>
                 </div>
             ) : (
-                <div className="space-y-4">
+                <div>
                     {popups.map((p) => (
                         <PopupCard key={p.id} popup={p} busy={busy} onToggle={toggle} onEdit={(pp) => setEditing(pp)} onDelete={remove} />
                     ))}
                 </div>
             )}
 
-            <p className="text-[11px] text-gray-400 mt-8 leading-relaxed">
+            <p className="cf-footnote">
                 El popup activo se muestra automáticamente en todas las páginas públicas mientras el plugin esté activo.
                 Marcar «Volver a mostrar a todos» al editar reinicia la frecuencia de todos los visitantes.
             </p>

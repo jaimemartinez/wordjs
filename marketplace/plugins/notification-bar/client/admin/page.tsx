@@ -6,15 +6,15 @@
  * One form over the single 'notification_bar_config' option: message + CTA, colors,
  * position, dismissal, schedule window, and a "reprompt" checkbox that bumps the config
  * version so visitors who dismissed the bar see it again. Includes a live inline preview.
+ *
+ * Visual identity (premium/modern) lives in the plugin's OWN stylesheet
+ * (client/admin/admin.css, injected by the host admin shell and scoped to
+ * .plugin-admin-announcement) — the markup below only uses cf-* classes plus
+ * sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
-
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const checkCls = "w-4 h-4 rounded accent-gray-900";
 
 const DEFAULT_CONFIG = {
     enabled: false,
@@ -29,6 +29,19 @@ const DEFAULT_CONFIG = {
     ends_at: "",
     version: 1,
 };
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconMegaphone = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="m3 11 18-5v12L3 14v-3z" />
+        <path d="M11.6 16.8a3 3 0 1 1-5.8-1.6" />
+    </svg>
+);
+const IconX = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+);
 
 export default function NotificationBarAdminPage() {
     const [cfg, setCfg] = useState(DEFAULT_CONFIG);
@@ -72,142 +85,153 @@ export default function NotificationBarAdminPage() {
     };
 
     return (
-        <div className="max-w-3xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Barra de Anuncios</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Aviso fijo en todo el sitio — mensaje, enlace, colores y programación
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconMegaphone /></div>
+                <div>
+                    <h1 className="cf-title">Barra de Anuncios</h1>
+                    <p className="cf-subtitle">
+                        Aviso fijo en todo el sitio — mensaje, enlace, colores y programación
+                    </p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             {/* Live preview reflecting the current (unsaved) form values */}
-            <div className="mb-8">
-                <div className="flex items-center justify-between mb-2">
-                    <span className={labelCls + " mb-0"}>Vista previa ({cfg.position === "bottom" ? "abajo del sitio" : "arriba del sitio"})</span>
-                    <span className={`text-[10px] font-black uppercase tracking-widest ${cfg.enabled ? "text-green-600" : "text-gray-300"}`}>
-                        {cfg.enabled ? "Activa" : "Desactivada"}
-                    </span>
-                </div>
-                <div className="rounded-2xl overflow-hidden border border-gray-100 shadow-lg shadow-gray-200/40">
-                    <div
-                        className="relative flex items-center justify-center gap-3 px-12 py-3 text-sm"
-                        style={{ backgroundColor: cfg.bgColor, color: cfg.textColor }}
-                    >
-                        <span className="text-center">
-                            {cfg.message || "(escribe un mensaje abajo)"}
-                            {cfg.linkUrl && cfg.linkLabel ? (
-                                <span className="underline underline-offset-2 font-bold ml-3 whitespace-nowrap">{cfg.linkLabel}</span>
-                            ) : null}
-                        </span>
-                        {cfg.dismissible ? (
-                            <span className="absolute right-3 top-1/2 -translate-y-1/2 text-lg leading-none opacity-75">×</span>
+            <div className="cf-preview-head">
+                <span className="cf-label" style={{ marginBottom: 0 }}>Vista previa ({cfg.position === "bottom" ? "abajo del sitio" : "arriba del sitio"})</span>
+                <span className={`cf-status-pill ${cfg.enabled ? "is-on" : "is-off"}`}>
+                    {cfg.enabled ? "Activa" : "Desactivada"}
+                </span>
+            </div>
+            <div className="cf-preview-shell">
+                <div
+                    className="cf-preview-bar"
+                    style={{ backgroundColor: cfg.bgColor, color: cfg.textColor }}
+                >
+                    <span>
+                        {cfg.message || "(escribe un mensaje abajo)"}
+                        {cfg.linkUrl && cfg.linkLabel ? (
+                            <span className="cf-preview-link">{cfg.linkLabel}</span>
                         ) : null}
-                    </div>
+                    </span>
+                    {cfg.dismissible ? (
+                        <span className="cf-preview-close" aria-hidden="true"><IconX /></span>
+                    ) : null}
                 </div>
             </div>
 
-            <form onSubmit={save} className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8 space-y-5">
-                <label className="flex items-center gap-3 cursor-pointer select-none">
-                    <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} className={checkCls} />
-                    <span className="text-sm font-bold text-gray-800">Mostrar la barra en el sitio</span>
-                </label>
-
-                <div>
-                    <label className={labelCls}>Mensaje</label>
-                    <textarea
-                        value={cfg.message}
-                        onChange={(e) => set({ message: e.target.value })}
-                        maxLength={300}
-                        rows={2}
-                        placeholder="Ej.: Envío gratis en pedidos superiores a 50 € hasta el domingo"
-                        className={inputCls + " resize-y"}
-                    />
-                    <p className="text-[11px] text-gray-400 mt-1 text-right">{(cfg.message || "").length}/300</p>
-                </div>
-
-                <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Etiqueta del enlace (opcional)</label>
-                        <input type="text" value={cfg.linkLabel} onChange={(e) => set({ linkLabel: e.target.value })} maxLength={60} placeholder="Ver ofertas" className={inputCls} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>URL del enlace (opcional)</label>
-                        <input type="text" value={cfg.linkUrl} onChange={(e) => set({ linkUrl: e.target.value })} placeholder="https://… o /pagina" className={inputCls} />
-                    </div>
-                </div>
-
-                <div className="grid sm:grid-cols-3 gap-4">
-                    <div>
-                        <label className={labelCls}>Color de fondo</label>
-                        <div className="flex items-center gap-3">
-                            <input type="color" value={cfg.bgColor} onChange={(e) => set({ bgColor: e.target.value })} className="w-12 h-12 rounded-xl border border-gray-200 cursor-pointer bg-transparent p-1" />
-                            <span className="text-xs font-mono text-gray-500">{cfg.bgColor}</span>
-                        </div>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Color del texto</label>
-                        <div className="flex items-center gap-3">
-                            <input type="color" value={cfg.textColor} onChange={(e) => set({ textColor: e.target.value })} className="w-12 h-12 rounded-xl border border-gray-200 cursor-pointer bg-transparent p-1" />
-                            <span className="text-xs font-mono text-gray-500">{cfg.textColor}</span>
-                        </div>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Posición</label>
-                        <select value={cfg.position} onChange={(e) => set({ position: e.target.value })} className={inputCls}>
-                            <option value="top">Superior (arriba)</option>
-                            <option value="bottom">Inferior (abajo)</option>
-                        </select>
-                    </div>
-                </div>
-
-                <label className="flex items-center gap-3 cursor-pointer select-none">
-                    <input type="checkbox" checked={cfg.dismissible} onChange={(e) => set({ dismissible: e.target.checked })} className={checkCls} />
-                    <span className="text-sm font-medium text-gray-700">Permitir cerrar la barra (botón ×)</span>
-                </label>
-
-                <div className="grid sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Mostrar desde (opcional)</label>
-                        <input type="datetime-local" value={cfg.starts_at} onChange={(e) => set({ starts_at: e.target.value })} className={inputCls} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Mostrar hasta (opcional)</label>
-                        <input type="datetime-local" value={cfg.ends_at} onChange={(e) => set({ ends_at: e.target.value })} className={inputCls} />
-                    </div>
-                </div>
-                {(cfg.starts_at || cfg.ends_at) ? (
-                    <div className="flex justify-end -mt-2">
-                        <button type="button" onClick={() => set({ starts_at: "", ends_at: "" })} className="text-[11px] font-bold uppercase tracking-widest text-gray-400 hover:text-red-500 transition-colors">
-                            Quitar programación
-                        </button>
-                    </div>
-                ) : null}
-
-                <div className="bg-gray-50/80 rounded-2xl p-4">
-                    <label className="flex items-start gap-3 cursor-pointer select-none">
-                        <input type="checkbox" checked={reprompt} onChange={(e) => setReprompt(e.target.checked)} className={checkCls + " mt-0.5"} />
-                        <span>
-                            <span className="text-sm font-bold text-gray-800 block">Volver a mostrar a quienes la cerraron</span>
-                            <span className="text-[11px] text-gray-400 leading-relaxed block mt-0.5">
-                                Al guardar se incrementa la versión del aviso (actual: v{cfg.version}), así la barra reaparece para
-                                los visitantes que ya la habían cerrado. Úsalo cuando cambies el mensaje.
-                            </span>
-                        </span>
+            {/* the editor: one featured surface with an accent crown */}
+            <form onSubmit={save} className="cf-editor">
+                <div className="cf-editor-body" style={{ display: "grid", gap: "1.2rem" }}>
+                    <label className="cf-check">
+                        <input type="checkbox" checked={cfg.enabled} onChange={(e) => set({ enabled: e.target.checked })} />
+                        Mostrar la barra en el sitio
                     </label>
-                </div>
 
-                <div className="flex items-center justify-end gap-3">
-                    <button type="submit" disabled={busy || !loaded} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
-                </div>
-
-                {message && (
-                    <div className={`text-sm px-4 py-3 rounded-xl ${/^Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
-                        {message}
+                    <div>
+                        <label className="cf-label" htmlFor="nb-message">Mensaje</label>
+                        <textarea
+                            id="nb-message"
+                            value={cfg.message}
+                            onChange={(e) => set({ message: e.target.value })}
+                            maxLength={300}
+                            rows={2}
+                            placeholder="Ej.: Envío gratis en pedidos superiores a 50 € hasta el domingo"
+                            className="cf-input"
+                        />
+                        <p className="cf-counter">{(cfg.message || "").length}/300</p>
                     </div>
-                )}
+
+                    <div className="cf-grid">
+                        <div>
+                            <label className="cf-label" htmlFor="nb-link-label">Etiqueta del enlace (opcional)</label>
+                            <input id="nb-link-label" type="text" value={cfg.linkLabel} onChange={(e) => set({ linkLabel: e.target.value })} maxLength={60} placeholder="Ver ofertas" className="cf-input" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="nb-link-url">URL del enlace (opcional)</label>
+                            <input id="nb-link-url" type="text" value={cfg.linkUrl} onChange={(e) => set({ linkUrl: e.target.value })} placeholder="https://… o /pagina" className="cf-input" />
+                        </div>
+                    </div>
+
+                    <div className="cf-grid-3">
+                        <div>
+                            <label className="cf-label" htmlFor="nb-bg">Color de fondo</label>
+                            <div className="cf-color-row">
+                                <input id="nb-bg" type="color" value={cfg.bgColor} onChange={(e) => set({ bgColor: e.target.value })} className="cf-color-input" />
+                                <span className="cf-color-code">{cfg.bgColor}</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="nb-text">Color del texto</label>
+                            <div className="cf-color-row">
+                                <input id="nb-text" type="color" value={cfg.textColor} onChange={(e) => set({ textColor: e.target.value })} className="cf-color-input" />
+                                <span className="cf-color-code">{cfg.textColor}</span>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="nb-position">Posición</label>
+                            <select id="nb-position" value={cfg.position} onChange={(e) => set({ position: e.target.value })} className="cf-select">
+                                <option value="top">Superior (arriba)</option>
+                                <option value="bottom">Inferior (abajo)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <label className="cf-check">
+                        <input type="checkbox" checked={cfg.dismissible} onChange={(e) => set({ dismissible: e.target.checked })} />
+                        Permitir cerrar la barra (botón ×)
+                    </label>
+
+                    <div className="cf-grid">
+                        <div>
+                            <label className="cf-label" htmlFor="nb-starts">Mostrar desde (opcional)</label>
+                            <input id="nb-starts" type="datetime-local" value={cfg.starts_at} onChange={(e) => set({ starts_at: e.target.value })} className="cf-input" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="nb-ends">Mostrar hasta (opcional)</label>
+                            <input id="nb-ends" type="datetime-local" value={cfg.ends_at} onChange={(e) => set({ ends_at: e.target.value })} className="cf-input" />
+                        </div>
+                    </div>
+                    {(cfg.starts_at || cfg.ends_at) ? (
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "-0.6rem" }}>
+                            <button type="button" onClick={() => set({ starts_at: "", ends_at: "" })} className="cf-link-clear">
+                                <IconX /> Quitar programación
+                            </button>
+                        </div>
+                    ) : null}
+
+                    <div className="cf-nested-panel">
+                        <label className="cf-check">
+                            <input type="checkbox" checked={reprompt} onChange={(e) => setReprompt(e.target.checked)} />
+                            <span>
+                                <span className="cf-nested-title">Volver a mostrar a quienes la cerraron</span>
+                                <span className="cf-help">
+                                    Al guardar se incrementa la versión del aviso (actual: v{cfg.version}), así la barra reaparece para
+                                    los visitantes que ya la habían cerrado. Úsalo cuando cambies el mensaje.
+                                </span>
+                            </span>
+                        </label>
+                    </div>
+
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem" }}>
+                        <button type="submit" className="cf-btn" disabled={busy || !loaded}>{busy ? "Guardando…" : "Guardar"}</button>
+                    </div>
+
+                    {message && (
+                        <div
+                            role={/^Error/i.test(message) ? "alert" : "status"}
+                            className={`cf-flash ${/^Error/i.test(message) ? "is-error" : "is-ok"}`}
+                            style={{ marginBottom: 0 }}
+                        >
+                            {message}
+                        </div>
+                    )}
+                </div>
             </form>
 
-            <p className="text-[11px] text-gray-400 mt-6 leading-relaxed">
+            <p className="cf-footnote">
                 La barra se muestra en todas las páginas públicas mientras el plugin esté activo y "Mostrar la barra" esté
                 marcado. Si defines un rango de fechas, solo aparece dentro de ese rango. El cierre se recuerda en el
                 navegador del visitante hasta que incrementes la versión.

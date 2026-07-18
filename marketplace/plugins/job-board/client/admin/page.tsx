@@ -6,17 +6,16 @@
  * Tabs: Vacantes (CRUD + publish toggle), Postulaciones (inbox with statuses, cover-letter modal,
  * CSV export) and Configuración. Salary inputs are decimals in the UI and INTEGER CENTS on the
  * wire/database. API calls go through the host's api helpers (session cookie).
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-jobs) — the markup below only uses cf-* classes
+ * plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/job-board";
-
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-5 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
 
 const TYPE_LABELS = {
     "full-time": "Tiempo completo",
@@ -27,11 +26,12 @@ const TYPE_LABELS = {
 };
 const PERIOD_LABELS = { hour: "Por hora", month: "Al mes", year: "Al año" };
 const STATUS_LABELS = { new: "Nueva", reviewed: "Revisada", shortlisted: "Preseleccionada", rejected: "Rechazada" };
+// Maps each application status to its cf-status-select tint modifier (see admin.css).
 const STATUS_COLORS = {
-    new: "bg-blue-50 text-blue-700",
-    reviewed: "bg-gray-100 text-gray-600",
-    shortlisted: "bg-green-50 text-green-700",
-    rejected: "bg-red-50 text-red-600",
+    new: "is-new",
+    reviewed: "is-reviewed",
+    shortlisted: "is-shortlisted",
+    rejected: "is-rejected",
 };
 
 const centsToInput = (cents) => {
@@ -49,6 +49,45 @@ const fmtDate = (iso) => {
     return isNaN(d.getTime()) ? s : d.toLocaleString();
 };
 
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconBriefcase = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="2" y="7" width="20" height="14" rx="2" />
+        <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconDownload = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+    </svg>
+);
+const IconInboxEmpty = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </svg>
+);
+const IconFileText = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <path d="M14 2v6h6" />
+        <path d="M16 13H8" />
+        <path d="M16 17H8" />
+    </svg>
+);
 // ---- Vacante create/edit modal (module level — never define a component inside a component) ----
 function JobModal({ initial, onClose, onSaved }) {
     const [form, setForm] = useState(() => ({
@@ -105,84 +144,92 @@ function JobModal({ initial, onClose, onSaved }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+        <div className="cf-overlay" onClick={onClose}>
             <form
                 onSubmit={save}
                 onClick={(e) => e.stopPropagation()}
-                className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 sm:p-8 space-y-4"
+                className="cf-letter is-wide"
+                role="dialog"
+                aria-modal="true"
+                aria-label={initial?.id ? "Editar vacante" : "Nueva vacante"}
             >
-                <h2 className="text-xl font-black text-gray-900 italic tracking-tighter">
-                    {initial?.id ? "Editar vacante" : "Nueva vacante"}
-                </h2>
-                <div>
-                    <label className={labelCls}>Título *</label>
-                    <input type="text" value={form.title} onChange={set("title")} className={inputCls} required maxLength={200} />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Empresa</label>
-                        <input type="text" value={form.company} onChange={set("company")} className={inputCls} maxLength={200} />
+                <div className="cf-letter-body">
+                    <h2 className="cf-editor-title">
+                        <IconPen />
+                        {initial?.id ? "Editar vacante" : "Nueva vacante"}
+                    </h2>
+                    <div style={{ display: "grid", gap: "1.05rem" }}>
+                        <div>
+                            <label className="cf-label" htmlFor="jb-title">Título *</label>
+                            <input id="jb-title" type="text" value={form.title} onChange={set("title")} className="cf-input" required maxLength={200} />
+                        </div>
+                        <div className="cf-grid">
+                            <div>
+                                <label className="cf-label" htmlFor="jb-company">Empresa</label>
+                                <input id="jb-company" type="text" value={form.company} onChange={set("company")} className="cf-input" maxLength={200} />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="jb-location">Ubicación</label>
+                                <input id="jb-location" type="text" value={form.location} onChange={set("location")} className="cf-input" maxLength={200} />
+                            </div>
+                        </div>
+                        <div className="cf-grid" style={{ alignItems: "end" }}>
+                            <div>
+                                <label className="cf-label" htmlFor="jb-type">Tipo</label>
+                                <select id="jb-type" value={form.type} onChange={set("type")} className="cf-select">
+                                    {Object.entries(TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                                </select>
+                            </div>
+                            <label className="cf-check">
+                                <input type="checkbox" checked={form.is_remote} onChange={set("is_remote")} />
+                                Trabajo remoto
+                            </label>
+                        </div>
+                        <div className="cf-grid-3">
+                            <div>
+                                <label className="cf-label" htmlFor="jb-salary-min">Salario mín.</label>
+                                <input id="jb-salary-min" type="number" min="0" step="0.01" value={form.salaryMin} onChange={set("salaryMin")} className="cf-input" placeholder="0 = no mostrar" />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="jb-salary-max">Salario máx.</label>
+                                <input id="jb-salary-max" type="number" min="0" step="0.01" value={form.salaryMax} onChange={set("salaryMax")} className="cf-input" placeholder="0 = no mostrar" />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="jb-period">Periodo</label>
+                                <select id="jb-period" value={form.salary_period} onChange={set("salary_period")} className="cf-select">
+                                    {Object.entries(PERIOD_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+                                </select>
+                            </div>
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="jb-description">Descripción *</label>
+                            <textarea id="jb-description" value={form.description} onChange={set("description")} className="cf-textarea" style={{ minHeight: "120px" }} required />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="jb-requirements">Requisitos</label>
+                            <textarea id="jb-requirements" value={form.requirements} onChange={set("requirements")} className="cf-textarea" style={{ minHeight: "80px" }} />
+                        </div>
+                        <div className="cf-grid">
+                            <div>
+                                <label className="cf-label" htmlFor="jb-apply-email">Email para postulaciones</label>
+                                <input id="jb-apply-email" type="email" value={form.apply_email} onChange={set("apply_email")} className="cf-input" placeholder="(vacío = email de configuración)" maxLength={254} />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="jb-expires">Expira</label>
+                                <input id="jb-expires" type="date" value={form.expires_at} onChange={set("expires_at")} className="cf-input" />
+                                <p className="cf-help">Vacía = nunca expira.</p>
+                            </div>
+                        </div>
+                        <label className="cf-check">
+                            <input type="checkbox" checked={form.is_published} onChange={set("is_published")} />
+                            Publicada
+                        </label>
+                        {error && <div role="alert" className="cf-flash is-error" style={{ marginBottom: 0 }}>{error}</div>}
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "0.35rem" }}>
+                            <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                        </div>
                     </div>
-                    <div>
-                        <label className={labelCls}>Ubicación</label>
-                        <input type="text" value={form.location} onChange={set("location")} className={inputCls} maxLength={200} />
-                    </div>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 items-end">
-                    <div>
-                        <label className={labelCls}>Tipo</label>
-                        <select value={form.type} onChange={set("type")} className={inputCls}>
-                            {Object.entries(TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                        </select>
-                    </div>
-                    <label className="flex items-center gap-2 pb-3 text-sm font-bold text-gray-600 cursor-pointer select-none">
-                        <input type="checkbox" checked={form.is_remote} onChange={set("is_remote")} />
-                        Trabajo remoto
-                    </label>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                    <div>
-                        <label className={labelCls}>Salario mín.</label>
-                        <input type="number" min="0" step="0.01" value={form.salaryMin} onChange={set("salaryMin")} className={inputCls} placeholder="0 = no mostrar" />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Salario máx.</label>
-                        <input type="number" min="0" step="0.01" value={form.salaryMax} onChange={set("salaryMax")} className={inputCls} placeholder="0 = no mostrar" />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Periodo</label>
-                        <select value={form.salary_period} onChange={set("salary_period")} className={inputCls}>
-                            {Object.entries(PERIOD_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                        </select>
-                    </div>
-                </div>
-                <div>
-                    <label className={labelCls}>Descripción *</label>
-                    <textarea value={form.description} onChange={set("description")} className={`${inputCls} min-h-[120px]`} required />
-                </div>
-                <div>
-                    <label className={labelCls}>Requisitos</label>
-                    <textarea value={form.requirements} onChange={set("requirements")} className={`${inputCls} min-h-[80px]`} />
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Email para postulaciones</label>
-                        <input type="email" value={form.apply_email} onChange={set("apply_email")} className={inputCls} placeholder="(vacío = email de configuración)" maxLength={254} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Expira</label>
-                        <input type="date" value={form.expires_at} onChange={set("expires_at")} className={inputCls} />
-                        <p className="text-[11px] text-gray-400 mt-1">Vacía = nunca expira.</p>
-                    </div>
-                </div>
-                <label className="flex items-center gap-2 text-sm font-bold text-gray-600 cursor-pointer select-none">
-                    <input type="checkbox" checked={form.is_published} onChange={set("is_published")} />
-                    Publicada
-                </label>
-                {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600">{error}</div>}
-                <div className="flex justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
                 </div>
             </form>
         </div>
@@ -192,17 +239,25 @@ function JobModal({ initial, onClose, onSaved }) {
 // ---- Cover letter modal ------------------------------------------------------------------------
 function CoverLetterModal({ application, onClose }) {
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-            <div onClick={(e) => e.stopPropagation()} className="bg-white rounded-3xl shadow-2xl w-full max-w-xl max-h-[85vh] overflow-y-auto p-6 sm:p-8">
-                <h2 className="text-lg font-black text-gray-900 italic tracking-tighter mb-1">Carta de presentación</h2>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mb-4">
-                    {application.name} · {application.email}
-                </p>
-                <p className="text-sm text-gray-700 whitespace-pre-line leading-relaxed">
-                    {application.cover_letter || "(sin carta de presentación)"}
-                </p>
-                <div className="flex justify-end mt-6">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cerrar</button>
+        <div className="cf-overlay" onClick={onClose}>
+            <div
+                onClick={(e) => e.stopPropagation()}
+                className="cf-letter"
+                role="dialog"
+                aria-modal="true"
+                aria-label="Carta de presentación"
+            >
+                <div className="cf-letter-body">
+                    <h2 className="cf-editor-title" style={{ marginBottom: 0 }}><IconFileText /> Carta de presentación</h2>
+                    <p className="cf-postmark">
+                        {application.name} · {application.email}
+                    </p>
+                    <p className="cf-prose">
+                        {application.cover_letter || "(sin carta de presentación)"}
+                    </p>
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.4rem" }}>
+                        <button type="button" onClick={onClose} className="cf-btn-ghost">Cerrar</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -236,71 +291,74 @@ function JobsTab({ jobs, onReload, onMessage }) {
     const isExpired = (job) => !!(job.expires_at && job.expires_at < new Date().toISOString().slice(0, 10));
 
     return (
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-                <h2 className="font-bold text-gray-800">Vacantes ({jobs.length})</h2>
-                <button type="button" onClick={() => setModalJob(null)} className={btnCls}>Nueva vacante</button>
+        <div className="cf-card-item">
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.15rem" }}>
+                <h2 className="cf-form-name">Vacantes ({jobs.length})</h2>
+                <button type="button" onClick={() => setModalJob(null)} className="cf-btn"><IconPlus /> Nueva vacante</button>
             </div>
             {jobs.length === 0 ? (
-                <p className="text-sm text-gray-400">Aún no hay vacantes — crea la primera.</p>
+                <div className="cf-empty">
+                    <IconBriefcase />
+                    <span>Aún no hay vacantes — crea la primera.</span>
+                </div>
             ) : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                <div className="cf-table-wrap">
+                    <table className="cf-table is-static">
                         <thead>
-                            <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                <th className="py-3 pr-4">Título</th>
-                                <th className="py-3 pr-4">Tipo</th>
-                                <th className="py-3 pr-4">Ubicación</th>
-                                <th className="py-3 pr-4 text-right">Vistas</th>
-                                <th className="py-3 pr-4 text-right">Postulaciones</th>
-                                <th className="py-3 pr-4">Publicada</th>
-                                <th className="py-3 pr-4">Expira</th>
-                                <th className="py-3"></th>
+                            <tr>
+                                <th>Título</th>
+                                <th>Tipo</th>
+                                <th>Ubicación</th>
+                                <th style={{ textAlign: "right" }}>Vistas</th>
+                                <th style={{ textAlign: "right" }}>Postulaciones</th>
+                                <th>Publicada</th>
+                                <th>Expira</th>
+                                <th></th>
                             </tr>
                         </thead>
                         <tbody>
                             {jobs.map((job) => (
-                                <tr key={job.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                                    <td className="py-3 pr-4">
-                                        <span className="font-bold text-gray-800">{job.title}</span>
-                                        {job.company ? <span className="text-gray-400"> · {job.company}</span> : null}
+                                <tr key={job.id}>
+                                    <td>
+                                        <span className="cf-cand-name">{job.title}</span>
+                                        {job.company ? <span style={{ color: "var(--cf-faint)" }}> · {job.company}</span> : null}
                                     </td>
-                                    <td className="py-3 pr-4">
-                                        <span className="inline-block px-2 py-0.5 rounded-full bg-blue-50 text-blue-700 text-[11px] font-bold">
+                                    <td style={{ whiteSpace: "nowrap" }}>
+                                        <span className="cf-pill is-accent">
                                             {TYPE_LABELS[job.type] || job.type}
                                         </span>
                                         {job.is_remote ? (
-                                            <span className="inline-block ml-1 px-2 py-0.5 rounded-full bg-green-50 text-green-700 text-[11px] font-bold">Remoto</span>
+                                            <span className="cf-pill is-ok">Remoto</span>
                                         ) : null}
                                     </td>
-                                    <td className="py-3 pr-4 text-gray-500">{job.location || "—"}</td>
-                                    <td className="py-3 pr-4 text-right text-gray-500">{job.views || 0}</td>
-                                    <td className="py-3 pr-4 text-right">
-                                        <span className="font-bold text-gray-700">{job.app_count || 0}</span>
+                                    <td>{job.location || "—"}</td>
+                                    <td className="cf-cell-num">{job.views || 0}</td>
+                                    <td className="cf-cell-num" style={{ whiteSpace: "nowrap" }}>
+                                        <span style={{ fontWeight: 650, color: "var(--cf-ink)" }}>{job.app_count || 0}</span>
                                         {job.new_count > 0 && (
-                                            <span className="ml-1 inline-block px-1.5 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-black">
+                                            <span className="cf-chip is-unread" style={{ marginLeft: "0.4rem" }}>
                                                 {job.new_count} nuevas
                                             </span>
                                         )}
                                     </td>
-                                    <td className="py-3 pr-4">
+                                    <td>
                                         <button
                                             type="button"
                                             onClick={() => togglePublish(job)}
-                                            className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${job.is_published ? "bg-green-500" : "bg-gray-300"}`}
+                                            className={`cf-switch ${job.is_published ? "is-on" : ""}`}
+                                            aria-pressed={!!job.is_published}
+                                            aria-label={job.is_published ? "Publicada — clic para ocultar" : "Oculta — clic para publicar"}
                                             title={job.is_published ? "Publicada — clic para ocultar" : "Oculta — clic para publicar"}
-                                        >
-                                            <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${job.is_published ? "translate-x-6" : "translate-x-1"}`} />
-                                        </button>
+                                        ></button>
                                     </td>
-                                    <td className="py-3 pr-4 text-gray-500">
+                                    <td className="cf-cell-date">
                                         {job.expires_at ? (
-                                            <span className={isExpired(job) ? "text-red-500 font-bold" : ""}>{job.expires_at}{isExpired(job) ? " (expirada)" : ""}</span>
+                                            <span className={isExpired(job) ? "cf-expired" : ""}>{job.expires_at}{isExpired(job) ? " (expirada)" : ""}</span>
                                         ) : "Nunca"}
                                     </td>
-                                    <td className="py-3 text-right whitespace-nowrap">
-                                        <button type="button" onClick={() => setModalJob(job)} className="text-blue-600 hover:text-blue-800 font-bold text-xs uppercase tracking-widest mr-3">Editar</button>
-                                        <button type="button" onClick={() => remove(job)} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase tracking-widest">Eliminar</button>
+                                    <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                                        <button type="button" onClick={() => setModalJob(job)} className="cf-linkbtn">Editar</button>
+                                        <button type="button" onClick={() => remove(job)} className="cf-linkbtn is-danger">Eliminar</button>
                                     </td>
                                 </tr>
                             ))}
@@ -389,79 +447,83 @@ function ApplicationsTab({ jobs, onMessage, onCountsChange }) {
     };
 
     return (
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8">
-            <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-                <h2 className="font-bold text-gray-800">
+        <div className="cf-card-item">
+            <div className="cf-toolbar">
+                <h2 className="cf-form-name" style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                     Postulaciones
                     {counts.new > 0 && (
-                        <span className="ml-2 inline-block px-2 py-0.5 rounded-full bg-blue-600 text-white text-[11px] font-black align-middle">
+                        <span className="cf-chip is-unread">
                             {counts.new} nuevas
                         </span>
                     )}
                 </h2>
-                <div className="flex flex-wrap items-center gap-3">
-                    <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} className="px-3 py-2 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-medium outline-none">
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.6rem" }}>
+                    <select value={jobFilter} onChange={(e) => setJobFilter(e.target.value)} className="cf-select" aria-label="Filtrar por vacante">
                         <option value="">Todas las vacantes</option>
                         {jobs.map((j) => <option key={j.id} value={j.id}>{j.title}</option>)}
                     </select>
-                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-medium outline-none">
+                    <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="cf-select" aria-label="Filtrar por estado">
                         <option value="">Todos los estados</option>
                         {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
-                    <button type="button" onClick={exportCsv} className={btnGhostCls}>Exportar CSV</button>
+                    <button type="button" onClick={exportCsv} className="cf-btn-ghost"><IconDownload /> Exportar CSV</button>
                 </div>
             </div>
             {loading ? (
-                <p className="text-sm text-gray-400">Cargando…</p>
+                <p className="cf-meta">Cargando…</p>
             ) : applications.length === 0 ? (
-                <p className="text-sm text-gray-400">No hay postulaciones con estos filtros.</p>
+                <div className="cf-empty">
+                    <IconInboxEmpty />
+                    <span>No hay postulaciones con estos filtros.</span>
+                </div>
             ) : (
-                <div className="overflow-x-auto">
-                    <table className="w-full text-sm">
+                <div className="cf-table-wrap">
+                    <table className="cf-table is-static">
                         <thead>
-                            <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                <th className="py-3 pr-4">Candidato</th>
-                                <th className="py-3 pr-4">Vacante</th>
-                                <th className="py-3 pr-4">CV</th>
-                                <th className="py-3 pr-4">Carta</th>
-                                <th className="py-3 pr-4">Estado</th>
-                                <th className="py-3 pr-4">Fecha</th>
-                                <th className="py-3"></th>
+                            <tr>
+                                <th>Candidato</th>
+                                <th>Vacante</th>
+                                <th>CV</th>
+                                <th>Carta</th>
+                                <th>Estado</th>
+                                <th>Fecha</th>
+                                <th></th>
                             </tr>
                         </thead>
                         <tbody>
                             {applications.map((app) => (
-                                <tr key={app.id} className={`border-b border-gray-50 hover:bg-gray-50/50 ${app.status === "new" ? "bg-blue-50/30" : ""}`}>
-                                    <td className="py-3 pr-4">
-                                        <div className="font-bold text-gray-800">{app.name}</div>
-                                        <div className="text-gray-400 text-xs">
-                                            <a href={`mailto:${app.email}`} className="hover:text-blue-600">{app.email}</a>
+                                <tr key={app.id} className={app.status === "new" ? "is-new" : ""}>
+                                    <td>
+                                        <div className="cf-cand-name">{app.name}</div>
+                                        <div className="cf-cand-sub">
+                                            <a href={`mailto:${app.email}`} className="cf-tlink">{app.email}</a>
                                             {app.phone ? ` · ${app.phone}` : ""}
                                         </div>
                                     </td>
-                                    <td className="py-3 pr-4 text-gray-500">{app.job_title || `#${app.job_id}`}</td>
-                                    <td className="py-3 pr-4">
+                                    <td>{app.job_title || `#${app.job_id}`}</td>
+                                    <td>
                                         {app.cv_url ? (
-                                            <a href={app.cv_url} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:text-blue-800 font-bold text-xs uppercase tracking-widest">Ver CV</a>
-                                        ) : <span className="text-gray-300">—</span>}
+                                            <a href={app.cv_url} target="_blank" rel="noopener noreferrer" className="cf-tlink">Ver CV</a>
+                                        ) : <span className="cf-void">—</span>}
                                     </td>
-                                    <td className="py-3 pr-4">
+                                    <td>
                                         {app.cover_letter ? (
-                                            <button type="button" onClick={() => setLetterApp(app)} className="text-blue-600 hover:text-blue-800 font-bold text-xs uppercase tracking-widest">Leer</button>
-                                        ) : <span className="text-gray-300">—</span>}
+                                            <button type="button" onClick={() => setLetterApp(app)} className="cf-linkbtn">Leer</button>
+                                        ) : <span className="cf-void">—</span>}
                                     </td>
-                                    <td className="py-3 pr-4">
+                                    <td>
                                         <select
                                             value={app.status}
                                             onChange={(e) => setStatus(app, e.target.value)}
-                                            className={`px-2 py-1 rounded-lg text-xs font-bold border-0 outline-none cursor-pointer ${STATUS_COLORS[app.status] || "bg-gray-100 text-gray-600"}`}
+                                            aria-label={`Estado de la postulación de ${app.name}`}
+                                            className={`cf-status-select ${STATUS_COLORS[app.status] || ""}`}
                                         >
                                             {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                                         </select>
                                     </td>
-                                    <td className="py-3 pr-4 text-gray-400 text-xs whitespace-nowrap">{fmtDate(app.created_at)}</td>
-                                    <td className="py-3 text-right">
-                                        <button type="button" onClick={() => remove(app)} className="text-red-500 hover:text-red-700 font-bold text-xs uppercase tracking-widest">Eliminar</button>
+                                    <td className="cf-cell-date">{fmtDate(app.created_at)}</td>
+                                    <td style={{ textAlign: "right" }}>
+                                        <button type="button" onClick={() => remove(app)} className="cf-linkbtn is-danger">Eliminar</button>
                                     </td>
                                 </tr>
                             ))}
@@ -500,25 +562,29 @@ function ConfigTab({ onMessage }) {
     };
 
     return (
-        <form onSubmit={save} className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8 space-y-5 max-w-xl">
-            <div>
-                <label className={labelCls}>Símbolo de moneda</label>
-                <input type="text" value={config.currencySymbol} onChange={(e) => setConfig((c) => ({ ...c, currencySymbol: e.target.value }))} className={inputCls} maxLength={5} />
-                <p className="text-[11px] text-gray-400 mt-1">Se usa para mostrar los rangos salariales, p. ej. $ o €.</p>
-            </div>
-            <div>
-                <label className={labelCls}>Email de notificación</label>
-                <input type="email" value={config.notifyEmail} onChange={(e) => setConfig((c) => ({ ...c, notifyEmail: e.target.value }))} className={inputCls} placeholder="(vacío = sin notificaciones)" maxLength={254} />
-                <p className="text-[11px] text-gray-400 mt-1">
-                    Recibe un correo por cada postulación. Si la vacante tiene su propio email, ese tiene prioridad.
-                </p>
-            </div>
-            <label className="flex items-center gap-2 text-sm font-bold text-gray-600 cursor-pointer select-none">
-                <input type="checkbox" checked={!!config.showSalary} onChange={(e) => setConfig((c) => ({ ...c, showSalary: e.target.checked }))} />
-                Mostrar salarios en el sitio público
-            </label>
-            <div className="flex justify-end">
-                <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+        <form onSubmit={save} className="cf-editor" style={{ maxWidth: "36rem" }}>
+            <div className="cf-editor-body">
+                <div style={{ display: "grid", gap: "1.2rem" }}>
+                    <div>
+                        <label className="cf-label" htmlFor="jb-currency">Símbolo de moneda</label>
+                        <input id="jb-currency" type="text" value={config.currencySymbol} onChange={(e) => setConfig((c) => ({ ...c, currencySymbol: e.target.value }))} className="cf-input" maxLength={5} />
+                        <p className="cf-help">Se usa para mostrar los rangos salariales, p. ej. $ o €.</p>
+                    </div>
+                    <div>
+                        <label className="cf-label" htmlFor="jb-notify">Email de notificación</label>
+                        <input id="jb-notify" type="email" value={config.notifyEmail} onChange={(e) => setConfig((c) => ({ ...c, notifyEmail: e.target.value }))} className="cf-input" placeholder="(vacío = sin notificaciones)" maxLength={254} />
+                        <p className="cf-help">
+                            Recibe un correo por cada postulación. Si la vacante tiene su propio email, ese tiene prioridad.
+                        </p>
+                    </div>
+                    <label className="cf-check">
+                        <input type="checkbox" checked={!!config.showSalary} onChange={(e) => setConfig((c) => ({ ...c, showSalary: e.target.checked }))} />
+                        Mostrar salarios en el sitio público
+                    </label>
+                    <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                    </div>
+                </div>
             </div>
         </form>
     );
@@ -552,33 +618,41 @@ export default function JobBoardAdminPage() {
     const tabBtn = (id, label, badge) => (
         <button
             type="button"
+            role="tab"
+            aria-selected={tab === id}
             onClick={() => setTab(id)}
-            className={`px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === id ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+            className={`cf-tab ${tab === id ? "is-active" : ""}`}
         >
             {label}
             {badge > 0 && (
-                <span className="ml-2 inline-block px-1.5 py-0.5 rounded-full bg-blue-600 text-white text-[10px] font-black">{badge}</span>
+                <span className="cf-badge">{badge}</span>
             )}
         </button>
     );
 
     return (
-        <div className="max-w-6xl mx-auto p-4 sm:p-8">
-            <div className="mb-6">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Bolsa de empleo</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Vacantes · postulaciones · bloque JobBoard en el editor visual
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconBriefcase /></div>
+                <div>
+                    <h1 className="cf-title">Bolsa de empleo</h1>
+                    <p className="cf-subtitle">
+                        Vacantes · postulaciones · bloque JobBoard en el editor visual
+                    </p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
-            <div className="flex flex-wrap gap-2 mb-6">
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
                 {tabBtn("jobs", "Vacantes", 0)}
                 {tabBtn("applications", "Postulaciones", newCount)}
                 {tabBtn("config", "Configuración", 0)}
             </div>
 
             {message && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-4 ${/^Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
+                <div role={/^Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/^Error/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}

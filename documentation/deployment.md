@@ -1,6 +1,6 @@
 # Production Deployment Guide 🚀
 
-WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** database for zero-config startups, but fully supports **PostgreSQL** for high-scale external database needs.
+WordJS is designed to be easy to deploy. It defaults to a file-based **SQLite** database for zero-config startups, but fully supports **PostgreSQL** and **MySQL / MariaDB** for external-database needs.
 
 ---
 
@@ -29,15 +29,17 @@ A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **ba
 
 ### Separate (split across different machines)
 
-**Split** can also run with the three services on **different hosts** — a gateway box, a backend box, and a frontend box — joined into one cluster. Because the tiers talk over **mutual TLS**, each node needs a cert signed by a shared cluster CA; WordJS bootstraps that trust with **single-use join tokens** (like `kubeadm join`) instead of hand-copying certs:
+**Split** can also run with the three services on **different hosts** — a gateway box, a backend box, and a frontend box — joined into one cluster. Because the tiers talk over **mutual TLS**, each node needs a cert signed by a shared cluster CA; WordJS bootstraps that trust with **single-use join tokens** (like `kubeadm join`) instead of hand-copying certs. **One command per machine:**
 
-1. **Gateway (the cluster CA):** `node scripts/cluster.js init --host <gateway-ip>` mints the CA (CA key kept `0600` on the gateway), issues the gateway's identity + a cluster-CA-signed public cert, writes a multi-node `gateway/gateway-config.json` (`gatewayInternalBind`, `gatewayEnrollPort` default **3101**), and clears the registry.
-2. **Mint a token per node:** `node scripts/cluster.js token backend` / `… token frontend` prints the exact `node-join` command (with the gateway address, enroll port, token, and CA fingerprint).
-3. **On each node:** `node scripts/node-join.js --role … --gateway … --token … --ca-hash … --advertise …` makes one `POST /enroll` call, receives a signed `CN=<role>` cert + the cluster CA + bootstrap config, writes `<role>/certs/*` and `<role>/wordjs-config.json`, and starts the service, which registers over mTLS.
+```bash
+npx create-wordjs gateway --host <gateway-ip>     # machine 1: cluster CA + prints ready-to-paste join commands
+npx create-wordjs join backend  --gateway <ip> --token <t> --ca-hash <fp> --advertise <backend-ip>
+npx create-wordjs join frontend --gateway <ip> --token <t> --ca-hash <fp> --advertise <frontend-ip>
+```
 
-One backend + one frontend per gateway needs **no** shared database or filesystem — SQLite stays on the single backend and the frontend reaches uploads through the gateway. Scaling a role to **N** replicas is a further step (Postgres + Redis + shared FS). Full step-by-step: **[separate-mode.md](separate-mode.md)**; horizontal scaling: **[multi-node.md](multi-node.md)**.
+Each command downloads the pre-compiled release, enrolls the machine and starts its service. Under the hood (and the manual path from a source checkout — `scripts/cluster.js init` / `token`, `scripts/node-join.js`): the gateway mints the CA (key kept `0600` on the gateway) and per-role single-use tokens; each node makes one `POST /enroll` call with a CSR, receives a signed `CN=<role>` cert + the cluster CA + bootstrap config, then starts and registers over mTLS.
 
-- **Dev/Prod:** the same `npm start` (split) on each machine — `node-join --start` launches it for you.
+One backend + one frontend per gateway needs **no** shared database or filesystem — SQLite stays on the single backend and the frontend reaches uploads through the gateway. Scaling a role to **N** replicas is a further step (Postgres + Redis + shared FS). Full step-by-step (npx quickstart + manual procedure): **[separate-mode.md](separate-mode.md)**; horizontal scaling: **[multi-node.md](multi-node.md)**.
 
 ### Which one should I pick?
 
@@ -92,7 +94,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 - **No data.** The database is created fresh by the install wizard; no `database.sqlite` (or any `*.db`/`*.sqlite`/`*.sqlite3`) is included.
 - **No marketplace plugins.** Optional plugins are installed post-deploy from the admin **Marketplace** tab (see below), not shipped in the bundle.
 
-> **Plugin marketplace at runtime.** The admin **Plugins → Marketplace** tab lists a catalog the backend fetches **server-side** (`backend/src/routes/marketplace.ts`). With no configuration it uses the committed catalog at `https://raw.githubusercontent.com/jaimemartinez/wordjs/main/marketplace/dist` — so the server needs outbound HTTPS to `raw.githubusercontent.com` for the tab to work (a dev/full checkout with a local `marketplace/dist/` uses that instead). The `marketplace_source` option (admin-configurable) overrides the source: an `https://` URL — e.g. pin a fixed catalog snapshot at `https://github.com/jaimemartinez/wordjs/releases/download/vX.Y.Z`, since tagged releases attach the same assets — or a **local directory** for air-gapped installs. Downloads are **sha256-verified** against the catalog entry and installed through the **same pipeline as manual zip uploads** (size cap, Zip-Slip/zip-bomb guards, manifest + AST scan), so the marketplace adds no new install surface beyond the catalog fetch itself.
+> **Plugin marketplace at runtime.** The admin **Plugins → Marketplace** tab lists a catalog the backend fetches **server-side** (`backend/src/routes/marketplace.ts`). With no configuration it uses the **GitHub Release assets** at `https://github.com/jaimemartinez/wordjs/releases/latest/download` (the catalog + zips are published there by `release.yml`; `marketplace/dist/` is a build output and is **not** committed) — so the server needs outbound HTTPS to `github.com` for the tab to work (a dev/full checkout with a local `marketplace/dist/` uses that instead). Sources are **admin-configurable** from the UI, backed by `GET`/`PUT /api/v1/marketplace/sources` writing the `marketplace_sources` option — a **list** of https catalogs (max 12) that are fetched and **merged** (deduped by id, earlier sources win, each source's errors isolated). E.g. add a fixed catalog snapshot at `https://github.com/jaimemartinez/wordjs/releases/download/vX.Y.Z`, since tagged releases attach the same assets. (The legacy single `marketplace_source` option — an https URL or a **local directory** for air-gapped installs — is still honored for back-compat when the list is empty.) Downloads are **sha256-verified** against the catalog entry and installed through the **same pipeline as manual zip uploads** (size cap, Zip-Slip/zip-bomb guards, manifest + AST scan), so the marketplace adds no new install surface beyond the catalog fetch itself.
 
 ### How an operator deploys a release
 
@@ -199,7 +201,7 @@ Example `backend/wordjs-config.json`:
 
 > The **gateway has its own config file** at `gateway/gateway-config.json` (`gatewaySecret`, `gatewayPort`, `gatewayInternalPort`, `ssl`, `mtls`). The setup orchestrator (`npm run setup`) writes the matching secret into both files and generates the mTLS cluster CA + per-service certs. Keep the two `gatewaySecret` values in sync.
 
-> **Database choice:** SQLite is the zero-config default — the canonical driver is `sqlite-native` (better-sqlite3); `sqlite-legacy` (pure-JS WASM) is an automatic fallback. For Postgres set the `db` block to use the `postgres` driver (the `pg` client) pointed at an external Postgres server.
+> **Database choice:** SQLite is the zero-config default — the canonical driver is `sqlite-native` (better-sqlite3); `sqlite-legacy` (pure-JS WASM) is an automatic fallback. The browser install wizard offers **SQLite** or **PostgreSQL**; the other engines are selected in `backend/wordjs-config.json` via the `dbDriver` key. For **Postgres** set `dbDriver: "postgres"` (the `pg` client) + the `db` block pointed at an external Postgres server. For **MySQL / MariaDB** (8.0+) set `dbDriver: "mysql"` (aliased `mariadb`, via `mysql2`) with `dbPort: 3306` and the same `db` connection block — the driver translates the SQLite dialect to MySQL at the boundary.
 
 ---
 
@@ -363,7 +365,7 @@ WordJS is **MIT-licensed** consistently across every package (root, `backend`, `
 
 CI runs on every push and pull request via `.github/workflows/ci.yml`, on **Node 22**, with three parallel jobs:
 
-- **Backend:** **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`). The job ends with a **marketplace catalog freshness** gate: it re-runs `node backend/scripts/build-marketplace.js` (deterministic output) and fails if the committed `marketplace/dist/` differs — run `npm run build:marketplace` and commit the result to fix.
+- **Backend:** **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`). The job ends with a **marketplace catalog** step that re-runs `node backend/scripts/build-marketplace.js` (deterministic output) to confirm the catalog builds. The catalog itself (`marketplace/dist/`) is **not** committed — it is a build output published as GitHub Release assets by `release.yml` — so this step validates the build rather than a checked-in artifact.
 - **Gateway:** audit gate → tests (`npm test`), including the proxy/mTLS integration test.
 - **Frontend:** audit gate → plugin-registry regeneration → type check → lint (`npm run lint`) → **unit tests** (`npm run test`, vitest — e.g. the XSS sanitizer) → production build (`npm run build`).
 

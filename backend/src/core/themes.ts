@@ -638,6 +638,79 @@ async function createThemeZip(slug: string) {
   return tempPath;
 }
 
+/**
+ * Install a theme from a zip THROUGH THE SAME SECURITY GATES as the admin upload route
+ * (zip-bomb budget, Zip Slip containment) — shared by the theme marketplace. Unlike the upload
+ * route (which trusts the zip's filename and layout for back-compat), this STRICT variant requires
+ * every entry to live under `<slug>/` and a `<slug>/theme.json` to exist, so a catalog zip can only
+ * ever materialize the one theme directory it claims to be. Returns {ok, status, body} and owns
+ * the temp-file cleanup, mirroring plugins' installPluginFromZip.
+ */
+async function installThemeFromZip(zipPath: any, slug: any): Promise<{ ok: boolean; status: number; body: any }> {
+  const AdmZip = require('adm-zip');
+  const { assertZipWithinBudget } = require('./zip-guard');
+  const cleanup = () => { try { if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath); } catch { /* best-effort */ } };
+  try {
+    if (!/^[a-zA-Z0-9_-]+$/.test(String(slug))) {
+      cleanup();
+      return { ok: false, status: 400, body: { error: 'Invalid theme slug' } };
+    }
+    const targetDir = path.resolve(THEMES_DIR, slug);
+    if (!targetDir.startsWith(path.resolve(THEMES_DIR) + path.sep)) {
+      cleanup();
+      return { ok: false, status: 400, body: { error: 'Invalid theme slug' } };
+    }
+    if (fs.existsSync(targetDir)) {
+      cleanup();
+      return { ok: false, status: 409, body: { error: `Theme "${slug}" already exists. Delete it before reinstalling.` } };
+    }
+
+    const zip = new AdmZip(zipPath);
+    const entries = zip.getEntries();
+    try {
+      assertZipWithinBudget(entries, { kind: 'theme' });
+    } catch (e: any) {
+      cleanup();
+      return { ok: false, status: 400, body: { error: e.message } };
+    }
+
+    // STRICT containment: every entry under <slug>/ inside THEMES_DIR, no '..' segments.
+    const resolvedRoot = path.resolve(THEMES_DIR);
+    for (const entry of entries) {
+      const name = String(entry.entryName).replace(/\\/g, '/');
+      if (name.split('/').includes('..')) { cleanup(); return { ok: false, status: 400, body: { error: 'Malicious zip file detected (path traversal)' } }; }
+      if (!(name === `${slug}/` || name.startsWith(`${slug}/`))) {
+        cleanup();
+        return { ok: false, status: 400, body: { error: `Zip entries must live under "${slug}/" (found "${name}").` } };
+      }
+      const dest = path.resolve(THEMES_DIR, name);
+      if (!(dest === resolvedRoot || dest.startsWith(resolvedRoot + path.sep))) {
+        cleanup();
+        return { ok: false, status: 400, body: { error: 'Malicious zip file detected (Zip Slip)' } };
+      }
+    }
+    if (!entries.some((e: any) => String(e.entryName).replace(/\\/g, '/') === `${slug}/theme.json`)) {
+      cleanup();
+      return { ok: false, status: 400, body: { error: 'Not a valid WordJS theme (missing theme.json).' } };
+    }
+
+    // Write file entries ourselves (never extract directory entries — mirrors the plugin installer's
+    // defense against adm-zip directory-entry re-enumeration).
+    for (const entry of entries) {
+      if (entry.isDirectory) continue;
+      const dest = path.resolve(THEMES_DIR, String(entry.entryName).replace(/\\/g, '/'));
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.writeFileSync(dest, entry.getData());
+    }
+    cleanup();
+    return { ok: true, status: 200, body: { success: true, message: `Theme "${slug}" installed successfully`, slug } };
+  } catch (error: any) {
+    cleanup();
+    try { const t = path.resolve(THEMES_DIR, String(slug)); if (fs.existsSync(t)) fs.rmSync(t, { recursive: true, force: true }); } catch { /* best-effort */ }
+    return { ok: false, status: 500, body: { error: `Failed to install theme: ${error.message}` } };
+  }
+}
+
 module.exports = {
   Theme,
   scanThemes,
@@ -649,5 +722,6 @@ module.exports = {
   createDefaultTheme,
   deleteTheme,
   createThemeZip,
+  installThemeFromZip,
   THEMES_DIR
 };

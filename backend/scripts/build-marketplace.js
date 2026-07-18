@@ -28,7 +28,8 @@ const CATEGORIES = {
     'online-store': 'Comercio', 'vendor-marketplace': 'Comercio', 'bookings': 'Comercio',
     'donations': 'Comercio', 'digital-downloads': 'Comercio', 'invoices': 'Comercio',
     'job-board': 'Comercio', 'restaurant-menu': 'Comercio', 'event-tickets': 'Comercio',
-    'auctions': 'Comercio',
+    'auctions': 'Comercio', 'youtube-videos': 'Medios', 'conference-manager': 'Eventos',
+    'mail-server': 'Email',
 };
 
 // Junk that must never ship inside a plugin zip.
@@ -65,6 +66,10 @@ function buildOne(slug) {
     const FIXED_DATE = new Date('2026-01-01T00:00:00Z');
     for (const abs of files) {
         const rel = path.relative(dir, abs).split(path.sep).join('/');
+        // SECURITY: a plugin's top-level data/ is RUNTIME state (e.g. mail-server's AES root key
+        // data/.mailenc, user attachments) — it must never ship in a catalog zip. Anchored to the
+        // plugin root so a legit nested source dir named data/ (client/data/...) is unaffected.
+        if (rel === 'data' || rel.startsWith('data/')) continue;
         zip.addFile(`${slug}/${rel}`, fs.readFileSync(abs));
     }
     for (const entry of zip.getEntries()) entry.header.time = FIXED_DATE;
@@ -86,6 +91,45 @@ function buildOne(slug) {
         hasPuckBlock: !!(fe.puckComponents && fe.puckComponents.entry),
         blockName: fe.puckComponents ? toPascalCase(slug) : null,
         adminMenu: manifest.adminMenu ? { label: manifest.adminMenu.label, icon: manifest.adminMenu.icon } : null,
+        file,
+        size: buf.length,
+        sha256: crypto.createHash('sha256').update(buf).digest('hex'),
+    };
+}
+
+// ============================== THEMES ==============================
+// Same system as plugins: marketplace/themes/<slug>/ → theme-<slug>-<version>.zip + a themes index,
+// deterministic (fixed entry mtimes, sorted entries, no generated-at fields) so rebuilds of
+// unchanged sources are byte-identical.
+const THEMES_SRC = path.join(ROOT, 'marketplace', 'themes');
+
+function buildOneTheme(slug) {
+    const dir = path.join(THEMES_SRC, slug);
+    const metaPath = path.join(dir, 'theme.json');
+    if (!fs.existsSync(metaPath)) throw new Error(`${slug}: missing theme.json`);
+    const meta = JSON.parse(fs.readFileSync(metaPath, 'utf8'));
+    if (!meta.name) throw new Error(`${slug}: theme.json is missing a "name"`);
+    const version = String(meta.version || '1.0.0');
+
+    const zip = new AdmZip();
+    const files = walk(dir).sort();
+    const FIXED_DATE = new Date('2026-01-01T00:00:00Z');
+    for (const abs of files) {
+        const rel = path.relative(dir, abs).split(path.sep).join('/');
+        zip.addFile(`${slug}/${rel}`, fs.readFileSync(abs));
+    }
+    for (const entry of zip.getEntries()) entry.header.time = FIXED_DATE;
+
+    const buf = zip.toBuffer();
+    const file = `theme-${slug}-${version}.zip`;
+    fs.writeFileSync(path.join(DIST, file), buf);
+
+    return {
+        id: slug,
+        name: meta.name,
+        version,
+        description: meta.description || '',
+        author: meta.author || '',
         file,
         size: buf.length,
         sha256: crypto.createHash('sha256').update(buf).digest('hex'),
@@ -123,8 +167,31 @@ function main() {
     };
     fs.writeFileSync(path.join(DIST, 'marketplace-index.json'), JSON.stringify(index, null, 2));
     console.log(`\nmarketplace-index.json: ${entries.length} plugins → ${DIST}`);
+
+    // Themes catalog (optional dir: a checkout without marketplace themes still builds plugins).
+    const themeEntries = [];
+    if (fs.existsSync(THEMES_SRC)) {
+        const themeSlugs = fs.readdirSync(THEMES_SRC, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+        for (const slug of themeSlugs) {
+            try {
+                const entry = buildOneTheme(slug);
+                themeEntries.push(entry);
+                console.log(`  ✓ ${entry.file}  (${(entry.size / 1024).toFixed(1)} KB)`);
+            } catch (e) {
+                failures.push(`theme ${slug}: ${e.message}`);
+                console.error(`  ✗ theme ${slug}: ${e.message}`);
+            }
+        }
+    }
+    const themesIndex = {
+        count: themeEntries.length,
+        themes: themeEntries,
+    };
+    fs.writeFileSync(path.join(DIST, 'marketplace-themes-index.json'), JSON.stringify(themesIndex, null, 2));
+    console.log(`marketplace-themes-index.json: ${themeEntries.length} themes → ${DIST}`);
+
     if (failures.length) {
-        console.error(`\n${failures.length} plugin(s) FAILED to pack.`);
+        console.error(`\n${failures.length} package(s) FAILED to pack.`);
         process.exit(1);
     }
 }

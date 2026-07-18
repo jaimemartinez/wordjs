@@ -257,6 +257,20 @@ function isPathSafe(targetPath: string, isWrite = false) {
         }
     }
 
+    // MONOLITH-mode carve-out: Next.js runs in-process and flushes its own dev log
+    // (frontend/.next/dev/logs/*.log) from a timer that can inherit a plugin's ALS context —
+    // secure-require wraps timers with creation-time context, so a console.log intercepted by
+    // Next's log capture inside a plugin scope schedules the flusher "as" that plugin. The write
+    // is Next's own, not the plugin's; denying it only breaks Next's logging and floods the
+    // console with EACCES. Allow WRITES to *.log files under frontend/.next only — never code
+    // (EXECUTABLE_CODE_EXT can't match *.log), log-injection at worst.
+    if (!isAllowed && isWrite) {
+        const nextDir = path.resolve(ROOT_DIR, '../frontend/.next');
+        if (resolved.startsWith(nextDir + path.sep) && /\.log$/i.test(resolved)) {
+            isAllowed = true;
+        }
+    }
+
     if (!isAllowed) {
         throttledWarn(`${pluginSlug}:outside-${isWrite ? 'write' : 'read'}`, `[Security Block] Plugin '${pluginSlug}' tried to ${isWrite ? 'WRITE' : 'READ'} outside safe zones: ${resolved}`);
         return false;

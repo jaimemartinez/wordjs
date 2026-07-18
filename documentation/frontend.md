@@ -251,8 +251,8 @@ Plugins can inject custom blocks into Puck via the frontend plugin registry.
 
 `/admin/plugins` now has two tabs — **Installed** and **Marketplace** (`src/app/admin/plugins/page.tsx`, `tab: 'installed' | 'marketplace'`).
 
-*   **`MarketplaceTab.tsx`** (`src/app/admin/plugins/MarketplaceTab.tsx`) browses the plugin catalog with search + category filters, showing each entry's version, size, requested permissions (rendered via `permMeta` from `src/lib/permissionMeta.ts`) and installed/active/update state; the catalog source (remote URL or local dir) is surfaced in the tab.
-*   **API client:** `marketplaceApi` in `src/lib/api.ts` — `catalog(refresh?)` → `GET /marketplace/catalog`, `install(id)` → `POST /marketplace/install`.
+*   **`MarketplaceTab.tsx`** (`src/app/admin/plugins/MarketplaceTab.tsx`) browses the merged plugin catalog with search + category filters, showing each entry's version, size, requested permissions (rendered via `permMeta` from `src/lib/permissionMeta.ts`) and installed/active/update state; the per-source status (`sources[]`, each URL's `ok`/`count`/`error`) is surfaced in the tab, and the source list itself is admin-editable.
+*   **API client:** `marketplaceApi` in `src/lib/api.ts` — `catalog(refresh?)` → `GET /marketplace/catalog`, `install(id)` → `POST /marketplace/install`, `getSources()` → `GET /marketplace/sources`, `setSources(urls)` → `PUT /marketplace/sources` (admin-configurable catalog sources — no hard-coded URL).
 *   **Install flow:** a confirm dialog previews the plugin's requested permissions, then the backend downloads the zip **server-side**, verifies its **sha256** against the catalog entry and runs the exact same security pipeline as a manual upload. The plugin then appears in the **Installed** tab **inactive** with **default-deny** grants, where the admin activates it and grants its capabilities.
 *   **Registries:** marketplace-installed plugins flow through the same auto-generated registries as bundled ones — `src/lib/pluginRegistry.ts` (admin pages, hybrid dev/prod loading) and `src/lib/puckPluginRegistry.ts` (Puck blocks) — via the standard activate → regenerate → restart flow.
 
@@ -334,12 +334,12 @@ img-src 'self' data: blob: https:;
 font-src 'self' data: https:;
 connect-src 'self' https: http: ws: wss:;
 frame-src 'self' https://www.youtube.com https://player.vimeo.com;
-frame-ancestors 'none';
+frame-ancestors 'self';
 object-src 'none';
 base-uri 'self';
 ```
 
-Companion headers: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`.
+Companion headers: `X-Frame-Options: SAMEORIGIN`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin`.
 
 **Honest caveats** (documented in the code comments — this CSP is *not* the XSS backstop):
 
@@ -348,4 +348,4 @@ Companion headers: `X-Frame-Options: DENY`, `X-Content-Type-Options: nosniff`, `
     *   `'unsafe-eval'` — the Puck visual editor and some bundled libs use `Function()`/`eval` at runtime.
     *   `'unsafe-inline'` — Next.js App Router emits inline bootstrap/hydration `<script>` tags (a per-request nonce migration is out of scope).
 *   **`https:` on `font-src`/`style-src`/`img-src`/`script-src`** is needed because the app loads its own theme assets and, crucially, the Puck editor renders the theme inside an `about:srcdoc` iframe where the CSP keyword `'self'` does **not** resolve to the page origin — same-origin `https:` assets would otherwise be blocked.
-*   The **real structural value** is `frame-ancestors 'none'` (clickjacking, plus the legacy `X-Frame-Options: DENY`), `object-src 'none'`, and `base-uri 'self'`.
+*   The **real structural value** is `frame-ancestors 'self'` (clickjacking, plus the legacy `X-Frame-Options: SAMEORIGIN`), `object-src 'none'`, and `base-uri 'self'`. `frame-ancestors` is `self` (not `none`) so WordJS can frame its OWN pages same-origin (the theme Customizer previews the live site in an iframe); cross-origin framing stays blocked.

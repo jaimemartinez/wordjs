@@ -7,20 +7,19 @@
  * (draft composer modal, test send, send-to-confirmed with confirm guard). API calls go through
  * the host's api helpers (session cookie). The CSV arrives as a JSON field ({csv, filename})
  * because the sandbox cannot stream raw text bodies — the Blob download is built here.
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-newsletter) — the markup below only uses cf-*
+ * classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnDark = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnLight = "px-4 py-2.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-[11px] uppercase tracking-widest transition-all disabled:opacity-50";
-
 const STATUS_META = {
-    pending: { label: "Pendiente", cls: "bg-amber-50 text-amber-600" },
-    confirmed: { label: "Confirmado", cls: "bg-green-50 text-green-700" },
-    unsubscribed: { label: "Cancelado", cls: "bg-gray-100 text-gray-500" },
+    pending: { label: "Pendiente", cls: "is-pending" },
+    confirmed: { label: "Confirmado", cls: "is-confirmed" },
+    unsubscribed: { label: "Cancelado", cls: "is-unsub" },
 };
 
 const FILTER_CHIPS = [
@@ -30,12 +29,52 @@ const FILTER_CHIPS = [
     { value: "unsubscribed", label: "Cancelados" },
 ];
 
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconSend = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="m22 2-11 11" />
+        <path d="M22 2 15 22l-4-9-9-4Z" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconDownload = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+    </svg>
+);
+const IconUsers = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+    </svg>
+);
+const IconEnvelope = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="2" y="4" width="20" height="16" rx="2" />
+        <path d="m22 7-10 6L2 7" />
+    </svg>
+);
+
 // Module-level (never define a component inside a component — remounting steals input focus).
 function StatCard({ label, value, accent }) {
     return (
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-5">
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{label}</p>
-            <p className={`text-3xl font-black tracking-tighter mt-1 ${accent || "text-gray-900"}`}>{value}</p>
+        <div className="cf-stat">
+            <p className="cf-stat-label">{label}</p>
+            <p className={`cf-stat-value ${accent || ""}`}>{value}</p>
         </div>
     );
 }
@@ -63,39 +102,50 @@ function CampaignModal({ campaign, onClose, onSaved }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 backdrop-blur-sm p-4" onClick={onClose}>
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6 sm:p-8" onClick={(e) => e.stopPropagation()}>
-                <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-xl font-black text-gray-900 tracking-tighter">
-                        {campaign?.id ? "Editar campaña" : "Nueva campaña"}
-                    </h2>
-                    <button type="button" onClick={onClose} className="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 font-black transition-all" aria-label="Cerrar">✕</button>
+        <div className="cf-overlay" onClick={onClose}>
+            <div
+                className="cf-letter"
+                role="dialog"
+                aria-modal="true"
+                aria-label={campaign?.id ? "Editar campaña" : "Nueva campaña"}
+                style={{ maxWidth: "42rem" }}
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="cf-letter-body">
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.35rem" }}>
+                        <h2 className="cf-editor-title" style={{ marginBottom: 0 }}>
+                            <IconPen />
+                            {campaign?.id ? "Editar campaña" : "Nueva campaña"}
+                        </h2>
+                        <button type="button" onClick={onClose} aria-label="Cerrar" className="cf-iconbtn">✕</button>
+                    </div>
+                    <form onSubmit={save} style={{ display: "grid", gap: "1.15rem" }}>
+                        <div>
+                            <label className="cf-label" htmlFor="nl-subject">Asunto</label>
+                            <input id="nl-subject" type="text" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Novedades de este mes" className="cf-input" required maxLength={300} />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="nl-body">Contenido (HTML)</label>
+                            <textarea
+                                id="nl-body"
+                                value={bodyHtml}
+                                onChange={(e) => setBodyHtml(e.target.value)}
+                                placeholder={"<h1>Hola</h1>\n<p>Escribe aquí el contenido del boletín…</p>"}
+                                className="cf-textarea"
+                                required
+                            />
+                            <p className="cf-help">
+                                Se permite HTML básico: &lt;h1&gt;–&lt;h3&gt;, &lt;p&gt;, &lt;a&gt;, &lt;strong&gt;, &lt;em&gt;, &lt;ul&gt;/&lt;li&gt;, &lt;img&gt;…
+                                El enlace para cancelar la suscripción se añade automáticamente al final de cada correo.
+                            </p>
+                        </div>
+                        {error && <div role="alert" className="cf-flash is-error" style={{ marginBottom: 0 }}>{error}</div>}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem" }}>
+                            <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar borrador"}</button>
+                        </div>
+                    </form>
                 </div>
-                <form onSubmit={save} className="space-y-5">
-                    <div>
-                        <label className={labelCls}>Asunto</label>
-                        <input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Novedades de este mes" className={inputCls} required maxLength={300} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Contenido (HTML)</label>
-                        <textarea
-                            value={bodyHtml}
-                            onChange={(e) => setBodyHtml(e.target.value)}
-                            placeholder={"<h1>Hola</h1>\n<p>Escribe aquí el contenido del boletín…</p>"}
-                            className={`${inputCls} font-mono text-sm min-h-[260px]`}
-                            required
-                        />
-                        <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
-                            Se permite HTML básico: &lt;h1&gt;–&lt;h3&gt;, &lt;p&gt;, &lt;a&gt;, &lt;strong&gt;, &lt;em&gt;, &lt;ul&gt;/&lt;li&gt;, &lt;img&gt;…
-                            El enlace para cancelar la suscripción se añade automáticamente al final de cada correo.
-                        </p>
-                    </div>
-                    {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600">{error}</div>}
-                    <div className="flex items-center justify-end gap-3">
-                        <button type="button" onClick={onClose} className={btnLight}>Cancelar</button>
-                        <button type="submit" disabled={busy} className={btnDark}>{busy ? "Guardando…" : "Guardar borrador"}</button>
-                    </div>
-                </form>
             </div>
         </div>
     );
@@ -226,57 +276,72 @@ export default function NewsletterAdminPage() {
         return isNaN(d.getTime()) ? String(v) : d.toLocaleDateString();
     };
 
-    const tabCls = (active) =>
-        `px-5 py-2.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${active ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`;
-
     return (
-        <div className="max-w-5xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Newsletter</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Suscriptores + campañas de correo con enlace de baja automático
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconSend /></div>
+                <div>
+                    <h1 className="cf-title">Newsletter</h1>
+                    <p className="cf-subtitle">Suscriptores + campañas de correo con enlace de baja automático</p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             {notice && (
                 <div
-                    className={`text-sm px-4 py-3 rounded-xl mb-6 ${
-                        notice.kind === "ok"
-                            ? "bg-green-50 text-green-700"
-                            : notice.kind === "warn"
-                            ? "bg-amber-50 text-amber-700"
-                            : "bg-red-50 text-red-600"
-                    }`}
+                    role={notice.kind === "err" ? "alert" : "status"}
+                    className={`cf-flash ${notice.kind === "ok" ? "is-ok" : notice.kind === "warn" ? "is-warn" : "is-error"}`}
                 >
-                    {notice.text}
-                    <button type="button" className="float-right font-black opacity-60 hover:opacity-100" onClick={() => setNotice(null)} aria-label="Cerrar aviso">✕</button>
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem" }}>
+                        <span>{notice.text}</span>
+                        <button type="button" className="cf-flash-x" onClick={() => setNotice(null)} aria-label="Cerrar aviso">✕</button>
+                    </div>
                 </div>
             )}
 
-            <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
+            {/* stat tiles */}
+            <div className="cf-stats">
                 <StatCard label="Total" value={stats.total} />
-                <StatCard label="Confirmados" value={stats.confirmed} accent="text-green-600" />
-                <StatCard label="Pendientes" value={stats.pending} accent="text-amber-500" />
-                <StatCard label="Cancelados" value={stats.unsubscribed} accent="text-gray-400" />
+                <StatCard label="Confirmados" value={stats.confirmed} accent="is-ok" />
+                <StatCard label="Pendientes" value={stats.pending} accent="is-warn" />
+                <StatCard label="Cancelados" value={stats.unsubscribed} accent="is-muted" />
             </div>
 
-            <div className="flex gap-2 mb-6">
-                <button type="button" className={tabCls(tab === "subs")} onClick={() => setTab("subs")}>Suscriptores</button>
-                <button type="button" className={tabCls(tab === "camps")} onClick={() => setTab("camps")}>Campañas</button>
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "subs"}
+                    className={`cf-tab ${tab === "subs" ? "is-active" : ""}`}
+                    onClick={() => setTab("subs")}
+                >
+                    Suscriptores
+                </button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "camps"}
+                    className={`cf-tab ${tab === "camps" ? "is-active" : ""}`}
+                    onClick={() => setTab("camps")}
+                >
+                    Campañas
+                </button>
             </div>
 
+            {/* ============================== SUBSCRIBERS TAB ============================== */}
             {tab === "subs" && (
-                <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8">
-                    <div className="flex flex-wrap items-center gap-3 mb-6">
-                        <div className="flex flex-wrap gap-2">
+                <div className="cf-card-item">
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.75rem", marginBottom: "1.15rem" }}>
+                        <div className="cf-chips">
                             {FILTER_CHIPS.map((c) => (
                                 <button
                                     key={c.value}
                                     type="button"
+                                    aria-pressed={statusFilter === c.value}
                                     onClick={() => setStatusFilter(c.value)}
-                                    className={`px-3.5 py-2 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all ${
-                                        statusFilter === c.value ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"
-                                    }`}
+                                    className={`cf-chip-filter ${statusFilter === c.value ? "is-active" : ""}`}
                                 >
                                     {c.label}
                                 </button>
@@ -287,45 +352,50 @@ export default function NewsletterAdminPage() {
                             value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             placeholder="Buscar por correo o nombre…"
-                            className="flex-1 min-w-[200px] px-4 py-2.5 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none text-sm font-medium"
+                            aria-label="Buscar por correo o nombre"
+                            className="cf-input"
+                            style={{ flex: 1, minWidth: "200px", width: "auto" }}
                         />
-                        <button type="button" onClick={exportCsv} className={btnLight}>Exportar CSV</button>
+                        <button type="button" onClick={exportCsv} className="cf-btn-ghost">
+                            <IconDownload /> Exportar CSV
+                        </button>
                     </div>
 
                     {subs.length === 0 ? (
-                        <p className="text-sm text-gray-400 py-8 text-center">
-                            No hay suscriptores{statusFilter || search ? " con ese filtro" : " todavía — agrega el bloque Newsletter a una página"}.
-                        </p>
+                        <div className="cf-empty">
+                            <IconUsers />
+                            <span>
+                                No hay suscriptores{statusFilter || search ? " con ese filtro" : " todavía — agrega el bloque Newsletter a una página"}.
+                            </span>
+                        </div>
                     ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
+                        <div className="cf-table-wrap">
+                            <table className="cf-table">
                                 <thead>
-                                    <tr className="text-left">
-                                        <th className={`${labelCls} pb-3`}>Correo</th>
-                                        <th className={`${labelCls} pb-3`}>Nombre</th>
-                                        <th className={`${labelCls} pb-3`}>Estado</th>
-                                        <th className={`${labelCls} pb-3`}>Fecha</th>
-                                        <th className="pb-3"></th>
+                                    <tr>
+                                        <th>Correo</th>
+                                        <th>Nombre</th>
+                                        <th>Estado</th>
+                                        <th>Fecha</th>
+                                        <th style={{ width: "2.5rem" }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {subs.map((s) => {
                                         const meta = STATUS_META[s.status] || STATUS_META.pending;
                                         return (
-                                            <tr key={s.id} className="border-t border-gray-50">
-                                                <td className="py-3 pr-4 font-medium text-gray-800 break-all">{s.email}</td>
-                                                <td className="py-3 pr-4 text-gray-500">{s.name || "—"}</td>
-                                                <td className="py-3 pr-4">
-                                                    <span className={`inline-block px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${meta.cls}`}>
-                                                        {meta.label}
-                                                    </span>
+                                            <tr key={s.id}>
+                                                <td className="cf-cell-email">{s.email}</td>
+                                                <td>{s.name || "—"}</td>
+                                                <td>
+                                                    <span className={`cf-pill ${meta.cls}`}>{meta.label}</span>
                                                 </td>
-                                                <td className="py-3 pr-4 text-gray-400 whitespace-nowrap">{fmtDate(s.created_at)}</td>
-                                                <td className="py-3 text-right">
+                                                <td className="cf-cell-date">{fmtDate(s.created_at)}</td>
+                                                <td style={{ textAlign: "right" }}>
                                                     <button
                                                         type="button"
                                                         onClick={() => deleteSubscriber(s.id)}
-                                                        className="px-3 py-1.5 rounded-xl bg-gray-50 hover:bg-red-50 text-gray-400 hover:text-red-600 text-[10px] font-black uppercase tracking-widest transition-all"
+                                                        className="cf-btn-danger"
                                                     >
                                                         Eliminar
                                                     </button>
@@ -340,55 +410,59 @@ export default function NewsletterAdminPage() {
                 </div>
             )}
 
+            {/* ============================== CAMPAIGNS TAB ============================== */}
             {tab === "camps" && (
-                <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8">
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-6">
-                        <h2 className="font-bold text-gray-800">Campañas</h2>
-                        <button type="button" onClick={() => setEditing({})} className={btnDark}>Nueva campaña</button>
+                <div className="cf-card-item">
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.15rem" }}>
+                        <h2 className="cf-form-name">Campañas</h2>
+                        <button type="button" onClick={() => setEditing({})} className="cf-btn">
+                            <IconPlus /> Nueva campaña
+                        </button>
                     </div>
 
                     {campaigns.length === 0 ? (
-                        <p className="text-sm text-gray-400 py-8 text-center">
-                            No hay campañas todavía — crea la primera con "Nueva campaña".
-                        </p>
+                        <div className="cf-empty">
+                            <IconEnvelope />
+                            <span>No hay campañas todavía — crea la primera con "Nueva campaña".</span>
+                        </div>
                     ) : (
-                        <div className="space-y-3">
+                        <div>
                             {campaigns.map((c) => (
-                                <div key={c.id} className="border border-gray-100 rounded-2xl p-4 sm:p-5 flex flex-wrap items-center gap-3">
-                                    <div className="flex-1 min-w-[200px]">
-                                        <p className="font-bold text-gray-800 break-words">{c.subject}</p>
-                                        <p className="text-[11px] text-gray-400 mt-1 uppercase tracking-widest font-bold">
+                                <div key={c.id} className="cf-camp-row">
+                                    <div style={{ flex: 1, minWidth: "200px" }}>
+                                        <p className="cf-camp-subject">{c.subject}</p>
+                                        <p className="cf-camp-meta">
                                             {c.status === "sent"
                                                 ? `Enviada · ${c.sent_count} enviados${c.fail_count ? ` · ${c.fail_count} fallidos` : ""} · ${fmtDate(c.sent_at)}`
                                                 : `Borrador · creada ${fmtDate(c.created_at)}`}
                                         </p>
                                     </div>
-                                    <span
-                                        className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${
-                                            c.status === "sent" ? "bg-green-50 text-green-700" : "bg-blue-50 text-blue-600"
-                                        }`}
-                                    >
+                                    <span className={`cf-pill ${c.status === "sent" ? "is-sent" : "is-draft"}`}>
                                         {c.status === "sent" ? "Enviada" : "Borrador"}
                                     </span>
-                                    <div className="flex flex-wrap gap-2">
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
                                         {c.status === "draft" && (
-                                            <button type="button" onClick={() => setEditing(c)} className={btnLight}>Editar</button>
+                                            <button type="button" onClick={() => setEditing(c)} className="cf-btn-ghost">
+                                                <IconPen /> Editar
+                                            </button>
                                         )}
-                                        <button type="button" onClick={() => sendTest(c)} className={btnLight}>Enviar prueba</button>
+                                        <button type="button" onClick={() => sendTest(c)} className="cf-btn-ghost">
+                                            <IconSend /> Enviar prueba
+                                        </button>
                                         {c.status === "draft" && (
                                             <button
                                                 type="button"
                                                 onClick={() => sendCampaign(c)}
                                                 disabled={sendingId === c.id}
-                                                className={btnDark}
+                                                className="cf-btn"
                                             >
-                                                {sendingId === c.id ? "Enviando…" : `Enviar a ${stats.confirmed} confirmados`}
+                                                <IconSend /> {sendingId === c.id ? "Enviando…" : `Enviar a ${stats.confirmed} confirmados`}
                                             </button>
                                         )}
                                         <button
                                             type="button"
                                             onClick={() => deleteCampaign(c)}
-                                            className="px-4 py-2.5 rounded-2xl bg-gray-50 hover:bg-red-50 text-gray-400 hover:text-red-600 text-[11px] font-black uppercase tracking-widest transition-all"
+                                            className="cf-btn-danger"
                                         >
                                             Eliminar
                                         </button>
@@ -398,7 +472,7 @@ export default function NewsletterAdminPage() {
                         </div>
                     )}
 
-                    <p className="text-[11px] text-gray-400 mt-6 leading-relaxed">
+                    <p className="cf-footnote">
                         Los envíos van únicamente a los suscriptores <strong>confirmados</strong>. Cada correo incluye
                         automáticamente un enlace para cancelar la suscripción. Usa "Enviar prueba" para revisar el
                         resultado antes del envío definitivo.

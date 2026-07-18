@@ -54,7 +54,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `db.get(sql, params)` | `db.get` | Same scoping as `db.all`. |
 | `db.run(sql, params)` | `db.run` | Same scoping. |
 | `db.createTable(name, cols)` | `db.createTable` | Creates a `wjp_<slug>_`-prefixed table. |
-| `db.getType()` | `db.getType` | Returns the driver type for dialect branches. |
+| `db.getType()` | `db.getType` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` for dialect branches (`driver` ∈ `sqlite-native`/`sqlite-legacy`/`postgres`/`mysql`; `isSQLite` stays true under MySQL, so gate `PRAGMA`/`sqlite_master` on `isMySQL`). |
 | `users.findByEmail / findByLogin / findById / search` | `users.*` | `users:read` grant. Returns a **safe projection** `{id, userLogin, username, userEmail, displayName, role}` — never `user_pass`. |
 | `site.url / domain / adminEmail` | `site.*` | `settings:read` grant. Read-only site identity. |
 | `db.tablePrefix` | (local) | A string property (`wjp_<slug>_`), not an RPC — the required prefix for the plugin's own tables. |
@@ -219,14 +219,21 @@ Beyond the bundled plugins above, WordJS ships a **Marketplace** of first-party 
 *   **Sources:** `marketplace/plugins/<slug>/` in the repo (25 plugins, listed below).
 *   **Catalog build:** `npm run build:marketplace` (`backend/scripts/build-marketplace.js`) packs each
     plugin into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json`
-    (id, version, description, category, file, **sha256**). The `dist/` catalog is **committed**, so
-    merging a plugin update to `main` updates every site's catalog immediately — decoupled from core
-    releases (tagged releases also attach a snapshot, so a site can pin a fixed catalog).
+    (id, version, description, category, file, **sha256**). `marketplace/dist/` is a **build output and is
+    NOT committed** (`.gitignore`); the catalog + zips are published as **GitHub release assets** by
+    `.github/workflows/release.yml` (build:marketplace runs there), so `releases/latest/download/` always
+    resolves to the newest published catalog — decoupled from any local checkout. Pin a fixed catalog by
+    pointing a source at a specific release tag.
 *   **Backend API:** `backend/src/routes/marketplace.ts` — `GET /api/v1/marketplace/catalog` (annotated
-    with installed/active/updateAvailable state) and `POST /api/v1/marketplace/install` (admin-only).
-    The catalog source is admin-configurable via the `marketplace_source` option: an http(s) URL
-    (fetched server-side), a local dir (dev / air-gapped), or unset → repo-local `marketplace/dist`
-    when present, else `https://raw.githubusercontent.com/jaimemartinez/wordjs/main/marketplace/dist`.
+    with installed/active/updateAvailable state), `POST /api/v1/marketplace/install` (admin-only), and
+    `GET`/`PUT /api/v1/marketplace/sources` to read/replace the configured source list.
+    The catalog **sources are admin-configurable** and stored as a **list** in the `marketplace_sources`
+    option (managed from the Marketplace UI; the legacy singular `marketplace_source` is still honored for
+    back-compat). Every configured source is fetched and **merged** (dedup by id, earlier sources win) with
+    **per-source error isolation** — one bad URL is reported but never hides the rest. Precedence:
+    configured list → legacy `marketplace_source` → repo-local `marketplace/dist` (dev / full checkout) →
+    the built-in default `https://github.com/jaimemartinez/wordjs/releases/latest/download`. UI-set sources
+    must be `https://` (or `http://localhost` in dev); a local dir works only via the option/dev fallback.
 *   **Install path:** the zip is downloaded to a temp file, **sha256-verified against the catalog
     entry**, then handed to `installPluginFromZip()` — the **same pipeline as manual uploads**
     (zip-bomb budget, Zip Slip, slug validation, manifest + AST scan). The marketplace adds no new

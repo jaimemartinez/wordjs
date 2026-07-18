@@ -4,16 +4,16 @@
 /**
  * Admin page for the Cookie Consent plugin (/admin/plugin/cookie-consent).
  * Left: banner configuration with a live inline preview (the real public banner uses
- * public/banner.css — the preview mirrors it with Tailwind). Right: anonymous compliance stats.
+ * public/banner.css — the preview mirrors it with plugin-scoped cf-* styles). Right: anonymous
+ * compliance stats.
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-cookie-consent) — the markup below only uses
+ * cf-* classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost } from "@/lib/api";
-
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-red-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
 
 const DEFAULT_FORM = {
     enabled: false,
@@ -26,39 +26,59 @@ const DEFAULT_FORM = {
     version: 1,
 };
 
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconCookie = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 2a10 10 0 1 0 10 10 4 4 0 0 1-5-5 4 4 0 0 1-5-5" />
+        <path d="M8.5 8.5v.01" />
+        <path d="M16 15.5v.01" />
+        <path d="M12 12v.01" />
+        <path d="M11 17v.01" />
+        <path d="M7 14v.01" />
+    </svg>
+);
+const IconEye = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z" />
+        <circle cx="12" cy="12" r="3" />
+    </svg>
+);
+const IconChart = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M3 3v18h18" />
+        <path d="M8 17v-4" />
+        <path d="M13 17V8" />
+        <path d="M18 17v-7" />
+    </svg>
+);
+
 /** Inline mock of the public banner reflecting the current form state (module level — never nest). */
 function BannerPreview({ form }) {
     const dark = form.theme !== "light";
     const corner = form.position === "corner";
     const boxCls = [
-        "absolute flex flex-col gap-2 p-4 shadow-2xl",
-        corner ? "right-3 bottom-3 left-auto max-w-[280px] rounded-2xl" : "left-0 right-0 bottom-0",
-        dark ? "bg-gray-900 text-gray-50" : "bg-white text-gray-800 border border-gray-200",
+        "cf-preview-banner",
+        corner ? "is-corner" : "is-bar",
+        dark ? "is-dark" : "is-light",
     ].join(" ");
     return (
-        <div className="relative h-64 rounded-2xl overflow-hidden border-2 border-dashed border-gray-200 bg-gray-50">
+        <div className="cf-preview-canvas">
             {/* Fake page content behind the banner */}
-            <div className="p-5 space-y-3 opacity-40 select-none" aria-hidden="true">
-                <div className="h-4 w-1/3 bg-gray-300 rounded" />
-                <div className="h-3 w-full bg-gray-200 rounded" />
-                <div className="h-3 w-5/6 bg-gray-200 rounded" />
-                <div className="h-3 w-2/3 bg-gray-200 rounded" />
-                <div className="h-24 w-full bg-gray-200 rounded-xl" />
+            <div className="cf-preview-page" aria-hidden="true">
+                <div className="cf-skel" style={{ width: "33%", height: "1rem" }} />
+                <div className="cf-skel" style={{ width: "100%" }} />
+                <div className="cf-skel" style={{ width: "83%" }} />
+                <div className="cf-skel" style={{ width: "66%" }} />
+                <div className="cf-skel" style={{ width: "100%", height: "6rem", borderRadius: "0.75rem" }} />
             </div>
             <div className={boxCls}>
-                <p className="text-xs leading-relaxed m-0">{form.message || " "}</p>
+                <p className="cf-preview-msg">{form.message || " "}</p>
                 {form.policyUrl ? (
-                    <span className={`text-[11px] underline ${dark ? "text-gray-300" : "text-gray-500"}`}>
-                        Política de cookies
-                    </span>
+                    <span className="cf-preview-link">Política de cookies</span>
                 ) : null}
-                <div className="flex gap-2 justify-end flex-wrap">
-                    <span className={`px-4 py-2 rounded-full text-[11px] font-bold cursor-default ${dark ? "bg-white/15 text-gray-50" : "bg-gray-100 text-gray-800"}`}>
-                        {form.rejectLabel || "Rechazar"}
-                    </span>
-                    <span className={`px-4 py-2 rounded-full text-[11px] font-bold cursor-default ${dark ? "bg-gray-50 text-gray-900" : "bg-gray-900 text-white"}`}>
-                        {form.acceptLabel || "Aceptar"}
-                    </span>
+                <div className="cf-preview-actions">
+                    <span className="cf-preview-pill is-secondary">{form.rejectLabel || "Rechazar"}</span>
+                    <span className="cf-preview-pill is-primary">{form.acceptLabel || "Aceptar"}</span>
                 </div>
             </div>
         </div>
@@ -68,9 +88,9 @@ function BannerPreview({ form }) {
 /** One stat tile (module level — never nest components). */
 function StatTile({ label, value, accent }) {
     return (
-        <div className="bg-gray-50/80 rounded-2xl p-4 text-center">
-            <p className={`text-2xl font-black tracking-tighter ${accent || "text-gray-900"}`}>{value}</p>
-            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mt-1">{label}</p>
+        <div className="cf-stat-tile">
+            <p className={`cf-stat-value ${accent || ""}`}>{value}</p>
+            <p className="cf-stat-label">{label}</p>
         </div>
     );
 }
@@ -131,158 +151,172 @@ export default function CookieConsentAdminPage() {
     const maxDay = Math.max(1, ...last30.map((d) => (d.accepted || 0) + (d.rejected || 0)));
 
     return (
-        <div className="max-w-4xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Cookie Consent</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Banner de cookies (RGPD) en todo el sitio público + estadísticas anónimas
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconCookie /></div>
+                <div>
+                    <h1 className="cf-title">Cookie Consent</h1>
+                    <p className="cf-subtitle">
+                        Banner de cookies (RGPD) en todo el sitio público + estadísticas anónimas
+                    </p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             {/* --- Configuration ------------------------------------------------------------------ */}
-            <form onSubmit={save} className={`${cardCls} mb-8 space-y-5`}>
-                <label className="flex items-center gap-3 cursor-pointer select-none">
-                    <input
-                        type="checkbox"
-                        checked={!!form.enabled}
-                        onChange={(e) => setField("enabled", e.target.checked)}
-                        className="w-5 h-5 accent-gray-900"
-                    />
-                    <span className="text-sm font-bold text-gray-800">Mostrar el banner en el sitio público</span>
-                </label>
+            <form onSubmit={save} className="cf-editor">
+                <div className="cf-editor-body">
+                    <div style={{ display: "grid", gap: "1.15rem" }}>
+                        <label className="cf-check is-strong" htmlFor="cc-enabled">
+                            <input
+                                id="cc-enabled"
+                                type="checkbox"
+                                className="cf-switch"
+                                checked={!!form.enabled}
+                                onChange={(e) => setField("enabled", e.target.checked)}
+                            />
+                            <span>Mostrar el banner en el sitio público</span>
+                        </label>
 
-                <div>
-                    <label className={labelCls}>Mensaje (máx. 500 caracteres)</label>
-                    <textarea
-                        value={form.message}
-                        onChange={(e) => setField("message", e.target.value)}
-                        maxLength={500}
-                        rows={3}
-                        className={inputCls}
-                        required
-                    />
-                </div>
+                        <div>
+                            <label className="cf-label" htmlFor="cc-message">Mensaje (máx. 500 caracteres)</label>
+                            <textarea
+                                id="cc-message"
+                                value={form.message}
+                                onChange={(e) => setField("message", e.target.value)}
+                                maxLength={500}
+                                rows={3}
+                                className="cf-input"
+                                required
+                            />
+                        </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Botón aceptar (máx. 40)</label>
-                        <input type="text" value={form.acceptLabel} onChange={(e) => setField("acceptLabel", e.target.value)} maxLength={40} className={inputCls} />
+                        <div className="cf-grid">
+                            <div>
+                                <label className="cf-label" htmlFor="cc-accept">Botón aceptar (máx. 40)</label>
+                                <input id="cc-accept" type="text" value={form.acceptLabel} onChange={(e) => setField("acceptLabel", e.target.value)} maxLength={40} className="cf-input" />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="cc-reject">Botón rechazar (máx. 40)</label>
+                                <input id="cc-reject" type="text" value={form.rejectLabel} onChange={(e) => setField("rejectLabel", e.target.value)} maxLength={40} className="cf-input" />
+                            </div>
+                        </div>
+
+                        <div>
+                            <label className="cf-label" htmlFor="cc-policy">URL de la política de cookies (opcional)</label>
+                            <input
+                                id="cc-policy"
+                                type="url"
+                                value={form.policyUrl}
+                                onChange={(e) => setField("policyUrl", e.target.value)}
+                                maxLength={300}
+                                placeholder="https://misitio.com/politica-de-cookies"
+                                className="cf-input"
+                            />
+                        </div>
+
+                        <div className="cf-grid">
+                            <div>
+                                <label className="cf-label" htmlFor="cc-position">Posición</label>
+                                <select id="cc-position" value={form.position} onChange={(e) => setField("position", e.target.value)} className="cf-select">
+                                    <option value="bottom">Barra inferior (todo el ancho)</option>
+                                    <option value="corner">Tarjeta en la esquina</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="cc-theme">Tema</label>
+                                <select id="cc-theme" value={form.theme} onChange={(e) => setField("theme", e.target.value)} className="cf-select">
+                                    <option value="dark">Oscuro</option>
+                                    <option value="light">Claro</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <label className="cf-callout" htmlFor="cc-reprompt">
+                            <input
+                                id="cc-reprompt"
+                                type="checkbox"
+                                checked={reprompt}
+                                onChange={(e) => setReprompt(e.target.checked)}
+                            />
+                            <span>
+                                <span className="cf-callout-title">Volver a preguntar a todos</span>
+                                <span className="cf-callout-text">
+                                    Al guardar se invalida el consentimiento guardado de cada visitante y el banner se muestra de
+                                    nuevo (versión actual: {form.version}).
+                                </span>
+                            </span>
+                        </label>
+
+                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.75rem" }}>
+                            <p className="cf-help" style={{ margin: 0 }}>
+                                El banner aparece en el sitio público cuando el plugin está activo y habilitado.
+                            </p>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                        </div>
+
+                        {message && (
+                            <div
+                                role={/Error/i.test(message) ? "alert" : "status"}
+                                className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}
+                                style={{ margin: 0 }}
+                            >
+                                {message}
+                            </div>
+                        )}
                     </div>
-                    <div>
-                        <label className={labelCls}>Botón rechazar (máx. 40)</label>
-                        <input type="text" value={form.rejectLabel} onChange={(e) => setField("rejectLabel", e.target.value)} maxLength={40} className={inputCls} />
-                    </div>
                 </div>
-
-                <div>
-                    <label className={labelCls}>URL de la política de cookies (opcional)</label>
-                    <input
-                        type="url"
-                        value={form.policyUrl}
-                        onChange={(e) => setField("policyUrl", e.target.value)}
-                        maxLength={300}
-                        placeholder="https://misitio.com/politica-de-cookies"
-                        className={inputCls}
-                    />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Posición</label>
-                        <select value={form.position} onChange={(e) => setField("position", e.target.value)} className={inputCls}>
-                            <option value="bottom">Barra inferior (todo el ancho)</option>
-                            <option value="corner">Tarjeta en la esquina</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Tema</label>
-                        <select value={form.theme} onChange={(e) => setField("theme", e.target.value)} className={inputCls}>
-                            <option value="dark">Oscuro</option>
-                            <option value="light">Claro</option>
-                        </select>
-                    </div>
-                </div>
-
-                <label className="flex items-start gap-3 cursor-pointer select-none bg-amber-50/60 border border-amber-100 rounded-2xl p-4">
-                    <input
-                        type="checkbox"
-                        checked={reprompt}
-                        onChange={(e) => setReprompt(e.target.checked)}
-                        className="w-5 h-5 mt-0.5 accent-amber-600"
-                    />
-                    <span>
-                        <span className="block text-sm font-bold text-gray-800">Volver a preguntar a todos</span>
-                        <span className="block text-[11px] text-gray-500 mt-0.5">
-                            Al guardar se invalida el consentimiento guardado de cada visitante y el banner se muestra de
-                            nuevo (versión actual: {form.version}).
-                        </span>
-                    </span>
-                </label>
-
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                    <p className="text-[11px] text-gray-400">
-                        El banner aparece en el sitio público cuando el plugin está activo y habilitado.
-                    </p>
-                    <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
-                </div>
-
-                {message && (
-                    <div className={`text-sm px-4 py-3 rounded-xl ${/Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
-                        {message}
-                    </div>
-                )}
             </form>
 
             {/* --- Live preview ------------------------------------------------------------------- */}
-            <div className={`${cardCls} mb-8`}>
-                <h2 className="font-bold text-gray-800 mb-4">Vista previa</h2>
+            <div className="cf-card-item" style={{ marginTop: "1.5rem" }}>
+                <h2 className="cf-editor-title" style={{ marginBottom: "1rem" }}><IconEye /> Vista previa</h2>
                 <BannerPreview form={form} />
-                <p className="text-[11px] text-gray-400 mt-4 leading-relaxed">
+                <p className="cf-help" style={{ marginTop: "0.9rem" }}>
                     Vista aproximada — en el sitio público el banner usa su propia hoja de estilos y se adapta al ancho
                     real de la página.
                 </p>
             </div>
 
             {/* --- Stats ---------------------------------------------------------------------------- */}
-            <div className={cardCls}>
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-4">
-                    <h2 className="font-bold text-gray-800">Estadísticas de consentimiento</h2>
-                    <span className="text-[11px] font-bold uppercase tracking-widest text-gray-400">
-                        Registro anónimo — sin datos personales
-                    </span>
+            <div className="cf-card-item" style={{ marginTop: "1.5rem" }}>
+                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "0.5rem", marginBottom: "1.1rem" }}>
+                    <h2 className="cf-editor-title" style={{ marginBottom: 0 }}><IconChart /> Estadísticas de consentimiento</h2>
+                    <span className="cf-micro">Registro anónimo — sin datos personales</span>
                 </div>
 
                 {stats === null ? (
-                    <p className="text-sm text-gray-400">Sin datos todavía — las elecciones de los visitantes aparecerán aquí.</p>
+                    <p className="cf-help" style={{ margin: 0 }}>Sin datos todavía — las elecciones de los visitantes aparecerán aquí.</p>
                 ) : (
                     <>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-6">
+                        <div className="cf-stat-grid">
                             <StatTile label="Total" value={total} />
-                            <StatTile label="Aceptados" value={accepted} accent="text-green-600" />
-                            <StatTile label="Rechazados" value={rejected} accent="text-red-500" />
-                            <StatTile label="% aceptación" value={acceptPct === null ? "—" : `${acceptPct}%`} accent="text-blue-600" />
+                            <StatTile label="Aceptados" value={accepted} accent="is-ok" />
+                            <StatTile label="Rechazados" value={rejected} accent="is-danger" />
+                            <StatTile label="% aceptación" value={acceptPct === null ? "—" : `${acceptPct}%`} accent="is-accent" />
                         </div>
 
                         {last30.length === 0 ? (
-                            <p className="text-sm text-gray-400">Aún no hay elecciones registradas.</p>
+                            <p className="cf-help" style={{ margin: 0 }}>Aún no hay elecciones registradas.</p>
                         ) : (
-                            <div className="space-y-2">
-                                <p className={labelCls}>Últimos 30 días con actividad</p>
+                            <div>
+                                <p className="cf-label">Últimos 30 días con actividad</p>
                                 {last30.map((d) => {
                                     const dayTotal = (d.accepted || 0) + (d.rejected || 0);
                                     const accW = Math.round(((d.accepted || 0) / maxDay) * 100);
                                     const rejW = Math.round(((d.rejected || 0) / maxDay) * 100);
                                     return (
-                                        <div key={d.day} className="flex items-center gap-3 text-xs">
-                                            <span className="w-24 shrink-0 font-mono text-gray-500">{d.day}</span>
-                                            <div className="flex-1 h-3 bg-gray-100 rounded-full overflow-hidden flex">
-                                                <div className="h-full bg-green-500" style={{ width: `${accW}%` }} />
-                                                <div className="h-full bg-red-400" style={{ width: `${rejW}%` }} />
+                                        <div key={d.day} className="cf-bar-row">
+                                            <span className="cf-bar-day">{d.day}</span>
+                                            <div className="cf-bar-track">
+                                                <div className="cf-bar-fill is-acc" style={{ width: `${accW}%` }} />
+                                                <div className="cf-bar-fill is-rej" style={{ width: `${rejW}%` }} />
                                             </div>
-                                            <span className="w-28 shrink-0 text-right text-gray-500">
-                                                <span className="text-green-600 font-bold">{d.accepted || 0}</span>
+                                            <span className="cf-bar-nums">
+                                                <span className="is-acc">{d.accepted || 0}</span>
                                                 {" · "}
-                                                <span className="text-red-500 font-bold">{d.rejected || 0}</span>
+                                                <span className="is-rej">{d.rejected || 0}</span>
                                                 {" / "}{dayTotal}
                                             </span>
                                         </div>

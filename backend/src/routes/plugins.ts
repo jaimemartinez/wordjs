@@ -63,25 +63,53 @@ function regenerateRegistry() {
         'generate-puck-plugin-registry.js'     // Puck components
     ];
 
-    for (const script of scripts) {
-        const scriptPath = path.join(scriptsDir, script);
+    // Resolve the authoritative active list IN-PROCESS and hand it to the generators via env.
+    // Their own fallback (GET /plugins/active over plain http) fails against an https dev server —
+    // they then include EVERY plugin found on disk, active or not — and can race uninstall's
+    // directory deletion, leaving the registries importing a deleted plugin (Module not found).
+    getAllPlugins().then((plugins: any) => {
+        const activeSlugs = (plugins || []).filter((p: any) => p.active).map((p: any) => p.slug);
+        const env = { ...process.env, WORDJS_ACTIVE_PLUGINS: JSON.stringify(activeSlugs) };
 
-        if (!fs.existsSync(scriptPath)) {
-            console.log(`⚠️  Script not found: ${script}`);
-            continue;
+        for (const script of scripts) {
+            const scriptPath = path.join(scriptsDir, script);
+
+            if (!fs.existsSync(scriptPath)) {
+                console.log(`⚠️  Script not found: ${script}`);
+                continue;
+            }
+
+            // SECURITY: Use execFile instead of exec to prevent command injection
+            execFile('node', [scriptPath], { env }, (error: Error | null, stdout: string, stderr: string) => {
+                if (error) {
+                    console.error(`❌ Failed to run ${script}:`, error.message);
+                    return;
+                }
+                if (process.env.NODE_ENV !== 'production') {
+                    console.log(`🔄 ${script}:`);
+                    console.log(stdout);
+                }
+            });
         }
+    }).catch((e: any) => console.error('regenerateRegistry: could not resolve active plugins:', e && e.message));
+}
 
-        // SECURITY: Use execFile instead of exec to prevent command injection
-        execFile('node', [scriptPath], (error: Error | null, stdout: string, stderr: string) => {
-            if (error) {
-                console.error(`❌ Failed to run ${script}:`, error.message);
-                return;
-            }
-            if (process.env.NODE_ENV !== 'production') {
-                console.log(`🔄 ${script}:`);
-                console.log(stdout);
-            }
-        });
+/**
+ * Remove a plugin directory but PRESERVE its top-level data/ subdir (runtime state: encryption keys,
+ * attachments…). Without this, uninstalling mail-server destroys data/.mailenc — the AES root key —
+ * and every stored mail secret becomes permanently undecryptable even though its wjp_ tables survive.
+ * If no data/ exists the directory is removed entirely. The residual data-only dir is understood by
+ * installPluginFromZip, which ADOPTS it on reinstall instead of refusing with a 409.
+ */
+function removePluginDirPreservingData(dir: string) {
+    const dataDir = path.join(dir, 'data');
+    if (!fs.existsSync(dataDir)) {
+        fs.rmSync(dir, { recursive: true, force: true });
+        return;
+    }
+    for (const entry of fs.readdirSync(dir)) {
+        if (entry === 'data') continue;
+        fs.rmSync(path.join(dir, entry), { recursive: true, force: true });
     }
 }
 
@@ -280,9 +308,22 @@ async function installPluginFromZip(zipPath: string, originalName: string): Prom
         // overwrites in place and, if post-extract validation fails, the catch below rmSync's the whole
         // dir — which would destroy a legitimate same-named plugin's files that were there first (audit
         // LOW). To update a plugin, remove the old one first (uninstall), then install.
+        //
+        // EXCEPTION — residual runtime data: uninstall preserves plugins/<slug>/data/ (encryption keys,
+        // attachments — see removePluginDirPreservingData). A dir containing NOTHING but data/ is not a
+        // plugin (no manifest, no code); adopt it and extract around it so reinstall reconnects with the
+        // preserved state instead of 409ing.
+        let hadResidualData = false;
         if (fs.existsSync(installedDir)) {
-            fs.unlinkSync(zipPath);
-            return { ok: false, status: 409, body: { error: `A plugin directory '${intendedSlug}' already exists. Uninstall it before installing this one (this prevents overwriting or deleting an existing plugin).` } };
+            let residualOnly = false;
+            try {
+                residualOnly = fs.readdirSync(installedDir).every((e: string) => e === 'data');
+            } catch { /* unreadable → treat as a real plugin and refuse */ }
+            if (!residualOnly) {
+                fs.unlinkSync(zipPath);
+                return { ok: false, status: 409, body: { error: `A plugin directory '${intendedSlug}' already exists. Uninstall it before installing this one (this prevents overwriting or deleting an existing plugin).` } };
+            }
+            hadResidualData = fs.existsSync(path.join(installedDir, 'data'));
         }
 
         // Write ONLY the already-validated FILE content entries OURSELVES — never zip.extractEntryTo (audit
@@ -301,6 +342,13 @@ async function installPluginFromZip(zipPath: string, originalName: string): Prom
             if (!isContained || hasDotDotSegment) {
                 fs.unlinkSync(zipPath);
                 return { ok: false, status: 400, body: { error: 'Malicious zip file detected (Zip Slip / path traversal)' } };
+            }
+            // When adopting residual runtime data, the zip's own data/ payload is ignored ENTIRELY:
+            // preserved keys/attachments always win, and a zip that fails validation later can never
+            // have mixed its files into the preserved data dir.
+            if (hadResidualData) {
+                const residualDataDir = path.join(installedDir, 'data');
+                if (dest === residualDataDir || dest.startsWith(residualDataDir + path.sep)) continue;
             }
             fs.mkdirSync(path.dirname(dest), { recursive: true });
             fs.writeFileSync(dest, entry.getData());
@@ -324,7 +372,13 @@ async function installPluginFromZip(zipPath: string, originalName: string): Prom
             // Static AST scan (also re-runs at activation for defense in depth).
             validatePluginPermissions(pluginSlug, installedDir, manifest);
         } catch (valErr: any) {
-            try { fs.rmSync(installedDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+            // Failed validation → undo the extract. If we ADOPTED residual data, restore the residual
+            // state (data/ survives, extracted files go); otherwise remove the whole dir as before —
+            // a rejected zip must never leave lingering files behind.
+            try {
+                if (hadResidualData) removePluginDirPreservingData(installedDir);
+                else fs.rmSync(installedDir, { recursive: true, force: true });
+            } catch { /* best-effort */ }
             fs.unlinkSync(zipPath);
             return { ok: false, status: 400, body: { error: valErr.message, details: { missingPermissions: valErr.missingPermissions, dangerousCalls: valErr.dangerousCalls } } };
         }
@@ -831,9 +885,17 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
         return res.status(404).json({ message: 'Plugin not found' });
     }
 
-    // 3. Delete directory recursively
+    // 3. Delete directory recursively — but PRESERVE the plugin's runtime data/ subdir by default,
+    // the same WordPress-parity rule the tables follow below: e.g. mail-server's data/.mailenc AES
+    // root key must survive an uninstall→reinstall cycle or every stored mail secret becomes
+    // permanently undecryptable. `dropData: true` (the admin explicitly asked) removes it too, and
+    // installPluginFromZip ADOPTS the residual data/ dir on reinstall.
     try {
-        fs.rmSync(pluginPath, { recursive: true, force: true });
+        if (dropData) {
+            fs.rmSync(pluginPath, { recursive: true, force: true });
+        } else {
+            removePluginDirPreservingData(pluginPath);
+        }
 
         // Purge the plugin's persisted footprint. ALWAYS clear grants (else a re-uploaded slug inherits
         // old, possibly-revoked grants) + crash strikes; only DROP the plugin's data tables when the
