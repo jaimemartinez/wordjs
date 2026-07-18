@@ -22,6 +22,16 @@ WordJS implements a "Defense in Depth" security model for its plugin ecosystem, 
 > plugin tier and no bypass** — every plugin is sandboxed, and capabilities are admin-granted per plugin
 > (default-deny). See §8 for the capability-grant model.
 
+> **Themes run in the same isolate.** A theme's `functions.js` is **no longer executed in-process** on the
+> host — it runs in a **child_process isolate** exactly like a plugin, via `loadIsolatedPlugin('theme:<slug>')`
+> (`backend/src/core/theme-engine.ts` → `loadThemeLogic`), behind the **same** capability bridge and runtime
+> guards, after the **same** Acorn AST pre-scan (a scan failure blocks the theme from loading). This closed
+> the in-process-theme RCE cluster: host-side theme code had no runtime `eval`/`Function`/dynamic-`import`
+> guard, so a malicious `functions.js` achieved host RCE that no static scan can fully prevent. Any
+> hooks/shortcodes a theme registers flow through the same RPC bridge; theme-registered Handlebars helpers
+> execute inside the theme's security context (`runWithContext('theme:<slug>', …)`) so the context-gated
+> guards still fire against them.
+
 ### 1.1 AST Static Analysis (Pre-Activation)
 Before a plugin is activated, its entire source code is parsed into an **Abstract Syntax Tree (AST)** using Acorn (`backend/src/core/plugins.ts → validatePluginPermissions`).
 
@@ -33,6 +43,7 @@ Before a plugin is activated, its entire source code is parsed into an **Abstrac
     *   **Module Hijacking:** Blocks `require()` of sensitive Node.js modules like `child_process`, `fs`, `http`/`https`, `net`, `dgram`, `dns`, `cluster`, `async_hooks`, `vm`, `worker_threads`, etc. (the `node:` prefix is normalized first).
 *   **Fail-closed:** If a plugin file cannot be parsed, it is treated as a **violation** (never waved through).
 *   **Enforcement:** Validation happens on every activation attempt and **on every server boot** (to prevent post-activation code poisoning).
+*   **One install pipeline (uploads AND marketplace):** Plugin zips reach disk only through the shared guarded installer (`installPluginFromZip` in `backend/src/routes/plugins.ts`) — zip-bomb budget, Zip Slip path checks, slug validation, squat refusal, manifest validation, and the AST scan. The admin **Marketplace** tab (`backend/src/routes/marketplace.ts`) converges on the same pipeline: catalog zips are fetched server-side (https-only, size-capped, strict filename shape), **sha256-verified** against the catalog entry, then handed to `installPluginFromZip` — so a one-click install gets the exact same vetting as a manual upload.
 
 ### 1.2 Runtime Context Proxies
 WordJS uses `AsyncLocalStorage` to track the execution context of every request.
@@ -52,7 +63,7 @@ WordJS uses `AsyncLocalStorage` to track the execution context of every request.
     *   **Native-binding lockdown:** `process.binding`/`_linkedBinding` throw for plugin contexts and `.node` addons are refused (`process.dlopen` is also blocked for all plugins — a `.node` addon runs outside every JS-level guard, so no trust tier unlocks it). `process.getBuiltinModule(id)` (Node ≥ 22.3) — a direct C++-backed accessor that hands back a builtin **without** routing through `Module._load` / `Module.prototype.require` / the ESM loader — is likewise re-routed through the same per-plugin module policy (secure `fs`/`child_process` proxy, inert blocked proxy for `net`/`vm`/`worker_threads`/…), so it can't be used to fetch an unguarded builtin.
     *   **Obfuscation-Immune:** Because enforcement happens at runtime (not just static analysis), even obfuscated code like `fs["read" + "FileSync"]()` is blocked.
 
-*   **Secret & Core-Module Scrubbing:** A plugin that `require()`s a core module could capture the real `fs`/secrets it closed over. So plugins are **denied** sensitive core modules; `config/app` is handed back as a read-only Proxy with credential-like fields (`*secret*`, `*password*`, `*key*`, `*token*`, …) stripped; and the `config/database` `dbAsync` is replaced with a **table-scoped** view. That scoping is **default-deny by prefix and applies to every plugin** (`backend/src/core/plugin-api.ts`): every table a query touches must be one the plugin OWNS under its `wjp_<slug>_` prefix, so it can't read another plugin's tables or any core table — backed by an explicit denylist of core tables (`users`, `user_meta`, `options`, `roles`, `sessions`, …) and rejection of `ATTACH`/`DETACH`/`PRAGMA`, schema catalogs (`sqlite_master`/`information_schema`), stacked statements, comma cross-joins, Postgres `USING`, and `RETURNING`. There is no "unscoped DB" capability for any plugin. Plugins that need user or site data use the **safe bridges** `wordjs.users.*` (a projection that never includes `user_pass`, gated on `users:read`) and `wordjs.site.*` (gated on `settings:read`) instead.
+*   **Secret & Core-Module Scrubbing:** A plugin that `require()`s a core module could capture the real `fs`/secrets it closed over. So plugins are **denied** sensitive core modules; `config/app` is handed back as a read-only Proxy with credential-like fields (`*secret*`, `*password*`, `*key*`, `*token*`, …) stripped; and the `config/database` `dbAsync` is replaced with a **table-scoped** view. That scoping is **default-deny by prefix and applies to every plugin** (`backend/src/core/plugin-api.ts`): every table a query touches must be one the plugin OWNS under its `wjp_<slug>_` prefix, so it can't read another plugin's tables or any core table — backed by an explicit denylist of core tables (`users`, `user_meta`, `options`, `roles`, `sessions`, …) and rejection of `ATTACH`/`DETACH`/`PRAGMA`, schema catalogs (`sqlite_master`/`information_schema`/`pg_catalog`), file/extension SQL functions (`readfile`/`writefile`/`load_extension`/`pg_read_file`/…), stacked statements, comma cross-joins, and `RETURNING`; a Postgres `DELETE … USING <table>` target is prefix-attributed like `FROM`/`JOIN`. The fail-closed table attribution also rejects `ON CONFLICT … DO UPDATE` upserts (plugins use UPDATE-then-INSERT instead), and the scoped view exposes only `get`/`all`/`run` — **no `transaction()`**. There is no "unscoped DB" capability for any plugin. Plugins that need user or site data use the **safe bridges** `wordjs.users.*` (a projection that never includes `user_pass`, gated on `users:read`) and `wordjs.site.*` (gated on `settings:read`) instead.
 
 *   **API Sandboxing (capability bridge):** The `wordjs` object passed to a plugin's `init(api)` (`backend/src/core/plugin-api.ts`) is the *only* sanctioned path to core, and inside an isolated plugin those calls are RPC'd to the host over IPC. The host dispatcher (`callApi` in `plugin-isolate.ts`) enforces an **exact method allowlist** — a malicious child cannot walk an arbitrary dotted path on the api object — and registration / mail-provider / notify-transport / route all flow only through their own dedicated IPC kinds (default-deny). Every method then enforces the plugin's capability grant (`verifyPermission` = manifest-declared **AND** admin-granted, default-deny) **and** constrains arguments host-side: option-key allowlists, SQL table-scoping, and path confinement to the plugin's own dir + uploads. **No plugin skips the option/table scoping** — these constraints are unconditional now that the trusted tier is gone.
 
@@ -156,13 +167,14 @@ These are the valid scopes and access levels you can declare in `manifest.json`.
 
 ## 6. Internal Cluster Security (mTLS) 🔒
 
-WordJS uses a **Mutual TLS (mTLS)** architecture to secure communication between internal components (Gateway, Backend, Frontend).
+WordJS uses a **Mutual TLS (mTLS)** architecture to secure communication between internal components (Gateway, Backend, Frontend). This applies in every run mode: **monolith** (all three in one process), **split** (all three on one host), and **separate** (each on a different machine — see §6.4 and **[Separate mode](separate-mode.md)**).
 
 ### 6.1 Gateway as Certificate Authority
 The Gateway acts as the master of the mTLS infrastructure:
 *   **Location:** The master certificates, including the **Cluster Root CA key**, are stored in `gateway/certs/`.
-*   **Isolation:** The private key of the CA NEVER leaves the Gateway folder.
-*   **Identity Provisioning:** During setup, the Orchestrator generates unique identities for the Backend and Frontend, firming them with the CA stored in the Gateway.
+*   **Isolation:** The private key of the CA NEVER leaves the Gateway folder (written `0600`).
+*   **CA minting:** `node scripts/cluster.js init` (`gateway/src/cluster-ca.js`) mints the cluster CA, the gateway's own `gateway-internal` identity, and the gateway's **public** cert — which is now **also signed by the cluster CA** (so a frontend on another host validates the gateway's public origin from the same trust root via `NODE_EXTRA_CA_CERTS`). It writes a multi-node `gateway-config.json` (routable `gatewayInternalBind`, ports) and clears the registry.
+*   **Identity Provisioning:** the Backend and Frontend each receive a unique per-node identity signed by the CA — on one host during setup, or, in separate mode, via the token-enrollment flow in §6.4.
 
 ### 6.2 Selective Distribution (Least Privilege)
 To prevent lateral movement if a service is compromised, certificates are distributed selectively:
@@ -171,10 +183,19 @@ To prevent lateral movement if a service is compromised, certificates are distri
 *   **Gateway:** Receives ALL files (as it is the master) but only uses `gateway-internal` for identity.
 
 ### 6.3 Secure Control Plane
-The Backend manages the Gateway via a dedicated **Internal API** (Port 3100). This API:
-*   Requires a valid `backend` mTLS certificate to connect.
+The Backend manages the Gateway via a dedicated **Internal API** (Port `gatewayInternalPort`, default 3100). This API:
+*   Requires a valid `backend` mTLS certificate to connect (the `/register` listener requests and verifies a client cert whose CN is in `{backend, frontend}`).
 *   Allows the Backend to push new public SSL certificates (from Let's Encrypt) to the Gateway without direct filesystem access.
 *   Allows remote configuration of the Gateway without restarting the main OS process.
+
+### 6.4 Join-token enrollment (separate mode) 🎟️
+When the three services run on **different machines**, hand-copying certs is error-prone, so a node bootstraps its mTLS identity with a **join token**, `kubeadm join`-style (`scripts/cluster.js`, `scripts/node-join.js`, `gateway/src/cluster-ca.js`):
+*   **Mint (gateway):** `node scripts/cluster.js token <backend|frontend>` mints a **single-use, role-bound, TTL** token (default 60 min) and prints the exact `node-join` command, including the gateway address, enroll port, token, and CA fingerprint (`--ca-hash`).
+*   **Enroll (new machine):** `node scripts/node-join.js --role … --gateway … --token … --ca-hash … --advertise …` generates a keypair + CSR (`openssl`) and makes **one** `POST /enroll` call to the gateway's **token-enrollment listener** — a **separate** HTTPS listener on `gatewayEnrollPort` (default 3101) that **does NOT request a client cert** (the strict-mTLS `/register` listener in §6.3 is unchanged). It is rate-limited and never exposed to the public internet.
+*   **Sign (gateway):** the gateway `consume`s the token (validating role + TTL + single-use), then signs the CSR while **forcing `CN=<role>` from the token — the CSR's subject is ignored** — so a node can never mint itself a different identity. It returns `{ cert, ca (cluster CA), config (bootstrap: gatewaySecret + ports + siteUrl) }`.
+*   **Verify + start:** `node-join` verifies the returned CA against `--ca-hash` (MITM guard), writes `<role>/certs/*` + `<role>/wordjs-config.json`, and starts the service, which then **registers over mTLS** on `/register`. The token is burned after that first call; everything afterward is mTLS.
+
+Config keys: `advertiseHost`, `gatewayHost`, `gatewayInternalBind`, `gatewayEnrollPort`, `internalApiUrl` (the frontend's SSR base = the gateway's public origin, trusted via `NODE_EXTRA_CA_CERTS`), `gatewaySecret`. Manage tokens with `node scripts/cluster.js tokens` / `revoke-tokens` / `info`. Full walkthrough: **[Separate mode](separate-mode.md)**.
 
 ---
 

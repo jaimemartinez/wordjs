@@ -142,14 +142,16 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.0.0
+**ID:** `conference-manager` | **Version:** 2.1.0
 
 Complex business logic for managing church conferences.
 
 *   **Features:**
-    *   Inscription/Registration management
-    *   Hotel & Room assignment
-    *   Payment tracking
+    *   Inscription/Registration management (admin CRUD + custom form fields + public self-registration endpoints)
+    *   Hotel & Room assignment, including a rule-based auto-assignment engine (`/assignment/rules`, `/assignment/run`, `/assignment/reset`)
+    *   Payment tracking (per-inscription payments + bulk recording via the attendee portal)
+    *   Attendee portal (`/portal/login`, `/portal/me`, `/portal/inscriptions`, `/portal/payments/bulk`) surfaced at `/portal/conference` on the frontend
+    *   Reports (`/reports/summary`) and CSV export of inscriptions (`/inscriptions/export`)
 *   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: activation grants its declared
     capabilities (admin-approved in the activation dialog, refinable/revocable in `/admin/plugins`). It
@@ -191,3 +193,79 @@ Reference plugin for hooks + DB access through the bridge (`wordjs.db.createTabl
 
 *   **Purpose:** Development / Education.
 *   **Sandbox:** isolated (like every plugin).
+
+---
+
+## 9. YouTube Videos 🎥
+**ID:** `youtube-videos` | **Version:** 1.0.0
+
+Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Puck carousel block
+with title filtering and a video-count limit. Works **keyless** out of the box via the channel RSS
+feed (latest 15 videos); add a YouTube Data API v3 key for the full upload history.
+
+*   **Routes:** `GET /`, `GET /status`, `POST /refresh`, `POST /settings` (namespaced under `/api/v1/plugin/youtube-videos/*`)
+*   **Puck Component:** `YoutubeVideosPuck` (carousel with title filter + count limit)
+*   **Admin page:** `/admin/plugin/youtube`
+*   **Requested capabilities:** `settings` (read/write — configured channel + cached video list), `database` (read/write — the Data API key lives in the plugin's own `wjp_youtube_videos_*` table, **not** in options, because options are readable by other plugins), `network` (fetch youtube.com RSS / googleapis.com Data API — public egress only, like every `network` grant).
+*   **Sandbox:** isolated (like every plugin). Default-deny: activation grants its declared capabilities, refinable in `/admin/plugins`.
+
+---
+
+## 10. Plugin Marketplace 🛒
+
+Beyond the bundled plugins above, WordJS ships a **Marketplace** of first-party plugins distributed
+**outside** the core build:
+
+*   **Sources:** `marketplace/plugins/<slug>/` in the repo (25 plugins, listed below).
+*   **Catalog build:** `npm run build:marketplace` (`backend/scripts/build-marketplace.js`) packs each
+    plugin into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json`
+    (id, version, description, category, file, **sha256**). The `dist/` catalog is **committed**, so
+    merging a plugin update to `main` updates every site's catalog immediately — decoupled from core
+    releases (tagged releases also attach a snapshot, so a site can pin a fixed catalog).
+*   **Backend API:** `backend/src/routes/marketplace.ts` — `GET /api/v1/marketplace/catalog` (annotated
+    with installed/active/updateAvailable state) and `POST /api/v1/marketplace/install` (admin-only).
+    The catalog source is admin-configurable via the `marketplace_source` option: an http(s) URL
+    (fetched server-side), a local dir (dev / air-gapped), or unset → repo-local `marketplace/dist`
+    when present, else `https://raw.githubusercontent.com/jaimemartinez/wordjs/main/marketplace/dist`.
+*   **Install path:** the zip is downloaded to a temp file, **sha256-verified against the catalog
+    entry**, then handed to `installPluginFromZip()` — the **same pipeline as manual uploads**
+    (zip-bomb budget, Zip Slip, slug validation, manifest + AST scan). The marketplace adds no new
+    install surface beyond the catalog fetch; only `https://` sources are accepted (plus
+    `http://localhost` in dev), and catalog filenames are strictly shape-validated.
+*   **Admin UI:** the **Marketplace** tab in `/admin/plugins`
+    (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`) — browse, one-click install, update detection.
+*   **Sandbox:** marketplace plugins are ordinary plugins — `"isolated": true`, bridge-only,
+    default-deny grants, AST-scanned. Nothing about the marketplace bypasses the sandbox.
+
+### Catalog (25 plugins)
+
+| Slug | What it does | Key requested capabilities |
+| --- | --- | --- |
+| `analytics-tag` | Site-wide analytics tag (GA4, Plausible or Matomo) with optional cookie-consent gating | `settings` r/w, routes, admin menu, `assets:write` |
+| `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
+| `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `breadcrumbs` | Breadcrumbs Puck block with optional BreadcrumbList JSON-LD | — (frontend-only) |
+| `contact-forms` | Form builder with Puck embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
+| `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
+| `digital-downloads` | Sell/give away downloadable products with expiring token-gated download links | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `donations` | Donation campaigns with goal thermometer, manual payment + optional Stripe Checkout, CSV export | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
+| `event-tickets` | Ticket types with quantity caps, unique ticket codes, attendee check-in | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `events-calendar` | Admin-managed events shown as an upcoming list or monthly calendar Puck block | `database` r/w, routes, admin menu |
+| `faq` | Database-managed FAQ accordion with categories + Google FAQPage JSON-LD | `database` r/w, routes, admin menu |
+| `image-lightbox` | Site-wide click-to-zoom lightbox for content images (captions, keyboard nav) | `settings` r/w, routes, admin menu, `assets:write` |
+| `invoices` | Invoices with statuses, dashboard totals, CSV export, public token URL + print view, email to client | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `job-board` | Job listings with anti-spam public application form, applications inbox, filterable Puck block | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `newsletter` | Subscriptions (double opt-in when mail is configured), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
+| `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
+| `online-store` | Product catalog + cart + checkout with server-side price validation, coupons, orders admin, optional Stripe | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
+| `polls` | WP-Polls-style polls with a voting + animated-results Puck block | `database` r/w, routes, admin menu |
+| `popup-builder` | Site-wide popups with triggers (delay/scroll/exit intent), frequency capping, view/click stats | `database` r/w, routes, admin menu, `assets:write` |
+| `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | — (frontend-only) |
+| `restaurant-menu` | Menu sections/dishes with photos and diet tags; optional cart with WhatsApp order hand-off | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `social-share` | Share buttons Puck block (Facebook, X, WhatsApp, LinkedIn, Telegram, Email, copy link) — fully client-side | — (frontend-only) |
+| `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
+| `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Puck block | `database` r/w, `settings` r/w, routes, admin menu |
+| `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |
+
+*(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is
+manifest-requested and admin-granted, default-deny, exactly like the bundled plugins.)*

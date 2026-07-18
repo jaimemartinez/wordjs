@@ -35,8 +35,11 @@ so your browser will warn once; that's expected.
 of them in isolation:
 
 ```bash
-npm run dev                # gateway :4000-ish, backend, frontend :3000
+npm run dev                # gateway :3000 (public), backend :4000, frontend :3001
 ```
+
+To run the three services on **separate machines** (joined over mTLS via cluster join tokens), see
+the [Separate-mode guide](documentation/separate-mode.md).
 
 ---
 
@@ -47,10 +50,12 @@ CI runs three gates — **Backend (typecheck + test)**, **Frontend (lint + build
 
 ```bash
 # Backend
-cd backend && npm test          # node --test over src/tests/*.test.ts
-cd backend && npm run typecheck  # tsc --noEmit
+cd backend && npm run typecheck  # tsc --noEmit (strict)
+cd backend && npm run build      # compile to dist (CI blocks on this too)
+cd backend && npm test           # node --test over src/tests/*.test.ts
 
 # Frontend (CI runs these as separate steps)
+cd frontend && npm run predev    # regenerate plugin registries first — CI does, and tsc fails on stale ones
 cd frontend && npx tsc --noEmit  # type check (next build skips this)
 cd frontend && npm run lint      # eslint .
 cd frontend && npm run test      # vitest run
@@ -59,6 +64,13 @@ cd frontend && npm run build     # next build
 # Gateway
 cd gateway && npm test
 ```
+
+CI also runs a few gates that usually don't need a local equivalent: `npm audit` (blocks
+high/critical prod vulns in each service), a license check (`license-checker --production`, blocks
+AGPL/SSPL), backend **integration tests** (`npm run test:integration`, against real Postgres + Redis
+service containers), and a **marketplace catalog freshness** check — if you touch anything under
+`marketplace/plugins/`, run `npm run build:marketplace` from the repo root and commit the updated
+`marketplace/dist/`, or that gate fails.
 
 A green local run isn't a guarantee CI passes (Linux vs. your OS can differ), but it catches the
 common cases.

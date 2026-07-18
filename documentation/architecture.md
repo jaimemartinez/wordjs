@@ -63,9 +63,9 @@ graph TB
 
 ---
 
-## 🚦 Run Modes (SPLIT vs MONOLITH)
+## 🚦 Run Modes (SPLIT / MONOLITH / SEPARATE)
 
-The **same codebase** runs two ways, and you can switch **at any time** with no migration. Both modes share the same `backend/wordjs-config.json`, the same database, the same `uploads/`, `themes/`, and `plugins/`, the same secrets, and the same public origin (`https://localhost:3000`). They are **mutually exclusive** — both bind the public port (default **3000**) — so only one runs at a time. In **both** modes plugins stay **isolated** in separate OS processes (`child_process.fork`) exactly as described in the Plugin System section.
+The **same codebase** runs as **two mutually-exclusive process models** — **SPLIT** (3 processes) and **MONOLITH** (1 process) — and you can switch **at any time** with no migration. Both share the same `backend/wordjs-config.json`, the same database, the same `uploads/`, `themes/`, and `plugins/`, the same secrets, and the same public origin (`https://localhost:3000`). They are **mutually exclusive** — both bind the public port (default **3000**) — so only one runs at a time. A third topology, **SEPARATE**, is SPLIT spread across **different machines**, joined by gateway-minted join tokens (see below). In **all** of them plugins stay **isolated** in separate OS processes (`child_process.fork`) exactly as described in the Plugin System section.
 
 ### SPLIT (default — 3 processes)
 
@@ -95,6 +95,16 @@ Scripts: `npm run dev:mono` (dev — Next dev HMR + `ts-node` backend), `npm run
 > **Internals:** `monolith.js` sets `WORDJS_EMBEDDED=1` (and `WORDJS_MODE=mono`); when embedded, backend `src/index.ts` skips its own self-listen and gateway self-register and instead exposes `initialize()` for the entrypoint to mount.
 
 **Choose MONOLITH for** the simplest single-artifact deploy — one VM/container, TLS via its built-in HTTPS or a single reverse proxy in front.
+
+### SEPARATE (split across machines)
+
+SPLIT run on **different hosts** — a gateway box, a backend box, and a frontend box — joined into one cluster. The barrier is trust: the three tiers talk over **mutual TLS**, so every node needs a certificate signed by a shared cluster CA. Rather than hand-copying certs, WordJS bootstraps trust with **single-use join tokens** (like `kubeadm join` / `docker swarm join`):
+
+- The **gateway is the cluster CA.** `node scripts/cluster.js init --host <gateway-ip>` mints the cluster CA (keeping the CA private key `0600` on the gateway), issues the gateway's own `gateway-internal` identity **and** a public front-door cert that is now **also signed by the cluster CA**, writes a multi-node `gateway/gateway-config.json` (`gatewayInternalBind` = routable IP, `gatewayEnrollPort` default **3101**), and clears the registry.
+- `node scripts/cluster.js token <backend|frontend>` mints a **single-use, role-bound, TTL** token and prints the exact `node-join` command.
+- On the new machine `node scripts/node-join.js --role … --gateway … --token … --ca-hash … --advertise …` generates a keypair + CSR (openssl) and makes **one** call to the gateway's token-enrollment listener (a **separate** HTTPS listener on `gatewayEnrollPort` that does **not** request a client cert — the strict mTLS `/register` listener is unchanged). The gateway validates the token, **forces `CN=<role>`** from the token (the CSR subject is ignored), signs the cert, and returns `{ cert, cluster-ca, bootstrap config }`. `node-join` verifies `--ca-hash` (a MITM guard), writes `<role>/certs/*` + `<role>/wordjs-config.json`, and starts the service, which then **registers over mTLS**.
+
+Key files: `gateway/src/cluster-ca.js`, `scripts/cluster.js`, `scripts/node-join.js`. Key config keys: `advertiseHost` (this node's routable address), `gatewayHost`, `gatewayInternalBind`, `gatewayEnrollPort`, and — on the frontend — `internalApiUrl` (its SSR base = the gateway's public origin, trusted via `NODE_EXTRA_CA_CERTS` since that origin's cert is cluster-CA-signed). The SQLite DB and `uploads/` stay on the single backend node — no shared filesystem is needed for one replica per role. Full step-by-step: **[separate-mode.md](separate-mode.md)**; scaling a role to **N** replicas (Postgres + Redis + shared FS): **[multi-node.md](multi-node.md)**.
 
 ### Observability — `/metrics`
 
@@ -154,7 +164,7 @@ graph LR
     subgraph "Theme Request Flow"
         Page[📄 Page Load]
         ThemeLoader[🔄 ThemeLoader.tsx]
-        API[📡 /api/themes/active]
+        API[📡 /api/v1/themes]
         CSS[🎨 style.css]
     end
 
@@ -363,6 +373,15 @@ graph TB
     MainJS --> Cron
 ```
 
+### Plugin distribution — bundled + Marketplace
+
+Plugins reach a site two ways:
+
+- **Bundled** (`backend/plugins/`) — first-party plugins that ship with core (card-gallery, conference-manager, hello-world, mail-server, photo-carousel, test-schema, video-gallery, youtube-videos).
+- **Marketplace** — **25** first-party plugins whose sources live in `marketplace/plugins/`, distributed **outside** the core build. `backend/scripts/build-marketplace.js` (run as `npm run build:marketplace` from the repo root) packs each into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` — the catalog (id/name/version/category/permissions/size + a **sha256** per zip). The `dist/` output is **committed**, so by default sites fetch the catalog straight from `raw.githubusercontent.com` (main branch) and plugin releases are decoupled from core releases; the `marketplace_source` option can instead pin a tagged-release URL or point at a local directory (dev / air-gapped).
+
+The backend exposes it at **`/api/v1/marketplace`** (`backend/src/routes/marketplace.ts`, admin-only): `GET /catalog` returns the catalog annotated with each entry's installed/active/update state (with a 5-minute in-memory cache), and `POST /install` downloads the zip **server-side** (https-only, size-capped, strict filename shape), verifies its **sha256** against the catalog entry, and hands it to the **same** `installPluginFromZip()` pipeline as a manual upload (zip-bomb budget, Zip Slip/slug validation, manifest + AST security scan) — the marketplace adds no new install surface beyond the catalog fetch itself. The admin UI is the **Marketplace tab** of `/admin/plugins` (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`); an installed plugin lands **inactive with default-deny grants**, exactly like any other install.
+
 ### Isolated sandbox (separate OS process)
 
 Plugin server code marked `"isolated": true` does **not** run in the host process. The host (`src/core/plugin-isolate.ts`) forks each plugin into a **separate OS process** via `child_process.fork`, running the transport-agnostic sandbox entry `src/core/plugin-worker.js` (it also supports a legacy `worker_threads` fallback, normalized by an internal transport abstraction; a Worker-like adapter keeps the host's RPC code unchanged). Because the child is its own process with its own heap and event loop, a **crash, OOM, or heap escape is contained to the child and the host always survives** — a guarantee a worker thread, which shared the host heap/RSS, could not give. The legacy in-process execution path was removed.
@@ -556,8 +575,9 @@ wordjs/
 │   ├── 📁 src/                 # All .ts; `npm run build` emits dist/
 │   │   ├── 📁 core/            # Core Modules (incl. db-admin/, plugin-worker.js)
 │   │   ├── 📁 drivers/         # DB driver interface + implementations
-│   │   ├── 📁 routes/          # API Routes
-│   │   └── 📁 plugins/         # Plugin System (plugin code stays .js)
+│   │   └── 📁 routes/          # API Routes (incl. marketplace.ts)
+│   ├── 📁 plugins/             # Installed/bundled plugins (plugin code stays .js)
+│   ├── 📁 scripts/             # Maintenance scripts (incl. build-marketplace.js)
 │   ├── dist/                   # Compiled output (npm run build) — prod entry
 │   ├── tsconfig.json           # strict typecheck config (commonjs)
 │   ├── tsconfig.build.json     # production build config (emits dist/)
@@ -572,6 +592,10 @@ wordjs/
 │   │       └── core.css        # Core Styles
 │   └── package.json
 │
+├── 📁 marketplace/              # Plugin Marketplace (distributed outside the core build)
+│   ├── 📁 plugins/             # 25 first-party plugin sources
+│   └── 📁 dist/                # Committed catalog: marketplace-index.json + <slug>-<version>.zip
+│
 ├── 📁 documentation/            # Documentation
 │   ├── api.md
 │   ├── frontend.md
@@ -581,10 +605,15 @@ wordjs/
 │
 ├── 📁 gateway/                  # Cluster Gateway (reverse proxy + mTLS)
 │   ├── 📁 src/
-│   │   ├── index.js            # Gateway entry (Node cluster)
+│   │   ├── index.js            # Gateway entry (Node cluster; mTLS /register + token /enroll servers)
+│   │   ├── cluster-ca.js       # Cluster CA: issue/sign identities + join-token store
 │   │   └── proxy-config.js     # Proxy + mTLS upstream agent
 │   ├── gateway-config.json      # Gateway config (secret, ports, ssl, mtls)
 │   └── gateway-registry.json    # Persisted service registry + health
+│
+├── 📁 scripts/                  # Cluster tooling (SEPARATE mode)
+│   ├── cluster.js              # Run on gateway: init CA, mint join tokens
+│   └── node-join.js            # Run on a new node: enroll + write certs/config
 │
 ├── 📁 setup/                    # Setup/migration orchestrator + mTLS cert gen
 │   └── index.js
@@ -664,4 +693,8 @@ graph LR
     GatewayAPI -- "Trusts cluster CA" --> Backend
 ```
 
-The **Gateway** runs a private mTLS server on the internal port (`gatewayInternalPort`, default **3100** = public port + 100). Services register and fetch info here over mutual TLS: the TLS layer (`requestCert: true` / `rejectUnauthorized: true`) requires every internal request to present a client certificate that chains to the cluster CA, and each route then enforces an allowed CN via `requireIdentity()`. `POST /register` (CN `backend`/`frontend`) updates the routing registry; `GET /info`, `POST /cert-upload`, and `POST /config-update` (CN `backend` only) return gateway/SSL/cert status and apply cert/config changes. The cluster CA and per-service certs are generated by the **setup orchestrator** (`setup/index.js`), so sensitive keys never travel over the public port.
+The **Gateway** runs a private mTLS server on the internal port (`gatewayInternalPort`, default **3100** = public port + 100). Services register and fetch info here over mutual TLS: the TLS layer (`requestCert: true` / `rejectUnauthorized: true`) requires every internal request to present a client certificate that chains to the cluster CA, and each route then enforces an allowed CN via `requireIdentity()`. `POST /register` (CN `backend`/`frontend`) updates the routing registry; `GET /info`, `POST /cert-upload`, and `POST /config-update` (CN `backend` only) return gateway/SSL/cert status and apply cert/config changes.
+
+For a **single-host** deployment the cluster CA and per-service certs are generated by the **setup orchestrator** (`setup/index.js`), so sensitive keys never travel over the public port. For **SEPARATE** (multi-machine) deployments the CA is minted by `node scripts/cluster.js init` and a new node bootstraps its own mTLS identity through the gateway's **token-enrollment listener** — a **separate** HTTPS server on `gatewayEnrollPort` (default **3101**, `startEnrollServer()`) that does **not** request a client cert: it accepts `POST /enroll { role, token, advertiseHost, csr }`, validates a single-use join token, forces `CN=<role>`, and returns the signed cert + cluster CA. See **[separate-mode.md](separate-mode.md)**.
+
+Themes are subject to the **same** OS isolation: a theme's `functions.js` runs in a child-process isolate (`theme:<slug>`, via `loadIsolatedPlugin` in `core/plugin-isolate.ts`) rather than on the host main thread, and any hooks/shortcodes/mail it registers flow through the same permission-checked RPC bridge as plugins.
