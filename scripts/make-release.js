@@ -204,9 +204,21 @@ function shouldIgnore(filePath) {
     // Don't include the release folder itself
     if (relativePath.startsWith('release')) return true;
 
-    // Check if path contains any ignored pattern (e.g. .next/cache, node_modules)
+    // Match ignore patterns at PATH-SEGMENT boundaries, NOT as raw substrings. A bare directory name
+    // like `marketplace` or `logs` used with a naive `.includes()` also strips legitimate source whose
+    // path merely CONTAINS it — e.g. `backend/dist/routes/marketplace.js` (the compiled marketplace
+    // ROUTE), which silently vanished from the v1.6.0 bundle and crashed the backend on boot
+    // (`Cannot find module './marketplace'`). Segment matching keeps the top-level `marketplace/`
+    // catalog excluded while preserving `routes/marketplace.js`.
+    const segments = relativePath.split('/');
     for (const pattern of IGNORE_PATTERNS) {
-        if (relativePath.includes(pattern)) return true;
+        if (pattern.startsWith('*')) continue;                 // extension globs are handled above
+        if (pattern.includes('/')) {                           // path fragment (e.g. backend/cli, .next/cache)
+            if (relativePath === pattern || relativePath.startsWith(pattern + '/') ||
+                relativePath.includes('/' + pattern + '/') || relativePath.endsWith('/' + pattern)) return true;
+        } else if (segments.includes(pattern)) {               // bare dir/file NAME → full-segment match
+            return true;
+        }
     }
 
     // SECURITY: drop databases / private keys / TLS material — the secret DIRS are anchored to their
