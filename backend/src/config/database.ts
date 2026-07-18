@@ -46,6 +46,16 @@ async function loadDriver(overrideName: string | null = null) {
           get: () => { throw new Error('Synchronous DB access not supported with Postgres. Use dbAsync.'); },
           close: () => { }
         };
+      } else if (name === 'mysql' || name === 'mariadb') {
+        driverAsync = require('../drivers/mysql');
+        console.log(`🔌 DB Manager: Loaded Async Driver for '${name}'`);
+
+        // Mock sync driver for MySQL (async-only, like Postgres).
+        driver = {
+          init: async () => { },
+          get: () => { throw new Error('Synchronous DB access not supported with MySQL. Use dbAsync.'); },
+          close: () => { }
+        };
       }
     } catch (e) {
       console.warn(`⚠️  Async driver not found for '${name}': ${e.message}`);
@@ -579,9 +589,15 @@ async function createPluginTable(tableName: string, columns: string[]) {
  * Useful for conditional logic if needed
  */
 function getDbType() {
+  const isPostgres = driverName === 'postgres';
+  const isMySQL = driverName === 'mysql' || driverName === 'mariadb';
   return {
-    isPostgres: driverName === 'postgres',
-    isSQLite: driverName !== 'postgres',
+    isPostgres,
+    isMySQL,
+    // isSQLite stays true for MySQL so the many binary `isPostgres ? pg : sqlite` branches keep taking
+    // the SQLite path (the MySQL driver translates that dialect at the boundary). The few genuinely
+    // SQLite-ONLY catalog queries (sqlite_master / PRAGMA) are branched on isMySQL explicitly.
+    isSQLite: !isPostgres,
     driver: driverName
   };
 }

@@ -88,7 +88,8 @@ backend/plugins/malicious.txt
 frontend/_backups/
 frontend/src/app/_backup/
 
-# marketplace/dist/ IS committed on purpose: it is the live catalog served to every install via
-# raw.githubusercontent.com (zips are tiny + deterministic). CI keeps it in sync with marketplace/plugins/.
+# marketplace/dist/ is a BUILD OUTPUT (catalog index + one zip per plugin) — intentionally NOT committed
+# (ignored by `**/dist/` above). It is published as GitHub Release ASSETS by release.yml and served from
+# releases/latest/download (the default marketplace_source). Regenerate for dev with `npm run build:marketplace`.
 cluster-tokens.json
 gateway/cluster-tokens.json
