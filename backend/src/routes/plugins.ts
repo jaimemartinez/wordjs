@@ -151,9 +151,18 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
+    const result = await installPluginFromZip(req.file.path, req.file.originalname);
+    res.status(result.status).json(result.body);
+}));
 
-    const zipPath = req.file.path;
-
+/**
+ * Shared plugin-zip install pipeline — the SINGLE implementation of every security check
+ * (zip bomb, Zip Slip, slug validation, squat/clobber refusal, manifest + AST validation),
+ * used by BOTH the direct upload above and the marketplace installer (routes/marketplace.ts).
+ * Always deletes zipPath before returning. Expected failures come back as { ok:false, status, body }
+ * rather than throwing, so callers map them straight onto the HTTP response.
+ */
+async function installPluginFromZip(zipPath: string, originalName: string): Promise<{ ok: boolean; status: number; body: any }> {
     try {
         const zip = new AdmZip(zipPath);
         const zipEntries = zip.getEntries();
@@ -164,7 +173,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
             assertZipWithinBudget(zipEntries, { kind: 'plugin' });
         } catch (e: any) {
             fs.unlinkSync(zipPath);
-            return res.status(400).json({ error: e.message });
+            return { ok: false, status: 400, body: { error: e.message } };
         }
 
         // Basic validation: ensure it extracts into a folder
@@ -186,7 +195,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         // segment: a crafted filename ('...zip' → path.parse().name === '..') or a './'-prefixed entry
         // (first segment '.') would otherwise redirect extractAllTo into the host code tree (backend/) or
         // collapse the target to PLUGINS_DIR itself (a later failure-path rmSync then wipes every plugin).
-        const zipName = path.parse(req.file.originalname).name;
+        const zipName = path.parse(originalName).name;
 
         // OS archivers add sibling junk at the zip root (__MACOSX/, .DS_Store, Thumbs.db, desktop.ini) —
         // ignore it for root detection and skip extracting it, so a valid single-folder plugin isn't
@@ -200,7 +209,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         const contentEntries = zipEntries.filter((e: any) => !isJunkEntry(e.entryName));
         if (contentEntries.length === 0) {
             fs.unlinkSync(zipPath);
-            return res.status(400).json({ error: 'Zip contains no plugin files.' });
+            return { ok: false, status: 400, body: { error: 'Zip contains no plugin files.' } };
         }
 
         // First path segment of every CONTENT entry (normalize backslashes). Reject '.'/'..' tokens
@@ -211,7 +220,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
             if (!first) continue;
             if (first === '.' || first === '..') {
                 fs.unlinkSync(zipPath);
-                return res.status(400).json({ error: 'Malicious zip: entry names contain "." / ".." path segments.' });
+                return { ok: false, status: 400, body: { error: 'Malicious zip: entry names contain "." / ".." path segments.' } };
             }
             rootDirs.add(first);
         }
@@ -220,7 +229,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         const intendedSlug = (singleRoot ? Array.from(rootDirs)[0] : zipName) as string;
         if (!isValidSlug(intendedSlug)) {
             fs.unlinkSync(zipPath);
-            return res.status(400).json({ error: `Refused: '${intendedSlug}' is not a valid plugin folder name (expected a single [A-Za-z0-9_-] segment, no dots or separators).` });
+            return { ok: false, status: 400, body: { error: `Refused: '${intendedSlug}' is not a valid plugin folder name (expected a single [A-Za-z0-9_-] segment, no dots or separators).` } };
         }
         // Guaranteed a proper CHILD of PLUGINS_DIR (throws otherwise). In BOTH shapes the plugin's files
         // must land under installedDir: single-root entries carry the '<slug>/' prefix and extract to
@@ -240,7 +249,7 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
             const hasDotDotSegment = rel.split('/').includes('..');
             if (!isContained || hasDotDotSegment) {
                 fs.unlinkSync(zipPath);
-                return res.status(400).json({ error: 'Malicious zip file detected (Zip Slip / path traversal)' });
+                return { ok: false, status: 400, body: { error: 'Malicious zip file detected (Zip Slip / path traversal)' } };
             }
         }
 
@@ -250,13 +259,13 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         const RESERVED_SLUGS: string[] = [];
         if (RESERVED_SLUGS.some(s => String(s).normalize('NFC').toLowerCase() === canonSlug)) {
             fs.unlinkSync(zipPath);
-            return res.status(409).json({ error: `Refused: '${intendedSlug}' is a reserved system plugin slug and cannot be uploaded or overwritten.` });
+            return { ok: false, status: 409, body: { error: `Refused: '${intendedSlug}' is a reserved system plugin slug and cannot be uploaded or overwritten.` } };
         }
         try {
             const clash = fs.readdirSync(PLUGINS_DIR).find((d: string) => d !== intendedSlug && d.normalize('NFC').toLowerCase() === canonSlug);
             if (clash) {
                 fs.unlinkSync(zipPath);
-                return res.status(409).json({ error: `Refused: name collides with existing plugin '${clash}' (case/Unicode squat).` });
+                return { ok: false, status: 409, body: { error: `Refused: name collides with existing plugin '${clash}' (case/Unicode squat).` } };
             }
         } catch { /* PLUGINS_DIR missing — nothing to clobber */ }
 
@@ -264,12 +273,37 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         // corrupt a working plugin and the next reload would swap live code with no warning.
         if (await isPluginActive(intendedSlug)) {
             fs.unlinkSync(zipPath);
-            return res.status(409).json({ error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` });
+            return { ok: false, status: 409, body: { error: `Plugin '${intendedSlug}' is currently active. Deactivate it before re-uploading (this prevents corrupting a running plugin).` } };
         }
 
-        // Extract ONLY the validated content entries (skips the OS junk) into the contained target.
+        // INTEGRITY: refuse to install over an EXISTING (even inactive) plugin directory. The extract
+        // overwrites in place and, if post-extract validation fails, the catch below rmSync's the whole
+        // dir — which would destroy a legitimate same-named plugin's files that were there first (audit
+        // LOW). To update a plugin, remove the old one first (uninstall), then install.
+        if (fs.existsSync(installedDir)) {
+            fs.unlinkSync(zipPath);
+            return { ok: false, status: 409, body: { error: `A plugin directory '${intendedSlug}' already exists. Uninstall it before installing this one (this prevents overwriting or deleting an existing plugin).` } };
+        }
+
+        // Write ONLY the already-validated FILE content entries OURSELVES — never zip.extractEntryTo (audit
+        // #29 — adm-zip directory-entry Zip-Slip). extractEntryTo on a DIRECTORY entry re-enumerates that
+        // dir's children by RAW startsWith-prefix, which re-introduces junk-filtered '..' entries that never
+        // passed the containment scan above (e.g. 'my-plugin/../victim/desktop.ini' → sibling write past
+        // installedDir). By skipping directory entries and mkdir'ing each file's parent, every write is
+        // confined to the plugin's own dir. Re-assert containment on the FINAL dest (defense-in-depth —
+        // identical rule to the pre-scan; unreachable for the entries validated at the loop above).
         for (const entry of contentEntries) {
-            zip.extractEntryTo(entry, targetDir, /*maintainEntryPath*/ true, /*overwrite*/ true);
+            if (entry.isDirectory) continue; // dirs are re-created from file paths below; never extract-enumerate them
+            const rel = String(entry.entryName).replace(/\\/g, '/');
+            const dest = path.resolve(targetDir, rel);
+            const isContained = dest === confineDir || dest.startsWith(confineDir + path.sep);
+            const hasDotDotSegment = rel.split('/').includes('..');
+            if (!isContained || hasDotDotSegment) {
+                fs.unlinkSync(zipPath);
+                return { ok: false, status: 400, body: { error: 'Malicious zip file detected (Zip Slip / path traversal)' } };
+            }
+            fs.mkdirSync(path.dirname(dest), { recursive: true });
+            fs.writeFileSync(dest, entry.getData());
         }
         pluginSlug = intendedSlug;
 
@@ -292,19 +326,19 @@ router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHand
         } catch (valErr: any) {
             try { fs.rmSync(installedDir, { recursive: true, force: true }); } catch { /* best-effort */ }
             fs.unlinkSync(zipPath);
-            return res.status(400).json({ error: valErr.message, details: { missingPermissions: valErr.missingPermissions, dangerousCalls: valErr.dangerousCalls } });
+            return { ok: false, status: 400, body: { error: valErr.message, details: { missingPermissions: valErr.missingPermissions, dangerousCalls: valErr.dangerousCalls } } };
         }
 
         // Cleanup temp file
         fs.unlinkSync(zipPath);
 
-        res.json({ success: true, message: 'Plugin installed successfully', slug: pluginSlug });
-    } catch (error) {
+        return { ok: true, status: 200, body: { success: true, message: 'Plugin installed successfully', slug: pluginSlug } };
+    } catch (error: any) {
         // Cleanup temp file on error
         if (fs.existsSync(zipPath)) fs.unlinkSync(zipPath);
-        throw new Error(`Failed to install plugin: ${error.message}`);
+        return { ok: false, status: 500, body: { error: `Failed to install plugin: ${error.message}` } };
     }
-}));
+}
 
 /**
  * @swagger
@@ -768,11 +802,21 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
         return res.status(400).json({ message: 'Password is required' });
     }
 
-    // 0. Verify password
-    // req.user is populated by authenticate middleware
+    // 0. Verify password — gated by the SAME shared per-account lockout as /auth/login, so a hijacked admin
+    // session can't brute-force the password unthrottled (only the loose apiLimiter applies) (audit #26 —
+    // unthrottled password oracle). req.user is populated by authenticate middleware. This path is
+    // authenticated/session-scoped, so RECORDING failures here throttles the oracle without the
+    // unauthenticated-lockout-DoS of #25.
+    const auth = require('./auth');
+    const lockId = await auth.resolveLockIdentifier(req.user.userLogin);
+    if (await auth.isLoginLocked(lockId)) {
+        return res.status(429).json({ message: 'Too many failed attempts. Try again later.' });
+    }
     try {
         await User.authenticate(req.user.userLogin, password);
+        await auth.clearLoginFails(lockId);
     } catch (error) {
+        await auth.recordLoginFail(lockId);
         return res.status(403).json({ message: 'Invalid password' });
     }
 
@@ -960,3 +1004,6 @@ module.exports = router;
 // Exposed for unit tests of the path-traversal guards (the router remains the default export).
 module.exports.isValidSlug = isValidSlug;
 module.exports.resolveSafePluginDir = resolveSafePluginDir;
+// The shared zip-install pipeline — consumed by routes/marketplace.ts so marketplace installs
+// go through the exact same security gauntlet as manual uploads.
+module.exports.installPluginFromZip = installPluginFromZip;

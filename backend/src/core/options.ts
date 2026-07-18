@@ -8,6 +8,22 @@ const { verifyPermission, runWithContext } = require('./plugin-context');
 const { doAction } = require('./hooks');
 const cache = require('./cache');
 
+// Core-level backstop for the security-critical option-NAME denylist that otherwise lives ONLY in the
+// bridge (createPluginApi.isProtectedOption). Scoped to THEME context specifically — isolated plugins never
+// reach here (bridge/RPC only), and core code invoked on behalf of a normal plugin has a plugin (not
+// 'theme:') context. Applied to EVERY option writer (update/add/delete) so none is a write-side escalation
+// path (#9). (Post theme-isolation this is largely defense-in-depth — themes no longer run in-process.)
+function assertThemeOptionWritable(name: string): void {
+    const eff = require('./plugin-context').getEffectivePlugin();
+    if (eff && String(eff).startsWith('theme:')) {
+        const n = String(name).toLowerCase();
+        const PROTECTED_NAME = /^(wordjs_user_roles|user_roles|roles|active_plugins|default_role|users_can_register|plugin_grants|cron|plugin_strikes|plugin_health|trusted_plugins?|trustedsystemplugins|template|stylesheet|active_theme_layout|active_theme_mods|theme_mods|siteurl|site_url|home|admin_email|marketplace_(source|url|catalog_url))$/;
+        if (PROTECTED_NAME.test(n) || /secret|passw|priv[_-]?key|privatekey|\bkey\b|[_-]key\b|token|jwt|credential|encryption|dkim|\bsalt\b|api[_-]?key|signing|certificate/.test(n)) {
+            throw new Error(`🛡️ Option '${name}' is not writable from theme context.`);
+        }
+    }
+}
+
 /**
  * Get an option value
  * Equivalent to get_option()
@@ -58,6 +74,7 @@ async function getOption(name: string, defaultValue: any = null) {
  */
 async function updateOption(name: string, value: any, autoload = 'yes') {
     verifyPermission('settings', 'write');
+    assertThemeOptionWritable(name); // #9
 
     return runWithContext(null, async () => {
         const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
@@ -97,6 +114,7 @@ async function updateOption(name: string, value: any, autoload = 'yes') {
  */
 async function addOption(name: string, value: any, autoload = 'yes') {
     verifyPermission('settings', 'write');
+    assertThemeOptionWritable(name); // #9 — same backstop as updateOption
 
     return runWithContext(null, async () => {
         const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
@@ -118,6 +136,7 @@ async function addOption(name: string, value: any, autoload = 'yes') {
  */
 async function deleteOption(name: string) {
     verifyPermission('settings', 'write');
+    assertThemeOptionWritable(name); // #9 — same backstop as updateOption
 
     return runWithContext(null, async () => {
         const result = await dbAsync.run('DELETE FROM options WHERE option_name = ?', [name]);

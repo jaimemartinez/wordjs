@@ -29,6 +29,17 @@ try { realHttps = require('https'); } catch { /* */ }
 try { realHttp2 = require('http2'); } catch { /* */ }
 try { realDgram = require('dgram'); } catch { /* */ }
 
+// Capture the RAW dgram prototype methods NOW — at module load, i.e. BEFORE installChildDgramGuard()
+// replaces them on the prototype. Both the in-place prototype patch AND the module-wrapper (guardDgram)
+// then delegate to this SAME unguarded impl, so a socket never gets double-validated (its instance/
+// subclass override shadows the patched prototype but still bottoms out here).
+const realDgramSend: any = realDgram && realDgram.Socket && realDgram.Socket.prototype.send;
+const realDgramConnect: any = realDgram && realDgram.Socket && realDgram.Socket.prototype.connect;
+// #19: also capture the raw disconnect() — it resets Node's internal connectState to "unconnected", so it
+// must drop the socket from the connected-state WeakSet (below) or a later no-address send() would default
+// to loopback while the guard still believed the socket was "connected to a validated destination".
+const realDgramDisconnect: any = realDgram && realDgram.Socket && realDgram.Socket.prototype.disconnect;
+
 function isBlockedV4(a: string): boolean {
     const p = a.split('.').map((n) => parseInt(n, 10));
     if (p.length !== 4 || p.some((n) => isNaN(n) || n < 0 || n > 255)) return true;
@@ -299,52 +310,233 @@ function guardHttp2(mod: any): any {
     return wrapModule(mod, overrides);
 }
 
+// ---- dgram (UDP) egress -------------------------------------------------------------------------
+// dgram send()/connect() take the destination as a POSITIONAL arg (not a `lookup`-bearing options object
+// like net/http), so we resolve hostnames ourselves AND — critically — hand the underlying send/connect the
+// VALIDATED LITERAL IP, never the original hostname. If we re-passed the hostname, Node's own internal
+// dns.lookup would resolve it a SECOND time; a TTL-0 rebind can flip the answer to an internal IP between
+// our check and Node's (DNS-rebinding). Pinning the IP we validated makes Node's re-resolution a no-op
+// (isIP() short-circuits DNS). CORRECTION (#27): dgram.createSocket()/new Socket() DO accept a per-socket
+// `lookup` option, and Node runs it for EVERY resolution — even the literal IPs we pin (via lookup4/lookup6,
+// which call the socket lookup with the address unconditionally). A plugin lookup could therefore re-map a
+// pinned literal to an internal IP, so guardDgram STRIPS any plugin-supplied lookup at construction (falling
+// back to Node's default dns.lookup, a no-op on the pinned literals). We delete it rather than inject
+// validatingLookup because dgram reuses the socket lookup for bind() too, whose wildcard 0.0.0.0 / :: default
+// validatingLookup would wrongly reject. (EG-DGRAM-REBIND, #27)
+//
+// Per-socket "connected to a validated destination" state, tracked in a WeakSet so PLUGIN code cannot
+// forge it (a plain instance flag like `sock.__connected = true` could be set by the plugin to sneak a
+// no-address send() through to the default 127.0.0.1). Membership is added only by secureDgramConnect
+// after the destination passed validation.
+const dgramConnectedSockets = new WeakSet<object>();
+
+// Mirror Node's dgram.Socket.prototype.send arg-shifting to locate the destination `address` index:
+//   send(msg[, offset, length][, port][, address][, callback])
+// Long form (msg, offset, length, port, address[, cb]) is in play when a 5th positional (address) exists
+// OR the 4th (port) is a real port (not the callback); address then sits at index 4. Otherwise it is the
+// short form (msg, port, address[, cb]) and address sits at index 2. (Positional — unlike a "last string
+// arg" scan, this never mistakes a STRING msg for the address.)
+function dgramSendAddressIndex(args: any[]): number {
+    const port = args[3], address = args[4];
+    if (address !== undefined || (port !== undefined && typeof port !== 'function')) return 4;
+    return 2;
+}
+
+// Choose which validated IP to PIN back into the args. Prefer one whose family matches the socket type
+// (udp4→IPv4, udp6→IPv6) so we never hand a udp4 socket an AAAA literal (which Node would reject); every
+// address in `list` was already IP-validated as public, so any is safe security-wise.
+function pinDgramAddress(sock: any, list: any[]): string {
+    const want = sock && sock.type === 'udp6' ? 6 : sock && sock.type === 'udp4' ? 4 : 0;
+    if (want) { const m = list.find((a) => realNet.isIP(a.address) === want); if (m) return m.address; }
+    return list[0].address;
+}
+
+// Validate a dgram send() against the egress policy, then delegate to `orig` with the destination pinned
+// to a validated IP literal. `orig`/`thisArg`/`args` mirror the prototype call so this is reusable from
+// both the in-place prototype patch AND the module-wrapper instance/subclass overrides.
+function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
+    const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
+    const idx = dgramSendAddressIndex(args);
+    const address = typeof args[idx] === 'string' ? args[idx] : undefined;
+    if (address === undefined) {
+        // No explicit destination host. On a CONNECTED socket the remote was validated at connect() →
+        // allow. Otherwise dgram DEFAULTS to 127.0.0.1 — a blind loopback datagram — so deny it.
+        if (dgramConnectedSockets.has(thisArg)) return orig.apply(thisArg, args);
+        const e = blockErr('127.0.0.1', '(dgram default)'); if (cb) { cb(e); return; } throw e;
+    }
+    if (realNet.isIP(address)) {
+        // Already an IP literal → no DNS, no rebind window; validate and pass straight through.
+        try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
+        return orig.apply(thisArg, args);
+    }
+    // Hostname: resolve, validate EVERY resolved IP, then REWRITE the address arg to the validated literal
+    // so Node cannot re-resolve to a different (internal) address. (#27)
+    realDns.lookup(address, { all: true, verbatim: true }, (err: any, addrs: any) => {
+        if (err) { if (cb) cb(err); return; }
+        const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
+        for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
+        const pinned = args.slice(); pinned[idx] = pinDgramAddress(thisArg, list);
+        orig.apply(thisArg, pinned);
+    });
+}
+
+// Validate a dgram connect() — `connect(port[, address][, callback])` — the same way, pinning the IP and
+// marking the socket connected-to-a-validated-destination so a later no-address send() is allowed.
+function secureDgramConnect(orig: any, thisArg: any, args: any[]): any {
+    const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
+    const address = typeof args[1] === 'string' ? args[1] : undefined; // arg after port
+    if (address === undefined) {
+        // connect(port) with no address defaults to 127.0.0.1 / ::1 — a loopback binding. Deny. (EG-3)
+        const e = blockErr('127.0.0.1', '(dgram connect default)'); if (cb) { cb(e); return; } throw e;
+    }
+    if (realNet.isIP(address)) {
+        try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
+        dgramConnectedSockets.add(thisArg);
+        return orig.apply(thisArg, args);
+    }
+    realDns.lookup(address, { all: true, verbatim: true }, (err: any, addrs: any) => {
+        if (err) { if (cb) cb(err); return; }
+        const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
+        for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
+        const pinned = args.slice(); pinned[1] = pinDgramAddress(thisArg, list);
+        dgramConnectedSockets.add(thisArg);
+        orig.apply(thisArg, pinned);
+    });
+}
+
+// Validate a dgram disconnect(). disconnect() resets Node's internal connectState back to "unconnected", so
+// a subsequent no-address send() would DEFAULT to 127.0.0.1. secureDgramSend only allows a no-address send
+// when the socket is in dgramConnectedSockets, so we MUST drop the socket from that WeakSet here — otherwise
+// connect(validated-public) → disconnect() → send() (no address) sneaks a blind loopback datagram past the
+// guard (the WeakSet still said "connected"). Remove BEFORE delegating so the state is consistent even if the
+// real disconnect throws. (#19)
+function secureDgramDisconnect(orig: any, thisArg: any, args: any[]): any {
+    dgramConnectedSockets.delete(thisArg);
+    if (typeof orig === 'function') return orig.apply(thisArg, args);
+}
+
+// THE definitive UDP egress enforcement for the isolated child: patch the REAL dgram.Socket.prototype
+// .send/.connect in place, so EVERY datagram is validated no matter how the socket was obtained —
+// dgram.createSocket, `new dgram.Socket()` (#19; the raw Socket ctor the module Proxy would forward),
+// AND `await import('dgram')` (#22; the ESM loader bypasses the CJS require proxy, but every dgram
+// instance shares this ONE prototype, so patching it here covers the ESM module and the createSocket
+// path too). Module-name overrides alone are bypassable; the prototype is the single chokepoint —
+// exactly the model installChildNetGuard uses for TCP. SAFE ONLY in the child (one plugin per process;
+// its core bootstrap + IPC bridge never use dgram). NEVER call this on the host. Idempotent.
+let childDgramGuardInstalled = false;
+export function installChildDgramGuard(): void {
+    if (childDgramGuardInstalled) return;
+    childDgramGuardInstalled = true;
+    if (!realDgram || !realDgram.Socket || typeof realDgramSend !== 'function') return;
+    try {
+        const proto = realDgram.Socket.prototype;
+        const specs: Array<[string, any, (o: any, t: any, a: any[]) => any]> = [
+            ['send', realDgramSend, secureDgramSend],
+            ['connect', realDgramConnect, secureDgramConnect],
+            // #19: patch + LOCK disconnect() too, so it clears the connected-state WeakSet (a plugin must not
+            // be able to restore the raw disconnect and desync our state to regain a no-address loopback send).
+            ['disconnect', realDgramDisconnect, secureDgramDisconnect],
+        ];
+        for (const [name, orig, secure] of specs) {
+            if (typeof orig !== 'function' || (proto[name] as any).__wjGuarded) continue;
+            const desc = Object.getOwnPropertyDescriptor(proto, name);
+            const patched = function (this: any, ...args: any[]) { return secure(orig, this, args); };
+            (patched as any).__wjGuarded = true;
+            // LOCK it (non-writable + non-configurable): a network-granted plugin must NOT be able to
+            // restore the raw send/connect (e.g. `require('dgram').Socket.prototype.send = raw`) and
+            // regain unvalidated UDP to loopback/metadata/private. `orig` lives only in this closure,
+            // unreachable from plugin code. (mirrors installChildNetGuard / EG-1)
+            Object.defineProperty(proto, name, { value: patched, writable: false, configurable: false, enumerable: desc ? !!desc.enumerable : false });
+        }
+        // Also guard the NATIVE udp_wrap handle: a plugin can reflect PAST the JS prototype via
+        // `sock[Symbol(state symbol)].handle.send(...)` — the handle's own send/send6/connect/connect6 do
+        // the real OS egress and sit below the patched prototype (#22). The handle is materialized on
+        // bind(), so wrap bind() to validate + lock the handle methods the first time it exists. Best-effort
+        // over Node internals; the AUTHORITATIVE UDP containment for a network-granted plugin is the OS
+        // sandbox (bwrap/seccomp) the isolated worker runs under on Linux.
+        const origBind = proto.bind;
+        if (typeof origBind === 'function' && !(origBind as any).__wjGuarded) {
+            const guardHandleFn = (ho: any, addrIdx: number) => function (this: any, ...ha: any[]) {
+                const addr = ha[addrIdx];
+                if (typeof addr === 'string' && !realNet.isIP(addr)) { /* hostname at native layer — deny (no rebind-safe resolve here) */ throw blockErr(addr, addr); }
+                if (typeof addr === 'string' && isBlockedIp(addr)) throw blockErr(addr, addr);
+                return ho.apply(this, ha);
+            };
+            const patchedBind = function (this: any, ...bargs: any[]) {
+                const r = origBind.apply(this, bargs);
+                try {
+                    const sock: any = this;
+                    const sym = Object.getOwnPropertySymbols(sock).find((s) => String(s) === 'Symbol(state symbol)');
+                    const handle = sym ? (sock[sym] && sock[sym].handle) : null;
+                    if (handle && !handle.__wjGuarded) {
+                        for (const [hm, idx] of [['send', 4], ['send6', 4], ['connect', 0], ['connect6', 0]] as Array<[string, number]>) {
+                            const ho = handle[hm];
+                            if (typeof ho === 'function') {
+                                try { Object.defineProperty(handle, hm, { value: guardHandleFn(ho, idx), writable: false, configurable: false }); } catch { /* */ }
+                            }
+                        }
+                        try { Object.defineProperty(handle, '__wjGuarded', { value: true, enumerable: false }); } catch { /* */ }
+                    }
+                } catch { /* Node internals shifted — best effort; OS sandbox is the real boundary */ }
+                return r;
+            };
+            (patchedBind as any).__wjGuarded = true;
+            try { Object.defineProperty(proto, 'bind', { value: patchedBind, writable: false, configurable: false, enumerable: false }); } catch { /* */ }
+        }
+    } catch { /* best-effort; the module-wrapper GuardedSocket below remains as defense */ }
+}
+
 function guardDgram(mod: any): any {
-    const overrides: Record<string, any> = {};
+    // Cover `new (require('dgram').Socket)()` at the module-wrapper level too — the raw Socket ctor is
+    // what the Proxy would otherwise forward unguarded (#19). In the isolated child the prototype patch
+    // (installChildDgramGuard) is the authoritative chokepoint AND locked; this subclass + instance
+    // override is the protection on the in-process (non-isolated) path where the prototype isn't patched.
+    // Both bottom out at the captured RAW send/connect, so a child socket is validated exactly once.
+    class GuardedSocket extends mod.Socket {
+        constructor(...args: any[]) {
+            // #27: STRIP any plugin-supplied `lookup` BEFORE it reaches the real Socket ctor, which bakes it into
+            // the udp handle (via newHandle). A baked-in lookup runs for EVERY resolution on the socket, so it can
+            // only be neutralized at construction, not at send time. We DELETE it (rather than inject
+            // validatingLookup) because dgram reuses the SAME socket lookup for bind() too, and bind() defaults to
+            // the wildcard 0.0.0.0 / :: — which validatingLookup would reject, breaking every implicit bind. With
+            // the plugin lookup removed Node falls back to its default dns.lookup, which is a NO-OP on the literal
+            // IPs secure send/connect always pin (isIP short-circuits DNS → no rebind) and correctly resolves the
+            // wildcard bind. A plugin can no longer supply its own lookup.
+            if (args[0] && typeof args[0] === 'object') { const o: any = { ...args[0] }; delete o.lookup; args[0] = o; }
+            super(...args);
+        }
+        send(...args: any[]) { return secureDgramSend(realDgramSend, this, args); }
+        connect(...args: any[]) { return secureDgramConnect(realDgramConnect, this, args); }
+        disconnect(...args: any[]) { return secureDgramDisconnect(realDgramDisconnect, this, args); } // #19
+    }
+    const overrides: Record<string, any> = { Socket: GuardedSocket };
     if (typeof mod.createSocket === 'function') {
         overrides.createSocket = function (...args: any[]) {
+            // #27: dgram DOES honor a per-socket `lookup` option — createSocket({ type, lookup }). Forwarding the
+            // plugin's options untouched would let a malicious lookup run for every name Node resolves on this
+            // socket, INCLUDING the validated literal IPs the guard pins (Node's lookup4/lookup6 call the socket
+            // lookup unconditionally), re-mapping them to an internal address (DNS-rebind). Copy the options and
+            // STRIP the lookup (see the GuardedSocket ctor note: injecting validatingLookup would break bind(),
+            // which reuses the socket lookup for the wildcard 0.0.0.0 / ::; deleting it falls back to Node's
+            // default dns.lookup, a no-op on the pinned literals). A string `type` first-arg carries no lookup, so
+            // it is left alone.
+            if (args[0] && typeof args[0] === 'object') { args = args.slice(); const o: any = { ...args[0] }; delete o.lookup; args[0] = o; }
             const sock = mod.createSocket(...args);
-            const origSend = sock.send.bind(sock);
-            sock.send = function (...sargs: any[]) {
-                // dgram.send(msg, [offset, length,] port, address, cb): the destination host is the last
-                // string arg. dgram has no `lookup` option, so resolve+validate hostnames ourselves.
-                const cb = typeof sargs[sargs.length - 1] === 'function' ? sargs[sargs.length - 1] : undefined;
-                const strs = sargs.filter((x) => typeof x === 'string');
-                const address = strs.length ? strs[strs.length - 1] : undefined;
-                if (address && realNet.isIP(address)) {
-                    try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e); return; } throw e; }
-                    return origSend(...sargs);
-                }
-                if (address) {
-                    realDns.lookup(address, { all: true, verbatim: true }, (err: any, addrs: any) => {
-                        if (err) { if (cb) cb(err); return; }
-                        const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
-                        for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
-                        origSend(...sargs);
-                    });
-                    return;
-                }
-                return origSend(...sargs); // no explicit address (dgram defaults to 127.0.0.1; UDP, no read-back)
-            };
-            // Connected dgram: `sock.connect(port[, address][, cb])` then send() with no address. Validate
-            // the destination host here too, else a connected-send reaches loopback/private unvalidated. (EG-3)
+            // Define OWN instance overrides via defineProperty, NOT `sock.send = …` assignment: in the
+            // isolated child installChildDgramGuard has already made the prototype send/connect
+            // non-writable, and a non-writable prototype data-property makes plain assignment throw
+            // ("Cannot assign to read only property"). defineProperty on the instance sidesteps that (it
+            // creates an own property without consulting the prototype's writability). Harmless in the
+            // child (shadows the — equivalent — patched prototype) and the real guard on the in-process
+            // path where the prototype is untouched.
+            Object.defineProperty(sock, 'send', { value: function (...sargs: any[]) { return secureDgramSend(realDgramSend, sock, sargs); }, writable: true, configurable: true });
             if (typeof sock.connect === 'function') {
-                const origConnect = sock.connect.bind(sock);
-                sock.connect = function (...cargs: any[]) {
-                    const cb = typeof cargs[cargs.length - 1] === 'function' ? cargs[cargs.length - 1] : undefined;
-                    const address = cargs.find((x: any, i: number) => i > 0 && typeof x === 'string'); // arg after port
-                    if (!address) { const e = blockErr('127.0.0.1 (dgram connect default)'); if (cb) { cb(e); return; } throw e; }
-                    if (realNet.isIP(address)) {
-                        try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
-                        return origConnect(...cargs);
-                    }
-                    realDns.lookup(address, { all: true, verbatim: true }, (err: any, addrs: any) => {
-                        if (err) { if (cb) cb(err); return; }
-                        const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
-                        for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
-                        origConnect(...cargs);
-                    });
-                };
+                Object.defineProperty(sock, 'connect', { value: function (...cargs: any[]) { return secureDgramConnect(realDgramConnect, sock, cargs); }, writable: true, configurable: true });
+            }
+            if (typeof sock.disconnect === 'function') {
+                // #19: instance-level disconnect override for the in-process path (prototype unpatched there) —
+                // clears the connected-state WeakSet so a later no-address send() can't default to loopback.
+                Object.defineProperty(sock, 'disconnect', { value: function (...dargs: any[]) { return secureDgramDisconnect(realDgramDisconnect, sock, dargs); }, writable: true, configurable: true });
             }
             return sock;
         };

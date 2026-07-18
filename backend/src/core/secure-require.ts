@@ -64,6 +64,57 @@ const FS_WRITE_METHODS = [
 // check-then-write TOCTOU races on containment. Plugins have no legitimate need for them.
 const FS_LINK_DENIED = ['symlink', 'symlinkSync', 'link', 'linkSync'];
 
+// Methods that take TWO paths (source READ, dest WRITE) — both must be checked.
+const FS_TWO_PATH = new Set(['copyfile', 'copyfilesync', 'cp', 'cpsync', 'rename', 'renamesync']);
+
+// Single source of truth for fs PATH containment, shared by the callback/sync proxy AND the fs.promises
+// proxy so they can't diverge (audit CRITICAL: fs.promises dropped the grant check + link-deny, and
+// open()/openSync() — NOT patched by io-guard — skipped isPathSafe entirely). For each path arg it
+// enforces: link/symlink deny, reject fd/pathless args, isPathSafe (zones + secret/DB/exec blocks), and
+// the own-dir-OR-grant permission gate. Throws on any violation; returns normally when allowed.
+function guardFsCall(pluginSlug: string, prop: string, args: any[]): void {
+    const p = String(prop).toLowerCase();
+    if (FS_LINK_DENIED.includes(prop)) {
+        throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'creating links/symlinks is not permitted for plugins');
+    }
+    // createReadStream/createWriteStream accept an { fd } that makes Node IGNORE the path arg, so a path
+    // check would validate a decoy while the real I/O rides the fd. Deny the pathless form, and defeat a
+    // STATEFUL `fd` getter (returns null to this check but a real fd to Node's later read — TOCTOU, #4) by
+    // STRIPPING fd from a fresh plain-object snapshot so Node can never observe it regardless of the getter.
+    if (p === 'createreadstream' || p === 'createwritestream') {
+        if (args[0] == null) {
+            throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'fd-based / pathless stream creation is not permitted for plugins');
+        }
+        const o = args[1];
+        if (o && typeof o === 'object') {
+            const safe: any = {};
+            for (const k of Object.keys(o)) safe[k] = (o as any)[k]; // read each getter ONCE
+            delete safe.fd;                                          // Node now cannot receive an fd
+            args[1] = safe;
+        }
+    }
+    const { isPathSafe } = require('./io-guard');
+    // [path, isWriteForThatPath] pairs: two-path ops read arg0 + write arg1; everything else is arg0.
+    const pairs: [any, boolean][] = FS_TWO_PATH.has(p)
+        ? [[args[0], false], [args[1], true]]
+        : [[args[0], FS_WRITE_METHODS.includes(prop as string)]];
+    for (const [targetPath, isWrite] of pairs) {
+        if (targetPath == null) continue;
+        const pathy = typeof targetPath === 'string' || Buffer.isBuffer(targetPath) || (typeof targetPath === 'object' && typeof (targetPath as any).href === 'string');
+        if (!pathy) {
+            // A non-path first arg means an fd/pathless op ({fd} stream, numeric fd) that sidesteps the
+            // path check — deny it. A plugin must go through a path-checked open()/read()/write().
+            throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'fd-based / pathless file access is not permitted for plugins');
+        }
+        if (!isPathSafe(targetPath, isWrite)) {
+            throw createSecurityError(pluginSlug, `fs.${String(prop)}`, targetPath);
+        }
+        if (!isPathWithinPluginDir(pluginSlug, targetPath) && !hasPermission('filesystem', isWrite ? 'write' : 'read')) {
+            throw createSecurityError(pluginSlug, `fs.${String(prop)}`, targetPath);
+        }
+    }
+}
+
 // All child_process methods are BLOCKED for plugins
 const CHILD_PROCESS_BLOCKED = [
     'exec', 'execSync', 'execFile', 'execFileSync',
@@ -169,47 +220,12 @@ function createSecureFs() {
                 return originalMethod;
             }
 
-            // Link/symlink creation is denied for plugins outright (TOCTOU + escape vector).
-            if (FS_LINK_DENIED.includes(prop)) {
-                return function () {
-                    throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'creating links/symlinks is not permitted for plugins');
-                };
-            }
-
-            // Check if this is a read method
-            if (FS_READ_METHODS.includes(prop)) {
+            // Read / write / link fs methods: confine via the shared guard (link-deny + fd/pathless-deny +
+            // isPathSafe zones/secret/DB/exec + the own-dir-OR-grant permission gate). Crucially this also
+            // covers open()/openSync(), which io-guard's method-patch does NOT wrap (audit CRITICAL #4).
+            if (FS_LINK_DENIED.includes(prop) || FS_READ_METHODS.includes(prop) || FS_WRITE_METHODS.includes(prop)) {
                 return function (...args: any[]) {
-                    const targetPath = args[0];
-
-                    // Allow access to own plugin directory without explicit permission
-                    if (isPathWithinPluginDir(pluginSlug, targetPath)) {
-                        return originalMethod.apply(target, args);
-                    }
-
-                    // Check filesystem:read permission
-                    if (!hasPermission('filesystem', 'read')) {
-                        throw createSecurityError(pluginSlug, `fs.${prop}`, targetPath);
-                    }
-
-                    return originalMethod.apply(target, args);
-                };
-            }
-
-            // Check if this is a write method
-            if (FS_WRITE_METHODS.includes(prop)) {
-                return function (...args: any[]) {
-                    const targetPath = args[0];
-
-                    // Allow write to own plugin directory without explicit permission
-                    if (isPathWithinPluginDir(pluginSlug, targetPath)) {
-                        return originalMethod.apply(target, args);
-                    }
-
-                    // Check filesystem:write permission
-                    if (!hasPermission('filesystem', 'write')) {
-                        throw createSecurityError(pluginSlug, `fs.${prop}`, targetPath);
-                    }
-
+                    guardFsCall(pluginSlug, prop, args);
                     return originalMethod.apply(target, args);
                 };
             }
@@ -220,6 +236,31 @@ function createSecureFs() {
             return function () {
                 throw createSecurityError(pluginSlug, `fs.${String(prop)}`, 'is not permitted in the plugin sandbox');
             };
+        },
+        // Mirror the get-trap guard on [[GetOwnProperty]] so Object.getOwnPropertyDescriptor(proxy, prop) /
+        // Reflect.getOwnPropertyDescriptor / getOwnPropertyDescriptors can't hand back the RAW method (or the
+        // raw fs.promises object) and bypass the get trap entirely (audit: get-only proxy hole).
+        defineProperty(target: any, prop: any, descriptor: any) {
+            // Without this trap, Object.defineProperty(proxy, p, {configurable:false}) forwards to the TARGET
+            // and makes the real property non-configurable, so the getOwnPropertyDescriptor mirror below
+            // (guarded on desc.configurable) falls through and returns the RAW method — a plugin recovers the
+            // unguarded fn and bypasses guardFsCall (#3/#4/#10/#18 round-7 flip-configurable escape). A plugin
+            // has no legitimate reason to redefine a property on a guarded module: deny it in plugin context.
+            const s = getEffectivePlugin();
+            if (s) throw createSecurityError(s, 'defineProperty', 'redefining a guarded module property is not permitted');
+            return Reflect.defineProperty(target, prop, descriptor);
+        },
+        getOwnPropertyDescriptor(target: any, prop: any) {
+            const desc = Object.getOwnPropertyDescriptor(target, prop);
+            if (desc && desc.configurable) {
+                // Data property → swap in the GUARDED value. ACCESSOR property (crucially fs.promises is a
+                // GETTER, not a data prop!) → return a getter that yields the guarded value, so
+                // Object.getOwnPropertyDescriptor(proxy, p).get.call(proxy) can't recover the RAW method/
+                // object and bypass the get trap entirely (#3/#4/#11 — the get-only proxy hole, accessor form).
+                if ('value' in desc) return { ...desc, value: (handler as any).get(target, prop) };
+                if (typeof desc.get === 'function') return { ...desc, get: () => (handler as any).get(target, prop) };
+            }
+            return desc;
         }
     };
 
@@ -262,8 +303,43 @@ function createSecureChildProcess() {
                 };
             }
 
-            // For other methods, return as-is
-            return originalMethod.bind(target);
+            // DEFAULT-DENY every remaining function (deny-list → allow-list): child_process has NO
+            // plugin-safe function, and the old block-list missed the `ChildProcess` CONSTRUCTOR —
+            // `new cp.ChildProcess().spawn({file,args,stdio})` spawned an arbitrary process, bypassing
+            // every named block (#10) — and would miss any future spawn-capable export. Non-function
+            // props (constants) already returned above, so only callable exports are denied here.
+            return function () {
+                throw createSecurityError(
+                    pluginSlug,
+                    `child_process.${String(prop)}`,
+                    'Shell execution / process spawning is blocked for plugins.'
+                );
+            };
+        },
+        // Mirror the get-trap on [[GetOwnProperty]]: without this,
+        // Object.getOwnPropertyDescriptor(cp,'spawn').value / ('ChildProcess').value returns the RAW
+        // function/constructor and the plugin spawns arbitrary processes, skipping the get trap (#10).
+        defineProperty(target: any, prop: any, descriptor: any) {
+            // Without this trap, Object.defineProperty(proxy, p, {configurable:false}) forwards to the TARGET
+            // and makes the real property non-configurable, so the getOwnPropertyDescriptor mirror below
+            // (guarded on desc.configurable) falls through and returns the RAW method — a plugin recovers the
+            // unguarded fn and bypasses guardFsCall (#3/#4/#10/#18 round-7 flip-configurable escape). A plugin
+            // has no legitimate reason to redefine a property on a guarded module: deny it in plugin context.
+            const s = getEffectivePlugin();
+            if (s) throw createSecurityError(s, 'defineProperty', 'redefining a guarded module property is not permitted');
+            return Reflect.defineProperty(target, prop, descriptor);
+        },
+        getOwnPropertyDescriptor(target: any, prop: any) {
+            const desc = Object.getOwnPropertyDescriptor(target, prop);
+            if (desc && desc.configurable) {
+                // Data property → swap in the GUARDED value. ACCESSOR property (crucially fs.promises is a
+                // GETTER, not a data prop!) → return a getter that yields the guarded value, so
+                // Object.getOwnPropertyDescriptor(proxy, p).get.call(proxy) can't recover the RAW method/
+                // object and bypass the get trap entirely (#3/#4/#11 — the get-only proxy hole, accessor form).
+                if ('value' in desc) return { ...desc, value: (handler as any).get(target, prop) };
+                if (typeof desc.get === 'function') return { ...desc, get: () => (handler as any).get(target, prop) };
+            }
+            return desc;
         }
     };
 
@@ -365,7 +441,14 @@ const CORE_DIR = __dirname;
 const CONFIG_APP = path.join(CORE_DIR, '../config', 'app');
 const BLOCKED_CORE = new Set([
     'plugin-test-runner', 'import-export', 'backup', 'cert-manager', 'certManager',
-    'plugin-context', 'secure-require', 'io-guard', 'crash-guard', 'configManager'
+    'plugin-context', 'secure-require', 'io-guard', 'crash-guard', 'configManager',
+    // Authorization internals: an in-process theme could require these and mutate live authz state to
+    // self-escalate — roles.ts getRoles() hands back the _rolesCache BY REFERENCE (a theme flips a role's
+    // caps to ['*'], #9); plugin-permissions holds the grant map. 'cache' EXPORTS getClient() which returns
+    // a LIVE ioredis client built with host config → a plugin/theme could run arbitrary Redis commands and
+    // poison the option cache (#20). No plugin/theme has a legitimate reason to load any of these (they use
+    // the RPC bridge / options API). Defense-in-depth alongside the function-level gates.
+    'roles', 'plugin-permissions', 'cache'
 ].map(n => path.join(CORE_DIR, n)));
 
 // Realpath-resolved plugin/theme dirs, used to classify the REQUIRING module by its filename.
@@ -511,9 +594,13 @@ function isUnderNonRequirableDir(resolvedPath: string): boolean {
 // never throws on a resolution failure (falls through to normal loading, where io-guard still applies).
 function guardPluginRequirePath(request: any, mod: any): void {
     if (typeof request !== 'string') return;
-    if (request[0] !== '.' && !path.isAbsolute(request)) return; // bare specifier → can't reach a data dir
     const slug = requirerSlug(mod && mod.filename);
     if (!slug) return; // core (non-plugin) requirer is unrestricted
+    const isTheme = slug.startsWith('theme:');
+    // A bare specifier can't reach a writable data dir, so for PLUGINS it's fine here (builtins/core are
+    // already handled upstream by secureModuleFor/corePolicyFor). But a THEME requiring a bare PACKAGE pulls
+    // UNSCANNED node_modules code into the host process (#8) — resolve and check those too.
+    if (request[0] !== '.' && !path.isAbsolute(request) && !isTheme) return;
     let resolved: string;
     try { resolved = Module._resolveFilename(request, mod); } catch { return; }
     if (!path.isAbsolute(resolved)) return; // resolved to a builtin/bare id, not a file
@@ -521,6 +608,25 @@ function guardPluginRequirePath(request: any, mod: any): void {
     try { real = originalFs.realpathSync(resolved); } catch { /* not yet on disk — check lexical form */ }
     if (isUnderNonRequirableDir(resolved) || isUnderNonRequirableDir(real)) {
         throw createSecurityError(slug, `require('${request}')`, 'loading code from a writable data directory (uploads/data/os-tmp/logs) is not permitted');
+    }
+    // Node runs a file of ANY (or no) extension as JavaScript via the default '.js' compiler, so a plugin
+    // could write JS to '<owndir>/payload.log' (a DATA extension the executable-write block doesn't match)
+    // and require('./payload.log') to run code the install-time AST scan never vetted (#4 variant 2). A
+    // legitimate plugin only ever requires .js/.cjs/.mjs/.json/.node — refuse any other resolved extension.
+    // .ts/.cts/.mts included because in DEV the whole backend (incl. the core modules a plugin legitimately
+    // requires) runs through ts-node; the DATA extensions the exploit needs (.log/.txt/.dat/…) stay blocked.
+    // NOTE: also blocks the EMPTY extension — Node's LOAD_AS_FILE tries the exact path FIRST and compiles an
+    // extension-LESS file (`require('./payload')` where `payload` has no ext) as JavaScript (#4). A legit
+    // require always resolves to one of the listed extensions; a bare/planted file never does.
+    const ext = path.extname(resolved).toLowerCase();
+    if (!['.js', '.cjs', '.mjs', '.json', '.node', '.ts', '.cts', '.mts'].includes(ext)) {
+        throw createSecurityError(slug, `require('${request}')`, `requiring a '${ext || '(no-extension)'}' file is not permitted for plugins (only .js/.cjs/.mjs/.json/.node)`);
+    }
+    // A THEME runs in-process and its node_modules is NOT AST-scanned; requiring a package (whose code can
+    // eval/Function past the static scan) is an unvettable code-injection surface. Themes are presentation-
+    // only with no legitimate runtime package dep — block requiring from ANY node_modules (#8).
+    if (isTheme && /(^|[\\/])node_modules[\\/]/.test(real)) {
+        throw createSecurityError(slug, `require('${request}')`, "requiring package code from a theme's node_modules is not permitted");
     }
 }
 
@@ -658,6 +764,38 @@ function installSecureRequire() {
         };
     }
 
+    // 4b. Anchor the async-DEFER schedulers a plugin/theme can use to run code on a LATER tick
+    //     (setImmediate / queueMicrotask / process.nextTick) — the same sandbox-strip vector as the timers
+    //     above: e.g. an in-process theme's `queueMicrotask(()=>require('child_process').execSync(...))` or
+    //     code in a never-scanned dist/ that defers its require past the load frame (#8). Cheap ALS-only
+    //     check (getCurrentPlugin) captured AT SCHEDULE time (context is live then) — core hot-path
+    //     schedules with no plugin context are untouched; only in-context schedules are wrapped to re-enter.
+    for (const m of ['setImmediate', 'queueMicrotask']) {
+        const orig = (global as any)[m];
+        if (typeof orig !== 'function') continue;
+        (global as any)[m] = function (cb: any, ...rest: any[]) {
+            const slug = typeof cb === 'function' ? timerCtx.getCurrentPlugin() : null;
+            if (slug) {
+                const wrapped = function (this: any, ...a: any[]) { return timerCtx.runWithContext(slug, () => cb.apply(this, a)); };
+                return orig.call(this, wrapped, ...rest);
+            }
+            return orig.apply(this, arguments);
+        };
+    }
+    {
+        const origNextTick = (process as any).nextTick;
+        if (typeof origNextTick === 'function') {
+            (process as any).nextTick = function (cb: any, ...rest: any[]) {
+                const slug = typeof cb === 'function' ? timerCtx.getCurrentPlugin() : null;
+                if (slug) {
+                    const wrapped = function (this: any, ...a: any[]) { return timerCtx.runWithContext(slug, () => cb.apply(this, a)); };
+                    return origNextTick.call(this, wrapped, ...rest);
+                }
+                return origNextTick.apply(this, arguments);
+            };
+        }
+    }
+
     // 5. Anchor EventEmitter listeners a plugin registers. emit() does NOT propagate ALS, so a
     //    listener a plugin attaches to ANY emitter (process, the hooks monitor, a dep's server
     //    socket, SSE responses) would otherwise run DETACHED when core fires it — the seed of the
@@ -709,6 +847,17 @@ function installSecureRequire() {
         };
     }
 
+    // 6. Eagerly initialize io-guard NOW, in this core context. io-guard's module top-level does
+    //    `const fs = require('fs')` and patches its methods — but secureModuleFor hands back the fs PROXY
+    //    whenever getEffectivePlugin() is truthy. If io-guard is first loaded LAZILY (guardFsCall requires
+    //    it on the first fs call, which can happen inside a plugin request), it captures the proxy and its
+    //    `fs.method = fn` patch trips the proxy's defineProperty trap (a [[Set]] routes through
+    //    [[DefineOwnProperty]]) → the whole guard init throws. installSecureRequire always runs at boot with
+    //    NO plugin on the stack, so loading io-guard here guarantees it patches the RAW fs — mirroring the
+    //    eager `require('./io-guard')` in index.ts / plugin-worker.js, and coupling the two guards so they
+    //    can never be initialized out of order. Defensive: never let an io-guard load failure abort install.
+    try { require('./io-guard'); } catch (e) { console.error('io-guard eager init failed:', (e as any)?.message); }
+
     console.log('🛡️ Secure Require: Runtime security hooks installed for fs and child_process');
 }
 
@@ -722,26 +871,82 @@ function meterPromiseWrite(slug: string, prop: string, args: any[]): void {
     let io: any = null;
     try { io = require('./io-guard'); } catch { return; }
     if (!io || typeof io.enforceGrowQuota !== 'function') return;
+    // fs.promises.writeFile/appendFile (unlike the callback API) accept an AsyncIterable | Iterable | Stream
+    // and stream ALL of it to disk — byteLenOf can't measure that, so it would go UNMETERED and re-open the
+    // disk-fill DoS (#14/#24). Require measurable data (string / Buffer / TypedArray / DataView) from plugins.
+    if (prop === 'writeFile' || prop === 'appendFile') {
+        const d = args[1];
+        if (d != null && typeof d !== 'string' && !Buffer.isBuffer(d) && !ArrayBuffer.isView(d)) {
+            throw createSecurityError(slug, `fs.promises.${prop}`, 'streaming/iterable write data is not permitted in the sandbox (use a string or Buffer)');
+        }
+    }
     if (prop === 'appendFile') { io.enforceGrowQuota(slug, io.byteLenOf(args[1])); return; }
+    if (prop === 'truncate') { io.enforceGrowQuota(slug, Math.max(0, Number(args[1]) || 0)); return; } // truncate(path,len): len allocates (#24)
+    if (prop === 'copyFile' || prop === 'cp') {
+        // copyFile/cp DUPLICATE a file (a genuine byte-writer the fix must meter) → charge the SOURCE size
+        // to the rolling grow quota (#14). Use the RAW fs to stat so it isn't re-gated as a plugin read.
+        let sz = 0; try { sz = originalFs.statSync(args[0]).size; } catch { /* src unstattable */ }
+        io.enforceGrowQuota(slug, sz);
+        return;
+    }
     if (prop === 'writeFile') {
-        const opts = args[2];
-        const append = opts && typeof opts === 'object' && /^a/.test(String(opts.flag || '')); // {flag:'a'} = growth
-        if (append) io.enforceGrowQuota(slug, io.byteLenOf(args[1]));
-        else io.enforceSingleWrite(slug, io.byteLenOf(args[1]));
+        // EVERY writeFile accumulates against the rolling grow-quota (which itself enforces the per-call
+        // single cap first), so a distinct-filename flood via fs.promises can't fill the disk either —
+        // matching io-guard's callback-path fix. Append ({flag:'a'} or numeric O_APPEND) is the same
+        // growth path; overwrite-writes to distinct names must accumulate too (#14). Floor at one FS block
+        // so a 0-byte distinct-filename flood (inode/dir-entry exhaustion) still accrues quota.
+        io.enforceGrowQuota(slug, Math.max(io.byteLenOf(args[1]), 4096));
     }
 }
 // A FileHandle (from fs.promises.open) exposes write/writeFile/appendFile that also skip io-guard — meter
 // them too so `const fh = await fsp.open(p,'a'); fh.write(hugeBuf)` can't dodge the quota.
+// The write methods live on FileHandle.PROTOTYPE, not the instance — so instance-shadowing (fh[name]=…)
+// is trivially bypassed via Object.getPrototypeOf(fh).write.call(fh) (#24). Patch the shared prototype ONCE
+// instead: the wrapper meters (and denies createWriteStream) ONLY when a plugin is in context, so host
+// FileHandle use (getEffectivePlugin()===null) is byte-for-byte unchanged. Covers every FileHandle,
+// including prototype-reached calls, because there is a single prototype object per process.
+let _fhProtoPatched = false;
+function patchFileHandleProto(fh: any): void {
+    if (_fhProtoPatched) return;
+    const proto = Object.getPrototypeOf(fh);
+    if (!proto) return;
+    let io: any = null;
+    try { io = require('./io-guard'); } catch { return; }
+    if (!io || typeof io.enforceGrowQuota !== 'function') return;
+    const ctx = require('./plugin-context');
+    for (const name of ['write', 'writeFile', 'appendFile', 'writev', 'truncate']) {
+        const orig = proto[name];
+        if (typeof orig !== 'function') continue;
+        proto[name] = function (this: any, ...a: any[]) {
+            const slug = ctx.getEffectivePlugin();
+            if (slug) {
+                // FileHandle.writeFile/appendFile also accept Stream/Iterable data (unmeasurable) → deny (#14/#24).
+                if ((name === 'writeFile' || name === 'appendFile') && a[0] != null && typeof a[0] !== 'string' && !Buffer.isBuffer(a[0]) && !ArrayBuffer.isView(a[0])) {
+                    throw createSecurityError(slug, `FileHandle.${name}`, 'streaming/iterable write data is not permitted in the sandbox (use a string or Buffer)');
+                }
+                let bytes: number;
+                if (name === 'writev') bytes = Array.isArray(a[0]) ? a[0].reduce((s: number, b: any) => s + io.byteLenOf(b), 0) : io.byteLenOf(a[0]);
+                else if (name === 'truncate') bytes = Math.max(0, Number(a[0]) || 0);
+                else bytes = io.byteLenOf(a[0]);
+                io.enforceGrowQuota(slug, bytes);
+            }
+            return orig.apply(this, a);
+        };
+    }
+    // FileHandle.createWriteStream returns a WriteStream writing to the fd, bypassing the metered methods
+    // above → unmetered own-dir disk-fill. Deny it for plugins (they can use fh.write/writev/appendFile).
+    const origCWS = proto.createWriteStream;
+    if (typeof origCWS === 'function') {
+        proto.createWriteStream = function (this: any, ...a: any[]) {
+            if (ctx.getEffectivePlugin()) throw new Error('🛡️ FileHandle.createWriteStream is not permitted in the plugin sandbox.');
+            return origCWS.apply(this, a);
+        };
+    }
+    _fhProtoPatched = true;
+}
 function wrapFileHandle(slug: string, fh: any): any {
     if (!fh || typeof fh !== 'object') return fh;
-    let io: any = null;
-    try { io = require('./io-guard'); } catch { return fh; }
-    if (!io || typeof io.enforceGrowQuota !== 'function') return fh;
-    for (const name of ['write', 'writeFile', 'appendFile']) {
-        const orig = fh[name];
-        if (typeof orig !== 'function') continue;
-        fh[name] = function (...a: any[]) { io.enforceGrowQuota(slug, io.byteLenOf(a[0])); return orig.apply(fh, a); };
-    }
+    patchFileHandleProto(fh); // one-time prototype patch (metering is context-gated)
     return fh;
 }
 
@@ -770,22 +975,16 @@ function createSecureFsPromises() {
 
             if (isRead || isWrite) {
                 return async function (...args: any[]) {
-                    const targetPath = args[0];
-                    // Meter disk writes (own-dir writes bypass the callback-fs io-guard patch). Throws
-                    // EDQUOT past the budget, before the write is attempted. 'open' writes no data here —
-                    // its returned FileHandle is metered via wrapFileHandle below.
+                    // SECURITY: confine EXACTLY like the callback/sync proxy via the SHARED guardFsCall so the
+                    // two fs surfaces CANNOT diverge — link/symlink hard-deny (#3/#5/#11), fd/pathless deny
+                    // (#4), isPathSafe (safe zones + secret/DB/exec blocks), AND the own-dir-OR-grant gate
+                    // (#13/#18). The prior inline version ran isPathSafe only: it dropped the link-deny
+                    // (fs.promises.link overwrote host code → RCE) and the filesystem grant check (ungranted
+                    // plugin read/wrote shared uploads/data/themes) — both fixed by delegating here.
+                    guardFsCall(pluginSlug, String(prop), args);
+                    // Meter disk writes (own-dir writes bypass the callback-fs io-guard patch). Throws past
+                    // the budget. 'open' writes no data here — its FileHandle is metered via wrapFileHandle.
                     if (isWrite && prop !== 'open' && prop !== 'openSync') meterPromiseWrite(pluginSlug, String(prop), args);
-
-                    if (isPathWithinPluginDir(pluginSlug, targetPath)) {
-                        const r = await originalMethod.apply(target, args);
-                        return prop === 'open' ? wrapFileHandle(pluginSlug, r) : r;
-                    }
-
-                    const permission = isWrite ? 'write' : 'read';
-                    if (!hasPermission('filesystem', permission)) {
-                        throw createSecurityError(pluginSlug, `fs.promises.${prop}`, targetPath);
-                    }
-
                     const r = await originalMethod.apply(target, args);
                     return prop === 'open' ? wrapFileHandle(pluginSlug, r) : r;
                 };
@@ -795,6 +994,31 @@ function createSecureFsPromises() {
             return function () {
                 throw createSecurityError(pluginSlug, `fs.promises.${String(prop)}`, 'is not permitted in the plugin sandbox');
             };
+        },
+        // Mirror the guard on [[GetOwnProperty]] — fs.promises methods are OWN DATA PROPERTIES, so
+        // Object.getOwnPropertyDescriptor(fsp,'readFile').value would otherwise return the RAW, unguarded
+        // method and skip guardFsCall + the grant gate entirely (audit CRITICAL: get-only proxy hole).
+        defineProperty(target: any, prop: any, descriptor: any) {
+            // Without this trap, Object.defineProperty(proxy, p, {configurable:false}) forwards to the TARGET
+            // and makes the real property non-configurable, so the getOwnPropertyDescriptor mirror below
+            // (guarded on desc.configurable) falls through and returns the RAW method — a plugin recovers the
+            // unguarded fn and bypasses guardFsCall (#3/#4/#10/#18 round-7 flip-configurable escape). A plugin
+            // has no legitimate reason to redefine a property on a guarded module: deny it in plugin context.
+            const s = getEffectivePlugin();
+            if (s) throw createSecurityError(s, 'defineProperty', 'redefining a guarded module property is not permitted');
+            return Reflect.defineProperty(target, prop, descriptor);
+        },
+        getOwnPropertyDescriptor(target: any, prop: any) {
+            const desc = Object.getOwnPropertyDescriptor(target, prop);
+            if (desc && desc.configurable) {
+                // Data property → swap in the GUARDED value. ACCESSOR property (crucially fs.promises is a
+                // GETTER, not a data prop!) → return a getter that yields the guarded value, so
+                // Object.getOwnPropertyDescriptor(proxy, p).get.call(proxy) can't recover the RAW method/
+                // object and bypass the get trap entirely (#3/#4/#11 — the get-only proxy hole, accessor form).
+                if ('value' in desc) return { ...desc, value: (handler as any).get(target, prop) };
+                if (typeof desc.get === 'function') return { ...desc, get: () => (handler as any).get(target, prop) };
+            }
+            return desc;
         }
     };
 

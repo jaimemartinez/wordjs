@@ -70,6 +70,12 @@ if (!netAllowed) {
         // bypasses, AND the connect that undici (global fetch / WebSocket / EventSource) performs. This
         // closes redirect-to-private and DNS-rebinding at the socket layer (the actual IP is checked).
         eg.installChildNetGuard();
+        // Same chokepoint for UDP: patch dgram.Socket.prototype.send/.connect in place. Covers EVERY way
+        // a plugin obtains a dgram socket — createSocket, `new dgram.Socket()`, AND `await import('dgram')`
+        // (the ESM loader bypasses the CJS require proxy, but all instances share this one patched
+        // prototype) — validating + pinning the destination IP so none can reach loopback/metadata/private
+        // or DNS-rebind. dgram has no `lookup` option, so this is the only reliable UDP chokepoint.
+        eg.installChildDgramGuard();
         // Defense-in-depth: fast, clear failures on the binding-backed globals. We DO NOT hand-roll
         // redirects anymore — native fetch follows them AND correctly strips Authorization/Cookie on a
         // cross-origin hop; each hop's connect is IP-validated by the prototype patch above.
@@ -129,9 +135,14 @@ try {
         'dns', 'dns/promises', 'worker_threads', 'vm', 'module', 'inspector', 'repl', 'test',
         'trace_events', 'cluster', 'async_hooks', 'v8'
     ]);
-    // A network-granted plugin may import() the network modules; everything else (child_process/fs/
-    // vm/...) stays blocked. Mirrors the secure-require CJS net allowance.
-    if (netAllowed) for (const m of ['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']) esmBlocked.delete(m);
+    // A network-granted plugin may import() the TCP/HTTP/DNS modules (net/tls/http/https/http2/dns) —
+    // installChildNetGuard locks net.Socket.prototype.connect, the single chokepoint every TCP path funnels
+    // through, so import() of those is safe. dgram is DIFFERENT and stays import-BLOCKED: import('dgram')
+    // returns the RAW module whose Socket constructor (a) honors a plugin-supplied `lookup` option baked at
+    // construction → DNS-rebind past the send/connect validation (#19/#27), and (b) exposes the native
+    // udp_wrap handle below the JS prototype (#22). The guarded require('dgram') path strips `lookup` and is
+    // the ONLY way a plugin should obtain UDP; blocking the ESM path removes the raw-ctor escape entirely.
+    if (netAllowed) for (const m of ['net', 'tls', 'http', 'https', 'http2', 'dns', 'dns/promises']) esmBlocked.delete(m);
     let esmGuardInstalled = false;
     try {
         const nodeModule = require('module');
@@ -254,6 +265,13 @@ const wordjs = {
     }),
     adminMenu: { add: (item) => callHost('adminMenu.add', [item]) },
     cron: { schedule: (ts, rec, hook, args) => callHost('cron.schedule', [ts, rec, hook, args]) },
+    // CSPRNG bridge — the static validator blocks crypto/globalThis in plugin CODE, so a plugin that
+    // needs UNGUESSABLE tokens/codes must get them here (host-backed) instead of Math.random (whose
+    // xorshift128+ state is reconstructable from a few outputs). Async (RPC): `await wordjs.crypto.…`.
+    crypto: {
+        randomToken: (bytes) => callHost('crypto.randomToken', [bytes]),
+        randomInt: (min, max) => callHost('crypto.randomInt', [min, max]),
+    },
 
     // Load a script/style from inside your plugin dir onto public pages (needs the 'assets' grant).
     // spec = { handle, src (relative path in your plugin), inFooter?, strategy?:'async'|'defer', media? }
@@ -401,7 +419,11 @@ onMessage(async (msg) => {
         // code is sandboxed (previously require(entryFile) ran with an empty context).
         await runWithContext(slug, async () => {
             const plugin = require(entryFile);
-            if (typeof plugin.init === 'function') {
+            if (typeof plugin === 'function') {
+                // Theme functions.js style: `module.exports = (wordjs) => {…}` (a bare function).
+                await plugin(wordjs);
+            } else if (plugin && typeof plugin.init === 'function') {
+                // Plugin style: `exports.init = (wordjs) => {…}`.
                 await plugin.init(wordjs);
             }
         });

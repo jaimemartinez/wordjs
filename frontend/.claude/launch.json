@@ -1,0 +1,18 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "anim-io-test",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": [
+        "-y",
+        "http-server",
+        "C:/Users/jaime/AppData/Local/Temp/claude/C--Users-jaime-OneDrive-Escritorio-wordjs/6fb425e0-ab37-4ae6-84dd-c1de6e9f584e/scratchpad/anim-io-test",
+        "-p",
+        "8123",
+        "-c-1"
+      ],
+      "port": 8123
+    }
+  ]
+}

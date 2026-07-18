@@ -1,0 +1,63 @@
+{
+    "id": "event-tickets",
+    "name": "Event Tickets",
+    "version": "1.0.0",
+    "description": "Ticket types for events with quantity caps: public purchase generates unique ticket codes (instantly for free tickets, after manual payment confirmation for paid ones), emails them, and provides an attendee list with check-in by code.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "tickets"
+        },
+        "puckComponents": {
+            "entry": "client/puck/EventTicketsPuck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "Entradas",
+        "icon": "fa-ticket",
+        "href": "/admin/plugin/tickets",
+        "order": 77
+    },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read events, ticket types, orders, tickets and attendee check-in state."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create the plugin tables and write events, ticket types, orders, generated ticket codes and check-ins."
+        },
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the plugin configuration (currency symbol, manual payment instructions, notification email)."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Save the plugin configuration from the admin page."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Public endpoints for the ticket block (events, order, order status) and admin endpoints (CRUD, payment confirmation, check-in, CSV export)."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the 'Entradas' entry to the admin sidebar."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Email ticket codes to buyers and notify the site owner about new orders."
+        }
+    ]
+}

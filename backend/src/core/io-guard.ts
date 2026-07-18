@@ -83,16 +83,28 @@ let _cfgDbPaths: string[] | null = null;
 function getConfiguredDbPaths(): string[] {
     if (_cfgDbPaths) return _cfgDbPaths;
     const out = new Set<string>();
+    let sawLoaded = false;
     for (const mod of ['../config/app', '../config/database', '../config']) {
-        try {
-            const c = require(mod);
-            for (const v of [c && c.dbPath, c && c.config && c.config.dbPath, c && c.DB_PATH]) {
-                if (typeof v === 'string' && v) out.add(path.resolve(v));
-            }
-        } catch { /* config not available / different shape */ }
+        let resolved: string;
+        try { resolved = require.resolve(mod); } catch { continue; }
+        // Read straight from the module cache, and ONLY once the module has finished loading. Calling
+        // require() here during boot — while config/* is still mid-load (this runs from an fs op that
+        // can fire inside config's own load) — would read properties off a half-initialized circular
+        // export, which makes Node print a "non-existent property … inside circular dependency" warning
+        // on every plugin start. The .db/.sqlite extension block above is the primary defense meanwhile.
+        const cached = require.cache[resolved];
+        if (!cached || cached.loaded !== true) continue;
+        sawLoaded = true;
+        const c: any = cached.exports;
+        for (const v of [c && c.dbPath, c && c.config && c.config.dbPath, c && c.DB_PATH]) {
+            if (typeof v === 'string' && v) out.add(path.resolve(v));
+        }
     }
-    _cfgDbPaths = Array.from(out);
-    return _cfgDbPaths;
+    // Only freeze the cache once a config module was actually loaded; before that keep retrying, so an
+    // early boot-time call can't permanently cache an empty set (which would silently disable this
+    // custom-DB-path defense for the whole process lifetime).
+    if (sawLoaded) _cfgDbPaths = Array.from(out);
+    return sawLoaded ? (_cfgDbPaths as string[]) : Array.from(out);
 }
 
 // Executable/loadable code extensions. A plugin must never CREATE, overwrite, rename-into, or copy-into
@@ -128,6 +140,7 @@ function isPathSafe(targetPath: string, isWrite = false) {
         '.env.development',
         'wordjs-config.json',
         'wordjs-config.backup.json',
+        'wjp-prefix-registry.json', // per-plugin table-prefix ownership registry (#12) — plugin-untouchable
         'package-lock.json', // Can reveal dependency tree for attacks
         'id_rsa',
         'id_ed25519',
@@ -136,8 +149,10 @@ function isPathSafe(targetPath: string, isWrite = false) {
         'passwd'
     ];
 
-    // Block files by name
-    if (BLOCKED_FILES.includes(filename)) {
+    // Block files by name — CASE-INSENSITIVE: Windows/macOS filesystems are case-insensitive, so an exact
+    // match would let a plugin reach wordjs-config.json / the prefix registry / .env via a case variant
+    // like WORDJS-CONFIG.JSON or WJP-Prefix-Registry.json (#12).
+    if (BLOCKED_FILES.some(f => f.toLowerCase() === String(filename).toLowerCase())) {
         throttledWarn(`${pluginSlug}:sensitive-file`, `[Security Block] Plugin '${pluginSlug}' tried to access sensitive file: ${resolved}`);
         return false;
     }
@@ -254,9 +269,12 @@ function isPathSafe(targetPath: string, isWrite = false) {
 // io-guard governs raw fs; the bridge's byte quota (wordjs.fs.write) is BYPASSED when a plugin writes
 // via require('fs') directly. Path checks confine WHERE a plugin writes but not HOW MUCH — an unbounded
 // createWriteStream/appendFile loop to its own dir (no grant needed) fills the shared volume → ENOSPC on
-// the DB → full-site outage. Meter it here. To avoid false positives on legitimate OVERWRITES, only the
-// GROWING writers (append*/createWriteStream) accumulate toward the cumulative cap; a whole-file writeFile
-// is bounded by the single-write cap alone (its payload IS the resulting file size).
+// the DB → full-site outage. Meter it here. (#14) ALL byte-producing writers — writeFile*, append*, and
+// createWriteStream — accumulate toward the rolling cap. The earlier exemption for whole-file writeFile
+// ("it overwrites, so payload == final file size, so the single-write cap suffices") was FALSE: a loop of
+// DISTINCT filenames (each ≤64MB, own dir, no grant) and a writeFile({flag:'a'}) append both grow the
+// volume without bound under the single-cap-only branch. The single-write cap still bounds any individual
+// payload; the rolling window bounds cumulative growth regardless of overwrite-vs-append or filename churn.
 const SINGLE_WRITE_MAX = 64 * 1024 * 1024;        // 64MB — largest single write/chunk a plugin may make
 const PLUGIN_GROW_QUOTA = 512 * 1024 * 1024;      // 512MB of append/stream growth per ROLLING WINDOW per plugin
 const GROW_WINDOW_MS = 60 * 1000;                 // rolling window: a flood trips fast; slow legit appends never do
@@ -290,9 +308,40 @@ function enforceGrowQuota(slug: string, n: number): void {
     if (w.bytes + n > PLUGIN_GROW_QUOTA) throw quotaErr(slug, `append/stream growth quota of ${PLUGIN_GROW_QUOTA} bytes per ${GROW_WINDOW_MS / 1000}s exceeded`);
     w.bytes += n;
 }
+// Patch fs.WriteStream.PROTOTYPE._write/_writev ONCE (context-gated) — the instance-level stream.write
+// shadow in wrapQuotaStream is trivially bypassed via Object.getPrototypeOf(stream).write.call(stream)
+// (#14, same class of hole as FileHandle). _write/_writev are the single funnel EVERY buffered write
+// passes through no matter how .write was reached, so metering there is authoritative; host streams
+// (getEffectivePlugin()===null) are unaffected.
+let _wsProtoPatched = false;
+function patchWriteStreamProto(): void {
+    if (_wsProtoPatched) return;
+    try {
+        const WS: any = (fs as any).WriteStream;
+        if (!WS || !WS.prototype) return;
+        const orig = WS.prototype._write;
+        if (typeof orig === 'function') {
+            WS.prototype._write = function (this: any, chunk: any, enc: any, cb: any) {
+                const slug = getEffectivePlugin();
+                if (slug && chunk != null) { try { enforceGrowQuota(slug, byteLenOf(chunk)); } catch (e) { return cb(e); } }
+                return orig.call(this, chunk, enc, cb);
+            };
+        }
+        const origV = WS.prototype._writev;
+        if (typeof origV === 'function') {
+            WS.prototype._writev = function (this: any, chunks: any[], cb: any) {
+                const slug = getEffectivePlugin();
+                if (slug && Array.isArray(chunks)) { try { let n = 0; for (const c of chunks) n += byteLenOf(c && c.chunk); enforceGrowQuota(slug, n); } catch (e) { return cb(e); } }
+                return origV.call(this, chunks, cb);
+            };
+        }
+        _wsProtoPatched = true;
+    } catch { /* best-effort; the instance shadow below remains as defense */ }
+}
 // Wrap a createWriteStream result so each chunk is metered; on overflow the stream is destroyed with the
 // quota error (surfaced as a normal stream 'error') instead of silently filling the disk.
 function wrapQuotaStream(slug: string, stream: any): any {
+    patchWriteStreamProto(); // authoritative prototype-level metering (covers getPrototypeOf(stream).write)
     if (!stream || typeof stream.write !== 'function') return stream;
     const origWrite = stream.write.bind(stream);
     const origEnd = stream.end.bind(stream);
@@ -362,6 +411,39 @@ function patch(methodName: string, isSync = false) {
             }
         }
 
+        // (#14) truncate(path,len)/truncateSync ALLOCATE `len` bytes — a byte-producing write QUOTA_METHODS
+        // omits. Meter by the target length against the same rolling grow quota (metered only under plugin
+        // context; core/host is unmetered).
+        if (methodName === 'truncate' || methodName === 'truncateSync') {
+            const cslug = getEffectivePlugin();
+            if (cslug) {
+                try { enforceGrowQuota(cslug, Math.max(0, Number(args[1]) || 0)); }
+                catch (error: any) {
+                    if (isSync) throw error;
+                    const cb = args[args.length - 1];
+                    if (typeof cb === 'function') { cb(error); return; }
+                    throw error;
+                }
+            }
+        }
+        // (#14) copyFile/copyFileSync DUPLICATE a file — a real byte-writer that QUOTA_METHODS omits. Meter
+        // the SOURCE file's size against the same rolling grow quota so a distinct-dest copy loop can't fill
+        // the disk unmetered. (Metered only under plugin context; core/host is unmetered.)
+        if (methodName === 'copyFile' || methodName === 'copyFileSync' || methodName === 'cp' || methodName === 'cpSync') {
+            const cslug = getEffectivePlugin();
+            if (cslug) {
+                try {
+                    let sz = 0; try { sz = fs.statSync(args[0]).size; } catch { sz = 0; }
+                    enforceGrowQuota(cslug, sz);
+                } catch (error: any) {
+                    if (isSync) throw error;
+                    const cb = args[args.length - 1];
+                    if (typeof cb === 'function') { cb(error); return; }
+                    throw error;
+                }
+            }
+        }
+
         // Per-plugin write quota (metered only under a plugin context; core/host is unmetered).
         const quotaSlug = QUOTA_METHODS.has(methodName) ? getEffectivePlugin() : null;
         if (quotaSlug) {
@@ -369,11 +451,24 @@ function patch(methodName: string, isSync = false) {
                 return wrapQuotaStream(quotaSlug, original.apply(this, args));
             }
             try {
-                if (methodName === 'appendFile' || methodName === 'appendFileSync') {
-                    enforceGrowQuota(quotaSlug, byteLenOf(args[1]));
-                } else {
-                    enforceSingleWrite(quotaSlug, byteLenOf(args[1])); // writeFile / writeFileSync (overwrite)
-                }
+                // (#14) writeFile* now accumulate against the rolling grow-quota exactly like append*,
+                // instead of only taking the per-call single-write cap. The old exemption assumed a
+                // whole-file writeFile "overwrites, so payload == final file size, so the single cap
+                // suffices" — FALSE for a loop of DISTINCT filenames:
+                //   for (let i = 0; ; i++) fs.writeFileSync('<owndir>/f' + i, buf64MB);
+                // each write is ≤64MB and needs no grant, yet the loop wrote tens of GB → ENOSPC on
+                // data/wordjs.db → full-site outage. It is also false for a single-file append via
+                // writeFile('<owndir>/log', chunk, { flag: 'a' }) (string 'a'/'ax'/'a+' OR numeric
+                // O_APPEND=1024), which the old single-cap branch never inspected. Metering EVERY write
+                // (overwrite or append) against the window closes both: enforceGrowQuota calls
+                // enforceSingleWrite internally, so the >64MB single-payload reject is preserved, AND it
+                // adds the payload to the rolling window — one accounting path per call, never doubled.
+                // (#14) A writeFile CREATES/overwrites a file, and a loop of DISTINCT filenames with a 0-byte
+                // (or tiny) payload floods inodes/dir entries while charging ~0 bytes. Floor each writeFile at
+                // one filesystem block so an empty-file flood still accrues quota (≈128K files per 60s window
+                // before the 512MB cap trips — far above any legitimate write rate). Append/stream unaffected.
+                const _floor = (methodName === 'writeFile' || methodName === 'writeFileSync') ? 4096 : 0;
+                enforceGrowQuota(quotaSlug, Math.max(byteLenOf(args[1]), _floor));
             } catch (error: any) {
                 if (isSync) throw error;
                 const cb = args[args.length - 1];

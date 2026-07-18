@@ -1,0 +1,63 @@
+{
+    "id": "bookings",
+    "name": "Bookings",
+    "version": "1.0.0",
+    "description": "Appointment booking system: services with weekly availability, a public slot picker with race-safe reservations, email confirmations, and an admin agenda. WordPress parity: Amelia / Bookly (v1 scope).",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "bookings"
+        },
+        "puckComponents": {
+            "entry": "client/puck/BookingsPuck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "Reservas",
+        "icon": "fa-calendar-check",
+        "href": "/admin/plugin/bookings",
+        "order": 71
+    },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read services, availability, and bookings to build the agenda and the public slot picker (own prefixed tables only)."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create/update services and record reservations with a race-safe insert (own prefixed tables only)."
+        },
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the plugin configuration (notification email, minimum notice hours)."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Store the plugin configuration (notification email, minimum notice hours)."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Register the public booking endpoints and the admin agenda/services API under /api/v1/plugin/bookings/*."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Reservas entry to the admin sidebar."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Send the booking confirmation to the customer and notify the site owner of new reservations."
+        }
+    ]
+}

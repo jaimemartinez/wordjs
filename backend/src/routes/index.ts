@@ -72,6 +72,7 @@ router.use('/comments', commentsRoutes);
 router.use('/media', mediaRoutes);
 router.use('/settings', settingsRoutes);
 router.use('/plugins', pluginsRoutes);
+router.use('/marketplace', require('./marketplace'));
 router.use('/themes', themesRoutes);
 router.use('/menus', menusRoutes);
 router.use('/widgets', widgetsRoutes);

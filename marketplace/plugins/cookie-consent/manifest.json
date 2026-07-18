@@ -1,0 +1,60 @@
+{
+    "id": "cookie-consent",
+    "name": "Cookie Consent",
+    "version": "1.0.0",
+    "description": "GDPR cookie banner injected site-wide on every public page. The admin configures texts, position and theme; visitor choices are logged anonymously (no PII) for compliance stats, and consent can be re-requested from everyone by bumping the config version.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "cookie-consent"
+        }
+    },
+    "adminMenu": {
+        "label": "Cookie Consent",
+        "icon": "fa-cookie-bite",
+        "href": "/admin/plugin/cookie-consent",
+        "order": 58
+    },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read the anonymous consent log to build the compliance stats (totals + last 30 days)."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create the consent log table and insert one anonymous row per visitor choice (accepted/rejected, no PII)."
+        },
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the banner configuration (texts, position, theme, version) served to the public banner script."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Save the banner configuration edited in the admin page."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Public endpoints for the banner (config + anonymous choice log) and admin endpoints (config + stats)."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Cookie Consent entry to the admin sidebar."
+        },
+        {
+            "scope": "assets",
+            "access": "write",
+            "reason": "Enqueue the banner script and stylesheet on every public page (this is how the banner appears site-wide)."
+        }
+    ]
+}

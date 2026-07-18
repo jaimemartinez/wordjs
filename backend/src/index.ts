@@ -193,6 +193,12 @@ app.use(`${config.api.prefix}/media`, uploadLimiter);
 app.use(`${config.api.prefix}/themes/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/plugins/upload`, uploadLimiter);
 app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to backups too
+// #26: /setup/migrate authenticates attacker-supplied admin credentials and — necessarily, per #25 — cannot
+// record login failures to trip the account lockout, so it was an unthrottled password oracle. Cap it under the
+// strict authLimiter (10/hr/IP) — much tighter than the setupLimiter (20/15min) below. This more-specific mount
+// is registered FIRST so authLimiter is the binding constraint; the /setup setupLimiter still also applies
+// (defense in depth). Pair with the uniform-response fix in routes/setup.ts.
+app.use(`${config.api.prefix}/setup/migrate`, authLimiter);
 app.use(`${config.api.prefix}/setup`, setupLimiter); // tight cap on the public install/test-db endpoints
 
 // SECURITY: CSRF Protection for all API routes

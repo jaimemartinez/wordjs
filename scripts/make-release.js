@@ -52,7 +52,8 @@ const IGNORE_PATTERNS = [
     'check_plugins.js',
     'debug-inbox.js',
     'dump-routes.js',
-    'build-production.ps1'
+    'build-production.ps1',
+    'marketplace', // Marketplace plugins are DISTRIBUTED separately (release assets), never bundled in the core package
 ];
 
 // SECURITY: never ship local databases, private keys or TLS material in a release. The sensitive

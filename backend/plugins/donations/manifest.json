@@ -1,0 +1,67 @@
+{
+    "id": "donations",
+    "name": "Donations",
+    "version": "1.0.0",
+    "description": "Donation campaigns with a goal thermometer, preset or custom amounts, always-available manual payment instructions plus optional Stripe Checkout, donor management and CSV export. GiveWP-style, sandbox-native.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "donations"
+        },
+        "puckComponents": {
+            "entry": "client/puck/DonationsPuck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "Donaciones",
+        "icon": "fa-hand-holding-heart",
+        "href": "/admin/plugin/donations",
+        "order": 72
+    },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read campaigns, donations and the plugin's own settings table (Stripe key lives there, never in options)."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create the plugin tables and record campaigns, donations and payment-status changes."
+        },
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the non-secret donations configuration (currency, presets, manual payment instructions, notify email)."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Save the non-secret donations configuration."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Public donation/confirmation endpoints for the Puck block and admin CRUD/export endpoints."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Donaciones entry to the admin sidebar."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Send thank-you/receipt emails to donors and notify the administrator about new donations (donations still work if mail fails)."
+        },
+        {
+            "scope": "network",
+            "reason": "Create and verify Stripe Checkout sessions against api.stripe.com when a Stripe key is configured (optional feature)."
+        }
+    ]
+}

@@ -1,0 +1,17 @@
+{
+    "id": "table-of-contents",
+    "name": "Table of Contents",
+    "version": "1.0.0",
+    "description": "Índice de contenidos automático: el bloque Puck \"TableOfContents\" escanea los H2/H3 de la página y genera un índice anidado con anclas, scroll suave y resaltado de la sección activa.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "puckComponents": {
+            "entry": "client/puck/TableOfContentsPuck.tsx"
+        }
+    },
+    "permissions": []
+}

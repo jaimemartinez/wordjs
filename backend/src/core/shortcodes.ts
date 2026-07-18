@@ -37,7 +37,14 @@ function addShortcode(tag: string, callback: Function) {
             return;
         }
     }
-    shortcodes.set(tag, callback);
+    // Wrap the callback so it ALWAYS runs in its owner's security context. Unlike hooks/timers/emitters,
+    // doShortcodeAsync invokes the shortcode callback DIRECTLY, and it is called from Post.toJSON during
+    // render with an EMPTY ALS store — so an unwrapped plugin/theme shortcode would execute as "core"/
+    // trusted and slip past the option/cache/env context-gated guards (#20). Core (owner=null) stays raw.
+    const stored = owner
+        ? function (this: any, ...a: any[]) { const { runWithContext } = require('./plugin-context'); return runWithContext(owner, () => (callback as any).apply(this, a)); }
+        : callback;
+    shortcodes.set(tag, stored);
     shortcodeOwners.set(tag, owner);
 }
 

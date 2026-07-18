@@ -392,8 +392,38 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
     // runtime (different module loader), so catching it statically is the primary defense; the worker's
     // ESM resolve hook is the runtime backstop.
     const SENSITIVE_MODULES = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads', 'module', 'inspector', 'v8', 'repl'];
+    // THEMES run functions.js IN-PROCESS on the host, where there is NO ESM import() resolve hook (unlike
+    // the isolated worker), so a theme's import() of anything loads UNSCANNED module code = host RCE (#7/#8).
+    const isThemeScan = /[\\/]themes[\\/]/.test(pluginPath);
     const flagModuleLiteral = (rawValue: any, kindLabel: string) => {
-        const moduleName = String(rawValue).replace(/^node:/, '');
+        const raw = String(rawValue);
+        // An import specifier can bypass both this static scan AND the require proxy. The WHATWG URL parser
+        // STRIPS ASCII whitespace/control chars before scheme detection, so `da\tta:` ≡ `data:` at runtime —
+        // strip them here too before inspecting (#7).
+        if (kindLabel === 'import') {
+            const spec = raw.split('').filter(c => c.charCodeAt(0) > 0x20).join('');
+            // For THEMES, only RELATIVE import specifiers (./ ../) are allowed — they resolve inside the
+            // theme's own AST-scanned tree. A bare package ('evilpkg' from the theme's node_modules), an
+            // absolute path, or a URL scheme all load code the scan never saw (#7). require() (CJS) stays
+            // governed by secure-require at runtime; only ESM import() lacks a host hook.
+            if (isThemeScan && !/^\.\.?[\\/]/.test(spec) && spec !== '.' && spec !== '..') {
+                dangerousCalls.add(`import('${spec.slice(0, 40)}') — non-relative import specifier is not permitted in a theme`);
+                return;
+            }
+            // Even a RELATIVE theme import that points into node_modules (`./node_modules/pwn`) reaches an
+            // unscanned tree — reject it (#7). node_modules is not part of a theme's scanned own-code.
+            if (isThemeScan && /(^|[\\/])node_modules([\\/]|$)/i.test(spec)) {
+                dangerousCalls.add(`import('${spec.slice(0, 40)}') — importing from node_modules is not permitted in a theme`);
+                return;
+            }
+            // For PLUGINS, reject data:/file:/blob:/remote URL-scheme specifiers (a bare/builtin import is
+            // governed by the worker's ESM resolve hook; a URL scheme bypasses it and the require proxy).
+            if (/^[a-z][a-z0-9+.\-]*:/i.test(spec) && !/^node:/i.test(spec)) {
+                dangerousCalls.add(`import('${spec.slice(0, 40)}') — non-relative URL-scheme import specifier is not permitted`);
+                return;
+            }
+        }
+        const moduleName = raw.replace(/^node:/, '');
         if (!SENSITIVE_MODULES.includes(moduleName)) return;
         if (moduleName === 'dns' || moduleName === 'net') {
             if (!hasDeclared('network', 'admin') && !hasDeclared('email', 'admin')) {
@@ -407,6 +437,9 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
     // No plugin may skip the AST scan: there is no trust tier, and declaring system:admin grants
     // nothing. EVERY plugin runs the full scan (so its child_process/eval/native use is caught).
 
+    // (isThemeScan is defined above.) THEMES run functions.js in-process, so EVERY .js they could require()
+    // must be scanned — a theme shipping dist/payload.js + require('./dist/payload.js') would otherwise run
+    // never-scanned host code (#8). For plugins, dist/client/frontend are browser bundles (never the worker).
     function getFiles(dir: string): string[] {
         let results: string[] = [];
         if (!fs.existsSync(dir)) return results;
@@ -415,13 +448,13 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
             const fullPath = path.join(dir, file);
             const stat = fs.statSync(fullPath);
             if (stat && stat.isDirectory()) {
-                // Skip node_modules, hidden files, and FRONTEND directories. `dist/` is the BUILT
-                // output of client/ (esbuild bundles like component.bundle.js) — it runs in the
-                // browser, NOT in the isolated worker, and bundling injects require.*/process.cwd from
-                // packed deps, which falsely trips the dangerous-call scan. The worker only loads the
-                // backend entry (index.js), so scanning dist/ is both wrong and a false-positive source.
-                if (!file.includes('node_modules') && !file.startsWith('.') &&
-                    !['client', 'frontend', 'dist'].includes(file)) {
+                // For PLUGINS skip node_modules, hidden dirs, and FRONTEND/dist bundles (browser-only, and
+                // bundling falsely trips the scan). For THEMES skip ONLY node_modules — a theme's functions.js
+                // runs in-process and can require() from ANY of its own subdirs incl. hidden ones like
+                // `.assets/payload.js`, so those MUST be scanned too (#8).
+                const skipDir = file.includes('node_modules') ||
+                    (!isThemeScan && (file.startsWith('.') || ['client', 'frontend', 'dist'].includes(file)));
+                if (!skipDir) {
                     results = results.concat(getFiles(fullPath));
                 }
             } else if (file.endsWith('.js') || file.endsWith('.ts') ||
@@ -459,11 +492,26 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
         }
 
         walk.ancestor(ast, {
+            NewExpression(node: any) {
+                // `new Function('…')` / new (Async|Generator)Function('…') build code from a STRING that this
+                // static scan cannot see. The isolated worker also blocks code-gen at runtime
+                // (--disallow-code-generation-from-strings), but an IN-PROCESS theme has no such backstop, so
+                // flagging here is the only gate against `new Function('return import("child_process")')()` (#8).
+                if (node.callee && node.callee.type === 'Identifier' && ['Function', 'GeneratorFunction', 'AsyncFunction'].includes(node.callee.name)) {
+                    dangerousCalls.add(`new ${node.callee.name}() — runtime code generation is not permitted`);
+                }
+            },
             CallExpression(node: any, ancestors: any) {
                 let name = '';
                 // 1. Direct calls: eval(), execSync()
                 if (node.callee.type === 'Identifier') {
                     name = node.callee.name;
+
+                    // Runtime code-generation (eval()/Function()) defeats this static scan — an in-process
+                    // theme has no runtime code-gen block (unlike the worker). Flag it (#8).
+                    if (name === 'eval' || name === 'Function') {
+                        dangerousCalls.add(`${name}() — runtime code generation is not permitted`);
+                    }
 
                     // Detect require of sensitive modules
                     if (name === 'require' && node.arguments.length > 0) {
