@@ -54,6 +54,11 @@ const IGNORE_PATTERNS = [
     'dump-routes.js',
     'build-production.ps1',
     'marketplace', // Marketplace plugins are DISTRIBUTED separately (release assets), never bundled in the core package
+    // SECURITY: private CLIENT plugins. They are gitignored (CI releases built from git never see
+    // them) but they DO exist in local working trees — without these entries a locally-run
+    // `npm run bundle-release` would ship client code+secrets inside the public ZIP.
+    'backend/plugins/toscano',
+    'backend/plugins/toscano-platform',
 ];
 
 // SECURITY: never ship local databases, private keys or TLS material in a release. The sensitive

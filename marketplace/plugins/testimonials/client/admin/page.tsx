@@ -6,24 +6,51 @@
  * Moderation tabs (Pendientes with badge / Aprobados), card list with approve/edit/delete,
  * a create/edit modal, and the "allow public submissions" settings toggle.
  * API calls go through the host's api helpers (session cookie).
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-testimonials) — the markup below only uses cf-*
+ * classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnLightCls = "px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50";
+/* Tiny inline icon set (viewBox 24, stroke currentColor) so the identity needs no icon-font. */
+const IconQuote = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconCheck = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M20 6 9 17l-5-5" />
+    </svg>
+);
+const IconStar = (props) => (
+    <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+    </svg>
+);
 
 // ── module-level components (never define a component inside a component) ──────────────────────
 
 function StarsRow({ rating }) {
     const r = Math.max(1, Math.min(5, Number(rating) || 5));
     return (
-        <span className="inline-flex gap-0.5 text-sm" aria-label={`${r} de 5 estrellas`}>
+        <span className="cf-stars" aria-label={`${r} de 5 estrellas`}>
             {[1, 2, 3, 4, 5].map((i) => (
-                <span key={i} className={i <= r ? "text-amber-500" : "text-gray-200"} aria-hidden="true">★</span>
+                <IconStar key={i} className={i <= r ? "" : "is-off"} />
             ))}
         </span>
     );
@@ -31,16 +58,16 @@ function StarsRow({ rating }) {
 
 function RatingPicker({ value, onChange }) {
     return (
-        <span className="inline-flex gap-1" role="radiogroup" aria-label="Calificación">
+        <span className="cf-star-row" role="radiogroup" aria-label="Calificación">
             {[1, 2, 3, 4, 5].map((i) => (
                 <button
                     key={i}
                     type="button"
-                    className={`text-2xl leading-none transition-colors ${i <= value ? "text-amber-500" : "text-gray-200 hover:text-amber-300"}`}
+                    className={`cf-star-btn ${i <= value ? "is-on" : ""}`}
                     aria-label={`${i} de 5 estrellas`}
                     aria-pressed={i === value}
                     onClick={() => onChange(i)}
-                >★</button>
+                ><IconStar /></button>
             ))}
         </span>
     );
@@ -50,10 +77,10 @@ function AuthorAvatar({ item }) {
     const initial = (item.author_name || "?").trim().charAt(0).toUpperCase() || "?";
     if (item.author_photo) {
         // eslint-disable-next-line @next/next/no-img-element
-        return <img src={item.author_photo} alt={item.author_name} className="w-11 h-11 rounded-full object-cover border border-gray-100 flex-shrink-0" />;
+        return <img src={item.author_photo} alt={item.author_name} className="cf-avatar" />;
     }
     return (
-        <span className="w-11 h-11 rounded-full bg-gray-900 text-white flex items-center justify-center font-black flex-shrink-0" aria-hidden="true">
+        <span className="cf-avatar cf-avatar-fallback" aria-hidden="true">
             {initial}
         </span>
     );
@@ -61,32 +88,32 @@ function AuthorAvatar({ item }) {
 
 function TestimonialCard({ item, busy, onApprove, onEdit, onDelete }) {
     return (
-        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-5 sm:p-6 flex flex-col gap-3">
-            <div className="flex items-center gap-3">
+        <div className="cf-card-item cf-tcard">
+            <div className="cf-tcard-head">
                 <AuthorAvatar item={item} />
-                <div className="min-w-0">
-                    <p className="font-bold text-gray-900 truncate">{item.author_name}</p>
-                    {item.author_role && <p className="text-[11px] text-gray-400 truncate">{item.author_role}</p>}
+                <div style={{ minWidth: 0 }}>
+                    <p className="cf-t-name">{item.author_name}</p>
+                    {item.author_role && <p className="cf-t-role">{item.author_role}</p>}
                 </div>
-                <div className="ml-auto flex flex-col items-end gap-1">
+                <div style={{ marginLeft: "auto", display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "0.35rem" }}>
                     <StarsRow rating={item.rating} />
-                    <span className={`text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded-full ${item.source === "public" ? "bg-blue-50 text-blue-500" : "bg-gray-100 text-gray-400"}`}>
+                    <span className={`cf-pill ${item.source === "public" ? "is-public" : ""}`}>
                         {item.source === "public" ? "Público" : "Admin"}
                     </span>
                 </div>
             </div>
-            <p className="text-sm text-gray-600 leading-relaxed whitespace-pre-line">{item.content}</p>
-            <div className="flex flex-wrap items-center gap-2 mt-auto pt-2">
-                <span className="text-[10px] text-gray-300 font-bold mr-auto">
+            <p className="cf-t-quote">{item.content}</p>
+            <div className="cf-tcard-foot">
+                <span className="cf-t-date">
                     {item.created_at ? new Date(item.created_at).toLocaleDateString() : ""}
                 </span>
                 {item.status === "pending" && (
-                    <button type="button" disabled={busy} onClick={() => onApprove(item)} className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
-                        Aprobar
+                    <button type="button" disabled={busy} onClick={() => onApprove(item)} className="cf-btn">
+                        <IconCheck /> Aprobar
                     </button>
                 )}
-                <button type="button" disabled={busy} onClick={() => onEdit(item)} className={btnLightCls}>Editar</button>
-                <button type="button" disabled={busy} onClick={() => onDelete(item)} className="px-4 py-2 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
+                <button type="button" disabled={busy} onClick={() => onEdit(item)} className="cf-btn-ghost"><IconPen /> Editar</button>
+                <button type="button" disabled={busy} onClick={() => onDelete(item)} className="cf-btn-danger">
                     Eliminar
                 </button>
             </div>
@@ -134,44 +161,56 @@ function TestimonialModal({ initial, onClose, onSaved }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/50 p-4" onClick={onClose}>
-            <form onSubmit={save} onClick={(e) => e.stopPropagation()} className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 sm:p-8 space-y-4">
-                <h2 className="text-xl font-black text-gray-900 italic tracking-tighter">
-                    {initial?.id ? "Editar testimonio" : "Nuevo testimonio"}
-                </h2>
-                <div>
-                    <label className={labelCls}>Nombre *</label>
-                    <input type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} className={inputCls} required />
-                </div>
-                <div>
-                    <label className={labelCls}>Cargo / Empresa</label>
-                    <input type="text" value={role} maxLength={120} onChange={(e) => setRole(e.target.value)} className={inputCls} />
-                </div>
-                <div>
-                    <label className={labelCls}>URL de la foto (http/https, opcional)</label>
-                    <input type="url" value={photo} maxLength={500} onChange={(e) => setPhoto(e.target.value)} placeholder="https://…" className={inputCls} />
-                </div>
-                <div>
-                    <label className={labelCls}>Testimonio *</label>
-                    <textarea value={content} maxLength={2000} onChange={(e) => setContent(e.target.value)} rows={4} className={inputCls} required />
-                </div>
-                <div className="flex flex-wrap items-end gap-6">
-                    <div>
-                        <label className={labelCls}>Calificación</label>
-                        <RatingPicker value={rating} onChange={setRating} />
+        <div className="cf-overlay" onClick={onClose}>
+            <form
+                onSubmit={save}
+                onClick={(e) => e.stopPropagation()}
+                className="cf-letter"
+                role="dialog"
+                aria-modal="true"
+                aria-label={initial?.id ? "Editar testimonio" : "Nuevo testimonio"}
+            >
+                <div className="cf-letter-body">
+                    <h2 className="cf-editor-title">
+                        {initial?.id ? <IconPen /> : <IconPlus />}
+                        {initial?.id ? "Editar testimonio" : "Nuevo testimonio"}
+                    </h2>
+                    <div style={{ display: "grid", gap: "1.05rem" }}>
+                        <div>
+                            <label className="cf-label" htmlFor="tm-name">Nombre *</label>
+                            <input id="tm-name" type="text" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} className="cf-input" required />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="tm-role">Cargo / Empresa</label>
+                            <input id="tm-role" type="text" value={role} maxLength={120} onChange={(e) => setRole(e.target.value)} className="cf-input" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="tm-photo">URL de la foto (http/https, opcional)</label>
+                            <input id="tm-photo" type="url" value={photo} maxLength={500} onChange={(e) => setPhoto(e.target.value)} placeholder="https://…" className="cf-input" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="tm-content">Testimonio *</label>
+                            <textarea id="tm-content" value={content} maxLength={2000} onChange={(e) => setContent(e.target.value)} rows={4} className="cf-input" required />
+                        </div>
+                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "1.5rem" }}>
+                            <div>
+                                <span className="cf-label">Calificación</span>
+                                <RatingPicker value={rating} onChange={setRating} />
+                            </div>
+                            <div style={{ flex: 1, minWidth: "140px" }}>
+                                <label className="cf-label" htmlFor="tm-status">Estado</label>
+                                <select id="tm-status" value={status} onChange={(e) => setStatus(e.target.value)} className="cf-select">
+                                    <option value="approved">Aprobado</option>
+                                    <option value="pending">Pendiente</option>
+                                </select>
+                            </div>
+                        </div>
+                        {error && <div role="alert" className="cf-flash is-error" style={{ marginBottom: 0 }}>{error}</div>}
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", paddingTop: "0.35rem" }}>
+                            <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                        </div>
                     </div>
-                    <div className="flex-1 min-w-[140px]">
-                        <label className={labelCls}>Estado</label>
-                        <select value={status} onChange={(e) => setStatus(e.target.value)} className={inputCls}>
-                            <option value="approved">Aprobado</option>
-                            <option value="pending">Pendiente</option>
-                        </select>
-                    </div>
-                </div>
-                {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600">{error}</div>}
-                <div className="flex items-center justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} className={btnLightCls}>Cancelar</button>
-                    <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
                 </div>
             </form>
         </div>
@@ -248,22 +287,26 @@ export default function TestimonialsAdminPage() {
     const visible = items.filter((i) => (tab === "pending" ? i.status === "pending" : i.status === "approved"));
 
     return (
-        <div className="max-w-4xl mx-auto p-4 sm:p-8">
-            <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconQuote /></div>
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Testimonios</h1>
-                    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                        Moderación + bloque "Testimonials" en el editor visual
-                    </p>
+                    <h1 className="cf-title">Testimonios</h1>
+                    <p className="cf-subtitle">Moderación + bloque "Testimonials" en el editor visual</p>
                 </div>
-                <button type="button" onClick={() => setModal({})} className={btnCls}>Nuevo testimonio</button>
+            </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+                <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> Nuevo testimonio</button>
             </div>
 
             {/* Settings toggle */}
-            <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-5 sm:p-6 mb-6 flex flex-wrap items-center justify-between gap-3">
-                <div>
-                    <p className="font-bold text-gray-800 text-sm">Permitir envíos públicos desde el bloque</p>
-                    <p className="text-[11px] text-gray-400 mt-1 leading-relaxed">
+            <div className="cf-card-item" style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "1rem", marginBottom: "1.5rem" }}>
+                <div style={{ minWidth: 0, flex: "1 1 18rem" }}>
+                    <p className="cf-setting-title">Permitir envíos públicos desde el bloque</p>
+                    <p className="cf-setting-desc">
                         Si está activo, el bloque puede mostrar un formulario público; los envíos entran como
                         <strong> pendientes</strong> y solo se publican cuando los apruebas aquí.
                     </p>
@@ -273,50 +316,58 @@ export default function TestimonialsAdminPage() {
                     onClick={toggleSubmit}
                     role="switch"
                     aria-checked={allowPublicSubmit}
-                    className={`relative w-14 h-8 rounded-full transition-colors flex-shrink-0 ${allowPublicSubmit ? "bg-green-500" : "bg-gray-200"}`}
+                    aria-label="Permitir envíos públicos desde el bloque"
+                    className={`cf-switch ${allowPublicSubmit ? "is-on" : ""}`}
                 >
-                    <span className={`absolute top-1 w-6 h-6 bg-white rounded-full shadow transition-all ${allowPublicSubmit ? "left-7" : "left-1"}`} />
+                    <span className="cf-switch-knob" />
                 </button>
             </div>
 
             {/* Tabs */}
-            <div className="flex gap-2 mb-6">
+            <div className="cf-tabs" role="tablist">
                 <button
                     type="button"
+                    role="tab"
+                    aria-selected={tab === "pending"}
                     onClick={() => setTab("pending")}
-                    className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === "pending" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                    className={`cf-tab ${tab === "pending" ? "is-active" : ""}`}
                 >
                     Pendientes
                     {counts.pending > 0 && (
-                        <span className="bg-red-500 text-white text-[10px] font-black rounded-full min-w-[20px] h-5 px-1.5 flex items-center justify-center">
+                        <span className="cf-badge">
                             {counts.pending}
                         </span>
                     )}
                 </button>
                 <button
                     type="button"
+                    role="tab"
+                    aria-selected={tab === "approved"}
                     onClick={() => setTab("approved")}
-                    className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === "approved" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                    className={`cf-tab ${tab === "approved" ? "is-active" : ""}`}
                 >
                     Aprobados ({counts.approved})
                 </button>
             </div>
 
             {message && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-6 ${/Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
+                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
 
             {/* Cards */}
             {visible.length === 0 ? (
-                <div className="bg-white rounded-3xl border border-dashed border-gray-200 p-10 text-center text-sm text-gray-400">
-                    {tab === "pending"
-                        ? "No hay testimonios pendientes de moderación."
-                        : "No hay testimonios aprobados todavía — crea uno con “Nuevo testimonio”."}
+                <div className="cf-empty">
+                    <IconQuote />
+                    <span>
+                        {tab === "pending"
+                            ? "No hay testimonios pendientes de moderación."
+                            : "No hay testimonios aprobados todavía — crea uno con “Nuevo testimonio”."}
+                    </span>
                 </div>
             ) : (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div className="cf-cardgrid">
                     {visible.map((item) => (
                         <TestimonialCard
                             key={item.id}
@@ -330,7 +381,7 @@ export default function TestimonialsAdminPage() {
                 </div>
             )}
 
-            <p className="text-[11px] text-gray-400 mt-8 leading-relaxed">
+            <p className="cf-footnote">
                 En el editor visual, agrega el bloque <strong>Testimonials</strong> (categoría Testimonios) —
                 muestra los testimonios aprobados en carrusel o cuadrícula y, si lo permites arriba, un
                 formulario de envío público. (El bloque estático "Testimonial" del núcleo es distinto: uno

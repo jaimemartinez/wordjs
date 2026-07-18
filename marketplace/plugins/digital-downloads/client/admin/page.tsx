@@ -6,19 +6,16 @@
  * Tabs: Productos (CRUD + sales/download counters), Pedidos (pending badge, mark-paid → auto-email,
  * CSV export), Configuración (currency symbol, manual-payment instructions, notify email,
  * link expiry days, max uses). All calls go through the host api helpers (session cookie).
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-downloads) — the markup below only uses cf-*
+ * classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/digital-downloads";
-
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnPrimary = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhost = "px-5 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnSmall = "px-3 py-1.5 rounded-xl text-[11px] font-black uppercase tracking-widest transition-all disabled:opacity-50";
-const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
 
 const EMPTY_FORM = { name: "", slug: "", description: "", price: "0", file_url: "", file_label: "", image_url: "", is_published: true };
 
@@ -30,6 +27,40 @@ const priceToCents = (str) => {
     if (!Number.isFinite(n) || n < 0) return null;
     return Math.round(n * 100);
 };
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconDownload = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconBox = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z" />
+        <path d="m3.3 7 8.7 5 8.7-5" />
+        <path d="M12 22V12" />
+    </svg>
+);
+const IconReceipt = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M4 2v20l2-1 2 1 2-1 2 1 2-1 2 1 2-1 2 1V2l-2 1-2-1-2 1-2-1-2 1-2-1-2 1Z" />
+        <path d="M16 8H8" />
+        <path d="M16 12H8" />
+    </svg>
+);
 
 export default function DigitalDownloadsAdminPage() {
     const [tab, setTab] = useState("products");
@@ -172,136 +203,154 @@ export default function DigitalDownloadsAdminPage() {
         <button
             key={id}
             type="button"
+            role="tab"
+            aria-selected={tab === id}
             onClick={() => { setTab(id); setMessage(""); }}
-            className={`px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === id ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+            className={`cf-tab ${tab === id ? "is-active" : ""}`}
         >
             {label}
-            {badge > 0 && <span className="min-w-[20px] h-5 px-1.5 rounded-full bg-amber-400 text-gray-900 text-[10px] font-black flex items-center justify-center">{badge}</span>}
+            {badge > 0 && <span className="cf-badge">{badge}</span>}
         </button>
     );
 
     return (
-        <div className="max-w-5xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Descargas Digitales</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Productos descargables con enlaces protegidos por token (caducidad + límite de usos)
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconDownload /></div>
+                <div>
+                    <h1 className="cf-title">Descargas Digitales</h1>
+                    <p className="cf-subtitle">
+                        Productos descargables con enlaces protegidos por token (caducidad + límite de usos)
+                    </p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
-            <div className="flex flex-wrap gap-2 mb-6">
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
                 {tabBtn("products", "Productos", 0)}
                 {tabBtn("orders", "Pedidos", pendingCount)}
                 {tabBtn("config", "Configuración", 0)}
             </div>
 
             {message && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-6 ${isError ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>{message}</div>
+                <div role={isError ? "alert" : "status"} className={`cf-flash ${isError ? "is-error" : "is-ok"}`}>{message}</div>
             )}
 
             {/* ============ PRODUCTOS ============ */}
             {tab === "products" && (
-                <div className="space-y-6">
-                    <div className="flex justify-end">
-                        <button type="button" onClick={openCreate} className={btnPrimary}>+ Nuevo producto</button>
+                <div>
+                    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+                        <button type="button" onClick={openCreate} className="cf-btn"><IconPlus /> Nuevo producto</button>
                     </div>
 
                     {showForm && (
-                        <form onSubmit={saveProduct} className={`${cardCls} space-y-5`}>
-                            <h2 className="font-bold text-gray-800">{editingId ? "Editar producto" : "Nuevo producto"}</h2>
-                            <div className="grid sm:grid-cols-2 gap-5">
-                                <div>
-                                    <label className={labelCls}>Nombre *</label>
-                                    <input type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className={inputCls} required />
+                        <form onSubmit={saveProduct} className="cf-editor">
+                            <div className="cf-editor-body">
+                                <h2 className="cf-editor-title">
+                                    <IconPen />
+                                    {editingId ? "Editar producto" : "Nuevo producto"}
+                                </h2>
+                                <div className="cf-grid">
+                                    <div>
+                                        <label className="cf-label" htmlFor="dd-name">Nombre *</label>
+                                        <input id="dd-name" type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} className="cf-input" required />
+                                    </div>
+                                    <div>
+                                        <label className="cf-label" htmlFor="dd-slug">Slug (opcional — se genera del nombre)</label>
+                                        <input id="dd-slug" type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="mi-ebook" className="cf-input" />
+                                    </div>
+                                    <div className="cf-span-2">
+                                        <label className="cf-label" htmlFor="dd-desc">Descripción</label>
+                                        <textarea id="dd-desc" value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} className="cf-input" />
+                                    </div>
+                                    <div>
+                                        <label className="cf-label" htmlFor="dd-price">Precio ({symbol}) — 0 = gratis</label>
+                                        <input id="dd-price" type="text" inputMode="decimal" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} placeholder="9.99" className="cf-input" />
+                                    </div>
+                                    <div>
+                                        <label className="cf-label" htmlFor="dd-flabel">Etiqueta del archivo</label>
+                                        <input id="dd-flabel" type="text" value={form.file_label} onChange={(e) => setForm({ ...form, file_label: e.target.value })} placeholder="PDF — 12 MB" className="cf-input" />
+                                    </div>
+                                    <div className="cf-span-2">
+                                        <label className="cf-label" htmlFor="dd-furl">URL del archivo *</label>
+                                        <input id="dd-furl" type="text" value={form.file_url} onChange={(e) => setForm({ ...form, file_url: e.target.value })} placeholder="/uploads/2026/07/mi-ebook.pdf" className="cf-input" required />
+                                        <p className="cf-help">
+                                            Sube el archivo a la <strong>biblioteca de medios</strong> y pega aquí su URL. El enlace nunca se muestra públicamente:
+                                            solo se revela a quien tenga un token de descarga válido.
+                                        </p>
+                                    </div>
+                                    <div className="cf-span-2">
+                                        <label className="cf-label" htmlFor="dd-img">URL de imagen (opcional)</label>
+                                        <input id="dd-img" type="text" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} placeholder="/uploads/2026/07/portada.jpg" className="cf-input" />
+                                    </div>
                                 </div>
-                                <div>
-                                    <label className={labelCls}>Slug (opcional — se genera del nombre)</label>
-                                    <input type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: e.target.value })} placeholder="mi-ebook" className={inputCls} />
+                                <div style={{ marginTop: "0.9rem" }}>
+                                    <label className="cf-check">
+                                        <input type="checkbox" checked={form.is_published} onChange={(e) => setForm({ ...form, is_published: e.target.checked })} />
+                                        Publicado (visible en el bloque del editor visual)
+                                    </label>
                                 </div>
-                            </div>
-                            <div>
-                                <label className={labelCls}>Descripción</label>
-                                <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={3} className={inputCls} />
-                            </div>
-                            <div className="grid sm:grid-cols-2 gap-5">
-                                <div>
-                                    <label className={labelCls}>Precio ({symbol}) — 0 = gratis</label>
-                                    <input type="text" inputMode="decimal" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} placeholder="9.99" className={inputCls} />
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.2rem" }}>
+                                    <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }} className="cf-btn-ghost">Cancelar</button>
+                                    <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar producto"}</button>
                                 </div>
-                                <div>
-                                    <label className={labelCls}>Etiqueta del archivo</label>
-                                    <input type="text" value={form.file_label} onChange={(e) => setForm({ ...form, file_label: e.target.value })} placeholder="PDF — 12 MB" className={inputCls} />
-                                </div>
-                            </div>
-                            <div>
-                                <label className={labelCls}>URL del archivo *</label>
-                                <input type="text" value={form.file_url} onChange={(e) => setForm({ ...form, file_url: e.target.value })} placeholder="/uploads/2026/07/mi-ebook.pdf" className={inputCls} required />
-                                <p className="text-[11px] text-gray-400 mt-2">
-                                    Sube el archivo a la <strong>biblioteca de medios</strong> y pega aquí su URL. El enlace nunca se muestra públicamente:
-                                    solo se revela a quien tenga un token de descarga válido.
-                                </p>
-                            </div>
-                            <div>
-                                <label className={labelCls}>URL de imagen (opcional)</label>
-                                <input type="text" value={form.image_url} onChange={(e) => setForm({ ...form, image_url: e.target.value })} placeholder="/uploads/2026/07/portada.jpg" className={inputCls} />
-                            </div>
-                            <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
-                                <input type="checkbox" checked={form.is_published} onChange={(e) => setForm({ ...form, is_published: e.target.checked })} />
-                                Publicado (visible en el bloque del editor visual)
-                            </label>
-                            <div className="flex flex-wrap gap-3 justify-end">
-                                <button type="button" onClick={() => { setShowForm(false); setEditingId(null); }} className={btnGhost}>Cancelar</button>
-                                <button type="submit" disabled={busy} className={btnPrimary}>{busy ? "Guardando…" : "Guardar producto"}</button>
                             </div>
                         </form>
                     )}
 
-                    <div className={cardCls}>
-                        <h2 className="font-bold text-gray-800 mb-4">Productos ({products.length})</h2>
+                    <div className="cf-card-item">
+                        <h2 className="cf-card-heading">Productos ({products.length})</h2>
                         {products.length === 0 ? (
-                            <p className="text-sm text-gray-400">Sin productos todavía — crea el primero y agrégalo con el bloque <strong>DigitalDownloads</strong> en el editor visual.</p>
+                            <div className="cf-empty">
+                                <IconBox />
+                                <span>Sin productos todavía — crea el primero y agrégalo con el bloque <strong>DigitalDownloads</strong> en el editor visual.</span>
+                            </div>
                         ) : (
-                            <div className="overflow-x-auto">
-                                <table className="w-full text-sm">
+                            <div className="cf-table-wrap">
+                                <table className="cf-table is-static">
                                     <thead>
-                                        <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                            <th className="py-2 pr-3">Producto</th>
-                                            <th className="py-2 pr-3">Precio</th>
-                                            <th className="py-2 pr-3">Ventas</th>
-                                            <th className="py-2 pr-3">Descargas</th>
-                                            <th className="py-2 pr-3">Estado</th>
-                                            <th className="py-2"></th>
+                                        <tr>
+                                            <th>Producto</th>
+                                            <th>Precio</th>
+                                            <th>Ventas</th>
+                                            <th>Descargas</th>
+                                            <th>Estado</th>
+                                            <th></th>
                                         </tr>
                                     </thead>
                                     <tbody>
                                         {products.map((p) => (
-                                            <tr key={p.id} className="border-b border-gray-50">
-                                                <td className="py-3 pr-3">
-                                                    <div className="flex items-center gap-3">
+                                            <tr key={p.id}>
+                                                <td>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
                                                         {p.image_url ? (
                                                             /* eslint-disable-next-line @next/next/no-img-element */
-                                                            <img src={p.image_url} alt={p.name} className="w-10 h-10 rounded-xl object-cover border border-gray-100" />
+                                                            <img src={p.image_url} alt={p.name} className="cf-thumb" />
                                                         ) : (
-                                                            <div className="w-10 h-10 rounded-xl bg-gray-100 flex items-center justify-center text-gray-300 font-black">↓</div>
+                                                            <div className="cf-thumb-ph" aria-hidden="true"><IconDownload /></div>
                                                         )}
-                                                        <div>
-                                                            <div className="font-bold text-gray-800">{p.name}</div>
-                                                            <div className="text-[11px] text-gray-400">{p.file_label || p.slug}</div>
+                                                        <div style={{ minWidth: 0 }}>
+                                                            <div className="cf-prod-name">{p.name}</div>
+                                                            <div className="cf-prod-sub">{p.file_label || p.slug}</div>
                                                         </div>
                                                     </div>
                                                 </td>
-                                                <td className="py-3 pr-3 font-bold">{(Number(p.price_cents) || 0) === 0 ? <span className="text-green-600">Gratis</span> : fmtMoney(p.price_cents, symbol)}</td>
-                                                <td className="py-3 pr-3">{p.sales_count}</td>
-                                                <td className="py-3 pr-3">{p.download_count}</td>
-                                                <td className="py-3 pr-3">
+                                                <td className="cf-cell-money">{(Number(p.price_cents) || 0) === 0 ? <span className="cf-free">Gratis</span> : fmtMoney(p.price_cents, symbol)}</td>
+                                                <td className="cf-cell-num">{p.sales_count}</td>
+                                                <td className="cf-cell-num">{p.download_count}</td>
+                                                <td>
                                                     <button type="button" onClick={() => togglePublished(p)} disabled={busy}
-                                                        className={`${btnSmall} ${p.is_published ? "bg-green-50 text-green-700 hover:bg-green-100" : "bg-gray-100 text-gray-400 hover:bg-gray-200"}`}>
+                                                        className={`cf-pill-btn ${p.is_published ? "is-on" : "is-off"}`}>
                                                         {p.is_published ? "Publicado" : "Oculto"}
                                                     </button>
                                                 </td>
-                                                <td className="py-3 text-right whitespace-nowrap">
-                                                    <button type="button" onClick={() => openEdit(p)} className={`${btnSmall} bg-gray-100 text-gray-600 hover:bg-gray-200 mr-2`}>Editar</button>
-                                                    <button type="button" onClick={() => deleteProduct(p)} disabled={busy} className={`${btnSmall} bg-red-50 text-red-600 hover:bg-red-100`}>Eliminar</button>
+                                                <td>
+                                                    <div className="cf-rowactions">
+                                                        <button type="button" onClick={() => openEdit(p)} className="cf-btn-ghost"><IconPen /> Editar</button>
+                                                        <button type="button" onClick={() => deleteProduct(p)} disabled={busy} className="cf-btn-danger">Eliminar</button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}
@@ -315,60 +364,70 @@ export default function DigitalDownloadsAdminPage() {
 
             {/* ============ PEDIDOS ============ */}
             {tab === "orders" && (
-                <div className={cardCls}>
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-                        <h2 className="font-bold text-gray-800">Pedidos ({filteredOrders.length})</h2>
-                        <div className="flex flex-wrap items-center gap-2">
-                            <select value={orderFilter} onChange={(e) => setOrderFilter(e.target.value)} className="px-3 py-2 bg-gray-50 border-2 border-gray-100 rounded-xl text-xs font-bold outline-none">
+                <div className="cf-card-item">
+                    <div className="cf-toolbar">
+                        <h2 className="cf-card-heading" style={{ margin: 0 }}>Pedidos ({filteredOrders.length})</h2>
+                        <div className="cf-toolbar-left">
+                            <select
+                                value={orderFilter}
+                                onChange={(e) => setOrderFilter(e.target.value)}
+                                className="cf-select"
+                                aria-label="Filtrar pedidos por estado"
+                            >
                                 <option value="all">Todos</option>
                                 <option value="pending">Pendientes</option>
                                 <option value="paid">Pagados</option>
                             </select>
-                            <button type="button" onClick={exportCsv} disabled={busy} className={btnGhost}>Exportar CSV</button>
+                            <button type="button" onClick={exportCsv} disabled={busy} className="cf-btn-ghost"><IconDownload /> Exportar CSV</button>
                         </div>
                     </div>
                     {filteredOrders.length === 0 ? (
-                        <p className="text-sm text-gray-400">No hay pedidos {orderFilter === "pending" ? "pendientes" : orderFilter === "paid" ? "pagados" : ""} todavía.</p>
+                        <div className="cf-empty">
+                            <IconReceipt />
+                            <span>No hay pedidos {orderFilter === "pending" ? "pendientes" : orderFilter === "paid" ? "pagados" : ""} todavía.</span>
+                        </div>
                     ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
+                        <div className="cf-table-wrap">
+                            <table className="cf-table is-static">
                                 <thead>
-                                    <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                        <th className="py-2 pr-3">#</th>
-                                        <th className="py-2 pr-3">Producto</th>
-                                        <th className="py-2 pr-3">Cliente</th>
-                                        <th className="py-2 pr-3">Importe</th>
-                                        <th className="py-2 pr-3">Estado</th>
-                                        <th className="py-2 pr-3">Usos</th>
-                                        <th className="py-2 pr-3">Expira</th>
-                                        <th className="py-2"></th>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Producto</th>
+                                        <th>Cliente</th>
+                                        <th>Importe</th>
+                                        <th>Estado</th>
+                                        <th>Usos</th>
+                                        <th>Expira</th>
+                                        <th></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {filteredOrders.map((o) => (
-                                        <tr key={o.id} className="border-b border-gray-50">
-                                            <td className="py-3 pr-3 text-gray-400">{o.id}</td>
-                                            <td className="py-3 pr-3 font-bold text-gray-800">{o.product_name || "(eliminado)"}</td>
-                                            <td className="py-3 pr-3">
-                                                <div className="font-medium text-gray-700">{o.customer_name || "—"}</div>
-                                                <div className="text-[11px] text-gray-400">{o.customer_email}</div>
+                                        <tr key={o.id}>
+                                            <td className="cf-cell-num">{o.id}</td>
+                                            <td><span className="cf-prod-name">{o.product_name || "(eliminado)"}</span></td>
+                                            <td>
+                                                <div className="cf-prod-name">{o.customer_name || "—"}</div>
+                                                <div className="cf-prod-sub">{o.customer_email}</div>
                                             </td>
-                                            <td className="py-3 pr-3 font-bold">{(Number(o.amount_cents) || 0) === 0 ? <span className="text-green-600">Gratis</span> : fmtMoney(o.amount_cents, symbol)}</td>
-                                            <td className="py-3 pr-3">
-                                                <span className={`${btnSmall} cursor-default ${o.payment_status === "paid" ? "bg-green-50 text-green-700" : "bg-amber-50 text-amber-700"}`}>
+                                            <td className="cf-cell-money">{(Number(o.amount_cents) || 0) === 0 ? <span className="cf-free">Gratis</span> : fmtMoney(o.amount_cents, symbol)}</td>
+                                            <td>
+                                                <span className={`cf-pill ${o.payment_status === "paid" ? "is-paid" : "is-pending"}`}>
                                                     {o.payment_status === "paid" ? "Pagado" : "Pendiente"}
                                                 </span>
                                             </td>
-                                            <td className="py-3 pr-3 text-gray-500">{o.use_count}/{o.max_uses}</td>
-                                            <td className="py-3 pr-3 text-[11px] text-gray-400">{o.expires_at ? new Date(o.expires_at).toLocaleDateString() : "—"}</td>
-                                            <td className="py-3 text-right whitespace-nowrap">
-                                                {o.payment_status === "pending" && (
-                                                    <button type="button" onClick={() => markPaid(o)} disabled={busy} className={`${btnSmall} bg-gray-900 text-white hover:bg-green-600 mr-2`}>Marcar pagado</button>
-                                                )}
-                                                {o.payment_status === "paid" && (
-                                                    <button type="button" onClick={() => copyLink(o)} className={`${btnSmall} bg-gray-100 text-gray-600 hover:bg-gray-200 mr-2`}>Copiar enlace</button>
-                                                )}
-                                                <button type="button" onClick={() => deleteOrder(o)} disabled={busy} className={`${btnSmall} bg-red-50 text-red-600 hover:bg-red-100`}>Eliminar</button>
+                                            <td className="cf-cell-num">{o.use_count}/{o.max_uses}</td>
+                                            <td className="cf-cell-date">{o.expires_at ? new Date(o.expires_at).toLocaleDateString() : "—"}</td>
+                                            <td>
+                                                <div className="cf-rowactions">
+                                                    {o.payment_status === "pending" && (
+                                                        <button type="button" onClick={() => markPaid(o)} disabled={busy} className="cf-btn">Marcar pagado</button>
+                                                    )}
+                                                    {o.payment_status === "paid" && (
+                                                        <button type="button" onClick={() => copyLink(o)} className="cf-btn-ghost">Copiar enlace</button>
+                                                    )}
+                                                    <button type="button" onClick={() => deleteOrder(o)} disabled={busy} className="cf-btn-danger">Eliminar</button>
+                                                </div>
                                             </td>
                                         </tr>
                                     ))}
@@ -376,7 +435,7 @@ export default function DigitalDownloadsAdminPage() {
                             </table>
                         </div>
                     )}
-                    <p className="text-[11px] text-gray-400 mt-6 leading-relaxed">
+                    <p className="cf-footnote">
                         Al pulsar <strong>Marcar pagado</strong> se reinicia la caducidad del enlace y se envía automáticamente el correo de descarga al cliente.
                     </p>
                 </div>
@@ -385,39 +444,39 @@ export default function DigitalDownloadsAdminPage() {
             {/* ============ CONFIGURACIÓN ============ */}
             {tab === "config" && (
                 config === null ? (
-                    <div className={cardCls}><p className="text-sm text-gray-400">Cargando configuración…</p></div>
+                    <div className="cf-card-item"><p className="cf-meta" style={{ marginTop: 0 }}>Cargando configuración…</p></div>
                 ) : (
-                    <form onSubmit={saveConfig} className={`${cardCls} space-y-5`}>
-                        <div className="grid sm:grid-cols-3 gap-5">
+                    <form onSubmit={saveConfig} className="cf-card-item">
+                        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(11rem, 1fr))", gap: "1.05rem" }}>
                             <div>
-                                <label className={labelCls}>Símbolo de moneda</label>
-                                <input type="text" value={config.currencySymbol} onChange={(e) => setConfig({ ...config, currencySymbol: e.target.value })} className={inputCls} maxLength={8} />
+                                <label className="cf-label" htmlFor="dd-cur">Símbolo de moneda</label>
+                                <input id="dd-cur" type="text" value={config.currencySymbol} onChange={(e) => setConfig({ ...config, currencySymbol: e.target.value })} className="cf-input" maxLength={8} />
                             </div>
                             <div>
-                                <label className={labelCls}>Días de validez del enlace</label>
-                                <input type="number" min={1} max={365} value={config.linkDays} onChange={(e) => setConfig({ ...config, linkDays: e.target.value })} className={inputCls} />
+                                <label className="cf-label" htmlFor="dd-days">Días de validez del enlace</label>
+                                <input id="dd-days" type="number" min={1} max={365} value={config.linkDays} onChange={(e) => setConfig({ ...config, linkDays: e.target.value })} className="cf-input" />
                             </div>
                             <div>
-                                <label className={labelCls}>Máx. descargas por enlace</label>
-                                <input type="number" min={1} max={100} value={config.maxUses} onChange={(e) => setConfig({ ...config, maxUses: e.target.value })} className={inputCls} />
+                                <label className="cf-label" htmlFor="dd-uses">Máx. descargas por enlace</label>
+                                <input id="dd-uses" type="number" min={1} max={100} value={config.maxUses} onChange={(e) => setConfig({ ...config, maxUses: e.target.value })} className="cf-input" />
                             </div>
                         </div>
-                        <div>
-                            <label className={labelCls}>Correo de notificación (nuevos pedidos)</label>
-                            <input type="email" value={config.notifyEmail} onChange={(e) => setConfig({ ...config, notifyEmail: e.target.value })} placeholder="ventas@midominio.com (vacío = correo del administrador)" className={inputCls} />
+                        <div style={{ marginTop: "1.05rem" }}>
+                            <label className="cf-label" htmlFor="dd-notify">Correo de notificación (nuevos pedidos)</label>
+                            <input id="dd-notify" type="email" value={config.notifyEmail} onChange={(e) => setConfig({ ...config, notifyEmail: e.target.value })} placeholder="ventas@midominio.com (vacío = correo del administrador)" className="cf-input" />
                         </div>
-                        <div>
-                            <label className={labelCls}>Instrucciones de pago manual</label>
-                            <textarea value={config.manualInstructions} onChange={(e) => setConfig({ ...config, manualInstructions: e.target.value })} rows={5}
+                        <div style={{ marginTop: "1.05rem" }}>
+                            <label className="cf-label" htmlFor="dd-instr">Instrucciones de pago manual</label>
+                            <textarea id="dd-instr" value={config.manualInstructions} onChange={(e) => setConfig({ ...config, manualInstructions: e.target.value })} rows={5}
                                 placeholder={"Ej.: Transfiere el importe a la cuenta XX00 0000 0000 e indica tu código de pedido en el concepto. Confirmaremos tu pago en 24h."}
-                                className={inputCls} />
-                            <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
+                                className="cf-input" />
+                            <p className="cf-help">
                                 Se muestran al comprador de productos de pago (y en su correo de "pedido recibido"). El pago con Stripe llegará en una versión futura;
                                 en esta versión los pedidos de pago se confirman manualmente desde la pestaña Pedidos.
                             </p>
                         </div>
-                        <div className="flex justify-end">
-                            <button type="submit" disabled={busy} className={btnPrimary}>{busy ? "Guardando…" : "Guardar configuración"}</button>
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.5rem" }}>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar configuración"}</button>
                         </div>
                     </form>
                 )

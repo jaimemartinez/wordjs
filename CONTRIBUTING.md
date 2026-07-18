@@ -69,8 +69,9 @@ CI also runs a few gates that usually don't need a local equivalent: `npm audit`
 high/critical prod vulns in each service), a license check (`license-checker --production`, blocks
 AGPL/SSPL), backend **integration tests** (`npm run test:integration`, against real Postgres + Redis
 service containers), and a **marketplace catalog freshness** check — if you touch anything under
-`marketplace/plugins/`, run `npm run build:marketplace` from the repo root and commit the updated
-`marketplace/dist/`, or that gate fails.
+`marketplace/plugins/`, rebuild the catalog with `npm run build:marketplace` from the repo root so it
+stays consistent. `marketplace/dist/` is a **gitignored build output** (not committed) that the
+release workflow republishes as GitHub Release assets — don't try to commit it.
 
 A green local run isn't a guarantee CI passes (Linux vs. your OS can differ), but it catches the
 common cases.

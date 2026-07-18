@@ -55,15 +55,16 @@ All async drivers extend `DatabaseDriverInterface` (`backend/src/drivers/interfa
 | `transaction(fn)`      | Run `fn(tx)` atomically (BEGIN → COMMIT, ROLLBACK on throw). |
 | `close()`              | Close the connection / pool.                         |
 
-The base `interface.ts` default `transaction()` throws `transaction() not implemented`; every async driver (`sqlite-native-async`, `postgres`, `sqlite-legacy`) overrides it with a real atomic implementation — see [§1.2.1](#121-atomic-transactionfn) below.
+The base `interface.ts` default `transaction()` throws `transaction() not implemented`; every async driver (`sqlite-native-async`, `postgres`, `mysql`, `sqlite-legacy`) overrides it with a real atomic implementation — see [§1.2.1](#121-atomic-transactionfn) below.
 
-A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the *same* contract (create → insert → get → all → update → delete → drop) against every async driver, asserting `run()` returns a truthy `lastID` and correct `changes`, that params bind, and that mutations persist. Drivers whose backend isn't reachable **skip gracefully**: if `better-sqlite3` can't load it's treated as the sql.js-fallback case, and if no Postgres is reachable that block is skipped (3s connect timeout). The legacy sync `sqlite-legacy` driver is intentionally out of scope (the suite validates the async interface implementers).
+A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the *same* contract (create → insert → get → all → update → delete → drop) against the drivers it carries a dialect descriptor block for, asserting `run()` returns a truthy `lastID` and correct `changes`, that params bind, and that mutations persist. Today that is **`sqlite-native` and `postgres`** (adding a driver = add a descriptor block); the `mysql` driver satisfies the same interface but has no descriptor block wired in yet. Drivers whose backend isn't reachable **skip gracefully**: if `better-sqlite3` can't load it's treated as the sql.js-fallback case, and if no Postgres is reachable that block is skipped (3s connect timeout). The legacy sync `sqlite-legacy` driver is intentionally out of scope (the suite validates the async interface implementers).
 
 #### 1.2.1 Atomic `transaction(fn)`
 
 `transaction(fn)` is part of the driver contract and is genuinely **atomic** on every async driver. The callback receives a `tx` exposing `get`/`all`/`run`/`exec` with the **same SQLite-style SQL shape** (placeholders, `RETURNING` auto-injection, `{ lastID, changes }`) inside the transaction as outside it, so callers write identical SQL either way.
 
 *   **PostgreSQL** (`postgres.ts`) pins **one** pooled client for the whole unit of work — `BEGIN` → `fn(tx)` → `COMMIT`, `ROLLBACK` on throw, and the client is **always** released in a `finally`. This matters because the per-statement methods each grab a *different* pooled connection, so a multi-statement unit would otherwise not share a transaction.
+*   **MySQL / MariaDB** (`mysql.ts`) pins **one** pooled `mysql2` connection for the unit of work — `BEGIN` → `fn(tx)` → `COMMIT`, `ROLLBACK` on throw, connection released in a `finally` — for the same reason as Postgres (the per-statement methods each grab a different pooled connection).
 *   **SQLite (Native)** (`sqlite-native-async.ts`) wraps `BEGIN`/`COMMIT`/`ROLLBACK` on its single shared `better-sqlite3` handle.
 *   **SQLite (Legacy)** (`sqlite-legacy.ts`) suppresses its per-write disk flush while a transaction is open and saves to disk **once** after `COMMIT`; on `ROLLBACK` it restores the pre-transaction in-memory image (so a failed tx leaves both memory and disk at the prior committed state).
 
@@ -95,6 +96,8 @@ WordJS includes a **Zero Data Loss** migration tool for switching drivers withou
     - **Restart** the backend automatically to apply changes.
 
 > **Note:** For SQLite-to-SQLite migrations (e.g. Legacy -> Native), the system uses an atomic file swap mechanism to ensure no corruption.
+
+> **MySQL is not yet a migration target.** The DB-Admin migration tool's `availableDrivers` are `sqlite-legacy`, `sqlite-native`, and `postgres` only. MySQL/MariaDB is a fully supported **runtime** driver (§1.1), but moving existing data *into* it isn't wired into this UI yet — point a fresh install at MySQL via `dbDriver` instead.
 
 The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` + the `manage_options` permission).
 
@@ -236,7 +239,7 @@ Global system settings.
 | `option_value` | LONGTEXT   | Auto-serialized JSON        |
 | `autoload`     | VARCHAR    | `yes`/`no` to load on boot  |
 
-> Option writes are an **atomic** `INSERT … ON CONFLICT (option_name) DO UPDATE` upsert (`updateOption`), and `DO NOTHING` for insert-if-absent (`addOption`) — replacing the old SELECT-then-INSERT/UPDATE that raced the `idx_options_name` UNIQUE index (two concurrent first-writes both INSERTed, and the loser hit a raw violation). Supported by SQLite ≥3.24 and Postgres; the legacy sql.js driver strips `RETURNING` but honors `ON CONFLICT`.
+> Option writes are an **atomic** `INSERT … ON CONFLICT (option_name) DO UPDATE` upsert (`updateOption`), and `DO NOTHING` for insert-if-absent (`addOption`) — replacing the old SELECT-then-INSERT/UPDATE that raced the `idx_options_name` UNIQUE index (two concurrent first-writes both INSERTed, and the loser hit a raw violation). Supported by SQLite ≥3.24 and Postgres natively; the legacy sql.js driver strips `RETURNING` but honors `ON CONFLICT`; and the MySQL driver rewrites `ON CONFLICT … DO UPDATE` to `INSERT … ON DUPLICATE KEY UPDATE`.
 
 ### 2.6 `terms` & `term_taxonomy`
 Manages Categories and Tags.
@@ -333,17 +336,18 @@ Plugins do this through the permission-checked `wordjs` capability bridge (`word
 
 ## 4. Adding a New Database Driver
 
-Multi-DB support is designed to be a contained, **verifiable** unit. To add a backend (e.g. MySQL):
+Multi-DB support is designed to be a contained, **verifiable** unit. The `mysql` driver (`backend/src/drivers/mysql.ts`) is the most recent worked example — a full SQLite→MySQL dialect translator; use it as a reference. To add a backend (e.g. Microsoft SQL Server):
 
-1. **Implement the interface.** Create `backend/src/drivers/<name>.ts` exporting a singleton that extends `DatabaseDriverInterface` (`interface.ts`) and implements all seven methods. `run()` must return `{ lastID, changes }`; `get`/`all` must return a row / array of rows. If the engine uses non-`?` placeholders, normalize SQLite-style `?` internally (see `postgres.ts`'s `normalizeSql`) so callers keep writing SQLite-style SQL.
-2. **Register it in the DB Manager.** Add the `<name>` branch in `loadDriver` (`config/database.ts`) so it's loaded as the async driver, and extend the dialect handling (`isPostgres` checks, `createPluginTable` type map, `clearDatabase` truncate syntax) if the new engine needs different DDL.
+1. **Implement the interface.** Create `backend/src/drivers/<name>.ts` exporting a singleton that extends `DatabaseDriverInterface` (`interface.ts`) and implements all seven methods. `run()` must return `{ lastID, changes }`; `get`/`all` must return a row / array of rows. If the engine uses non-`?` placeholders, normalize SQLite-style `?` internally (see `postgres.ts`'s `normalizeSql`, or `mysql.ts`'s fuller `translateSql`) so callers keep writing SQLite-style SQL.
+2. **Register it in the DB Manager.** Add the `<name>` branch in `loadDriver` (`config/database.ts`) so it's loaded as the async driver (see the `mysql`/`mariadb` branch), extend `getDbType()` (the `isPostgres`/`isMySQL`/`isSQLite` flags), and extend the dialect handling (`createPluginTable` type map, `clearDatabase` truncate syntax) if the new engine needs different DDL.
 3. **Add a conformance block.** Add a `test(...)` block in `backend/src/tests/driver-conformance.test.ts` with the engine's dialect descriptor (placeholder style, auto-increment PK, INSERT-returns-id mechanism). The shared `runContract` then validates the whole contract — and skips gracefully if the backend isn't reachable in CI.
 
 ### Dialect Handling Today
 
 Dialect differences are confined to a few spots:
 
-*   **Auto-increment PK:** `SERIAL PRIMARY KEY` (Postgres) vs `INTEGER PRIMARY KEY AUTOINCREMENT` (SQLite), chosen in `initializeSchema` and `createPluginTable`.
-*   **Placeholders:** SQLite-style `?` everywhere; the Postgres driver rewrites to `$1, $2` (single source of truth — the proxy passes SQL through untouched, so there's no double-normalization).
-*   **`RETURNING`:** auto-injected by the Postgres driver on `INSERT`; stripped by the legacy WASM driver.
+*   **Auto-increment PK:** `SERIAL PRIMARY KEY` (Postgres) vs `INTEGER PRIMARY KEY AUTOINCREMENT` (SQLite, rewritten to `AUTO_INCREMENT` by the MySQL driver), chosen in `initializeSchema` and `createPluginTable`.
+*   **Placeholders:** SQLite-style `?` everywhere; the Postgres driver rewrites to `$1, $2` (single source of truth — the proxy passes SQL through untouched, so there's no double-normalization). MySQL uses `?` natively.
+*   **`RETURNING`:** auto-injected by the Postgres driver on `INSERT`; the MySQL driver reports `insertId` instead; stripped by the legacy WASM driver.
+*   **`TEXT` / defaults / upserts (MySQL):** the MySQL driver maps `TEXT`→`VARCHAR(255)`/`LONGTEXT` with parenthesised expression defaults, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, and runs `sql_mode=ANSI_QUOTES` so `"col"` is an identifier.
 *   **Clearing tables:** `TRUNCATE … RESTART IDENTITY CASCADE` (Postgres) vs `DELETE FROM …` plus a `sqlite_sequence` reset (SQLite), in `clearDatabase`.

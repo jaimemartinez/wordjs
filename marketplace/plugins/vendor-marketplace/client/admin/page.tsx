@@ -6,31 +6,49 @@
  * Tabs: Vendedores (approve/suspend/rotate-code/edit/delete + create), Productos (moderation),
  * Consultas (buyer inquiries), Reporte (per-vendor counts + editable commission + currency symbol).
  * API calls go through the host's api helpers (session cookie).
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-vendor-marketplace) — the markup below only uses
+ * cf-* classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/vendor-marketplace";
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all disabled:opacity-50";
-const btnSmCls = "px-3 py-1.5 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all disabled:opacity-50";
-const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
-const thCls = "text-left text-[10px] font-black uppercase tracking-widest text-gray-400 px-3 py-2";
-const tdCls = "px-3 py-3 text-sm text-gray-700 align-top";
 
 const STATUS_LABEL = { pending: "Pendiente", approved: "Aprobada", suspended: "Suspendida" };
-const STATUS_BADGE = {
-    pending: "bg-amber-100 text-amber-700",
-    approved: "bg-emerald-100 text-emerald-700",
-    suspended: "bg-red-100 text-red-700",
-};
+const STATUS_BADGE = { pending: "is-warn", approved: "is-ok", suspended: "is-danger" };
 const INQ_LABEL = { new: "Nueva", replied: "Respondida", closed: "Cerrada" };
 
 const fmtMoney = (cents, symbol) => `${symbol || "$"}${((Number(cents) || 0) / 100).toFixed(2)}`;
 const fmtDate = (v) => (v ? String(v).slice(0, 16).replace("T", " ") : "—");
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconStore = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z" />
+        <path d="M3 6h18" />
+        <path d="M16 10a4 4 0 0 1-8 0" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconCopy = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="9" y="9" width="13" height="13" rx="2" />
+        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+);
 
 // Module-level (never define a component inside a component — remounting steals input focus).
 function VendorFormModal({ initial, title, busy, onSave, onClose }) {
@@ -45,47 +63,51 @@ function VendorFormModal({ initial, title, busy, onSave, onClose }) {
     const set = (k) => (e) => setForm({ ...form, [k]: e.target.value });
 
     return (
-        <div className="fixed inset-0 z-50 bg-gray-900/50 flex items-center justify-center p-4" onClick={onClose}>
-            <div className="bg-white rounded-3xl p-6 sm:p-8 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-                <h3 className="text-lg font-black text-gray-900 mb-5">{title}</h3>
-                <form
-                    className="space-y-4"
-                    onSubmit={(e) => {
-                        e.preventDefault();
-                        onSave({ ...form, commission_pct: Number(form.commission_pct) });
-                    }}
-                >
-                    <div>
-                        <label className={labelCls}>Nombre de la tienda *</label>
-                        <input type="text" className={inputCls} value={form.name} onChange={set("name")} required maxLength={120} />
+        <div className="cf-overlay" onClick={onClose}>
+            <div className="cf-letter" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+                <div className="cf-letter-body">
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.35rem" }}>
+                        <h3 className="cf-editor-title" style={{ marginBottom: 0 }}><IconPen /> {title}</h3>
+                        <button type="button" onClick={onClose} aria-label="Cerrar" className="cf-iconbtn">✕</button>
                     </div>
-                    <div>
-                        <label className={labelCls}>Email *</label>
-                        <input type="email" className={inputCls} value={form.email} onChange={set("email")} required maxLength={200} />
-                    </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className={labelCls}>Teléfono</label>
-                            <input type="text" className={inputCls} value={form.phone} onChange={set("phone")} maxLength={40} />
+                    <form
+                        onSubmit={(e) => {
+                            e.preventDefault();
+                            onSave({ ...form, commission_pct: Number(form.commission_pct) });
+                        }}
+                    >
+                        <div className="cf-grid">
+                            <div className="cf-span-2">
+                                <label className="cf-label" htmlFor="vm-name">Nombre de la tienda *</label>
+                                <input id="vm-name" type="text" className="cf-input" value={form.name} onChange={set("name")} required maxLength={120} />
+                            </div>
+                            <div className="cf-span-2">
+                                <label className="cf-label" htmlFor="vm-email">Email *</label>
+                                <input id="vm-email" type="email" className="cf-input" value={form.email} onChange={set("email")} required maxLength={200} />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="vm-phone">Teléfono</label>
+                                <input id="vm-phone" type="text" className="cf-input" value={form.phone} onChange={set("phone")} maxLength={40} />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="vm-commission">Comisión % (informativa)</label>
+                                <input id="vm-commission" type="number" min="0" max="100" step="1" className="cf-input" value={form.commission_pct} onChange={set("commission_pct")} />
+                            </div>
+                            <div className="cf-span-2">
+                                <label className="cf-label" htmlFor="vm-logo">Logo (URL)</label>
+                                <input id="vm-logo" type="text" className="cf-input" value={form.logo_url} onChange={set("logo_url")} placeholder="https://… o /uploads/…" maxLength={500} />
+                            </div>
+                            <div className="cf-span-2">
+                                <label className="cf-label" htmlFor="vm-desc">Descripción</label>
+                                <textarea id="vm-desc" className="cf-input" style={{ minHeight: "90px" }} value={form.description} onChange={set("description")} maxLength={2000} />
+                            </div>
                         </div>
-                        <div>
-                            <label className={labelCls}>Comisión % (informativa)</label>
-                            <input type="number" min="0" max="100" step="1" className={inputCls} value={form.commission_pct} onChange={set("commission_pct")} />
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}>
+                            <button type="button" className="cf-btn-ghost" onClick={onClose}>Cancelar</button>
+                            <button type="submit" className="cf-btn" disabled={busy}>{busy ? "Guardando…" : "Guardar"}</button>
                         </div>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Logo (URL)</label>
-                        <input type="text" className={inputCls} value={form.logo_url} onChange={set("logo_url")} placeholder="https://… o /uploads/…" maxLength={500} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Descripción</label>
-                        <textarea className={`${inputCls} min-h-[90px]`} value={form.description} onChange={set("description")} maxLength={2000} />
-                    </div>
-                    <div className="flex justify-end gap-3 pt-2">
-                        <button type="button" className={btnGhostCls} onClick={onClose}>Cancelar</button>
-                        <button type="submit" className={btnCls} disabled={busy}>{busy ? "Guardando…" : "Guardar"}</button>
-                    </div>
-                </form>
+                    </form>
+                </div>
             </div>
         </div>
     );
@@ -224,110 +246,123 @@ export default function MarketplaceAdminPage() {
     ];
 
     return (
-        <div className="max-w-6xl mx-auto p-4 sm:p-8">
-            <div className="mb-6">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Marketplace</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Directorio multi-vendedor · portal de vendedores con código de acceso
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconStore /></div>
+                <div>
+                    <h1 className="cf-title">Marketplace</h1>
+                    <p className="cf-subtitle">
+                        Directorio multi-vendedor · portal de vendedores con código de acceso
+                    </p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             {/* v1 scope banner — this marketplace generates LEADS, it does not process payments. */}
-            <div className="bg-blue-50 border border-blue-100 text-blue-800 text-sm rounded-2xl px-5 py-4 mb-6 leading-relaxed">
+            <div className="cf-note">
                 <strong>Marketplace v1 = generación de contactos (leads).</strong> Los compradores consultan por producto
                 y cada vendedor cierra la venta por su cuenta. No hay checkout centralizado ni cobro de comisiones
                 automático — el porcentaje de comisión del reporte es informativo.
             </div>
 
-            <div className="flex flex-wrap gap-2 mb-6">
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
                 {tabs.map((t) => (
                     <button
                         key={t.id}
                         type="button"
+                        role="tab"
+                        aria-selected={tab === t.id}
                         onClick={() => { setTab(t.id); setMessage(""); }}
-                        className={`px-4 py-2.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === t.id ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600 hover:bg-gray-200"}`}
+                        className={`cf-tab ${tab === t.id ? "is-active" : ""}`}
                     >
                         {t.label}
-                        {t.badge ? <span className="ml-2 inline-flex items-center justify-center min-w-[1.3rem] h-5 px-1 rounded-full bg-amber-400 text-gray-900 text-[10px]">{t.badge}</span> : null}
+                        {t.badge ? <span className="cf-badge">{t.badge}</span> : null}
                     </button>
                 ))}
             </div>
 
             {message && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-5 ${isError ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>{message}</div>
+                <div role={isError ? "alert" : "status"} className={`cf-flash ${isError ? "is-error" : "is-ok"}`}>{message}</div>
             )}
 
             {/* ============================== VENDEDORES ============================== */}
             {tab === "vendors" && (
-                <div className={cardCls}>
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-                        <div className="flex items-center gap-3">
-                            <h2 className="font-bold text-gray-800">Vendedores</h2>
-                            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="px-3 py-2 bg-gray-50 border-2 border-gray-100 rounded-xl text-xs font-bold outline-none">
+                <div className="cf-card-item">
+                    <div className="cf-toolbar">
+                        <div className="cf-toolbar-left">
+                            <h2 className="cf-card-title">Vendedores</h2>
+                            <select
+                                value={statusFilter}
+                                onChange={(e) => setStatusFilter(e.target.value)}
+                                className="cf-select"
+                                aria-label="Filtrar por estado"
+                            >
                                 <option value="">Todos los estados</option>
                                 <option value="pending">Pendientes</option>
                                 <option value="approved">Aprobadas</option>
                                 <option value="suspended">Suspendidas</option>
                             </select>
                         </div>
-                        <button type="button" className={btnCls} onClick={() => setCreating(true)}>+ Crear vendedor</button>
+                        <button type="button" className="cf-btn" onClick={() => setCreating(true)}><IconPlus /> Crear vendedor</button>
                     </div>
 
-                    <div className="overflow-x-auto">
-                        <table className="w-full">
+                    <div className="cf-table-wrap">
+                        <table className="cf-table">
                             <thead>
-                                <tr className="border-b-2 border-gray-100">
-                                    <th className={thCls}>Tienda</th>
-                                    <th className={thCls}>Contacto</th>
-                                    <th className={thCls}>Estado</th>
-                                    <th className={thCls}>Código</th>
-                                    <th className={thCls}>Prod. / Cons.</th>
-                                    <th className={thCls}>Acciones</th>
+                                <tr>
+                                    <th>Tienda</th>
+                                    <th>Contacto</th>
+                                    <th>Estado</th>
+                                    <th>Código</th>
+                                    <th>Prod. / Cons.</th>
+                                    <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {visibleVendors.length === 0 ? (
-                                    <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-gray-400">Sin vendedores{statusFilter ? " en este estado" : " todavía — las solicitudes públicas aparecerán aquí"}.</td></tr>
+                                    <tr><td colSpan={6} className="cf-cell-empty">Sin vendedores{statusFilter ? " en este estado" : " todavía — las solicitudes públicas aparecerán aquí"}.</td></tr>
                                 ) : visibleVendors.map((v) => (
-                                    <tr key={v.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                                        <td className={tdCls}>
-                                            <div className="font-bold text-gray-900">{v.name}</div>
-                                            <div className="text-[11px] text-gray-400">/{v.slug} · {fmtDate(v.created_at)}</div>
-                                            {v.description ? <div className="text-[11px] text-gray-400 max-w-[220px] truncate">{v.description}</div> : null}
+                                    <tr key={v.id}>
+                                        <td>
+                                            <div className="cf-strong">{v.name}</div>
+                                            <div className="cf-sub">/{v.slug} · {fmtDate(v.created_at)}</div>
+                                            {v.description ? <div className="cf-sub" style={{ maxWidth: "14rem", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{v.description}</div> : null}
                                         </td>
-                                        <td className={tdCls}>
+                                        <td>
                                             <div>{v.email}</div>
-                                            {v.phone ? <div className="text-[11px] text-gray-400">{v.phone}</div> : null}
+                                            {v.phone ? <div className="cf-sub">{v.phone}</div> : null}
                                         </td>
-                                        <td className={tdCls}>
-                                            <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${STATUS_BADGE[v.status] || "bg-gray-100 text-gray-600"}`}>
+                                        <td>
+                                            <span className={`cf-pill ${STATUS_BADGE[v.status] || "is-muted"}`}>
                                                 {STATUS_LABEL[v.status] || v.status}
                                             </span>
                                         </td>
-                                        <td className={tdCls}>
+                                        <td>
                                             {v.access_code ? (
-                                                <span className="inline-flex items-center gap-1.5">
-                                                    <code className="bg-gray-100 rounded-lg px-2 py-1 font-mono text-xs font-bold">{v.access_code}</code>
-                                                    <button type="button" title="Copiar código" className="text-gray-400 hover:text-gray-700 text-xs font-bold" onClick={() => copyCode(v.access_code)}>Copiar</button>
+                                                <span style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem" }}>
+                                                    <code className="cf-code">{v.access_code}</code>
+                                                    <button type="button" title="Copiar código" className="cf-btn-ghost" onClick={() => copyCode(v.access_code)}><IconCopy /> Copiar</button>
                                                 </span>
-                                            ) : <span className="text-gray-300 text-xs">— al aprobar —</span>}
+                                            ) : <span className="cf-void">— al aprobar —</span>}
                                         </td>
-                                        <td className={tdCls}>
-                                            <span className="text-xs font-bold">{v.product_count} / {v.inquiry_count}</span>
+                                        <td>
+                                            <span className="cf-strong" style={{ whiteSpace: "nowrap" }}>{v.product_count} / {v.inquiry_count}</span>
                                         </td>
-                                        <td className={tdCls}>
-                                            <div className="flex flex-wrap gap-1.5">
+                                        <td>
+                                            <div className="cf-row-actions">
                                                 {v.status !== "approved" && (
-                                                    <button type="button" disabled={busy} className={`${btnSmCls} bg-emerald-100 hover:bg-emerald-200 text-emerald-700`} onClick={() => approve(v)}>Aprobar</button>
+                                                    <button type="button" disabled={busy} className="cf-btn" onClick={() => approve(v)}>Aprobar</button>
                                                 )}
                                                 {v.status === "approved" && (
-                                                    <button type="button" disabled={busy} className={`${btnSmCls} bg-amber-100 hover:bg-amber-200 text-amber-700`} onClick={() => suspend(v)}>Suspender</button>
+                                                    <button type="button" disabled={busy} className="cf-btn-ghost" onClick={() => suspend(v)}>Suspender</button>
                                                 )}
                                                 {v.access_code && (
-                                                    <button type="button" disabled={busy} className={`${btnSmCls} bg-gray-100 hover:bg-gray-200 text-gray-600`} onClick={() => rotateCode(v)}>Rotar código</button>
+                                                    <button type="button" disabled={busy} className="cf-btn-ghost" onClick={() => rotateCode(v)}>Rotar código</button>
                                                 )}
-                                                <button type="button" disabled={busy} className={`${btnSmCls} bg-blue-100 hover:bg-blue-200 text-blue-700`} onClick={() => setEditVendor(v)}>Editar</button>
-                                                <button type="button" disabled={busy} className={`${btnSmCls} bg-red-100 hover:bg-red-200 text-red-700`} onClick={() => removeVendor(v)}>Eliminar</button>
+                                                <button type="button" disabled={busy} className="cf-btn-ghost" onClick={() => setEditVendor(v)}><IconPen /> Editar</button>
+                                                <button type="button" disabled={busy} className="cf-btn-danger" onClick={() => removeVendor(v)}>Eliminar</button>
                                             </div>
                                         </td>
                                     </tr>
@@ -340,51 +375,51 @@ export default function MarketplaceAdminPage() {
 
             {/* ============================== PRODUCTOS ============================== */}
             {tab === "products" && (
-                <div className={cardCls}>
-                    <h2 className="font-bold text-gray-800 mb-5">Todos los productos</h2>
-                    <div className="overflow-x-auto">
-                        <table className="w-full">
+                <div className="cf-card-item">
+                    <h2 className="cf-card-title" style={{ marginBottom: "1.15rem" }}>Todos los productos</h2>
+                    <div className="cf-table-wrap">
+                        <table className="cf-table">
                             <thead>
-                                <tr className="border-b-2 border-gray-100">
-                                    <th className={thCls}>Producto</th>
-                                    <th className={thCls}>Tienda</th>
-                                    <th className={thCls}>Precio</th>
-                                    <th className={thCls}>Categoría</th>
-                                    <th className={thCls}>Visibilidad</th>
-                                    <th className={thCls}>Acciones</th>
+                                <tr>
+                                    <th>Producto</th>
+                                    <th>Tienda</th>
+                                    <th>Precio</th>
+                                    <th>Categoría</th>
+                                    <th>Visibilidad</th>
+                                    <th>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {products.length === 0 ? (
-                                    <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-gray-400">Sin productos todavía — los vendedores los crean desde su portal.</td></tr>
+                                    <tr><td colSpan={6} className="cf-cell-empty">Sin productos todavía — los vendedores los crean desde su portal.</td></tr>
                                 ) : products.map((p) => (
-                                    <tr key={p.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                                        <td className={tdCls}>
-                                            <div className="flex items-center gap-2">
-                                                {p.image_url ? <img src={p.image_url} alt={p.name} decoding="async" className="w-10 h-10 rounded-lg object-cover border border-gray-100" /> : null}
+                                    <tr key={p.id}>
+                                        <td>
+                                            <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
+                                                {p.image_url ? <img src={p.image_url} alt={p.name} decoding="async" className="cf-thumb" /> : null}
                                                 <div>
-                                                    <div className="font-bold text-gray-900">{p.name}</div>
-                                                    <div className="text-[11px] text-gray-400">{fmtDate(p.created_at)}</div>
+                                                    <div className="cf-strong">{p.name}</div>
+                                                    <div className="cf-sub">{fmtDate(p.created_at)}</div>
                                                 </div>
                                             </div>
                                         </td>
-                                        <td className={tdCls}>
+                                        <td>
                                             {p.vendor_name}
-                                            {p.vendor_status !== "approved" ? <span className="ml-1 text-[10px] font-black uppercase text-red-500">({STATUS_LABEL[p.vendor_status] || p.vendor_status})</span> : null}
+                                            {p.vendor_status !== "approved" ? <span className="cf-danger-note">({STATUS_LABEL[p.vendor_status] || p.vendor_status})</span> : null}
                                         </td>
-                                        <td className={tdCls}><span className="font-bold">{fmtMoney(p.price_cents, symbol)}</span></td>
-                                        <td className={tdCls}>{p.category || "—"}</td>
-                                        <td className={tdCls}>
-                                            <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${p.is_published ? "bg-emerald-100 text-emerald-700" : "bg-gray-100 text-gray-500"}`}>
+                                        <td><span className="cf-strong">{fmtMoney(p.price_cents, symbol)}</span></td>
+                                        <td>{p.category || "—"}</td>
+                                        <td>
+                                            <span className={`cf-pill ${p.is_published ? "is-ok" : "is-muted"}`}>
                                                 {p.is_published ? "Publicado" : "Oculto"}
                                             </span>
                                         </td>
-                                        <td className={tdCls}>
-                                            <div className="flex flex-wrap gap-1.5">
-                                                <button type="button" disabled={busy} className={`${btnSmCls} bg-gray-100 hover:bg-gray-200 text-gray-600`} onClick={() => togglePublish(p)}>
+                                        <td>
+                                            <div className="cf-row-actions">
+                                                <button type="button" disabled={busy} className="cf-btn-ghost" onClick={() => togglePublish(p)}>
                                                     {p.is_published ? "Ocultar" : "Publicar"}
                                                 </button>
-                                                <button type="button" disabled={busy} className={`${btnSmCls} bg-red-100 hover:bg-red-200 text-red-700`} onClick={() => removeProduct(p)}>Eliminar</button>
+                                                <button type="button" disabled={busy} className="cf-btn-danger" onClick={() => removeProduct(p)}>Eliminar</button>
                                             </div>
                                         </td>
                                     </tr>
@@ -397,40 +432,42 @@ export default function MarketplaceAdminPage() {
 
             {/* ============================== CONSULTAS ============================== */}
             {tab === "inquiries" && (
-                <div className={cardCls}>
-                    <h2 className="font-bold text-gray-800 mb-5">Consultas de compradores</h2>
-                    <div className="overflow-x-auto">
-                        <table className="w-full">
+                <div className="cf-card-item">
+                    <h2 className="cf-card-title" style={{ marginBottom: "1.15rem" }}>Consultas de compradores</h2>
+                    <div className="cf-table-wrap">
+                        <table className="cf-table">
                             <thead>
-                                <tr className="border-b-2 border-gray-100">
-                                    <th className={thCls}>Comprador</th>
-                                    <th className={thCls}>Producto / Tienda</th>
-                                    <th className={thCls}>Mensaje</th>
-                                    <th className={thCls}>Fecha</th>
-                                    <th className={thCls}>Estado</th>
+                                <tr>
+                                    <th>Comprador</th>
+                                    <th>Producto / Tienda</th>
+                                    <th>Mensaje</th>
+                                    <th>Fecha</th>
+                                    <th>Estado</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {inquiries.length === 0 ? (
-                                    <tr><td colSpan={5} className="px-3 py-8 text-center text-sm text-gray-400">Sin consultas todavía.</td></tr>
+                                    <tr><td colSpan={5} className="cf-cell-empty">Sin consultas todavía.</td></tr>
                                 ) : inquiries.map((i) => (
-                                    <tr key={i.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                                        <td className={tdCls}>
-                                            <div className="font-bold text-gray-900">{i.buyer_name}</div>
-                                            <a href={`mailto:${i.buyer_email}`} className="text-[11px] text-blue-500">{i.buyer_email}</a>
+                                    <tr key={i.id}>
+                                        <td>
+                                            <div className="cf-strong">{i.buyer_name}</div>
+                                            <a href={`mailto:${i.buyer_email}`} className="cf-link">{i.buyer_email}</a>
                                         </td>
-                                        <td className={tdCls}>
-                                            <div>{i.product_name || <span className="text-gray-300">(producto eliminado)</span>}</div>
-                                            <div className="text-[11px] text-gray-400">{i.vendor_name}</div>
+                                        <td>
+                                            <div>{i.product_name || <span className="cf-void">(producto eliminado)</span>}</div>
+                                            <div className="cf-sub">{i.vendor_name}</div>
                                         </td>
-                                        <td className={`${tdCls} max-w-[280px]`}><div className="whitespace-pre-wrap break-words text-xs">{i.message}</div></td>
-                                        <td className={tdCls}><span className="text-xs">{fmtDate(i.created_at)}</span></td>
-                                        <td className={tdCls}>
+                                        <td className="cf-cell-msg">{i.message}</td>
+                                        <td className="cf-cell-date">{fmtDate(i.created_at)}</td>
+                                        <td>
                                             <select
                                                 value={i.status}
                                                 disabled={busy}
                                                 onChange={(e) => setInquiryStatus(i, e.target.value)}
-                                                className="px-2 py-1.5 bg-gray-50 border-2 border-gray-100 rounded-xl text-xs font-bold outline-none"
+                                                className="cf-select"
+                                                aria-label="Estado de la consulta"
+                                                style={{ width: "auto" }}
                                             >
                                                 {Object.keys(INQ_LABEL).map((s) => <option key={s} value={s}>{INQ_LABEL[s]}</option>)}
                                             </select>
@@ -445,63 +482,65 @@ export default function MarketplaceAdminPage() {
 
             {/* ============================== REPORTE ============================== */}
             {tab === "report" && (
-                <div className="space-y-6">
-                    <div className={cardCls}>
-                        <div className="flex flex-wrap items-end justify-between gap-4">
+                <div>
+                    <div className="cf-card-item">
+                        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", justifyContent: "space-between", gap: "1rem" }}>
                             <div>
-                                <h2 className="font-bold text-gray-800">Configuración</h2>
-                                <p className="text-[11px] text-gray-400 mt-1">Símbolo con el que se muestran los precios (solo visual — los precios se guardan en centavos).</p>
+                                <h2 className="cf-card-title">Configuración</h2>
+                                <p className="cf-help">Símbolo con el que se muestran los precios (solo visual — los precios se guardan en centavos).</p>
                             </div>
-                            <div className="flex items-center gap-2">
-                                <input type="text" value={symbolDraft} onChange={(e) => setSymbolDraft(e.target.value)} maxLength={8} className="w-24 px-3 py-2.5 bg-gray-50 border-2 border-gray-100 rounded-xl text-sm font-bold outline-none focus:border-blue-500" />
-                                <button type="button" className={btnCls} disabled={busy || !symbolDraft.trim()} onClick={saveSymbol}>Guardar</button>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                <input type="text" value={symbolDraft} onChange={(e) => setSymbolDraft(e.target.value)} maxLength={8} className="cf-input" style={{ width: "6rem" }} aria-label="Símbolo de moneda" />
+                                <button type="button" className="cf-btn" disabled={busy || !symbolDraft.trim()} onClick={saveSymbol}>Guardar</button>
                             </div>
                         </div>
                     </div>
 
-                    <div className={cardCls}>
-                        <h2 className="font-bold text-gray-800 mb-1">Reporte por vendedor</h2>
-                        {report?.note ? <p className="text-[11px] text-gray-400 mb-5">{report.note}</p> : null}
-                        <div className="overflow-x-auto">
-                            <table className="w-full">
+                    <div className="cf-card-item">
+                        <h2 className="cf-card-title">Reporte por vendedor</h2>
+                        {report?.note ? <p className="cf-help" style={{ marginBottom: "1.15rem" }}>{report.note}</p> : <div style={{ marginBottom: "1.15rem" }}></div>}
+                        <div className="cf-table-wrap">
+                            <table className="cf-table">
                                 <thead>
-                                    <tr className="border-b-2 border-gray-100">
-                                        <th className={thCls}>Tienda</th>
-                                        <th className={thCls}>Productos (publ.)</th>
-                                        <th className={thCls}>Consultas (nuevas)</th>
-                                        <th className={thCls}>Valor catálogo</th>
-                                        <th className={thCls}>Comisión %</th>
-                                        <th className={thCls}>Comisión estimada</th>
+                                    <tr>
+                                        <th>Tienda</th>
+                                        <th>Productos (publ.)</th>
+                                        <th>Consultas (nuevas)</th>
+                                        <th>Valor catálogo</th>
+                                        <th>Comisión %</th>
+                                        <th>Comisión estimada</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {!report || report.vendors.length === 0 ? (
-                                        <tr><td colSpan={6} className="px-3 py-8 text-center text-sm text-gray-400">Sin datos todavía.</td></tr>
+                                        <tr><td colSpan={6} className="cf-cell-empty">Sin datos todavía.</td></tr>
                                     ) : report.vendors.map((v) => {
                                         const pct = Number(commissionDrafts[v.id]);
                                         const estCents = Number.isFinite(pct) ? Math.round((Number(v.catalog_cents) || 0) * pct / 100) : 0;
                                         return (
-                                            <tr key={v.id} className="border-b border-gray-50 hover:bg-gray-50/50">
-                                                <td className={tdCls}>
-                                                    <div className="font-bold text-gray-900">{v.name}</div>
-                                                    <span className={`inline-block px-2 py-0.5 rounded-full text-[9px] font-black uppercase ${STATUS_BADGE[v.status] || "bg-gray-100 text-gray-600"}`}>{STATUS_LABEL[v.status] || v.status}</span>
+                                            <tr key={v.id}>
+                                                <td>
+                                                    <div className="cf-strong">{v.name}</div>
+                                                    <span className={`cf-pill ${STATUS_BADGE[v.status] || "is-muted"}`}>{STATUS_LABEL[v.status] || v.status}</span>
                                                 </td>
-                                                <td className={tdCls}><span className="font-bold">{v.products}</span> <span className="text-gray-400 text-xs">({v.published_products} publ.)</span></td>
-                                                <td className={tdCls}><span className="font-bold">{v.inquiries}</span> <span className="text-gray-400 text-xs">({v.new_inquiries} nuevas)</span></td>
-                                                <td className={tdCls}>{fmtMoney(v.catalog_cents, report.currencySymbol || symbol)}</td>
-                                                <td className={tdCls}>
-                                                    <div className="flex items-center gap-1.5">
+                                                <td><span className="cf-strong">{v.products}</span> <span className="cf-sub">({v.published_products} publ.)</span></td>
+                                                <td><span className="cf-strong">{v.inquiries}</span> <span className="cf-sub">({v.new_inquiries} nuevas)</span></td>
+                                                <td>{fmtMoney(v.catalog_cents, report.currencySymbol || symbol)}</td>
+                                                <td>
+                                                    <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
                                                         <input
                                                             type="number" min="0" max="100" step="1"
                                                             value={commissionDrafts[v.id] ?? ""}
                                                             onChange={(e) => setCommissionDrafts({ ...commissionDrafts, [v.id]: e.target.value })}
-                                                            className="w-16 px-2 py-1.5 bg-gray-50 border-2 border-gray-100 rounded-xl text-xs font-bold outline-none focus:border-blue-500"
+                                                            className="cf-input"
+                                                            style={{ width: "5rem" }}
+                                                            aria-label={`Comisión % de ${v.name}`}
                                                         />
-                                                        <button type="button" disabled={busy} className={`${btnSmCls} bg-gray-100 hover:bg-gray-200 text-gray-600`} onClick={() => saveCommission(v.id)}>OK</button>
+                                                        <button type="button" disabled={busy} className="cf-btn-ghost" onClick={() => saveCommission(v.id)}>OK</button>
                                                     </div>
                                                 </td>
-                                                <td className={tdCls}>
-                                                    <span className="text-xs text-gray-500" title="Estimación informativa: valor del catálogo publicado × comisión. No hay ventas registradas en v1.">
+                                                <td>
+                                                    <span className="cf-sub" title="Estimación informativa: valor del catálogo publicado × comisión. No hay ventas registradas en v1.">
                                                         ≈ {fmtMoney(estCents, report.currencySymbol || symbol)}
                                                     </span>
                                                 </td>
@@ -511,7 +550,7 @@ export default function MarketplaceAdminPage() {
                                 </tbody>
                             </table>
                         </div>
-                        <p className="text-[11px] text-gray-400 mt-5 leading-relaxed">
+                        <p className="cf-usage">
                             En el editor visual, agrega el bloque <strong>Marketplace</strong> — modo productos o tiendas,
                             filtros por tienda/categoría/búsqueda y el enlace "Acceso vendedores" que abre el portal de
                             autogestión dentro del propio bloque.

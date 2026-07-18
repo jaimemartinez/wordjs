@@ -32,7 +32,7 @@ Run from `backend/`.
 
 ## 2. One-Command Site Bootstrap (`npx create-wordjs`)
 
-The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.5.4`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
+The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.6.2`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
 
 ```bash
 npx create-wordjs my-site
@@ -49,6 +49,19 @@ The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 ra
 | `--http` | Serve plain HTTP instead of self-signed HTTPS (sets `WORDJS_HTTP=1`). |
 | `--no-start` | Scaffold + install dependencies only; don't start the server. |
 | `-h`, `--help` | Show usage. |
+
+### Subcommands (beyond the default scaffold)
+
+The default `npx create-wordjs <dir>` above installs a single-machine site. The same bin also has subcommands for **in-place upgrades** and **separate mode** (the three services on **different** machines), so the whole cluster can be stood up without cloning the repo:
+
+| Command | Purpose |
+| :--- | :--- |
+| `npx create-wordjs <dir>` | Fresh single-machine install (monolith), as above. |
+| `npx create-wordjs upgrade [dir]` | Replace the app code in an existing install with the latest release **in place**, preserving `wordjs-config.json`, gateway secrets, the database, and user-installed plugins. |
+| `npx create-wordjs gateway [dir] [opts]` | Stand up a **separate-mode gateway**: fetches the release, then runs the bundled `scripts/cluster.js init` to mint the cluster CA + gateway certs and prints ready-to-paste `join` commands (with fresh single-use tokens). Key option: `--host <ip/dns>` (the address other machines dial to reach this gateway). |
+| `npx create-wordjs join <role> [dir] [opts]` | Join **this** machine to a gateway as `backend` or `frontend`: fetches the release, then runs the bundled `scripts/node-join.js` to enroll over the token listener and register over mTLS. Options: `--gateway <ip/dns>`, `--token <join-token>`, `--ca-hash <sha256>` (MITM guard), `--advertise <ip/dns>` (this node's routable address), `--enroll-port <port>` (default 3101). Needs `openssl` on `PATH`. |
+
+So `create-wordjs gateway` / `join` are the one-command equivalents of the in-repo `scripts/cluster.js` / `scripts/node-join.js` walkthrough in [§ 6a](#6a-cluster-enrollment-separate-mode-) below — see **[separate-mode.md](separate-mode.md)** for the full flow.
 
 > Unlike the backend `cli/*` scripts below, `create-wordjs` is **not** run from the repo — it is a standalone npm bin invoked via `npx` on an end-user machine to *produce* a WordJS install. The in-repo scaffolders (§ 3, for plugin/theme *authors*) are a different tool.
 
@@ -166,6 +179,7 @@ The database file depends on the active driver (selected by `dbDriver` in `wordj
 | `sqlite-native` (default) | `backend/data/wordjs-native.db` | `better-sqlite3`. The DB-manager default.        |
 | `sqlite-legacy` (fallback) | `backend/data/wordjs.db`       | pure-JS WASM `sql.js`; same SQLite file format. Automatic fallback only. |
 | `postgres`           | external PostgreSQL server (via the `pg` client) | Set `db: { host, port, user, password, name, ssl }` in `wordjs-config.json`. |
+| `mysql` (or `mariadb`) | external MySQL 8.0+ / MariaDB server (via the `mysql2` client) | Same `db` connection object (set `dbPort: 3306`); the driver translates SQLite-dialect SQL to MySQL at the boundary. |
 
 You can open any SQLite file with a SQLite CLI or GUI (like *DB Browser for SQLite*) directly while the server is stopped.
 

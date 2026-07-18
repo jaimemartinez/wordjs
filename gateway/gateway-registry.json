@@ -1,4 +1,137 @@
 {
+  "/": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001",
+      "https://localhost:3001"
+    ],
+    "metrics": {
+      "https://localhost:3001": {
+        "status": "Healthy",
+        "latency": 34,
+        "failCount": 0
+      },
+      "https://127.0.0.1:3001": {
+        "status": "Healthy",
+        "latency": 28,
+        "failCount": 0
+      }
+    }
+  },
+  "/admin": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001",
+      "https://localhost:3001"
+    ],
+    "metrics": {
+      "https://localhost:3001": {
+        "status": "Healthy",
+        "latency": 34,
+        "failCount": 0
+      },
+      "https://127.0.0.1:3001": {
+        "status": "Healthy",
+        "latency": 28,
+        "failCount": 0
+      }
+    }
+  },
+  "/login": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001",
+      "https://localhost:3001"
+    ],
+    "metrics": {
+      "https://localhost:3001": {
+        "status": "Healthy",
+        "latency": 34,
+        "failCount": 0
+      },
+      "https://127.0.0.1:3001": {
+        "status": "Healthy",
+        "latency": 28,
+        "failCount": 0
+      }
+    }
+  },
+  "/install": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001",
+      "https://localhost:3001"
+    ],
+    "metrics": {
+      "https://localhost:3001": {
+        "status": "Healthy",
+        "latency": 34,
+        "failCount": 0
+      },
+      "https://127.0.0.1:3001": {
+        "status": "Healthy",
+        "latency": 28,
+        "failCount": 0
+      }
+    }
+  },
+  "/migration": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001",
+      "https://localhost:3001"
+    ],
+    "metrics": {
+      "https://localhost:3001": {
+        "status": "Healthy",
+        "latency": 34,
+        "failCount": 0
+      },
+      "https://127.0.0.1:3001": {
+        "status": "Healthy",
+        "latency": 28,
+        "failCount": 0
+      }
+    }
+  },
+  "/portal": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001",
+      "https://localhost:3001"
+    ],
+    "metrics": {
+      "https://localhost:3001": {
+        "status": "Healthy",
+        "latency": 34,
+        "failCount": 0
+      },
+      "https://127.0.0.1:3001": {
+        "status": "Healthy",
+        "latency": 28,
+        "failCount": 0
+      }
+    }
+  },
+  "/_next": {
+    "name": "frontend",
+    "targets": [
+      "https://127.0.0.1:3001",
+      "https://localhost:3001"
+    ],
+    "metrics": {
+      "https://localhost:3001": {
+        "status": "Healthy",
+        "latency": 34,
+        "failCount": 0
+      },
+      "https://127.0.0.1:3001": {
+        "status": "Healthy",
+        "latency": 28,
+        "failCount": 0
+      }
+    }
+  },
   "/api": {
     "name": "backend",
     "targets": [
@@ -34,52 +167,24 @@
     ],
     "metrics": {}
   },
-  "/": {
-    "name": "frontend",
+  "/healthz": {
+    "name": "backend",
     "targets": [
-      "https://127.0.0.1:3001"
+      "https://127.0.0.1:4000"
     ],
     "metrics": {}
   },
-  "/admin": {
-    "name": "frontend",
+  "/readyz": {
+    "name": "backend",
     "targets": [
-      "https://127.0.0.1:3001"
+      "https://127.0.0.1:4000"
     ],
     "metrics": {}
   },
-  "/login": {
-    "name": "frontend",
+  "/metrics": {
+    "name": "backend",
     "targets": [
-      "https://127.0.0.1:3001"
-    ],
-    "metrics": {}
-  },
-  "/install": {
-    "name": "frontend",
-    "targets": [
-      "https://127.0.0.1:3001"
-    ],
-    "metrics": {}
-  },
-  "/migration": {
-    "name": "frontend",
-    "targets": [
-      "https://127.0.0.1:3001"
-    ],
-    "metrics": {}
-  },
-  "/portal": {
-    "name": "frontend",
-    "targets": [
-      "https://127.0.0.1:3001"
-    ],
-    "metrics": {}
-  },
-  "/_next": {
-    "name": "frontend",
-    "targets": [
-      "https://127.0.0.1:3001"
+      "https://127.0.0.1:4000"
     ],
     "metrics": {}
   }

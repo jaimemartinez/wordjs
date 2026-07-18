@@ -7,8 +7,15 @@ const nextConfig: NextConfig = {
   },
   async headers() {
     // SECURITY: baseline security headers for every route. The KEY anti-clickjacking control is
-    // `frame-ancestors 'none'` (plus the legacy X-Frame-Options: DENY); object-src 'none' + base-uri
-    // 'self' close common injection vectors. Those are the real value here.
+    // `frame-ancestors 'self'` (plus the legacy X-Frame-Options: SAMEORIGIN); object-src 'none' +
+    // base-uri 'self' close common injection vectors. Those are the real value here.
+    //
+    // frame-ancestors is 'self' (NOT 'none') on purpose: WordJS frames its OWN pages same-origin —
+    // the theme Customizer (/admin/themes/customize) previews the live site in an <iframe src="/">,
+    // and other admin surfaces embed same-origin content. 'self' still fully blocks CROSS-origin
+    // framing (an attacker's site can't frame WordJS → no clickjacking); 'none' additionally blocked
+    // the app's own same-origin preview, which broke the Customizer (blank/errored iframe). This is
+    // the same relaxation WordPress uses for its Customizer preview.
     //
     // script-src DELIBERATELY keeps 'unsafe-inline' 'unsafe-eval' AND adds blob: — removing them BREAKS
     // the app (a regression), so they stay:
@@ -27,7 +34,7 @@ const nextConfig: NextConfig = {
     // origin, so same-origin https assets are blocked unless https: is allowed. These directories are
     // NOT the XSS line of defense anyway (script-src already has 'unsafe-inline'/'unsafe-eval' for
     // Next.js + Puck; the server-side sanitizer is the XSS control). The REAL value kept here is the
-    // structural set: frame-ancestors 'none' (clickjacking), object-src 'none', base-uri 'self'.
+    // structural set: frame-ancestors 'self' (cross-origin clickjacking), object-src 'none', base-uri 'self'.
     const csp = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:",
@@ -37,7 +44,7 @@ const nextConfig: NextConfig = {
       "font-src 'self' data: https:",
       "connect-src 'self' https: http: ws: wss:",
       "frame-src 'self' https://www.youtube.com https://player.vimeo.com",
-      "frame-ancestors 'none'",
+      "frame-ancestors 'self'",
       "object-src 'none'",
       "base-uri 'self'",
     ].join('; ');
@@ -46,7 +53,7 @@ const nextConfig: NextConfig = {
         source: '/:path*',
         headers: [
           { key: 'Content-Security-Policy', value: csp },
-          { key: 'X-Frame-Options', value: 'DENY' },
+          { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
         ],

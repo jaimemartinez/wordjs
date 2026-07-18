@@ -5,15 +5,14 @@
  * Admin page for the Events Calendar plugin (/admin/plugin/events-calendar).
  * CRUD over events: filter chips (upcoming/past/all), a table with color dot + dates + actions,
  * and a modal form for create/edit. API calls go through the host's api helpers (session cookie).
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-events-calendar) — the markup below only uses
+ * cf-* classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
-
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-5 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
 
 const MONTHS_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
@@ -43,6 +42,32 @@ function fmtWhen(ev) {
     if (end.toDateString() === start.toDateString()) return `${datePart(start)} · ${timePart(start)} – ${timePart(end)}`;
     return `${datePart(start)} ${timePart(start)} → ${datePart(end)} ${timePart(end)}`;
 }
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconCalendar = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconCalendarEmpty = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4M8 2v4M3 10h18" />
+        <path d="m9.5 15.5 5 0" />
+    </svg>
+);
 
 /**
  * Create/edit modal. Module-level on purpose (defining it inside the page component would remount
@@ -97,71 +122,77 @@ function EventModal({ initial, onClose, onSaved }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onClick={onClose}>
+        <div className="cf-overlay" onClick={onClose}>
             <form
                 onSubmit={submit}
                 onClick={(e) => e.stopPropagation()}
-                className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 sm:p-8 space-y-4"
+                className="cf-letter"
+                role="dialog"
+                aria-modal="true"
+                aria-label={ev.id ? "Editar evento" : "Nuevo evento"}
             >
-                <h2 className="text-xl font-black text-gray-900 italic tracking-tighter">
-                    {ev.id ? "Editar evento" : "Nuevo evento"}
-                </h2>
+                <div className="cf-letter-body">
+                    <h2 className="cf-editor-title">
+                        {ev.id ? <IconPen /> : <IconPlus />}
+                        {ev.id ? "Editar evento" : "Nuevo evento"}
+                    </h2>
 
-                <div>
-                    <label className={labelCls}>Título *</label>
-                    <input type="text" value={title} onChange={(e) => setTitle(e.target.value)} className={inputCls} placeholder="Nombre del evento" required />
-                </div>
+                    <div className="cf-grid">
+                        <div className="cf-span-2">
+                            <label className="cf-label" htmlFor="ec-title">Título *</label>
+                            <input id="ec-title" type="text" value={title} onChange={(e) => setTitle(e.target.value)} className="cf-input" placeholder="Nombre del evento" required />
+                        </div>
 
-                <label className="flex items-center gap-2 text-sm font-medium text-gray-600 cursor-pointer select-none">
-                    <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
-                    Todo el día
-                </label>
+                        <div className="cf-span-2">
+                            <label className="cf-check">
+                                <input type="checkbox" checked={allDay} onChange={(e) => setAllDay(e.target.checked)} />
+                                Todo el día
+                            </label>
+                        </div>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Inicio *</label>
-                        {allDay ? (
-                            <input type="date" value={startsAt.slice(0, 10)} onChange={(e) => setStartsAt(e.target.value ? e.target.value + "T00:00" : "")} className={inputCls} required />
-                        ) : (
-                            <input type="datetime-local" value={startsAt.slice(0, 16)} onChange={(e) => setStartsAt(e.target.value)} className={inputCls} required />
-                        )}
+                        <div>
+                            <label className="cf-label" htmlFor="ec-starts">Inicio *</label>
+                            {allDay ? (
+                                <input id="ec-starts" type="date" value={startsAt.slice(0, 10)} onChange={(e) => setStartsAt(e.target.value ? e.target.value + "T00:00" : "")} className="cf-input" required />
+                            ) : (
+                                <input id="ec-starts" type="datetime-local" value={startsAt.slice(0, 16)} onChange={(e) => setStartsAt(e.target.value)} className="cf-input" required />
+                            )}
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="ec-ends">Fin (opcional)</label>
+                            {allDay ? (
+                                <input id="ec-ends" type="date" value={endsAt.slice(0, 10)} onChange={(e) => setEndsAt(e.target.value ? e.target.value + "T23:59" : "")} className="cf-input" />
+                            ) : (
+                                <input id="ec-ends" type="datetime-local" value={endsAt.slice(0, 16)} onChange={(e) => setEndsAt(e.target.value)} className="cf-input" />
+                            )}
+                        </div>
+
+                        <div>
+                            <label className="cf-label" htmlFor="ec-location">Lugar</label>
+                            <input id="ec-location" type="text" value={location} onChange={(e) => setLocation(e.target.value)} className="cf-input" placeholder="Auditorio, dirección…" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="ec-color">Color</label>
+                            <input id="ec-color" type="color" value={color} onChange={(e) => setColor(e.target.value)} className="cf-color-input" />
+                        </div>
+
+                        <div className="cf-span-2">
+                            <label className="cf-label" htmlFor="ec-url">Enlace "Más info" (opcional)</label>
+                            <input id="ec-url" type="url" value={url} onChange={(e) => setUrl(e.target.value)} className="cf-input" placeholder="https://…" />
+                        </div>
+
+                        <div className="cf-span-2">
+                            <label className="cf-label" htmlFor="ec-description">Descripción</label>
+                            <textarea id="ec-description" value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className="cf-input" placeholder="Detalles del evento…" />
+                        </div>
                     </div>
-                    <div>
-                        <label className={labelCls}>Fin (opcional)</label>
-                        {allDay ? (
-                            <input type="date" value={endsAt.slice(0, 10)} onChange={(e) => setEndsAt(e.target.value ? e.target.value + "T23:59" : "")} className={inputCls} />
-                        ) : (
-                            <input type="datetime-local" value={endsAt.slice(0, 16)} onChange={(e) => setEndsAt(e.target.value)} className={inputCls} />
-                        )}
+
+                    {error && <div role="alert" className="cf-flash is-error" style={{ marginTop: "1.05rem", marginBottom: 0 }}>{error}</div>}
+
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}>
+                        <button type="button" onClick={onClose} disabled={busy} className="cf-btn-ghost">Cancelar</button>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
                     </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                        <label className={labelCls}>Lugar</label>
-                        <input type="text" value={location} onChange={(e) => setLocation(e.target.value)} className={inputCls} placeholder="Auditorio, dirección…" />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Color</label>
-                        <input type="color" value={color} onChange={(e) => setColor(e.target.value)} className="h-12 w-full bg-gray-50/60 border-2 border-gray-100 rounded-2xl cursor-pointer p-1" />
-                    </div>
-                </div>
-
-                <div>
-                    <label className={labelCls}>Enlace "Más info" (opcional)</label>
-                    <input type="url" value={url} onChange={(e) => setUrl(e.target.value)} className={inputCls} placeholder="https://…" />
-                </div>
-
-                <div>
-                    <label className={labelCls}>Descripción</label>
-                    <textarea value={description} onChange={(e) => setDescription(e.target.value)} rows={3} className={inputCls} placeholder="Detalles del evento…" />
-                </div>
-
-                {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600">{error}</div>}
-
-                <div className="flex items-center justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} disabled={busy} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
                 </div>
             </form>
         </div>
@@ -209,24 +240,30 @@ export default function EventsCalendarAdminPage() {
     };
 
     return (
-        <div className="max-w-5xl mx-auto p-4 sm:p-8">
-            <div className="flex flex-wrap items-end justify-between gap-4 mb-8">
-                <div>
-                    <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Eventos</h1>
-                    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                        Calendario de eventos → bloque EventsCalendar en el editor visual
-                    </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + primary action */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconCalendar /></div>
+                <div style={{ minWidth: 0 }}>
+                    <h1 className="cf-title">Eventos</h1>
+                    <p className="cf-subtitle">Calendario de eventos → bloque EventsCalendar en el editor visual</p>
                 </div>
-                <button type="button" onClick={() => setModal({})} className={btnCls}>+ Nuevo evento</button>
+                <div style={{ marginLeft: "auto" }}>
+                    <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> Nuevo evento</button>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
-            <div className="flex flex-wrap gap-2 mb-6">
+            {/* scope filter: segmented pill */}
+            <div className="cf-tabs" role="tablist">
                 {SCOPES.map((s) => (
                     <button
                         key={s.value}
                         type="button"
+                        role="tab"
+                        aria-selected={scope === s.value}
                         onClick={() => setScope(s.value)}
-                        className={`px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest transition-all ${scope === s.value ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                        className={`cf-tab ${scope === s.value ? "is-active" : ""}`}
                     >
                         {s.label}
                     </button>
@@ -234,63 +271,62 @@ export default function EventsCalendarAdminPage() {
             </div>
 
             {message && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-6 ${/Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
+                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
 
-            <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 overflow-hidden">
+            <div className="cf-card-item">
                 {events === null ? (
-                    <p className="text-sm text-gray-400 p-8">Cargando eventos…</p>
+                    <div className="cf-empty">
+                        <IconCalendarEmpty />
+                        <span>Cargando eventos…</span>
+                    </div>
                 ) : events.length === 0 ? (
-                    <p className="text-sm text-gray-400 p-8">
-                        {scope === "upcoming" ? "No hay eventos próximos." : scope === "past" ? "No hay eventos pasados." : "Todavía no hay eventos — crea el primero."}
-                    </p>
+                    <div className="cf-empty">
+                        <IconCalendarEmpty />
+                        <span>
+                            {scope === "upcoming" ? "No hay eventos próximos." : scope === "past" ? "No hay eventos pasados." : "Todavía no hay eventos — crea el primero."}
+                        </span>
+                    </div>
                 ) : (
-                    <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
+                    <div className="cf-table-wrap">
+                        <table className="cf-table">
                             <thead>
-                                <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                    <th className="px-6 py-4">Evento</th>
-                                    <th className="px-6 py-4">Fecha</th>
-                                    <th className="px-6 py-4">Lugar</th>
-                                    <th className="px-6 py-4 text-right">Acciones</th>
+                                <tr>
+                                    <th>Evento</th>
+                                    <th>Fecha</th>
+                                    <th>Lugar</th>
+                                    <th style={{ textAlign: "right" }}>Acciones</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {events.map((ev) => (
-                                    <tr key={ev.id} className="border-b border-gray-50 hover:bg-gray-50/60 transition">
-                                        <td className="px-6 py-4">
-                                            <div className="flex items-center gap-3">
-                                                <span className="inline-block w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: ev.color || "#3b82f6" }} />
-                                                <div>
-                                                    <div className="font-bold text-gray-800">{ev.title}</div>
+                                    <tr key={ev.id}>
+                                        <td>
+                                            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+                                                <span className="cf-event-dot" aria-hidden="true" style={{ backgroundColor: ev.color || "#3b82f6" }} />
+                                                <div style={{ minWidth: 0 }}>
+                                                    <div className="cf-event-title">{ev.title}</div>
                                                     {ev.url && (
-                                                        <a href={ev.url} target="_blank" rel="noopener noreferrer" className="text-[11px] text-blue-500 hover:underline break-all">
+                                                        <a href={ev.url} target="_blank" rel="noopener noreferrer" className="cf-event-url">
                                                             {ev.url}
                                                         </a>
                                                     )}
                                                 </div>
                                             </div>
                                         </td>
-                                        <td className="px-6 py-4 text-gray-600 whitespace-nowrap">{fmtWhen(ev)}</td>
-                                        <td className="px-6 py-4 text-gray-500">{ev.location || "—"}</td>
-                                        <td className="px-6 py-4 text-right whitespace-nowrap">
-                                            <button
-                                                type="button"
-                                                onClick={() => setModal(ev)}
-                                                className="px-3 py-2 rounded-xl text-xs font-black uppercase tracking-widest text-gray-600 hover:bg-gray-100 transition"
-                                            >
-                                                Editar
-                                            </button>
-                                            <button
-                                                type="button"
-                                                onClick={() => remove(ev)}
-                                                disabled={busyId === ev.id}
-                                                className="px-3 py-2 rounded-xl text-xs font-black uppercase tracking-widest text-red-500 hover:bg-red-50 transition disabled:opacity-50"
-                                            >
-                                                Eliminar
-                                            </button>
+                                        <td className="cf-cell-date">{fmtWhen(ev)}</td>
+                                        <td>{ev.location || "—"}</td>
+                                        <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                                            <div style={{ display: "inline-flex", gap: "0.5rem" }}>
+                                                <button type="button" onClick={() => setModal(ev)} className="cf-btn-ghost">
+                                                    <IconPen /> Editar
+                                                </button>
+                                                <button type="button" onClick={() => remove(ev)} disabled={busyId === ev.id} className="cf-btn-danger">
+                                                    Eliminar
+                                                </button>
+                                            </div>
                                         </td>
                                     </tr>
                                 ))}
@@ -300,7 +336,7 @@ export default function EventsCalendarAdminPage() {
                 )}
             </div>
 
-            <p className="text-[11px] text-gray-400 mt-6 leading-relaxed">
+            <p className="cf-footnote">
                 En el editor visual, agrega el bloque <strong>EventsCalendar</strong> — muestra los eventos como
                 lista de próximos o como calendario mensual, con descripción opcional.
             </p>

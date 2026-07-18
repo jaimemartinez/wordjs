@@ -57,13 +57,15 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
         }
     };
 
-    // Open the sources editor, pre-filled with the configured list (or the default when none is set yet).
+    // Open the sources editor, pre-filled with the configured list. Only when nothing was ever
+    // configured (usingDefault) does the official default show as a row — an explicitly saved
+    // empty list stays empty (remote marketplace disabled).
     const openSources = async () => {
         setShowSources(true);
         try {
             const s = await marketplaceApi.getSources();
             setDefaultSrc(s.default);
-            setSrcList(s.configured.length ? s.configured : [s.default]);
+            setSrcList(s.usingDefault ? [s.default] : s.configured);
         } catch (e: any) {
             addToast(e?.message || "No se pudieron cargar las fuentes.", "error");
         }
@@ -85,12 +87,28 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
         setSavingSrc(true);
         try {
             const res = await marketplaceApi.setSources(list);
-            setSrcList(res.configured.length ? res.configured : [res.default]);
-            addToast(list.length ? "Fuentes del marketplace guardadas." : "Fuentes restablecidas al valor por defecto.", "success");
+            setSrcList(res.configured);
+            addToast(list.length ? "Fuentes del marketplace guardadas." : "Marketplace sin fuentes — catálogo remoto desactivado.", "success");
             setShowSources(false);
             await load(true);
         } catch (e: any) {
             addToast(e?.message || "No se pudieron guardar las fuentes.", "error");
+        } finally {
+            setSavingSrc(false);
+        }
+    };
+
+    // "Restablecer al default": forget the configured list entirely → official catalog again.
+    const resetSources = async () => {
+        setSavingSrc(true);
+        try {
+            const res = await marketplaceApi.resetSources();
+            setSrcList([res.default]);
+            addToast("Fuentes restablecidas al catálogo oficial.", "success");
+            setShowSources(false);
+            await load(true);
+        } catch (e: any) {
+            addToast(e?.message || "No se pudieron restablecer las fuentes.", "error");
         } finally {
             setSavingSrc(false);
         }
@@ -201,7 +219,7 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                         <button onClick={() => setShowSources(false)} className="text-slate-400 hover:text-slate-700 text-[11px] font-bold uppercase tracking-wider">Cerrar</button>
                     </div>
                     <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
-                        Agregá uno o varios catálogos (URLs <span className="font-mono">https</span>). WordJS los combina — los primeros tienen prioridad ante ids repetidos. Dejá la lista vacía para volver al catálogo oficial.
+                        Agregá uno o varios catálogos (URLs <span className="font-mono">https</span>). WordJS los combina — los primeros tienen prioridad ante ids repetidos. Podés dejar la lista vacía para desactivar el catálogo remoto; «Restablecer al default» vuelve al catálogo oficial.
                     </p>
                     <div className="space-y-2 mb-4">
                         {srcList.map((u, i) => {
@@ -218,7 +236,7 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                                 </div>
                             );
                         })}
-                        {srcList.length === 0 && <div className="text-[11px] text-slate-400 italic px-1">Sin fuentes — se usará el catálogo oficial por defecto.</div>}
+                        {srcList.length === 0 && <div className="text-[11px] text-slate-400 italic px-1">Sin fuentes — el catálogo remoto queda desactivado al guardar.</div>}
                     </div>
                     <div className="flex items-center gap-2 mb-4">
                         <input
@@ -231,7 +249,7 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                         <Button onClick={addSource} className="shrink-0"><FaPlus className="mr-1.5 text-[10px]" /> Agregar</Button>
                     </div>
                     <div className="flex items-center justify-between gap-2 pt-3 border-t border-slate-100">
-                        <button onClick={() => saveSources([])} disabled={savingSrc} className="text-[11px] font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50">Restablecer al default</button>
+                        <button onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-slate-500 hover:text-slate-800 disabled:opacity-50">Restablecer al default</button>
                         <Button onClick={() => saveSources()} disabled={savingSrc}>{savingSrc ? "Guardando…" : "Guardar fuentes"}</Button>
                     </div>
                 </div>
@@ -240,14 +258,16 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
             <p className="text-[10px] font-semibold text-slate-450/80 mb-6 bg-slate-50 border border-slate-150/60 px-4 py-2.5 rounded-xl inline-block shadow-[inset_0_2px_4px_rgba(0,0,0,0.015)]">
                 {sourcesStatus.length > 1
                     ? <>{sourcesStatus.length} fuentes</>
-                    : <>Fuente: <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? "catálogo local" : (source || "por defecto")}</span></>}
+                    : <>Fuente: <span className="font-mono text-slate-650 bg-slate-100 px-1.5 py-0.5 rounded">{isLocal ? "catálogo local" : (source || "sin fuentes")}</span></>}
                 {" · "}{entries.length} plugins
                 {sourcesStatus.some((s) => !s.ok) && <span className="text-rose-500 font-bold"> · {sourcesStatus.filter((s) => !s.ok).length} fuente(s) con error</span>}
                 {" · "}Los plugins se instalan desactivados y con permisos denegados por defecto.
             </p>
 
             {filtered.length === 0 ? (
-                <EmptyState icon="fa-puzzle-piece" title="Sin resultados" description="Ningún plugin coincide con la búsqueda." />
+                entries.length === 0 && sourcesStatus.length === 0
+                    ? <EmptyState icon="fa-store-slash" title="Marketplace sin fuentes" description="El catálogo remoto está desactivado. Agregá una fuente con el botón de configuración (⚙️)." />
+                    : <EmptyState icon="fa-puzzle-piece" title="Sin resultados" description="Ningún plugin coincide con la búsqueda." />
             ) : (
                 <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                     {filtered.map((e) => {

@@ -4,6 +4,46 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.6.3] - 2026-07-18
+
+### Added
+
+- **Theme marketplace.** Themes are now distributed exactly like plugins: a browsable catalog with
+  deterministic, sha256-verified zips installed through a hardened pipeline. The **Themes** admin page
+  gains **Instalados | Marketplace** tabs; `GET /api/v1/marketplace/themes/catalog` and
+  `POST /api/v1/marketplace/themes/install` (strict containment: every entry under `<slug>/`, a
+  `theme.json` is required, zip-bomb + Zip-Slip guards). Themes have their **own** admin-configurable
+  source list (`GET`/`PUT /api/v1/marketplace/themes/sources`, option `marketplace_theme_sources`),
+  independent from the plugin sources, so you can point themes at a different origin.
+- **MySQL is selectable at install AND for driver-switch migration.** The install wizard's driver
+  picker now offers MySQL / MariaDB (with a connection form), and Admin → Database can migrate an
+  existing site to MySQL (async client-server migration path, `?`-placeholder + `FOREIGN_KEY_CHECKS`
+  handling), alongside the existing Postgres path.
+- **Premium admin redesign for every marketplace plugin.** Each plugin admin page ships its own
+  scoped `admin.css` in a shared modern design system (cool-neutral canvas, single indigo accent,
+  soft layered shadows, segmented tabs, glass modals) — logic unchanged, styling isolated per plugin.
+- **`youtube-videos`, `conference-manager` and `mail-server` moved to the marketplace** (catalog now
+  28 plugins). `mail-server`'s runtime `data/` (its AES key + attachments) is excluded from the zip.
+
+### Changed
+
+- **Marketplace sources v2 — an explicitly empty source list now disables the remote marketplace**
+  (instead of silently falling back to the official catalog). "Restablecer al default" (a new
+  `reset` on the sources endpoints) is the way back to the official catalog. Applies to plugins and
+  themes. Bundled themes were moved out of the release bundle into the theme marketplace, mirroring
+  plugins; upgrades preserve any themes already installed on a site.
+- **Uninstalling a plugin now preserves its `data/` folder by default** (encryption keys,
+  attachments) — the same WordPress-parity rule the DB tables already followed. Reinstalling adopts
+  the preserved data; check "delete data" to remove it too.
+
+### Fixed
+
+- **Theme Customizer live preview was blank/broken** (broken-document icon, black swatches, all
+  "theme default"). The site-wide `X-Frame-Options: DENY` + CSP `frame-ancestors 'none'` blocked ALL
+  framing, including the customizer's own same-origin `<iframe src="/">`. Relaxed to `SAMEORIGIN` /
+  `frame-ancestors 'self'` in `frontend/next.config.ts` — cross-origin clickjacking stays fully
+  blocked; only WordJS framing its own pages is re-allowed (the pattern WordPress's Customizer uses).
+
 ## [1.6.2] - 2026-07-18
 
 ### Added

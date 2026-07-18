@@ -13,11 +13,21 @@ import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/restaurant-menu";
 
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-orange-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-bold text-xs transition-all disabled:opacity-50";
-const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40";
+// Visual identity (premium/modern) lives in the plugin's OWN stylesheet (client/admin/admin.css,
+// scoped to .plugin-admin-restaurant); the markup only references cf-* classes.
+const inputCls = "cf-input";
+const labelCls = "cf-label";
+const btnCls = "cf-btn";
+const btnGhostCls = "cf-btn-ghost";
+const cardCls = "cf-card-item";
+
+const UtensilsIcon = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M3 2v7c0 1.1.9 2 2 2h4a2 2 0 0 0 2-2V2" />
+        <path d="M7 2v20" />
+        <path d="M21 15V2a5 5 0 0 0-5 5v6c0 1.1.9 2 2 2h3Zm0 0v7" />
+    </svg>
+);
 
 const TAGS = [
     { id: "vegano", emoji: "🌱", label: "Vegano" },
@@ -27,12 +37,13 @@ const TAGS = [
     { id: "popular", emoji: "⭐", label: "Popular" },
 ];
 
+// `color` is a cf-pill modifier class (see admin.css).
 const STATUS_META = {
-    new: { label: "Nuevo", color: "bg-blue-50 text-blue-700 border-blue-200" },
-    preparing: { label: "Preparando", color: "bg-amber-50 text-amber-700 border-amber-200" },
-    ready: { label: "Listo", color: "bg-green-50 text-green-700 border-green-200" },
-    delivered: { label: "Entregado", color: "bg-gray-50 text-gray-500 border-gray-200" },
-    cancelled: { label: "Cancelado", color: "bg-red-50 text-red-500 border-red-200" },
+    new: { label: "Nuevo", color: "is-accent" },
+    preparing: { label: "Preparando", color: "is-warn" },
+    ready: { label: "Listo", color: "is-ok" },
+    delivered: { label: "Entregado", color: "" },
+    cancelled: { label: "Cancelado", color: "is-danger" },
 };
 
 function fmtMoney(cents, symbol) {
@@ -65,14 +76,15 @@ function tagsToArray(tags) {
 
 function Modal({ title, onClose, children }) {
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-black/40" onClick={onClose}></div>
-            <div className="relative bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 sm:p-8">
-                <div className="flex items-center justify-between mb-5">
-                    <h3 className="text-lg font-black text-gray-900">{title}</h3>
-                    <button type="button" onClick={onClose} className="w-8 h-8 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold">✕</button>
+        <div className="cf-overlay" onClick={onClose}>
+            <div className="cf-letter" role="dialog" aria-modal="true" aria-label={title} onClick={(e) => e.stopPropagation()}>
+                <div className="cf-letter-body">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.1rem" }}>
+                        <h3 className="cf-editor-title" style={{ marginBottom: 0 }}>{title}</h3>
+                        <button type="button" onClick={onClose} aria-label="Cerrar" className="cf-iconbtn">✕</button>
+                    </div>
+                    {children}
                 </div>
-                {children}
             </div>
         </div>
     );
@@ -83,11 +95,11 @@ function SectionModal({ initial, busy, onSave, onClose }) {
     return (
         <Modal title={initial ? "Editar sección" : "Nueva sección"} onClose={onClose}>
             <form onSubmit={(e) => { e.preventDefault(); onSave({ name: name.trim() }); }}>
-                <div className="mb-5">
+                <div style={{ marginBottom: "1.25rem" }}>
                     <label className={labelCls}>Nombre de la sección</label>
                     <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Entradas, Platos fuertes, Bebidas…" className={inputCls} maxLength={120} required autoFocus />
                 </div>
-                <div className="flex justify-end gap-3">
+                <div className="cf-end">
                     <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
                     <button type="submit" disabled={busy || !name.trim()} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
                 </div>
@@ -124,7 +136,7 @@ function ItemModal({ initial, sections, defaultSectionId, busy, onSave, onClose 
 
     return (
         <Modal title={initial ? "Editar plato" : "Nuevo plato"} onClose={onClose}>
-            <form onSubmit={submit} className="space-y-4">
+            <form onSubmit={submit} className="cf-stack">
                 <div>
                     <label className={labelCls}>Nombre del plato</label>
                     <input type="text" value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Pizza Margarita" className={inputCls} maxLength={160} required autoFocus />
@@ -133,7 +145,7 @@ function ItemModal({ initial, sections, defaultSectionId, busy, onSave, onClose 
                     <label className={labelCls}>Descripción</label>
                     <textarea value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Ingredientes, presentación…" className={inputCls} rows={2} maxLength={1000} />
                 </div>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="cf-grid-2">
                     <div>
                         <label className={labelCls}>Precio</label>
                         <input type="text" inputMode="decimal" value={priceStr} onChange={(e) => setPriceStr(e.target.value)} placeholder="0.00" className={inputCls} required />
@@ -153,16 +165,16 @@ function ItemModal({ initial, sections, defaultSectionId, busy, onSave, onClose 
                 </div>
                 <div>
                     <label className={labelCls}>Etiquetas</label>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="cf-row">
                         {TAGS.map((t) => (
                             <button key={t.id} type="button" onClick={() => toggleTag(t.id)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all ${tags.includes(t.id) ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"}`}>
+                                className={`cf-tag ${tags.includes(t.id) ? "is-on" : ""}`}>
                                 {t.emoji} {t.label}
                             </button>
                         ))}
                     </div>
                 </div>
-                <div className="flex justify-end gap-3 pt-2">
+                <div className="cf-end" style={{ paddingTop: "0.5rem" }}>
                     <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
                     <button type="submit" disabled={busy || !name.trim() || inputToCents(priceStr) === null} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
                 </div>
@@ -176,60 +188,60 @@ function OrderDetailModal({ order, symbol, busy, onStatus, onDelete, onClose }) 
     const phoneDigits = String(order.customer_phone || "").replace(/\D/g, "");
     return (
         <Modal title={`Pedido #${order.id}`} onClose={onClose}>
-            <div className="space-y-4">
-                <div className="flex flex-wrap items-center gap-2">
-                    <span className={`px-3 py-1 rounded-full text-xs font-black border ${meta.color}`}>{meta.label}</span>
-                    <span className="text-xs text-gray-400 font-bold">{fmtDate(order.created_at)}</span>
+            <div className="cf-stack">
+                <div className="cf-row" style={{ alignItems: "center" }}>
+                    <span className={`cf-pill ${meta.color}`}>{meta.label}</span>
+                    <span className="cf-meta" style={{ marginTop: 0 }}>{fmtDate(order.created_at)}</span>
                 </div>
-                <div className="bg-gray-50 rounded-2xl p-4 text-sm space-y-1">
-                    <p><span className="font-black">{order.customer_name}</span></p>
-                    <p className="flex flex-wrap gap-3">
-                        <a href={`tel:${order.customer_phone}`} className="text-blue-600 font-bold hover:underline">📞 {order.customer_phone}</a>
+                <div className="cf-subcard">
+                    <p style={{ margin: 0, fontWeight: 700 }}>{order.customer_name}</p>
+                    <p className="cf-row" style={{ margin: "0.35rem 0 0" }}>
+                        <a href={`tel:${order.customer_phone}`} className="cf-link">📞 {order.customer_phone}</a>
                         {phoneDigits ? (
-                            <a href={`https://wa.me/${phoneDigits}`} target="_blank" rel="noopener noreferrer" className="text-green-600 font-bold hover:underline">WhatsApp</a>
+                            <a href={`https://wa.me/${phoneDigits}`} target="_blank" rel="noopener noreferrer" className="cf-link is-ok">WhatsApp</a>
                         ) : null}
                     </p>
-                    <p className="text-gray-500">
+                    <p style={{ margin: "0.35rem 0 0", color: "var(--cf-soft)" }}>
                         {order.delivery_type === "delivery" ? `🛵 Domicilio: ${order.customer_address || "—"}` : "🏪 Recoger en local"}
                     </p>
                 </div>
                 <div>
                     <p className={labelCls}>Productos</p>
-                    <div className="divide-y divide-gray-100 border border-gray-100 rounded-2xl overflow-hidden">
+                    <div className="cf-line-items">
                         {(Array.isArray(order.items) ? order.items : []).map((it, i) => (
-                            <div key={i} className="px-4 py-2.5 text-sm">
-                                <div className="flex justify-between gap-3">
-                                    <span className="font-bold">{it.qty}x {it.name}</span>
-                                    <span className="font-black tabular-nums">{fmtMoney(it.price_cents * it.qty, symbol)}</span>
+                            <div key={i} className="cf-line-item">
+                                <div className="cf-line-head">
+                                    <span>{it.qty}x {it.name}</span>
+                                    <span style={{ fontVariantNumeric: "tabular-nums" }}>{fmtMoney(it.price_cents * it.qty, symbol)}</span>
                                 </div>
-                                {it.note ? <p className="text-xs text-gray-400 mt-0.5">▸ {it.note}</p> : null}
+                                {it.note ? <p className="cf-line-note">▸ {it.note}</p> : null}
                             </div>
                         ))}
                     </div>
                 </div>
-                <div className="text-sm space-y-1">
-                    <div className="flex justify-between text-gray-500"><span>Subtotal</span><span className="tabular-nums">{fmtMoney(order.subtotal_cents, symbol)}</span></div>
+                <div className="cf-totals">
+                    <div className="cf-totals-row"><span>Subtotal</span><span>{fmtMoney(order.subtotal_cents, symbol)}</span></div>
                     {order.delivery_cents > 0 ? (
-                        <div className="flex justify-between text-gray-500"><span>Envío</span><span className="tabular-nums">{fmtMoney(order.delivery_cents, symbol)}</span></div>
+                        <div className="cf-totals-row"><span>Envío</span><span>{fmtMoney(order.delivery_cents, symbol)}</span></div>
                     ) : null}
-                    <div className="flex justify-between font-black text-base"><span>Total</span><span className="tabular-nums">{fmtMoney(order.total_cents, symbol)}</span></div>
+                    <div className="cf-totals-row is-total"><span>Total</span><span>{fmtMoney(order.total_cents, symbol)}</span></div>
                 </div>
                 {order.notes ? (
-                    <div className="bg-amber-50 text-amber-700 rounded-2xl px-4 py-3 text-sm">📝 {order.notes}</div>
+                    <div className="cf-subcard is-warn">📝 {order.notes}</div>
                 ) : null}
                 <div>
                     <p className={labelCls}>Cambiar estado</p>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="cf-row">
                         {Object.keys(STATUS_META).map((s) => (
                             <button key={s} type="button" disabled={busy || order.status === s} onClick={() => onStatus(order.id, s)}
-                                className={`px-3 py-1.5 rounded-full text-xs font-bold border-2 transition-all disabled:opacity-40 ${order.status === s ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-500 border-gray-200 hover:border-gray-400"}`}>
+                                className={`cf-tag ${order.status === s ? "is-on" : ""}`}>
                                 {STATUS_META[s].label}
                             </button>
                         ))}
                     </div>
                 </div>
-                <div className="flex justify-between items-center pt-2">
-                    <button type="button" disabled={busy} onClick={() => onDelete(order.id)} className="text-xs font-bold text-red-500 hover:text-red-700">Eliminar pedido</button>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "0.5rem" }}>
+                    <button type="button" disabled={busy} onClick={() => onDelete(order.id)} className="cf-linkbtn is-danger">Eliminar pedido</button>
                     <button type="button" onClick={onClose} className={btnGhostCls}>Cerrar</button>
                 </div>
             </div>
@@ -261,29 +273,29 @@ function ConfigForm({ initial, busy, onSave }) {
     };
 
     return (
-        <form onSubmit={submit} className={`${cardCls} p-6 sm:p-8 space-y-5`}>
-            <label className="flex items-center justify-between gap-4 cursor-pointer select-none bg-gray-50 rounded-2xl px-5 py-4">
+        <form onSubmit={submit} className={`${cardCls} cf-stack`}>
+            <label className="cf-toggle-card">
                 <span>
-                    <span className="block font-black text-gray-900 text-sm">Pedidos en línea</span>
-                    <span className="block text-xs text-gray-400 mt-0.5">Habilita el carrito y el envío de pedidos desde el bloque del menú.</span>
+                    <span className="cf-toggle-title">Pedidos en línea</span>
+                    <span className="cf-toggle-desc">Habilita el carrito y el envío de pedidos desde el bloque del menú.</span>
                 </span>
-                <input type="checkbox" checked={orderingEnabled} onChange={(e) => setOrderingEnabled(e.target.checked)} className="w-5 h-5 accent-gray-900" />
+                <input type="checkbox" checked={orderingEnabled} onChange={(e) => setOrderingEnabled(e.target.checked)} />
             </label>
 
-            <div className="grid sm:grid-cols-2 gap-4">
+            <div className="cf-grid-2">
                 <div>
                     <label className={labelCls}>Número de WhatsApp</label>
                     <input type="text" value={whatsappNumber} onChange={(e) => setWhatsappNumber(e.target.value)} placeholder="Ej. 573001234567 (con código de país)" className={inputCls} />
-                    <p className="text-[11px] text-gray-400 mt-1.5">Solo dígitos, con código de país. El cliente enviará ahí el resumen del pedido.</p>
+                    <p className="cf-help">Solo dígitos, con código de país. El cliente enviará ahí el resumen del pedido.</p>
                 </div>
                 <div>
                     <label className={labelCls}>Email de notificación (opcional)</label>
                     <input type="email" value={notifyEmail} onChange={(e) => setNotifyEmail(e.target.value)} placeholder="pedidos@mirestaurante.com" className={inputCls} />
-                    <p className="text-[11px] text-gray-400 mt-1.5">Se envía un correo por cada pedido nuevo (si hay proveedor de correo activo).</p>
+                    <p className="cf-help">Se envía un correo por cada pedido nuevo (si hay proveedor de correo activo).</p>
                 </div>
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-4">
+            <div className="cf-grid-2">
                 <div>
                     <label className={labelCls}>Costo de domicilio</label>
                     <input type="text" inputMode="decimal" value={deliveryStr} onChange={(e) => setDeliveryStr(e.target.value)} placeholder="0.00" className={inputCls} />
@@ -294,7 +306,7 @@ function ConfigForm({ initial, busy, onSave }) {
                 </div>
             </div>
 
-            <div className="grid sm:grid-cols-2 gap-4">
+            <div className="cf-grid-2">
                 <div>
                     <label className={labelCls}>Etiqueta "recoger"</label>
                     <input type="text" value={pickupLabel} onChange={(e) => setPickupLabel(e.target.value)} maxLength={60} className={inputCls} />
@@ -305,7 +317,7 @@ function ConfigForm({ initial, busy, onSave }) {
                 </div>
             </div>
 
-            <div className="flex justify-end">
+            <div className="cf-end">
                 <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar configuración"}</button>
             </div>
         </form>
@@ -464,9 +476,9 @@ export default function RestaurantAdminPage() {
 
     const tabBtn = (id, label, badge) => (
         <button type="button" onClick={() => { setTab(id); if (id === "orders") loadOrders(); }}
-            className={`px-4 sm:px-5 py-2.5 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === id ? "bg-gray-900 text-white" : "bg-white text-gray-500 hover:bg-gray-100 border border-gray-100"}`}>
+            className={`cf-tab ${tab === id ? "is-active" : ""}`}>
             {label}
-            {badge > 0 ? <span className="bg-orange-500 text-white rounded-full min-w-[20px] h-5 px-1.5 inline-flex items-center justify-center text-[10px]">{badge}</span> : null}
+            {badge > 0 ? <span className="cf-badge">{badge}</span> : null}
         </button>
     );
 
@@ -475,24 +487,24 @@ export default function RestaurantAdminPage() {
             : o.status === "preparing" ? { status: "ready", label: "Listo →" }
             : o.status === "ready" ? { status: "delivered", label: "Entregado ✓" } : null;
         return (
-            <div key={o.id} className="bg-white border border-gray-100 rounded-2xl p-4 shadow-sm">
-                <button type="button" className="w-full text-left" onClick={() => setSelectedOrder(o)}>
-                    <div className="flex justify-between items-start gap-2">
-                        <span className="font-black text-sm text-gray-900">#{o.id} · {o.customer_name}</span>
-                        <span className="font-black text-sm tabular-nums">{fmtMoney(o.total_cents, symbol)}</span>
+            <div key={o.id} className="cf-order-card">
+                <button type="button" className="cf-order-open" onClick={() => setSelectedOrder(o)}>
+                    <div className="cf-order-title">
+                        <span>#{o.id} · {o.customer_name}</span>
+                        <span>{fmtMoney(o.total_cents, symbol)}</span>
                     </div>
-                    <p className="text-[11px] text-gray-400 font-bold mt-0.5">
+                    <p className="cf-order-meta">
                         {o.delivery_type === "delivery" ? "🛵 Domicilio" : "🏪 Recoger"} · {(Array.isArray(o.items) ? o.items : []).reduce((n, it) => n + (it.qty || 0), 0)} items · {fmtDate(o.created_at)}
                     </p>
                 </button>
-                <div className="flex gap-2 mt-3">
+                <div className="cf-order-actions">
                     {nextAction ? (
-                        <button type="button" disabled={busy} onClick={() => setOrderStatus(o.id, nextAction.status)} className="flex-1 px-3 py-1.5 bg-gray-900 hover:bg-orange-600 text-white rounded-xl font-black text-[11px] uppercase tracking-wider transition-all disabled:opacity-50">
+                        <button type="button" disabled={busy} onClick={() => setOrderStatus(o.id, nextAction.status)} className="cf-btn-mini">
                             {nextAction.label}
                         </button>
                     ) : null}
                     {(o.status === "new" || o.status === "preparing") ? (
-                        <button type="button" disabled={busy} onClick={() => setOrderStatus(o.id, "cancelled")} className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-[11px] uppercase tracking-wider transition-all disabled:opacity-50">
+                        <button type="button" disabled={busy} onClick={() => setOrderStatus(o.id, "cancelled")} className="cf-btn-mini is-danger">
                             Cancelar
                         </button>
                     ) : null}
@@ -502,98 +514,100 @@ export default function RestaurantAdminPage() {
     };
 
     return (
-        <div className="max-w-6xl mx-auto p-4 sm:p-8">
-            <div className="mb-6">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Restaurante</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Menú por secciones · pedidos en línea · entrega por WhatsApp
-                </p>
+        <div className="cf-shell">
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><UtensilsIcon /></div>
+                <div>
+                    <h1 className="cf-title">Restaurante</h1>
+                    <p className="cf-subtitle">Menú por secciones · pedidos en línea · entrega por WhatsApp</p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
-            <div className="flex flex-wrap gap-2 mb-6">
+            <div className="cf-tabs" role="tablist">
                 {tabBtn("menu", "Menú", 0)}
                 {tabBtn("orders", "Pedidos", counts.new || 0)}
                 {tabBtn("config", "Configuración", 0)}
             </div>
 
             {message ? (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-5 ${/Error/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>{message}</div>
+                <div role={/Error/i.test(message) ? "alert" : "status"} className={`cf-flash ${/Error/i.test(message) ? "is-error" : "is-ok"}`}>{message}</div>
             ) : null}
 
             {/* ============================== MENÚ ============================== */}
             {tab === "menu" ? (
-                <div className="space-y-4">
-                    <div className="flex justify-end">
+                <div className="cf-stack">
+                    <div className="cf-end">
                         <button type="button" onClick={() => setSectionModal({ section: null })} className={btnCls}>+ Nueva sección</button>
                     </div>
 
                     {sections === null ? (
-                        <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando menú…</div>
+                        <div className="cf-empty">Cargando menú…</div>
                     ) : sections.length === 0 ? (
-                        <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>
+                        <div className="cf-empty">
                             Aún no hay secciones. Crea la primera (ej. "Entradas") y luego agrega platos.
                         </div>
                     ) : (
                         sections.map((s, si) => (
-                            <div key={s.id} className={`${cardCls} overflow-hidden ${s.is_active ? "" : "opacity-60"}`}>
-                                <div className="flex items-center gap-2 px-5 py-4 bg-gray-50/60">
-                                    <button type="button" onClick={() => setExpanded((p) => ({ ...p, [s.id]: !p[s.id] }))} className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-500 text-xs font-black">
+                            <div key={s.id} className={`${cardCls} ${s.is_active ? "" : "is-off"}`} style={{ padding: 0, overflow: "hidden" }}>
+                                <div className="cf-accordion-head">
+                                    <button type="button" onClick={() => setExpanded((p) => ({ ...p, [s.id]: !p[s.id] }))} aria-label={expanded[s.id] ? "Contraer sección" : "Expandir sección"} className="cf-iconbtn">
                                         {expanded[s.id] ? "▾" : "▸"}
                                     </button>
-                                    <h2 className="font-black text-gray-900 flex-1 truncate">{s.name}
-                                        <span className="text-[11px] text-gray-400 font-bold ml-2">{(s.items || []).length} platos</span>
-                                        {!s.is_active ? <span className="text-[10px] font-black uppercase text-red-400 ml-2">Oculta</span> : null}
+                                    <h2 className="cf-form-name" style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.name}
+                                        <span className="cf-meta" style={{ display: "inline", marginLeft: "0.5rem" }}>{(s.items || []).length} platos</span>
+                                        {!s.is_active ? <span className="cf-pill is-danger" style={{ marginLeft: "0.5rem" }}>Oculta</span> : null}
                                     </h2>
                                     <button type="button" disabled={busy || si === 0} onClick={() => moveSection(s.id, "up")} className={btnGhostCls} title="Subir">↑</button>
                                     <button type="button" disabled={busy || si === sections.length - 1} onClick={() => moveSection(s.id, "down")} className={btnGhostCls} title="Bajar">↓</button>
                                     <button type="button" disabled={busy} onClick={() => toggleSectionActive(s)} className={btnGhostCls}>{s.is_active ? "Ocultar" : "Mostrar"}</button>
                                     <button type="button" disabled={busy} onClick={() => setSectionModal({ section: s })} className={btnGhostCls}>Editar</button>
-                                    <button type="button" disabled={busy} onClick={() => deleteSection(s)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
+                                    <button type="button" disabled={busy} onClick={() => deleteSection(s)} className="cf-iconbtn is-danger">✕</button>
                                 </div>
 
                                 {expanded[s.id] ? (
-                                    <div className="divide-y divide-gray-50">
+                                    <div>
                                         {(s.items || []).length === 0 ? (
-                                            <p className="px-5 py-4 text-sm text-gray-400">Sin platos en esta sección.</p>
+                                            <p style={{ padding: "1rem 1.2rem", fontSize: "0.85rem", color: "var(--cf-faint)", margin: 0 }}>Sin platos en esta sección.</p>
                                         ) : (
                                             s.items.map((it, ii) => (
-                                                <div key={it.id} className={`px-5 py-3 flex flex-wrap items-center gap-3 ${it.is_available ? "" : "opacity-50"}`}>
+                                                <div key={it.id} className={`cf-item-row ${it.is_available ? "" : "is-off"}`}>
                                                     {it.image_url ? (
                                                         // eslint-disable-next-line @next/next/no-img-element
-                                                        <img src={it.image_url} alt={it.name} className="w-10 h-10 rounded-lg object-cover border border-gray-100" />
+                                                        <img src={it.image_url} alt={it.name} className="cf-thumb" />
                                                     ) : (
-                                                        <span className="w-10 h-10 rounded-lg bg-gray-50 border border-gray-100 flex items-center justify-center text-gray-300">🍽️</span>
+                                                        <span className="cf-thumb">🍽️</span>
                                                     )}
-                                                    <div className="flex-1 min-w-[140px]">
-                                                        <p className="font-bold text-sm text-gray-900 truncate">{it.name}</p>
-                                                        <p className="text-xs text-gray-400 font-black tabular-nums">{fmtMoney(it.price_cents, symbol)}</p>
+                                                    <div style={{ flex: 1, minWidth: "140px" }}>
+                                                        <p className="cf-item-name">{it.name}</p>
+                                                        <p className="cf-item-price">{fmtMoney(it.price_cents, symbol)}</p>
                                                     </div>
-                                                    <div className="flex flex-wrap gap-1">
+                                                    <div className="cf-row" style={{ gap: "0.25rem" }}>
                                                         {TAGS.map((t) => {
                                                             const on = tagsToArray(it.tags).includes(t.id);
                                                             return (
                                                                 <button key={t.id} type="button" disabled={busy} title={t.label} onClick={() => toggleItemTag(it, t.id)}
-                                                                    className={`px-2 py-1 rounded-full text-xs border transition-all ${on ? "bg-gray-900 border-gray-900" : "bg-white border-gray-200 opacity-40 hover:opacity-100 grayscale"}`}>
+                                                                    className={`cf-tag is-mini ${on ? "is-on" : ""}`}>
                                                                     {t.emoji}
                                                                 </button>
                                                             );
                                                         })}
                                                     </div>
-                                                    <label className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-wider text-gray-400 cursor-pointer select-none">
-                                                        <input type="checkbox" checked={!!it.is_available} disabled={busy} onChange={() => toggleItemAvailable(it)} className="w-4 h-4 accent-green-600" />
+                                                    <label className="cf-check">
+                                                        <input type="checkbox" checked={!!it.is_available} disabled={busy} onChange={() => toggleItemAvailable(it)} />
                                                         Disponible
                                                     </label>
-                                                    <div className="flex gap-1.5">
+                                                    <div style={{ display: "flex", gap: "0.35rem" }}>
                                                         <button type="button" disabled={busy || ii === 0} onClick={() => moveItem(it.id, "up")} className={btnGhostCls} title="Subir">↑</button>
                                                         <button type="button" disabled={busy || ii === s.items.length - 1} onClick={() => moveItem(it.id, "down")} className={btnGhostCls} title="Bajar">↓</button>
                                                         <button type="button" disabled={busy} onClick={() => setItemModal({ item: it, sectionId: s.id })} className={btnGhostCls}>Editar</button>
-                                                        <button type="button" disabled={busy} onClick={() => deleteItem(it)} className="px-3 py-2 bg-red-50 hover:bg-red-100 text-red-500 rounded-xl font-bold text-xs">✕</button>
+                                                        <button type="button" disabled={busy} onClick={() => deleteItem(it)} className="cf-iconbtn is-danger">✕</button>
                                                     </div>
                                                 </div>
                                             ))
                                         )}
-                                        <div className="px-5 py-3">
-                                            <button type="button" onClick={() => setItemModal({ item: null, sectionId: s.id })} className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-gray-900 transition-colors">+ Agregar plato</button>
+                                        <div style={{ padding: "0.75rem 1.2rem" }}>
+                                            <button type="button" onClick={() => setItemModal({ item: null, sectionId: s.id })} className="cf-linkbtn">+ Agregar plato</button>
                                         </div>
                                     </div>
                                 ) : null}
@@ -605,24 +619,24 @@ export default function RestaurantAdminPage() {
 
             {/* ============================== PEDIDOS ============================== */}
             {tab === "orders" ? (
-                <div className="space-y-5">
-                    <div className="flex justify-end">
+                <div className="cf-stack">
+                    <div className="cf-end">
                         <button type="button" disabled={busy} onClick={loadOrders} className={btnGhostCls}>⟳ Actualizar</button>
                     </div>
                     {ordersData === null ? (
-                        <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando pedidos…</div>
+                        <div className="cf-empty">Cargando pedidos…</div>
                     ) : (
                         <>
-                            <div className="grid md:grid-cols-3 gap-4">
+                            <div className="cf-board">
                                 {["new", "preparing", "ready"].map((st) => (
-                                    <div key={st} className="bg-gray-50/80 rounded-3xl p-4 border border-gray-100">
-                                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3 flex items-center justify-between">
+                                    <div key={st} className="cf-board-col">
+                                        <p className="cf-board-head">
                                             {STATUS_META[st].label}
-                                            <span className={`px-2 py-0.5 rounded-full border text-[10px] ${STATUS_META[st].color}`}>{board[st].length}</span>
+                                            <span className={`cf-pill ${STATUS_META[st].color}`}>{board[st].length}</span>
                                         </p>
-                                        <div className="space-y-3">
+                                        <div>
                                             {board[st].length === 0 ? (
-                                                <p className="text-xs text-gray-300 text-center py-4">Sin pedidos</p>
+                                                <p style={{ fontSize: "0.78rem", color: "var(--cf-faint)", textAlign: "center", padding: "1rem 0", margin: 0 }}>Sin pedidos</p>
                                             ) : (
                                                 board[st].map(orderCard)
                                             )}
@@ -630,21 +644,21 @@ export default function RestaurantAdminPage() {
                                     </div>
                                 ))}
                             </div>
-                            <div className={`${cardCls} p-5`}>
-                                <button type="button" onClick={() => setShowHistory((v) => !v)} className="text-xs font-black uppercase tracking-widest text-gray-400 hover:text-gray-900 transition-colors">
+                            <div className={cardCls}>
+                                <button type="button" onClick={() => setShowHistory((v) => !v)} className="cf-linkbtn">
                                     {showHistory ? "▾" : "▸"} Historial (entregados / cancelados) — {board.history.length}
                                 </button>
                                 {showHistory ? (
-                                    <div className="mt-4 divide-y divide-gray-50">
+                                    <div style={{ marginTop: "0.75rem" }}>
                                         {board.history.length === 0 ? (
-                                            <p className="text-sm text-gray-400 py-3">Sin historial todavía.</p>
+                                            <p style={{ fontSize: "0.85rem", color: "var(--cf-faint)", padding: "0.5rem 0", margin: 0 }}>Sin historial todavía.</p>
                                         ) : (
                                             board.history.map((o) => (
-                                                <button key={o.id} type="button" onClick={() => setSelectedOrder(o)} className="w-full text-left py-2.5 flex flex-wrap items-center gap-3 hover:bg-gray-50 rounded-xl px-2 transition-colors">
-                                                    <span className={`px-2 py-0.5 rounded-full border text-[10px] font-black ${(STATUS_META[o.status] || STATUS_META.new).color}`}>{(STATUS_META[o.status] || STATUS_META.new).label}</span>
-                                                    <span className="font-bold text-sm text-gray-700 flex-1 truncate">#{o.id} · {o.customer_name}</span>
-                                                    <span className="text-xs text-gray-400">{fmtDate(o.created_at)}</span>
-                                                    <span className="font-black text-sm tabular-nums">{fmtMoney(o.total_cents, symbol)}</span>
+                                                <button key={o.id} type="button" onClick={() => setSelectedOrder(o)} className="cf-history-row">
+                                                    <span className={`cf-pill ${(STATUS_META[o.status] || STATUS_META.new).color}`}>{(STATUS_META[o.status] || STATUS_META.new).label}</span>
+                                                    <span style={{ fontWeight: 650, color: "var(--cf-ink)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>#{o.id} · {o.customer_name}</span>
+                                                    <span style={{ fontSize: "0.76rem", color: "var(--cf-faint)" }}>{fmtDate(o.created_at)}</span>
+                                                    <span style={{ fontWeight: 750, fontVariantNumeric: "tabular-nums" }}>{fmtMoney(o.total_cents, symbol)}</span>
                                                 </button>
                                             ))
                                         )}
@@ -659,7 +673,7 @@ export default function RestaurantAdminPage() {
             {/* ============================== CONFIGURACIÓN ============================== */}
             {tab === "config" ? (
                 config === null ? (
-                    <div className={`${cardCls} p-8 text-center text-sm text-gray-400`}>Cargando configuración…</div>
+                    <div className="cf-empty">Cargando configuración…</div>
                 ) : (
                     <ConfigForm initial={config} busy={busy} onSave={saveConfig} />
                 )

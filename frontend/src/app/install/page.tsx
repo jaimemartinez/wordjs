@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { apiPost, apiGet } from "@/lib/api";
 import { FaServer, FaUserShield, FaMagic, FaCheckCircle, FaArrowRight, FaArrowLeft, FaDatabase } from 'react-icons/fa';
 
-type DbDriver = 'sqlite-native' | 'sqlite-legacy' | 'postgres';
+type DbDriver = 'sqlite-native' | 'sqlite-legacy' | 'postgres' | 'mysql';
 type TestState = { status: 'idle' | 'testing' | 'ok' | 'fail'; message: string };
 
 const INSTALL_STAGES = [
@@ -83,7 +83,8 @@ export default function InstallPage() {
     }, [router]);
 
     const pgConn = () => ({ host: dbHost, port: dbPort, user: dbUser, password: dbPassword, database: dbName, ssl: dbSsl });
-    const pgFilled = dbDriver !== 'postgres' || (dbHost && dbName && dbUser);
+    const needsConn = dbDriver === 'postgres' || dbDriver === 'mysql';
+    const pgFilled = !needsConn || (dbHost && dbName && dbUser);
     const emailValid = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(adminEmail);
     const pwStrength = passwordStrength(adminPassword);
     const pwValid = adminPassword.length >= 10;
@@ -123,7 +124,7 @@ export default function InstallPage() {
                 adminEmail,
                 adminPassword,
                 dbDriver,
-                ...(dbDriver === 'postgres' ? { db: pgConn() } : {}),
+                ...(needsConn ? { db: pgConn() } : {}),
                 frontendUrl: siteUrl || window.location.origin,
                 installToken,
                 demoContent
@@ -237,9 +238,10 @@ export default function InstallPage() {
                                         {([
                                             { id: 'sqlite-native', title: 'SQLite (recommended)', desc: 'Zero-config, fast, file-based. Perfect for a single host.' },
                                             { id: 'postgres', title: 'PostgreSQL', desc: 'For higher concurrency or multi-node. Needs a running server.' },
+                                            { id: 'mysql', title: 'MySQL / MariaDB', desc: 'For MySQL 8.0+ or MariaDB. Needs a running server.' },
                                             { id: 'sqlite-legacy', title: 'SQLite (legacy / WASM)', desc: 'Pure-JS fallback when the native binary can\'t load.' }
                                         ] as { id: DbDriver; title: string; desc: string }[]).map(opt => (
-                                            <button key={opt.id} type="button" onClick={() => { setDbDriver(opt.id); setDbTest({ status: 'idle', message: '' }); }}
+                                            <button key={opt.id} type="button" onClick={() => { setDbDriver(opt.id); if (opt.id === 'mysql') setDbPort('3306'); else if (opt.id === 'postgres') setDbPort('5432'); setDbTest({ status: 'idle', message: '' }); }}
                                                 className={`text-left p-4 rounded-lg border-2 transition-all ${dbDriver === opt.id ? 'border-blue-600 bg-blue-50/60 ring-2 ring-blue-200' : 'border-gray-200 hover:border-gray-300 bg-white/40'}`}>
                                                 <div className="flex items-center justify-between">
                                                     <span className="font-semibold text-gray-900">{opt.title}</span>
@@ -250,13 +252,13 @@ export default function InstallPage() {
                                         ))}
                                     </div>
 
-                                    {dbDriver === 'postgres' && (
+                                    {needsConn && (
                                         <div className="space-y-4 rounded-lg border border-gray-200 bg-white/40 p-4 animate-in fade-in duration-300">
                                             <div className="grid grid-cols-2 gap-3">
                                                 <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Host</label><input className={inputCls} value={dbHost} onChange={e => { setDbHost(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder="localhost" /></div>
-                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Port</label><input className={inputCls} value={dbPort} onChange={e => setDbPort(e.target.value)} placeholder="5432" /></div>
+                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Port</label><input className={inputCls} value={dbPort} onChange={e => setDbPort(e.target.value)} placeholder={dbDriver === 'mysql' ? '3306' : '5432'} /></div>
                                                 <div className="group col-span-2"><label className={labelCls}>Database</label><input className={inputCls} value={dbName} onChange={e => { setDbName(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder="wordjs" /></div>
-                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>User</label><input className={inputCls} value={dbUser} onChange={e => { setDbUser(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder="postgres" /></div>
+                                                <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>User</label><input className={inputCls} value={dbUser} onChange={e => { setDbUser(e.target.value); setDbTest({ status: 'idle', message: '' }); }} placeholder={dbDriver === 'mysql' ? 'root' : 'postgres'} /></div>
                                                 <div className="group col-span-2 sm:col-span-1"><label className={labelCls}>Password</label><input type="password" className={inputCls} value={dbPassword} onChange={e => setDbPassword(e.target.value)} /></div>
                                             </div>
                                             <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={dbSsl} onChange={e => setDbSsl(e.target.checked)} /> Use SSL</label>

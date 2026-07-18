@@ -6,6 +6,10 @@
  * Tabs: Agenda (day/week list grouped by day, colored by service, status changes, CSV export),
  * Servicios (CRUD modal with a per-weekday availability editor), Configuración (notification
  * email + minimum notice hours). All calls go through the host api helpers (session cookie).
+ *
+ * Visual identity (shared premium admin look) lives in the plugin's OWN stylesheet
+ * (client/admin/admin.css, injected by the host admin shell and scoped to
+ * .plugin-admin-bookings) — the markup below only uses cf-* classes.
  */
 
 import React, { useEffect, useState } from "react";
@@ -13,20 +17,14 @@ import { api, apiPost, apiPut, apiDelete } from "@/lib/api";
 
 const BASE = "/plugin/bookings";
 
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-5 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
-
 const DAY_ORDER = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const DAY_ES = { mon: "Lunes", tue: "Martes", wed: "Miércoles", thu: "Jueves", fri: "Viernes", sat: "Sábado", sun: "Domingo" };
 const DOW_ES = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const STATUS_ES = { confirmed: "Confirmada", cancelled: "Cancelada", completed: "Completada" };
 const STATUS_BADGE = {
-    confirmed: "bg-green-100 text-green-700",
-    cancelled: "bg-red-100 text-red-600",
-    completed: "bg-blue-100 text-blue-700",
+    confirmed: "is-confirmed",
+    cancelled: "is-cancelled",
+    completed: "is-completed",
 };
 
 const pad2 = (n) => String(n).padStart(2, "0");
@@ -46,6 +44,42 @@ const prettyDate = (s) => {
     return `${DOW_ES[d.getDay()]} ${d.getDate()}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`;
 };
 const fmtPrice = (cents) => `$${(Number(cents || 0) / 100).toFixed(2)}`;
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconCalendar = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <path d="M16 2v4M8 2v4M3 10h18" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconDownload = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+    </svg>
+);
+const IconChevronLeft = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="m15 18-6-6 6-6" />
+    </svg>
+);
+const IconChevronRight = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="m9 18 6-6-6-6" />
+    </svg>
+);
 
 // ── Servicios: create/edit modal (module level — never define a component inside a component) ──
 
@@ -119,77 +153,85 @@ function ServiceModal({ service, onClose, onSaved }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-4 overflow-y-auto" onClick={onClose}>
-            <form onSubmit={save} className="bg-white rounded-3xl shadow-2xl w-full max-w-2xl my-8 p-6 sm:p-8 space-y-5" onClick={(e) => e.stopPropagation()}>
-                <h2 className="text-xl font-black text-gray-900 tracking-tighter italic">
-                    {service ? "Editar servicio" : "Nuevo servicio"}
-                </h2>
+        <div className="cf-overlay" onClick={onClose}>
+            <form
+                onSubmit={save}
+                className="cf-letter is-wide"
+                role="dialog"
+                aria-modal="true"
+                aria-label={service ? "Editar servicio" : "Nuevo servicio"}
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="cf-letter-body">
+                    <h2 className="cf-editor-title">
+                        <IconPen />
+                        {service ? "Editar servicio" : "Nuevo servicio"}
+                    </h2>
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div className="sm:col-span-2">
-                        <label className={labelCls}>Nombre *</label>
-                        <input type="text" className={inputCls} value={form.name} maxLength={120} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+                    <div className="cf-grid">
+                        <div className="cf-span-2">
+                            <label className="cf-label" htmlFor="bk-svc-name">Nombre *</label>
+                            <input id="bk-svc-name" type="text" className="cf-input" value={form.name} maxLength={120} onChange={(e) => setForm({ ...form, name: e.target.value })} required />
+                        </div>
+                        <div className="cf-span-2">
+                            <label className="cf-label" htmlFor="bk-svc-desc">Descripción</label>
+                            <textarea id="bk-svc-desc" className="cf-input" rows={2} maxLength={2000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="bk-svc-duration">Duración (min) *</label>
+                            <input id="bk-svc-duration" type="number" className="cf-input" min={5} max={480} value={form.duration_min} onChange={(e) => setForm({ ...form, duration_min: e.target.value })} required />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="bk-svc-price">Precio</label>
+                            <input id="bk-svc-price" type="text" inputMode="decimal" className="cf-input" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} placeholder="0.00" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="bk-svc-color">Color</label>
+                            <input id="bk-svc-color" type="color" className="cf-color" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} />
+                        </div>
+                        <div style={{ display: "flex", alignItems: "flex-end", paddingBottom: "0.35rem" }}>
+                            <label className="cf-check">
+                                <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
+                                Activo (visible al público)
+                            </label>
+                        </div>
                     </div>
-                    <div className="sm:col-span-2">
-                        <label className={labelCls}>Descripción</label>
-                        <textarea className={inputCls} rows={2} maxLength={2000} value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Duración (min) *</label>
-                        <input type="number" className={inputCls} min={5} max={480} value={form.duration_min} onChange={(e) => setForm({ ...form, duration_min: e.target.value })} required />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Precio</label>
-                        <input type="text" inputMode="decimal" className={inputCls} value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value })} placeholder="0.00" />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Color</label>
-                        <input type="color" className="w-16 h-12 rounded-xl border-2 border-gray-100 cursor-pointer" value={form.color} onChange={(e) => setForm({ ...form, color: e.target.value })} />
-                    </div>
-                    <div className="flex items-end pb-2">
-                        <label className="flex items-center gap-2 text-sm font-bold text-gray-600 cursor-pointer select-none">
-                            <input type="checkbox" checked={form.is_active} onChange={(e) => setForm({ ...form, is_active: e.target.checked })} />
-                            Activo (visible al público)
-                        </label>
-                    </div>
-                </div>
 
-                <div>
-                    <label className={labelCls}>Disponibilidad semanal</label>
-                    <p className="text-[11px] text-gray-400 mb-3">
-                        Los turnos se generan cada {form.duration_min || 60} minutos dentro de cada rango. Puedes agregar varios rangos por día (turno partido).
-                    </p>
-                    <div className="space-y-2">
-                        {DAY_ORDER.map((day) => {
-                            const ranges = form.availability[day] || [];
-                            return (
-                                <div key={day} className="flex flex-wrap items-start gap-2 bg-gray-50/60 rounded-2xl px-4 py-3">
-                                    <div className="w-24 pt-2 text-xs font-black uppercase tracking-widest text-gray-500">{DAY_ES[day]}</div>
-                                    <div className="flex-1 space-y-2">
-                                        {ranges.length === 0 && <div className="text-xs text-gray-300 pt-2 font-bold">Cerrado</div>}
-                                        {ranges.map((r, idx) => (
-                                            <div key={idx} className="flex items-center gap-2">
-                                                <input type="time" className="px-3 py-2 bg-white border-2 border-gray-100 rounded-xl text-sm font-medium outline-none focus:border-blue-500" value={r.start} onChange={(e) => updateRange(day, idx, "start", e.target.value)} required />
-                                                <span className="text-gray-300 font-bold">→</span>
-                                                <input type="time" className="px-3 py-2 bg-white border-2 border-gray-100 rounded-xl text-sm font-medium outline-none focus:border-blue-500" value={r.end} onChange={(e) => updateRange(day, idx, "end", e.target.value)} required />
-                                                <button type="button" onClick={() => removeRange(day, idx)} className="text-red-400 hover:text-red-600 font-black text-lg leading-none px-2" title="Quitar rango">×</button>
-                                            </div>
-                                        ))}
+                    <div style={{ marginTop: "1.5rem" }}>
+                        <span className="cf-label">Disponibilidad semanal</span>
+                        <p className="cf-help" style={{ marginTop: 0, marginBottom: "0.9rem" }}>
+                            Los turnos se generan cada {form.duration_min || 60} minutos dentro de cada rango. Puedes agregar varios rangos por día (turno partido).
+                        </p>
+                        <div>
+                            {DAY_ORDER.map((day) => {
+                                const ranges = form.availability[day] || [];
+                                return (
+                                    <div key={day} className="cf-avail-row">
+                                        <div className="cf-avail-day">{DAY_ES[day]}</div>
+                                        <div className="cf-avail-ranges">
+                                            {ranges.length === 0 && <div className="cf-avail-closed">Cerrado</div>}
+                                            {ranges.map((r, idx) => (
+                                                <div key={idx} style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+                                                    <input type="time" aria-label={`${DAY_ES[day]} inicio`} className="cf-input is-time" value={r.start} onChange={(e) => updateRange(day, idx, "start", e.target.value)} required />
+                                                    <span className="cf-avail-arrow" aria-hidden="true">→</span>
+                                                    <input type="time" aria-label={`${DAY_ES[day]} fin`} className="cf-input is-time" value={r.end} onChange={(e) => updateRange(day, idx, "end", e.target.value)} required />
+                                                    <button type="button" onClick={() => removeRange(day, idx)} className="cf-iconbtn is-danger" title="Quitar rango" aria-label="Quitar rango">×</button>
+                                                </div>
+                                            ))}
+                                        </div>
+                                        <button type="button" onClick={() => addRange(day)} className="cf-btn-ghost"><IconPlus /> Rango</button>
                                     </div>
-                                    <button type="button" onClick={() => addRange(day)} className="mt-1 px-3 py-2 bg-white border-2 border-gray-100 hover:border-blue-400 rounded-xl text-xs font-black text-gray-500">
-                                        + Rango
-                                    </button>
-                                </div>
-                            );
-                        })}
+                                );
+                            })}
+                        </div>
                     </div>
-                </div>
 
-                {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600">{error}</div>}
+                    {error && <div role="alert" className="cf-flash is-error" style={{ marginTop: "1.25rem", marginBottom: 0 }}>{error}</div>}
 
-                <div className="flex items-center justify-end gap-3 pt-2">
-                    <button type="button" onClick={onClose} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}>
+                        <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -358,23 +400,29 @@ export default function BookingsAdminPage() {
     const tabBtn = (id, label) => (
         <button
             type="button"
+            role="tab"
+            aria-selected={tab === id}
             onClick={() => setTab(id)}
-            className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === id ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+            className={`cf-tab ${tab === id ? "is-active" : ""}`}
         >
             {label}
         </button>
     );
 
     return (
-        <div className="max-w-5xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Reservas</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Servicios con disponibilidad semanal · agenda · confirmaciones por correo
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconCalendar /></div>
+                <div>
+                    <h1 className="cf-title">Reservas</h1>
+                    <p className="cf-subtitle">Servicios con disponibilidad semanal · agenda · confirmaciones por correo</p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
-            <div className="flex flex-wrap gap-2 mb-6">
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
                 {tabBtn("agenda", "Agenda")}
                 {tabBtn("servicios", "Servicios")}
                 {tabBtn("config", "Configuración")}
@@ -382,68 +430,74 @@ export default function BookingsAdminPage() {
 
             {/* ══════════ AGENDA ══════════ */}
             {tab === "agenda" && (
-                <div className={cardCls}>
-                    <div className="flex flex-wrap items-center gap-3 mb-6">
-                        <div className="flex items-center gap-1 bg-gray-100 rounded-2xl p-1">
-                            <button type="button" onClick={() => setViewMode("day")} className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest ${viewMode === "day" ? "bg-white shadow text-gray-900" : "text-gray-400"}`}>Día</button>
-                            <button type="button" onClick={() => setViewMode("week")} className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-widest ${viewMode === "week" ? "bg-white shadow text-gray-900" : "text-gray-400"}`}>Semana</button>
+                <div className="cf-card-item">
+                    <div className="cf-toolbar">
+                        <div className="cf-toolbar-left">
+                            <div className="cf-seg" role="group" aria-label="Vista">
+                                <button type="button" onClick={() => setViewMode("day")} className={`cf-seg-btn ${viewMode === "day" ? "is-active" : ""}`}>Día</button>
+                                <button type="button" onClick={() => setViewMode("week")} className={`cf-seg-btn ${viewMode === "week" ? "is-active" : ""}`}>Semana</button>
+                            </div>
+                            <div style={{ display: "flex", alignItems: "center", gap: "0.35rem", flexWrap: "wrap" }}>
+                                <button type="button" aria-label="Anterior" title="Anterior" onClick={() => setAnchor(addDays(anchor, viewMode === "day" ? -1 : -7))} className="cf-iconbtn"><IconChevronLeft /></button>
+                                <input type="date" aria-label="Fecha" className="cf-input is-date" value={anchor} onChange={(e) => e.target.value && setAnchor(e.target.value)} />
+                                <button type="button" aria-label="Siguiente" title="Siguiente" onClick={() => setAnchor(addDays(anchor, viewMode === "day" ? 1 : 7))} className="cf-iconbtn"><IconChevronRight /></button>
+                                <button type="button" onClick={() => setAnchor(toDateStr(new Date()))} className="cf-btn-ghost">Hoy</button>
+                            </div>
                         </div>
-                        <div className="flex items-center gap-1">
-                            <button type="button" onClick={() => setAnchor(addDays(anchor, viewMode === "day" ? -1 : -7))} className="w-10 h-10 rounded-xl bg-gray-100 hover:bg-gray-200 font-black">‹</button>
-                            <input type="date" className="px-3 py-2 bg-gray-50/60 border-2 border-gray-100 rounded-xl font-medium outline-none focus:border-blue-500" value={anchor} onChange={(e) => e.target.value && setAnchor(e.target.value)} />
-                            <button type="button" onClick={() => setAnchor(addDays(anchor, viewMode === "day" ? 1 : 7))} className="w-10 h-10 rounded-xl bg-gray-100 hover:bg-gray-200 font-black">›</button>
-                            <button type="button" onClick={() => setAnchor(toDateStr(new Date()))} className="px-3 py-2 rounded-xl bg-gray-100 hover:bg-gray-200 text-xs font-black uppercase tracking-widest text-gray-500">Hoy</button>
-                        </div>
-                        <div className="flex items-center gap-2 ml-auto">
-                            <select className="px-3 py-2 bg-gray-50/60 border-2 border-gray-100 rounded-xl text-sm font-medium outline-none focus:border-blue-500" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                            <select aria-label="Filtrar por estado" className="cf-select is-compact" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
                                 <option value="">Todos los estados</option>
                                 <option value="confirmed">Confirmadas</option>
                                 <option value="completed">Completadas</option>
                                 <option value="cancelled">Canceladas</option>
                             </select>
-                            <select className="px-3 py-2 bg-gray-50/60 border-2 border-gray-100 rounded-xl text-sm font-medium outline-none focus:border-blue-500" value={serviceFilter} onChange={(e) => setServiceFilter(e.target.value)}>
+                            <select aria-label="Filtrar por servicio" className="cf-select is-compact" value={serviceFilter} onChange={(e) => setServiceFilter(e.target.value)}>
                                 <option value="">Todos los servicios</option>
                                 {(services || []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                             </select>
-                            <button type="button" onClick={exportCsv} className={btnGhostCls}>Exportar CSV</button>
+                            <button type="button" onClick={exportCsv} className="cf-btn-ghost"><IconDownload /> Exportar CSV</button>
                         </div>
                     </div>
 
-                    <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mb-4">
+                    <p className="cf-range-label">
                         {rangeFrom === rangeTo ? prettyDate(rangeFrom) : `${prettyDate(rangeFrom)} — ${prettyDate(rangeTo)}`}
                     </p>
 
-                    {agendaMsg && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600 mb-4">{agendaMsg}</div>}
+                    {agendaMsg && <div role="alert" className="cf-flash is-error">{agendaMsg}</div>}
 
                     {bookings === null ? (
-                        <p className="text-sm text-gray-400">Cargando agenda…</p>
+                        <p className="cf-help">Cargando agenda…</p>
                     ) : grouped.length === 0 ? (
-                        <p className="text-sm text-gray-400">No hay reservas en este rango.</p>
+                        <div className="cf-empty">
+                            <IconCalendar />
+                            <span>No hay reservas en este rango.</span>
+                        </div>
                     ) : (
-                        <div className="space-y-6">
+                        <div>
                             {grouped.map((g) => (
-                                <div key={g.date}>
-                                    <h3 className="text-sm font-black text-gray-700 capitalize mb-2">{prettyDate(g.date)}</h3>
-                                    <div className="space-y-2">
+                                <div key={g.date} className="cf-agenda-day">
+                                    <h3 className="cf-day-head">{prettyDate(g.date)}</h3>
+                                    <div>
                                         {g.items.map((b) => (
-                                            <div key={b.id} className="flex flex-wrap items-center gap-3 bg-gray-50/60 rounded-2xl px-4 py-3 border-l-4" style={{ borderLeftColor: b.service_color || "#3b82f6" }}>
-                                                <div className="font-black text-gray-900 tabular-nums w-14">{b.time}</div>
-                                                <div className="min-w-[140px]">
-                                                    <div className="font-bold text-gray-800 text-sm">{b.service_name || "Servicio eliminado"}</div>
-                                                    <div className="text-[11px] text-gray-400">{b.duration_min ? `${b.duration_min} min` : ""}</div>
+                                            <div key={b.id} className="cf-rowcard" style={{ borderLeftColor: b.service_color || "#3b82f6" }}>
+                                                <div className="cf-booking-time">{b.time}</div>
+                                                <div style={{ minWidth: "140px" }}>
+                                                    <div className="cf-row-name">{b.service_name || "Servicio eliminado"}</div>
+                                                    <div className="cf-row-sub">{b.duration_min ? `${b.duration_min} min` : ""}</div>
                                                 </div>
-                                                <div className="flex-1 min-w-[180px]">
-                                                    <div className="font-medium text-sm text-gray-700">{b.customer_name}</div>
-                                                    <div className="text-[11px] text-gray-400">
+                                                <div style={{ flex: 1, minWidth: "180px" }}>
+                                                    <div className="cf-row-name">{b.customer_name}</div>
+                                                    <div className="cf-row-sub">
                                                         {b.customer_email}{b.customer_phone ? ` · ${b.customer_phone}` : ""}
                                                     </div>
-                                                    {b.notes ? <div className="text-[11px] text-gray-400 italic mt-0.5">“{b.notes}”</div> : null}
+                                                    {b.notes ? <div className="cf-row-notes">“{b.notes}”</div> : null}
                                                 </div>
-                                                <span className={`px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-widest ${STATUS_BADGE[b.status] || "bg-gray-100 text-gray-500"}`}>
+                                                <span className={`cf-pill ${STATUS_BADGE[b.status] || "is-muted"}`}>
                                                     {STATUS_ES[b.status] || b.status}
                                                 </span>
                                                 <select
-                                                    className="px-2 py-1.5 bg-white border-2 border-gray-100 rounded-xl text-xs font-bold outline-none focus:border-blue-500"
+                                                    aria-label="Cambiar estado"
+                                                    className="cf-select is-compact"
                                                     value={b.status}
                                                     onChange={(e) => changeStatus(b.id, e.target.value)}
                                                 >
@@ -451,7 +505,7 @@ export default function BookingsAdminPage() {
                                                     <option value="completed">Completada</option>
                                                     <option value="cancelled">Cancelada</option>
                                                 </select>
-                                                <button type="button" onClick={() => deleteBooking(b.id)} className="text-red-300 hover:text-red-600 font-black px-1" title="Eliminar">×</button>
+                                                <button type="button" onClick={() => deleteBooking(b.id)} className="cf-iconbtn is-danger" title="Eliminar" aria-label="Eliminar">×</button>
                                             </div>
                                         ))}
                                     </div>
@@ -464,41 +518,44 @@ export default function BookingsAdminPage() {
 
             {/* ══════════ SERVICIOS ══════════ */}
             {tab === "servicios" && (
-                <div className={cardCls}>
-                    <div className="flex items-center justify-between mb-6">
-                        <h2 className="font-bold text-gray-800">Servicios</h2>
-                        <button type="button" onClick={() => setModalService(null)} className={btnCls}>+ Nuevo servicio</button>
+                <div className="cf-card-item">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1.25rem" }}>
+                        <h2 className="cf-section-title">Servicios</h2>
+                        <button type="button" onClick={() => setModalService(null)} className="cf-btn"><IconPlus /> Nuevo servicio</button>
                     </div>
 
-                    {servicesMsg && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600 mb-4">{servicesMsg}</div>}
+                    {servicesMsg && <div role="alert" className="cf-flash is-error">{servicesMsg}</div>}
 
                     {services === null ? (
-                        <p className="text-sm text-gray-400">Cargando servicios…</p>
+                        <p className="cf-help">Cargando servicios…</p>
                     ) : services.length === 0 ? (
-                        <p className="text-sm text-gray-400">Sin servicios todavía — crea el primero para empezar a recibir reservas.</p>
+                        <div className="cf-empty">
+                            <IconCalendar />
+                            <span>Sin servicios todavía — crea el primero para empezar a recibir reservas.</span>
+                        </div>
                     ) : (
-                        <div className="space-y-2">
+                        <div>
                             {services.map((s) => {
                                 const days = DAY_ORDER.filter((d) => (s.availability && s.availability[d] || []).length > 0);
                                 return (
-                                    <div key={s.id} className="flex flex-wrap items-center gap-3 bg-gray-50/60 rounded-2xl px-4 py-3 border-l-4" style={{ borderLeftColor: s.color || "#3b82f6" }}>
-                                        <div className="flex-1 min-w-[180px]">
-                                            <div className="font-bold text-gray-800">{s.name} {!s.is_active && <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 ml-1">(inactivo)</span>}</div>
-                                            <div className="text-[11px] text-gray-400">
+                                    <div key={s.id} className="cf-rowcard" style={{ borderLeftColor: s.color || "#3b82f6" }}>
+                                        <div style={{ flex: 1, minWidth: "180px" }}>
+                                            <div className="cf-row-name">{s.name} {!s.is_active && <span className="cf-pill is-muted" style={{ marginLeft: "0.35rem" }}>(inactivo)</span>}</div>
+                                            <div className="cf-row-sub">
                                                 {s.duration_min} min · {Number(s.price_cents) > 0 ? fmtPrice(s.price_cents) : "Gratis"} ·
                                                 {days.length ? ` ${days.map((d) => DAY_ES[d].slice(0, 3)).join(", ")}` : " sin disponibilidad"}
                                             </div>
                                         </div>
-                                        <button type="button" onClick={() => toggleService(s)} className={btnGhostCls}>{s.is_active ? "Desactivar" : "Activar"}</button>
-                                        <button type="button" onClick={() => setModalService(s)} className={btnGhostCls}>Editar</button>
-                                        <button type="button" onClick={() => deleteService(s)} className="px-5 py-3 bg-red-50 hover:bg-red-100 text-red-500 rounded-2xl font-black text-xs uppercase tracking-widest transition-all">Eliminar</button>
+                                        <button type="button" onClick={() => toggleService(s)} className="cf-btn-ghost">{s.is_active ? "Desactivar" : "Activar"}</button>
+                                        <button type="button" onClick={() => setModalService(s)} className="cf-btn-ghost"><IconPen /> Editar</button>
+                                        <button type="button" onClick={() => deleteService(s)} className="cf-btn-danger">Eliminar</button>
                                     </div>
                                 );
                             })}
                         </div>
                     )}
 
-                    <p className="text-[11px] text-gray-400 mt-6 leading-relaxed">
+                    <p className="cf-help" style={{ marginTop: "1.4rem" }}>
                         En el editor visual, agrega el bloque <strong>Bookings</strong> a una página — muestra el selector de
                         servicios, el calendario de horarios y el formulario de reserva. Configura el campo "Servicio (ID)" del
                         bloque con el ID de un servicio para saltarte el selector.
@@ -508,22 +565,24 @@ export default function BookingsAdminPage() {
 
             {/* ══════════ CONFIGURACIÓN ══════════ */}
             {tab === "config" && (
-                <form onSubmit={saveConfig} className={`${cardCls} space-y-5 max-w-xl`}>
-                    <h2 className="font-bold text-gray-800">Configuración</h2>
-                    <div>
-                        <label className={labelCls}>Email de notificaciones (nuevas reservas)</label>
-                        <input type="email" className={inputCls} value={config.notifyEmail} placeholder="(vacío = no notificar)" onChange={(e) => setConfig({ ...config, notifyEmail: e.target.value })} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Antelación mínima (horas)</label>
-                        <input type="number" min={0} max={720} className={inputCls} value={config.minNoticeHours} onChange={(e) => setConfig({ ...config, minNoticeHours: e.target.value })} />
-                        <p className="text-[11px] text-gray-400 mt-2">
-                            No se ofrecerán horarios que empiecen antes de este número de horas a partir de ahora (0 = permitir el mismo día).
-                        </p>
-                    </div>
-                    {configMsg && <div className={`text-sm px-4 py-3 rounded-xl ${/^Error/.test(configMsg) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>{configMsg}</div>}
-                    <div className="flex justify-end">
-                        <button type="submit" disabled={configBusy} className={btnCls}>{configBusy ? "Guardando…" : "Guardar"}</button>
+                <form onSubmit={saveConfig} className="cf-card-item" style={{ maxWidth: "36rem" }}>
+                    <h2 className="cf-section-title" style={{ marginBottom: "1.25rem" }}>Configuración</h2>
+                    <div style={{ display: "grid", gap: "1.05rem" }}>
+                        <div>
+                            <label className="cf-label" htmlFor="bk-cfg-email">Email de notificaciones (nuevas reservas)</label>
+                            <input id="bk-cfg-email" type="email" className="cf-input" value={config.notifyEmail} placeholder="(vacío = no notificar)" onChange={(e) => setConfig({ ...config, notifyEmail: e.target.value })} />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="bk-cfg-notice">Antelación mínima (horas)</label>
+                            <input id="bk-cfg-notice" type="number" min={0} max={720} className="cf-input" value={config.minNoticeHours} onChange={(e) => setConfig({ ...config, minNoticeHours: e.target.value })} />
+                            <p className="cf-help">
+                                No se ofrecerán horarios que empiecen antes de este número de horas a partir de ahora (0 = permitir el mismo día).
+                            </p>
+                        </div>
+                        {configMsg && <div role={/^Error/.test(configMsg) ? "alert" : "status"} className={`cf-flash ${/^Error/.test(configMsg) ? "is-error" : "is-ok"}`} style={{ marginBottom: 0 }}>{configMsg}</div>}
+                        <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                            <button type="submit" disabled={configBusy} className="cf-btn">{configBusy ? "Guardando…" : "Guardar"}</button>
+                        </div>
                     </div>
                 </form>
             )}

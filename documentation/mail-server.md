@@ -102,5 +102,6 @@ All routes are mounted by the host under `/api/v1/plugin/mail-server/*` (every i
 
 ## Notes
 *   **Localhost / dotless domains**: `admin@localhost` and similar are accepted for internal testing.
+*   **Email Center visibility**: the plugin registers its admin menu (via `wordjs.adminMenu.add`) with `requiresProfessionalMailbox: true`, so core (`GET /plugins/menus`) **hides the Email Center** from users whose account email isn't on the site domain — they have no WordJS inbox, so the page would be an empty shell. Administrators always keep it. The flag is slug/href-agnostic, so any mail plugin gets the same treatment (it isn't tied to the bundled mail-server).
 *   **Storage**: mail lives in the plugin's own prefixed tables `wjp_mail_server_received_emails` / `wjp_mail_server_email_attachments` (plus `wjp_mail_server_secrets`) via the bridge `wordjs.db`. Because the plugin can only write inside its own directory, attachments are stored under `backend/plugins/mail-server/data/attachments` and the Bayesian model persists to `backend/plugins/mail-server/data/bayes.json`.
 *   **Logging**: verbose, tagged `[MailServer]`, for tracing delivery paths.
