@@ -1,0 +1,50 @@
+{
+    "id": "notification-bar",
+    "name": "Notification Bar",
+    "version": "1.0.0",
+    "description": "Slim site-wide announcement bar (top or bottom): message + optional CTA link, dismissible with version-based re-show, colors, and an optional schedule window.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "announcement"
+        }
+    },
+    "adminMenu": {
+        "label": "Barra de Anuncios",
+        "icon": "fa-bullhorn",
+        "href": "/admin/plugin/announcement",
+        "order": 68
+    },
+    "permissions": [
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the notification bar configuration option (message, colors, schedule, version)."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Save the notification bar configuration option from the admin page."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Expose the public config endpoint the bar script consumes plus the admin read/save endpoints."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the announcement bar entry to the admin sidebar."
+        },
+        {
+            "scope": "assets",
+            "access": "write",
+            "reason": "Enqueue public/bar.js and public/bar.css so the announcement bar renders on every public page."
+        }
+    ]
+}

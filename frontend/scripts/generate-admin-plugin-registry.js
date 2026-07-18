@@ -126,6 +126,12 @@ async function generateAdminRegistry() {
         `    "${p.adminSlug}": () => import("../../../../../../backend/plugins/${p.folder}/${p.adminPath}"),`
     ).join('\n');
 
+    // Slug → plugin FOLDER id. The URL uses adminPage.slug, but a plugin's static assets
+    // (admin.css, manifest.json) are served from /plugins/<folder-id>/ — which frequently differs
+    // from the slug (e.g. slug "store" → folder "online-store", "youtube" → "youtube-videos").
+    // Without this map the admin-stylesheet feature silently 404s for every slug≠folder plugin.
+    const dirMap = availablePlugins.map(p => `    "${p.adminSlug}": "${p.folder}",`).join('\n');
+
     const content = `"use client";
 
 /**
@@ -139,17 +145,23 @@ async function generateAdminRegistry() {
 
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
-import { Suspense } from "react";
+import { useEffect, useState, Suspense } from "react";
 
 const PLUGIN_ADMIN_PAGES: Record<string, () => Promise<any>> = {
 ${imports}
+};
+
+// Maps the URL admin-slug to the plugin's on-disk FOLDER id, so admin.css / manifest.json are
+// fetched from the correct /plugins/<folder>/ path (the slug and folder often differ).
+const PLUGIN_ADMIN_DIRS: Record<string, string> = {
+${dirMap}
 };
 
 function LoadingFallback() {
     return (
         <div className="p-8 flex items-center justify-center">
             <div className="text-center">
-                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4 font-black"></div>
                 <p className="text-gray-500">Loading plugin...</p>
             </div>
         </div>
@@ -164,7 +176,7 @@ function PluginNotFound({ slug }: { slug: string }) {
             <p className="text-gray-600 mb-4">
                 The plugin <code className="bg-gray-100 px-2 py-1 rounded">{slug}</code> is not installed.
             </p>
-            <a href="/admin/plugins" className="text-blue-600 hover:underline">
+            <a href="/admin/plugins" className="text-blue-600 hover:underline font-bold">
                 ← Back to Plugins
             </a>
         </div>
@@ -174,6 +186,45 @@ function PluginNotFound({ slug }: { slug: string }) {
 export default function PluginAdminPage() {
     const params = useParams();
     const slug = params.slug as string;
+    const [hasCss, setHasCss] = useState(false);
+    const [themeStyle, setThemeStyle] = useState("");
+
+    // Static assets are served under the plugin's FOLDER id, which can differ from the URL slug.
+    const dir = PLUGIN_ADMIN_DIRS[slug] || slug;
+    const cssUrl = \`/plugins/\${dir}/client/admin/admin.css\`;
+
+    useEffect(() => {
+        if (!slug) return;
+        setHasCss(false);
+        setThemeStyle("");
+
+        // Check for admin.css existence
+        fetch(cssUrl, { method: "HEAD" })
+            .then((res) => {
+                if (res.ok) setHasCss(true);
+            })
+            .catch(() => {});
+
+        // Fetch manifest.json to check for style/theme fields. The plugin admin page is already
+        // trusted first-party JS, but this string reaches a dangerouslySetInnerHTML sink, so strip
+        // characters that could break out of the injected <style> ('}' rule breakout, '<' tag
+        // breakout, '@'/';' extra rules) — defense in depth, not the sandbox boundary.
+        fetch(\`/plugins/\${dir}/manifest.json\`)
+            .then((res) => res.json())
+            .then((manifest) => {
+                const clean = (s: unknown) => String(s).replace(/[<>{}@;]/g, "");
+                if (typeof manifest.style === "string" && manifest.style) {
+                    setThemeStyle(manifest.style.replace(/</g, ""));
+                } else if (manifest.theme && typeof manifest.theme === "object") {
+                    const vars = Object.entries(manifest.theme)
+                        .filter(([key]) => /^[a-zA-Z0-9-]+$/.test(key))
+                        .map(([key, val]) => \`--plugin-\${key}: \${clean(val)};\`)
+                        .join(" ");
+                    if (vars) setThemeStyle(\`.plugin-admin-\${slug} { \${vars} }\`);
+                }
+            })
+            .catch(() => {});
+    }, [slug, cssUrl, dir]);
 
     if (!PLUGIN_ADMIN_PAGES[slug]) {
         return <PluginNotFound slug={slug} />;
@@ -187,9 +238,13 @@ export default function PluginAdminPage() {
     );
 
     return (
-        <Suspense fallback={<LoadingFallback />}>
-            <PluginPage />
-        </Suspense>
+        <div className={\`plugin-admin-wrapper plugin-admin-\${slug} h-full overflow-y-auto custom-scrollbar\`}>
+            {themeStyle && <style dangerouslySetInnerHTML={{ __html: themeStyle }} />}
+            {hasCss && <link rel="stylesheet" href={cssUrl} />}
+            <Suspense fallback={<LoadingFallback />}>
+                <PluginPage />
+            </Suspense>
+        </div>
     );
 }
 `;

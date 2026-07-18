@@ -1,0 +1,12 @@
+{
+    "version": "0.0.1",
+    "configurations": [
+        {
+            "name": "wordjs-mono",
+            "runtimeExecutable": "npm",
+            "runtimeArgs": ["run", "dev:mono"],
+            "port": 3000,
+            "env": { "WORDJS_HTTP": "1" }
+        }
+    ]
+}

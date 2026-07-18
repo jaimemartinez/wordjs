@@ -46,7 +46,17 @@ export function assertZipWithinBudget(entries: any[], opts: ZipBudget = {}): voi
     for (const e of entries) {
         // header.size is the declared uncompressed size; missing → treat as 0 (dirs, etc.)
         const size = (e && e.header && typeof e.header.size === 'number') ? e.header.size : 0;
+        const compressed = (e && e.header && typeof e.header.compressedSize === 'number') ? e.header.compressedSize : 0;
+        const isDir = !!(e && (e.isDirectory || (typeof e.entryName === 'string' && e.entryName.endsWith('/'))));
         if (size < 0) continue;
+        // A NON-directory entry that carries real compressed bytes but DECLARES uncompressed size 0 is
+        // lying to disable BOTH this budget sum AND adm-zip's maxOutputLength cap (which it derives from
+        // the declared size) — the classic size-0 decompression bomb. Refuse it (audit LOW).
+        if (!isDir && size === 0 && compressed > 64) {
+            const err: any = new Error(`This ${kind} archive has an entry declaring a bogus zero uncompressed size (possible decompression bomb). Refusing to extract.`);
+            err.code = 'ZIP_BUDGET_EXCEEDED';
+            throw err;
+        }
         total += size;
         if (total > maxTotal) {
             const err: any = new Error(`This ${kind} archive expands to over ${fmtMB(maxTotal)} uncompressed. Refusing to extract (possible decompression bomb).`);

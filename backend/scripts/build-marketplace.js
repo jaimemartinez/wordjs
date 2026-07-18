@@ -1,0 +1,132 @@
+/**
+ * WordJS marketplace builder.
+ *
+ * Packs every plugin under marketplace/plugins/<slug>/ into marketplace/dist/<slug>-<version>.zip
+ * and emits marketplace/dist/marketplace-index.json — the catalog consumed by
+ * backend/src/routes/marketplace.ts (locally in dev, or as GitHub Release assets in production).
+ *
+ * Run from the repo root:  npm run build:marketplace
+ * (Lives in backend/scripts so require('adm-zip') resolves against backend/node_modules.)
+ */
+
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const AdmZip = require('adm-zip');
+
+const ROOT = path.resolve(__dirname, '../..');
+const SRC = path.join(ROOT, 'marketplace', 'plugins');
+const DIST = path.join(ROOT, 'marketplace', 'dist');
+
+// Slug → catalog category (single source of truth; new plugins default to 'General').
+const CATEGORIES = {
+    'contact-forms': 'Formularios', 'newsletter': 'Marketing', 'events-calendar': 'Eventos',
+    'cookie-consent': 'Legal', 'social-share': 'Social', 'testimonials': 'Social',
+    'faq': 'Contenido', 'popup-builder': 'Marketing', 'analytics-tag': 'Marketing',
+    'table-of-contents': 'Contenido', 'related-posts': 'Contenido', 'breadcrumbs': 'SEO',
+    'image-lightbox': 'Medios', 'polls': 'Contenido', 'notification-bar': 'Marketing',
+    'online-store': 'Comercio', 'vendor-marketplace': 'Comercio', 'bookings': 'Comercio',
+    'donations': 'Comercio', 'digital-downloads': 'Comercio', 'invoices': 'Comercio',
+    'job-board': 'Comercio', 'restaurant-menu': 'Comercio', 'event-tickets': 'Comercio',
+    'auctions': 'Comercio',
+};
+
+// Junk that must never ship inside a plugin zip.
+const SKIP_RE = /(^|[\\/])(\.DS_Store|Thumbs\.db|desktop\.ini|__MACOSX|\.git|node_modules)([\\/]|$)/i;
+
+function walk(dir) {
+    const out = [];
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (SKIP_RE.test(p)) continue;
+        if (e.isDirectory()) out.push(...walk(p));
+        else out.push(p);
+    }
+    return out;
+}
+
+function toPascalCase(slug) {
+    return String(slug).split(/[-_]/).filter(Boolean).map((s) => s[0].toUpperCase() + s.slice(1)).join('');
+}
+
+function buildOne(slug) {
+    const dir = path.join(SRC, slug);
+    const manifestPath = path.join(dir, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) throw new Error(`${slug}: missing manifest.json`);
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+    if (manifest.id !== slug) throw new Error(`${slug}: manifest id "${manifest.id}" != folder name`);
+    if (manifest.isolated !== true) throw new Error(`${slug}: manifest must declare "isolated": true`);
+    const version = String(manifest.version || '1.0.0');
+
+    const zip = new AdmZip();
+    // Sort for a stable entry order; fix entry mtimes so rebuilding unchanged sources yields
+    // byte-identical zips (stable sha256 across CI runs).
+    const files = walk(dir).sort();
+    const FIXED_DATE = new Date('2026-01-01T00:00:00Z');
+    for (const abs of files) {
+        const rel = path.relative(dir, abs).split(path.sep).join('/');
+        zip.addFile(`${slug}/${rel}`, fs.readFileSync(abs));
+    }
+    for (const entry of zip.getEntries()) entry.header.time = FIXED_DATE;
+
+    const buf = zip.toBuffer();
+    const file = `${slug}-${version}.zip`;
+    fs.writeFileSync(path.join(DIST, file), buf);
+
+    const fe = manifest.frontend || {};
+    return {
+        id: slug,
+        name: manifest.name || slug,
+        version,
+        description: manifest.description || '',
+        author: manifest.author || '',
+        category: CATEGORIES[slug] || 'General',
+        permissions: manifest.permissions || [],
+        hasAdminPage: !!(fe.adminPage && fe.adminPage.entry),
+        hasPuckBlock: !!(fe.puckComponents && fe.puckComponents.entry),
+        blockName: fe.puckComponents ? toPascalCase(slug) : null,
+        adminMenu: manifest.adminMenu ? { label: manifest.adminMenu.label, icon: manifest.adminMenu.icon } : null,
+        file,
+        size: buf.length,
+        sha256: crypto.createHash('sha256').update(buf).digest('hex'),
+    };
+}
+
+function main() {
+    if (!fs.existsSync(SRC)) {
+        console.error(`No marketplace sources at ${SRC}`);
+        process.exit(1);
+    }
+    fs.rmSync(DIST, { recursive: true, force: true });
+    fs.mkdirSync(DIST, { recursive: true });
+
+    const slugs = fs.readdirSync(SRC, { withFileTypes: true }).filter((e) => e.isDirectory()).map((e) => e.name).sort();
+    const entries = [];
+    const failures = [];
+    for (const slug of slugs) {
+        try {
+            const entry = buildOne(slug);
+            entries.push(entry);
+            console.log(`  ✓ ${entry.file}  (${(entry.size / 1024).toFixed(1)} KB, ${entry.category})`);
+        } catch (e) {
+            failures.push(`${slug}: ${e.message}`);
+            console.error(`  ✗ ${slug}: ${e.message}`);
+        }
+    }
+
+    // DETERMINISTIC index (no timestamps): rebuilding unchanged sources yields a byte-identical
+    // dist, so the committed catalog never produces noise diffs and CI can enforce freshness
+    // with a plain `git diff --exit-code`.
+    const index = {
+        count: entries.length,
+        plugins: entries,
+    };
+    fs.writeFileSync(path.join(DIST, 'marketplace-index.json'), JSON.stringify(index, null, 2));
+    console.log(`\nmarketplace-index.json: ${entries.length} plugins → ${DIST}`);
+    if (failures.length) {
+        console.error(`\n${failures.length} plugin(s) FAILED to pack.`);
+        process.exit(1);
+    }
+}
+
+main();

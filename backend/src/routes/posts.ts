@@ -20,6 +20,26 @@ const sanitizeHtml = require('sanitize-html');
 // previously lived inline in this file.
 const { sanitize, sanitizeMetaValue } = require('../core/sanitize-meta');
 
+// Resolve the capability family for a post type (post → edit_posts, page → edit_pages, custom →
+// edit_<type>s) so an author holding only POST caps cannot create/edit/publish/delete PAGES.
+// Pure capability-name builder for a capability_type family. NEVER null — used as the guaranteed
+// fallback for an EXISTING post whose registered type may since have been removed.
+function capsFor(c: string) {
+    return {
+        edit: `edit_${c}s`, publish: `publish_${c}s`, del: `delete_${c}s`,
+        editPublished: `edit_published_${c}s`, deletePublished: `delete_published_${c}s`,
+        editOthers: `edit_others_${c}s`, deleteOthers: `delete_others_${c}s`,
+    };
+}
+// Returns null for an UNREGISTERED type so the CREATE path can reject it (400). Callers editing an
+// existing post fall back to capsFor('post') instead of relying on this nullable result.
+function capsForType(type: string) {
+    const { getPostType } = require('../core/post-types');
+    const pt = getPostType(String(type || 'post'));
+    if (!pt) return null;
+    return capsFor(pt.capability_type || 'post');
+}
+
 /**
  * @swagger
  * components:
@@ -249,7 +269,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: Response) =>
  *       403:
  *         description: Forbidden
  */
-router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req: any, res: Response) => {
+router.post('/', authenticate, asyncHandler(async (req: any, res: Response) => {
     // ...
     const {
         title,
@@ -274,9 +294,20 @@ router.post('/', authenticate, can('edit_posts'), asyncHandler(async (req: any, 
         });
     }
 
-    // Check if user can publish
+    // Type-aware capability gate: an unknown type is rejected, and the caller must hold the EDIT cap for
+    // THIS type's family (a post-only author cannot create a page). The old route gate was can('edit_posts')
+    // regardless of type, and the publish check below only tested publish_posts (audit HIGH).
+    const caps = capsForType(type);
+    if (!caps) {
+        return res.status(400).json({ code: 'rest_invalid_post_type', message: `Invalid post type '${type}'.`, data: { status: 400 } });
+    }
+    if (!req.user.can(caps.edit)) {
+        return res.status(403).json({ code: 'rest_cannot_create', message: `You are not allowed to create content of type '${type}'.`, data: { status: 403 } });
+    }
+
+    // Check if user can publish THIS type; if not, downgrade to pending (needs review).
     let postStatus = status;
-    if (status === 'publish' && !req.user.can('publish_posts')) {
+    if (status === 'publish' && !req.user.can(caps.publish)) {
         postStatus = 'pending';
     }
 
@@ -364,10 +395,13 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         });
     }
 
-    // Check permissions
-    const canEdit = post.authorId === req.user.id
-        ? req.user.can('edit_posts')
-        : req.user.can('edit_others_posts');
+    // Type-aware permissions: post.type picks the capability family (a post-only author must not edit a
+    // page). Editing an ALREADY-PUBLISHED post additionally requires edit_published_<type>s — a contributor
+    // could otherwise rewrite or unpublish their own editor-published post via plain edit_posts (audit LOW).
+    const pcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    const isOwn = post.authorId === req.user.id;
+    let canEdit = isOwn ? req.user.can(pcaps.edit) : req.user.can(pcaps.editOthers);
+    if (post.postStatus === 'publish' && !req.user.can(pcaps.editPublished)) canEdit = false;
 
     if (!canEdit) {
         return res.status(403).json({
@@ -392,9 +426,9 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
         autosave
     } = req.body;
 
-    // Check if user can publish
+    // Check if user can publish THIS type
     let postStatus = status;
-    if (status === 'publish' && !req.user.can('publish_posts')) {
+    if (status === 'publish' && !req.user.can(pcaps.publish)) {
         postStatus = post.postStatus === 'publish' ? 'publish' : 'pending';
     }
 
@@ -484,10 +518,13 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
         });
     }
 
-    // Check permissions
-    const canDelete = post.authorId === req.user.id
-        ? req.user.can('delete_posts')
-        : req.user.can('delete_others_posts');
+    // Type-aware permissions: post.type picks the capability family, and deleting an already-published
+    // post additionally requires delete_published_<type>s (mirrors the edit gate).
+    const dcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    let canDelete = post.authorId === req.user.id
+        ? req.user.can(dcaps.del)
+        : req.user.can(dcaps.deleteOthers);
+    if (post.postStatus === 'publish' && !req.user.can(dcaps.deletePublished)) canDelete = false;
 
     if (!canDelete) {
         return res.status(403).json({
@@ -533,10 +570,11 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: any, res: Respon
     }
 
     // SECURITY: Ownership check (prevents IDOR). This route was gated by authenticate only,
-    // letting any logged-in user write arbitrary meta on ANY post. Mirror the PUT /posts/:id gate.
+    // letting any logged-in user write arbitrary meta on ANY post. Mirror the PUT /posts/:id type-aware gate.
+    const mcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
     const canEdit = post.authorId === req.user.id
-        ? req.user.can('edit_posts')
-        : req.user.can('edit_others_posts');
+        ? req.user.can(mcaps.edit)
+        : req.user.can(mcaps.editOthers);
 
     if (!canEdit) {
         return res.status(403).json({

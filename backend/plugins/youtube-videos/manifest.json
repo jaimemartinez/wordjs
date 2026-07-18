@@ -1,0 +1,57 @@
+{
+    "id": "youtube-videos",
+    "name": "YouTube Videos",
+    "version": "1.0.0",
+    "description": "Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Puck carousel block with title filtering and a video-count limit. Works keyless out of the box via the channel RSS feed (latest 15); add a YouTube Data API v3 key for the full upload history.",
+    "author": "WordJS",
+    "isolated": true,
+    "theme": {
+        "brand": "#EF4444",
+        "brand-hover": "#DC2626",
+        "accent": "#FEE2E2"
+    },
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "youtube"
+        },
+        "puckComponents": {
+            "entry": "client/puck/YoutubeVideosPuck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "YouTube Videos",
+        "icon": "fa-video",
+        "href": "/admin/plugin/youtube",
+        "order": 56
+    },
+    "permissions": [
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the configured channel and the cached video list."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Store the configured channel and cache the fetched video list."
+        },
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read the YouTube Data API key from the plugin's own settings table (options are readable by other plugins, so the key lives in a wjp_ table instead)."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create/update the plugin's own settings table holding the API key."
+        },
+        {
+            "scope": "network",
+            "reason": "Fetch the channel's video list from youtube.com (RSS) or googleapis.com (Data API v3)."
+        }
+    ]
+}

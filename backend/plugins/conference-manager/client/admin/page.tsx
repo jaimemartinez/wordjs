@@ -17,7 +17,7 @@ import { ActionCard } from "../../../../../frontend/src/components/ui/ActionCard
 // Register plugin translations
 registerTranslations(translations);
 
-type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'locations' | 'reports' | 'assignment' | 'fields';
+type View = 'list' | 'dashboard' | 'inscriptions' | 'lodging' | 'locations' | 'reports' | 'assignment' | 'fields' | 'pricing';
 
 function ConferenceManagerContent() {
     const { currentConference, conferences, setCurrentConference, refreshConferences, loading } = useConference();
@@ -29,7 +29,7 @@ function ConferenceManagerContent() {
     // Initialize state from local storage
     useEffect(() => {
         const savedView = localStorage.getItem('conference-manager:view') as View;
-        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'locations', 'reports'].includes(savedView)) {
+        if (savedView && ['list', 'dashboard', 'inscriptions', 'lodging', 'locations', 'assignment', 'fields', 'pricing', 'reports'].includes(savedView)) {
             setViewState(savedView);
         }
     }, []);
@@ -95,12 +95,13 @@ function ConferenceManagerContent() {
                         { name: t('locations'), view: 'locations' as View, icon: 'fa-map-marker-alt' },
                         { name: t('assignment'), view: 'assignment' as View, icon: 'fa-wand-magic-sparkles' },
                         { name: t('fields'), view: 'fields' as View, icon: 'fa-list-check' },
+                        { name: t('pricing') || 'Precios', view: 'pricing' as View, icon: 'fa-tags' },
                         { name: t('reports'), view: 'reports' as View, icon: 'fa-file-lines' },
                     ].map((tab) => {
                         const isActive = view === tab.view;
                         return (
                             <button
-                                key={tab.name}
+                                key={tab.view}
                                 onClick={() => setView(tab.view)}
                                 className={`flex items-center gap-2 px-6 py-3 border-b-2 font-medium text-sm transition-colors whitespace-nowrap
                                     ${isActive
@@ -124,6 +125,7 @@ function ConferenceManagerContent() {
                     {view === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
                     {view === 'assignment' && <AssignmentPage conferenceId={currentConference.id} />}
                     {view === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
+                    {view === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
                     {view === 'reports' && <ReportsPage conferenceId={currentConference.id} />}
                 </div>
             </div>
@@ -630,11 +632,33 @@ function ConferenceDashboard({ conferenceId, onNavigate }: { conferenceId: numbe
 
 
 // Inscriptions Component
+// The registration form is the source of truth: attendee data lives in real columns named after each
+// field (with a custom_data fallback for legacy rows). These read a field's value + build a display name.
+const fieldVal = (person: any, field: any) => {
+    const v = person?.[field.name];
+    if (v !== undefined && v !== null && v !== '') return v;
+    const cd = person?.custom_data?.[field.name];
+    return (cd !== undefined && cd !== null && cd !== '') ? cd : '';
+};
+const personDisplayName = (person: any, fields: any[]) => {
+    const fl = fields || [];
+    // Prefer the fields tagged with the name roles; fall back to the first 1-2 form fields.
+    const named = ['first_name', 'last_name']
+        .map(role => fl.find((f: any) => f.role === role))
+        .filter(Boolean)
+        .map((f: any) => fieldVal(person, f))
+        .filter(v => v !== '' && v != null);
+    const parts = named.length ? named : fl.map((f: any) => fieldVal(person, f)).filter(v => v !== '' && v != null).slice(0, 2);
+    const name = parts.join(' ').trim();
+    return name || `#${person?.id ?? ''}`;
+};
+
 function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
     const { addToast } = useToast();
     const [inscriptions, setInscriptions] = useState<Inscription[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
+    const [confLocations, setConfLocations] = useState<Location[]>([]);
     const [loading, setLoading] = useState(true);
     const [showAddModal, setShowAddModal] = useState(false);
     const [searchTerm, setSearchTerm] = useState('');
@@ -645,24 +669,40 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
         custom_data: {}
     });
 
+    const [editId, setEditId] = useState<number | null>(null); // null = create, id = editing
+    const [saving, setSaving] = useState(false);
+
     const [selectedInscription, setSelectedInscription] = useState<Inscription | null>(null);
     const [payments, setPayments] = useState<Payment[]>([]);
     const [loadingPayments, setLoadingPayments] = useState(false);
+    const [paymentForm, setPaymentForm] = useState({ amount: '', method: 'Efectivo', reference: '', proof: '' });
+    const [proofViewer, setProofViewer] = useState<string | null>(null); // comprobante lightbox (data: URLs can't open in a new tab)
+    // In-app confirm that renders ABOVE the plugin's own z-[100] modals — the shared useModal dialog is
+    // z-50, so it'd be hidden BEHIND the payments modal. Same (message, label, danger) signature so the
+    // call sites are unchanged; the returned promise resolves to the user's choice. Never a window.confirm.
+    const [confirmState, setConfirmState] = useState<{ message: string; label: string; danger: boolean; resolve: (v: boolean) => void } | null>(null);
+    const confirm = (message: string, label = 'Confirmar', danger = false) =>
+        new Promise<boolean>(resolve => setConfirmState({ message, label, danger, resolve }));
+    const [addingPayment, setAddingPayment] = useState(false);
 
-    const loadData = async () => {
+    // Manual room-assignment modal state.
+    const [assignTarget, setAssignTarget] = useState<Inscription | null>(null);
+    const [assignHotels, setAssignHotels] = useState<Hotel[]>([]);
+    const [assignLoading, setAssignLoading] = useState(false);
+
+    // Fields own their own load (they change rarely); the inscriptions list is owned solely by
+    // fetchInscriptions so the two no longer race to setInscriptions on mount.
+    const loadFields = async () => {
         if (!conferenceId) return;
-        setLoading(true);
         try {
-            const [inscriptionsData, fieldsData] = await Promise.all([
-                conferenceApi.getInscriptions(conferenceId),
-                conferenceApi.getFields(conferenceId)
+            const [fieldsData, locData] = await Promise.all([
+                conferenceApi.getFields(conferenceId),
+                conferenceApi.getLocations(conferenceId),
             ]);
-            setInscriptions(inscriptionsData);
             setFields(fieldsData);
+            setConfLocations(locData?.locations || []);
         } catch (e) {
-            addToast('Error loading inscriptions', 'error');
-        } finally {
-            setLoading(false);
+            console.error(e);
         }
     };
 
@@ -670,12 +710,9 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
         if (!conferenceId) return;
         setLoading(true);
         try {
-            const params: any = { search: searchTerm };
-            // If specific locations are selected, filter by them
-            // Note: The API currently supports single location filter, so we'll filter client-side if multiple
-            const data = await conferenceApi.getInscriptions(conferenceId, params);
+            const data = await conferenceApi.getInscriptions(conferenceId, { search: searchTerm });
 
-            // Filter by selected locations if any are selected
+            // The API filters by a single location; multi-select is applied client-side.
             let filteredData = data;
             if (selectedLocations.size > 0) {
                 filteredData = data.filter(inscription => {
@@ -687,17 +724,17 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
             setInscriptions(filteredData);
         } catch (e) {
             console.error(e);
+            addToast(t('error.loading.inscriptions') || 'Error al cargar inscripciones', 'error');
         } finally {
             setLoading(false);
         }
     };
 
-    // Get unique locations from all inscriptions (before filtering)
+    // Unique locations for the filter dropdown — always the full set, independent of the search box.
     const fetchAllInscriptions = async () => {
-        if (!conferenceId) return;
+        if (!conferenceId) return [];
         try {
-            const data = await conferenceApi.getInscriptions(conferenceId, { search: searchTerm });
-            return data;
+            return await conferenceApi.getInscriptions(conferenceId, {});
         } catch (e) {
             return [];
         }
@@ -752,26 +789,153 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
     };
 
     useEffect(() => {
-        loadData(); // Initial load of inscriptions and fields
+        loadFields();
     }, [conferenceId]);
 
+    // Debounce so each keystroke in the search box does not fire a request.
     useEffect(() => {
-        fetchInscriptions(); // Filter inscriptions based on search/location
+        const h = setTimeout(() => { fetchInscriptions(); }, 250);
+        return () => clearTimeout(h);
     }, [searchTerm, selectedLocations, conferenceId]);
+
+    // Open the modal for a NEW inscription.
+    const openCreate = () => {
+        setEditId(null);
+        setFormData({ custom_data: {} });
+        setShowAddModal(true);
+    };
+
+    // Open the modal pre-filled to EDIT an existing inscription. Dynamic (custom) field values are
+    // flattened onto formData so the same form renders them.
+    const openEdit = (person: Inscription) => {
+        setEditId(person.id);
+        setFormData({ ...person, ...(person.custom_data || {}) });
+        setShowAddModal(true);
+    };
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!conferenceId) return;
+        setSaving(true);
         try {
-            await conferenceApi.createInscription({ ...formData, conference_id: conferenceId });
+            if (editId) {
+                await conferenceApi.updateInscription(editId, formData);
+                addToast(t('inscription.updated') || 'Inscripción actualizada', 'success');
+            } else {
+                await conferenceApi.createInscription(conferenceId, formData);
+                addToast(t('inscription.created') || 'Inscripción creada', 'success');
+            }
             setShowAddModal(false);
-            setFormData({
-                custom_data: {}
-            });
-            loadData(); // Refresh all data including fields
-            addToast(t('inscription.created') || 'Inscripción creada', 'success');
-        } catch (error) {
-            addToast('Error creating inscription', 'error');
+            setEditId(null);
+            setFormData({ custom_data: {} });
+            fetchInscriptions();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    const handleDelete = async (person: Inscription) => {
+        if (!await confirm(`${t('confirm.delete.inscription') || '¿Eliminar la inscripción de'} ${personDisplayName(person, fields)}?`, t('delete') || 'Eliminar', true)) return;
+        try {
+            await conferenceApi.deleteInscription(person.id);
+            addToast(t('inscription.deleted') || 'Inscripción eliminada', 'success');
+            fetchInscriptions();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        }
+    };
+
+    // Reset + reload the payment list for a person (no stale rows on a slow/failed fetch).
+    const openPayments = (person: Inscription) => {
+        setSelectedInscription(person);
+        setPayments([]);
+        setPaymentForm({ amount: '', method: 'Efectivo', reference: '' });
+        setLoadingPayments(true);
+        conferenceApi.getPayments(person.id)
+            .then(setPayments)
+            .catch(() => addToast(t('error.loading.payments') || 'Error al cargar pagos', 'error'))
+            .finally(() => setLoadingPayments(false));
+    };
+
+    // Refresh the payments list + the selected row's totals after any payment action (add/validate/reject).
+    const refreshAfterPaymentAction = async () => {
+        if (!selectedInscription) return;
+        const [fresh, list] = await Promise.all([
+            conferenceApi.getPayments(selectedInscription.id),
+            conferenceApi.getInscriptions(conferenceId, {}),
+        ]);
+        setPayments(fresh);
+        const updated = list.find(i => i.id === selectedInscription.id);
+        if (updated) setSelectedInscription(updated);
+        fetchInscriptions();
+    };
+
+    const handleAddPayment = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!selectedInscription) return;
+        const amt = Number(paymentForm.amount);
+        if (!Number.isFinite(amt) || amt <= 0) { addToast(t('payment.invalid.amount') || 'El monto debe ser mayor que cero.', 'error'); return; }
+        if (!paymentForm.proof) { addToast('El comprobante es obligatorio.', 'error'); return; }
+        setAddingPayment(true);
+        try {
+            await conferenceApi.addPayment(selectedInscription.id, { amount: amt, method: paymentForm.method, reference: paymentForm.reference, proof: paymentForm.proof });
+            addToast('Pago registrado — queda pendiente de validación.', 'success');
+            setPaymentForm({ amount: '', method: 'Efectivo', reference: '', proof: '' });
+            await refreshAfterPaymentAction();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setAddingPayment(false);
+        }
+    };
+
+    const handleValidatePayment = async (payment: Payment) => {
+        try { await conferenceApi.validatePayment(payment.id); addToast('Pago validado.', 'success'); await refreshAfterPaymentAction(); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+    };
+    const handleRejectPayment = async (payment: Payment) => {
+        if (!await confirm('¿Rechazar este pago? No contará para el saldo.', 'Rechazar pago', true)) return;
+        try { await conferenceApi.rejectPayment(payment.id); addToast('Pago rechazado.', 'info'); await refreshAfterPaymentAction(); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+    };
+
+    const handleVoidPayment = async (payment: Payment) => {
+        if (!selectedInscription) return;
+        if (!await confirm(t('confirm.void.payment') || '¿Anular este pago?', t('void.payment') || 'Anular pago', true)) return;
+        try {
+            await conferenceApi.voidPayment(payment.id);
+            const fresh = await conferenceApi.getPayments(selectedInscription.id);
+            setPayments(fresh);
+            fetchInscriptions();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        }
+    };
+
+    // Manual room assignment.
+    const openAssign = async (person: Inscription) => {
+        setAssignTarget(person);
+        setAssignLoading(true);
+        try {
+            setAssignHotels(await conferenceApi.getHotels(conferenceId));
+        } catch (e) {
+            addToast(t('error.loading.hotels') || 'Error al cargar hoteles', 'error');
+        } finally {
+            setAssignLoading(false);
+        }
+    };
+
+    const doAssign = async (roomId: number | null) => {
+        if (!assignTarget) return;
+        try {
+            await conferenceApi.assignRoom(assignTarget.id, roomId);
+            addToast(roomId ? (t('room.assigned') || 'Habitación asignada') : (t('room.unassigned') || 'Asignación removida'), 'success');
+            setAssignTarget(null);
+            fetchInscriptions();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
         }
     };
 
@@ -892,7 +1056,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                 </div>
 
                 <button
-                    onClick={() => setShowAddModal(true)}
+                    onClick={openCreate}
                     className="flex-shrink-0 bg-blue-600 text-white px-8 py-4 rounded-2xl hover:bg-blue-700 active:scale-95 transition-all shadow-xl shadow-blue-500/30 flex items-center justify-center gap-3 w-full md:w-auto font-black italic tracking-tighter"
                 >
                     <i className="fa-solid fa-plus text-sm"></i>
@@ -966,16 +1130,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                             <table className="w-full text-sm text-left border-collapse">
                                                 <thead>
                                                     <tr className="bg-gray-50/50">
-                                                        <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">{t('first.name')} / {t('last.name')}</th>
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">{t('email')}</th>
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">{t('phone')}</th>
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('document')}</th>
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('gender')}</th>
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('age')}</th>
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('blood.type')}</th>
-                                                        <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('family')}</th>
-                                                        {fields.map(field => (
-                                                            <th key={field.id} className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">{field.label}</th>
+                                                        {/* Columns follow the registration form — one per defined field. */}
+                                                        {fields.length === 0 && (
+                                                            <th className="px-8 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap">{t('participant.singular')}</th>
+                                                        )}
+                                                        {fields.map((field, idx) => (
+                                                            <th key={field.id} className={`${idx === 0 ? 'px-8' : 'px-6'} py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest whitespace-nowrap`}>{field.label}</th>
                                                         ))}
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('payment')}</th>
                                                         <th className="px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest text-center whitespace-nowrap">{t('lodging')}</th>
@@ -985,55 +1145,27 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                 <tbody className="divide-y divide-gray-50">
                                                     {locationInscriptions.map((person) => (
                                                         <tr key={person.id} className="hover:bg-blue-50/30 transition-colors group/row">
-                                                            <td className="px-8 py-5">
-                                                                <div className="font-bold text-gray-900 group-hover/row:text-blue-700 transition-colors">{person.first_name} {person.last_name}</div>
-                                                            </td>
-                                                            <td className="px-6 py-5">
-                                                                <div className="text-gray-500 font-medium truncate max-w-[180px]">{person.email || <span className="text-gray-300 italic">No email</span>}</div>
-                                                            </td>
-                                                            <td className="px-6 py-5">
-                                                                <div className="text-gray-500 font-medium whitespace-nowrap">{person.phone || <span className="text-gray-300 italic">-</span>}</div>
-                                                            </td>
-                                                            <td className="px-6 py-5 text-center">
-                                                                <div className="flex flex-col items-center">
-                                                                    <div className="text-[8px] font-black text-gray-400 uppercase bg-gray-100 px-1.5 py-0.5 rounded mb-1">{person.document_type || '-'}</div>
-                                                                    <div className="text-gray-500 font-mono text-xs">{person.document_number || '-'}</div>
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-6 py-5 text-center">
-                                                                <div className="flex justify-center">
-                                                                    <span className={`w-8 h-8 flex items-center justify-center rounded-xl text-[10px] font-black text-white shadow-lg ${person.gender === 'M' ? 'bg-blue-500 shadow-blue-100' : 'bg-pink-500 shadow-pink-100'}`}>
-                                                                        {person.gender}
-                                                                    </span>
-                                                                </div>
-                                                            </td>
-                                                            <td className="px-6 py-5 text-center text-gray-500 font-bold">{person.age || '-'}</td>
-                                                            <td className="px-6 py-5 text-center text-gray-500 font-bold font-mono text-xs">{person.blood_type || '-'}</td>
-                                                            <td className="px-6 py-5 text-center">
-                                                                {person.family_group ? (
-                                                                    <div className="inline-flex items-center gap-1.5 px-3 py-1 bg-indigo-50 text-indigo-600 rounded-full text-[10px] font-black uppercase">
-                                                                        <i className="fa-solid fa-users text-[8px]"></i>
-                                                                        {person.family_group}
-                                                                    </div>
-                                                                ) : <span className="text-gray-300">-</span>}
-                                                            </td>
-                                                            {fields.map(field => (
-                                                                <td key={field.id} className="px-6 py-5">
-                                                                    <div className="text-xs text-gray-600 font-medium truncate max-w-[150px]">
-                                                                        {person.custom_data?.[field.name] || '-'}
-                                                                    </div>
+                                                            {fields.length === 0 && (
+                                                                <td className="px-8 py-5">
+                                                                    <div className="font-bold text-gray-900 group-hover/row:text-blue-700 transition-colors">{personDisplayName(person, fields)}</div>
                                                                 </td>
-                                                            ))}
+                                                            )}
+                                                            {fields.map((field, idx) => {
+                                                                const val = fieldVal(person, field);
+                                                                return (
+                                                                    <td key={field.id} className={`${idx === 0 ? 'px-8' : 'px-6'} py-5`}>
+                                                                        <div className={idx === 0
+                                                                            ? 'font-bold text-gray-900 group-hover/row:text-blue-700 transition-colors'
+                                                                            : 'text-gray-600 text-xs font-medium truncate max-w-[180px]'}>
+                                                                            {val !== '' ? String(val) : <span className="text-gray-300 italic">-</span>}
+                                                                        </div>
+                                                                    </td>
+                                                                );
+                                                            })}
                                                             <td className="px-6 py-5">
                                                                 <div className="flex flex-col items-center gap-1">
                                                                     <button
-                                                                        onClick={() => {
-                                                                            setSelectedInscription(person);
-                                                                            setLoadingPayments(true);
-                                                                            conferenceApi.getPayments(person.id)
-                                                                                .then(setPayments)
-                                                                                .finally(() => setLoadingPayments(false));
-                                                                        }}
+                                                                        onClick={() => openPayments(person)}
                                                                         className={`px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest transition-all ${person.payment_status === 'paid'
                                                                             ? 'bg-emerald-50 text-emerald-600 hover:bg-emerald-100'
                                                                             : person.payment_status === 'partial'
@@ -1041,9 +1173,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                                 : 'bg-rose-50 text-rose-600 hover:bg-rose-100'
                                                                             }`}
                                                                     >
-                                                                        {person.payment_status}
+                                                                        {t(person.payment_status) || person.payment_status}
                                                                     </button>
                                                                     <div className="text-[10px] text-gray-400 font-bold">${person.amount_paid} / ${person.total_due}</div>
+                                                                    {(person as any).pending_amount > 0 && (
+                                                                        <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 bg-amber-50 px-2 py-0.5 rounded-full whitespace-nowrap"><i className="fa-solid fa-clock mr-1"></i>${(person as any).pending_amount} por validar</div>
+                                                                    )}
                                                                 </div>
                                                             </td>
                                                             <td className="px-6 py-5">
@@ -1062,14 +1197,23 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                                 </div>
                                                             </td>
                                                             <td className="px-8 py-5 text-right">
-                                                                <div className="flex justify-end gap-2 opacity-0 group-hover/row:opacity-100 transition-opacity">
+                                                                <div className="flex justify-end gap-2 opacity-0 group-hover/row:opacity-100 focus-within:opacity-100 [@media(hover:none)]:opacity-100 transition-opacity">
                                                                     <button
+                                                                        onClick={() => openAssign(person)}
+                                                                        className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-emerald-400"
+                                                                        title={t('assign.room') || 'Asignar habitación'}
+                                                                    >
+                                                                        <i className="fa-solid fa-bed text-xs"></i>
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => openEdit(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-blue-400"
                                                                         title={t('edit')}
                                                                     >
                                                                         <i className="fa-solid fa-pen text-xs"></i>
                                                                     </button>
                                                                     <button
+                                                                        onClick={() => handleDelete(person)}
                                                                         className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm border border-transparent hover:border-rose-400"
                                                                         title={t('delete')}
                                                                     >
@@ -1094,12 +1238,33 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
-                            <h3 className="font-bold text-xl text-gray-900 italic">{t('new.inscription')}</h3>
-                            <button onClick={() => setShowAddModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
+                            <h3 className="font-bold text-xl text-gray-900 italic">{editId ? (t('edit.inscription') || 'Editar Inscripción') : t('new.inscription')}</h3>
+                            <button onClick={() => { setShowAddModal(false); setEditId(null); }} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
                                 <i className="fa-solid fa-xmark text-lg"></i>
                             </button>
                         </div>
                         <form onSubmit={handleSubmit} className="p-8 space-y-6">
+                            {/* Location — the admin picks it explicitly (the portal auto-sets it). */}
+                            {confLocations.length > 0 ? (
+                                <div>
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-1.5">
+                                        {t('location') || 'Localidad'} <span className="text-rose-500">*</span>
+                                    </label>
+                                    <select
+                                        required
+                                        className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                        value={formData.location || ''}
+                                        onChange={e => handleFormChange('location', e.target.value)}
+                                    >
+                                        <option value="">Seleccionar localidad...</option>
+                                        {confLocations.map((loc: any) => (
+                                            <option key={loc.id} value={loc.name}>{loc.name}</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            ) : (
+                                <p className="text-[10px] text-gray-400 italic px-1">Sin localidades configuradas. Créalas en la pestaña «Localidades» para poder asignarlas aquí.</p>
+                            )}
                             {fields.length === 0 ? (
                                 <div className="text-center py-10 bg-orange-50 rounded-2xl border-2 border-dashed border-orange-100 p-6">
                                     <i className="fa-solid fa-triangle-exclamation text-orange-400 text-3xl mb-4"></i>
@@ -1158,9 +1323,9 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                             )}
 
                             <div className="pt-6 flex justify-end gap-3 border-t border-gray-50">
-                                <button type="button" onClick={() => setShowAddModal(false)} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('cancel')}</button>
+                                <button type="button" onClick={() => { setShowAddModal(false); setEditId(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">{t('cancel')}</button>
                                 {fields.length > 0 && (
-                                    <button type="submit" className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition">{t('save')}</button>
+                                    <button type="submit" disabled={saving} className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition disabled:opacity-50">{saving ? (t('saving') || 'Guardando…') : t('save')}</button>
                                 )}
                             </div>
                         </form>
@@ -1174,7 +1339,7 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                     <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
                         <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
                             <div>
-                                <h3 className="font-bold text-xl text-gray-900 italic">Pagos de {selectedInscription.first_name} {selectedInscription.last_name}</h3>
+                                <h3 className="font-bold text-xl text-gray-900 italic">Pagos de {personDisplayName(selectedInscription, fields)}</h3>
                                 <p className="text-xs text-gray-500 mt-0.5">Historial de abonos y comprobantes</p>
                             </div>
                             <button onClick={() => setSelectedInscription(null)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
@@ -1201,6 +1366,13 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                     <div className="flex items-center gap-2 mb-1">
                                                         <span className="font-bold text-gray-900">${payment.amount.toLocaleString()}</span>
                                                         <span className="text-[10px] font-bold uppercase bg-blue-100 text-blue-700 px-1.5 py-0.5 rounded">{payment.method}</span>
+                                                        {payment.status === 'validated' ? (
+                                                            <span className="text-[10px] font-bold uppercase bg-emerald-100 text-emerald-700 px-1.5 py-0.5 rounded"><i className="fa-solid fa-check mr-1"></i>Validado</span>
+                                                        ) : payment.status === 'rejected' ? (
+                                                            <span className="text-[10px] font-bold uppercase bg-rose-100 text-rose-700 px-1.5 py-0.5 rounded"><i className="fa-solid fa-ban mr-1"></i>Rechazado</span>
+                                                        ) : (
+                                                            <span className="text-[10px] font-bold uppercase bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded"><i className="fa-solid fa-clock mr-1"></i>Pendiente</span>
+                                                        )}
                                                     </div>
                                                     <div className="text-xs text-gray-500 flex items-center gap-3">
                                                         <span><i className="fa-solid fa-calendar text-[10px] mr-1"></i> {new Date(payment.date).toLocaleDateString()}</span>
@@ -1213,28 +1385,231 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
                                                         <img
                                                             src={payment.proof}
                                                             className="w-16 h-16 rounded-lg object-cover border border-gray-200 cursor-pointer hover:opacity-80 transition"
-                                                            onClick={() => window.open(payment.proof, '_blank')}
+                                                            onClick={() => setProofViewer(payment.proof || null)}
                                                         />
                                                         <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity text-white bg-black/40 rounded-lg">
                                                             <i className="fa-solid fa-magnifying-glass-plus"></i>
                                                         </div>
                                                     </div>
                                                 )}
+                                                <div className="shrink-0 flex items-center gap-1">
+                                                    {payment.status === 'pending' && (
+                                                        <>
+                                                            <button type="button" onClick={() => handleValidatePayment(payment)} title="Validar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-emerald-600 hover:text-white hover:bg-emerald-600 border border-emerald-100 transition">
+                                                                <i className="fa-solid fa-check text-xs"></i>
+                                                            </button>
+                                                            <button type="button" onClick={() => handleRejectPayment(payment)} title="Rechazar pago" className="w-8 h-8 flex items-center justify-center rounded-lg text-amber-600 hover:text-white hover:bg-amber-600 border border-amber-100 transition">
+                                                                <i className="fa-solid fa-ban text-xs"></i>
+                                                            </button>
+                                                        </>
+                                                    )}
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => handleVoidPayment(payment)}
+                                                        title={t('void.payment') || 'Anular pago'}
+                                                        className="w-8 h-8 flex items-center justify-center rounded-lg text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition"
+                                                    >
+                                                        <i className="fa-solid fa-trash-can text-xs"></i>
+                                                    </button>
+                                                </div>
                                             </div>
                                         </div>
                                     ))}
                                 </div>
                             )}
 
-                            <div className="flex items-center justify-end pt-6 mt-4 border-t">
-                                <button
-                                    type="button"
-                                    onClick={() => setSelectedInscription(null)}
-                                    className="px-6 py-2.5 bg-gray-900 text-white font-bold rounded-xl hover:bg-black transition"
-                                >
-                                    Cerrar
-                                </button>
+                            {/* Register a new payment */}
+                            <form onSubmit={handleAddPayment} className="pt-6 mt-4 border-t border-gray-100">
+                                <div className="flex items-center justify-between mb-3">
+                                    <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400">{t('register.payment') || 'Registrar pago'}</h4>
+                                    <span className="text-xs font-bold text-gray-500">
+                                        {t('paid')}: <span className="text-emerald-600">${selectedInscription.amount_paid}</span> / ${selectedInscription.total_due}
+                                    </span>
+                                </div>
+                                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-sm">$</span>
+                                        <input
+                                            type="number" min="0" step="any" required
+                                            placeholder={t('amount') || 'Monto'}
+                                            className="w-full border-2 border-gray-100 rounded-xl pl-7 pr-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-sm font-bold text-gray-900"
+                                            value={paymentForm.amount}
+                                            onChange={e => setPaymentForm({ ...paymentForm, amount: e.target.value })}
+                                        />
+                                    </div>
+                                    <select
+                                        className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-sm font-medium"
+                                        value={paymentForm.method}
+                                        onChange={e => setPaymentForm({ ...paymentForm, method: e.target.value })}
+                                    >
+                                        <option>Efectivo</option>
+                                        <option>Transferencia</option>
+                                        <option>Consignación</option>
+                                    </select>
+                                    <input
+                                        type="text"
+                                        placeholder={t('reference') || 'Referencia (opcional)'}
+                                        className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-sm font-medium"
+                                        value={paymentForm.reference}
+                                        onChange={e => setPaymentForm({ ...paymentForm, reference: e.target.value })}
+                                    />
+                                </div>
+                                <div className="mt-3">
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1 mb-1.5">Comprobante <span className="text-rose-500">*</span></label>
+                                    <div className="flex items-center gap-3">
+                                        <label className="flex-1 cursor-pointer border-2 border-dashed border-gray-200 rounded-xl px-4 py-3 text-center text-xs font-bold text-gray-400 hover:border-blue-400 hover:text-blue-500 transition">
+                                            <i className="fa-solid fa-cloud-arrow-up mr-2"></i>
+                                            {paymentForm.proof ? 'Comprobante cargado — clic para cambiar' : 'Sube una imagen del comprobante'}
+                                            <input type="file" accept="image/*" className="hidden" onChange={e => {
+                                                const file = e.target.files?.[0]; if (!file) return;
+                                                if (file.size > 1024 * 1024) { addToast('El comprobante no puede superar 1 MB.', 'error'); return; }
+                                                const reader = new FileReader();
+                                                reader.onload = () => setPaymentForm(pf => ({ ...pf, proof: String(reader.result || '') }));
+                                                reader.readAsDataURL(file);
+                                            }} />
+                                        </label>
+                                        {paymentForm.proof && (
+                                            <img src={paymentForm.proof} className="w-14 h-14 rounded-lg object-cover border border-gray-200" alt="comprobante" />
+                                        )}
+                                    </div>
+                                    <p className="text-[10px] text-gray-400 italic mt-1 px-1">Obligatorio. El pago quedará <b>pendiente de validación</b> hasta que un administrador lo apruebe.</p>
+                                </div>
+                                <div className="flex items-center justify-end gap-3 pt-5">
+                                    <button
+                                        type="button"
+                                        onClick={() => setSelectedInscription(null)}
+                                        className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition"
+                                    >
+                                        {t('close') || 'Cerrar'}
+                                    </button>
+                                    <button
+                                        type="submit"
+                                        disabled={addingPayment}
+                                        className="px-8 py-2.5 bg-emerald-600 text-white font-bold rounded-xl shadow-lg shadow-emerald-500/30 hover:bg-emerald-700 transition disabled:opacity-50 flex items-center gap-2"
+                                    >
+                                        <i className="fa-solid fa-plus text-xs"></i>
+                                        {addingPayment ? (t('saving') || 'Guardando…') : (t('register.payment') || 'Registrar pago')}
+                                    </button>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* In-app confirm dialog — z-[120], above the payments modal (z-100) + lightbox (z-110). */}
+            {confirmState && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[120] flex items-center justify-center p-4 animate-in fade-in duration-150">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-150">
+                        <div className="p-6">
+                            <p className="text-gray-800 font-medium leading-relaxed">{confirmState.message}</p>
+                        </div>
+                        <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-100 flex justify-end gap-3">
+                            <button
+                                type="button"
+                                onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+                                className="px-5 py-2 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition"
+                            >
+                                {t('cancel') || 'Cancelar'}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
+                                className={`px-5 py-2 text-white font-bold rounded-xl shadow-lg transition ${confirmState.danger ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'}`}
+                            >
+                                {confirmState.label}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Comprobante lightbox — a data: URL is blocked from opening in a new tab, so view it in-app. */}
+            {proofViewer && (
+                <div
+                    className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[110] flex items-center justify-center p-6 animate-in fade-in duration-200"
+                    onClick={() => setProofViewer(null)}
+                >
+                    <button
+                        type="button"
+                        onClick={() => setProofViewer(null)}
+                        className="absolute top-4 right-4 w-10 h-10 flex items-center justify-center rounded-full bg-white/10 text-white hover:bg-white/20 transition"
+                    >
+                        <i className="fa-solid fa-xmark text-lg"></i>
+                    </button>
+                    <img
+                        src={proofViewer}
+                        alt="Comprobante"
+                        className="max-w-full max-h-[90vh] rounded-xl shadow-2xl object-contain bg-white"
+                        onClick={e => e.stopPropagation()}
+                    />
+                </div>
+            )}
+
+            {/* Manual room-assignment modal */}
+            {assignTarget && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
+                            <div>
+                                <h3 className="font-bold text-xl text-gray-900 italic">{t('assign.room') || 'Asignar habitación'}</h3>
+                                <p className="text-xs text-gray-500 mt-0.5">{personDisplayName(assignTarget, fields)}</p>
                             </div>
+                            <button onClick={() => setAssignTarget(null)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg">
+                                <i className="fa-solid fa-xmark text-lg"></i>
+                            </button>
+                        </div>
+                        <div className="p-8 max-h-[65vh] overflow-y-auto modern-scrollbar">
+                            {assignTarget.room_id && (
+                                <button
+                                    onClick={() => doAssign(null)}
+                                    className="w-full mb-4 px-4 py-3 rounded-xl border-2 border-dashed border-rose-200 text-rose-600 font-bold text-sm hover:bg-rose-50 transition flex items-center justify-center gap-2"
+                                >
+                                    <i className="fa-solid fa-xmark"></i> {t('unassign.room') || 'Quitar asignación actual'}
+                                </button>
+                            )}
+                            {assignLoading ? (
+                                <div className="text-center py-10"><div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>
+                            ) : assignHotels.length === 0 ? (
+                                <div className="text-center py-10 text-gray-400 bg-gray-50 rounded-xl border border-dashed">
+                                    <i className="fa-solid fa-hotel text-3xl mb-3 opacity-30"></i>
+                                    <p className="font-medium text-sm">{t('no.hotels') || 'No hay hoteles configurados.'}</p>
+                                </div>
+                            ) : (
+                                <div className="space-y-6">
+                                    {assignHotels.map(hotel => (
+                                        <div key={hotel.id}>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{hotel.name}</h4>
+                                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                                {(hotel.rooms || []).map(room => {
+                                                    const full = (room.occupied || 0) >= room.capacity && assignTarget.room_id !== room.id;
+                                                    const current = assignTarget.room_id === room.id;
+                                                    return (
+                                                        <button
+                                                            key={room.id}
+                                                            disabled={full}
+                                                            onClick={() => doAssign(room.id)}
+                                                            className={`px-3 py-2.5 rounded-xl border-2 text-left transition-all ${current
+                                                                ? 'border-blue-500 bg-blue-50'
+                                                                : full
+                                                                    ? 'border-gray-100 bg-gray-50 opacity-50 cursor-not-allowed'
+                                                                    : 'border-gray-100 hover:border-emerald-400 hover:bg-emerald-50'}`}
+                                                        >
+                                                            <div className="font-black text-sm text-gray-900">{room.room_number}</div>
+                                                            <div className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">
+                                                                {(room.occupied || 0)}/{room.capacity} · {room.gender}
+                                                            </div>
+                                                        </button>
+                                                    );
+                                                })}
+                                                {(hotel.rooms || []).length === 0 && (
+                                                    <div className="col-span-full text-xs text-gray-300 italic">{t('no.rooms') || 'Sin habitaciones'}</div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
                 </div>
@@ -1247,11 +1622,12 @@ function InscriptionsPage({ conferenceId }: { conferenceId: number }) {
 function LodgingPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n(); // Get t() function
     const { addToast } = useToast();
+    const { confirm } = useModal();
     const [hotels, setHotels] = useState<Hotel[]>([]);
     const [loading, setLoading] = useState(true);
     const [showHotelModal, setShowHotelModal] = useState(false);
     const [showRoomModal, setShowRoomModal] = useState<number | null>(null);
-    const [hotelForm, setHotelForm] = useState<Partial<Hotel>>({ name: '', address: '' });
+    const [hotelForm, setHotelForm] = useState<Partial<Hotel>>({ name: '', address: '', capacity: 0 });
     const [roomForm, setRoomForm] = useState<Partial<Room>>({ room_number: '', capacity: 2, notes: '' });
     const [isBulk, setIsBulk] = useState(false);
     const [bulkConfig, setBulkConfig] = useState({ start: 1, end: 10, prefix: '' });
@@ -1279,11 +1655,33 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
         try {
             await conferenceApi.createHotel(conferenceId, hotelForm);
             setShowHotelModal(false);
-            setHotelForm({ name: '', address: '' });
+            setHotelForm({ name: '', address: '', capacity: 0 });
             fetchHotels();
             addToast(t('hotel.created'), 'success');
         } catch (error: any) {
             addToast(error.message || 'Error creating hotel', 'error');
+        }
+    };
+
+    const handleDeleteHotel = async (hotel: Hotel) => {
+        if (!await confirm(`${t('confirm.delete.hotel') || '¿Eliminar el hotel'} "${hotel.name}"? ${t('delete.hotel.warning') || 'Se eliminarán sus habitaciones y se liberarán los huéspedes.'}`, t('delete.hotel') || 'Eliminar hotel', true)) return;
+        try {
+            await conferenceApi.deleteHotel(hotel.id);
+            addToast(t('hotel.deleted') || 'Hotel eliminado', 'success');
+            fetchHotels();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        }
+    };
+
+    const handleDeleteRoom = async (room: Room) => {
+        if (!await confirm(`${t('confirm.delete.room') || '¿Eliminar la habitación'} ${room.room_number}?`, t('delete.room') || 'Eliminar habitación', true)) return;
+        try {
+            await conferenceApi.deleteRoom(room.id);
+            addToast(t('room.deleted') || 'Habitación eliminada', 'success');
+            fetchHotels();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
         }
     };
 
@@ -1296,7 +1694,7 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                 const end = Number(bulkConfig.end);
 
                 if (start > end) throw new Error('Start number cannot be greater than end number');
-                if (end - start > 100) throw new Error('Maximum 100 rooms at once');
+                if (end - start + 1 > 100) throw new Error('Maximum 100 rooms at once');
 
                 for (let i = start; i <= end; i++) {
                     const roomNumber = `${bulkConfig.prefix}${i}`;
@@ -1366,12 +1764,21 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                 </div>
                             </div>
                         </div>
-                        <button
-                            onClick={() => setShowRoomModal(hotel.id)}
-                            className="bg-white border-2 border-gray-100 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:border-blue-500 hover:text-white hover:bg-blue-600 transition-all flex items-center gap-2 shadow-sm"
-                        >
-                            <i className="fa-solid fa-plus text-[8px]"></i> {t('add.room')}
-                        </button>
+                        <div className="flex items-center gap-3">
+                            <button
+                                onClick={() => setShowRoomModal(hotel.id)}
+                                className="bg-white border-2 border-gray-100 px-6 py-3 rounded-xl text-[10px] font-black uppercase tracking-widest text-gray-500 hover:border-blue-500 hover:text-white hover:bg-blue-600 transition-all flex items-center gap-2 shadow-sm"
+                            >
+                                <i className="fa-solid fa-plus text-[8px]"></i> {t('add.room')}
+                            </button>
+                            <button
+                                onClick={() => handleDeleteHotel(hotel)}
+                                title={t('delete.hotel') || 'Eliminar hotel'}
+                                className="w-11 h-11 flex items-center justify-center rounded-xl bg-white border-2 border-gray-100 text-gray-400 hover:border-rose-400 hover:bg-rose-600 hover:text-white transition-all shadow-sm"
+                            >
+                                <i className="fa-solid fa-trash-can text-xs"></i>
+                            </button>
+                        </div>
                     </div>
 
                     <div className="p-8 bg-gray-50/30">
@@ -1384,8 +1791,10 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                         ) : (
                             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4">
                                 {hotel.rooms.map(room => {
-                                    const isFull = room.capacity === (room.occupied || 0);
-                                    const occupancyPercent = ((room.occupied || 0) / room.capacity) * 100;
+                                    const cap = room.capacity || 0;
+                                    const occ = room.occupied || 0;
+                                    const isFull = cap > 0 && occ >= cap;
+                                    const occupancyPercent = cap > 0 ? Math.min(100, (occ / cap) * 100) : 0;
 
                                     return (
                                         <div key={room.id} className={`
@@ -1396,11 +1805,20 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                         `}>
                                             <div className="flex justify-between items-start z-10">
                                                 <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
-                                                {room.notes && (
-                                                    <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
-                                                        <i className="fa-solid fa-info text-[8px]"></i>
-                                                    </div>
-                                                )}
+                                                <div className="flex items-center gap-1.5">
+                                                    {room.notes && (
+                                                        <div className="w-5 h-5 rounded-full bg-blue-50 flex items-center justify-center text-blue-400 group-hover/room:bg-blue-100 transition-colors" title={room.notes}>
+                                                            <i className="fa-solid fa-info text-[8px]"></i>
+                                                        </div>
+                                                    )}
+                                                    <button
+                                                        onClick={() => handleDeleteRoom(room)}
+                                                        title={t('delete.room') || 'Eliminar habitación'}
+                                                        className="w-5 h-5 rounded-full flex items-center justify-center text-gray-300 hover:text-rose-600 hover:bg-rose-50 transition-colors opacity-0 group-hover/room:opacity-100 [@media(hover:none)]:opacity-100"
+                                                    >
+                                                        <i className="fa-solid fa-trash-can text-[8px]"></i>
+                                                    </button>
+                                                </div>
                                             </div>
 
                                             <div className="space-y-3 z-10">
@@ -1467,6 +1885,16 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
                                         onChange={e => setHotelForm({ ...hotelForm, address: e.target.value })}
                                     />
                                 </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('capacity') || 'Capacidad'}</label>
+                                <input
+                                    type="number" min="0"
+                                    placeholder="0"
+                                    className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold placeholder:text-gray-200"
+                                    value={hotelForm.capacity ?? 0}
+                                    onChange={e => setHotelForm({ ...hotelForm, capacity: Number(e.target.value) })}
+                                />
                             </div>
                             <div className="flex gap-4 pt-6">
                                 <button
@@ -1638,35 +2066,362 @@ function LodgingPage({ conferenceId }: { conferenceId: number }) {
     );
 }
 
+// Pricing Component — base fee + field-driven pricing rules (each rule 'set's or 'add's an amount
+// when the attendee's field value matches a condition). Evaluated server-side on registration.
+const FEE_OPERATORS = [
+    { value: 'eq', label: 'es igual a', needsValue: true },
+    { value: 'neq', label: 'no es igual a', needsValue: true },
+    { value: 'contains', label: 'contiene', needsValue: true },
+    { value: 'gt', label: 'mayor que', needsValue: true },
+    { value: 'gte', label: 'mayor o igual que', needsValue: true },
+    { value: 'lt', label: 'menor que', needsValue: true },
+    { value: 'lte', label: 'menor o igual que', needsValue: true },
+    { value: 'filled', label: 'tiene valor', needsValue: false },
+    { value: 'empty', label: 'está vacío', needsValue: false },
+    { value: 'any', label: 'siempre (sin condición)', needsValue: false },
+];
+
+function PricingPage({ conferenceId }: { conferenceId: number }) {
+    const { addToast } = useToast();
+    const { confirm } = useModal();
+    const [fields, setFields] = useState<any[]>([]);
+    const [rules, setRules] = useState<any[]>([]);
+    const [baseFee, setBaseFee] = useState<string>('0');
+    const [loading, setLoading] = useState(true);
+    const [savingBase, setSavingBase] = useState(false);
+    const [showModal, setShowModal] = useState(false);
+    const [form, setForm] = useState<any>(null);
+    const [repricing, setRepricing] = useState(false);
+
+    const load = async () => {
+        setLoading(true);
+        try {
+            const [flds, rls, confs] = await Promise.all([
+                conferenceApi.getFields(conferenceId),
+                conferenceApi.getFeeRules(conferenceId),
+                conferenceApi.getConferences(),
+            ]);
+            setFields(flds || []);
+            setRules(rls || []);
+            const conf = (confs || []).find((c: any) => c.id === conferenceId);
+            setBaseFee(String(conf?.fee_default ?? 0));
+        } catch (e: any) { addToast(e?.message || 'Error al cargar precios', 'error'); }
+        finally { setLoading(false); }
+    };
+    useEffect(() => { load(); }, [conferenceId]);
+
+    const saveBase = async () => {
+        setSavingBase(true);
+        try { await conferenceApi.updateConference(conferenceId, { fee_default: Number(baseFee) || 0 } as any); addToast('Cuota base guardada', 'success'); }
+        catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+        finally { setSavingBase(false); }
+    };
+
+    const openNew = () => { setForm({ label: '', field_name: '', operator: 'any', value: '', action: 'set', amount: '', priority: (rules.length + 1) * 10, enabled: 1 }); setShowModal(true); };
+    const openEdit = (r: any) => { setForm({ ...r, amount: String(r.amount) }); setShowModal(true); };
+
+    const saveRule = async (e: any) => {
+        e.preventDefault();
+        try {
+            await conferenceApi.saveFeeRule({ ...form, conference_id: conferenceId, amount: Number(form.amount) || 0 });
+            setShowModal(false); setForm(null); addToast('Regla guardada', 'success'); load();
+        } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+    };
+    const toggleRule = async (r: any) => { try { await conferenceApi.saveFeeRule({ ...r, conference_id: conferenceId, enabled: r.enabled ? 0 : 1 }); load(); } catch (e: any) { addToast(e?.message || 'Error', 'error'); } };
+    const delRule = async (r: any) => { if (!await confirm(`¿Eliminar la regla "${r.label || 'sin nombre'}"?`, 'Eliminar', true)) return; try { await conferenceApi.deleteFeeRule(r.id); load(); } catch (e: any) { addToast(e?.message || 'Error', 'error'); } };
+
+    const repriceAll = async () => {
+        if (!await confirm('Se recalcularán las cuotas de TODOS los inscritos con las reglas y la cuota base actuales. Los pagos ya registrados no se tocan. ¿Continuar?', 'Recalcular precios', false)) return;
+        setRepricing(true);
+        try {
+            const r = await conferenceApi.repriceAll(conferenceId);
+            addToast(`Precios recalculados: ${r.updated} de ${r.total} inscritos actualizados.`, 'success');
+        } catch (e: any) { addToast(e?.message || 'Error', 'error'); }
+        finally { setRepricing(false); }
+    };
+
+    const fieldLabel = (name: string) => fields.find(f => f.name === name)?.label || name;
+    const opLabel = (op: string) => FEE_OPERATORS.find(o => o.value === op)?.label || op;
+    const money = (n: any) => '$' + (Number(n) || 0).toLocaleString();
+    const opNeedsValue = (op: string) => FEE_OPERATORS.find(o => o.value === op)?.needsValue;
+
+    if (loading) return <div className="text-center py-20"><div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div></div>;
+
+    return (
+        <div className="h-full flex flex-col overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-6 flex-shrink-0">
+                <div>
+                    <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">Precios</h2>
+                    <p className="text-sm text-gray-400 font-medium">Cuota base + reglas según los campos del formulario</p>
+                </div>
+                <div className="flex items-center gap-2">
+                    <button onClick={repriceAll} disabled={repricing} className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 disabled:opacity-50" title="Aplica las reglas actuales a los inscritos existentes">
+                        <i className={`fa-solid ${repricing ? 'fa-spinner animate-spin' : 'fa-arrows-rotate'}`}></i> Recalcular todos
+                    </button>
+                    <button onClick={openNew} className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg">
+                        <i className="fa-solid fa-plus"></i> Nueva regla
+                    </button>
+                </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto modern-scrollbar min-h-0 space-y-6">
+                {/* Base fee */}
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-6">
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Cuota base (por defecto)</label>
+                    <div className="flex items-center gap-3">
+                        <div className="relative flex-1 max-w-xs">
+                            <span className="absolute left-4 top-1/2 -translate-y-1/2 text-gray-400 font-bold">$</span>
+                            <input type="number" min="0" value={baseFee} onChange={e => setBaseFee(e.target.value)}
+                                className="w-full border-2 border-gray-100 rounded-xl pl-8 pr-4 py-3 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none font-bold text-gray-900" />
+                        </div>
+                        <button onClick={saveBase} disabled={savingBase} className="px-6 py-3 bg-gray-900 hover:bg-black text-white rounded-xl font-black text-xs uppercase tracking-widest transition disabled:opacity-50">{savingBase ? 'Guardando…' : 'Guardar'}</button>
+                    </div>
+                    <p className="text-[11px] text-gray-400 mt-2">Se aplica a todos; luego las reglas la fijan o la ajustan según los campos.</p>
+                </div>
+
+                {/* Rules */}
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-gray-50 flex items-center justify-between">
+                        <h3 className="font-bold text-gray-800">Reglas de precio</h3>
+                        <span className="text-[10px] text-gray-400 font-bold uppercase tracking-widest">{rules.length} reglas · orden por prioridad</span>
+                    </div>
+                    {rules.length === 0 ? (
+                        <div className="text-center py-12 text-gray-400">
+                            <i className="fa-solid fa-tags text-3xl mb-3 opacity-30"></i>
+                            <p className="text-sm">Sin reglas — todos pagan la cuota base. Crea una con "Nueva regla".</p>
+                        </div>
+                    ) : (
+                        <div className="divide-y divide-gray-50">
+                            {rules.map(r => (
+                                <div key={r.id} className={`p-5 flex items-center justify-between gap-4 ${r.enabled ? '' : 'opacity-50'}`}>
+                                    <div className="min-w-0">
+                                        <div className="flex items-center gap-2 mb-1">
+                                            <span className="font-black text-gray-900">{r.label || 'Regla'}</span>
+                                            <span className={`text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full ${r.action === 'add' ? 'bg-amber-50 text-amber-600' : 'bg-blue-50 text-blue-600'}`}>
+                                                {r.action === 'add' ? 'Suma' : 'Fija'} {money(r.amount)}
+                                            </span>
+                                        </div>
+                                        <div className="text-xs text-gray-500">
+                                            {r.operator === 'any' || !r.field_name
+                                                ? 'Siempre'
+                                                : <>Si <span className="font-bold text-gray-700">{fieldLabel(r.field_name)}</span> {opLabel(r.operator)} {opNeedsValue(r.operator) && <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">{r.value}</span>}</>}
+                                            <span className="ml-2 text-gray-300">· prioridad {r.priority}</span>
+                                        </div>
+                                    </div>
+                                    <div className="flex items-center gap-2 shrink-0">
+                                        <button onClick={() => toggleRule(r)} title={r.enabled ? 'Desactivar' : 'Activar'} className={`w-11 h-6 rounded-full relative transition ${r.enabled ? 'bg-emerald-500' : 'bg-gray-200'}`}>
+                                            <span className={`absolute top-1 w-4 h-4 bg-white rounded-full transition ${r.enabled ? 'left-6' : 'left-1'}`}></span>
+                                        </button>
+                                        <button onClick={() => openEdit(r)} title="Editar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-blue-600 hover:text-white transition"><i className="fa-solid fa-pen text-xs"></i></button>
+                                        <button onClick={() => delRule(r)} title="Eliminar" className="w-9 h-9 flex items-center justify-center rounded-xl bg-gray-50 text-gray-400 hover:bg-rose-600 hover:text-white transition"><i className="fa-solid fa-trash text-xs"></i></button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+            </div>
+
+            {/* Rule modal */}
+            {showModal && form && (
+                <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 overflow-y-auto animate-in fade-in duration-200">
+                    <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
+                        <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
+                            <h3 className="font-bold text-xl text-gray-900 italic">{form.id ? 'Editar regla' : 'Nueva regla de precio'}</h3>
+                            <button onClick={() => { setShowModal(false); setForm(null); }} className="text-gray-400 hover:text-gray-600 p-2 hover:bg-gray-100 rounded-lg"><i className="fa-solid fa-xmark text-lg"></i></button>
+                        </div>
+                        <form onSubmit={saveRule} className="p-8 space-y-5">
+                            <div>
+                                <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Nombre de la regla</label>
+                                <input value={form.label} onChange={e => setForm({ ...form, label: e.target.value })} placeholder="Ej. Estudiantes" className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
+                                <div className="sm:col-span-1">
+                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Campo</label>
+                                    <select value={form.field_name} onChange={e => setForm({ ...form, field_name: e.target.value, operator: e.target.value ? (form.operator === 'any' ? 'eq' : form.operator) : 'any' })} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm">
+                                        <option value="">(Siempre)</option>
+                                        {fields.map(f => <option key={f.id} value={f.name}>{f.label}</option>)}
+                                    </select>
+                                </div>
+                                <div className="sm:col-span-1">
+                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Condición</label>
+                                    <select value={form.operator} onChange={e => setForm({ ...form, operator: e.target.value })} disabled={!form.field_name} className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm disabled:opacity-50">
+                                        {FEE_OPERATORS.filter(o => form.field_name ? o.value !== 'any' : o.value === 'any').map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                                    </select>
+                                </div>
+                                <div className="sm:col-span-1">
+                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Valor</label>
+                                    <input value={form.value} onChange={e => setForm({ ...form, value: e.target.value })} disabled={!opNeedsValue(form.operator)} placeholder="—" className="w-full border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium text-sm disabled:opacity-40" />
+                                </div>
+                            </div>
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                <div>
+                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Acción</label>
+                                    <div className="flex gap-2">
+                                        <button type="button" onClick={() => setForm({ ...form, action: 'set' })} className={`flex-1 py-2.5 rounded-xl text-xs font-bold border-2 transition ${form.action === 'set' ? 'border-blue-500 bg-blue-50/50 text-blue-700' : 'border-gray-100 text-gray-500'}`}>Fijar en</button>
+                                        <button type="button" onClick={() => setForm({ ...form, action: 'add' })} className={`flex-1 py-2.5 rounded-xl text-xs font-bold border-2 transition ${form.action === 'add' ? 'border-amber-500 bg-amber-50/50 text-amber-700' : 'border-gray-100 text-gray-500'}`}>Sumar/restar</button>
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Monto</label>
+                                    <div className="relative">
+                                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-sm">$</span>
+                                        <input type="number" step="any" required value={form.amount} onChange={e => setForm({ ...form, amount: e.target.value })} placeholder="0" className="w-full border-2 border-gray-100 rounded-xl pl-7 pr-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-bold" />
+                                    </div>
+                                </div>
+                            </div>
+                            <div>
+                                <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1.5">Prioridad (menor = primero)</label>
+                                <input type="number" value={form.priority} onChange={e => setForm({ ...form, priority: Number(e.target.value) || 0 })} className="w-32 border-2 border-gray-100 rounded-xl px-3 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 outline-none font-medium" />
+                            </div>
+                            <div className="flex justify-end gap-3 pt-4 border-t border-gray-50">
+                                <button type="button" onClick={() => { setShowModal(false); setForm(null); }} className="px-6 py-2.5 text-gray-500 font-bold hover:bg-gray-100 rounded-xl transition">Cancelar</button>
+                                <button type="submit" className="px-8 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition">Guardar regla</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+            )}
+        </div>
+    );
+}
+
 // Reports Component
 function ReportsPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
+    const { addToast } = useToast();
+    const [summary, setSummary] = useState<any>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        let alive = true;
+        setLoading(true);
+        conferenceApi.getReportSummary(conferenceId)
+            .then(s => { if (alive) setSummary(s); })
+            .catch(() => { if (alive) addToast(t('error.loading.reports') || 'Error al cargar el reporte', 'error'); })
+            .finally(() => { if (alive) setLoading(false); });
+        return () => { alive = false; };
+    }, [conferenceId]);
+
+    const money = (n: number) => '$' + (Number(n) || 0).toLocaleString();
+
+    const [exporting, setExporting] = useState(false);
+    const downloadCsv = async () => {
+        setExporting(true);
+        try {
+            // The sandbox can only return JSON, so fetch the CSV string and build the file locally.
+            const data = await conferenceApi.exportCsv(conferenceId);
+            const blob = new Blob([data.csv], { type: 'text/csv;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = data.filename || `inscripciones-${conferenceId}.csv`;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(url);
+        } catch (e: any) {
+            addToast(e?.message || t('error.loading.reports') || 'Error', 'error');
+        } finally {
+            setExporting(false);
+        }
+    };
+
+    if (loading) {
+        return (
+            <div className="text-center py-20">
+                <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                <p className="text-gray-500">{t('loading') || 'Cargando…'}</p>
+            </div>
+        );
+    }
+
+    const totals = summary?.totals || {};
+    const pending = (Number(totals.due) || 0) - (Number(totals.paid) || 0);
+    const paidPct = totals.total ? Math.round((totals.paid_count / totals.total) * 100) : 0;
+
+    const statCards = [
+        { label: t('total.registered') || 'Inscritos', value: totals.total || 0, icon: 'fa-users', color: 'text-blue-600', bg: 'bg-blue-50' },
+        { label: t('collected') || 'Recaudado', value: money(totals.paid), icon: 'fa-sack-dollar', color: 'text-emerald-600', bg: 'bg-emerald-50' },
+        { label: t('pending.balance') || 'Saldo pendiente', value: money(pending), icon: 'fa-clock', color: 'text-rose-500', bg: 'bg-rose-50' },
+        { label: t('assigned') || 'Alojados', value: `${totals.assigned_count || 0}/${totals.total || 0}`, icon: 'fa-bed', color: 'text-indigo-600', bg: 'bg-indigo-50' },
+    ];
+
     return (
-        <div className="flex flex-col items-center justify-center min-h-[60vh] animate-in fade-in zoom-in-95 duration-700">
-            <div className="relative group">
-                {/* Decorative background blur */}
-                <div className="absolute inset-0 bg-blue-500/20 blur-[60px] rounded-full group-hover:bg-indigo-500/30 transition-all duration-1000"></div>
+        <div className="h-full flex flex-col overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between gap-4 mb-8 flex-shrink-0">
+                <div>
+                    <h2 className="text-2xl font-black text-gray-900 italic tracking-tighter">{t('reports.title') || 'Reportes'}</h2>
+                    <p className="text-sm text-gray-400 font-medium">{t('reports.subtitle') || 'Resumen de inscripciones y pagos'}</p>
+                </div>
+                <button
+                    onClick={downloadCsv}
+                    disabled={exporting}
+                    className="bg-gray-900 hover:bg-black text-white px-6 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg disabled:opacity-50"
+                >
+                    <i className={`fa-solid ${exporting ? 'fa-spinner animate-spin' : 'fa-file-csv'}`}></i> {t('export.csv') || 'Exportar CSV'}
+                </button>
+            </div>
 
-                <div className="relative bg-white p-12 rounded-[40px] shadow-2xl shadow-blue-100/50 border border-gray-100 text-center max-w-sm">
-                    <div className="w-24 h-24 bg-gradient-to-br from-blue-600 to-indigo-700 rounded-3xl flex items-center justify-center text-white text-4xl shadow-xl shadow-blue-200 mx-auto mb-8 transform -rotate-6 hover:rotate-0 transition-all duration-500">
-                        <i className="fa-solid fa-chart-line"></i>
+            <div className="flex-1 overflow-y-auto modern-scrollbar min-h-0 space-y-8">
+                {/* Stat cards */}
+                <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                    {statCards.map((c) => (
+                        <div key={c.label} className="bg-white p-5 rounded-2xl border border-gray-100 shadow-sm">
+                            <div className={`w-10 h-10 rounded-xl ${c.bg} ${c.color} flex items-center justify-center mb-3`}>
+                                <i className={`fa-solid ${c.icon}`}></i>
+                            </div>
+                            <div className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{c.label}</div>
+                            <div className={`text-2xl font-black ${c.color}`}>{c.value}</div>
+                        </div>
+                    ))}
+                </div>
+
+                {/* Payment progress */}
+                <div className="bg-white p-6 rounded-2xl border border-gray-100 shadow-sm">
+                    <div className="flex items-center justify-between mb-3">
+                        <h3 className="font-bold text-gray-800">{t('payment.status') || 'Estado de pagos'}</h3>
+                        <span className="text-xs font-black text-emerald-600">{paidPct}% {t('paid').toLowerCase()}</span>
                     </div>
-
-                    <h2 className="text-3xl font-black text-gray-900 italic tracking-tighter mb-4">{t('reports.title') || 'Informes Avanzados'}</h2>
-
-                    <p className="text-gray-400 font-medium leading-relaxed mb-8">
-                        {t('reports.coming.soon.desc') || 'Estamos preparando un motor de reportes potente para que puedas exportar y analizar toda tu información.'}
-                    </p>
-
-                    <div className="inline-flex items-center gap-2 px-5 py-2.5 bg-gray-50 rounded-2xl border border-gray-100">
-                        <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></div>
-                        <span className="text-[10px] font-black text-gray-500 uppercase tracking-widest">{t('coming.soon') || 'Próximamente'}</span>
+                    <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden flex">
+                        <div className="bg-emerald-500 h-full" style={{ width: `${totals.total ? (totals.paid_count / totals.total) * 100 : 0}%` }}></div>
+                        <div className="bg-amber-400 h-full" style={{ width: `${totals.total ? (totals.partial_count / totals.total) * 100 : 0}%` }}></div>
                     </div>
+                    <div className="flex flex-wrap gap-4 mt-3 text-xs font-bold">
+                        <span className="text-emerald-600"><i className="fa-solid fa-circle text-[8px] mr-1"></i>{t('paid')}: {totals.paid_count || 0}</span>
+                        <span className="text-amber-500"><i className="fa-solid fa-circle text-[8px] mr-1"></i>{t('partial')}: {totals.partial_count || 0}</span>
+                        <span className="text-rose-500"><i className="fa-solid fa-circle text-[8px] mr-1"></i>{t('unpaid')}: {totals.unpaid_count || 0}</span>
+                    </div>
+                </div>
 
-                    <div className="mt-10 grid grid-cols-3 gap-4 opacity-30 grayscale pointer-events-none">
-                        <div className="h-2 bg-gray-200 rounded-full"></div>
-                        <div className="h-2 bg-gray-200 rounded-full"></div>
-                        <div className="h-2 bg-gray-200 rounded-full"></div>
+                {/* By location */}
+                <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+                    <div className="px-6 py-4 border-b border-gray-50">
+                        <h3 className="font-bold text-gray-800">{t('by.location') || 'Por localidad'}</h3>
+                    </div>
+                    <div className="overflow-x-auto">
+                        <table className="w-full text-sm text-left">
+                            <thead className="bg-gray-50/50 text-[10px] uppercase tracking-widest text-gray-400 font-black">
+                                <tr>
+                                    <th className="px-6 py-3">{t('location')}</th>
+                                    <th className="px-6 py-3 text-right">{t('inscriptions')}</th>
+                                    <th className="px-6 py-3 text-right">{t('collected') || 'Recaudado'}</th>
+                                    <th className="px-6 py-3 text-right">{t('pending.balance') || 'Pendiente'}</th>
+                                </tr>
+                            </thead>
+                            <tbody className="divide-y divide-gray-50">
+                                {(summary?.byLocation || []).length === 0 ? (
+                                    <tr><td colSpan={4} className="px-6 py-8 text-center text-gray-400">{t('no.inscriptions')}</td></tr>
+                                ) : (summary.byLocation.map((row: any) => (
+                                    <tr key={row.location} className="hover:bg-gray-50/50">
+                                        <td className="px-6 py-3 font-bold text-gray-900">{row.location}</td>
+                                        <td className="px-6 py-3 text-right font-medium text-gray-600">{row.count}</td>
+                                        <td className="px-6 py-3 text-right font-bold text-emerald-600">{money(row.paid)}</td>
+                                        <td className="px-6 py-3 text-right font-bold text-rose-500">{money((Number(row.due) || 0) - (Number(row.paid) || 0))}</td>
+                                    </tr>
+                                )))}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             </div>
@@ -1683,7 +2438,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [formData, setFormData] = useState<Partial<ConferenceField>>({
-        name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100
+        name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100, is_group: 0, is_unique: 0
     });
     const [openSelect, setOpenSelect] = useState<'type' | 'required' | null>(null);
 
@@ -1726,10 +2481,10 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
             await conferenceApi.saveField(dataToSave);
             addToast('Field saved', 'success');
             setShowModal(false);
-            setFormData({ name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100 });
+            setFormData({ name: '', label: '', type: 'text', options: '', is_required: 0, sort_order: 0, width: 100, is_group: 0, is_unique: 0 });
             loadData();
         } catch (e: any) {
-            addToast(e.error || 'Error saving field', 'error');
+            addToast(e?.message || 'Error saving field', 'error');
         }
     };
 
@@ -1740,7 +2495,7 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
             addToast('Field deleted', 'success');
             loadData();
         } catch (e: any) {
-            addToast(e.error || 'Error deleting field', 'error');
+            addToast(e?.message || 'Error deleting field', 'error');
         }
     };
 
@@ -1763,6 +2518,8 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
             addToast('Error reordering fields', 'error');
         }
     };
+
+    const isPublished = !!conference?.is_form_published;
 
     const [draggedIndex, setDraggedIndex] = useState<number | null>(null);
 
@@ -1798,29 +2555,26 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
     };
 
     const handlePublish = async () => {
-        { /* ... existing logic ... */ }
-        const isPublished = !!conference?.is_form_published;
-        if (!isPublished && fields.length === 0) {
+        const currentlyPublished = !!conference?.is_form_published;
+        if (!currentlyPublished && fields.length === 0) {
             addToast("No puedes publicar un formulario sin campos.", "error");
             return;
         }
 
-        const msg = isPublished
+        const msg = currentlyPublished
             ? "¿Seguro que quieres despublicar el formulario?"
             : "¿Seguro que quieres publicar el formulario? Los campos no se podrán añadir ni eliminar después.";
 
-        if (await confirm(msg, isPublished ? 'Despublicar Formulario' : 'Publicar Formulario', isPublished)) {
+        if (await confirm(msg, currentlyPublished ? 'Despublicar Formulario' : 'Publicar Formulario', currentlyPublished)) {
             try {
-                await conferenceApi.publishForm(conferenceId, !isPublished);
-                addToast(isPublished ? "Formulario despublicado" : "Formulario publicado", "success");
+                await conferenceApi.publishForm(conferenceId, !currentlyPublished);
+                addToast(currentlyPublished ? "Formulario despublicado" : "Formulario publicado", "success");
                 loadData();
             } catch (e) {
                 addToast("Error al cambiar el estado de publicación", "error");
             }
         }
     };
-
-    const isPublished = !!conference?.is_form_published;
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
@@ -1927,6 +2681,12 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                             ) : (
                                                 <span className="text-[10px] text-gray-400 font-bold uppercase bg-gray-50 px-2 py-0.5 rounded">Opcional</span>
                                             )}
+                                            {field.is_group ? (
+                                                <span className="text-[10px] text-indigo-600 font-bold uppercase bg-indigo-50 px-2 py-0.5 rounded shadow-sm"><i className="fa-solid fa-people-group mr-1"></i>Agrupación</span>
+                                            ) : null}
+                                            {field.is_unique ? (
+                                                <span className="text-[10px] text-amber-600 font-bold uppercase bg-amber-50 px-2 py-0.5 rounded shadow-sm"><i className="fa-solid fa-fingerprint mr-1"></i>Único</span>
+                                            ) : null}
                                         </div>
                                     </div>
                                 </div>
@@ -2160,6 +2920,37 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                                     </div>
                                 </div>
 
+                                {/* Generic per-field behaviours — ANY field can carry these; nothing is tied to a
+                                    fixed person attribute. Editable anytime (they don't alter the column). Separate
+                                    "by gender / by any field" for lodging lives in the Assignment tab as a rule. */}
+                                <div className="space-y-2.5">
+                                    <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">Comportamiento del campo</label>
+                                    <label className="flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 bg-gray-50/30 cursor-pointer hover:border-blue-200 transition-all">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                            checked={!!formData.is_group}
+                                            onChange={e => setFormData({ ...formData, is_group: e.target.checked ? 1 : 0 })}
+                                        />
+                                        <span>
+                                            <span className="block text-sm font-semibold text-gray-800">Agrupar inscritos por este campo</span>
+                                            <span className="block text-[11px] text-gray-400">Activa los grupos en el portal (p. ej. grupo familiar, delegación). Solo un campo puede agrupar.</span>
+                                        </span>
+                                    </label>
+                                    <label className="flex items-start gap-3 p-3 rounded-xl border-2 border-gray-100 bg-gray-50/30 cursor-pointer hover:border-blue-200 transition-all">
+                                        <input
+                                            type="checkbox"
+                                            className="mt-0.5 w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                            checked={!!formData.is_unique}
+                                            onChange={e => setFormData({ ...formData, is_unique: e.target.checked ? 1 : 0 })}
+                                        />
+                                        <span>
+                                            <span className="block text-sm font-semibold text-gray-800">No permitir valores duplicados</span>
+                                            <span className="block text-[11px] text-gray-400">Rechaza la inscripción si otro inscrito ya tiene el mismo valor (p. ej. documento, email).</span>
+                                        </span>
+                                    </label>
+                                </div>
+
                                 {formData.type === 'select' && (
                                     <div className="space-y-1.5 animate-in slide-in-from-top-2 duration-300">
                                         <label className="block text-xs font-bold text-gray-400 uppercase tracking-wider ml-1">{t('field.options')}</label>
@@ -2201,6 +2992,49 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
 const INSCRIPTION_FIELDS: string[] = [];
 
 // Assignment Component
+// The four composable assignment-rule primitives (must match the backend engine's rule types).
+const RULE_TYPES = [
+    { v: 'keep_together', label: 'Mantener juntos', icon: 'fa-people-group', desc: 'Los inscritos con el mismo valor del campo van a la misma habitación (con tamaño mínimo).' },
+    { v: 'separate_by', label: 'Separar por', icon: 'fa-shield-halved', desc: 'Una habitación admite un solo valor de este campo (p. ej. género estricto).' },
+    { v: 'split_by', label: 'Al dividir, agrupar por', icon: 'fa-arrows-split-up-and-left', desc: 'Cuando un grupo no cabe entero, se divide siguiendo este campo.' },
+    { v: 'require_companion', label: 'Requiere acompañante', icon: 'fa-user-shield', desc: 'Una habitación con alguien que cumple una condición exige N que cumplen otra (p. ej. un niño necesita un adulto).' },
+];
+const ruleTypeMeta = (t: string) => RULE_TYPES.find(r => r.v === t) || RULE_TYPES[0];
+
+// Editor for a CONDITION = a list of { field, op, value } predicates AND-ed together. Same vocabulary
+// as the pricing rules, reused so the whole plugin speaks one predicate language.
+const PRED_OPS = [
+    { v: 'eq', l: '=' }, { v: 'neq', l: '≠' }, { v: 'gt', l: '>' }, { v: 'gte', l: '≥' },
+    { v: 'lt', l: '<' }, { v: 'lte', l: '≤' }, { v: 'contains', l: 'contiene' },
+    { v: 'filled', l: 'tiene valor' }, { v: 'empty', l: 'vacío' },
+];
+const opNeedsNoValue = (op: string) => op === 'filled' || op === 'empty';
+function PredicateEditor({ fields, value, onChange, label }: any) {
+    const preds = Array.isArray(value) ? value : [];
+    const set = (i: number, patch: any) => onChange(preds.map((p: any, idx: number) => idx === i ? { ...p, ...patch } : p));
+    const add = () => onChange([...preds, { field: fields[0]?.name || '', op: 'eq', value: '' }]);
+    const remove = (i: number) => onChange(preds.filter((_: any, idx: number) => idx !== i));
+    return (
+        <div className="space-y-2">
+            {label && <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{label}</label>}
+            {preds.length === 0 && <p className="text-[10px] text-gray-400 italic px-1">Sin condición (aplica a todos).</p>}
+            {preds.map((p: any, i: number) => (
+                <div key={i} className="flex items-center gap-2">
+                    <select className="flex-1 min-w-0 border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white" value={p.field} onChange={e => set(i, { field: e.target.value })}>
+                        {fields.map((f: any) => <option key={f.name} value={f.name}>{f.label}</option>)}
+                    </select>
+                    <select className="border border-gray-200 rounded-lg px-2 py-2 text-xs bg-white" value={p.op} onChange={e => set(i, { op: e.target.value })}>
+                        {PRED_OPS.map(o => <option key={o.v} value={o.v}>{o.l}</option>)}
+                    </select>
+                    {!opNeedsNoValue(p.op) && <input className="w-20 border border-gray-200 rounded-lg px-2 py-2 text-xs" value={p.value || ''} onChange={e => set(i, { value: e.target.value })} placeholder="valor" />}
+                    <button type="button" onClick={() => remove(i)} className="text-gray-300 hover:text-rose-500 px-1"><i className="fa-solid fa-xmark"></i></button>
+                </div>
+            ))}
+            <button type="button" onClick={add} className="text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:text-indigo-800"><i className="fa-solid fa-plus mr-1"></i>Añadir condición</button>
+        </div>
+    );
+}
+
 function AssignmentPage({ conferenceId }: { conferenceId: number }) {
     const { t } = useI18n();
     const { addToast } = useToast();
@@ -2210,9 +3044,17 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
     const [running, setRunning] = useState(false);
     const [loading, setLoading] = useState(true);
     const [showRuleModal, setShowRuleModal] = useState(false);
+    const [runReport, setRunReport] = useState<any>(null);
     const [ruleForm, setRuleForm] = useState<Partial<AssignmentRule>>({
-        name: '', type: 'group_together', enabled: 1, priority: 50, config: 'family_group'
+        name: '', type: 'keep_together', enabled: 1, priority: 50, config: '', hard: 0, params: {}
     });
+    // params arrives from the API as a JSON string; parse it into the form for editing.
+    const openNewRule = () => { setRuleForm({ name: '', type: 'keep_together', enabled: 1, priority: 50, config: '', hard: 0, params: {} }); setShowRuleModal(true); };
+    const openEditRule = (rule: any) => {
+        let params: any = {};
+        try { params = typeof rule.params === 'string' ? JSON.parse(rule.params || '{}') : (rule.params || {}); } catch { params = {}; }
+        setRuleForm({ ...rule, params }); setShowRuleModal(true);
+    };
 
     const loadData = async () => {
         setLoading(true);
@@ -2225,20 +3067,9 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
 
             setFields(fieldsData);
 
-            // If no rules exist, initialize default ones
-            if (rulesData.length === 0) {
-                const defaults: Partial<AssignmentRule>[] = [
-                    { conference_id: conferenceId, name: t('rule.family'), type: 'group_together', enabled: 1, priority: 90, config: 'family_group' },
-                    { conference_id: conferenceId, name: t('rule.gender'), type: 'exclusive', enabled: 1, priority: 80, config: 'gender' },
-                ];
-                for (const d of defaults) {
-                    await conferenceApi.saveAssignmentRule(d);
-                }
-                const newRules = await conferenceApi.getAssignmentRules(conferenceId);
-                setRules(newRules);
-            } else {
-                setRules(rulesData);
-            }
+            // Default rules are seeded ONCE at conference-creation time (backend), NOT here — seeding
+            // on "0 rules" would resurrect them every time the admin deletes them all and reloads.
+            setRules(rulesData);
 
             const assigned = inscriptions.filter(i => i.room_id).length;
             setStats({
@@ -2262,7 +3093,7 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
         try {
             await conferenceApi.saveAssignmentRule({ ...ruleForm, conference_id: conferenceId });
             setShowRuleModal(false);
-            setRuleForm({ name: '', type: 'group_together', enabled: 1, priority: 50, config: 'family_group' });
+            setRuleForm({ name: '', type: 'keep_together', enabled: 1, priority: 50, config: '', hard: 0, params: {} });
             loadData();
         } catch (e) {
             addToast('Error saving rule', 'error');
@@ -2280,12 +3111,27 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
 
     const { confirm } = useModal();
 
+    const handleDeleteRule = async (rule: AssignmentRule) => {
+        if (!await confirm(`${t('confirm.delete.rule') || '¿Eliminar la regla'} "${rule.name}"?`, t('delete') || 'Eliminar', true)) return;
+        try {
+            await conferenceApi.deleteAssignmentRule(rule.id);
+            addToast(t('rule.deleted') || 'Regla eliminada', 'success');
+            loadData();
+        } catch (e: any) {
+            addToast(e?.message || 'Error deleting rule', 'error');
+        }
+    };
+
     const handleRun = async () => {
         setRunning(true);
+        setRunReport(null);
         addToast(t('assignment.started'), 'info');
         try {
-            const result = await conferenceApi.runAssignment(conferenceId);
-            addToast(`${t('assignment.completed')}: ${result.assignedCount} ${t('participant.plural')}`, 'success');
+            const result: any = await conferenceApi.runAssignment(conferenceId);
+            setRunReport(result);
+            const nv = (result.violations || []).length;
+            if (nv > 0) addToast(`Asignados: ${result.assignedCount}. ${nv} punto(s) no se pudieron cumplir del todo — revisa el reporte.`, 'error');
+            else addToast(`${t('assignment.completed')}: ${result.assignedCount} ${t('participant.plural')}`, 'success');
             loadData();
         } catch (e: any) {
             addToast(e.message || 'Error running assignment', 'error');
@@ -2304,6 +3150,23 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
             addToast('Error resetting assignments', 'error');
         }
     };
+
+    // Convenience accessors for the current rule's type-specific params blob.
+    const rParams: any = ruleForm.params || {};
+    const setRParam = (patch: any) => setRuleForm({ ...ruleForm, params: { ...(ruleForm.params || {}), ...patch } });
+    const fieldSelect = (
+        <div className="space-y-1.5">
+            <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.field') || 'Campo'}</label>
+            <select
+                className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                value={ruleForm.config}
+                onChange={e => setRuleForm({ ...ruleForm, config: e.target.value })}
+            >
+                <option value="">{t('select.field') || 'Seleccionar...'}</option>
+                {fields.map(f => (<option key={f.name} value={f.name}>{f.label}</option>))}
+            </select>
+        </div>
+    );
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
@@ -2371,7 +3234,7 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                         <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-2">{t('assignment.rules.desc') || 'Criterios para la distribución de habitaciones'}</p>
                     </div>
                     <button
-                        onClick={() => setShowRuleModal(true)}
+                        onClick={openNewRule}
                         className="px-5 py-2.5 bg-white border border-gray-200 rounded-xl text-[10px] font-black uppercase tracking-widest text-indigo-600 hover:bg-indigo-50 hover:border-indigo-200 transition-all flex items-center gap-2"
                     >
                         <i className="fa-solid fa-plus"></i>
@@ -2398,28 +3261,26 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                                     ? 'bg-indigo-600 text-white shadow-indigo-100'
                                     : 'bg-white text-gray-300 border border-gray-100 shadow-none'
                                     }`}>
-                                    <i className={`fa-solid ${rule.type === 'group_together' ? 'fa-people-group' : 'fa-shield-halved'} ${!rule.enabled && 'opacity-30'}`}></i>
+                                    <i className={`fa-solid ${ruleTypeMeta(rule.type).icon} ${!rule.enabled && 'opacity-30'}`}></i>
                                 </div>
                                 <div className="flex-1">
-                                    <div className="flex items-center gap-3 mb-1">
+                                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                                         <h4 className={`font-black italic tracking-tighter text-lg ${rule.enabled ? 'text-gray-900' : 'text-gray-400'}`}>{rule.name}</h4>
-                                        <div className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${rule.type === 'group_together' ? 'bg-indigo-50 text-indigo-600' : 'bg-amber-50 text-amber-600'
-                                            }`}>
-                                            {rule.type === 'group_together' ? 'Agrupar' : 'Excluir'}
-                                        </div>
+                                        <div className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-600">{ruleTypeMeta(rule.type).label}</div>
+                                        {rule.hard
+                                            ? <div className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-rose-50 text-rose-600">Obligatoria</div>
+                                            : <div className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-gray-100 text-gray-400">Preferente</div>}
                                     </div>
                                     <div className="flex flex-wrap items-center gap-3">
                                         <div className="flex items-center gap-1.5 px-2 py-1 bg-gray-100 rounded-lg text-[9px] font-bold text-gray-500 uppercase tracking-tight">
                                             <i className="fa-solid fa-bolt text-amber-500"></i>
                                             {t('priority')}: {rule.priority}
                                         </div>
-                                        <div className="w-1 h-1 rounded-full bg-gray-200"></div>
-                                        <div className="text-[10px] text-gray-500 font-medium whitespace-nowrap overflow-hidden text-ellipsis max-w-[300px]">
-                                            {rule.type === 'group_together' ? t('rule.description.group_together') : t('rule.description.exclusive')}
-                                            <span className="ml-1 font-black text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded uppercase text-[8px] tracking-widest">
-                                                [{t(rule.config) || rule.config}]
+                                        {rule.config && (rule.type === 'keep_together' || rule.type === 'separate_by' || rule.type === 'split_by') && (
+                                            <span className="font-black text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded uppercase text-[8px] tracking-widest">
+                                                {fields.find(f => f.name === rule.config)?.label || rule.config}
                                             </span>
-                                        </div>
+                                        )}
                                     </div>
                                 </div>
                             </div>
@@ -2430,7 +3291,10 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                                 >
                                     <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${rule.enabled ? 'left-7' : 'left-1'}`}></div>
                                 </button>
-                                <button className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
+                                <button onClick={() => openEditRule(rule)} title={t('edit') || 'Editar'} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-indigo-600 hover:border-indigo-100 hover:bg-indigo-50 transition-all flex items-center justify-center">
+                                    <i className="fa-solid fa-pen text-sm"></i>
+                                </button>
+                                <button onClick={() => handleDeleteRule(rule)} title={t('delete')} className="w-10 h-10 rounded-xl bg-white border border-gray-100 text-gray-400 hover:text-rose-600 hover:border-rose-100 hover:bg-rose-50 transition-all flex items-center justify-center group/del">
                                     <i className="fa-solid fa-trash-can text-sm group-hover/del:scale-110 transition-transform"></i>
                                 </button>
                             </div>
@@ -2439,13 +3303,36 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                 </div>
             </div>
 
+            {runReport && (
+                <div className={`rounded-3xl border p-6 shadow-xl ${(runReport.violations || []).length ? 'bg-amber-50/40 border-amber-200' : 'bg-emerald-50/40 border-emerald-200'}`}>
+                    <div className="flex items-center gap-3 mb-3">
+                        <i className={`fa-solid ${(runReport.violations || []).length ? 'fa-triangle-exclamation text-amber-500' : 'fa-circle-check text-emerald-500'} text-lg`}></i>
+                        <h3 className="text-sm font-black text-gray-900 uppercase tracking-widest">Resultado de la asignación</h3>
+                        <button onClick={() => setRunReport(null)} className="ml-auto text-gray-300 hover:text-gray-500"><i className="fa-solid fa-xmark"></i></button>
+                    </div>
+                    <p className="text-xs text-gray-600 mb-3">Asignados <b>{runReport.assignedCount}</b>{runReport.remaining ? <> · <span className="text-amber-700 font-bold">{runReport.remaining} sin cupo</span></> : null}.</p>
+                    {(runReport.violations || []).length === 0 ? (
+                        <p className="text-xs text-emerald-700 font-medium">Todas las reglas se cumplieron. ✓</p>
+                    ) : (
+                        <ul className="space-y-1.5">
+                            {runReport.violations.map((v: any, i: number) => (
+                                <li key={i} className="flex items-start gap-2 text-xs text-gray-700">
+                                    <span className={`mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap ${v.hard ? 'bg-rose-100 text-rose-600' : 'bg-gray-200 text-gray-500'}`}>{v.hard ? 'Obligatoria' : 'Preferente'}</span>
+                                    <span><b>{v.rule}</b> — {v.detail}</span>
+                                </li>
+                            ))}
+                        </ul>
+                    )}
+                </div>
+            )}
+
             {showRuleModal && (
                 <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-[100] flex items-center justify-center p-4 animate-in fade-in duration-200">
-                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200">
-                        <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between">
+                    <div className="bg-white rounded-3xl shadow-2xl w-full max-w-lg border border-gray-100 max-h-[92vh] overflow-y-auto animate-in zoom-in-95 duration-200">
+                        <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between sticky top-0 z-10">
                             <div>
-                                <h3 className="font-black text-xl text-gray-900 italic tracking-tighter">{t('add.rule')}</h3>
-                                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Configura un nuevo criterio</p>
+                                <h3 className="font-black text-xl text-gray-900 italic tracking-tighter">{ruleForm.id ? 'Editar regla' : t('add.rule')}</h3>
+                                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Criterio de asignación de habitaciones</p>
                             </div>
                             <button onClick={() => setShowRuleModal(false)} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-xl">
                                 <i className="fa-solid fa-xmark text-lg"></i>
@@ -2459,60 +3346,66 @@ function AssignmentPage({ conferenceId }: { conferenceId: number }) {
                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm placeholder:text-gray-300"
                                     value={ruleForm.name}
                                     onChange={e => setRuleForm({ ...ruleForm, name: e.target.value })}
-                                    placeholder="Ej: Mismo Género"
+                                    placeholder="Ej: Familias juntas"
                                 />
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-4">
-                                <div className="space-y-1.5">
-                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.action')}</label>
-                                    <select
-                                        className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                        value={ruleForm.type}
-                                        onChange={e => setRuleForm({ ...ruleForm, type: e.target.value as any })}
-                                    >
-                                        <option value="group_together">{t('action.group_together')}</option>
-                                        <option value="exclusive">{t('action.exclusive')}</option>
-                                    </select>
-                                </div>
-                                <div className="space-y-1.5">
-                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.field')}</label>
-                                    <select
-                                        className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                        value={ruleForm.config}
-                                        onChange={e => setRuleForm({ ...ruleForm, config: e.target.value })}
-                                    >
-                                        <option value="">{t('select.field') || 'Seleccionar...'}</option>
-                                        {fields.map(f => (
-                                            <option key={f.name} value={f.name}>{f.label}</option>
-                                        ))}
-                                    </select>
-                                </div>
                             </div>
 
                             <div className="space-y-1.5">
-                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.priority')} (1-100)</label>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    max="100"
+                                <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Tipo de regla</label>
+                                <select
                                     className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                    value={ruleForm.priority}
-                                    onChange={e => setRuleForm({ ...ruleForm, priority: Number(e.target.value) })}
-                                />
-                                <div className="mt-2 text-[10px] text-gray-400 italic px-1">
-                                    * Prioridades más altas se procesan primero.
-                                </div>
+                                    value={ruleForm.type}
+                                    onChange={e => setRuleForm({ ...ruleForm, type: e.target.value as any })}
+                                >
+                                    {RULE_TYPES.map(rt => <option key={rt.v} value={rt.v}>{rt.label}</option>)}
+                                </select>
+                                <p className="text-[10px] text-gray-400 italic px-1">{ruleTypeMeta(ruleForm.type as string).desc}</p>
                             </div>
 
-                            <div className="bg-indigo-50/50 p-4 rounded-2xl border border-indigo-100">
-                                <div className="flex gap-3">
-                                    <i className="fa-solid fa-circle-info text-indigo-400 text-sm mt-0.5"></i>
-                                    <p className="text-xs text-indigo-700 font-medium leading-relaxed">
-                                        {ruleForm.type === 'group_together' ? t('rule.description.group_together') : t('rule.description.exclusive')}
-                                    </p>
+                            {/* Type-specific configuration */}
+                            {ruleForm.type === 'keep_together' && (
+                                <>
+                                    {fieldSelect}
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Tamaño mínimo del grupo</label>
+                                        <input type="number" min="1" className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                            value={rParams.min_size || 1} onChange={e => setRParam({ min_size: Number(e.target.value) })} />
+                                        <p className="text-[10px] text-gray-400 italic px-1">Solo se mantienen juntos los grupos de este tamaño o más (p. ej. 3 → una pareja de 2 puede separarse).</p>
+                                    </div>
+                                    <PredicateEditor fields={fields} label="Solo aplica si (opcional)" value={rParams.when} onChange={(v: any) => setRParam({ when: v })} />
+                                </>
+                            )}
+
+                            {(ruleForm.type === 'separate_by' || ruleForm.type === 'split_by') && fieldSelect}
+
+                            {ruleForm.type === 'require_companion' && (
+                                <>
+                                    <PredicateEditor fields={fields} label="Si en la habitación hay alguien que cumple" value={rParams.subject} onChange={(v: any) => setRParam({ subject: v })} />
+                                    <div className="space-y-1.5">
+                                        <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Debe haber al menos</label>
+                                        <input type="number" min="1" className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                            value={rParams.min || 1} onChange={e => setRParam({ min: Number(e.target.value) })} />
+                                    </div>
+                                    <PredicateEditor fields={fields} label="…que cumplan" value={rParams.needs} onChange={(v: any) => setRParam({ needs: v })} />
+                                </>
+                            )}
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <div className="space-y-1.5">
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">{t('rule.priority')} (1-100)</label>
+                                    <input type="number" min="1" max="100" className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                        value={ruleForm.priority} onChange={e => setRuleForm({ ...ruleForm, priority: Number(e.target.value) })} />
+                                </div>
+                                <div className="space-y-1.5">
+                                    <label className="block text-[10px] font-bold text-gray-400 uppercase tracking-widest ml-1">Cumplimiento</label>
+                                    <select className="w-full border-2 border-gray-100 rounded-xl px-4 py-3 bg-gray-50/30 focus:bg-white focus:border-indigo-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                        value={ruleForm.hard ? '1' : '0'} onChange={e => setRuleForm({ ...ruleForm, hard: e.target.value === '1' ? 1 : 0 })}>
+                                        <option value="0">Preferente</option>
+                                        <option value="1">Obligatoria</option>
+                                    </select>
                                 </div>
                             </div>
+                            <p className="text-[10px] text-gray-400 italic px-1">Prioridad alta se procesa primero. «Obligatoria» nunca se viola; «preferente» se intenta y, si no se logra, se reporta.</p>
 
                             <div className="flex justify-end gap-3 pt-6 border-t border-gray-50">
                                 <button type="button" onClick={() => setShowRuleModal(false)} className="px-6 py-3 text-[10px] font-black uppercase tracking-widest text-gray-500 hover:bg-gray-100 rounded-xl transition-all">{t('cancel')}</button>
@@ -2592,25 +3485,57 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
         }
     };
 
-    const handleCopyLink = () => {
+    // Clipboard access throws on non-secure origins (LAN-IP HTTP deployments this repo has hit).
+    // Feature-check + fall back to a hidden-textarea copy; only report success when it worked.
+    const copyToClipboard = async (text: string): Promise<boolean> => {
+        try {
+            if (navigator.clipboard && window.isSecureContext) {
+                await navigator.clipboard.writeText(text);
+                return true;
+            }
+            const ta = document.createElement('textarea');
+            ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+            document.body.appendChild(ta); ta.select();
+            const ok = document.execCommand('copy');
+            document.body.removeChild(ta);
+            return ok;
+        } catch {
+            return false;
+        }
+    };
+
+    const handleCopyLink = async () => {
         if (!currentConference?.slug) return;
         if (!conference?.is_form_published) {
             addToast('El formulario no está publicado. El enlace no funcionará para el público.', 'warning');
         }
-        const url = `${window.location.host}/portal/conference?slug=${currentConference.slug}`;
-        const fullUrl = `${window.location.protocol}//${url}`;
-        navigator.clipboard.writeText(fullUrl);
-        addToast('Enlace copiado al portapapeles', 'success');
+        const fullUrl = `${window.location.protocol}//${window.location.host}/portal/conference?slug=${currentConference.slug}`;
+        if (await copyToClipboard(fullUrl)) addToast('Enlace copiado al portapapeles', 'success');
+        else addToast(fullUrl, 'info'); // fallback: show the link so it can be copied manually
     };
 
     const isPublished = !!conference?.is_form_published;
 
     const [copiedId, setCopiedId] = useState<number | null>(null);
 
-    const handleCopyCode = (code: string, id: number) => {
-        navigator.clipboard.writeText(code);
-        setCopiedId(id);
-        setTimeout(() => setCopiedId(null), 2000);
+    const handleCopyCode = async (code: string, id: number) => {
+        if (await copyToClipboard(code)) {
+            setCopiedId(id);
+            setTimeout(() => setCopiedId(null), 2000);
+        } else {
+            addToast(`${t('code') || 'Código'}: ${code}`, 'info');
+        }
+    };
+
+    const handleRotateCode = async (loc: Location) => {
+        if (!await confirm(t('confirm.rotate.code') || '¿Generar un código nuevo? El código actual dejará de funcionar.', t('rotate.code') || 'Rotar código', false)) return;
+        try {
+            await conferenceApi.updateLocation(loc.id, { rotate_code: true });
+            addToast(t('code.rotated') || 'Código actualizado', 'success');
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        }
     };
 
     return (
@@ -2731,12 +3656,21 @@ function LocationsPage({ conferenceId }: { conferenceId: number }) {
                                                 </div>
                                                 <span className="font-mono text-sm font-black text-gray-600 tracking-tighter uppercase">{loc.code}</span>
                                             </div>
-                                            <button
-                                                onClick={() => handleCopyCode(loc.code, loc.id)}
-                                                className={`text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-all duration-300 shadow-sm ${copiedId === loc.id ? 'bg-emerald-500 text-white' : 'bg-white text-blue-600 hover:bg-blue-600 hover:text-white'}`}
-                                            >
-                                                {copiedId === loc.id ? t('copied') || '¡Copiado!' : t('copy') || 'Copiar'}
-                                            </button>
+                                            <div className="flex items-center gap-2">
+                                                <button
+                                                    onClick={() => handleCopyCode(loc.code, loc.id)}
+                                                    className={`text-[10px] font-black uppercase tracking-widest px-4 py-2 rounded-xl transition-all duration-300 shadow-sm ${copiedId === loc.id ? 'bg-emerald-500 text-white' : 'bg-white text-blue-600 hover:bg-blue-600 hover:text-white'}`}
+                                                >
+                                                    {copiedId === loc.id ? t('copied') || '¡Copiado!' : t('copy') || 'Copiar'}
+                                                </button>
+                                                <button
+                                                    onClick={() => handleRotateCode(loc)}
+                                                    title={t('rotate.code') || 'Rotar código'}
+                                                    className="w-9 h-9 flex items-center justify-center rounded-xl bg-white text-gray-400 hover:bg-amber-500 hover:text-white transition-all shadow-sm"
+                                                >
+                                                    <i className="fa-solid fa-rotate text-xs"></i>
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
 

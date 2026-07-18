@@ -1,6 +1,6 @@
 {
     "name": "wordjs-gateway",
-    "version": "1.5.4",
+    "version": "1.6.0",
     "license": "MIT",
     "engines": {
         "node": ">=20.9.0"
@@ -25,7 +25,10 @@
         "install:setup": "cd setup && npm install",
         "setup": "node setup/index.js --install",
         "migrate": "node setup/index.js --migrate",
-        "bundle-release": "node scripts/make-release.js"
+        "cluster": "node scripts/cluster.js",
+        "node:join": "node scripts/node-join.js",
+        "bundle-release": "node scripts/make-release.js",
+        "build:marketplace": "node backend/scripts/build-marketplace.js"
     },
     "dependencies": {
         "@types/react": "^19.2.8",

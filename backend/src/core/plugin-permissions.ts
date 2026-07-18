@@ -64,8 +64,12 @@ function isGranted(slug: string, scope: string, access = 'read'): boolean {
     if (!slug) return false;
     const s = grants.get(slug);
     if (!s) return false;
-    // `admin` access implies read+write for that scope.
-    return s.has(`${scope}:${access}`) || s.has(`${scope}:admin`);
+    if (s.has(`${scope}:${access}`)) return true;
+    // `admin` implies ONLY the ordinary read+write verbs — NOT the high-power special verbs (provider =
+    // become the system mail sender; register / register_route = own host routes). Those confer far more
+    // than admin-on-this-scope and MUST be granted explicitly (audit HIGH: email:admin silently subsumed
+    // email:provider, letting a send-mail plugin hijack ALL outbound mail).
+    return (access === 'read' || access === 'write') && s.has(`${scope}:admin`);
 }
 
 /** Whether the operator granted this (untrusted) plugin outbound network access. */
@@ -84,6 +88,13 @@ function getGrants(slug: string): string[] {
  * strings (+ optional "network"). Persists to the `plugin_grants` option and mirrors in memory.
  */
 async function setGrants(slug: string, tokens: string[]): Promise<void> {
+    // NO plugin/theme may grant permissions: setGrants IS the permission store, so an in-process theme
+    // calling require('core/plugin-permissions').setGrants('confederate', ['*']) would self-escalate past
+    // the admin-approval default-deny model (#9). Only host/admin code (no plugin context) may call it —
+    // grant-on-activate and boot backfill both run in host context (getEffectivePlugin() === null).
+    if (require('./plugin-context').getEffectivePlugin()) {
+        throw new Error('🛡️ setGrants is not permitted from plugin/theme context.');
+    }
     const clean = Array.from(new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
     grants.set(slug, new Set(clean));
     const { getOption, updateOption } = require('./options');
@@ -129,6 +140,11 @@ async function removeGrants(slug: string): Promise<void> {
 // Test-only: set a plugin's grants in memory WITHOUT persisting, so unit tests can grant the
 // permissions a default-deny bridge now requires, with no DB dependency.
 function _setGrantsInMemory(slug: string, tokens: string[]): void {
+    // Same escalation vector as setGrants: ungated in-memory grant. Never callable from plugin/theme
+    // context (test/host only) — an in-process theme could otherwise silently grant itself any cap (#9).
+    if (require('./plugin-context').getEffectivePlugin()) {
+        throw new Error('🛡️ _setGrantsInMemory is not permitted from plugin/theme context.');
+    }
     grants.set(slug, new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
 }
 

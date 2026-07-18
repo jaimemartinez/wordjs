@@ -28,16 +28,16 @@ before(() => {
 after(() => { try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* */ } });
 
 test('default-deny: a declared-but-ungranted permission is denied', async () => {
+    perms._setGrantsInMemory(SLUG, []); // grants are set by ADMIN/host (no plugin context), then plugin code runs
     await runWithContext(SLUG, async () => {
-        perms._setGrantsInMemory(SLUG, []);
         assert.equal(hasPermission('database', 'read'), false);
         assert.equal(hasPermission('settings', 'write'), false);
     });
 });
 
 test('granting allows exactly that scope:access, nothing else', async () => {
+    perms._setGrantsInMemory(SLUG, ['database:read']);
     await runWithContext(SLUG, async () => {
-        perms._setGrantsInMemory(SLUG, ['database:read']);
         assert.equal(hasPermission('database', 'read'), true);   // granted
         assert.equal(hasPermission('database', 'write'), false); // not declared (manifest is read-only)
         assert.equal(hasPermission('settings', 'write'), false); // declared but not granted
@@ -45,8 +45,8 @@ test('granting allows exactly that scope:access, nothing else', async () => {
 });
 
 test('admin grant implies read+write, but only for DECLARED scopes', async () => {
+    perms._setGrantsInMemory(SLUG, ['database:admin', 'settings:admin']);
     await runWithContext(SLUG, async () => {
-        perms._setGrantsInMemory(SLUG, ['database:admin', 'settings:admin']);
         assert.equal(hasPermission('database', 'read'), true);   // declared(read) + admin grant
         assert.equal(hasPermission('database', 'write'), false); // manifest only declares database:read
         assert.equal(hasPermission('settings', 'write'), true);  // declared(write) + admin grant
@@ -54,8 +54,8 @@ test('admin grant implies read+write, but only for DECLARED scopes', async () =>
 });
 
 test('cannot grant beyond the manifest (undeclared scope stays denied)', async () => {
+    perms._setGrantsInMemory(SLUG, ['email:send']); // not in the manifest
     await runWithContext(SLUG, async () => {
-        perms._setGrantsInMemory(SLUG, ['email:send']); // not in the manifest
         assert.equal(hasPermission('email', 'send'), false);
     });
 });

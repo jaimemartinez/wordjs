@@ -1,0 +1,50 @@
+{
+    "id": "image-lightbox",
+    "name": "Image Lightbox",
+    "version": "1.0.0",
+    "description": "Site-wide click-to-zoom lightbox for content images: dark overlay, captions from alt text, prev/next navigation with keyboard support and neighbor preloading. Zero-config by default, with a small admin page to toggle it, toggle captions and adjust the content scope selector. WordPress parity: Simple Lightbox / FooBox / Easy FancyBox.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "lightbox"
+        }
+    },
+    "adminMenu": {
+        "label": "Lightbox de imágenes",
+        "icon": "fa-expand",
+        "href": "/admin/plugin/lightbox",
+        "order": 66
+    },
+    "permissions": [
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the lightbox configuration (enabled, captions, content scope selector)."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Save the lightbox configuration from the admin page."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Serve the public config endpoint the lightbox script fetches, plus the admin config endpoints."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the lightbox settings page to the admin sidebar."
+        },
+        {
+            "scope": "assets",
+            "access": "write",
+            "reason": "Enqueue the lightbox script and stylesheet on public pages."
+        }
+    ]
+}
