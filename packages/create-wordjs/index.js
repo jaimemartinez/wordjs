@@ -42,17 +42,25 @@ const HELP = `
 create-wordjs — bootstrap or upgrade a WordJS site with one command
 
 Usage:
-  npx create-wordjs <dir> [options]            Create a new site
+  npx create-wordjs <dir> [options]            Create a new site (monolith — one machine)
   npx create-wordjs upgrade [dir] [options]    Upgrade an existing site (dir defaults to .)
+  npx create-wordjs gateway [dir] [options]    Set up a SEPARATE-MODE gateway (cluster CA + join tokens)
+  npx create-wordjs join <role> [dir] [opts]   Join this machine to a gateway as backend|frontend
 
 Options:
   --zip <path-or-url>   Use a local release ZIP (or a direct ZIP URL) instead of asking GitHub.
   --version <tag>       Install/upgrade to a specific release tag (e.g. v1.0.0) instead of the latest.
   --http                Serve plain HTTP instead of self-signed HTTPS (sets WORDJS_HTTP=1). (create)
-  --no-start            Scaffold + install dependencies only; don't start the server. (create)
+  --no-start            Scaffold + install dependencies only; don't start the server.
   --yes, -y             Skip the confirmation prompt (required when upgrading non-interactively).
   --force               Re-apply even if already on the target version. (upgrade)
   --no-install          Swap the code only; skip 'npm run release:install'. (upgrade)
+  --host <ip/dns>       (gateway) The address other machines dial to reach this gateway.
+  --gateway <ip/dns>    (join) The gateway's address.
+  --token <join-token>  (join) A single-use token minted on the gateway (cluster token <role>).
+  --ca-hash <sha256>    (join) Pin the cluster CA fingerprint the gateway prints (MITM guard).
+  --advertise <ip/dns>  (join) This node's routable address the gateway will proxy to.
+  --enroll-port <port>  (join) Gateway token-enrollment port (default 3101).
   -h, --help            Show this help.
 
 Examples:
@@ -60,7 +68,15 @@ Examples:
   npx create-wordjs my-site --version v1.0.0
   npx create-wordjs upgrade                     # from inside your site directory
   npx create-wordjs upgrade ./my-site --yes
-  npx create-wordjs upgrade --version v1.5.2
+
+Separate mode (three machines) — run one command per machine:
+  # on the gateway machine (prints ready-to-paste join commands with fresh tokens):
+  npx create-wordjs gateway --host 10.0.0.1
+  # on the backend machine:
+  npx create-wordjs join backend  --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.2
+  # on the frontend machine:
+  npx create-wordjs join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
+  (join needs 'openssl' on PATH. See documentation/separate-mode.md.)
 
 Upgrading preserves your database (backend/data), uploads (backend/uploads), config
 (wordjs-config.json + gateway secrets) and any user-installed plugins; it replaces the app code and
@@ -76,9 +92,13 @@ function fail(message, hint) {
 }
 
 function parseArgs(argv) {
-    const opts = { mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true };
-    // First positional "upgrade" selects the upgrade command (npx create-wordjs upgrade [dir]).
-    if (argv[0] === 'upgrade') { opts.mode = 'upgrade'; argv = argv.slice(1); }
+    const opts = {
+        mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true,
+        role: null, gateway: null, token: null, caHash: null, advertise: null, enrollPort: null, host: null,
+    };
+    // A leading subcommand selects the mode (default is the monolith create flow).
+    if (['upgrade', 'gateway', 'join'].includes(argv[0])) { opts.mode = argv[0]; argv = argv.slice(1); }
+    const positionals = [];
     for (let i = 0; i < argv.length; i++) {
         const a = argv[i];
         if (a === '-h' || a === '--help') { console.log(HELP); process.exit(0); }
@@ -89,15 +109,28 @@ function parseArgs(argv) {
         else if (a === '--yes' || a === '-y') opts.yes = true;
         else if (a === '--force') opts.force = true;
         else if (a === '--no-install') opts.install = false;
+        else if (a === '--role') opts.role = argv[++i] || fail('--role needs a value (backend or frontend).');
+        else if (a === '--gateway') opts.gateway = argv[++i] || fail('--gateway needs the gateway host/ip.');
+        else if (a === '--token') opts.token = argv[++i] || fail('--token needs the join token.');
+        else if (a === '--ca-hash') opts.caHash = argv[++i] || fail('--ca-hash needs the CA fingerprint.');
+        else if (a === '--advertise') opts.advertise = argv[++i] || fail('--advertise needs this node\'s ip/dns.');
+        else if (a === '--enroll-port') opts.enrollPort = argv[++i] || fail('--enroll-port needs a port.');
+        else if (a === '--host') opts.host = argv[++i] || fail('--host needs the gateway ip/dns.');
         else if (a.startsWith('-')) fail(`Unknown option: ${a}`, 'Run with --help to see the available options.');
-        else if (!opts.dir) opts.dir = a;
-        else fail(`Unexpected extra argument: ${a}`);
+        else positionals.push(a);
     }
+    // Positionals: `join <role> [dir]` takes the role first; every other mode takes just [dir].
+    if (opts.mode === 'join' && !opts.role) opts.role = positionals.shift() || null;
+    opts.dir = positionals.shift() || null;
+    if (positionals.length) fail(`Unexpected extra argument: ${positionals[0]}`);
+
     if (!opts.dir) {
-        if (opts.mode === 'upgrade') opts.dir = '.'; // upgrade defaults to the current directory
+        if (opts.mode === 'upgrade') opts.dir = '.';                                   // upgrade defaults to cwd
+        else if (opts.mode === 'gateway') opts.dir = 'wordjs-gateway';
+        else if (opts.mode === 'join') opts.dir = opts.role ? `wordjs-${opts.role}` : 'wordjs-node';
         else fail('Please specify a directory for your new site.', 'Example: npx create-wordjs my-site');
     }
-    if (opts.version && /^\d/.test(opts.version)) opts.version = 'v' + opts.version; // accept "1.0.0" for "v1.0.0"
+    if (opts.version && /^\d/.test(opts.version)) opts.version = 'v' + opts.version;   // accept "1.0.0" for "v1.0.0"
     return opts;
 }
 
@@ -226,6 +259,32 @@ function runNpmScript(script, cwd, extraEnv) {
     });
     if (r.error) fail(`Could not run "npm run ${script}": ${r.error.message}`, 'Is npm on your PATH?');
     if (r.status !== 0) fail(`"npm run ${script}" exited with code ${r.status}.`, `Fix the error above, then re-run it manually inside ${cwd}.`);
+}
+
+// First non-internal IPv4 — a sensible default advertise/host when the user doesn't pass one.
+function firstLanIp() {
+    for (const ifaces of Object.values(os.networkInterfaces())) {
+        for (const i of ifaces || []) if (!i.internal && (i.family === 'IPv4' || i.family === 4)) return i.address;
+    }
+    return '127.0.0.1';
+}
+
+// Run a BUNDLED node script (scripts/cluster.js, scripts/node-join.js) with an ARGS ARRAY and no shell,
+// so user-supplied values (IPs, tokens) can never be interpreted by a shell. Inherits stdio.
+function runNode(scriptRel, args, cwd, extraEnv) {
+    const r = spawnSync(process.execPath, [scriptRel, ...args], {
+        cwd, stdio: 'inherit', env: extraEnv ? { ...process.env, ...extraEnv } : process.env,
+    });
+    if (r.error) fail(`Could not run ${scriptRel}: ${r.error.message}`, `Is node on your PATH?`);
+    if (r.status !== 0) fail(`${scriptRel} exited with code ${r.status}.`, `Fix the error above, then re-run it inside ${cwd}.`);
+}
+
+// Same, but capture stdout (to read a minted token / CA fingerprint back).
+function runNodeCapture(scriptRel, args, cwd) {
+    const r = spawnSync(process.execPath, [scriptRel, ...args], { cwd, encoding: 'utf8' });
+    if (r.error) fail(`Could not run ${scriptRel}: ${r.error.message}`);
+    if (r.status !== 0) { process.stderr.write((r.stdout || '') + (r.stderr || '')); fail(`${scriptRel} exited with code ${r.status}.`); }
+    return r.stdout || '';
 }
 
 /**
@@ -426,11 +485,137 @@ async function upgrade(opts) {
     }
 }
 
+// --- separate mode (gateway + join) ------------------------------------------------------------
+
+// Download + extract the release bundle into targetDir and install runtime deps. Shared by the
+// gateway and join flows (a superset of the create flow's steps 1–3, minus the mono-specific bits).
+async function scaffoldBundle(opts, targetDir) {
+    if (fs.existsSync(targetDir)) {
+        if (!fs.statSync(targetDir).isDirectory()) fail(`"${opts.dir}" already exists and is not a directory.`);
+        if (fs.readdirSync(targetDir).length > 0) fail(`Directory "${opts.dir}" already exists and is not empty.`, 'Pick a new directory name, or empty it first.');
+    } else {
+        fs.mkdirSync(targetDir, { recursive: true });
+    }
+
+    let tmpDir = null, zipPath = null;
+    if (opts.zip && !/^https?:\/\//i.test(opts.zip)) {
+        zipPath = path.resolve(process.cwd(), opts.zip);
+        if (!fs.existsSync(zipPath)) fail(`ZIP not found: ${zipPath}`);
+        console.log(`  Using local bundle: ${zipPath}`);
+    } else {
+        let url = opts.zip, name = 'wordjs.zip';
+        if (!url) {
+            console.log(opts.version ? `  Looking up release ${opts.version} of ${REPO}…` : `  Looking up the latest release of ${REPO}…`);
+            const asset = await resolveReleaseAsset(opts.version);
+            url = asset.url; name = asset.name;
+            console.log(`  Found ${asset.tag} → ${asset.name}`);
+        }
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'create-wordjs-'));
+        zipPath = path.join(tmpDir, name);
+        await download(url, zipPath, name);
+    }
+
+    console.log(`  Extracting into ${targetDir}…`);
+    try { extractZip(zipPath, targetDir); }
+    finally { if (tmpDir) { try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* best-effort */ } } }
+
+    let pkg = {};
+    try { pkg = JSON.parse(fs.readFileSync(path.join(targetDir, 'package.json'), 'utf8')); } catch { /* handled below */ }
+    if (!pkg.scripts || !pkg.scripts['release:install']) {
+        fail('The extracted ZIP does not look like a WordJS release bundle.', `Expected a wordjs-*.zip from https://github.com/${REPO}/releases.`);
+    }
+    if (!fs.existsSync(path.join(targetDir, 'scripts', 'cluster.js')) || !fs.existsSync(path.join(targetDir, 'scripts', 'node-join.js'))) {
+        fail('This release bundle predates separate mode (missing scripts/cluster.js).', 'Install v1.6.1 or later, e.g. add --version v1.6.1.');
+    }
+
+    console.log('\n📦 Installing runtime dependencies (this downloads prebuilt binaries — a few minutes)…\n');
+    runNpmScript('release:install', targetDir);
+}
+
+// `create-wordjs gateway` — set this machine up as the cluster gateway: install, mint the cluster CA +
+// config, mint one join token per role, and print the ready-to-paste join commands for the other nodes.
+async function gateway(opts) {
+    const targetDir = path.resolve(process.cwd(), opts.dir);
+    console.log('\n🚀 create-wordjs · gateway (separate mode)\n');
+    await scaffoldBundle(opts, targetDir);
+
+    const host = opts.host || firstLanIp();
+    const line = '━'.repeat(64);
+    console.log(`\n🔐 Initializing cluster gateway on ${host}…`);
+    runNode('scripts/cluster.js', ['init', '--host', host], targetDir);
+
+    // Read the CA fingerprint and mint a token per role (capturing the raw token for the join command).
+    const fp = (runNodeCapture('scripts/cluster.js', ['info'], targetDir).match(/CA fingerprint:\s*([0-9a-f]{64})/) || [])[1] || '<fingerprint>';
+    const mint = (role) => (runNodeCapture('scripts/cluster.js', ['token', role, '--ttl', '120'], targetDir)
+        .match(new RegExp(`wjc\\.${role}\\.[A-Za-z0-9_-]+`)) || [])[0] || '<token>';
+    const beTok = mint('backend'), feTok = mint('frontend');
+
+    console.log(`\n${line}`);
+    console.log('✅ Gateway ready.  Public origin: ' + `https://${host}:3000`);
+    console.log('');
+    console.log('   Run ONE of these on each other machine (they auto-download + enroll + start):');
+    console.log('');
+    console.log('   # backend machine:');
+    console.log(`   npx create-wordjs join backend --gateway ${host} --token ${beTok} \\`);
+    console.log(`        --ca-hash ${fp} --advertise <this-backend-ip>`);
+    console.log('');
+    console.log('   # frontend machine:');
+    console.log(`   npx create-wordjs join frontend --gateway ${host} --token ${feTok} \\`);
+    console.log(`        --ca-hash ${fp} --advertise <this-frontend-ip>`);
+    console.log('');
+    console.log('   Tokens are single-use and expire in 120 min. Mint more anytime:');
+    console.log(`     cd ${opts.dir} && node scripts/cluster.js token <backend|frontend>`);
+    console.log(line + '\n');
+
+    if (!opts.start) {
+        console.log(`   Start the gateway when ready:  cd ${opts.dir} && npm run prod:gateway\n`);
+        return;
+    }
+    console.log('   Starting the gateway below (Ctrl+C to stop) — the join commands above work once it is up.\n');
+    const child = spawn('npm run prod:gateway', { cwd: targetDir, stdio: 'inherit', shell: true, env: process.env });
+    child.on('error', (e) => fail(`Could not start the gateway: ${e.message}`, `Run it manually: cd ${opts.dir} && npm run prod:gateway`));
+    child.on('exit', (code) => process.exit(code || 0));
+}
+
+// `create-wordjs join <backend|frontend>` — install the bundle, enroll with the gateway using the
+// single-use token (delegates to scripts/node-join.js), then start + register the service.
+async function join(opts) {
+    if (!['backend', 'frontend'].includes(opts.role)) {
+        fail('join needs a role: backend or frontend.', 'Example: npx create-wordjs join backend --gateway <ip> --token <t>');
+    }
+    if (!opts.gateway) fail('--gateway <gateway-ip/dns> is required for join.');
+    if (!opts.token) fail('--token <join-token> is required for join.', `Mint one on the gateway: node scripts/cluster.js token ${opts.role}`);
+    if (!opts.caHash) console.warn('  ⚠️  No --ca-hash given — skipping the MITM fingerprint check (fine on a trusted network).');
+
+    const targetDir = path.resolve(process.cwd(), opts.dir);
+    console.log(`\n🚀 create-wordjs · join ${opts.role} (separate mode)\n`);
+    await scaffoldBundle(opts, targetDir);
+
+    const advertise = opts.advertise || firstLanIp();
+    const args = ['--role', opts.role, '--gateway', opts.gateway, '--enroll-port', String(opts.enrollPort || 3101),
+        '--token', opts.token, '--advertise', advertise];
+    if (opts.caHash) args.push('--ca-hash', opts.caHash);
+    if (opts.start) args.push('--start');
+
+    console.log(`\n🎟️  Enrolling ${opts.role} with gateway ${opts.gateway} (advertise ${advertise})…\n`);
+    runNode('scripts/node-join.js', args, targetDir);
+
+    const line = '━'.repeat(64);
+    console.log(`\n${line}`);
+    console.log(`✅ ${opts.role} enrolled${opts.start ? ' and started (registered with the gateway over mTLS)' : ''}.`);
+    console.log(opts.start
+        ? `   Logs: ${path.join(opts.dir, opts.role, 'cluster-start.log')}`
+        : `   Start it:  cd ${opts.dir} && npm start`);
+    console.log(line + '\n');
+}
+
 // --- main ---------------------------------------------------------------------------------------
 
 async function main() {
     const opts = parseArgs(process.argv.slice(2));
     if (opts.mode === 'upgrade') return upgrade(opts);
+    if (opts.mode === 'gateway') return gateway(opts);
+    if (opts.mode === 'join') return join(opts);
     const targetDir = path.resolve(process.cwd(), opts.dir);
 
     // Refuse to scribble over anything that already exists (an existing EMPTY dir is fine).

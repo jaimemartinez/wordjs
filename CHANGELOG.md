@@ -4,6 +4,31 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.6.1] - 2026-07-18
+
+### Fixed
+
+- **CRITICAL: the v1.6.0 compiled release bundle crashed on boot** with
+  `Cannot find module './marketplace'`. The release packager (`scripts/make-release.js`) excluded any
+  path *containing* the substring `marketplace` (to keep the separately-distributed `marketplace/`
+  plugin catalog out of the core ZIP), which also silently stripped the compiled marketplace **route**
+  `backend/dist/routes/marketplace.js`. Every production install from the v1.6.0 ZIP (mono and split)
+  therefore failed to start. The packager now matches ignore patterns at **path-segment boundaries**
+  instead of as substrings, so `routes/marketplace.js` is kept while the top-level `marketplace/`
+  catalog (and all secrets) stay excluded. **Upgrade from v1.6.0 to v1.6.1.**
+
+### Added
+
+- **`npx create-wordjs` now sets up separate mode too — one command per machine.** Two new
+  subcommands turn a multi-machine deploy into a single command on each box:
+  `npx create-wordjs gateway --host <ip>` installs this machine as the cluster gateway (mints the CA +
+  config and prints ready-to-paste join commands with fresh tokens), and
+  `npx create-wordjs join <backend|frontend> --gateway <ip> --token <t> --advertise <ip>` downloads the
+  bundle, enrolls with the gateway (delegating to the bundled `scripts/node-join.js`), and starts +
+  registers the service. Previously separate mode required cloning the repo and running the
+  `scripts/*.js` by hand. `join` needs `openssl` on PATH; see
+  [separate-mode.md](documentation/separate-mode.md).
+
 ## [1.6.0] - 2026-07-18
 
 Two headline themes on top of the plugin Marketplace: **running WordJS across multiple machines** — a
