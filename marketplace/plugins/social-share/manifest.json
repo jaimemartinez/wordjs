@@ -1,0 +1,27 @@
+{
+    "id": "social-share",
+    "name": "Social Share",
+    "version": "1.0.0",
+    "description": "Botones para compartir la página actual en redes sociales (Facebook, X, WhatsApp, LinkedIn, Telegram, Email y Copiar enlace) mediante el bloque \"SocialShare\" del editor visual. Todo funciona en el navegador: sin claves, sin configuración y sin llamadas al servidor.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "share"
+        },
+        "puckComponents": {
+            "entry": "client/puck/SocialSharePuck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "Compartir Social",
+        "icon": "fa-share-nodes",
+        "href": "/admin/plugin/share",
+        "order": 61
+    },
+    "permissions": []
+}

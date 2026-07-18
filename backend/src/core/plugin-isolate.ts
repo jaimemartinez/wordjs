@@ -566,6 +566,7 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'fs.read', 'fs.write',
     'mail', 'notify',
     'adminMenu.add', 'cron.schedule',
+    'crypto.randomToken', 'crypto.randomInt',
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',
@@ -1074,8 +1075,32 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                     // the authenticated identity is already provided via reqData.user, so the raw token is
                     // not needed. ALWAYS strip auth/session cookies before forwarding (no trust exemption).
                     const fwdCookies = Object.fromEntries(Object.entries(req.cookies || {}).filter(([k]) => !HOST_AUTH_COOKIE_RE.test(k)));
+                    // A STABLE, privacy-preserving per-client key so a plugin can rate-limit / dedup by caller
+                    // WITHOUT ever seeing the raw IP. It MUST be an HMAC keyed with a per-install secret that
+                    // is never exposed to plugins — a plain sha256('wjck:'+ip) over the 32-bit IPv4 space is
+                    // trivially rainbow-tabled back to the raw visitor IP, and the table is reusable across
+                    // every install because the prefix is a global constant (#28/#30). Key it with the JWT
+                    // secret (per-install, persisted, plugin-invisible); fall back to a stable per-process key.
+                    const clientKey = (() => {
+                        try {
+                            const ip = String(req.ip || (req.socket && req.socket.remoteAddress) || '');
+                            if (!ip) return '';
+                            const crypto = require('crypto');
+                            let secret: string | undefined;
+                            try { secret = require('../config/app').jwtSecret; } catch { /* config unavailable */ }
+                            // The default placeholder (app.ts) is a GLOBAL constant present on env-var/Docker
+                            // deploys with no wordjs-config.json — using it would make clientKey reversible
+                            // across every install (#28). Treat it as absent → per-process random key.
+                            if (!secret || secret === 'wordjs-default-secret-change-me') {
+                                const g: any = globalThis as any;
+                                secret = g.__wjClientKeySecret || (g.__wjClientKeySecret = crypto.randomBytes(32).toString('hex'));
+                            }
+                            return crypto.createHmac('sha256', 'wjck-hmac:' + secret).update(ip).digest('hex').slice(0, 24);
+                        } catch { return ''; }
+                    })();
                     const reqData = {
                         method: req.method, path: req.path, query: req.query, params: req.params, body: req.body,
+                        clientKey,
                         cookies: fwdCookies,
                         headers: { 'x-portal-token': req.headers['x-portal-token'] }, // selected non-sensitive headers
                         // Saved-upload metadata (multer) — the isolate gets the path/name, not the stream.
@@ -1089,9 +1114,17 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                             // re-inject a host cookie (e.g. wordjs_token), bypassing the clamped r.cookies
                             // path below, and CSP/HSTS/Location let it weaken host security or open-redirect.
                             // ALWAYS drop those (no trust exemption); cookies must flow through the clamped path.
-                            const UNSAFE = new Set(['set-cookie', 'set-cookie2', 'content-security-policy', 'strict-transport-security', 'location']);
+                            // Also drop content-type (a plugin forcing text/html on the JSON body = same-origin
+                            // XSS on the API origin, #15), refresh (open redirect, #21) and every access-control-*
+                            // header (CORS override, #21). The body is ALWAYS sent via res.json below, so dropping
+                            // content-type lets Express set the correct application/json.
+                            const UNSAFE = new Set(['set-cookie', 'set-cookie2', 'content-security-policy', 'strict-transport-security', 'location', 'content-type', 'refresh']);
                             const safe: any = {};
-                            for (const [k, v] of Object.entries(r.headers)) { if (!UNSAFE.has(String(k).toLowerCase())) safe[k] = v; }
+                            for (const [k, v] of Object.entries(r.headers)) {
+                                const lk = String(k).toLowerCase();
+                                if (UNSAFE.has(lk) || lk.startsWith('access-control-')) continue;
+                                safe[k] = v;
+                            }
                             res.set(safe);
                         }
                         // Replay cookies the isolate set/cleared on the real response.

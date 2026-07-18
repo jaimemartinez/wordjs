@@ -6,6 +6,14 @@ infrastructure. This guide covers what's required and how the pieces coordinate.
 > Single-host deployments need none of this — with the SQLite driver every coordination primitive
 > below is a no-op, and one backend + one gateway just works. Multi-node is opt-in.
 
+> **"Three machines" ≠ "this guide."** Running the gateway, **one** backend, and **one** frontend on
+> **separate machines** (one replica per role) does **not** need Postgres, Redis, or a shared
+> filesystem — SQLite stays on the single backend node and the frontend reaches its uploads through the
+> gateway. That is **SEPARATE mode**; use the join-token walkthrough in
+> **[separate-mode.md](separate-mode.md)** and stop there. **This** guide is for the next step:
+> scaling **one role to N replicas** (e.g. 3 backends), which is what forces the shared Postgres +
+> Redis + filesystem below.
+
 ## Topology
 
 ```
@@ -28,7 +36,8 @@ as usual.
 
 ## Hard requirements
 
-Multi-node requires all three shared backends. Without them, replicas diverge.
+Running **multiple replicas of a role** requires all three shared backends. Without them, replicas
+diverge. (A single-replica-per-role split across machines needs none of them — see the callout above.)
 
 | Requirement | Why | How |
 |---|---|---|
@@ -74,6 +83,12 @@ gateway uses to reach that specific node:
 Each backend registers `https://<advertiseHost>:<port>` with the gateway; the gateway keeps all
 registered backends in its route group and round-robins across them. (`advertiseHost` defaults to
 `127.0.0.1`, which is correct only when the gateway and backend are co-located.)
+
+> The `advertiseHost` / `gatewayHost` / `gatewaySecret` / mTLS-cert plumbing per node is written for you
+> by `scripts/node-join.js` when you enroll each node with a join token (**[separate-mode.md](separate-mode.md)**).
+> For an N-replica role, run `cluster.js token <role>` + `node-join` once **per replica** (each with its
+> own `--advertise`), then layer the shared Postgres/Redis and `jwtSecret` from this guide onto every
+> replica's `wordjs-config.json`.
 
 ## How coordination works (automatic)
 

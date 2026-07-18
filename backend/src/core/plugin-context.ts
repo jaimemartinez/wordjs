@@ -244,6 +244,18 @@ function getProtectedEnv() {
 
     const originalEnv = { ...process.env }; // Snapshot for basic security
 
+    // Spawn/module-load-poisoning env vars are NEVER legitimately rewritten at runtime by the server, so
+    // deny writes to them UNCONDITIONALLY (not merely in plugin/theme context). This closes the detached
+    // main-thread callback hole where getEffectivePlugin() resolves to null and the context-gated denials
+    // below don't fire — e.g. an in-process theme scheduling
+    // setImmediate(Reflect.defineProperty.bind(Reflect, process.env, 'NODE_OPTIONS', {...})) (#17). Reads
+    // are unaffected; only writes to this fixed denylist are blocked.
+    // NOTE: intentionally BROAD and case-insensitive. Includes the Windows shell/loader vars (COMSPEC =
+    // the cmd.exe path used by child_process shell:true; PATHEXT/ WINDIR/ SYSTEMROOT resolve executables;
+    // NODE_PATH injects a module search dir) alongside the POSIX loader vars, since the deployment target
+    // is win32 and any of these poisons the next spawn/module-load (#6/#17).
+    const SPAWN_CRITICAL_ENV = /^(?:NODE_OPTIONS|NODE_EXTRA_CA_CERTS|NODE_PATH|NODE_REPL_EXTERNAL_MODULE|NODE_ICU_DATA|LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_INSERT_LIBRARIES|DYLD_LIBRARY_PATH|DYLD_FRAMEWORK_PATH|BASH_ENV|ENV|PATH|PATHEXT|COMSPEC|WINDIR|SYSTEMROOT|PYTHONPATH|PERL5LIB|GIT_EXEC_PATH|OPENSSL_CONF|OPENSSL_ENGINES|OPENSSL_MODULES|SSL_CERT_FILE|SSL_CERT_DIR|ICU_DATA)$/i;
+
     return new Proxy(process.env, {
         get(target: any, prop) {
             const pluginSlug = getEffectivePlugin();
@@ -254,9 +266,16 @@ function getProtectedEnv() {
             return target[prop];
         },
         set(target: any, prop, value) {
+            if (SPAWN_CRITICAL_ENV.test(String(prop))) {
+                console.warn(`[Security] Blocked write to spawn-critical ENV '${String(prop)}' (unconditional).`);
+                return false;
+            }
             const pluginSlug = getEffectivePlugin();
-            if (pluginSlug && isSensitive(prop)) {
-                console.warn(`[Security] Plugin '${pluginSlug}' attempted to modify sensitive ENV: ${prop.toString()}`);
+            // A plugin/theme has NO business mutating the host process env. Even a "non-sensitive" var —
+            // PATH, NODE_OPTIONS, LD_PRELOAD, NODE_EXTRA_CA_CERTS — poisons the next child_process spawn or
+            // module load (RCE). Deny ALL writes in plugin/theme context; host code (no context) is normal.
+            if (pluginSlug) {
+                console.warn(`[Security] Plugin '${pluginSlug}' attempted to modify ENV '${prop.toString()}' — denied.`);
                 return false;
             }
             target[prop] = value;
@@ -277,6 +296,33 @@ function getProtectedEnv() {
                 return undefined;
             }
             return Reflect.getOwnPropertyDescriptor(target, prop);
+        },
+        // Object.defineProperty(process.env, k, {...}) and `delete process.env.k` are WRITE paths that a
+        // Proxy WITHOUT these traps forwards straight to the target, bypassing the set() deny above and
+        // re-opening NODE_OPTIONS/LD_PRELOAD/PATH poisoning → RCE (#17). Deny both in plugin/theme context.
+        defineProperty(target, prop, desc) {
+            if (SPAWN_CRITICAL_ENV.test(String(prop))) {
+                console.warn(`[Security] Blocked defineProperty on spawn-critical ENV '${String(prop)}' (unconditional).`);
+                return false;
+            }
+            const pluginSlug = getEffectivePlugin();
+            if (pluginSlug) {
+                console.warn(`[Security] Plugin '${pluginSlug}' attempted Object.defineProperty on ENV '${prop.toString()}' — denied.`);
+                return false;
+            }
+            return Reflect.defineProperty(target, prop, desc);
+        },
+        deleteProperty(target, prop) {
+            if (SPAWN_CRITICAL_ENV.test(String(prop))) {
+                console.warn(`[Security] Blocked delete of spawn-critical ENV '${String(prop)}' (unconditional).`);
+                return false;
+            }
+            const pluginSlug = getEffectivePlugin();
+            if (pluginSlug) {
+                console.warn(`[Security] Plugin '${pluginSlug}' attempted to delete ENV '${prop.toString()}' — denied.`);
+                return false;
+            }
+            return Reflect.deleteProperty(target, prop);
         }
     });
 }
@@ -287,7 +333,11 @@ try {
     Object.defineProperty(process, 'env', {
         value: protectedEnv,
         writable: false,
-        configurable: true // Allow us to fix it if we break it during dev
+        // NON-configurable: a plugin/theme running in-process must NOT be able to
+        // Object.defineProperty(process, 'env', {...}) to swap out this guard proxy wholesale and thereby
+        // dodge the set/defineProperty/deleteProperty denials (#6). Loaded once per process; a duplicate
+        // load's redefine throws and is swallowed by the catch below, leaving this proxy in place.
+        configurable: false
     });
 } catch (e) {
     console.error('[Security] Failed to install process.env proxy:', e.message);

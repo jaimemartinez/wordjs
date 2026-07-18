@@ -58,6 +58,17 @@ jobs:
           REDIS_ENABLED: 'true'
         run: npm run test:integration
 
+      - name: Marketplace catalog freshness
+        # marketplace/dist/ is the LIVE committed catalog served to every install via
+        # raw.githubusercontent.com. The build is deterministic (fixed zip timestamps, no
+        # generated-at field), so a plugin change without a rebuilt catalog shows up as a diff.
+        run: |
+          node backend/scripts/build-marketplace.js
+          git diff --exit-code -- marketplace/dist || {
+            echo "::error::marketplace/dist is stale — run 'npm run build:marketplace' and commit the result."
+            exit 1
+          }
+
   gateway:
     name: Gateway (test)
     runs-on: ubuntu-latest

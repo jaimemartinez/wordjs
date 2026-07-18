@@ -9,6 +9,11 @@ const getBaseUrl = () => {
     if (process.env.WORDJS_MODE === 'mono') {
         return `${process.env.WORDJS_MONO_ORIGIN || 'http://127.0.0.1:4000'}/api/v1`;
     }
+    // Separate-machine override (mirrors lib/server-api.ts so every SSR path agrees): reach a backend on
+    // another host via INTERNAL_API_URL (env) or config.internalApiUrl, instead of always localhost.
+    if (process.env.INTERNAL_API_URL) {
+        return process.env.INTERNAL_API_URL.replace(/\/+$/, '');
+    }
     let backendPort = 4000;
     try {
         // Dynamically require fs/path to avoid bundling issues on client
@@ -28,6 +33,9 @@ const getBaseUrl = () => {
         if (fs.existsSync(configPath)) {
             const fileContent = fs.readFileSync(configPath, 'utf-8');
             const config = JSON.parse(fileContent);
+            if (config.internalApiUrl) {
+                return String(config.internalApiUrl).replace(/\/+$/, '');
+            }
             if (config.port) {
                 backendPort = config.port;
             }
@@ -392,6 +400,38 @@ export const pluginsApi = {
         body: formData,
         headers: {} // Let browser set boundary
     }),
+};
+
+// ---------------------------------------------------------------------------
+// Plugin Marketplace (catalog browse + one-click install)
+// ---------------------------------------------------------------------------
+
+export interface MarketplaceEntry {
+    id: string;
+    name: string;
+    version: string;
+    description: string;
+    author: string;
+    category: string;
+    permissions: { scope: string; access?: string; reason?: string }[];
+    hasAdminPage: boolean;
+    hasPuckBlock: boolean;
+    blockName: string | null;
+    adminMenu: { label: string; icon?: string } | null;
+    file: string;
+    size: number;
+    sha256: string;
+    // Annotations added by the backend against the local install:
+    installed: boolean;
+    active: boolean;
+    installedVersion: string | null;
+    updateAvailable: boolean;
+}
+
+export const marketplaceApi = {
+    catalog: (refresh = false) =>
+        apiGet<{ source: string; isLocal: boolean; count: number; plugins: MarketplaceEntry[] }>(`/marketplace/catalog${refresh ? '?refresh=1' : ''}`),
+    install: (id: string) => apiPost<{ success: boolean; message: string; slug: string }>(`/marketplace/install`, { id }),
 };
 
 export interface Theme {

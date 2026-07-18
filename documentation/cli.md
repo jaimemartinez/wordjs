@@ -32,7 +32,7 @@ Run from `backend/`.
 
 ## 2. One-Command Site Bootstrap (`npx create-wordjs`)
 
-The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT, currently `v1.2.3`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
+The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.5.4`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
 
 ```bash
 npx create-wordjs my-site
@@ -129,6 +129,33 @@ Other handy diagnostics in `cli/` include `list-users.js`, `inspect-roles.js`, `
 **Use case:** Troubleshooting service discovery.
 
 This is a **file**, not a script. It contains the current state of the Gateway's known services. Inspecting it helps verify whether the backend/frontend registered successfully.
+
+## 6a. Cluster Enrollment (separate mode) 🪪
+
+Two **root** scripts bootstrap **separate mode** — the gateway, backend, and frontend running on **different machines**, joined into one cluster over mutual TLS. They are aliased as `npm run cluster` and `npm run node:join`. The full operator walkthrough is **[separate-mode.md](separate-mode.md)**; the trust-root internals are in **[core-modules.md](core-modules.md)** § 10 (Cluster Certificate Authority).
+
+### Gateway side (`scripts/cluster.js`, run **on the gateway machine**)
+
+```bash
+node scripts/cluster.js init   [--host <gw-ip/dns>] [--bind <ip>] [--port 3000] \
+                               [--internal-port 3100] [--enroll-port 3101] [--site-url <url>]
+node scripts/cluster.js token  <backend|frontend> [--host <node-ip>] [--ttl <minutes>]
+node scripts/cluster.js tokens          # list outstanding join tokens
+node scripts/cluster.js revoke-tokens   # burn all outstanding tokens
+node scripts/cluster.js info            # show CA fingerprint + endpoints
+```
+
+* **`init`** mints the cluster CA (keeping the CA key `0600` on the gateway), mints the gateway's own identity + public cert (the public cert is now **also** signed by the cluster CA), writes a multi-node `gateway/gateway-config.json` (`gatewayInternalBind` = the routable IP, `gatewayEnrollPort` default **3101**), and clears the registry. Idempotent — re-running reuses the existing CA.
+* **`token <role>`** mints a **single-use, role-bound, TTL** join token and prints the exact `node-join` command (including `--ca-hash`) to paste on the new machine.
+
+### Node side (`scripts/node-join.js`, run **on the new backend/frontend machine**)
+
+```bash
+node scripts/node-join.js --role <backend|frontend> --gateway <gw-ip/dns> --token <join-token> \
+     [--enroll-port 3101] [--advertise <this-node-ip>] [--ca-hash <sha256>] [--start]
+```
+
+It generates a keypair + CSR (via `openssl`), makes the **one** tokened `POST /enroll` call to the gateway's enrollment listener (port **3101** — a separate HTTPS listener that does **not** request a client cert; the strict mTLS `/register` listener on 3100 is untouched). The gateway validates the token, **forces `CN` = the token's role** (the CSR subject is ignored), signs the cert, and returns `{cert, cluster-ca, bootstrap config}`. `node-join` verifies the returned CA against `--ca-hash` (MITM guard), writes `<role>/certs/*` + `<role>/wordjs-config.json` (`advertiseHost`, `gatewayHost`, …), and with `--start` launches the service — which then **registers** with the gateway over mTLS.
 
 ## 7. Database Files & Maintenance
 

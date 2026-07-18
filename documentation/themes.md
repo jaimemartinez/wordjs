@@ -25,26 +25,33 @@ themes/
 > is kept on disk as a marked *legacy* / library path, not the renderer. What the live site consumes
 > from a theme is its **`style.css`** (design tokens + rules), injected as a `<link>` by
 > `ThemeLoader`, plus an optional **`theme.json` `layout`** block and the admin **customizer**
-> overrides (see "Theme integration with the live site" below). So for the live site `style.css` +
-> `theme.json` matter; `templates/`/`partials/`/`functions.js` belong only to the legacy engine.
+> overrides (see "Theme integration with the live site" below). So for the live site's **rendering**,
+> `style.css` + `theme.json` are what matter, and `templates/`/`partials/` belong only to the legacy
+> engine. A theme's optional `functions.js` still loads at boot — now in an **isolated child process**
+> (see the sandbox note below) — so it can register hooks/shortcodes, but it does not drive the
+> Next.js page render.
 >
 > Theme metadata is parsed from `theme.json` by `parseThemeMetadata()`; missing fields fall
 > back to defaults (name = slug, version = `1.0.0`). A `screenshot.{png,jpg,webp}`, if present,
 > is auto-detected and exposed in the theme picker.
 
-> **`functions.js` is sandboxed.** A theme's optional `functions.js` is *not* trusted code. When
-> the backend theme engine loads it (`loadThemeLogic()` in `backend/src/core/theme-engine.ts`)
-> it first runs the same install-time **AST static scanner** as plugins
+> **`functions.js` runs OS-isolated (like an isolated plugin).** A theme's optional `functions.js`
+> is *not* trusted code. When the theme engine loads it (`loadThemeLogic()` in
+> `backend/src/core/theme-engine.ts`, invoked from `themeEngine.init()` at boot and on a theme
+> switch) it first runs the same install-time **AST static scanner** as plugins
 > (`validatePluginPermissions`, which fails closed and blocks `eval`/`Function`, `exec`/`spawn`,
-> `require()`/`import()` of sensitive builtins such as `child_process`, etc.). It then executes
-> the logic **in-process** inside an AsyncLocalStorage security context under the slug
-> `theme:<slug>` (`runWithContext`), which activates the runtime guards in `secure-require.ts`:
-> dangerous Node builtins are blocked and `fs`/`require` access is confined to the theme's own
-> directory (reads of `.env`/secret files and the database are denied). By default a theme is
-> granted only `settings:read` + `content:read`; a theme that needs more must ship a
-> `manifest.json`. This is the lighter in-process guard model — distinct from the full OS-process
-> isolation (`child_process.fork`) used for plugins marked `"isolated": true`. If the AST scan
-> trips, the theme's `functions.js` is blocked and the rest of the theme still loads.
+> `require()`/`import()` of sensitive builtins such as `child_process`, etc.); if that scan trips,
+> `functions.js` is blocked and the rest of the theme still loads. It then runs the logic in a
+> **separate OS process** — exactly like an isolated plugin — via
+> `loadIsolatedPlugin('theme:<slug>', …)` (`child_process.fork` of `plugin-worker.js`), **not**
+> in-process. This closed the in-process-theme RCE cluster: theme code on the host main thread had
+> no runtime `eval`/`Function`/dynamic-import guard, so a malicious theme could achieve host RCE that
+> no static scan can fully prevent. Any hooks/shortcodes/mail the theme registers now flow through the
+> **same RPC bridge** isolated plugins use (the isolate layer already namespaces `theme:` slugs), and
+> the runtime guards (`secure-require`/`io-guard`) confine `fs`/`require` to the theme's own directory
+> and deny secret/DB files. By default a theme is granted only `settings:read` + `content:read`; a
+> theme that needs more must ship a `manifest.json`. (Handlebars helpers stay built-in and host-side —
+> they are not registered from `functions.js`.)
 
 ## Available Themes
 
@@ -104,6 +111,18 @@ stays legible against that theme's palette.
 - It is **never** loaded into the admin UI. Selectors are intentionally low-specificity, so themed
   chrome built with utility/Tailwind classes keeps winning; in practice the framework styles raw
   content HTML and offers opt-in classes wherever it's loaded.
+
+**Responsive out of the box (v1.5.4).** All 13 bundled themes are browser-verified at mobile, tablet
+and desktop widths. The framework contributes the shared guards: below `768px` it caps the
+visual-editor heading sizes through the `--wjs-h{1..6}-size` aliases (`min(var(--wjs-hN), cap)`, so a
+theme whose scale is already smaller wins), and at **every** width it contains wide content — tables
+and `pre` scroll inside their own container, long unbroken strings wrap — so nothing forces body-level
+horizontal scroll. It also ships the editor's per-block device-visibility classes `.wjs-hide-mobile` /
+`.wjs-hide-tablet` / `.wjs-hide-desktop` (breakpoints `<768` / `768–1023` / `≥1024`). Themes layer
+their own scoped media queries on top where their design needs it (e.g. narrow-viewport header-fit
+rules). When a theme hides or rearranges header pieces such as `.wjs-header-actions`, keep those rules
+**scoped to the intended breakpoint/selector** — an unscoped `display: none` there also kills the
+mobile nav toggle.
 
 All 13 bundled themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
 class reference, see [`documentation/theming.md`](./theming.md).
@@ -298,14 +317,22 @@ the `template` and `stylesheet` options, publishes the new theme's `theme.json` 
 re-initializes the (legacy) theme engine. On the
 public site, `frontend/src/components/public/ThemeLoader.tsx` receives the active-theme slug resolved
 on the **server** (`app/(public)/layout.tsx` → `getSettings().theme`) as `initialSlug`, so the first
-SSR paint already carries the right stylesheet (no FOUC). It injects
-`<link rel="stylesheet" href="/themes/{slug}/style.css?v={slug}">` (id `wjs-theme-stylesheet`). The
+SSR paint already carries the right stylesheet. It renders
+`<link rel="stylesheet" href="/themes/{slug}/style.css?v={slug}-{ASSET_VERSION}">` (id
+`wjs-theme-stylesheet`) with a React 19 **`precedence`** attribute — required so React hoists the
+link into `<head>` and treats it as render-blocking; without it the page painted with fallback token
+values and only restyled once the CSS finished loading (a flash of unthemed content). The framework
+link (`wjs-ui-framework`) is declared in an earlier precedence group, so the theme's `:root` still
+cascades after it. The
 client effect only re-checks via `themesApi.list()` on `window` `focus` (and resolves the slug once
 if the server gave none, e.g. the editor preview), so switching the theme in one tab applies in an
-open public tab when you return to it. The `?v=` query string is simply the **theme slug** — a
-deterministic, non-`Date.now()` value identical across SSR and hydration, so it changes only when you
-switch themes; edits to a theme's `style.css` revalidate through `express.static`'s ETag/Last-Modified
-instead.
+open public tab when you return to it; on such a runtime switch the loader also removes the previous
+theme's `<link>` (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
+otherwise stay applied alongside the new one). The `?v=` query string is the **theme slug** plus
+**`ASSET_VERSION`** (`frontend/src/lib/assetVersion.ts`, kept in step with the package version) — a
+deterministic value identical across SSR and hydration. Theme CSS and `wordjs-ui.css` are served with
+a long `Cache-Control` (~1 day), so `ASSET_VERSION` is bumped on any release that changes them,
+forcing browsers with a cached copy to refetch.
 
 ## Theme Previews in Admin
 

@@ -43,6 +43,10 @@ const defaultPostTypes = {
         showInRest: true,
         hasArchive: false,
         hierarchical: true,
+        // Pages use the page capability family (edit_pages/publish_pages/…) — NOT the post family. Without
+        // this, pages defaulted to capability_type 'post', so an author (edit_posts, no page caps) could
+        // create/publish pages (audit HIGH). The roles already define the page caps for admin/editor.
+        capability_type: 'page',
         supports: ['title', 'editor', 'author', 'thumbnail', 'excerpt', 'page-attributes', 'revisions'],
         taxonomies: [],
         menuIcon: 'fa-file-lines',

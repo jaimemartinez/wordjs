@@ -57,7 +57,7 @@ test('bridge blocks SQL touching core tables (incl. regex-evasion bypasses)', as
         await assert.rejects(() => api.db.all('SELECT * FROM users'), /off-limits/);
         await assert.rejects(() => api.db.run("UPDATE user_meta SET meta_value='administrator'"), /off-limits/);
         // Evasions that slipped past the old `FROM <table>` matcher:
-        await assert.rejects(() => api.db.all('SELECT * FROM plugin_t, users'), /off-limits|comma join/i);   // comma join (blocked as a comma join; core table never attaches)
+        await assert.rejects(() => api.db.all('SELECT * FROM plugin_t, users'), /off-limits|comma join|not owned/i);   // comma join: first table isn't prefix-owned → blocked before `users` can attach
         await assert.rejects(() => api.db.all('SELECT * FROM/**/users'), /off-limits/);            // comment-as-whitespace
         await assert.rejects(() => api.db.all("SELECT option_value FROM options WHERE option_name='jwt_secret'"), /off-limits/); // secret exfil via options table
     });
@@ -96,12 +96,93 @@ test('bridge blocks the DELETE...USING...RETURNING cross-table bypass', async ()
     });
 });
 
+// 2026-07-17 audit CRITICAL: a comma cross-join hidden AFTER a subquery or a JOIN...ON smuggled a core
+// table past the FROM attribution (`SELECT users.user_pass FROM (SELECT 1) a, users`) → full read of
+// password hashes / the options secrets table / sessions. Now denied (paren-collapse FROM-clause scan).
+test('bridge blocks subquery/JOIN-hidden comma cross-joins (critical SQL-guard escape)', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        const PFX = api.db.tablePrefix;
+        for (const sql of [
+            'SELECT users.user_pass FROM (SELECT 1) a, users',
+            'SELECT options.option_value FROM (SELECT 1), options',
+            `SELECT x.user_pass FROM ${PFX}t JOIN ${PFX}u ON 1=1, users x`,
+        ]) {
+            await assert.rejects(() => api.db.all(sql), /comma join|not owned|off-limits/i, `must block: ${sql}`);
+        }
+        await assert.rejects(() => api.db.run(`INSERT INTO ${PFX}x SELECT user_pass FROM (SELECT 1), users`), /comma join|not owned|off-limits/i);
+    });
+});
+
+// 2026-07-17 regression: the token-walker attributed the `if` in `CREATE TABLE IF NOT EXISTS <t>` as a
+// table named `if`, so EVERY plugin that creates its tables that way was denied at boot (14 failed to
+// load isolated). The IF/NOT/EXISTS keywords must be skipped WITHOUT closing the table slot so the REAL
+// name is what gets prefix-checked. Owned DDL must pass the guard; a foreign target must still be denied.
+test('bridge allows CREATE/DROP TABLE IF [NOT] EXISTS on OWN tables but denies foreign', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        const PFX = api.db.tablePrefix;
+        for (const sql of [
+            `CREATE TABLE IF NOT EXISTS ${PFX}gizmo (id INTEGER PRIMARY KEY, name TEXT)`,
+            `DROP TABLE IF EXISTS ${PFX}gizmo`,
+        ]) {
+            let err: any = null;
+            try { await api.db.run(sql); } catch (e) { err = e; }
+            // May fail for a benign reason (test DB state), but NEVER with the scoping denial — that proves
+            // the DDL cleared the prefix/ownership gate (the regression made it throw "not owned: table 'if'").
+            assert.ok(!err || !/not owned|off-limits/i.test(String(err.message)), `own IF-NOT-EXISTS DDL must not trip the guard: ${err && err.message}`);
+        }
+        // A foreign table behind IF NOT EXISTS is still attributed and denied.
+        await assert.rejects(() => api.db.run('CREATE TABLE IF NOT EXISTS users (id INTEGER)'), /not owned|off-limits/i);
+    });
+});
+
+// 2026-07-17 audit CRITICAL: ownership was `tok.startsWith(prefix)`, so a plugin whose prefix is a
+// startsWith-prefix of another's (wjp_event_ ⊂ wjp_event_tickets_orders) read the sibling's tables.
+// Now the LONGEST claimed prefix wins.
+test('bridge blocks reading a sibling plugin with a longer prefix', async () => {
+    createPluginApi('test-api-plugin-child'); // claims wjp_test_api_plugin_child_
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG); // prefix wjp_test_api_plugin_
+        await assert.rejects(() => api.db.all(`SELECT * FROM ${api.db.tablePrefix}child_orders`), /belongs to plugin/);
+    });
+});
+
+// 2026-07-17 audit LOW: CREATE VIEW / TRIGGER object names were never prefix-scoped (namespace squat).
+test('bridge scopes CREATE VIEW / DROP TRIGGER names to the plugin prefix', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        await assert.rejects(() => api.db.run(`CREATE VIEW wjp_victim_orders AS SELECT * FROM ${api.db.tablePrefix}x`), /view\/trigger name/);
+        await assert.rejects(() => api.db.run('DROP TRIGGER wjp_victim_trg'), /view\/trigger name/);
+    });
+});
+
 test('bridge confines fs to the plugin dir + uploads', async () => {
     await runWithContext(SLUG, async () => {
         const api = createPluginApi(SLUG);
         await assert.rejects(() => api.fs.read('../../package.json'), /outside/);
         await assert.rejects(() => api.fs.write('manifest.json', 'x'), /immutable/);
     });
+});
+
+// 2026-07-17 audit CRITICAL: fs.promises bypassed io-guard's path containment — the proxy only checked
+// the filesystem GRANT for out-of-dir paths and then ran on the RAW path (no isPathSafe). So a plugin
+// with filesystem:read read data/*.db & .env, and filesystem:write overwrote host/other-plugin code.
+test('fs.promises is path-confined like the callback fs (no raw DB/secret read, no host write)', async () => {
+    const { createSecureFs } = require('../core/secure-require');
+    const secureFs = createSecureFs();
+    const rootDir = path.resolve(__dirname, '../../');
+    const g: any = global; const prev = g.__WORDJS_ISOLATED__;
+    g.__WORDJS_ISOLATED__ = true; // DB-file block is child-only
+    try {
+        await runWithContext(SLUG, async () => { // test plugin has filesystem:admin, so this exercises isPathSafe, not the grant
+            const p = secureFs.promises;
+            await assert.rejects(() => p.readFile(path.join(rootDir, 'data', 'wordjs.db')), /SECURITY BLOCK|denied|not permitted/i);
+            await assert.rejects(() => p.readFile(path.join(rootDir, 'data', 'wordjs-native.db')), /SECURITY BLOCK|denied|not permitted/i);
+            await assert.rejects(() => p.readFile(path.join(rootDir, '.env')), /SECURITY BLOCK|denied|not permitted/i);
+            await assert.rejects(() => p.writeFile(path.join(rootDir, 'plugins', 'victim-x', 'index.js'), 'x'), /SECURITY BLOCK|denied|not permitted/i);
+        });
+    } finally { if (prev === undefined) delete g.__WORDJS_ISOLATED__; else g.__WORDJS_ISOLATED__ = prev; }
 });
 
 // Round-8 regression: the credentials SQLite DB sits under the data/ read zone, so a plugin holding

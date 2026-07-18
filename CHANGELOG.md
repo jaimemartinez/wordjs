@@ -4,9 +4,268 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [Unreleased]
+## [1.6.0] - 2026-07-18
 
-Focus: **plugin-sandbox security hardening** — a fresh adversarial red-team of the sandbox surfaced
+Two headline themes on top of the plugin Marketplace: **running WordJS across multiple machines** — a
+new distributed *separate mode* joined by gateway-issued **join tokens** — and a **deep
+security-hardening pass** (a full adversarial audit of core and every bundled plugin, remediated end
+to end).
+
+### Added
+
+- **Separate mode — run the gateway, backend, and frontend on three different machines**, joined with
+  kubeadm-style **join tokens** instead of hand-copied certificates. The gateway is the cluster CA:
+  `node scripts/cluster.js init` mints the cluster CA (keeping the CA private key on the gateway) plus
+  the gateway's own identity and public certs; `node scripts/cluster.js token <backend|frontend>`
+  prints a **single-use, role-bound, TTL-limited** token; on the new machine
+  `node scripts/node-join.js --role … --token … --advertise …` generates a keypair + CSR, calls the
+  gateway's **token-enrollment endpoint** (a dedicated listener on `gatewayEnrollPort`, default 3101,
+  separate from the strict mTLS `/register` control plane), and receives a signed `CN=<role>` mTLS
+  identity + the cluster CA + bootstrap config — then the service starts and **registers with the
+  gateway over mTLS**. The token authorizes only the first contact; a `--ca-hash` pin guards against a
+  man-in-the-middle. New files: `gateway/src/cluster-ca.js`, `scripts/cluster.js`,
+  `scripts/node-join.js`, and the step-by-step [separate-mode guide](documentation/separate-mode.md).
+  The frontend now advertises a routable `advertiseHost` to the gateway (instead of a hard-coded
+  loopback), and its server-side render base is configurable via `internalApiUrl`.
+- **Plugin Marketplace (browse + one-click install from the admin).** Plugins are distributed
+  decoupled from core releases: sources live in `marketplace/plugins/`, and
+  `backend/scripts/build-marketplace.js` produces a committed catalog (`marketplace/dist/` —
+  `marketplace-index.json` + one ZIP per plugin) served by default from
+  `raw.githubusercontent.com`, so merging a plugin update to `main` updates every site's catalog
+  immediately without a core release (tagged releases also attach a catalog snapshot for pinning).
+  A new backend API (`backend/src/routes/marketplace.ts`, admin-only) resolves the catalog source
+  (option `marketplace_source`: an http(s) URL, a local dir for dev/air-gapped installs, or the
+  default) and installs an entry by downloading its ZIP, **verifying its sha256 against the catalog
+  entry**, and handing it to the SAME `installPluginFromZip()` pipeline as manual uploads (zip-bomb
+  budget, Zip Slip, slug validation, manifest + AST scan) — the marketplace adds no new install
+  surface beyond the catalog fetch. The admin Plugins screen gains a **Marketplace tab**
+  (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`) with search, categories, requested-permission
+  preview, and installed/update-available state.
+- **25 first-party marketplace plugins** at launch: analytics-tag, auctions, bookings, breadcrumbs,
+  contact-forms, cookie-consent, digital-downloads, donations, event-tickets, events-calendar, faq,
+  image-lightbox, invoices, job-board, newsletter, notification-bar, online-store, polls,
+  popup-builder, related-posts, restaurant-menu, social-share, table-of-contents, testimonials, and
+  vendor-marketplace — every one sandboxed and permission-gated like any uploaded plugin.
+- **New bundled `youtube-videos` plugin.** Pulls a YouTube channel's videos (links, thumbnails,
+  titles) and ships a Puck **carousel block** with title filtering and a video-count limit. Works
+  **keyless out of the box** via the channel RSS feed (latest 15 videos); add a YouTube Data API v3
+  key for the full upload history (stored in the plugin's own `wjp_` tables).
+
+### Security
+
+- **Full adversarial security audit of core and every bundled plugin, remediated end to end.**
+  - **Themes now run in the same child-process OS-isolation as plugins.** A theme's `functions.js` is
+    no longer `require()`d on the host main thread — it executes in a sandboxed child, closing an
+    in-process code-execution class (a malicious or compromised theme could otherwise reach
+    `child_process` / `process.env` / the filesystem past the static install-time scanner).
+  - **The per-plugin SQL guard was rewritten as a single-pass lexer** backed by an authoritative
+    table→creator registry, closing a family of cross-plugin and core-table read bypasses (comma
+    cross-joins, quoted identifiers, comment / CTE / `WINDOW` poisoning, and a ReDoS) while keeping
+    every plugin scoped to its own `wjp_<slug>_` tables.
+  - **The filesystem sandbox was unified across the callback and `fs.promises` APIs** — path
+    containment, secret/DB-file and executable-extension write blocks, symlink and file-descriptor
+    guards, and a per-plugin write quota — and the `require`/proxy layer was hardened so a plugin can
+    no longer recover an unguarded `fs` handle.
+  - **A CSPRNG bridge (`wordjs.crypto`)** so plugins stop minting security tokens with `Math.random()`.
+  - Additional hardening: `/setup/migrate` is no longer a password-brute-force oracle or a
+    config-secret leak; stronger admin-role and forwarded-header guards; privacy-preserving per-client
+    keys for rate limiting; and the network egress guard closes blind-UDP and DNS-rebind vectors.
+  - **Inter-service traffic is mutual TLS** (a cluster CA with per-node `CN` identities); the new
+    join-token enrollment bootstraps a node's identity **without ever shipping the CA private key**.
+
+### Changed
+
+- **Conference Manager overhauled to v2.1.0.** Adds a **Reports** section with CSV export; fixes a
+  blocker in inscription creation; hardens payment/assignment integrity (updates guarded against
+  the non-transactional plugin DB bridge); revives dead admin buttons; and fixes portal-side issues
+  on the public conference page.
+
+## [1.5.4] - 2026-07-12
+
+### Fixed
+
+- **Full responsive pass over every bundled theme, verified in a real browser at mobile (375px),
+  tablet (768px), and desktop (#160).** The framework (`wordjs-ui.css`) now contains wide content
+  GLOBALLY, not mobile-only — wide tables and `<pre>` become their own horizontal scroll containers,
+  unbreakable strings word-wrap, media is capped at 100% width — on BOTH content paths (classic
+  `.wjs-content` AND the visual editor's `.puck-content`, which previously had no containment at
+  all). A mobile type scale caps each heading at `min(theme token, sensible cap)` under 768px via the
+  framework-owned `--wjs-hN-size` aliases, so desktop keeps every theme's own scale. Nine themes got
+  targeted mobile fixes (overflowing scaled pricing cards, tall fixed mastheads leaving dead gaps,
+  oversized `!important` typography, decorative pseudo-element overhangs) — including a **critical**
+  one: two themes hid `.wjs-header-actions` with an unscoped `display:none !important`, and that slot
+  holds the chrome's mobile hamburger, so those themes had NO navigation at all on phones.
+- **Switching the active theme at runtime no longer accumulates both themes' CSS.** A v1.5.1
+  regression: React `precedence` stylesheets are add-only, so activating another theme kept the old
+  `<link>` and the wrong theme could win the cascade until a full reload. The previous theme's link
+  is now evicted when the slug changes (`ThemeLoader`), and `ASSET_VERSION` is bumped so cached
+  browsers pick up the changed CSS.
+
+## [1.5.3] - 2026-07-12
+
+### Added
+
+- **`npx create-wordjs upgrade` — in-place updates for an existing site (#159).** Downloads the
+  latest (or `--version <tag>`) release and swaps in the new app code WHILE PRESERVING user state:
+  the database (`backend/data`), uploads, config + secrets, and any user-installed plugins (merge
+  copy, never deletes files not in the release); pure build outputs (`frontend/.next`,
+  `backend/dist`) are clean-replaced so no stale chunks linger, then `release:install` re-syncs
+  dependencies (schema migrations apply on next boot). Guardrails: verifies the target is a real
+  WordJS install, no-ops when already on the target version (`--force` to re-apply), backs up the
+  config files, asks for confirmation on a TTY (or `--yes`), and rolls back via `--version <old-tag>`
+  (data untouched). Closes the "how do I upgrade?" gap — previously the only path was a fresh install.
+
+## [1.5.2] - 2026-07-12
+
+### Fixed
+
+- **SSR sanitizer stripped ALL Puck rich-text formatting in production builds (#158).**
+  `lib/sanitize.ts` is a `"use client"` module whose `sanitizeHTML()` also runs during SERVER
+  rendering of every Puck block; its SSR branch did `require('sanitize-html')`, which webpack
+  rewrites — in the COMPILED production build that require resolved to a broken module and threw, so
+  the catch-all fallback stripped EVERY tag: font size, font family, bold, links all silently
+  vanished from public headings and text. Dev worked (`next dev` doesn't bundle the same way),
+  production didn't. The library is now loaded through `__non_webpack_require__` (webpack's
+  designated escape hatch, with fallbacks), so the real node module loads at SSR runtime and never
+  enters the client bundle. Verified in a local prod build.
+
+## [1.5.1] - 2026-07-12
+
+### Fixed
+
+- **Flash of unstyled content on public pages (#157).** `ThemeLoader` rendered the framework + theme
+  `<link rel="stylesheet">` without React 19's `precedence` prop, so they were NON-render-blocking:
+  the page painted with fallback token values and restyled once the CSS loaded. With `precedence`,
+  React hoists them into `<head>` and blocks paint (framework group first, so the theme's `:root`
+  still wins).
+- **Puck text/heading styling ignored the active theme.** The block renderer references
+  `var(--wjs-h1-size)` / `var(--wjs-font-family)` / `var(--wjs-color-text-heading)`, but the
+  framework and every theme define `--wjs-h1` / `--wjs-font-family-base` / `--wjs-color-heading` —
+  no theme (0/15) defined the names Puck uses, and with no fallback every Puck heading collapsed to
+  16px. The block token names are now `:root` aliases of the canonical tokens in `wordjs-ui.css`, so
+  headings/text pick up the theme's scale and font. Framework/theme CSS URLs are also versioned
+  (`?v=ASSET_VERSION`) so the fix actually reaches browsers that cached the day-long stable URL.
+
+## [1.5.0] - 2026-07-12
+
+Focus: **account & access management** — every user gets a self-service account surface, and
+password recovery works out of the box once any mail provider is active.
+
+### Added
+
+- **Self-service account page + subscriber gating (#156).** Subscribers (no `edit_posts`) are
+  blocked from the dashboard and the Puck page editor and land on a new `/admin/account` page
+  instead. Password change for ALL users via `PUT /users/me` verifying the current password (also
+  fixes `/me` being shadowed by the `/:id` route, which 404'd it).
+- **Personal/recovery email that coexists with the professional mailbox (#156).** The mail plugin's
+  "Professional Mail Account" toggle overwrites `user.email` with `username@domain`, losing any
+  personal address; a new independent personal email (user meta) is wired through create/update/
+  toJSON, both admin user forms, and format validation — the deliverable target for password
+  recovery, since a professional mailbox living INSIDE WordJS is unreachable when the user is locked
+  out.
+- **Public "forgot password" (#156), gated generically** — enabled when ANY mail provider is present
+  (no plugin slug hardcoded): sha256 single-use token, 30-min expiry, timing-safe compare,
+  anti-enumeration, sent to the personal/recovery address. The Email Center menu is likewise hidden
+  behind a generic `requiresProfessionalMailbox` admin-menu flag. i18n (es/en/pt) for the account UI
+  and reset flow, plus an integration test covering the full reset round-trip.
+
+### Fixed
+
+- **Editor font choices now render on the public page's first paint (#156).** A font picked in Puck
+  reached the public DOM, but the `@font-face` rules were injected only client-side in a
+  `useEffect` — so the first SSR paint fell back to the theme font (permanently, if client JS was
+  slow or the fonts fetch failed). The installed fonts' `@font-face` CSS is now emitted into the
+  initial `<head>` at SSR via a shared `buildFontFaceCss()` helper (`frontend/src/lib/fontFaceCss.ts`)
+  that the client loader reuses for fonts uploaded after the SSR cache.
+- **Mail to a user's PERSONAL address no longer lands in a WordJS inbox (#155).** A recipient was
+  treated as local whenever it matched any user's email — so mail to a user's personal gmail.com
+  address was captured into WordJS instead of delivered externally. A recipient is now local ONLY
+  when its domain is the site domain AND that user's professional mailbox is enabled; applied to
+  both the outbound split and the inbound accept path (catch-all is scoped to `@domain`).
+- **The mailbox auto-refreshes (#154).** New or just-sent mail appeared only after a manual reload;
+  a light silent poll (15s) of the current view plus an immediate refresh on tab focus (paused while
+  composing / on settings / when hidden) keeps the folder live without spinner flicker.
+
+## [1.4.3] - 2026-07-12
+
+### Fixed
+
+- **Full responsive pass across all admin/public surfaces + complete i18n coverage (#152).** 66
+  class-only Tailwind fixes (desktop pixel-identical): tables wrapped in `overflow-x-auto`,
+  fixed-width panels/drawers/modals/toasts capped to the viewport, cramped form grids collapse to
+  one column on phones, unbreakable strings (emails, URLs, slugs, DKIM/ACME values) wrap or
+  truncate, hover-only row actions made touch-visible, and `wordjs-ui.css` gains a mobile media
+  block. i18n: 32 core keys that rendered RAW on screen (categories admin, users, plugin permission
+  modal, …) + 18 conference-manager keys fixed across es/en/pt with zero cross-language gaps.
+  Verified live at 375px: zero horizontal overflow, zero raw keys.
+
+## [1.4.2] - 2026-07-11
+
+### Fixed
+
+- **Non-admin users can reach their own plugin UIs (#151).** `/plugins/menus` was gated `isAdmin`,
+  so editors/authors/subscribers received ZERO plugin menu items — hiding e.g. the mail plugin's
+  per-user webmail even though its data routes were already scoped per user. Each menu item is now
+  returned only if the caller holds its declared capability; items declaring NO capability keep the
+  old admin-only default, so nothing previously hidden is exposed. Every user now sees the Email
+  Center with THEIR own scoped inbox; the Server Admin tab stays administrator-only.
+
+## [1.4.1] - 2026-07-11
+
+### Added
+
+- **PROXY protocol (v1) support for inbound SMTP behind a TCP proxy (#150).** When inbound mail
+  reaches WordJS through nginx `stream` (`proxy_protocol on;`) or HAProxy (`send-proxy`), every
+  connection looked like the proxy — breaking SPF, DNSBL, and logging. A new "Trusted proxy IPs"
+  setting (Email Center → Server Admin) makes WordJS read the PROXY header and recover the real
+  sender IP, but ONLY from those exact proxy IPs (a client-forged header from any other origin is
+  ignored — never a blanket trust). IP-only allowlist validated at save and at bind; IPv4 entries
+  also match their `::ffff:` dual-stack form; direct senders unaffected. Verified end-to-end.
+
+## [1.4.0] - 2026-07-11
+
+### Added
+
+- **Zero-config, consent-gated liberation of a squatted port 25 (#149).** Distro LXC templates ship
+  Postfix/Exim bound to `:25`, forcing the mail listener onto the degraded fallback port. WordJS now
+  detects the squatter (socket scan + known-MTA allowlist) and offers a one-click, explicitly
+  confirmed fix: permanently disable the service and rebind. Host-side only (no plugin/bridge
+  reach), admin-authenticated, gated on a manifest `claimPorts` declaration, with a server-side
+  consent flag closing the client TOCTOU. Includes 16 tests.
+
+### Fixed
+
+- **A saved `siteUrl` takes effect immediately** — `saveConfig` now hot-reloads the in-memory
+  config, so CSRF/CORS honor a just-set site URL without a process restart.
+- **Updated plugin admin UIs reach cached browsers.** Plugin bundles were served with a 1-year
+  immutable `Cache-Control` on an unversioned URL, so an updated plugin's UI stayed invisible for a
+  year; they are now served with an ETag + `no-cache` (a tiny 304 when unchanged, fresh bytes the
+  moment the bundle changes).
+- **Plugin UI hooks register idempotently** — `initPlugins` re-ran on every admin-layout remount and
+  stacked duplicate UI elements (e.g. the professional-mail toggle rendering twice); a run-once
+  guard + keyed re-registration fix it.
+- **A user can save their own profile again.** The user form always resends the current role, so the
+  self-role-change guard 403'd EVERY self-save (an admin could never save their own email or display
+  name). An unchanged role is now treated as a no-op; a genuine self role change stays blocked.
+
+## [1.3.1] - 2026-07-11
+
+### Fixed
+
+- **Regex `.exec()` false-positive blocked plugin activation (#148).** The plugin AST scanner flags
+  any call to a method named `exec`/`eval`/`spawn`/… by NAME only, so a benign
+  `/regex/.exec(str)` — `RegExp.prototype.exec` — was rejected as a forbidden command; v1.3.0's
+  mail-server DNS verification used one to parse the DKIM key, so activating the mail server failed
+  on a fresh install. The scanner now exempts the regex-LITERAL form only (`someVar.exec()` stays
+  flagged, since it could be a `child_process` handle it can't resolve statically), and the
+  mail-server switched to `String(...).match(...)`.
+
+## [1.3.0] - 2026-07-11
+
+Focus: **a functional, zero-config mail server** — a 6-agent audit plus live bidirectional SMTP
+testing on a 2-MTA lab found the mail-server plugin was not functional beyond local injection, and
+this release fixes the whole chain (inbound, local delivery, threading, DNS setup) — and
+**plugin-sandbox security hardening**: a fresh adversarial red-team of the sandbox surfaced
 weaknesses that were almost entirely HOST-SIDE (the admin upload/extraction path, which runs on the
 real filesystem outside the child's io-guard, and the options bridge). The child sandbox itself held.
 Still self-audited, not independently audited.
@@ -48,6 +307,66 @@ Still self-audited, not independently audited.
   slug-tagged rate limiter; the AST scanner now flags aliased/indirect `eval` and the `Function`
   constructor; and macOS ZIP junk (`__MACOSX`/`.DS_Store`) is tolerated so valid uploads aren't
   rejected.
+
+### Added
+
+_Mail server — from "receives nothing out of the box" to zero-config internet mail, verified live
+on a 2-MTA lab with real MX routing:_
+
+- **Inbound defaults to port 25 with an honest fallback + live status (#144).** Internet mail is
+  only ever delivered to port 25, but the listener defaulted to 2525 — so out of the box it
+  silently received nothing. It now probe-then-binds 25 (works unconfigured on Windows / privileged
+  runs / Linux with `CAP_NET_BIND_SERVICE`, which `create-wordjs` prints the one-time grant for);
+  when 25 isn't bindable it falls back to 2525 and the Server Admin screen shows a green "Receiving
+  on port 25" or an amber degraded banner with the exact reason, instead of a silent no-inbound.
+- **DNS setup that tells you when you got it right (#145, #146).** The DNS card now lists ALL the
+  records inbound + outbound need in setup order (MX, A, SPF, DKIM, DMARC, PTR) with a per-provider
+  (Cloudflare/Hostinger/GoDaddy/Namecheap) "how to add these" guide — and a **Verify DNS** button
+  that resolves the LIVE DNS and shows a per-record status pill (verified / not found yet /
+  doesn't match), including an exact-key DKIM comparison so a wrong published key reports
+  "mismatch", not a false pass.
+- **Real conversation threading (RFC 5322) (#142).** One stable `Message-ID` per send is used for
+  both the stored record and the wire header, and inbound replies resolve `In-Reply-To`/`References`
+  to inherit the thread — so a cross-user conversation groups into one collapsed row instead of
+  splintering.
+- **Configurable relay/smarthost (#137)** — host/port/TLS/credentials in settings, with the
+  transporter re-created on save; previously the relay path was unreachable and delivery was stuck
+  on direct-MX port 25 (blocked by most clouds).
+
+### Fixed
+
+- **Inbound receipt actually works (#137, #139).** IPv4-mapped IPv6 (`::ffff:1.2.3.4`) is stripped
+  before SPF/DNSBL — the dual-stack listener reported the mapped form, so SPF matched no mechanism
+  and essentially EVERY real IPv4 sender was rejected; DNSBL now fails open on lookup error (only a
+  positive listing rejects). And mailparser's non-bindable values (`false` for a missing HTML part,
+  omitted subject/messageId) are normalized before the SQLite INSERT — a plain-text inbound mail
+  previously 450'd the whole message at end-of-DATA.
+- **Local delivery works on a default install (#138).** `user@localhost` (every default account) was
+  rejected by the address validator, and the validator's `net.isIP()` call threw under
+  `secure-require` for a plugin without the `network` grant — breaking ALL sends. Single-label
+  domains are accepted (they only resolve to a LOCAL user), and the IP-literal check is pure JS.
+- **18 Email Center UI bugs found by driving the plugin live in a browser (#140)** — headline: the
+  reading pane was crushed to ~280px on desktop (one word per line) by a fixed-width message list;
+  plus a global success/error toast for every mailbox action, forward keeping the HTML body,
+  signature no longer double-appended, and more. **Self-sent messages no longer appear twice in a
+  thread (#141)** — the inbox copy is skipped when recipient === sender.
+- **The admin sidebar showed "Media" twice (#143)** — the `attachment` post type registered its own
+  menu item next to the explicit Media Library entry; also dropped leftover DEBUG boot logs.
+
+### Changed
+
+- **Public-page SSR data is cached (ISR) and static assets get real `Cache-Control` (#135).**
+  Public reads opt into Next's Data Cache (settings 60s, plugin assets 120s, posts/pages 30s, each
+  tagged for future on-demand purging; per-user draft-preview reads stay `no-store`), collapsing ~8
+  backend `/settings` calls per render to one. `/uploads` is served
+  `max-age=31536000, immutable` (UUID-unique filenames), themes/plugins 1h with ETag revalidation.
+  Note: Next's cross-request Data Cache only persists in a production build, not `next dev`.
+- **The public Header/Footer chrome is server-rendered (#136).** Both were `"use client"` components
+  that re-fetched settings + menus on every visit after the page had already SSR'd — a per-visitor
+  double round-trip that shipped an empty header in the initial HTML. They now render from data the
+  server already fetched (with the client-fetch fallback kept for the Puck editor preview).
+- **Documentation reconciled with the code (#134)** — every canonical doc brought back in line after
+  the plugin-system overhaul, the sandbox hardening, and releases 1.2.1–1.2.3.
 
 ## [1.2.3] - 2026-07-09
 

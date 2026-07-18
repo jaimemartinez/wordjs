@@ -1,0 +1,53 @@
+{
+    "id": "auctions",
+    "name": "Auctions",
+    "version": "1.0.0",
+    "description": "Auction listings with starting price, minimum increment and end time; public bidding with validation, anti-snipe extension, live polling updates and winner reporting. WordPress parity: YITH Auctions / Ultimate Auction.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "auctions"
+        },
+        "puckComponents": {
+            "entry": "client/puck/AuctionsPuck.tsx"
+        }
+    },
+    "adminMenu": {
+        "label": "Subastas",
+        "icon": "fa-gavel",
+        "href": "/admin/plugin/auctions",
+        "order": 78
+    },
+    "permissions": [
+        {
+            "scope": "database",
+            "access": "read",
+            "reason": "Read auctions, bids and the plugin's own settings table (currency symbol)."
+        },
+        {
+            "scope": "database",
+            "access": "write",
+            "reason": "Create the auctions/bids tables, store bids from the public form and manage auctions from the admin."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Public endpoints for the auction grid, detail and bidding, plus admin CRUD/report endpoints."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the 'Subastas' entry to the admin sidebar."
+        },
+        {
+            "scope": "email",
+            "access": "admin",
+            "reason": "Notify the previous top bidder when their bid is outbid (best-effort, bidding works without mail)."
+        }
+    ]
+}

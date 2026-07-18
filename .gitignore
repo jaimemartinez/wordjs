@@ -87,3 +87,8 @@ backend/plugins/malicious.txt
 # Local editor backup scratch dirs (do not track)
 frontend/_backups/
 frontend/src/app/_backup/
+
+# marketplace/dist/ IS committed on purpose: it is the live catalog served to every install via
+# raw.githubusercontent.com (zips are tiny + deterministic). CI keeps it in sync with marketplace/plugins/.
+cluster-tokens.json
+gateway/cluster-tokens.json

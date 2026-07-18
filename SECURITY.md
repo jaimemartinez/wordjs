@@ -23,8 +23,10 @@ WordJS is built with a "Security First" architecture.
 - **Helmet Headers**: HSTS, `X-Content-Type-Options`, `X-Frame-Options`, and XSS filtering. (The gateway's helmet CSP is off; the **frontend ships a real Content Security Policy** on every route — see Known Limitations.)
 - **IO Guard**: Recursive filesystem locks to prevent unauthorized plugin access outside their directory.
 - **Zip Slip Protection**: Every entry in an uploaded plugin or theme archive has its resolved path verified to stay inside the target directory before extraction.
+- **Marketplace Install Integrity**: One-click installs from the admin Marketplace tab (`backend/src/routes/marketplace.ts`) fetch catalog zips server-side (https-only, size-capped, strict filename shape), verify them **sha256** against the catalog entry, and hand off to the **same** guarded zip-install pipeline as manual uploads (zip-bomb budget, Zip Slip, slug validation, manifest + AST scan) — the marketplace adds no separate install surface beyond the catalog fetch.
 - **SVG Sanitization**: Strips malicious scripts from vector images.
-- **Identity Isolation**: mTLS authentication between Gateway, Backend, and Services.
+- **Identity Isolation**: mTLS authentication between Gateway, Backend, and Services. The **gateway is the cluster CA** (`gateway/src/cluster-ca.js`); each service holds a per-node certificate (`CN` in `{backend, frontend}`) signed by that CA, and the internal control plane (`POST /register`, health checks) requires a valid client cert. The gatewaySecret is an additional shared-header secret on top of the mTLS channel.
+- **Token-Bound Node Enrollment** (separate mode): when the three services run on **different machines**, a new node bootstraps its mTLS identity with a **single-use, role-bound, TTL-limited join token** minted on the gateway (`node scripts/cluster.js token <backend|frontend>`). `node scripts/node-join.js` sends a CSR to a **dedicated token-enrollment listener** (default port `3101`, a separate HTTPS listener that does **not** request a client cert; the strict mTLS `/register` listener is unchanged); the gateway validates the token, **forces `CN` = the token's role** (the CSR subject is ignored), signs the cert, and returns it with the cluster CA. `node-join` verifies the CA fingerprint (`--ca-hash`, a MITM guard) before trusting the response. The token is burned after first use. See [`documentation/separate-mode.md`](documentation/separate-mode.md).
 - **One-Time Install Token**: The pre-install setup endpoints (`POST /setup/install`, `POST /setup/test-db`) are gated by a one-time token printed to the server console (and mirrored to a `0600` file in the data dir; overridable via `WORDJS_INSTALL_TOKEN`, ≥16 chars), compared in constant time and cleared once installed — preventing pre-install takeover.
 - **Import Identifier Allowlist**: The JSON `custom_tables` import validates every table and column name against a strict simple-identifier regex and refuses core tables + `sqlite_*` reserved tables before any SQL interpolation.
 
@@ -44,6 +46,7 @@ WordJS is built with a "Security First" architecture.
 - **No Trust Tier — Per-Capability Grants (default-deny)**: There is **no** trusted tier; every plugin is sandboxed and the admin grants each bridge capability individually in `/admin/plugins` (Android-style, default-deny, persisted server-side and never self-declarable). A plugin gets **nothing** until an operator approves it. First-party plugins are pre-granted only their **declared** capabilities and are not privileged. No plugin bypasses DB scoping, the IO Guard, or these grants.
 - **Outbound-Network Confinement**: A plugin has **no** outbound network unless an admin grants the `network` capability. While not granted, `fetch`/`WebSocket` and the raw `net`/`tls`/`http`/`https`/`http2`/`dgram` modules are blocked. When granted, egress is confined to **public destinations only** by a connect-time guard that blocks loopback, link-local (incl. `169.254.169.254` cloud-metadata), RFC1918, CGNAT (`100.64/10`), IPv6 ULA/loopback, IPv4-mapped-v6, `0.0.0.0/8` (this-host), and multicast/reserved ranges; denies IPC / unix-socket paths; fails closed on unresolvable hosts; and re-validates the **actual resolved IP at connect time** (anti DNS-rebinding) and across redirect hops — so a network-granted plugin still cannot SSRF the metadata endpoint or internal services.
 - **Secret Scrubbing**: Sandboxed plugins receive `config/app` and `dbAsync` views with credential-like fields stripped and core credential/role/option tables (`users`, `options`, …) refused.
+- **Isolated Themes**: A theme's optional server-side `functions.js` runs in the **same OS-isolated sandbox** as plugins (`loadIsolatedPlugin('theme:<slug>')` in `theme-engine.ts`), pre-scanned by the same AST validator and reaching core only through the same permission-checked bridge. Theme code never executes in-process on the host — this closed the former in-process-theme RCE surface.
 
 ### Vulnerability Management
 - **Deep Static Analysis (SAST)**: AST-based (Acorn) scanning of plugins at install to block Injection, RCE, and Obfuscation. Parse failures are treated as violations (**fail-closed**).
@@ -70,10 +73,10 @@ Our team is committed to addressing security issues promptly.
 
 ## 📝 Supported Versions
 
-WordJS is pre-production; only the latest `main` and the current `1.2.x` release line are supported. There is no LTS line yet.
+WordJS is pre-production; only the latest `main` and the current `1.5.x` release line are supported. There is no LTS line yet.
 
 | Version  | Supported | Notes                                             |
 | :------- | :-------- | :------------------------------------------------ |
 | `main`   | ✅         | Latest development line (the only one patched)    |
-| `1.2.x`  | ✅         | Current release line (latest tag `v1.2.3`)        |
-| < `1.2`  | ⚠️        | Best-effort; upgrade to `1.2.x` or latest `main`  |
+| `1.5.x`  | ✅         | Current release line (latest tag `v1.5.4`)        |
+| < `1.5`  | ⚠️        | Best-effort; upgrade to `1.5.x` or latest `main`  |

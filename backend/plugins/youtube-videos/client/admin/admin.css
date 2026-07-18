@@ -1,0 +1,40 @@
+.plugin-admin-youtube {
+  --yt-red: var(--plugin-brand, #EF4444);
+  --yt-red-hover: var(--plugin-brand-hover, #DC2626);
+  --yt-red-accent: var(--plugin-accent, #FEE2E2);
+}
+
+.plugin-admin-youtube input:focus {
+  border-color: var(--yt-red) !important;
+  box-shadow: 0 0 0 4px var(--yt-red-accent) !important;
+}
+
+.plugin-admin-youtube .yt-primary-btn {
+  background: linear-gradient(135deg, var(--yt-red) 0%, var(--yt-red-hover) 100%) !important;
+  box-shadow: 0 4px 14px 0 rgba(239, 68, 68, 0.3) !important;
+  transition: all 0.3s ease !important;
+}
+
+.plugin-admin-youtube .yt-primary-btn:hover:not(:disabled) {
+  transform: translateY(-1px) !important;
+  box-shadow: 0 6px 20px 0 rgba(239, 68, 68, 0.4) !important;
+}
+
+.plugin-admin-youtube .yt-card {
+  background: linear-gradient(to bottom, rgba(255, 255, 255, 0.95), rgba(248, 250, 252, 0.9)) !important;
+  backdrop-filter: blur(16px) !important;
+  border: 1px solid rgba(226, 232, 240, 0.8) !important;
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.04) !important;
+  transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1) !important;
+}
+
+.plugin-admin-youtube .yt-card-hover:hover {
+  transform: translateY(-4px) !important;
+  box-shadow: 0 20px 40px -15px rgba(220, 38, 38, 0.08), 0 0 0 1px rgba(239, 68, 68, 0.15) !important;
+  border-color: rgba(239, 68, 68, 0.25) !important;
+}
+
+.plugin-admin-youtube .yt-badge {
+  background-color: var(--yt-red-accent) !important;
+  color: var(--yt-red-hover) !important;
+}

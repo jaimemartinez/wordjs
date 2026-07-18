@@ -1,0 +1,50 @@
+{
+    "id": "analytics-tag",
+    "name": "Analytics Tag",
+    "version": "1.0.0",
+    "description": "Injects a third-party analytics tag site-wide (Google Analytics 4, Plausible or Matomo) with optional cookie-consent gating: when the cookie-consent plugin is active, tracking waits until the visitor accepts cookies.",
+    "author": "WordJS",
+    "isolated": true,
+    "backend": {
+        "entry": "index.js"
+    },
+    "frontend": {
+        "adminPage": {
+            "entry": "client/admin/page.tsx",
+            "slug": "tracking"
+        }
+    },
+    "adminMenu": {
+        "label": "Analytics",
+        "icon": "fa-chart-simple",
+        "href": "/admin/plugin/tracking",
+        "order": 65
+    },
+    "permissions": [
+        {
+            "scope": "settings",
+            "access": "read",
+            "reason": "Read the analytics configuration (provider, tag ids, consent mode)."
+        },
+        {
+            "scope": "settings",
+            "access": "write",
+            "reason": "Save the analytics configuration from the admin page."
+        },
+        {
+            "scope": "express",
+            "access": "register_route",
+            "reason": "Expose the public config endpoint the loader script reads, plus the admin config endpoints."
+        },
+        {
+            "scope": "admin_menu",
+            "access": "register",
+            "reason": "Add the Analytics entry to the admin sidebar."
+        },
+        {
+            "scope": "assets",
+            "access": "write",
+            "reason": "Enqueue the public loader script that injects the configured analytics tag on every public page."
+        }
+    ]
+}
