@@ -4,6 +4,35 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.6.2] - 2026-07-18
+
+### Added
+
+- **MySQL / MariaDB database driver.** A new `dbDriver: "mysql"` joins sqlite-native, sqlite-legacy and
+  postgres. WordJS models and plugins keep writing ONE dialect (SQLite); the driver
+  (`backend/src/drivers/mysql.ts`) translates it to MySQL at the boundary — `TEXT`→`VARCHAR(255)`/
+  `LONGTEXT` with expression defaults, `AUTO_INCREMENT`, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT
+  IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, functional-index parens, `ANSI_QUOTES`.
+  Point it at a server with `dbHost` / `dbPort: 3306` / `dbUser` / `dbPassword` / `dbName`. Verified
+  end-to-end on MySQL 8.0 (schema build, migrations, CRUD/JOIN/transactions, and a full backend boot
+  serving from MySQL).
+- **Configurable marketplace sources from the admin UI.** The Marketplace tab gains a source manager
+  (⚙️) where an admin points WordJS at any number of catalogs — official or private `https` URLs —
+  instead of a single hard-coded source. Catalogs are merged (dedup by id, list order = priority); a
+  failing source is reported per-source but never breaks the rest. New
+  `GET` / `PUT /api/v1/marketplace/sources`.
+
+### Fixed
+
+- **The plugin marketplace's default catalog source 404'd on every real install.** `DEFAULT_REMOTE`
+  pointed at `raw.githubusercontent.com/.../main/marketplace/dist`, but that path is a build output that
+  is not committed — so a release install could not browse or install ANY marketplace plugin. It now
+  points at the GitHub **release assets** (`releases/latest/download/`), where the catalog is actually
+  published (`marketplace-index.json` + one sha256-verified zip per plugin). Verified `404 → 200`.
+- **The analytics table failed to create on PostgreSQL** (`type "datetime" does not exist`): the
+  `wordjs_analytics` DDL used a literal `DATETIME`. Changed to `TIMESTAMP` (valid on Postgres, MySQL and
+  SQLite affinity) so analytics works on every driver.
+
 ## [1.6.1] - 2026-07-18
 
 ### Fixed
