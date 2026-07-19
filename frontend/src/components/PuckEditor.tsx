@@ -9,6 +9,7 @@ import PublicLayoutShell from "@/components/public/PublicLayoutShell";
 import { puckConfig } from "./puckConfig";
 import RevisionsSidebar from "./RevisionsSidebar";
 import BlockInserter from "./BlockInserter";
+import CommandPalette from "./CommandPalette";
 import { PATTERNS, insertPattern, regenIds } from "@/lib/puckPatterns";
 import InlineTiptap from "./InlineTiptap";
 import { hideClasses } from "./puck/VisibilityField";
@@ -76,12 +77,14 @@ function HistoryControls() {
  *   Supr delete · Ctrl/Cmd+C/V copy/paste the selected block (localStorage → works across pages).
  * Block-level keys are ignored while typing (inputs/contenteditable/inline Tiptap active).
  */
-function EditorHotkeys({ onSave, components }: { onSave?: () => void; components: Record<string, any> }) {
+function EditorHotkeys({ onSave, onCommandPalette, components }: { onSave?: () => void; onCommandPalette?: () => void; components: Record<string, any> }) {
     const getPuck = useGetPuck();
     const onSaveRef = useRef(onSave);
+    const onCommandPaletteRef = useRef(onCommandPalette);
     const componentsRef = useRef(components);
     React.useEffect(() => {
         onSaveRef.current = onSave;
+        onCommandPaletteRef.current = onCommandPalette;
         componentsRef.current = components;
     });
 
@@ -118,6 +121,15 @@ function EditorHotkeys({ onSave, components }: { onSave?: () => void; components
                 e.preventDefault();
                 e.stopPropagation();
                 onSaveRef.current?.();
+                return;
+            }
+
+            // ⌘K / Ctrl+K — toggle the command palette. Handled BEFORE the typing-target guard so it
+            // opens from anywhere (a focused field, or focus inside the canvas iframe).
+            if (mod && key === "k") {
+                e.preventDefault();
+                e.stopPropagation();
+                onCommandPaletteRef.current?.();
                 return;
             }
 
@@ -960,6 +972,7 @@ export default function PuckEditor({
     const [showRevisions, setShowRevisions] = useState(false);
     const [isUiLoaded, setIsUiLoaded] = useState(false);
     const [viewport, setViewport] = useState<ViewportKey>("desktop");
+    const [cmdkOpen, setCmdkOpen] = useState(false); // ⌘K command palette (insert block)
 
 
     const handleRestore = async (revision: Revision) => {
@@ -1089,8 +1102,11 @@ export default function PuckEditor({
                     iframe={{ enabled: true }}
                 >
                     <div className="flex flex-col h-screen w-full overflow-hidden">
-                        {/* Global keyboard layer: save/undo/redo/duplicate/delete/copy/paste */}
-                        <EditorHotkeys onSave={handleManualSave} components={editorConfig.components} />
+                        {/* Global keyboard layer: save/undo/redo/duplicate/delete/copy/paste + ⌘K palette */}
+                        <EditorHotkeys onSave={handleManualSave} onCommandPalette={() => setCmdkOpen((v) => !v)} components={editorConfig.components} />
+
+                        {/* ⌘K command palette — insert any block by search (portals to <body>) */}
+                        <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} components={editorConfig.components} />
 
                         {/* PREMIUM HEADER (h-20) */}
                         <div className="h-20 flex items-center justify-between bg-white/80 backdrop-blur-md px-6 md:px-8 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-6">
@@ -1129,6 +1145,18 @@ export default function PuckEditor({
 
                                 {/* Undo / Redo */}
                                 <HistoryControls />
+
+                                {/* ⌘K command palette launcher (insert any block by search) */}
+                                <button
+                                    type="button"
+                                    onClick={() => setCmdkOpen(true)}
+                                    title={trStr("Insertar bloque (Ctrl/⌘ + K)", language)}
+                                    className="hidden lg:flex items-center gap-2 h-12 px-3.5 rounded-2xl bg-gray-50/50 border border-gray-100 text-gray-500 hover:text-blue-600 hover:bg-gray-100 transition-all duration-300"
+                                >
+                                    <i className="fa-solid fa-magnifying-glass text-sm"></i>
+                                    <span className="text-xs font-bold">{trStr("Insertar", language)}</span>
+                                    <kbd className="text-[10px] font-black text-gray-400 bg-white border border-gray-200 rounded px-1.5 py-0.5 leading-none">⌘K</kbd>
+                                </button>
                             </div>
 
                             {/* Center: Viewport Controls */}
