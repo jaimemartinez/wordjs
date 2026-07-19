@@ -24,6 +24,18 @@ jobs:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping" --health-interval 10s --health-timeout 5s --health-retries 5
+      mysql:
+        image: mysql:8
+        env:
+          MYSQL_ROOT_PASSWORD: password
+          MYSQL_DATABASE: wordjs
+          MYSQL_ROOT_HOST: '%' # allow root over TCP from the runner host (not just the container)
+        ports:
+          - 3306:3306
+        # Credentialed ping so "healthy" means mysqld accepts a real root TCP login (the driver's path),
+        # not merely that the process is up. Extra retries cover MySQL 8's slower first-boot init.
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -ppassword" --health-interval 10s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -47,7 +59,13 @@ jobs:
         working-directory: backend
         run: npx --yes license-checker --production --failOn 'AGPL;SSPL'
       - name: Test
+        # WORDJS_CI_DB=1 turns the driver-conformance suite's postgres+mysql blocks from graceful skips
+        # into hard failures: the service containers above are wired precisely so those drivers ARE
+        # exercised, so a container that never came up must fail the job, not slip through green. This is
+        # the only CI coverage of the SQLite→MySQL translation layer (translateCreateTable/translateSql).
         working-directory: backend
+        env:
+          WORDJS_CI_DB: '1'
         run: npm test
       - name: Integration tests (Postgres + Redis)
         # Exercises the multi-node coordination paths (dist-lock lease CAS, Redis pub/sub coherence)
