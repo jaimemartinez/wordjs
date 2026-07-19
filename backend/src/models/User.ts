@@ -311,30 +311,45 @@ class User {
         return true;
     }
 
-    static async findAll(args: any = {}) {
-        const { role, search, limit = 10, offset = 0 } = args;
-
-        let sql = 'SELECT u.* FROM users u';
-        const params: any[] = [];
+    // Shared filter builder for findAll + count so their WHERE/JOIN can never drift — which is exactly
+    // what made count() ignore the search/role filter (wrong X-WP-Total pagination). All values are bound.
+    static _buildFilter(args: any = {}) {
+        const { role, search } = args;
+        let join = '';
         const where: string[] = [];
-
+        const params: any[] = [];
         if (role) {
-            sql += ' JOIN user_meta um ON u.id = um.user_id';
+            join = ' JOIN user_meta um ON u.id = um.user_id';
             where.push("um.meta_key = 'role' AND um.meta_value = ?");
             params.push(role);
         }
-
         if (search) {
             where.push('(u.user_login LIKE ? OR u.display_name LIKE ? OR u.user_email LIKE ?)');
             const s = `%${search}%`;
             params.push(s, s, s);
         }
+        const whereSql = where.length > 0 ? ' WHERE ' + where.join(' AND ') : '';
+        return { join, whereSql, params };
+    }
 
-        if (where.length > 0) {
-            sql += ' WHERE ' + where.join(' AND ');
-        }
+    static async findAll(args: any = {}) {
+        const { limit = 10, offset = 0, orderBy, order } = args;
+        const { join, whereSql, params } = User._buildFilter(args);
 
-        sql += ` LIMIT ${parseInt(limit, 10)} OFFSET ${parseInt(offset, 10)}`;
+        // Whitelist the ORDER BY column + direction (defense-in-depth — the route already whitelists, but
+        // findAll must never interpolate an arbitrary column). Previously findAll had NO ORDER BY, so the
+        // whitelisted orderBy/order the route passed were silently ignored (the admin user-list sort was a
+        // no-op, rows came back in undefined engine order). A trailing id tiebreak keeps pagination stable.
+        const ALLOWED_ORDER = ['id', 'user_login', 'display_name', 'user_email', 'user_registered'];
+        const col = ALLOWED_ORDER.includes(orderBy) ? orderBy : 'id';
+        const dir = String(order).toUpperCase() === 'DESC' ? 'DESC' : 'ASC';
+        const orderSql = ` ORDER BY u.${col} ${dir}${col !== 'id' ? ', u.id ASC' : ''}`;
+
+        // SELECT DISTINCT so a user with duplicate role meta (a non-atomic updateMeta race or a WXR
+        // import can leave two meta_key='role' rows) can't appear twice via the role JOIN — keeping this
+        // in lockstep with count()'s COUNT(DISTINCT u.id). The ORDER BY columns are all within u.* so
+        // DISTINCT is valid on Postgres too.
+        const sql = `SELECT DISTINCT u.* FROM users u${join}${whereSql}${orderSql} LIMIT ${parseInt(limit, 10)} OFFSET ${parseInt(offset, 10)}`;
 
         const rows = await dbAsync.all(sql, params);
 
@@ -370,8 +385,11 @@ class User {
         return users;
     }
 
-    static async count() {
-        const row = await dbAsync.get('SELECT COUNT(*) as count FROM users');
+    static async count(args: any = {}) {
+        const { join, whereSql, params } = User._buildFilter(args);
+        // COUNT(DISTINCT u.id): the role filter JOINs user_meta, so DISTINCT keeps this equal to the
+        // number of distinct users findAll returns — otherwise pagination totals wouldn't match the list.
+        const row = await dbAsync.get(`SELECT COUNT(DISTINCT u.id) as count FROM users u${join}${whereSql}`, params);
         return row.count;
     }
 

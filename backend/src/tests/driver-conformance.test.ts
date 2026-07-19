@@ -68,6 +68,25 @@ async function runContract(driver: any, d: any) {
         const remaining = await driver.all('SELECT id FROM conf_test');
         assert.strictEqual(remaining.length, 1, 'DELETE must remove exactly one row');
 
+        // --- Revision-prune portability (regression for core/revisions.ts limitRevisions) ---
+        // Pick the N oldest ids with a top-level `ORDER BY ... LIMIT ?`, THEN delete by an explicit id list.
+        // The tempting one-shot `DELETE FROM t WHERE id IN (SELECT id FROM t ORDER BY ... LIMIT ?)` works on
+        // SQLite + Postgres but MySQL rejects it twice over: ER 1093 (can't modify + select the same table in
+        // a subquery) and ER 1235 (LIMIT is unsupported inside an IN-subquery). This select-then-delete form
+        // must therefore hold on EVERY driver. conf_test currently holds one row (alpha, n=99); add two low-n
+        // rows so the "oldest two" pick is deterministic and alpha must survive.
+        await driver.run(`INSERT INTO conf_test (name, n) VALUES (${d.ph(1)}, ${d.ph(2)})${d.ret}`, ['gamma', 5]);
+        await driver.run(`INSERT INTO conf_test (name, n) VALUES (${d.ph(1)}, ${d.ph(2)})${d.ret}`, ['delta', 6]);
+        const oldest = await driver.all(`SELECT id FROM conf_test ORDER BY n ASC LIMIT ${d.ph(1)}`, [2]);
+        assert.strictEqual(oldest.length, 2, 'ORDER BY ... LIMIT ? must return exactly the 2 oldest ids');
+        const pruneIds = oldest.map((r: any) => r.id);
+        const inList = pruneIds.map((_: any, i: number) => d.ph(i + 1)).join(',');
+        const pruned = await driver.run(`DELETE FROM conf_test WHERE id IN (${inList})`, pruneIds);
+        assert.strictEqual(pruned.changes, 2, 'DELETE ... WHERE id IN (<list>) must remove exactly the 2 picked rows');
+        const afterPrune = await driver.all('SELECT name FROM conf_test');
+        assert.strictEqual(afterPrune.length, 1, 'exactly the un-pruned row must remain');
+        assert.strictEqual(afterPrune[0].name, 'alpha', 'the high-n row (alpha) must survive the prune');
+
         await driver.exec('DROP TABLE conf_test');
     } finally {
         try { await driver.close(); } catch { /* */ }

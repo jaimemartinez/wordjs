@@ -229,15 +229,29 @@ async function limitRevisions(postId: number, maxRevisions = 10) {
 
   const toDelete = count - maxRevisions;
 
-  // Delete oldest revisions
-  const result = await dbAsync.run(`
-    DELETE FROM posts WHERE id IN (
-      SELECT id FROM posts
-      WHERE post_parent = ? AND post_type = 'revision'
-      ORDER BY post_modified ASC
-      LIMIT ?
-    )
+  // Select the oldest revision ids to prune, THEN delete by explicit id list. The obvious one-shot
+  // `DELETE FROM posts WHERE id IN (SELECT id FROM posts ... ORDER BY ... LIMIT ?)` works on SQLite and
+  // Postgres but MySQL REJECTS it twice over: ER 1093 (can't modify + select the same table 'posts' in a
+  // subquery) and ER 1235 (LIMIT is not supported inside an IN-subquery). So pruning — and any restore
+  // that triggers it (saveRevision runs OUTSIDE restoreRevision's try) — used to throw on MySQL, leaving
+  // revisions to grow unbounded and 500-ing a restore of a >10-revision post. The select-then-delete
+  // form is portable across all drivers. (A top-level LIMIT ? in the SELECT is fine on every engine.)
+  // The `, id ASC` tiebreak makes the pick deterministic across engines: revisions copy the parent's
+  // post_modified, so many share a timestamp — without it, which rows get pruned would vary by engine.
+  const oldest = await dbAsync.all(`
+    SELECT id FROM posts
+    WHERE post_parent = ? AND post_type = 'revision'
+    ORDER BY post_modified ASC, id ASC
+    LIMIT ?
   `, [postId, toDelete]);
+
+  const ids = oldest.map((r: any) => r.id).filter((id: any) => id != null);
+  if (ids.length === 0) return 0;
+
+  const placeholders = ids.map(() => '?').join(',');
+  // Prune the revisions' meta first (else it orphans in post_meta), then the revision rows themselves.
+  await dbAsync.run(`DELETE FROM post_meta WHERE post_id IN (${placeholders})`, ids);
+  const result = await dbAsync.run(`DELETE FROM posts WHERE id IN (${placeholders})`, ids);
 
   return result.changes;
 }
