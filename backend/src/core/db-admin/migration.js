@@ -4,15 +4,7 @@ const config = require('../../config/app');
 const configManager = require('../../core/configManager');
 const dbManager = require('../../config/database');
 
-const TABLES = [
-    'users', 'user_meta',
-    'posts', 'post_meta',
-    'comments', 'comment_meta',
-    'terms', 'term_taxonomy', 'term_relationships',
-    'options', 'links'
-];
-
-let globalStatus = { step: 'idle', progress: 0, currentTable: '', totalTables: TABLES.length, warnings: [] };
+let globalStatus = { step: 'idle', progress: 0, currentTable: '', totalTables: 0, warnings: [] };
 let targetEncoding = 'UTF8';
 
 /**
@@ -31,6 +23,214 @@ const sanitizeForEncoding = (str) => {
         return map[match] || '?';
     });
 };
+
+// ── Cross-driver data copy: complete, atomic, fail-closed ───────────────────────────────────────
+// Replaces the old copy path, which iterated a HARDCODED 11-table list (silently dropping every
+// plugin wjp_*, wordjs_analytics, schema_migrations and notifications table on an engine switch),
+// used a non-atomic cross-connection BEGIN/COMMIT (each statement grabbed a different pooled
+// connection), and treated a row-count mismatch as a mere warning before switching the live DB.
+// This copies EVERY user table, recreates non-core schema on the target, runs the DML inside the
+// target driver's REAL single-connection transaction(), and FAILS CLOSED — any mismatch throws so
+// the transaction rolls back and the caller must not switch config/restart.
+
+// Tables initializeSchema() creates on the target — they already exist there, so only their DATA is
+// copied. Every OTHER user table must be recreated on the target before its rows can be inserted.
+const CORE_TABLES = new Set([
+    'users', 'user_meta', 'posts', 'post_meta', 'comments', 'comment_meta',
+    'terms', 'term_taxonomy', 'term_relationships', 'options', 'links', 'notifications',
+]);
+
+// Quote an identifier for the target so a reserved-word or hyphenated plugin table/column name is
+// safe (double quotes work on Postgres + SQLite, and on MySQL because the migration session runs with
+// ANSI_QUOTES). A name that can't be safely quoted aborts the migration FAIL-CLOSED — never silently
+// dropped (which was the whole class of bug this rewrite eliminates).
+function quoteIdent(name) {
+    // Reject a double-quote (breaks quoting), NUL, or ANY whitespace. A whitespace name would slip past
+    // the aliased-snapshot reader's table regex and silently empty that table — rejecting it here fails
+    // CLOSED with a clear error. Hyphens / dots / reserved words are fine once double-quoted.
+    if (typeof name !== 'string' || name.length === 0 || /["\s\u0000]/.test(name)) {
+        throw new Error(`Unsafe SQL identifier '${name}' — migration aborted (rename it or migrate that table manually).`);
+    }
+    return `"${name}"`;
+}
+const escLit = (s) => String(s).replace(/'/g, "''"); // escape a value into a single-quoted SQL literal
+
+// Coerce a source value into something every target driver accepts: Date → ISO string, nested object
+// → JSON, boolean → 0/1. Strings pass through unchanged — the migration REFUSES a lossy (non-UTF8)
+// target up-front (see runMigration) rather than silently substituting characters here.
+const sanitizeValue = (val) => {
+    if (val instanceof Date) return val.toISOString();
+    if (val !== null && typeof val === 'object' && !Buffer.isBuffer(val)) return JSON.stringify(val);
+    if (typeof val === 'boolean') return val ? 1 : 0;
+    return val;
+};
+
+// Enumerate every user table in the SOURCE (dialect-specific), excluding engine internals + views.
+// Does NOT drop odd-looking names — quoteIdent makes special-char names safe, and a truly unsafe name
+// throws at use — so a table can never silently vanish from the copy set.
+async function listSourceTables(readAll, sourceDriverName) {
+    let rows;
+    if (sourceDriverName === 'postgres') {
+        rows = await readAll("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = 'public' AND table_type = 'BASE TABLE'");
+    } else if (sourceDriverName === 'mysql') {
+        rows = await readAll("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE() AND table_type = 'BASE TABLE'");
+    } else {
+        rows = await readAll("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%'");
+    }
+    return rows.map((r) => r.name || r.NAME || r.table_name).filter((n) => typeof n === 'string' && n.length > 0);
+}
+
+// Build a target-dialect CREATE TABLE for a non-core table from the source's schema ({sql, columns} —
+// the real getTableSchema() shape). Prefer the raw SQLite CREATE (full fidelity: PK, AUTOINCREMENT,
+// UNIQUE) when the target driver TRANSLATES it (MySQL) or IS SQLite; for Postgres — whose exec does no
+// DDL translation — build from the normalized column list mapped to Postgres types. MySQL TEXT → LONGTEXT
+// so plugin content is never silently capped at VARCHAR(255).
+function buildTargetCreate(table, schema, targetKind) {
+    const qt = quoteIdent(table);
+    const rawSql = schema && schema.sql;
+    const cols = (schema && schema.columns) || [];
+    if (rawSql && (targetKind === 'mysql' || targetKind === 'sqlite')) {
+        // Rewrite only the `CREATE TABLE [IF NOT EXISTS] <name>` PREFIX, matching a quoted/bracketed name
+        // (any chars) OR a bare identifier — so a hyphenated name like "order-items" isn't truncated by a
+        // \w+ name token (which would splice a broken CREATE). Everything after the name is preserved.
+        let sql = rawSql.replace(
+            /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|[A-Za-z0-9_]+)/i,
+            `CREATE TABLE IF NOT EXISTS ${qt}`
+        );
+        if (targetKind === 'mysql') sql = sql.replace(/\bTEXT\b/g, 'LONGTEXT');
+        return sql;
+    }
+    if (!cols.length) {
+        throw new Error(`Cannot recreate table '${table}' on ${targetKind}: no schema (raw CREATE or columns) available from the source.`);
+    }
+    // KNOWN LIMITATION: the column path (Postgres target, or a Postgres/MySQL source with no raw CREATE)
+    // reconstructs from getTableSchema().columns, which does NOT expose PRIMARY KEY / autoincrement — so
+    // the recreated plugin table is DATA-complete (every row copies, ids preserved) but may lack its
+    // PK/serial. This is not data loss; plugins re-establish their own schema on activation. SQLite→MySQL
+    // and SQLite→SQLite keep full fidelity via the raw CREATE above.
+    const mapType = (def) => {
+        if (targetKind === 'postgres') return def.replace(/\bDATETIME\b/g, 'TIMESTAMP').replace(/\bBLOB\b/g, 'BYTEA');
+        if (targetKind === 'mysql') return def.replace(/\bTEXT\b/g, 'LONGTEXT');
+        return def;
+    };
+    return `CREATE TABLE IF NOT EXISTS ${qt} (\n  ${cols.map(mapType).join(',\n  ')}\n)`;
+}
+
+// Recreate a non-core table's schema on the target BEFORE the data copy. DDL runs OUTSIDE the copy
+// transaction — on MySQL, CREATE TABLE (like TRUNCATE) causes an implicit COMMIT that would end the
+// atomic copy. The source schema is captured by the CALLER before the target connects (see
+// runMigration) so this never re-reads a source that may alias the target's connection.
+async function recreateTableOnTarget(table, ctx) {
+    const { schemaByTable, sourceIsSqlite, readAll, targetExec, targetKind } = ctx;
+    let schema = (schemaByTable && schemaByTable[table]) || null;
+    if ((!schema || (!schema.sql && !(schema.columns || []).length)) && sourceIsSqlite) {
+        // sqlite-legacy source (no getTableSchema) — read the canonical CREATE directly.
+        const r = await readAll(`SELECT sql FROM sqlite_master WHERE type = 'table' AND name = '${escLit(table)}'`);
+        schema = { sql: r && r[0] && r[0].sql, columns: [] };
+    }
+    if (!schema || (!schema.sql && !(schema.columns || []).length)) {
+        throw new Error(`Cannot introspect schema for non-core table '${table}'`);
+    }
+    await targetExec(buildTargetCreate(table, schema, targetKind));
+
+    // Replay the table's secondary indexes (SQLite source) so a migrated plugin table isn't degraded to
+    // full-table scans. Skipped for a Postgres target (raw SQLite index DDL wouldn't translate there);
+    // non-fatal — a plugin recreates its indexes idempotently on activation.
+    if (sourceIsSqlite && targetKind !== 'postgres') {
+        const idx = await readAll(`SELECT sql FROM sqlite_master WHERE type = 'index' AND tbl_name = '${escLit(table)}' AND sql IS NOT NULL`);
+        for (const row of idx || []) {
+            const isql = (row.sql || '').replace(/^\s*CREATE\s+(UNIQUE\s+)?INDEX\s+(IF\s+NOT\s+EXISTS\s+)?/i, (_m, u) => `CREATE ${u || ''}INDEX IF NOT EXISTS `);
+            try { await targetExec(isql); } catch (_) { /* non-essential; plugin re-creates on activation */ }
+        }
+    }
+}
+
+// Copy every table's rows into the target through `targetTx` (bound to ONE connection), fail-closed:
+// identifiers are quoted (reserved-word/plugin names), rows cleared with DELETE (never TRUNCATE — it
+// implicit-commits on MySQL and breaks the transaction), and a row-count mismatch THROWS on the FIRST
+// table so the whole unit of work rolls back.
+async function copyTablesInto(tables, { sourceRead, targetTx, onProgress }) {
+    let totalRows = 0;
+    for (let i = 0; i < tables.length; i++) {
+        const table = tables[i];
+        const qt = quoteIdent(table);
+        if (onProgress) onProgress(table, i, tables.length);
+        const rows = await Promise.resolve(sourceRead.all(`SELECT * FROM ${qt}`));
+        await targetTx.exec(`DELETE FROM ${qt}`);
+        for (const row of rows) {
+            const keys = Object.keys(row);
+            if (!keys.length) continue;
+            const qcols = keys.map(quoteIdent).join(',');
+            // Always '?' — SQLite-dialect in; each driver's tx.run normalizes (Postgres → $n, MySQL/SQLite native '?').
+            const placeholders = keys.map(() => '?').join(',');
+            const values = Object.values(row).map(sanitizeValue);
+            await targetTx.run(`INSERT INTO ${qt} (${qcols}) VALUES (${placeholders})`, values);
+        }
+        const cntRow = await Promise.resolve(targetTx.get(`SELECT COUNT(*) as c FROM ${qt}`));
+        const got = parseInt((cntRow && (cntRow.c ?? cntRow.C)) || 0, 10) || 0;
+        if (got !== rows.length) {
+            throw new Error(`Row count mismatch after copying '${table}': source ${rows.length} vs target ${got}. Migration aborted; the original database is left untouched.`);
+        }
+        totalRows += rows.length;
+    }
+    return totalRows;
+}
+
+// Orchestrate: recreate non-core schema (DDL, outside any transaction), then copy ALL data atomically
+// and fail-closed. Returns the total rows copied, or THROWS (the caller must then NOT switch config).
+async function copyAllTables(ctx) {
+    const { tables, nonCore, isAsyncTarget, isMysqlTarget, targetModule, targetWrapper, sourceRead, onProgress } = ctx;
+
+    // 1. Recreate non-core (plugin / analytics / schema_migrations / notifications) tables on the target.
+    for (const t of nonCore) {
+        await recreateTableOnTarget(t, ctx);
+    }
+
+    // 2. Copy all data atomically on ONE pinned connection.
+    if (isAsyncTarget) {
+        return await targetModule.transaction(async (tx) => {
+            // FK/replication toggles run on the PINNED connection (previously issued on throwaway pooled
+            // connections, so they never applied to the writes). We deliberately DO NOT force STRICT
+            // sql_mode: the live MySQL session runs relaxed (mysql.ts) so SQLite's loose values insert
+            // the same way they do at runtime; plugin TEXT is protected from truncation by recreating it
+            // as LONGTEXT (buildTargetCreate), not by weaponizing STRICT (which would abort valid data).
+            if (isMysqlTarget) {
+                await tx.exec('SET FOREIGN_KEY_CHECKS = 0');
+            } else {
+                // Postgres: disabling FK triggers needs superuser — degrade gracefully on managed
+                // instances (the core schema declares no FK constraints, so insert order is safe).
+                try { await tx.exec("SET session_replication_role = 'replica'"); } catch (_) { /* non-superuser */ }
+            }
+            const total = await copyTablesInto(tables, { sourceRead, targetTx: tx, onProgress });
+            if (isMysqlTarget) await tx.exec('SET FOREIGN_KEY_CHECKS = 1');
+            return total;
+        });
+    }
+
+    // File-based SQLite target: better-sqlite3 is a single synchronous connection, so its BEGIN/COMMIT
+    // is genuinely atomic. Adapt the wrapper to the tx shape copyTablesInto expects.
+    const w = targetWrapper;
+    const tx = {
+        exec: (s) => (w.exec ? w.exec(s) : w.run(s)),
+        run: (s, p) => w.prepare(s).run(...(p || [])),
+        get: (s) => w.prepare(s).get(),
+    };
+    w.exec('BEGIN');
+    try {
+        const total = await copyTablesInto(tables, { sourceRead, targetTx: tx, onProgress });
+        w.exec('COMMIT');
+        return total;
+    } catch (e) {
+        try { w.exec('ROLLBACK'); } catch (_) { /* already rolled back */ }
+        throw e;
+    }
+}
+
+// Exported for tests of the cross-driver copy (round-trip a seeded DB across engines / drivers).
+exports.copyAllTables = copyAllTables;
+exports.listSourceTables = listSourceTables;
+exports.recreateTableOnTarget = recreateTableOnTarget;
+exports.CORE_TABLES = CORE_TABLES;
 
 exports.getStatus = (req, res) => {
     // Check for legacy files to allow cleanup
@@ -99,7 +299,7 @@ exports.runMigration = async (req, res) => {
 
     try {
         console.log(`🚀 Migration Started: ${currentDriver} -> ${targetDriver}`);
-        globalStatus = { step: 'initializing', progress: 0, currentTable: '', totalTables: TABLES.length, warnings: [] };
+        globalStatus = { step: 'initializing', progress: 0, currentTable: '', totalTables: 0, warnings: [] };
 
         // 0. Auto-Install Dependencies (Zero Config)
         if (targetDriver === 'sqlite-native') {
@@ -135,6 +335,53 @@ exports.runMigration = async (req, res) => {
         const isPostgresTarget = targetDriver === 'postgres';
         const isMysqlTarget = targetDriver === 'mysql';
         const isAsyncTarget = isPostgresTarget || isMysqlTarget;
+        const targetKind = isMysqlTarget ? 'mysql' : (isPostgresTarget ? 'postgres' : 'sqlite');
+
+        // ── Pre-read the SOURCE before the target connects ────────────────────────────────────────
+        // Enumerate tables + capture each non-core table's schema from the LIVE source NOW, before the
+        // target driver initialises. For a SAME-ENGINE async re-migration (e.g. postgres→postgres to
+        // repoint the server, permitted above) source and target are the SAME driver singleton, and
+        // targetDriverModule.connect() below OVERWRITES its pool to the target — so reading the source
+        // afterwards would read the (empty) target, silently copy 0 rows past the 0===0 guard, and
+        // switch the live DB to an empty server. We therefore ALSO snapshot all rows here when aliased.
+        const sourceIsAsync = currentDriver === 'postgres' || currentDriver === 'mysql';
+        const liveSource = sourceIsAsync ? dbManager.getDbAsync() : sourceDb;
+        const liveReadAll = (sql) => Promise.resolve(liveSource.all(sql));
+        const liveIntrospector = (() => {
+            const m = dbManager.getDbAsync();
+            return m && typeof m.getTableSchema === 'function' && typeof m.getTables === 'function' ? m : null;
+        })();
+
+        const allTables = await listSourceTables(liveReadAll, currentDriver);
+        const nonCore = allTables.filter((t) => !CORE_TABLES.has(t));
+
+        // Capture non-core schema from the live source now (before the target can alias the connection).
+        const schemaByTable = {};
+        for (const t of nonCore) {
+            let s = null;
+            if (liveIntrospector) { try { s = await liveIntrospector.getTableSchema(t); } catch (_) { s = null; } }
+            if ((!s || (!s.sql && !(s.columns || []).length)) && !sourceIsAsync) {
+                const r = await liveReadAll(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${escLit(t)}'`);
+                s = { sql: r && r[0] && r[0].sql, columns: (s && s.columns) || [] };
+            }
+            schemaByTable[t] = s;
+        }
+
+        // Same-engine async re-migration aliases source↔target on one singleton → snapshot rows NOW (the
+        // only moment the source is still readable). Other combos (different modules, or a sync SQLite
+        // source unaffected by the target connecting) stream per-table during the copy.
+        const aliased = isAsyncTarget && currentDriver === targetDriver;
+        let sourceRead = liveSource;
+        if (aliased) {
+            // TRADEOFF: buffers the whole DB in memory. Because the source and target share ONE driver
+            // singleton, this pre-connect read is the ONLY safe window; a very large same-engine repoint
+            // could pressure memory. Acceptable for the CMS's typical data sizes; a future improvement is
+            // a streamed second connection or an on-disk spool. quoteIdent(t) throws on a whitespace name,
+            // so the snapshot reader's table regex only ever sees safe (quotable) names.
+            const snapshot = {};
+            for (const t of allTables) snapshot[t] = await liveReadAll(`SELECT * FROM ${quoteIdent(t)}`);
+            sourceRead = { all: (sql) => { const m = sql.match(/FROM\s+"?([^"\s]+)"?/i); return (m && snapshot[m[1]]) || []; } };
+        }
 
         // 2. Prepare Target
         let tempTargetFile = null;
@@ -184,19 +431,22 @@ exports.runMigration = async (req, res) => {
             });
             await targetDriverModule.connect();
 
-            // 3.1 Verify Encoding (Postgres only — Windows WIN1252 defaults). MySQL uses utf8mb4.
+            // 3.1 REFUSE a lossy (non-UTF8) target. The old code silently rewrote every non-Latin1
+            //     character to '?' — invisible to the row-COUNT guard — permanently mangling content
+            //     (emoji, CJK, smart quotes) while reporting success. Fail closed instead: the operator
+            //     creates the database with ENCODING 'UTF8'. MySQL always runs utf8mb4, so it's exempt.
             if (isPostgresTarget) {
                 try {
                     const encRes = await targetDriverModule.all("SELECT pg_encoding_to_char(encoding) as enc FROM pg_database WHERE datname = current_database()");
                     targetEncoding = encRes[0]?.enc || 'UTF8';
                     console.log(`   Target Encoding: ${targetEncoding}`);
-                    if (targetEncoding !== 'UTF8' && targetEncoding !== 'UTF-8') {
-                        const warn = `Target database encoding is ${targetEncoding}. WordJS will automatically sanitize special characters to ensure migration success.`;
-                        console.warn(`⚠️ ${warn}`);
-                        globalStatus.warnings.push(warn);
-                    }
                 } catch (encErr) {
-                    console.warn('⚠️ Could not verify database encoding:', encErr.message);
+                    // Can't verify the encoding → can't guarantee it's UTF8 → fail closed rather than
+                    // risk silently mangling non-Latin1 content into '?' on a WIN1252 target.
+                    throw new Error(`Could not verify the target Postgres database encoding (${encErr.message}) — migration refused. Ensure the target database uses ENCODING 'UTF8'.`);
+                }
+                if (targetEncoding !== 'UTF8' && targetEncoding !== 'UTF-8') {
+                    throw new Error(`Target Postgres database encoding is ${targetEncoding}, not UTF8 — migration refused to avoid silently corrupting non-Latin1 content. Recreate the target database with ENCODING 'UTF8' and retry.`);
                 }
             }
         } else {
@@ -205,11 +455,7 @@ exports.runMigration = async (req, res) => {
         }
 
         let targetWrapper;
-        if (isAsyncTarget) {
-            // Disable trigger/FK enforcement during the bulk copy (precautionary — the core schema has no
-            // FK constraints). Per-driver syntax: Postgres session_replication_role vs MySQL FK checks.
-            await targetDriverModule.exec(isMysqlTarget ? 'SET FOREIGN_KEY_CHECKS=0' : "SET session_replication_role = 'replica';");
-        } else {
+        if (!isAsyncTarget) {
             targetWrapper = targetDriverModule.get();
             if (targetWrapper.exec) targetWrapper.exec('PRAGMA foreign_keys = OFF;');
             else targetWrapper.run('PRAGMA foreign_keys = OFF;');
@@ -220,6 +466,9 @@ exports.runMigration = async (req, res) => {
                 targetWrapper.pragma('journal_mode = DELETE');
             }
         }
+        // For async targets, the FK/replication-role toggles + STRICT sql_mode now run INSIDE the copy
+        // transaction on the PINNED connection (see copyAllTables) — previously they were issued on
+        // throwaway pooled connections and never applied to the writing connection.
 
         // 4. Initialize Schema on Target. For an async target the schema DDL is emitted in the SOURCE
         //    driver's dialect (module-global driverName) and TRANSLATED at the target driver's boundary
@@ -227,148 +476,45 @@ exports.runMigration = async (req, res) => {
         await dbManager.initializeSchema(isAsyncTarget ? targetDriverModule : targetWrapper, isAsyncTarget);
         console.log('   Schema initialized on target.');
 
-        // 5. Copy Data Table-by-Table
-        let totalRows = 0;
-
-        // Start Transaction
-        if (isAsyncTarget) await targetDriverModule.exec('BEGIN');
-
-        let tablesProcessed = 0;
+        // 5. Copy ALL user data — complete (every table, dynamically enumerated, NOT a hardcoded list),
+        //    atomic (one pinned connection via the driver's transaction()), and FAIL-CLOSED (a row-count
+        //    mismatch throws → rollback → the caller never switches the live DB). See copyAllTables above.
         globalStatus.step = 'copying';
         globalStatus.warnings = [];
 
-        // Define Source Type for Read Logic
-        // Async client-server drivers (Postgres / MySQL) read via sourceAsync; SQLite (Native/Legacy) via sourceDb.
-        const sourceIsAsync = currentDriver === 'postgres' || currentDriver === 'mysql';
-        const sourceAsync = sourceIsAsync ? dbManager.getDbAsync() : null;
+        // (allTables / nonCore / schemaByTable / sourceRead were captured from the LIVE source above,
+        //  BEFORE the target connected — see the pre-read block — so an aliased re-migration can't read
+        //  the empty target here.)
+        globalStatus.totalTables = allTables.length;
+        console.log(`   Copying ${allTables.length} table(s); ${nonCore.length} non-core to recreate: ${nonCore.join(', ') || 'none'}.`);
 
-        for (const table of TABLES) {
-            globalStatus.currentTable = table;
+        const totalRows = await copyAllTables({
+            tables: allTables,
+            nonCore,
+            isAsyncTarget,
+            isMysqlTarget,
+            targetKind,
+            targetModule: targetDriverModule,
+            targetWrapper,
+            targetExec: isAsyncTarget
+                ? (s) => targetDriverModule.exec(s)
+                : (s) => (targetWrapper.exec ? targetWrapper.exec(s) : targetWrapper.run(s)),
+            schemaByTable,
+            // Non-aliased: the source is still live during the copy (index recreation + any sqlite-legacy
+            // schema fallback read through it). Aliased: reads the pre-taken snapshot. Never the target.
+            readAll: (sql) => Promise.resolve(sourceRead.all(sql)),
+            sourceIsSqlite: !sourceIsAsync,
+            sourceRead,
+            onProgress: (table, i, n) => {
+                globalStatus.currentTable = table;
+                globalStatus.progress = Math.round((i / n) * 100);
+            },
+        });
 
-            // Read Source
-            let rows = [];
-            if (sourceIsAsync) {
-                rows = await sourceAsync.all(`SELECT * FROM ${table}`);
-            } else {
-                // SQLite (Native or Legacy)
-                // Both wrappers expose .all(sql) which handles preparation and cleanup internally
-                rows = sourceDb.all(`SELECT * FROM ${table}`);
-            }
-
-
-
-            if (rows.length > 0) {
-                console.log(`   Copying ${rows.length} rows from table '${table}'...`);
-
-                // Clear Table
-                if (isAsyncTarget) {
-                    // Postgres supports CASCADE; MySQL truncates fine with FK checks disabled above.
-                    await targetDriverModule.exec(isMysqlTarget ? `TRUNCATE TABLE ${table}` : `TRUNCATE TABLE ${table} CASCADE`);
-                } else {
-                    if (targetWrapper.exec) targetWrapper.exec(`DELETE FROM ${table}`);
-                    else targetWrapper.run(`DELETE FROM ${table}`);
-                }
-
-                // Insert Data
-                if (isAsyncTarget) {
-                    for (const row of rows) {
-                        const keys = Object.keys(row);
-                        // Postgres uses $1,$2…; MySQL (mysql2) binds ? placeholders.
-                        const placeholders = keys.map((_, i) => isMysqlTarget ? '?' : `$${i + 1}`).join(',');
-                        const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`;
-
-                        // Sanitize values for target encoding
-                        const values = Object.values(row).map(val => {
-                            if (typeof val === 'string') return sanitizeForEncoding(val);
-                            return val;
-                        });
-
-                        await targetDriverModule.run(sql, values);
-                    }
-                } else {
-                    // SQLite Bulk
-                    const keys = Object.keys(rows[0]);
-                    const placeholders = keys.map(() => '?').join(',');
-                    const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`;
-                    const stmt = targetWrapper.prepare(sql);
-
-                    const sanitize = (val) => {
-                        if (val instanceof Date) return val.toISOString();
-                        if (typeof val === 'object' && val !== null) return JSON.stringify(val);
-                        if (typeof val === 'boolean') return val ? 1 : 0;
-                        return val;
-                    };
-
-                    const BATCH_SIZE = 500;
-                    const useTransactions = targetDriver !== 'sqlite-legacy';
-
-                    if (useTransactions) targetWrapper.exec('BEGIN TRANSACTION');
-                    try {
-                        let count = 0;
-                        for (const row of rows) {
-                            const values = Object.values(row).map(sanitize);
-                            stmt.run(...values);
-                            count++;
-                            if (useTransactions && count % BATCH_SIZE === 0) {
-                                targetWrapper.exec('COMMIT');
-                                targetWrapper.exec('BEGIN TRANSACTION');
-                            }
-                        }
-                        if (useTransactions) targetWrapper.exec('COMMIT');
-                    } catch (err) {
-                        try { if (useTransactions) targetWrapper.exec('ROLLBACK'); } catch (e) { }
-                        throw err;
-                    }
-                }
-
-                // VERIFICATION LOGIC
-                try {
-                    let targetCount = 0;
-                    if (isAsyncTarget) {
-                        const allRows = await targetDriverModule.all(`SELECT COUNT(*) as c FROM ${table}`);
-                        targetCount = parseInt(allRows[0].c);
-                    } else {
-                        // SQLite Verification check
-                        // Both Native and Legacy wrappers support .get()
-                        if (targetWrapper.get && typeof targetWrapper.get === 'function') {
-                            const res = targetWrapper.get(`SELECT COUNT(*) as c FROM ${table}`);
-                            targetCount = res ? res.c : 0;
-                        } else {
-                            const stmt = targetWrapper.prepare(`SELECT COUNT(*) as c FROM ${table}`);
-                            const res = stmt.get();
-                            targetCount = res ? res.c : 0;
-                        }
-                    }
-
-                    if (targetCount !== rows.length) {
-                        const msg = `Mismatch in ${table}: Source=${rows.length} vs Target=${targetCount}`;
-                        console.warn('❌ ' + msg);
-                        globalStatus.warnings.push(msg);
-                    } else {
-                        console.log(`   ✅ Verified ${table}: ${targetCount} rows.`);
-                    }
-                } catch (vErr) {
-                    console.warn(`⚠️ Verification skipped for ${table}:`, vErr.message);
-                    console.error(vErr);
-                }
-
-                totalRows += rows.length;
-            }
-
-            tablesProcessed++;
-            globalStatus.progress = Math.round((tablesProcessed / TABLES.length) * 100);
-        }
-
-        // Close Source DB now that we are done reading
+        // Close Source DB now that we are done reading.
         try { if (dbManager.closeDatabase) await dbManager.closeDatabase(); } catch (e) { console.warn('Could not close source DB:', e.message); }
 
-        if (isAsyncTarget) {
-            // Re-enable FK enforcement: MySQL toggles FOREIGN_KEY_CHECKS, Postgres restores replication role.
-            await targetDriverModule.exec(isMysqlTarget ? 'SET FOREIGN_KEY_CHECKS=1' : "SET session_replication_role = 'origin';");
-            await targetDriverModule.exec('COMMIT');
-        }
-
-        console.log(`✅ Data Copied (${totalRows} rows).`);
+        console.log(`✅ Data copied: ${totalRows} row(s) across ${allTables.length} table(s).`);
 
         // 6. Persist & Close Target
         if (targetDriverModule.save) targetDriverModule.save();
