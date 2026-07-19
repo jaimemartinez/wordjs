@@ -3,7 +3,7 @@
  * Overrides Puck's CSS custom properties (its stable theming API) so the built-in
  * palette (<Puck.Components/>), outline tree (<Puck.Outline/>) and field renderer
  * (<Puck.Fields/>) match the WordJS creator design system instead of clashing with
- * the hand-built shell. Imported AFTER "@measured/puck/puck.css" in PuckEditor.tsx
+ * the hand-built shell. Imported AFTER "@wordjs/puck/puck.css" in PuckEditor.tsx
  * so these definitions win the cascade. Only loaded on editor routes.
  */
 

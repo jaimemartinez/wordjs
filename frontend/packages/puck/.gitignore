@@ -1,0 +1,12 @@
+# Build artifacts — rebuilt from source by `npm run build:editor` (tsup). Never commit.
+dist/
+node_modules/
+*.tsbuildinfo
+
+# Re-include Puck's SOURCE directories literally named `data/` (lib/data, reducer/actions/data, …).
+# The repo-root .gitignore has a broad `data/` rule (protecting plugin data dirs like
+# mail-server/data) that would otherwise silently drop ~22 vendored source files and break the
+# build on unresolved `../lib/data/*` imports. Negate the directory first, then its contents, so the
+# parent-dir exclusion is actually lifted. dist/ + node_modules/ above stay ignored.
+!**/data/
+!**/data/**

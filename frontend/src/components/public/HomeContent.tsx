@@ -7,8 +7,8 @@
  */
 import { Fragment } from "react";
 import PluginLoader from "@/components/PluginLoader";
-import { Render } from "@measured/puck";
-import "@measured/puck/puck.css";
+import { Render } from "@wordjs/puck";
+import "@wordjs/puck/puck.css";
 import { pageConfig } from "@/components/puckConfig";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
