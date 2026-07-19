@@ -4,6 +4,30 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.7.0] - 2026-07-19
+
+### Added
+
+- **Companion themes — a plugin can ship its own theme.** A plugin zip may include a top-level
+  `theme/` folder; on the Plugins admin page the admin installs it with one click
+  (`POST /plugins/:slug/install-theme` copies `plugins/<slug>/theme/` → `themes/<slug>-theme` with
+  upload-parity validation, symlink refusal, and a 409 if it already exists). Complements the theme
+  marketplace (remote catalog): companion themes ship *inside* a plugin.
+- **`online-store` v2 — a complete e-commerce.** Product variants with atomic per-variant stock,
+  multi-image galleries, shipping zones + pickup, taxes, customer order history (a StoreOrders block),
+  transactional emails, Stripe refunds, SEO product pages + catalog search/filters, sales reports +
+  CSV, and Stripe webhooks re-verified server-side. Install it from the marketplace (plugin `2.0.0`).
+- **`restaurant-menu` v2 — a complete restaurant.** Dish modifiers (size/extras with price), opening
+  hours + accept-orders window + prep times, table QR (per-table menu + order-from-table + QR
+  generator), native reservations, online payment (Stripe) alongside WhatsApp/cash, a live kitchen
+  view over SSE, menu i18n (es/en) + allergens, and reports. Marketplace plugin `2.0.0`.
+
+### Notes
+
+- The `online-store` and `restaurant-menu` v2 admin pages currently use the v1 utility styling; the
+  premium `admin.css` skin from 1.6.3 is shipped alongside and re-skinning the expanded v2 admins to
+  it is a follow-up.
+
 ## [1.6.3] - 2026-07-18
 
 ### Added
