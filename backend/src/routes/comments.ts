@@ -361,6 +361,19 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: 
 
     const { author, author_email, author_url, content, status } = req.body;
 
+    // SECURITY: changing a comment's MODERATION status (approve '1' / unapprove '0' / spam / trash) is a
+    // privileged action gated by moderate_comments — the SAME capability POST /:id/approve and /:id/spam
+    // require. edit_comments alone lets a caller fix a comment's content/author fields, but must NOT be a
+    // back door to moderation: a custom role granting edit_comments without moderate_comments could
+    // otherwise approve/spam any comment via this field. Reject a status change from a non-moderator.
+    if (status !== undefined && !req.user.can('moderate_comments')) {
+        return res.status(403).json({
+            code: 'rest_forbidden',
+            message: 'You do not have permission to moderate comments.',
+            data: { status: 403 }
+        });
+    }
+
     // SECURITY: enforce the SAME http(s)-only constraint the guest-create path applies via
     // safeAuthorUrl, so an edit_comments user can't set a `javascript:`/`data:` comment_author_url that
     // bypasses guest validation. Only transform when the field was actually provided — leaving it
