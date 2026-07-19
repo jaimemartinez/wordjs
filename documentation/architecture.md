@@ -41,6 +41,7 @@ graph TB
     subgraph "Data Layer"
         SQLite[(🗄️ SQLite)]
         PostgreSQL[(🐘 PostgreSQL)]
+        MySQL[(🐬 MySQL)]
         MediaFS[📁 Media Files]
     end
 
@@ -58,6 +59,7 @@ graph TB
     PluginCore --> PluginN
     Express --> SQLite
     Express --> PostgreSQL
+    Express --> MySQL
     Express --> MediaFS
 ```
 
@@ -378,9 +380,9 @@ graph TB
 Plugins reach a site two ways:
 
 - **Bundled** (`backend/plugins/`) — first-party plugins that ship with core (card-gallery, conference-manager, hello-world, mail-server, photo-carousel, test-schema, video-gallery, youtube-videos).
-- **Marketplace** — **25** first-party plugins whose sources live in `marketplace/plugins/`, distributed **outside** the core build. `backend/scripts/build-marketplace.js` (run as `npm run build:marketplace` from the repo root) packs each into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` — the catalog (id/name/version/category/permissions/size + a **sha256** per zip). The `dist/` output is **committed**, so by default sites fetch the catalog straight from `raw.githubusercontent.com` (main branch) and plugin releases are decoupled from core releases; the `marketplace_source` option can instead pin a tagged-release URL or point at a local directory (dev / air-gapped).
+- **Marketplace** — first-party plugins whose sources live in `marketplace/plugins/`, distributed **outside** the core build. `backend/scripts/build-marketplace.js` (run as `npm run build:marketplace` from the repo root) packs each into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` — the catalog (id/name/version/category/permissions/size + a **sha256** per zip). The `marketplace/dist/` output is a **build artifact and is NOT committed** (it is `.gitignore`d); `.github/workflows/release.yml` runs `build:marketplace` and publishes the catalog + zips as **GitHub Release assets**. So plugin releases are decoupled from core releases, and by default a site fetches the catalog from the release-assets URL `https://github.com/jaimemartinez/wordjs/releases/latest/download` (a dev/full checkout with a local `marketplace/dist/` uses that instead). Sources are **admin-configurable** — see below.
 
-The backend exposes it at **`/api/v1/marketplace`** (`backend/src/routes/marketplace.ts`, admin-only): `GET /catalog` returns the catalog annotated with each entry's installed/active/update state (with a 5-minute in-memory cache), and `POST /install` downloads the zip **server-side** (https-only, size-capped, strict filename shape), verifies its **sha256** against the catalog entry, and hands it to the **same** `installPluginFromZip()` pipeline as a manual upload (zip-bomb budget, Zip Slip/slug validation, manifest + AST security scan) — the marketplace adds no new install surface beyond the catalog fetch itself. The admin UI is the **Marketplace tab** of `/admin/plugins` (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`); an installed plugin lands **inactive with default-deny grants**, exactly like any other install.
+The backend exposes it at **`/api/v1/marketplace`** (`backend/src/routes/marketplace.ts`, admin-only): `GET /catalog` fetches **every** configured source and returns the **merged** catalog (deduped by id, earlier sources winning, each source's errors isolated so one bad URL can't hide the rest) annotated with each entry's installed/active/update state (with a 5-minute in-memory cache); `POST /install` downloads the zip **server-side from the source the entry was listed under** (https-only, size-capped, strict filename shape), verifies its **sha256** against the catalog entry, and hands it to the **same** `installPluginFromZip()` pipeline as a manual upload (zip-bomb budget, Zip Slip/slug validation, manifest + AST security scan) — the marketplace adds no new install surface beyond the catalog fetch itself. **Sources are admin-configurable** via `GET`/`PUT /api/v1/marketplace/sources`, which read/write the `marketplace_sources` option (a JSON list of https catalogs, max 12; each must be https or `http://localhost`); precedence is that list → the legacy single `marketplace_source` option (back-compat) → the repo-local `marketplace/dist/` → the built-in release-assets default. The admin UI is the **Marketplace tab** of `/admin/plugins` (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`); an installed plugin lands **inactive with default-deny grants**, exactly like any other install.
 
 ### Isolated sandbox (separate OS process)
 
@@ -593,8 +595,9 @@ wordjs/
 │   └── package.json
 │
 ├── 📁 marketplace/              # Plugin Marketplace (distributed outside the core build)
-│   ├── 📁 plugins/             # 25 first-party plugin sources
-│   └── 📁 dist/                # Committed catalog: marketplace-index.json + <slug>-<version>.zip
+│   ├── 📁 plugins/             # First-party plugin sources
+│   └── 📁 dist/                # Build output (gitignored): marketplace-index.json + <slug>-<version>.zip
+│                               #   — published as GitHub Release assets, NOT committed
 │
 ├── 📁 documentation/            # Documentation
 │   ├── api.md
@@ -630,7 +633,7 @@ wordjs/
 | **Gateway** | Node.js Cluster   | **3000** | **Identity & Routing (Single Entry Point)** |
 | Frontend    | Next.js           | 3001     | SSR, Visual Editor                          |
 | Backend     | Express.js (TypeScript, compiled) | 4000 | REST API, Plugins                  |
-| Database    | SQLite/PostgreSQL | -        | Data Storage                                |
+| Database    | SQLite / PostgreSQL / MySQL | -        | Data Storage                                |
 
 > For build/run commands and the dev vs prod workflow, see **[development.md](development.md)**.
 
@@ -643,7 +646,7 @@ The backend is written in **TypeScript** (`backend/src/**/*.ts`). In **productio
 - **Strict typecheck:** `backend/tsconfig.json` has `strict: true`, so the strict core is enforced (`strictNullChecks`, `strictFunctionTypes`, `strictBindCallApply`, `strictPropertyInitialization`, `noImplicitThis`, `alwaysStrict`). `noImplicitAny: true` is now **enforced** (every parameter/variable is annotated — real types where locally determinable, explicit `any` only at genuinely dynamic boundaries; the annotation pass was type-only, zero runtime change). One sub-flag remains explicitly **OFF**: `useUnknownInCatchVariables: false`. `module: commonjs`, `moduleDetection: force`, `allowJs`.
 - **Entry / supervisor:** `npm start` runs the `server.js` supervisor. It checks for `backend/dist/index.js`: if present it spawns `node dist/index.js` (compiled); otherwise it falls back to `node -r ts-node/register src/index.ts`. `npm run dev` uses `node --watch -r ./scripts/dev-env.js -r ts-node/register src/index.ts` (the `dev-env.js` preload forces `NODE_ENV=development` for the split-mode dev backend).
 - **In-tree `.js` files compiled via `allowJs`:** `src/core/db-admin/*` (the in-core DB migration/admin runner that used to be the `db-migration` plugin) and `src/core/plugin-worker.js` (the plugin isolate worker) are carried into `dist/` by `allowJs`.
-- **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/transaction/close`, where `transaction(fn)` runs `fn` atomically on a single connection wrapped in BEGIN/COMMIT with ROLLBACK on throw) plus implementations (`sqlite-native`, `sqlite-native-async`, `sqlite-legacy`, `postgres`). Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
+- **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/transaction/close`, where `transaction(fn)` runs `fn` atomically on a single connection wrapped in BEGIN/COMMIT with ROLLBACK on throw) plus implementations (`sqlite-native`, `sqlite-native-async`, `sqlite-legacy`, `postgres`, and `mysql`). The driver is selected by `config.dbDriver` (`backend/src/config/database.ts`, default `sqlite-native`); `mysql` (aliased `mariadb`) targets MySQL 8.0+/MariaDB via `mysql2` and carries a SQLite→MySQL dialect-translation layer (TEXT→VARCHAR/LONGTEXT + expression defaults, AUTO_INCREMENT, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, ANSI_QUOTES). `getDbType()` returns `{ isPostgres, isMySQL, isSQLite, driver }`. Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
 - **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`. Plugins are excluded from the build.
 - **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs **strict typecheck → build → license gate (block AGPL/SSPL) → tests** for the backend, gateway tests, and frontend lint + build.
 

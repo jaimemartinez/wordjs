@@ -445,8 +445,37 @@ export const marketplaceApi = {
         apiGet<{ source: string; isLocal: boolean; sources: MarketplaceSourceStatus[]; count: number; plugins: MarketplaceEntry[] }>(`/marketplace/catalog${refresh ? '?refresh=1' : ''}`),
     install: (id: string) => apiPost<{ success: boolean; message: string; slug: string }>(`/marketplace/install`, { id }),
     // Configurable catalog sources (managed from the Marketplace UI — no hard-coded URL).
+    // Saving an EMPTY list disables the remote marketplace; resetSources returns to the official default.
     getSources: () => apiGet<MarketplaceSources>(`/marketplace/sources`),
     setSources: (sources: string[]) => apiPut<MarketplaceSources>(`/marketplace/sources`, { sources }),
+    resetSources: () => apiPut<MarketplaceSources>(`/marketplace/sources`, { reset: true }),
+};
+
+// Theme marketplace — same system (and the same configurable sources) as the plugin marketplace.
+export interface ThemeMarketplaceEntry {
+    id: string;
+    name: string;
+    version: string;
+    description: string;
+    author: string;
+    file: string;
+    size: number;
+    sha256: string;
+    source?: string;
+    installed: boolean;
+    active: boolean;
+    installedVersion: string | null;
+    updateAvailable: boolean;
+}
+
+export const themesMarketplaceApi = {
+    catalog: (refresh = false) =>
+        apiGet<{ source: string; isLocal: boolean; sources: MarketplaceSourceStatus[]; count: number; themes: ThemeMarketplaceEntry[] }>(`/marketplace/themes/catalog${refresh ? '?refresh=1' : ''}`),
+    install: (id: string) => apiPost<{ success: boolean; message: string; slug: string }>(`/marketplace/themes/install`, { id }),
+    // Own source list, independent from the plugin marketplace (option marketplace_theme_sources).
+    getSources: () => apiGet<MarketplaceSources>(`/marketplace/themes/sources`),
+    setSources: (sources: string[]) => apiPut<MarketplaceSources>(`/marketplace/themes/sources`, { sources }),
+    resetSources: () => apiPut<MarketplaceSources>(`/marketplace/themes/sources`, { reset: true }),
 };
 
 export interface Theme {

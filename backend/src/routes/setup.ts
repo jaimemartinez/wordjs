@@ -81,6 +81,24 @@ router.post('/test-db', async (req: any, res: Response) => {
             await client.end();
             return res.json({ ok: true, message: 'PostgreSQL connection successful.' });
         }
+        if (dbDriver === 'mysql') {
+            if (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user) {
+                return res.json({ ok: false, error: 'host, database and user are required.' });
+            }
+            const mysql = require('mysql2/promise');
+            const conn = await mysql.createConnection({
+                host: dbConn.host,
+                port: Number(dbConn.port) || 3306,
+                user: dbConn.user,
+                password: dbConn.password || '',
+                database: dbConn.database,
+                ssl: dbConn.ssl ? { rejectUnauthorized: false } : undefined,
+                connectTimeout: 4000
+            });
+            await conn.query('SELECT 1');
+            await conn.end();
+            return res.json({ ok: true, message: 'MySQL connection successful.' });
+        }
         if (dbDriver === 'sqlite-native' || dbDriver === 'sqlite-legacy') {
             const fs = require('fs');
             const dataDir = path.resolve('./data');
@@ -118,10 +136,10 @@ router.post('/install', async (req: any, res: Response) => {
     if (!adminUser || !/^[a-zA-Z0-9_.-]{3,}$/.test(String(adminUser))) return fail('Admin username must be at least 3 characters (letters, numbers, . _ -).');
     if (!adminEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(adminEmail))) return fail('A valid admin email is required.');
     if (!adminPassword || String(adminPassword).length < 10) return fail('Admin password must be at least 10 characters.');
-    const ALLOWED_DRIVERS = ['sqlite-native', 'sqlite-legacy', 'postgres'];
+    const ALLOWED_DRIVERS = ['sqlite-native', 'sqlite-legacy', 'postgres', 'mysql'];
     if (!ALLOWED_DRIVERS.includes(dbDriver)) return fail('Invalid database driver.');
-    if (dbDriver === 'postgres' && (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user)) {
-        return fail('PostgreSQL requires host, database, and user.');
+    if ((dbDriver === 'postgres' || dbDriver === 'mysql') && (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user)) {
+        return fail(`${dbDriver === 'mysql' ? 'MySQL' : 'PostgreSQL'} requires host, database, and user.`);
     }
 
     // SECURITY: siteUrl and the mTLS cert SANs below are derived from the request host. The Host /
@@ -201,11 +219,11 @@ router.post('/install', async (req: any, res: Response) => {
         // Database selection (chosen in the installer). SQLite drivers use their own file; Postgres
         // stores a connection object. The driver layer reads these from the live config.
         dbDriver,
-        ...(dbDriver === 'postgres'
+        ...((dbDriver === 'postgres' || dbDriver === 'mysql')
             ? {
                 db: {
                     host: dbConn.host,
-                    port: Number(dbConn.port) || 5432,
+                    port: Number(dbConn.port) || (dbDriver === 'mysql' ? 3306 : 5432),
                     user: dbConn.user,
                     password: dbConn.password || '',
                     database: dbConn.database,

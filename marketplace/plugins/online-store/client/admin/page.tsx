@@ -6,6 +6,10 @@
  * Tabs: Pedidos (orders + CSV export), Productos (CRUD), Cupones (CRUD), Configuración
  * (currency / shipping / manual instructions / store email / write-only Stripe key).
  * All money is INTEGER CENTS server-side; this page converts decimal inputs to cents on save.
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-store) — the markup below only uses cf-* classes
+ * plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
@@ -13,25 +17,18 @@ import { api, apiPost, apiDelete } from "@/lib/api";
 
 const B = "/plugin/online-store";
 
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-5 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnDangerCls = "px-4 py-2 bg-red-50 hover:bg-red-600 hover:text-white text-red-600 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all";
-const cardCls = "bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8";
-
 const ORDER_STATUSES = ["new", "processing", "shipped", "completed", "cancelled"];
 const STATUS_LABELS = { new: "Nuevo", processing: "En proceso", shipped: "Enviado", completed: "Completado", cancelled: "Cancelado" };
 const STATUS_PILL = {
-    new: "bg-blue-100 text-blue-700",
-    processing: "bg-amber-100 text-amber-700",
-    shipped: "bg-purple-100 text-purple-700",
-    completed: "bg-green-100 text-green-700",
-    cancelled: "bg-gray-200 text-gray-500",
+    new: "is-new",
+    processing: "is-processing",
+    shipped: "is-shipped",
+    completed: "is-completed",
+    cancelled: "is-cancelled",
 };
 const PAYMENT_STATUSES = ["pending", "paid", "cancelled"];
 const PAY_LABELS = { pending: "Pendiente", paid: "Pagado", cancelled: "Cancelado" };
-const PAY_PILL = { pending: "bg-amber-100 text-amber-700", paid: "bg-green-100 text-green-700", cancelled: "bg-gray-200 text-gray-500" };
+const PAY_PILL = { pending: "is-pending", paid: "is-paid", cancelled: "is-cancelled" };
 
 // Decimal string -> integer cents (null when invalid).
 const parseMoney = (s) => {
@@ -41,17 +38,65 @@ const parseMoney = (s) => {
 };
 const centsToInput = (cents) => ((Number(cents) || 0) / 100).toFixed(2);
 
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconCart = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <circle cx="9" cy="21" r="1" />
+        <circle cx="20" cy="21" r="1" />
+        <path d="M1 1h4l2.68 13.39a2 2 0 0 0 2 1.61h9.72a2 2 0 0 0 2-1.61L23 6H6" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconDownload = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+    </svg>
+);
+const IconBox = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+        <path d="m3.27 6.96 8.73 5.05 8.73-5.05" />
+        <path d="M12 22.08V12" />
+    </svg>
+);
+const IconTicket = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M2 9a3 3 0 0 1 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 1 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2Z" />
+        <path d="M13 5v2M13 11v2M13 17v2" />
+    </svg>
+);
+
 // Module-level modal (never define a component inside a component).
 function Modal({ title, onClose, children, wide }) {
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-            <div className="absolute inset-0 bg-gray-900/50" onClick={onClose} />
-            <div className={`relative bg-white rounded-3xl shadow-2xl w-full ${wide ? "max-w-3xl" : "max-w-lg"} max-h-[90vh] overflow-y-auto p-6 sm:p-8`}>
-                <div className="flex items-center justify-between mb-6">
-                    <h3 className="text-lg font-black text-gray-900 tracking-tight">{title}</h3>
-                    <button type="button" onClick={onClose} className="text-gray-400 hover:text-gray-700 text-xl leading-none font-bold" aria-label="Cerrar">&#215;</button>
+        <div className="cf-overlay" onClick={onClose}>
+            <div
+                className="cf-letter"
+                role="dialog"
+                aria-modal="true"
+                aria-label={title}
+                style={wide ? { maxWidth: "48rem" } : undefined}
+                onClick={(e) => e.stopPropagation()}
+            >
+                <div className="cf-letter-body">
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem", marginBottom: "1.15rem" }}>
+                        <h3 className="cf-editor-title" style={{ marginBottom: 0 }}>{title}</h3>
+                        <button type="button" onClick={onClose} className="cf-iconbtn" aria-label="Cerrar">&#215;</button>
+                    </div>
+                    {children}
                 </div>
-                {children}
             </div>
         </div>
     );
@@ -305,21 +350,27 @@ export default function OnlineStoreAdminPage() {
     ];
 
     return (
-        <div className="max-w-6xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Tienda Online</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Catálogo + carrito + checkout con cupones y Stripe opcional
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconCart /></div>
+                <div>
+                    <h1 className="cf-title">Tienda Online</h1>
+                    <p className="cf-subtitle">Catálogo + carrito + checkout con cupones y Stripe opcional</p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
-            <div className="flex flex-wrap gap-2 mb-6">
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
                 {tabs.map((t) => (
                     <button
                         key={t.id}
                         type="button"
+                        role="tab"
+                        aria-selected={tab === t.id}
                         onClick={() => { setTab(t.id); setMsg(null); }}
-                        className={`px-4 py-2 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === t.id ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                        className={`cf-tab ${tab === t.id ? "is-active" : ""}`}
                     >
                         {t.label}
                     </button>
@@ -327,71 +378,85 @@ export default function OnlineStoreAdminPage() {
             </div>
 
             {msg && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-6 ${msg.ok ? "bg-green-50 text-green-700" : "bg-red-50 text-red-600"}`}>
+                <div role={msg.ok ? "status" : "alert"} className={`cf-flash ${msg.ok ? "is-ok" : "is-error"}`}>
                     {msg.text}
                 </div>
             )}
 
             {/* ============================ PEDIDOS ============================ */}
             {tab === "orders" && (
-                <div className={cardCls}>
-                    <div className="flex flex-wrap items-center gap-3 mb-6">
-                        <select value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value); loadOrders(e.target.value, orderSearch); }} className="px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl font-medium outline-none">
-                            <option value="">Todos los estados</option>
-                            {ORDER_STATUSES.map((s) => (
-                                <option key={s} value={s}>{STATUS_LABELS[s]}{counts[s] ? ` (${counts[s]})` : ""}</option>
-                            ))}
-                        </select>
-                        <input
-                            type="search"
-                            placeholder="Buscar cliente, email o código…"
-                            value={orderSearch}
-                            onChange={(e) => setOrderSearch(e.target.value)}
-                            onKeyDown={(e) => { if (e.key === "Enter") loadOrders(statusFilter, orderSearch); }}
-                            className="flex-1 min-w-[200px] px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl font-medium outline-none"
-                        />
-                        <button type="button" onClick={() => loadOrders(statusFilter, orderSearch)} className={btnGhostCls}>Buscar</button>
-                        <button type="button" onClick={exportCsv} disabled={busy} className={btnCls}>Exportar CSV</button>
+                <div className="cf-card-item">
+                    <div className="cf-toolbar">
+                        <div className="cf-toolbar-left" style={{ flex: 1 }}>
+                            <select
+                                aria-label="Filtrar por estado"
+                                value={statusFilter}
+                                onChange={(e) => { setStatusFilter(e.target.value); loadOrders(e.target.value, orderSearch); }}
+                                className="cf-select"
+                            >
+                                <option value="">Todos los estados</option>
+                                {ORDER_STATUSES.map((s) => (
+                                    <option key={s} value={s}>{STATUS_LABELS[s]}{counts[s] ? ` (${counts[s]})` : ""}</option>
+                                ))}
+                            </select>
+                            <input
+                                type="search"
+                                aria-label="Buscar pedidos"
+                                placeholder="Buscar cliente, email o código…"
+                                value={orderSearch}
+                                onChange={(e) => setOrderSearch(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") loadOrders(statusFilter, orderSearch); }}
+                                className="cf-input"
+                                style={{ flex: 1, minWidth: "200px", width: "auto" }}
+                            />
+                        </div>
+                        <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                            <button type="button" onClick={() => loadOrders(statusFilter, orderSearch)} className="cf-btn-ghost">Buscar</button>
+                            <button type="button" onClick={exportCsv} disabled={busy} className="cf-btn"><IconDownload /> Exportar CSV</button>
+                        </div>
                     </div>
 
                     {orders.length === 0 ? (
-                        <p className="text-sm text-gray-400">No hay pedidos todavía.</p>
+                        <div className="cf-empty">
+                            <IconBox />
+                            <span>No hay pedidos todavía.</span>
+                        </div>
                     ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
+                        <div className="cf-table-wrap">
+                            <table className="cf-table">
                                 <thead>
-                                    <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                        <th className="py-3 pr-4">#</th>
-                                        <th className="py-3 pr-4">Fecha</th>
-                                        <th className="py-3 pr-4">Cliente</th>
-                                        <th className="py-3 pr-4">Total</th>
-                                        <th className="py-3 pr-4">Pago</th>
-                                        <th className="py-3 pr-4">Estado</th>
-                                        <th className="py-3"></th>
+                                    <tr>
+                                        <th>#</th>
+                                        <th>Fecha</th>
+                                        <th>Cliente</th>
+                                        <th>Total</th>
+                                        <th>Pago</th>
+                                        <th>Estado</th>
+                                        <th style={{ width: "4rem" }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {orders.map((o) => (
-                                        <tr key={o.id} className="border-b border-gray-50 hover:bg-gray-50/60">
-                                            <td className="py-3 pr-4 font-black">#{o.id}</td>
-                                            <td className="py-3 pr-4 text-gray-500 whitespace-nowrap">{String(o.created_at || "").slice(0, 16)}</td>
-                                            <td className="py-3 pr-4">
-                                                <div className="font-bold text-gray-800">{o.customer_name}</div>
-                                                <div className="text-xs text-gray-400">{o.customer_email}</div>
+                                        <tr key={o.id}>
+                                            <td className="cf-cell-strong">#{o.id}</td>
+                                            <td className="cf-cell-date">{String(o.created_at || "").slice(0, 16)}</td>
+                                            <td>
+                                                <div className="cf-cell-strong">{o.customer_name}</div>
+                                                <div className="cf-cell-sub">{o.customer_email}</div>
                                             </td>
-                                            <td className="py-3 pr-4 font-black">{fmt(o.total_cents)}</td>
-                                            <td className="py-3 pr-4">
-                                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${PAY_PILL[o.payment_status] || "bg-gray-100 text-gray-500"}`}>
+                                            <td className="cf-cell-money">{fmt(o.total_cents)}</td>
+                                            <td>
+                                                <span className={`cf-pill ${PAY_PILL[o.payment_status] || ""}`}>
                                                     {PAY_LABELS[o.payment_status] || o.payment_status}
                                                 </span>
                                             </td>
-                                            <td className="py-3 pr-4">
-                                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${STATUS_PILL[o.status] || "bg-gray-100 text-gray-500"}`}>
+                                            <td>
+                                                <span className={`cf-pill ${STATUS_PILL[o.status] || ""}`}>
                                                     {STATUS_LABELS[o.status] || o.status}
                                                 </span>
                                             </td>
-                                            <td className="py-3 text-right">
-                                                <button type="button" onClick={() => setDetail(o)} className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px]"}>Ver</button>
+                                            <td style={{ textAlign: "right" }}>
+                                                <button type="button" onClick={() => setDetail(o)} className="cf-btn-ghost">Ver</button>
                                             </td>
                                         </tr>
                                     ))}
@@ -404,31 +469,34 @@ export default function OnlineStoreAdminPage() {
 
             {/* ============================ PRODUCTOS ============================ */}
             {tab === "products" && (
-                <div className={cardCls}>
-                    <div className="flex items-center justify-between mb-6">
-                        <h2 className="font-bold text-gray-800">Productos ({products.length})</h2>
-                        <button type="button" onClick={() => setProductForm({ ...EMPTY_PRODUCT })} className={btnCls}>Nuevo producto</button>
+                <div className="cf-card-item">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1.25rem" }}>
+                        <h2 className="cf-form-name">Productos ({products.length})</h2>
+                        <button type="button" onClick={() => setProductForm({ ...EMPTY_PRODUCT })} className="cf-btn"><IconPlus /> Nuevo producto</button>
                     </div>
                     {products.length === 0 ? (
-                        <p className="text-sm text-gray-400">Sin productos — crea el primero para que aparezca en el bloque OnlineStore.</p>
+                        <div className="cf-empty">
+                            <IconCart />
+                            <span>Sin productos — crea el primero para que aparezca en el bloque OnlineStore.</span>
+                        </div>
                     ) : (
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+                        <div className="cf-product-grid">
                             {products.map((p) => (
-                                <div key={p.id} className="border border-gray-100 rounded-2xl overflow-hidden flex flex-col">
+                                <div key={p.id} className="cf-product-card">
                                     {p.image_url ? (
                                         // eslint-disable-next-line @next/next/no-img-element
-                                        <img src={p.image_url} alt={p.name} className="w-full aspect-[4/3] object-cover bg-gray-50" decoding="async" />
+                                        <img src={p.image_url} alt={p.name} className="cf-product-img" decoding="async" />
                                     ) : (
-                                        <div className="w-full aspect-[4/3] bg-gray-50 flex items-center justify-center text-gray-300 text-3xl">&#128722;</div>
+                                        <div className="cf-product-ph" aria-hidden="true"><IconCart /></div>
                                     )}
-                                    <div className="p-4 flex flex-col gap-1 flex-1">
-                                        <div className="flex items-center gap-2">
-                                            <span className="font-bold text-gray-800 flex-1 truncate">{p.name}</span>
-                                            {!p.is_published && <span className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-400 text-[9px] font-black uppercase">Oculto</span>}
+                                    <div className="cf-product-body">
+                                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", minWidth: 0 }}>
+                                            <span className="cf-product-name" style={{ flex: 1 }}>{p.name}</span>
+                                            {!p.is_published && <span className="cf-pill is-cancelled">Oculto</span>}
                                         </div>
-                                        <div className="text-xs text-gray-400">{p.category || "Sin categoría"} · {p.stock < 0 ? "Stock ilimitado" : `Stock: ${p.stock}`}</div>
-                                        <div className="font-black text-gray-900 mt-1">{fmt(p.price_cents)}</div>
-                                        <div className="flex gap-2 mt-3">
+                                        <div className="cf-product-meta">{p.category || "Sin categoría"} · {p.stock < 0 ? "Stock ilimitado" : `Stock: ${p.stock}`}</div>
+                                        <div className="cf-product-price">{fmt(p.price_cents)}</div>
+                                        <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.7rem" }}>
                                             <button
                                                 type="button"
                                                 onClick={() => setProductForm({
@@ -437,11 +505,11 @@ export default function OnlineStoreAdminPage() {
                                                     category: p.category || "", stock: p.stock < 0 ? "" : String(p.stock),
                                                     is_published: !!p.is_published,
                                                 })}
-                                                className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px]"}
+                                                className="cf-btn-ghost"
                                             >
-                                                Editar
+                                                <IconPen /> Editar
                                             </button>
-                                            <button type="button" onClick={() => deleteProduct(p.id)} className={btnDangerCls}>Eliminar</button>
+                                            <button type="button" onClick={() => deleteProduct(p.id)} className="cf-btn-danger">Eliminar</button>
                                         </div>
                                     </div>
                                 </div>
@@ -453,53 +521,58 @@ export default function OnlineStoreAdminPage() {
 
             {/* ============================ CUPONES ============================ */}
             {tab === "coupons" && (
-                <div className={cardCls}>
-                    <div className="flex items-center justify-between mb-6">
-                        <h2 className="font-bold text-gray-800">Cupones ({coupons.length})</h2>
-                        <button type="button" onClick={() => setCouponForm({ ...EMPTY_COUPON })} className={btnCls}>Nuevo cupón</button>
+                <div className="cf-card-item">
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "0.75rem", flexWrap: "wrap", marginBottom: "1.25rem" }}>
+                        <h2 className="cf-form-name">Cupones ({coupons.length})</h2>
+                        <button type="button" onClick={() => setCouponForm({ ...EMPTY_COUPON })} className="cf-btn"><IconPlus /> Nuevo cupón</button>
                     </div>
                     {coupons.length === 0 ? (
-                        <p className="text-sm text-gray-400">Sin cupones todavía.</p>
+                        <div className="cf-empty">
+                            <IconTicket />
+                            <span>Sin cupones todavía.</span>
+                        </div>
                     ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
+                        <div className="cf-table-wrap">
+                            <table className="cf-table">
                                 <thead>
-                                    <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                        <th className="py-3 pr-4">Código</th>
-                                        <th className="py-3 pr-4">Descuento</th>
-                                        <th className="py-3 pr-4">Mínimo</th>
-                                        <th className="py-3 pr-4">Usos</th>
-                                        <th className="py-3 pr-4">Activo</th>
-                                        <th className="py-3"></th>
+                                    <tr>
+                                        <th>Código</th>
+                                        <th>Descuento</th>
+                                        <th>Mínimo</th>
+                                        <th>Usos</th>
+                                        <th>Activo</th>
+                                        <th style={{ width: "9rem" }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     {coupons.map((c) => (
-                                        <tr key={c.id} className="border-b border-gray-50 hover:bg-gray-50/60">
-                                            <td className="py-3 pr-4 font-black font-mono">{c.code}</td>
-                                            <td className="py-3 pr-4">{c.type === "percent" ? `${c.value}%` : fmt(c.value)}</td>
-                                            <td className="py-3 pr-4">{c.min_total_cents > 0 ? fmt(c.min_total_cents) : "—"}</td>
-                                            <td className="py-3 pr-4">{c.used_count}{c.max_uses >= 0 ? ` / ${c.max_uses}` : " / ∞"}</td>
-                                            <td className="py-3 pr-4">
-                                                <span className={`px-2.5 py-1 rounded-full text-[10px] font-black uppercase ${c.is_active ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-500"}`}>
+                                        <tr key={c.id}>
+                                            <td><span className="cf-code cf-cell-strong">{c.code}</span></td>
+                                            <td className="cf-cell-money">{c.type === "percent" ? `${c.value}%` : fmt(c.value)}</td>
+                                            <td>{c.min_total_cents > 0 ? fmt(c.min_total_cents) : "—"}</td>
+                                            <td style={{ whiteSpace: "nowrap" }}>{c.used_count}{c.max_uses >= 0 ? ` / ${c.max_uses}` : " / ∞"}</td>
+                                            <td>
+                                                <span className={`cf-pill ${c.is_active ? "is-completed" : "is-cancelled"}`}>
                                                     {c.is_active ? "Sí" : "No"}
                                                 </span>
                                             </td>
-                                            <td className="py-3 text-right whitespace-nowrap">
-                                                <button
-                                                    type="button"
-                                                    onClick={() => setCouponForm({
-                                                        id: c.id, code: c.code, type: c.type,
-                                                        value: c.type === "percent" ? String(c.value) : centsToInput(c.value),
-                                                        minTotal: c.min_total_cents > 0 ? centsToInput(c.min_total_cents) : "",
-                                                        maxUses: c.max_uses >= 0 ? String(c.max_uses) : "",
-                                                        is_active: !!c.is_active,
-                                                    })}
-                                                    className={btnGhostCls.replace("px-5 py-3", "px-4 py-2") + " text-[10px] mr-2"}
-                                                >
-                                                    Editar
-                                                </button>
-                                                <button type="button" onClick={() => deleteCoupon(c.id)} className={btnDangerCls}>Eliminar</button>
+                                            <td style={{ textAlign: "right", whiteSpace: "nowrap" }}>
+                                                <div style={{ display: "inline-flex", gap: "0.5rem" }}>
+                                                    <button
+                                                        type="button"
+                                                        onClick={() => setCouponForm({
+                                                            id: c.id, code: c.code, type: c.type,
+                                                            value: c.type === "percent" ? String(c.value) : centsToInput(c.value),
+                                                            minTotal: c.min_total_cents > 0 ? centsToInput(c.min_total_cents) : "",
+                                                            maxUses: c.max_uses >= 0 ? String(c.max_uses) : "",
+                                                            is_active: !!c.is_active,
+                                                        })}
+                                                        className="cf-btn-ghost"
+                                                    >
+                                                        <IconPen /> Editar
+                                                    </button>
+                                                    <button type="button" onClick={() => deleteCoupon(c.id)} className="cf-btn-danger">Eliminar</button>
+                                                </div>
                                             </td>
                                         </tr>
                                     ))}
@@ -512,57 +585,60 @@ export default function OnlineStoreAdminPage() {
 
             {/* ============================ CONFIGURACIÓN ============================ */}
             {tab === "config" && cfgForm && (
-                <form onSubmit={saveConfig} className={cardCls + " space-y-5 max-w-2xl"}>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                        <div>
-                            <label className={labelCls}>Símbolo de moneda</label>
-                            <input type="text" value={cfgForm.currencySymbol} onChange={(e) => setCfgForm({ ...cfgForm, currencySymbol: e.target.value })} className={inputCls} maxLength={8} />
+                <form onSubmit={saveConfig} className="cf-editor" style={{ maxWidth: "42rem" }}>
+                    <div className="cf-editor-body">
+                        <div className="cf-grid-3">
+                            <div>
+                                <label className="cf-label" htmlFor="st-symbol">Símbolo de moneda</label>
+                                <input id="st-symbol" type="text" value={cfgForm.currencySymbol} onChange={(e) => setCfgForm({ ...cfgForm, currencySymbol: e.target.value })} className="cf-input" maxLength={8} />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="st-code">Código de moneda (ISO)</label>
+                                <input id="st-code" type="text" value={cfgForm.currencyCode} onChange={(e) => setCfgForm({ ...cfgForm, currencyCode: e.target.value })} placeholder="USD" className="cf-input" maxLength={3} />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="st-shipping">Envío fijo ({cfgForm.currencySymbol})</label>
+                                <input id="st-shipping" type="text" inputMode="decimal" value={cfgForm.shipping} onChange={(e) => setCfgForm({ ...cfgForm, shipping: e.target.value })} placeholder="0.00" className="cf-input" />
+                            </div>
                         </div>
-                        <div>
-                            <label className={labelCls}>Código de moneda (ISO)</label>
-                            <input type="text" value={cfgForm.currencyCode} onChange={(e) => setCfgForm({ ...cfgForm, currencyCode: e.target.value })} placeholder="USD" className={inputCls} maxLength={3} />
+                        <div style={{ marginTop: "1.05rem" }}>
+                            <label className="cf-label" htmlFor="st-instructions">Instrucciones de pago manual</label>
+                            <textarea id="st-instructions" rows={3} value={cfgForm.manualPaymentInstructions} onChange={(e) => setCfgForm({ ...cfgForm, manualPaymentInstructions: e.target.value })} className="cf-input" maxLength={2000} />
+                            <p className="cf-help">Se muestran al cliente al elegir pago manual y se incluyen en el correo de confirmación.</p>
                         </div>
-                        <div>
-                            <label className={labelCls}>Envío fijo ({cfgForm.currencySymbol})</label>
-                            <input type="text" inputMode="decimal" value={cfgForm.shipping} onChange={(e) => setCfgForm({ ...cfgForm, shipping: e.target.value })} placeholder="0.00" className={inputCls} />
+                        <div style={{ marginTop: "1.05rem" }}>
+                            <label className="cf-label" htmlFor="st-store-email">Correo de la tienda (notificaciones de pedidos)</label>
+                            <input id="st-store-email" type="email" value={cfgForm.storeEmail} onChange={(e) => setCfgForm({ ...cfgForm, storeEmail: e.target.value })} placeholder="ventas@mitienda.com" className="cf-input" maxLength={200} />
                         </div>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Instrucciones de pago manual</label>
-                        <textarea rows={3} value={cfgForm.manualPaymentInstructions} onChange={(e) => setCfgForm({ ...cfgForm, manualPaymentInstructions: e.target.value })} className={inputCls} maxLength={2000} />
-                        <p className="text-[11px] text-gray-400 mt-2">Se muestran al cliente al elegir pago manual y se incluyen en el correo de confirmación.</p>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Correo de la tienda (notificaciones de pedidos)</label>
-                        <input type="email" value={cfgForm.storeEmail} onChange={(e) => setCfgForm({ ...cfgForm, storeEmail: e.target.value })} placeholder="ventas@mitienda.com" className={inputCls} maxLength={200} />
-                    </div>
-                    <div className="pt-4 border-t border-gray-100">
-                        <label className={labelCls}>
-                            Stripe secret key {hasStripeKey ? <span className="text-green-600">· configurada</span> : <span className="text-gray-300">· sin configurar</span>}
-                        </label>
-                        <input
-                            type="password"
-                            value={stripeKeyInput}
-                            onChange={(e) => { setStripeKeyInput(e.target.value); setClearStripeKey(false); }}
-                            placeholder={hasStripeKey ? "(configurada — escribe para reemplazar)" : "sk_live_… / sk_test_…"}
-                            className={inputCls}
-                            autoComplete="new-password"
-                        />
-                        <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
-                            La key nunca se muestra de vuelta (solo escribir). Con key configurada, el checkout ofrece
-                            "Tarjeta (Stripe)". <strong>Probar:</strong> usa una key <span className="font-mono">sk_test_</span> y
-                            haz un pedido de prueba desde el bloque — si la key es inválida, el pedido cae automáticamente a pago manual
-                            y el error de Stripe aparece como aviso.
-                        </p>
-                        {hasStripeKey && (
-                            <label className="flex items-center gap-2 mt-2 text-[11px] text-gray-500 cursor-pointer select-none">
-                                <input type="checkbox" checked={clearStripeKey} onChange={(e) => { setClearStripeKey(e.target.checked); if (e.target.checked) setStripeKeyInput(""); }} />
-                                Quitar la key (desactivar Stripe)
+                        <div className="cf-config-sep">
+                            <label className="cf-label" htmlFor="st-stripe-key">
+                                Stripe secret key {hasStripeKey ? <span className="cf-ok-text">· configurada</span> : <span className="cf-faint-text">· sin configurar</span>}
                             </label>
-                        )}
-                    </div>
-                    <div className="flex justify-end">
-                        <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar configuración"}</button>
+                            <input
+                                id="st-stripe-key"
+                                type="password"
+                                value={stripeKeyInput}
+                                onChange={(e) => { setStripeKeyInput(e.target.value); setClearStripeKey(false); }}
+                                placeholder={hasStripeKey ? "(configurada — escribe para reemplazar)" : "sk_live_… / sk_test_…"}
+                                className="cf-input"
+                                autoComplete="new-password"
+                            />
+                            <p className="cf-help">
+                                La key nunca se muestra de vuelta (solo escribir). Con key configurada, el checkout ofrece
+                                "Tarjeta (Stripe)". <strong>Probar:</strong> usa una key <span className="cf-code">sk_test_</span> y
+                                haz un pedido de prueba desde el bloque — si la key es inválida, el pedido cae automáticamente a pago manual
+                                y el error de Stripe aparece como aviso.
+                            </p>
+                            {hasStripeKey && (
+                                <label className="cf-check">
+                                    <input type="checkbox" checked={clearStripeKey} onChange={(e) => { setClearStripeKey(e.target.checked); if (e.target.checked) setStripeKeyInput(""); }} />
+                                    Quitar la key (desactivar Stripe)
+                                </label>
+                            )}
+                        </div>
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginTop: "1.5rem" }}>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar configuración"}</button>
+                        </div>
                     </div>
                 </form>
             )}
@@ -570,71 +646,71 @@ export default function OnlineStoreAdminPage() {
             {/* ============================ MODAL: DETALLE PEDIDO ============================ */}
             {detail && (
                 <Modal title={`Pedido #${detail.id}`} onClose={() => setDetail(null)} wide>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6 text-sm">
+                    <div className="cf-grid" style={{ marginBottom: "1.3rem" }}>
                         <div>
-                            <div className={labelCls}>Cliente</div>
-                            <div className="font-bold text-gray-800">{detail.customer_name}</div>
-                            <div className="text-gray-500">{detail.customer_email}</div>
-                            {detail.customer_phone && <div className="text-gray-500">{detail.customer_phone}</div>}
-                            {detail.customer_address && <div className="text-gray-500 whitespace-pre-line">{detail.customer_address}</div>}
+                            <div className="cf-label">Cliente</div>
+                            <div className="cf-cell-strong">{detail.customer_name}</div>
+                            <div className="cf-detail-line">{detail.customer_email}</div>
+                            {detail.customer_phone && <div className="cf-detail-line">{detail.customer_phone}</div>}
+                            {detail.customer_address && <div className="cf-detail-line" style={{ whiteSpace: "pre-line" }}>{detail.customer_address}</div>}
                         </div>
                         <div>
-                            <div className={labelCls}>Pedido</div>
-                            <div className="text-gray-500">Fecha: {String(detail.created_at || "").slice(0, 16)}</div>
-                            <div className="text-gray-500">Código: <span className="font-mono text-xs">{detail.token}</span></div>
-                            <div className="text-gray-500">Método: {detail.payment_method === "stripe" ? "Tarjeta (Stripe)" : "Pago manual"}</div>
-                            {detail.coupon_code && <div className="text-gray-500">Cupón: <span className="font-mono">{detail.coupon_code}</span></div>}
+                            <div className="cf-label">Pedido</div>
+                            <div className="cf-detail-line">Fecha: {String(detail.created_at || "").slice(0, 16)}</div>
+                            <div className="cf-detail-line">Código: <span className="cf-code">{detail.token}</span></div>
+                            <div className="cf-detail-line">Método: {detail.payment_method === "stripe" ? "Tarjeta (Stripe)" : "Pago manual"}</div>
+                            {detail.coupon_code && <div className="cf-detail-line">Cupón: <span className="cf-code">{detail.coupon_code}</span></div>}
                         </div>
                     </div>
 
-                    <div className="overflow-x-auto mb-4">
-                        <table className="w-full text-sm">
+                    <div className="cf-table-wrap" style={{ marginBottom: "1rem" }}>
+                        <table className="cf-table">
                             <thead>
-                                <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                    <th className="py-2 pr-4">Producto</th>
-                                    <th className="py-2 pr-4">Precio</th>
-                                    <th className="py-2 pr-4">Cant.</th>
-                                    <th className="py-2 text-right">Importe</th>
+                                <tr>
+                                    <th>Producto</th>
+                                    <th>Precio</th>
+                                    <th>Cant.</th>
+                                    <th style={{ textAlign: "right" }}>Importe</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {(detail.items || []).map((i, idx) => (
-                                    <tr key={idx} className="border-b border-gray-50">
-                                        <td className="py-2 pr-4 font-medium text-gray-800">{i.name}</td>
-                                        <td className="py-2 pr-4 text-gray-500">{fmt(i.price_cents)}</td>
-                                        <td className="py-2 pr-4 text-gray-500">x{i.qty}</td>
-                                        <td className="py-2 text-right font-bold">{fmt(i.price_cents * i.qty)}</td>
+                                    <tr key={idx}>
+                                        <td className="cf-cell-strong">{i.name}</td>
+                                        <td>{fmt(i.price_cents)}</td>
+                                        <td>x{i.qty}</td>
+                                        <td className="cf-cell-money" style={{ textAlign: "right" }}>{fmt(i.price_cents * i.qty)}</td>
                                     </tr>
                                 ))}
                             </tbody>
                         </table>
                     </div>
 
-                    <div className="text-sm space-y-1 mb-6 max-w-xs ml-auto">
-                        <div className="flex justify-between text-gray-500"><span>Subtotal</span><span>{fmt(detail.subtotal_cents)}</span></div>
-                        {detail.discount_cents > 0 && <div className="flex justify-between text-gray-500"><span>Descuento</span><span>-{fmt(detail.discount_cents)}</span></div>}
-                        <div className="flex justify-between text-gray-500"><span>Envío</span><span>{fmt(detail.shipping_cents)}</span></div>
-                        <div className="flex justify-between font-black text-gray-900 text-base"><span>Total</span><span>{fmt(detail.total_cents)}</span></div>
+                    <div className="cf-totals" style={{ marginBottom: "1.4rem" }}>
+                        <div className="cf-totals-row"><span>Subtotal</span><span>{fmt(detail.subtotal_cents)}</span></div>
+                        {detail.discount_cents > 0 && <div className="cf-totals-row"><span>Descuento</span><span>-{fmt(detail.discount_cents)}</span></div>}
+                        <div className="cf-totals-row"><span>Envío</span><span>{fmt(detail.shipping_cents)}</span></div>
+                        <div className="cf-totals-row is-grand"><span>Total</span><span>{fmt(detail.total_cents)}</span></div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
+                    <div className="cf-grid" style={{ marginBottom: "1.4rem" }}>
                         <div>
-                            <label className={labelCls}>Estado del pedido</label>
-                            <select value={detail.status} onChange={(e) => applyOrderStatus(detail.id, e.target.value)} className={inputCls}>
+                            <label className="cf-label" htmlFor="st-order-status">Estado del pedido</label>
+                            <select id="st-order-status" value={detail.status} onChange={(e) => applyOrderStatus(detail.id, e.target.value)} className="cf-select">
                                 {ORDER_STATUSES.map((s) => <option key={s} value={s}>{STATUS_LABELS[s]}</option>)}
                             </select>
                         </div>
                         <div>
-                            <label className={labelCls}>Estado del pago</label>
-                            <select value={detail.payment_status} onChange={(e) => applyPaymentStatus(detail.id, e.target.value)} className={inputCls}>
+                            <label className="cf-label" htmlFor="st-pay-status">Estado del pago</label>
+                            <select id="st-pay-status" value={detail.payment_status} onChange={(e) => applyPaymentStatus(detail.id, e.target.value)} className="cf-select">
                                 {PAYMENT_STATUSES.map((s) => <option key={s} value={s}>{PAY_LABELS[s]}</option>)}
                             </select>
                         </div>
                     </div>
 
-                    <div className="flex justify-between">
-                        <button type="button" onClick={() => deleteOrder(detail.id)} className={btnDangerCls}>Eliminar pedido</button>
-                        <button type="button" onClick={() => setDetail(null)} className={btnGhostCls}>Cerrar</button>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem", flexWrap: "wrap" }}>
+                        <button type="button" onClick={() => deleteOrder(detail.id)} className="cf-btn-danger">Eliminar pedido</button>
+                        <button type="button" onClick={() => setDetail(null)} className="cf-btn-ghost">Cerrar</button>
                     </div>
                 </Modal>
             )}
@@ -642,40 +718,40 @@ export default function OnlineStoreAdminPage() {
             {/* ============================ MODAL: PRODUCTO ============================ */}
             {productForm && (
                 <Modal title={productForm.id ? "Editar producto" : "Nuevo producto"} onClose={() => setProductForm(null)}>
-                    <form onSubmit={saveProduct} className="space-y-4">
+                    <form onSubmit={saveProduct} style={{ display: "grid", gap: "1.05rem" }}>
                         <div>
-                            <label className={labelCls}>Nombre *</label>
-                            <input type="text" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} className={inputCls} required maxLength={200} />
+                            <label className="cf-label" htmlFor="st-p-name">Nombre *</label>
+                            <input id="st-p-name" type="text" value={productForm.name} onChange={(e) => setProductForm({ ...productForm, name: e.target.value })} className="cf-input" required maxLength={200} />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.05rem" }}>
                             <div>
-                                <label className={labelCls}>Precio ({symbol}) *</label>
-                                <input type="text" inputMode="decimal" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} placeholder="19.99" className={inputCls} required />
+                                <label className="cf-label" htmlFor="st-p-price">Precio ({symbol}) *</label>
+                                <input id="st-p-price" type="text" inputMode="decimal" value={productForm.price} onChange={(e) => setProductForm({ ...productForm, price: e.target.value })} placeholder="19.99" className="cf-input" required />
                             </div>
                             <div>
-                                <label className={labelCls}>Stock (vacío = ilimitado)</label>
-                                <input type="text" inputMode="numeric" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} placeholder="∞" className={inputCls} />
+                                <label className="cf-label" htmlFor="st-p-stock">Stock (vacío = ilimitado)</label>
+                                <input id="st-p-stock" type="text" inputMode="numeric" value={productForm.stock} onChange={(e) => setProductForm({ ...productForm, stock: e.target.value })} placeholder="∞" className="cf-input" />
                             </div>
                         </div>
                         <div>
-                            <label className={labelCls}>Descripción</label>
-                            <textarea rows={3} value={productForm.description} onChange={(e) => setProductForm({ ...productForm, description: e.target.value })} className={inputCls} maxLength={5000} />
+                            <label className="cf-label" htmlFor="st-p-desc">Descripción</label>
+                            <textarea id="st-p-desc" rows={3} value={productForm.description} onChange={(e) => setProductForm({ ...productForm, description: e.target.value })} className="cf-input" maxLength={5000} />
                         </div>
                         <div>
-                            <label className={labelCls}>URL de imagen</label>
-                            <input type="text" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} placeholder="/uploads/2026/07/producto.jpg" className={inputCls} maxLength={1000} />
+                            <label className="cf-label" htmlFor="st-p-img">URL de imagen</label>
+                            <input id="st-p-img" type="text" value={productForm.image_url} onChange={(e) => setProductForm({ ...productForm, image_url: e.target.value })} placeholder="/uploads/2026/07/producto.jpg" className="cf-input" maxLength={1000} />
                         </div>
                         <div>
-                            <label className={labelCls}>Categoría</label>
-                            <input type="text" value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} placeholder="ropa, accesorios…" className={inputCls} maxLength={100} />
+                            <label className="cf-label" htmlFor="st-p-cat">Categoría</label>
+                            <input id="st-p-cat" type="text" value={productForm.category} onChange={(e) => setProductForm({ ...productForm, category: e.target.value })} placeholder="ropa, accesorios…" className="cf-input" maxLength={100} />
                         </div>
-                        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                        <label className="cf-check">
                             <input type="checkbox" checked={!!productForm.is_published} onChange={(e) => setProductForm({ ...productForm, is_published: e.target.checked })} />
                             Publicado (visible en la tienda)
                         </label>
-                        <div className="flex justify-end gap-3">
-                            <button type="button" onClick={() => setProductForm(null)} className={btnGhostCls}>Cancelar</button>
-                            <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
+                            <button type="button" onClick={() => setProductForm(null)} className="cf-btn-ghost">Cancelar</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
                         </div>
                     </form>
                 </Modal>
@@ -684,41 +760,41 @@ export default function OnlineStoreAdminPage() {
             {/* ============================ MODAL: CUPÓN ============================ */}
             {couponForm && (
                 <Modal title={couponForm.id ? "Editar cupón" : "Nuevo cupón"} onClose={() => setCouponForm(null)}>
-                    <form onSubmit={saveCoupon} className="space-y-4">
+                    <form onSubmit={saveCoupon} style={{ display: "grid", gap: "1.05rem" }}>
                         <div>
-                            <label className={labelCls}>Código *</label>
-                            <input type="text" value={couponForm.code} onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })} placeholder="VERANO10" className={inputCls + " font-mono uppercase"} required maxLength={50} />
+                            <label className="cf-label" htmlFor="st-c-code">Código *</label>
+                            <input id="st-c-code" type="text" value={couponForm.code} onChange={(e) => setCouponForm({ ...couponForm, code: e.target.value.toUpperCase() })} placeholder="VERANO10" className="cf-input cf-code" style={{ textTransform: "uppercase" }} required maxLength={50} />
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.05rem" }}>
                             <div>
-                                <label className={labelCls}>Tipo</label>
-                                <select value={couponForm.type} onChange={(e) => setCouponForm({ ...couponForm, type: e.target.value })} className={inputCls}>
+                                <label className="cf-label" htmlFor="st-c-type">Tipo</label>
+                                <select id="st-c-type" value={couponForm.type} onChange={(e) => setCouponForm({ ...couponForm, type: e.target.value })} className="cf-select">
                                     <option value="percent">Porcentaje (%)</option>
                                     <option value="fixed">Monto fijo ({symbol})</option>
                                 </select>
                             </div>
                             <div>
-                                <label className={labelCls}>{couponForm.type === "percent" ? "Porcentaje (1–100)" : `Monto (${symbol})`}</label>
-                                <input type="text" inputMode="decimal" value={couponForm.value} onChange={(e) => setCouponForm({ ...couponForm, value: e.target.value })} placeholder={couponForm.type === "percent" ? "10" : "5.00"} className={inputCls} required />
+                                <label className="cf-label" htmlFor="st-c-value">{couponForm.type === "percent" ? "Porcentaje (1–100)" : `Monto (${symbol})`}</label>
+                                <input id="st-c-value" type="text" inputMode="decimal" value={couponForm.value} onChange={(e) => setCouponForm({ ...couponForm, value: e.target.value })} placeholder={couponForm.type === "percent" ? "10" : "5.00"} className="cf-input" required />
                             </div>
                         </div>
-                        <div className="grid grid-cols-2 gap-4">
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "1.05rem" }}>
                             <div>
-                                <label className={labelCls}>Compra mínima ({symbol})</label>
-                                <input type="text" inputMode="decimal" value={couponForm.minTotal} onChange={(e) => setCouponForm({ ...couponForm, minTotal: e.target.value })} placeholder="0.00" className={inputCls} />
+                                <label className="cf-label" htmlFor="st-c-min">Compra mínima ({symbol})</label>
+                                <input id="st-c-min" type="text" inputMode="decimal" value={couponForm.minTotal} onChange={(e) => setCouponForm({ ...couponForm, minTotal: e.target.value })} placeholder="0.00" className="cf-input" />
                             </div>
                             <div>
-                                <label className={labelCls}>Usos máximos (vacío = ∞)</label>
-                                <input type="text" inputMode="numeric" value={couponForm.maxUses} onChange={(e) => setCouponForm({ ...couponForm, maxUses: e.target.value })} placeholder="∞" className={inputCls} />
+                                <label className="cf-label" htmlFor="st-c-max">Usos máximos (vacío = ∞)</label>
+                                <input id="st-c-max" type="text" inputMode="numeric" value={couponForm.maxUses} onChange={(e) => setCouponForm({ ...couponForm, maxUses: e.target.value })} placeholder="∞" className="cf-input" />
                             </div>
                         </div>
-                        <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer select-none">
+                        <label className="cf-check">
                             <input type="checkbox" checked={!!couponForm.is_active} onChange={(e) => setCouponForm({ ...couponForm, is_active: e.target.checked })} />
                             Activo
                         </label>
-                        <div className="flex justify-end gap-3">
-                            <button type="button" onClick={() => setCouponForm(null)} className={btnGhostCls}>Cancelar</button>
-                            <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                        <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem" }}>
+                            <button type="button" onClick={() => setCouponForm(null)} className="cf-btn-ghost">Cancelar</button>
+                            <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
                         </div>
                     </form>
                 </Modal>

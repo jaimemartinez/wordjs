@@ -45,7 +45,7 @@ exports.getStatus = (req, res) => {
 
     res.json({
         currentDriver,
-        availableDrivers: ['sqlite-legacy', 'sqlite-native', 'postgres'],
+        availableDrivers: ['sqlite-legacy', 'sqlite-native', 'postgres', 'mysql'],
         status: globalStatus,
         legacyFiles
     });
@@ -87,13 +87,13 @@ exports.runMigration = async (req, res) => {
     let targetDriverModule = null;
 
     // Safety Checks
-    if (!targetDriver || !['sqlite-legacy', 'sqlite-native', 'postgres'].includes(targetDriver)) {
+    if (!targetDriver || !['sqlite-legacy', 'sqlite-native', 'postgres', 'mysql'].includes(targetDriver)) {
         return res.status(400).json({ error: 'Invalid target driver' });
     }
 
     const currentDriver = config.dbDriver || 'sqlite-legacy';
-    if (targetDriver === currentDriver && targetDriver !== 'postgres') {
-        // Allow re-migration to postgres for credential updates, but block file-to-file defaults
+    if (targetDriver === currentDriver && targetDriver !== 'postgres' && targetDriver !== 'mysql') {
+        // Allow re-migration to postgres/mysql for credential updates, but block file-to-file defaults
         return res.status(400).json({ error: 'Already using this driver' });
     }
 
@@ -116,13 +116,25 @@ exports.runMigration = async (req, res) => {
                 execSync('npm install pg --save', { cwd: path.resolve(__dirname, '../../../../'), stdio: 'inherit' });
             }
         }
+        if (targetDriver === 'mysql') {
+            try { require.resolve('mysql2'); } catch (e) {
+                console.log('📦 Installing MySQL Driver (mysql2)...');
+                const { execSync } = require('child_process');
+                execSync('npm install mysql2 --save', { cwd: path.resolve(__dirname, '../../../../'), stdio: 'inherit' });
+            }
+        }
 
-        // 1. Connect to Source (Current Active DB)
+        // 1. Connect to Source (Current Active DB). Postgres and MySQL are async client-server drivers
+        //    (no local file, sync getDb() throws for them); the file-based SQLite drivers use getDb().
         let sourceDb = null;
-        if (config.dbDriver !== 'postgres') {
+        if (config.dbDriver !== 'postgres' && config.dbDriver !== 'mysql') {
             sourceDb = dbManager.getDb();
         }
+        // ASYNC targets (Postgres + MySQL) share the client-server path: init({dbConfig}) + connect(),
+        // schema via the async driver, a `db` connection block in config (not a dbPath file).
         const isPostgresTarget = targetDriver === 'postgres';
+        const isMysqlTarget = targetDriver === 'mysql';
+        const isAsyncTarget = isPostgresTarget || isMysqlTarget;
 
         // 2. Prepare Target
         let tempTargetFile = null;
@@ -144,7 +156,7 @@ exports.runMigration = async (req, res) => {
             }
         };
 
-        if (!isPostgresTarget) {
+        if (!isAsyncTarget) {
             const targetFilename = targetDriver === 'sqlite-native' ? 'wordjs-native.db' : 'wordjs.db';
             targetFile = path.resolve('./data', targetFilename);
             // Use a temporary file for writing to avoid locking issues on the main file during the process
@@ -165,35 +177,38 @@ exports.runMigration = async (req, res) => {
         // 3. Connect to Target Driver
         targetDriverModule = require(`../../drivers/${targetDriver}`);
 
-        if (isPostgresTarget) {
-            // Dynamic Init for Postgres
+        if (isAsyncTarget) {
+            // Dynamic init for an async client-server driver (Postgres / MySQL).
             await targetDriverModule.init({
                 dbConfig: { host: dbHost, user: dbUser, password: dbPassword, name: dbName, port: dbPort }
             });
             await targetDriverModule.connect();
 
-            // 3.1 Verify Encoding (Special check for Windows users with WIN1252 defaults)
-            try {
-                const encRes = await targetDriverModule.all("SELECT pg_encoding_to_char(encoding) as enc FROM pg_database WHERE datname = current_database()");
-                targetEncoding = encRes[0]?.enc || 'UTF8';
-                console.log(`   Target Encoding: ${targetEncoding}`);
-                if (targetEncoding !== 'UTF8' && targetEncoding !== 'UTF-8') {
-                    const warn = `Target database encoding is ${targetEncoding}. WordJS will automatically sanitize special characters to ensure migration success.`;
-                    console.warn(`⚠️ ${warn}`);
-                    globalStatus.warnings.push(warn);
+            // 3.1 Verify Encoding (Postgres only — Windows WIN1252 defaults). MySQL uses utf8mb4.
+            if (isPostgresTarget) {
+                try {
+                    const encRes = await targetDriverModule.all("SELECT pg_encoding_to_char(encoding) as enc FROM pg_database WHERE datname = current_database()");
+                    targetEncoding = encRes[0]?.enc || 'UTF8';
+                    console.log(`   Target Encoding: ${targetEncoding}`);
+                    if (targetEncoding !== 'UTF8' && targetEncoding !== 'UTF-8') {
+                        const warn = `Target database encoding is ${targetEncoding}. WordJS will automatically sanitize special characters to ensure migration success.`;
+                        console.warn(`⚠️ ${warn}`);
+                        globalStatus.warnings.push(warn);
+                    }
+                } catch (encErr) {
+                    console.warn('⚠️ Could not verify database encoding:', encErr.message);
                 }
-            } catch (encErr) {
-                console.warn('⚠️ Could not verify database encoding:', encErr.message);
             }
         } else {
-            // Legacy driver takes path
-            // Write to .tmp first
+            // File-based SQLite driver takes a path — write to .tmp first.
             await targetDriverModule.init({ dbPath: tempTargetFile });
         }
 
         let targetWrapper;
-        if (isPostgresTarget) {
-            await targetDriverModule.exec("SET session_replication_role = 'replica';"); // Disable Triggers/FKs
+        if (isAsyncTarget) {
+            // Disable trigger/FK enforcement during the bulk copy (precautionary — the core schema has no
+            // FK constraints). Per-driver syntax: Postgres session_replication_role vs MySQL FK checks.
+            await targetDriverModule.exec(isMysqlTarget ? 'SET FOREIGN_KEY_CHECKS=0' : "SET session_replication_role = 'replica';");
         } else {
             targetWrapper = targetDriverModule.get();
             if (targetWrapper.exec) targetWrapper.exec('PRAGMA foreign_keys = OFF;');
@@ -206,30 +221,33 @@ exports.runMigration = async (req, res) => {
             }
         }
 
-        // 4. Initialize Schema on Target
-        await dbManager.initializeSchema(isPostgresTarget ? targetDriverModule : targetWrapper, isPostgresTarget);
+        // 4. Initialize Schema on Target. For an async target the schema DDL is emitted in the SOURCE
+        //    driver's dialect (module-global driverName) and TRANSLATED at the target driver's boundary
+        //    — the MySQL driver rewrites sqlite/postgres DDL to MySQL, so this works for any source.
+        await dbManager.initializeSchema(isAsyncTarget ? targetDriverModule : targetWrapper, isAsyncTarget);
         console.log('   Schema initialized on target.');
 
         // 5. Copy Data Table-by-Table
         let totalRows = 0;
 
         // Start Transaction
-        if (isPostgresTarget) await targetDriverModule.exec('BEGIN');
+        if (isAsyncTarget) await targetDriverModule.exec('BEGIN');
 
         let tablesProcessed = 0;
         globalStatus.step = 'copying';
         globalStatus.warnings = [];
 
         // Define Source Type for Read Logic
-        // Postgres uses sourceAsync, SQLite (Native/Legacy) uses sourceDb
-        const sourceAsync = currentDriver === 'postgres' ? dbManager.getDbAsync() : null;
+        // Async client-server drivers (Postgres / MySQL) read via sourceAsync; SQLite (Native/Legacy) via sourceDb.
+        const sourceIsAsync = currentDriver === 'postgres' || currentDriver === 'mysql';
+        const sourceAsync = sourceIsAsync ? dbManager.getDbAsync() : null;
 
         for (const table of TABLES) {
             globalStatus.currentTable = table;
 
             // Read Source
             let rows = [];
-            if (currentDriver === 'postgres') {
+            if (sourceIsAsync) {
                 rows = await sourceAsync.all(`SELECT * FROM ${table}`);
             } else {
                 // SQLite (Native or Legacy)
@@ -243,18 +261,20 @@ exports.runMigration = async (req, res) => {
                 console.log(`   Copying ${rows.length} rows from table '${table}'...`);
 
                 // Clear Table
-                if (isPostgresTarget) {
-                    await targetDriverModule.exec(`TRUNCATE TABLE ${table} CASCADE`);
+                if (isAsyncTarget) {
+                    // Postgres supports CASCADE; MySQL truncates fine with FK checks disabled above.
+                    await targetDriverModule.exec(isMysqlTarget ? `TRUNCATE TABLE ${table}` : `TRUNCATE TABLE ${table} CASCADE`);
                 } else {
                     if (targetWrapper.exec) targetWrapper.exec(`DELETE FROM ${table}`);
                     else targetWrapper.run(`DELETE FROM ${table}`);
                 }
 
                 // Insert Data
-                if (isPostgresTarget) {
+                if (isAsyncTarget) {
                     for (const row of rows) {
                         const keys = Object.keys(row);
-                        const placeholders = keys.map((_, i) => `$${i + 1}`).join(',');
+                        // Postgres uses $1,$2…; MySQL (mysql2) binds ? placeholders.
+                        const placeholders = keys.map((_, i) => isMysqlTarget ? '?' : `$${i + 1}`).join(',');
                         const sql = `INSERT INTO ${table} (${keys.join(',')}) VALUES (${placeholders})`;
 
                         // Sanitize values for target encoding
@@ -304,7 +324,7 @@ exports.runMigration = async (req, res) => {
                 // VERIFICATION LOGIC
                 try {
                     let targetCount = 0;
-                    if (isPostgresTarget) {
+                    if (isAsyncTarget) {
                         const allRows = await targetDriverModule.all(`SELECT COUNT(*) as c FROM ${table}`);
                         targetCount = parseInt(allRows[0].c);
                     } else {
@@ -342,8 +362,9 @@ exports.runMigration = async (req, res) => {
         // Close Source DB now that we are done reading
         try { if (dbManager.closeDatabase) await dbManager.closeDatabase(); } catch (e) { console.warn('Could not close source DB:', e.message); }
 
-        if (isPostgresTarget) {
-            await targetDriverModule.exec("SET session_replication_role = 'origin';");
+        if (isAsyncTarget) {
+            // Re-enable FK enforcement: MySQL toggles FOREIGN_KEY_CHECKS, Postgres restores replication role.
+            await targetDriverModule.exec(isMysqlTarget ? 'SET FOREIGN_KEY_CHECKS=1' : "SET session_replication_role = 'origin';");
             await targetDriverModule.exec('COMMIT');
         }
 
@@ -384,7 +405,7 @@ exports.runMigration = async (req, res) => {
 
         // 8. Update Configuration
         const newConfig = { dbDriver: targetDriver };
-        if (!isPostgresTarget) {
+        if (!isAsyncTarget) {
             // Make path relative to backend root (e.g. ./data/wordjs.db)
             // path.relative might return 'data/wordjs.db', we want './data/...' usually, but 'data/...' works too.
             // Let's stick to the current convention of ./data

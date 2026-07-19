@@ -88,14 +88,16 @@ Esto aplica a:
 
 Los plugins usan sintaxis SQLite estándar, y el core la traduce automáticamente:
 
-| Tipo Plugin | SQLite                              | PostgreSQL           |
-| ----------- | ----------------------------------- | -------------------- |
-| `INT_PK`    | `INTEGER PRIMARY KEY AUTOINCREMENT` | `SERIAL PRIMARY KEY` |
-| `INT`       | `INTEGER`                           | `INTEGER`            |
-| `TEXT`      | `TEXT`                              | `TEXT`               |
-| `REAL`      | `REAL`                              | `REAL`               |
-| `DATETIME`  | `DATETIME`                          | `TIMESTAMP`          |
-| `TIMESTAMP` | `DATETIME`                          | `TIMESTAMP`          |
+| Tipo Plugin | SQLite                              | PostgreSQL           | MySQL / MariaDB                        |
+| ----------- | ----------------------------------- | -------------------- | -------------------------------------- |
+| `INT_PK`    | `INTEGER PRIMARY KEY AUTOINCREMENT` | `SERIAL PRIMARY KEY` | `INTEGER AUTO_INCREMENT PRIMARY KEY`   |
+| `INT`       | `INTEGER`                           | `INTEGER`            | `INTEGER`                              |
+| `TEXT`      | `TEXT`                              | `TEXT`               | `VARCHAR(255)` (o `LONGTEXT` en columnas de contenido largo) |
+| `REAL`      | `REAL`                              | `REAL`               | `REAL`                                 |
+| `DATETIME`  | `DATETIME`                          | `TIMESTAMP`          | `DATETIME`                             |
+| `TIMESTAMP` | `DATETIME`                          | `TIMESTAMP`          | `DATETIME`                             |
+
+> El driver **MySQL** (`backend/src/drivers/mysql.ts`, `mysql2`, MySQL 8.0+/MariaDB) traduce el dialecto SQLite en el borde del driver (`translateSql`): `INTEGER PRIMARY KEY AUTOINCREMENT`/`SERIAL` → `INTEGER AUTO_INCREMENT PRIMARY KEY`, `TEXT` → `VARCHAR(255)` (o `LONGTEXT` en columnas de contenido largo conocidas, porque MySQL no admite default literal en `TEXT`), `INSERT OR IGNORE`/`ON CONFLICT` → `INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, y `RETURNING` → `insertId`. El plugin no escribe nada distinto: sigue usando sintaxis SQLite.
 
 ### Ejemplo de Uso
 
@@ -119,8 +121,8 @@ async function initSchema(wordjs) {
 ### Ventajas
 
 1. **Una sola sintaxis global**: Los plugins escriben SQLite-style para TODO
-2. **Normalización automática**: el driver de Postgres convierte `?` a `$1, $2` (e inyecta `RETURNING` en INSERTs); el driver WASM legacy quita `RETURNING`. El plugin no nota nada.
-3. **Compatibilidad total**: Funciona con SQLite Legacy, SQLite Native y PostgreSQL
+2. **Normalización automática**: el driver de Postgres convierte `?` a `$1, $2` (e inyecta `RETURNING` en INSERTs); el driver WASM legacy quita `RETURNING`; el driver MySQL reescribe el dialecto (`translateSql`) y mapea `RETURNING` a `insertId`. El plugin no nota nada.
+3. **Compatibilidad total**: Funciona con SQLite Native (default), SQLite Legacy (WASM), PostgreSQL y MySQL/MariaDB
 4. **Sin cambios al migrar**: Si cambias de driver, el plugin sigue funcionando sin modificaciones
 5. **Código más limpio**: No necesitas detectar el driver manualmente
 6. **Transparente**: Los plugins no saben qué driver están usando
@@ -130,12 +132,14 @@ async function initSchema(wordjs) {
 Si necesitas información sobre el driver activo (para lógica condicional, rara vez necesaria):
 
 ```javascript
-const { isPostgres, isSQLite, driver } = wordjs.db.getType();
+const { isPostgres, isMySQL, isSQLite, driver } = wordjs.db.getType();
 
 if (isPostgres) {
     // Lógica específica para PostgreSQL (raro, pero posible)
 }
 ```
+
+> `getType()` devuelve `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` es el nombre completo: `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'` o `'mysql'`). Ojo: `isSQLite` es `true` también bajo MySQL (para que las ramas binarias `isPostgres ? pg : sqlite` sigan tomando el camino SQLite, que el driver MySQL traduce). Las consultas **exclusivas de SQLite** (`sqlite_master` / `PRAGMA`) deben ramificarse sobre `isMySQL` explícitamente, porque fallan en MySQL.
 
 ## Migraciones
 
@@ -143,9 +147,10 @@ Para migraciones que verifican si una columna existe, ramifica sobre el dialecto
 
 ```javascript
 async function migrate(wordjs) {
-    const { isPostgres } = wordjs.db.getType();
+    const { isPostgres, isMySQL } = wordjs.db.getType();
 
-    if (isPostgres) {
+    // Postgres Y MySQL exponen information_schema; solo SQLite usa PRAGMA.
+    if (isPostgres || isMySQL) {
         const result = await wordjs.db.get(
             `SELECT COUNT(*) as count FROM information_schema.columns
              WHERE table_name = ? AND column_name = ?`,
@@ -158,6 +163,8 @@ async function migrate(wordjs) {
     }
 }
 ```
+
+> Recuerda: bajo MySQL `isSQLite` también es `true`, así que **no** ramifiques la rama PRAGMA con `if (!isPostgres)` — usa `isMySQL` como arriba, o el `PRAGMA table_info` fallará en MySQL.
 
 ## Ejemplos Completos
 

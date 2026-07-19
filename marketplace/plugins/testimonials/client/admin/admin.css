@@ -1,0 +1,452 @@
+/**
+ * Testimonials — plugin-scoped admin stylesheet (premium/modern identity).
+ * Injected automatically by the host admin shell (/plugins/testimonials/client/admin/admin.css)
+ * and scoped under .plugin-admin-testimonials so it can never bleed into the rest of the admin.
+ *
+ * Identity: cool-neutral canvas, white surfaces with layered soft shadows and 1px low-alpha
+ * hairlines, a single indigo accent spent precisely (primary actions, active states, unread),
+ * segmented-pill tabs, glass modal. Depth from light — not decoration.
+ *
+ * The shared cf-* classes are copied verbatim from the reference identity; page-specific
+ * components (star ratings, avatar, source pill, settings switch, card grid) are appended
+ * at the end in the same visual language.
+ */
+
+.plugin-admin-testimonials {
+    /* palette */
+    --cf-bg: #F6F7F9;
+    --cf-card: #FFFFFF;
+    --cf-card-nested: #FAFBFC;
+    --cf-ink: #0F172A;
+    --cf-soft: #5B6472;
+    --cf-faint: #8C97A7;
+    --cf-line: rgba(15, 23, 42, 0.07);
+    --cf-line-strong: rgba(15, 23, 42, 0.13);
+    --cf-accent: #4F46E5;
+    --cf-accent-hover: #4338CA;
+    --cf-accent-soft: rgba(79, 70, 229, 0.08);
+    --cf-accent-ring: rgba(79, 70, 229, 0.18);
+    --cf-accent-grad: linear-gradient(135deg, #6366F1, #8B5CF6);
+    --cf-danger: #DC3D43;
+    --cf-danger-soft: rgba(220, 61, 67, 0.08);
+    --cf-ok: #298459;
+    --cf-ok-soft: rgba(41, 132, 89, 0.09);
+    --cf-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+    --cf-shadow-md: 0 1px 2px rgba(15, 23, 42, 0.05), 0 12px 32px -16px rgba(15, 23, 42, 0.16);
+    --cf-shadow-lg: 0 24px 64px -24px rgba(15, 23, 42, 0.35);
+    --cf-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+    background: var(--cf-bg);
+    color: var(--cf-ink);
+    min-height: 100%;
+}
+
+.plugin-admin-testimonials .cf-shell {
+    max-width: 64rem;
+    margin: 0 auto;
+    padding: 2.25rem 1rem 4.5rem;
+}
+@media (min-width: 640px) { .plugin-admin-testimonials .cf-shell { padding: 2.75rem 2rem 5rem; } }
+
+/* ============ header ============ */
+.plugin-admin-testimonials .cf-header { display: flex; align-items: center; gap: 1.05rem; }
+.plugin-admin-testimonials .cf-stamp {
+    width: 3.25rem; height: 3.25rem; flex: 0 0 auto;
+    display: grid; place-items: center;
+    background: var(--cf-accent-grad); color: #fff;
+    border-radius: 1rem;
+    box-shadow: 0 10px 24px -10px rgba(99, 102, 241, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+.plugin-admin-testimonials .cf-stamp svg { width: 1.45rem; height: 1.45rem; }
+.plugin-admin-testimonials .cf-title {
+    font-size: 1.7rem; line-height: 1.15; font-weight: 750; letter-spacing: -0.028em; margin: 0;
+}
+.plugin-admin-testimonials .cf-subtitle {
+    font-size: 0.82rem; color: var(--cf-soft); margin-top: 0.3rem; font-weight: 480;
+}
+.plugin-admin-testimonials .cf-airmail-rule {
+    height: 1px; margin: 1.6rem 0 1.6rem;
+    background: linear-gradient(90deg, rgba(99, 102, 241, 0.35), rgba(15, 23, 42, 0.06) 40%, rgba(15, 23, 42, 0.06));
+}
+
+/* ============ tabs: segmented pill ============ */
+.plugin-admin-testimonials .cf-tabs {
+    display: inline-flex; gap: 0.25rem; margin-bottom: 1.5rem;
+    background: #ECEEF2; border-radius: 0.8rem; padding: 0.27rem;
+    border: 1px solid var(--cf-line);
+}
+.plugin-admin-testimonials .cf-tab {
+    display: inline-flex; align-items: center; gap: 0.5rem;
+    padding: 0.55rem 1.1rem; min-height: 40px;
+    font-size: 0.82rem; font-weight: 600; letter-spacing: -0.006em;
+    color: var(--cf-soft); background: transparent;
+    border: none; border-radius: 0.57rem;
+    cursor: pointer; transition: color 160ms ease, background 160ms ease, box-shadow 160ms ease;
+}
+.plugin-admin-testimonials .cf-tab:hover { color: var(--cf-ink); }
+.plugin-admin-testimonials .cf-tab.is-active {
+    background: var(--cf-card); color: var(--cf-ink);
+    box-shadow: var(--cf-shadow-sm), 0 0 0 1px var(--cf-line);
+}
+.plugin-admin-testimonials .cf-badge {
+    display: inline-flex; align-items: center; justify-content: center;
+    min-width: 1.3rem; height: 1.3rem; padding: 0 0.4rem;
+    background: var(--cf-accent); color: #fff; border-radius: 999px;
+    font-size: 0.66rem; font-weight: 700; font-variant-numeric: tabular-nums;
+}
+
+/* ============ flash message ============ */
+.plugin-admin-testimonials .cf-flash {
+    font-size: 0.84rem; font-weight: 550; padding: 0.75rem 1rem; margin-bottom: 1.4rem;
+    border-radius: 0.75rem; border: 1px solid;
+}
+.plugin-admin-testimonials .cf-flash.is-error { background: var(--cf-danger-soft); color: var(--cf-danger); border-color: rgba(220, 61, 67, 0.22); }
+.plugin-admin-testimonials .cf-flash.is-ok { background: var(--cf-ok-soft); color: var(--cf-ok); border-color: rgba(41, 132, 89, 0.22); }
+
+/* ============ surfaces ============ */
+.plugin-admin-testimonials .cf-card-item {
+    background: var(--cf-card); border: 1px solid var(--cf-line);
+    border-radius: 1.1rem; padding: 1.5rem 1.6rem;
+    box-shadow: var(--cf-shadow-sm);
+    transition: box-shadow 200ms ease, transform 200ms ease;
+}
+.plugin-admin-testimonials .cf-card-item:hover { box-shadow: var(--cf-shadow-md); }
+.plugin-admin-testimonials .cf-card-item + .cf-card-item { margin-top: 1rem; }
+
+/* the editor: featured surface with a slim accent crown */
+.plugin-admin-testimonials .cf-editor {
+    background: var(--cf-card); border: 1px solid var(--cf-line);
+    border-radius: 1.1rem; overflow: hidden; margin-bottom: 1.5rem;
+    box-shadow: var(--cf-shadow-md);
+}
+.plugin-admin-testimonials .cf-editor::before {
+    content: ""; display: block; height: 3px; background: var(--cf-accent-grad);
+}
+.plugin-admin-testimonials .cf-editor-body { padding: 1.6rem 1.6rem 1.7rem; }
+@media (min-width: 640px) { .plugin-admin-testimonials .cf-editor-body { padding: 2rem 2.1rem 2.1rem; } }
+.plugin-admin-testimonials .cf-editor-title {
+    font-size: 1.06rem; font-weight: 700; letter-spacing: -0.015em; margin: 0 0 1.35rem;
+    display: flex; align-items: center; gap: 0.6rem;
+}
+.plugin-admin-testimonials .cf-editor-title svg { width: 1.05rem; height: 1.05rem; color: var(--cf-accent); }
+
+/* ============ inputs ============ */
+.plugin-admin-testimonials .cf-label {
+    display: block; font-size: 0.68rem; font-weight: 650;
+    text-transform: uppercase; letter-spacing: 0.07em; color: var(--cf-soft);
+    margin-bottom: 0.45rem;
+}
+.plugin-admin-testimonials .cf-input,
+.plugin-admin-testimonials .cf-select {
+    width: 100%; padding: 0.66rem 0.9rem; font-size: 0.9rem; font-weight: 480;
+    background: var(--cf-card); color: var(--cf-ink);
+    border: 1px solid var(--cf-line-strong); border-radius: 0.7rem;
+    outline: none; box-shadow: var(--cf-shadow-sm);
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+    min-height: 44px;
+}
+.plugin-admin-testimonials .cf-input::placeholder { color: var(--cf-faint); }
+.plugin-admin-testimonials .cf-input:focus,
+.plugin-admin-testimonials .cf-select:focus {
+    border-color: var(--cf-accent);
+    box-shadow: 0 0 0 3px var(--cf-accent-ring);
+}
+.plugin-admin-testimonials .cf-help { font-size: 0.74rem; color: var(--cf-faint); margin-top: 0.4rem; line-height: 1.5; }
+
+.plugin-admin-testimonials .cf-grid { display: grid; grid-template-columns: 1fr; gap: 1.05rem; }
+@media (min-width: 768px) {
+    .plugin-admin-testimonials .cf-grid { grid-template-columns: 1fr 1fr; }
+    .plugin-admin-testimonials .cf-grid .cf-span-2 { grid-column: span 2; }
+}
+
+/* ============ buttons ============ */
+.plugin-admin-testimonials .cf-btn {
+    display: inline-flex; align-items: center; gap: 0.5rem; justify-content: center;
+    padding: 0.66rem 1.2rem; min-height: 44px;
+    font-size: 0.82rem; font-weight: 620; letter-spacing: -0.006em;
+    background: var(--cf-accent); color: #fff;
+    border: 1px solid var(--cf-accent); border-radius: 0.7rem;
+    box-shadow: 0 1px 2px rgba(79, 70, 229, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+    cursor: pointer; transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+}
+.plugin-admin-testimonials .cf-btn:hover:not(:disabled) {
+    background: var(--cf-accent-hover); border-color: var(--cf-accent-hover);
+    box-shadow: 0 4px 12px -2px rgba(79, 70, 229, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.14);
+}
+.plugin-admin-testimonials .cf-btn:active:not(:disabled) { transform: translateY(1px); }
+.plugin-admin-testimonials .cf-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.plugin-admin-testimonials .cf-btn svg { width: 0.85rem; height: 0.85rem; }
+
+.plugin-admin-testimonials .cf-btn-ghost {
+    display: inline-flex; align-items: center; gap: 0.45rem; justify-content: center;
+    padding: 0.55rem 1rem; min-height: 40px;
+    font-size: 0.8rem; font-weight: 600; letter-spacing: -0.006em;
+    background: var(--cf-card); color: var(--cf-soft);
+    border: 1px solid var(--cf-line-strong); border-radius: 0.7rem;
+    box-shadow: var(--cf-shadow-sm);
+    cursor: pointer; transition: color 150ms ease, border-color 150ms ease, box-shadow 150ms ease;
+}
+.plugin-admin-testimonials .cf-btn-ghost:hover:not(:disabled) { color: var(--cf-ink); border-color: rgba(15, 23, 42, 0.25); }
+.plugin-admin-testimonials .cf-btn-ghost:disabled { opacity: 0.45; cursor: not-allowed; }
+.plugin-admin-testimonials .cf-btn-ghost svg { width: 0.8rem; height: 0.8rem; }
+
+.plugin-admin-testimonials .cf-btn-danger {
+    display: inline-flex; align-items: center; gap: 0.45rem; justify-content: center;
+    padding: 0.55rem 1rem; min-height: 40px;
+    font-size: 0.8rem; font-weight: 600;
+    background: var(--cf-card); color: var(--cf-danger);
+    border: 1px solid rgba(220, 61, 67, 0.28); border-radius: 0.7rem;
+    box-shadow: var(--cf-shadow-sm);
+    cursor: pointer; transition: background 150ms ease, border-color 150ms ease;
+}
+.plugin-admin-testimonials .cf-btn-danger:hover:not(:disabled) { background: var(--cf-danger-soft); border-color: rgba(220, 61, 67, 0.45); }
+.plugin-admin-testimonials .cf-btn-danger:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.plugin-admin-testimonials .cf-iconbtn {
+    width: 2.25rem; height: 2.25rem; display: inline-grid; place-items: center;
+    background: var(--cf-card); color: var(--cf-soft);
+    border: 1px solid var(--cf-line-strong); border-radius: 0.55rem;
+    box-shadow: var(--cf-shadow-sm);
+    cursor: pointer; font-weight: 600; transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+.plugin-admin-testimonials .cf-iconbtn:hover:not(:disabled) { color: var(--cf-ink); border-color: rgba(15, 23, 42, 0.25); }
+.plugin-admin-testimonials .cf-iconbtn:disabled { opacity: 0.3; cursor: not-allowed; }
+.plugin-admin-testimonials .cf-iconbtn.is-danger { color: var(--cf-danger); border-color: rgba(220, 61, 67, 0.28); }
+.plugin-admin-testimonials .cf-iconbtn.is-danger:hover:not(:disabled) { background: var(--cf-danger-soft); border-color: rgba(220, 61, 67, 0.45); }
+
+/* keyboard focus — one consistent ring */
+.plugin-admin-testimonials button:focus-visible,
+.plugin-admin-testimonials input:focus-visible,
+.plugin-admin-testimonials select:focus-visible {
+    outline: 2px solid var(--cf-accent); outline-offset: 2px;
+}
+
+/* ============ field builder ============ */
+.plugin-admin-testimonials .cf-field-row {
+    border: 1px solid var(--cf-line); border-radius: 0.9rem;
+    background: var(--cf-card-nested); padding: 1.15rem 1.2rem 1.05rem; position: relative;
+    transition: border-color 160ms ease;
+}
+.plugin-admin-testimonials .cf-field-row:hover { border-color: var(--cf-line-strong); }
+.plugin-admin-testimonials .cf-field-row + .cf-field-row { margin-top: 0.8rem; }
+.plugin-admin-testimonials .cf-field-num {
+    position: absolute; top: -0.62rem; left: 0.95rem;
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--cf-accent); background: var(--cf-card);
+    border: 1px solid var(--cf-line); border-radius: 999px;
+    padding: 0.12rem 0.55rem; box-shadow: var(--cf-shadow-sm);
+}
+.plugin-admin-testimonials .cf-field-grid {
+    display: grid; grid-template-columns: 1fr; gap: 0.8rem; align-items: end;
+}
+@media (min-width: 768px) {
+    .plugin-admin-testimonials .cf-field-grid { grid-template-columns: 4fr 3fr 2fr 3fr; }
+    .plugin-admin-testimonials .cf-field-grid .cf-span-full { grid-column: 1 / -1; }
+}
+.plugin-admin-testimonials .cf-field-actions { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; padding-bottom: 0.15rem; }
+.plugin-admin-testimonials .cf-check {
+    display: inline-flex; align-items: center; gap: 0.45rem; cursor: pointer; user-select: none;
+    font-size: 0.8rem; font-weight: 550; color: var(--cf-soft); min-height: 44px;
+}
+.plugin-admin-testimonials .cf-check input { width: 1rem; height: 1rem; accent-color: var(--cf-accent); }
+
+/* empty states */
+.plugin-admin-testimonials .cf-empty {
+    text-align: center; padding: 2.6rem 1rem; color: var(--cf-faint);
+    background: var(--cf-card); border: 1px dashed var(--cf-line-strong); border-radius: 1.1rem;
+    font-size: 0.86rem; display: grid; place-items: center; gap: 0.7rem;
+}
+.plugin-admin-testimonials .cf-empty svg { width: 2rem; height: 2rem; color: rgba(15, 23, 42, 0.18); }
+
+/* ============ forms list card internals ============ */
+.plugin-admin-testimonials .cf-form-name { font-size: 1.02rem; font-weight: 700; letter-spacing: -0.012em; margin: 0; }
+.plugin-admin-testimonials .cf-chip {
+    font-family: var(--cf-mono); font-size: 0.64rem; font-weight: 600;
+    color: var(--cf-soft); background: #F1F3F6;
+    border: 1px solid var(--cf-line); border-radius: 999px; padding: 0.18rem 0.55rem;
+    font-variant-numeric: tabular-nums;
+}
+.plugin-admin-testimonials .cf-chip.is-unread {
+    font-family: inherit; color: #fff; background: var(--cf-accent); border-color: var(--cf-accent);
+    font-weight: 650;
+}
+.plugin-admin-testimonials .cf-meta {
+    font-size: 0.78rem; color: var(--cf-soft); margin-top: 0.35rem; font-variant-numeric: tabular-nums;
+}
+.plugin-admin-testimonials .cf-usage {
+    display: inline-block; margin-top: 0.75rem; font-size: 0.76rem; color: var(--cf-soft);
+    background: var(--cf-accent-soft); border: 1px solid rgba(79, 70, 229, 0.16);
+    border-radius: 0.6rem; padding: 0.42rem 0.75rem;
+}
+.plugin-admin-testimonials .cf-usage strong { color: var(--cf-accent-hover); font-weight: 650; }
+
+/* ============ inbox ============ */
+.plugin-admin-testimonials .cf-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.9rem; margin-bottom: 1.15rem; }
+.plugin-admin-testimonials .cf-toolbar-left { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; }
+.plugin-admin-testimonials .cf-toolbar .cf-select { width: auto; min-width: 14rem; }
+
+.plugin-admin-testimonials .cf-table-wrap { overflow-x: auto; margin: 0 -0.25rem; }
+.plugin-admin-testimonials .cf-table { width: 100%; border-collapse: collapse; font-size: 0.86rem; }
+.plugin-admin-testimonials .cf-table thead th {
+    font-size: 0.62rem; font-weight: 650; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--cf-faint); text-align: left;
+    padding: 0.55rem 0.8rem 0.55rem 0.25rem; border-bottom: 1px solid var(--cf-line-strong);
+    white-space: nowrap;
+}
+.plugin-admin-testimonials .cf-table tbody tr {
+    border-bottom: 1px solid var(--cf-line); cursor: pointer;
+    transition: background 130ms ease;
+}
+.plugin-admin-testimonials .cf-table tbody tr:hover { background: #F6F7FB; }
+.plugin-admin-testimonials .cf-table td { padding: 0.78rem 0.8rem 0.78rem 0.25rem; color: var(--cf-soft); }
+.plugin-admin-testimonials .cf-table tr.is-unread td { color: var(--cf-ink); font-weight: 600; }
+.plugin-admin-testimonials .cf-dot { display: inline-block; width: 0.5rem; height: 0.5rem; border-radius: 999px; background: var(--cf-accent); box-shadow: 0 0 0 3px var(--cf-accent-soft); }
+.plugin-admin-testimonials .cf-cell-date { white-space: nowrap; font-variant-numeric: tabular-nums; font-size: 0.8rem; }
+.plugin-admin-testimonials .cf-cell-preview { max-width: 20rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-admin-testimonials .cf-cell-url { max-width: 11rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--cf-faint); font-size: 0.78rem; }
+.plugin-admin-testimonials .cf-void { color: var(--cf-faint); font-style: italic; }
+
+.plugin-admin-testimonials .cf-pager { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-top: 1.2rem; flex-wrap: wrap; }
+.plugin-admin-testimonials .cf-pager-info {
+    font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em;
+    color: var(--cf-faint); font-variant-numeric: tabular-nums;
+}
+
+/* ============ submission modal: glass sheet ============ */
+.plugin-admin-testimonials .cf-overlay {
+    position: fixed; inset: 0; z-index: 50;
+    background: rgba(15, 23, 42, 0.42);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+    display: flex; align-items: center; justify-content: center; padding: 1rem;
+}
+.plugin-admin-testimonials .cf-letter {
+    background: var(--cf-card); width: 100%; max-width: 34rem; max-height: 85vh;
+    overflow-y: auto; border-radius: 1.25rem; border: 1px solid var(--cf-line);
+    box-shadow: var(--cf-shadow-lg);
+}
+.plugin-admin-testimonials .cf-letter::before { content: ""; display: block; height: 3px; background: var(--cf-accent-grad); }
+.plugin-admin-testimonials .cf-letter-body { padding: 1.6rem 1.7rem 1.8rem; }
+.plugin-admin-testimonials .cf-postmark {
+    font-size: 0.76rem; color: var(--cf-faint); margin-top: 0.3rem; font-variant-numeric: tabular-nums;
+}
+.plugin-admin-testimonials .cf-letter-rows { margin: 1.15rem 0 0; }
+.plugin-admin-testimonials .cf-letter-row { padding: 0.7rem 0; border-bottom: 1px solid var(--cf-line); }
+.plugin-admin-testimonials .cf-letter-row dt {
+    font-size: 0.62rem; font-weight: 650; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--cf-faint);
+}
+.plugin-admin-testimonials .cf-letter-row dd { margin: 0.32rem 0 0; font-size: 0.9rem; color: var(--cf-ink); white-space: pre-wrap; word-break: break-word; }
+.plugin-admin-testimonials .cf-letter-from { font-size: 0.74rem; color: var(--cf-faint); margin-top: 1rem; word-break: break-all; }
+
+@media (prefers-reduced-motion: reduce) {
+    .plugin-admin-testimonials * { transition: none !important; }
+}
+
+/* ================================================================================================
+   Testimonials page-specific components (same tokens, radii, shadows and spacing rhythm)
+   ================================================================================================ */
+
+.plugin-admin-testimonials {
+    /* star rating: content/data color (like ok/danger), the indigo accent stays for UI chrome */
+    --cf-star: #F59E0B;
+    --cf-star-off: rgba(15, 23, 42, 0.14);
+}
+
+/* two-column card grid (grid gap replaces the stacked-card sibling margin) */
+.plugin-admin-testimonials .cf-cardgrid { display: grid; grid-template-columns: 1fr; gap: 1rem; }
+@media (min-width: 768px) { .plugin-admin-testimonials .cf-cardgrid { grid-template-columns: 1fr 1fr; } }
+.plugin-admin-testimonials .cf-cardgrid .cf-card-item + .cf-card-item { margin-top: 0; }
+
+/* testimonial card internals */
+.plugin-admin-testimonials .cf-tcard { display: flex; flex-direction: column; gap: 0.85rem; }
+.plugin-admin-testimonials .cf-tcard-head { display: flex; align-items: center; gap: 0.8rem; }
+.plugin-admin-testimonials .cf-tcard-foot {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem;
+    margin-top: auto; padding-top: 0.4rem; border-top: 1px solid var(--cf-line);
+}
+.plugin-admin-testimonials .cf-t-name {
+    font-size: 0.95rem; font-weight: 700; letter-spacing: -0.012em; margin: 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.plugin-admin-testimonials .cf-t-role {
+    font-size: 0.74rem; color: var(--cf-faint); margin: 0.15rem 0 0;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.plugin-admin-testimonials .cf-t-quote {
+    font-size: 0.88rem; color: var(--cf-soft); line-height: 1.6; margin: 0; white-space: pre-line;
+}
+.plugin-admin-testimonials .cf-t-date {
+    font-size: 0.72rem; color: var(--cf-faint); font-variant-numeric: tabular-nums; margin-right: auto;
+}
+
+/* avatar: photo or gradient initial */
+.plugin-admin-testimonials .cf-avatar {
+    width: 2.75rem; height: 2.75rem; flex: 0 0 auto; border-radius: 999px;
+    object-fit: cover; border: 1px solid var(--cf-line); box-shadow: var(--cf-shadow-sm);
+}
+.plugin-admin-testimonials .cf-avatar-fallback {
+    display: inline-grid; place-items: center;
+    background: var(--cf-accent-grad); color: #fff;
+    font-size: 1rem; font-weight: 700;
+    border: none; box-shadow: 0 6px 16px -8px rgba(99, 102, 241, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+}
+
+/* uppercase micro-label pill for the testimonial source (Público / Admin) */
+.plugin-admin-testimonials .cf-pill {
+    display: inline-flex; align-items: center;
+    font-size: 0.6rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--cf-faint); background: #F1F3F6;
+    border: 1px solid var(--cf-line); border-radius: 999px; padding: 0.18rem 0.55rem;
+}
+.plugin-admin-testimonials .cf-pill.is-public {
+    color: var(--cf-accent-hover); background: var(--cf-accent-soft); border-color: rgba(79, 70, 229, 0.16);
+}
+
+/* star rating — read-only row */
+.plugin-admin-testimonials .cf-stars { display: inline-flex; gap: 0.15rem; color: var(--cf-star); }
+.plugin-admin-testimonials .cf-stars svg { width: 0.95rem; height: 0.95rem; }
+.plugin-admin-testimonials .cf-stars .is-off { color: var(--cf-star-off); }
+
+/* star rating — interactive picker (44px targets) */
+.plugin-admin-testimonials .cf-star-row { display: inline-flex; gap: 0.1rem; }
+.plugin-admin-testimonials .cf-star-btn {
+    width: 2.75rem; height: 2.75rem; display: inline-grid; place-items: center;
+    background: transparent; border: none; border-radius: 0.55rem;
+    color: var(--cf-star-off); cursor: pointer; transition: color 140ms ease, transform 140ms ease;
+}
+.plugin-admin-testimonials .cf-star-btn svg { width: 1.35rem; height: 1.35rem; }
+.plugin-admin-testimonials .cf-star-btn:hover { color: var(--cf-star); transform: scale(1.08); }
+.plugin-admin-testimonials .cf-star-btn.is-on { color: var(--cf-star); }
+
+/* settings switch (accent = on); ::after expands the hit area to >= 44px */
+.plugin-admin-testimonials .cf-switch {
+    position: relative; width: 3.25rem; height: 2rem; flex: 0 0 auto;
+    background: #E4E7EC; border: 1px solid var(--cf-line-strong); border-radius: 999px;
+    padding: 0; cursor: pointer;
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.06);
+    transition: background 180ms ease, border-color 180ms ease;
+}
+.plugin-admin-testimonials .cf-switch::after { content: ""; position: absolute; inset: -8px; border-radius: 999px; }
+.plugin-admin-testimonials .cf-switch.is-on { background: var(--cf-accent); border-color: var(--cf-accent); }
+.plugin-admin-testimonials .cf-switch-knob {
+    position: absolute; top: 50%; left: 0.22rem; transform: translateY(-50%);
+    width: 1.5rem; height: 1.5rem; background: #fff; border-radius: 999px;
+    box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+    transition: left 180ms ease;
+}
+.plugin-admin-testimonials .cf-switch.is-on .cf-switch-knob { left: calc(100% - 1.72rem); }
+
+/* settings card copy */
+.plugin-admin-testimonials .cf-setting-title { font-size: 0.92rem; font-weight: 650; letter-spacing: -0.01em; margin: 0; }
+.plugin-admin-testimonials .cf-setting-desc {
+    font-size: 0.78rem; color: var(--cf-soft); margin: 0.35rem 0 0; line-height: 1.55; max-width: 40rem;
+}
+
+/* multiline input in the modal */
+.plugin-admin-testimonials textarea.cf-input {
+    min-height: 7rem; resize: vertical; font-family: inherit; line-height: 1.55;
+}
+
+/* closing footnote under the card list */
+.plugin-admin-testimonials .cf-footnote { font-size: 0.76rem; color: var(--cf-faint); margin-top: 2rem; line-height: 1.65; }
+.plugin-admin-testimonials .cf-footnote strong { color: var(--cf-soft); font-weight: 650; }

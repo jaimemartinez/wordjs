@@ -6,6 +6,10 @@
  * Pure static guide — the plugin is 100% client-side, so there is nothing to configure and the
  * page makes NO API calls: it explains the Puck block, lists the supported networks, and shows a
  * non-functional visual preview of the buttons in the three sizes and shapes.
+ *
+ * Visual identity (premium/modern) lives in the plugin's OWN stylesheet
+ * (client/admin/admin.css, injected by the host admin shell and scoped to
+ * .plugin-admin-share) — the markup below only uses cf-* classes.
  */
 
 import React from "react";
@@ -44,6 +48,35 @@ const SHAPES = [
     { label: "Cuadrado", radius: "0" },
 ];
 
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconShare = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <circle cx="18" cy="5" r="3" />
+        <circle cx="6" cy="12" r="3" />
+        <circle cx="18" cy="19" r="3" />
+        <path d="m8.6 13.5 6.8 3.9M15.4 6.6 8.6 10.5" />
+    </svg>
+);
+const IconBook = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20" />
+        <path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z" />
+    </svg>
+);
+const IconGlobe = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20" />
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+    </svg>
+);
+const IconEye = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+        <circle cx="12" cy="12" r="3" />
+    </svg>
+);
+
 // Module-level components (never define a component inside a component).
 function NetIcon({ d, px }) {
     return (
@@ -57,7 +90,7 @@ function NetIcon({ d, px }) {
 function PreviewButton({ netKey, color, px, radius }) {
     return (
         <span
-            className="inline-flex items-center justify-center text-white shrink-0"
+            className="cf-preview-chip"
             style={{ width: px, height: px, backgroundColor: color, borderRadius: radius }}
         >
             <NetIcon d={ICON_PATHS[netKey]} px={Math.round(px / 2)} />
@@ -65,60 +98,65 @@ function PreviewButton({ netKey, color, px, radius }) {
     );
 }
 
-const stepCls = "flex gap-3 items-start";
-const stepNumCls = "shrink-0 w-6 h-6 rounded-full bg-gray-900 text-white text-[11px] font-black flex items-center justify-center";
+const stepCls = "cf-step";
+const stepNumCls = "cf-step-num";
 
 export default function SocialShareAdminPage() {
     return (
-        <div className="max-w-3xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Compartir Social</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Botones para compartir la página actual en redes sociales
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconShare /></div>
+                <div>
+                    <h1 className="cf-title">Compartir Social</h1>
+                    <p className="cf-subtitle">
+                        Botones para compartir la página actual en redes sociales
+                    </p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
             {/* How to use */}
-            <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8 mb-8">
-                <h2 className="font-bold text-gray-800 mb-4">Cómo usar</h2>
-                <p className="text-sm text-gray-600 leading-relaxed mb-5">
+            <div className="cf-card-item">
+                <h2 className="cf-card-title"><IconBook /> Cómo usar</h2>
+                <p className="cf-prose">
                     Agrega el bloque <strong>SocialShare</strong> en el editor visual de cualquier página o entrada.
                     Los botones comparten la URL y el título de la página donde se muestran — no necesitan
                     configuración, claves ni llamadas al servidor.
                 </p>
-                <div className="space-y-3">
+                <div className="cf-steps">
                     <div className={stepCls}>
                         <span className={stepNumCls}>1</span>
-                        <p className="text-sm text-gray-600 leading-relaxed">Abre el editor visual de la página o entrada donde quieras los botones.</p>
+                        <p>Abre el editor visual de la página o entrada donde quieras los botones.</p>
                     </div>
                     <div className={stepCls}>
                         <span className={stepNumCls}>2</span>
-                        <p className="text-sm text-gray-600 leading-relaxed">Arrastra el bloque <strong>SocialShare</strong> (categoría "Social") al contenido.</p>
+                        <p>Arrastra el bloque <strong>SocialShare</strong> (categoría "Social") al contenido.</p>
                     </div>
                     <div className={stepCls}>
                         <span className={stepNumCls}>3</span>
-                        <p className="text-sm text-gray-600 leading-relaxed">
+                        <p>
                             Elige qué redes mostrar y ajusta el título, el tamaño (pequeño / mediano / grande),
                             la forma (círculo / redondeado / cuadrado), las etiquetas y la alineación.
                         </p>
                     </div>
                 </div>
-                <p className="text-[11px] text-gray-400 mt-5 leading-relaxed">
+                <p className="cf-note">
                     "Copiar enlace" usa el portapapeles del navegador y confirma con "¡Copiado!" durante 2 segundos.
                     "Email" abre el cliente de correo del visitante.
                 </p>
             </div>
 
             {/* Supported networks */}
-            <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8 mb-8">
-                <h2 className="font-bold text-gray-800 mb-4">Redes soportadas</h2>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="cf-card-item">
+                <h2 className="cf-card-title"><IconGlobe /> Redes soportadas</h2>
+                <div className="cf-net-grid">
                     {NETWORKS.map((n) => (
-                        <div key={n.key} className="flex items-center gap-3 p-3 rounded-2xl bg-gray-50/60 border border-gray-100">
+                        <div key={n.key} className="cf-net-tile">
                             <PreviewButton netKey={n.key} color={n.color} px={40} radius="50%" />
-                            <div className="min-w-0">
-                                <p className="text-sm font-bold text-gray-800">{n.name}</p>
-                                <p className="text-[11px] text-gray-400 leading-snug">{n.desc}</p>
+                            <div style={{ minWidth: 0 }}>
+                                <p className="cf-net-name">{n.name}</p>
+                                <p className="cf-net-desc">{n.desc}</p>
                             </div>
                         </div>
                     ))}
@@ -126,20 +164,20 @@ export default function SocialShareAdminPage() {
             </div>
 
             {/* Visual preview */}
-            <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8">
-                <h2 className="font-bold text-gray-800 mb-1">Vista previa</h2>
-                <p className="text-[11px] text-gray-400 mb-5 leading-relaxed">
+            <div className="cf-card-item">
+                <h2 className="cf-card-title" style={{ marginBottom: "0.35rem" }}><IconEye /> Vista previa</h2>
+                <p className="cf-help" style={{ margin: "0 0 1.35rem" }}>
                     Muestra estática de los tres tamaños y las tres formas — los botones reales se agregan con el
                     bloque en el editor visual.
                 </p>
 
-                <div className="space-y-5">
+                <div>
                     {SIZES.map((s) => (
-                        <div key={s.label}>
-                            <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                        <div key={s.label} className="cf-preview-group">
+                            <p className="cf-micro">
                                 {s.label} ({s.px} px)
                             </p>
-                            <div className="flex flex-wrap items-center gap-2.5">
+                            <div className="cf-preview-row">
                                 {NETWORKS.map((n) => (
                                     <PreviewButton key={n.key} netKey={n.key} color={n.color} px={s.px} radius="50%" />
                                 ))}
@@ -147,17 +185,17 @@ export default function SocialShareAdminPage() {
                         </div>
                     ))}
 
-                    <div className="pt-4 border-t border-gray-100">
-                        <p className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Formas</p>
-                        <div className="flex flex-wrap items-center gap-6">
+                    <div className="cf-preview-group cf-divider">
+                        <p className="cf-micro">Formas</p>
+                        <div className="cf-preview-row" style={{ gap: "1.5rem" }}>
                             {SHAPES.map((sh) => (
-                                <div key={sh.label} className="flex flex-col items-center gap-2">
-                                    <div className="flex items-center gap-2.5">
+                                <div key={sh.label} className="cf-shape-col">
+                                    <div className="cf-preview-row">
                                         {NETWORKS.slice(0, 3).map((n) => (
                                             <PreviewButton key={n.key} netKey={n.key} color={n.color} px={40} radius={sh.radius} />
                                         ))}
                                     </div>
-                                    <p className="text-[11px] text-gray-400">{sh.label}</p>
+                                    <p className="cf-shape-caption">{sh.label}</p>
                                 </div>
                             ))}
                         </div>

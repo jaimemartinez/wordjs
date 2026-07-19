@@ -373,10 +373,10 @@ header {
 
 ### Containment Rules
 
-All Puck components have built-in overflow containment:
+All Puck components have built-in overflow containment (shipped in the framework `backend/public/css/wordjs-ui.css`, which contains wide content — tables/`pre` scroll in their own container, long strings wrap — at every width):
 
 ```css
-/* Already defined in core.css */
+/* Already defined in wordjs-ui.css */
 [class*="wp-block-"] {
   overflow: hidden;
   max-width: 100%;
@@ -413,7 +413,7 @@ For dark themes, invert the color semantics:
 
 ### Videos/Images Overflow
 
-All media should be constrained by the containment rules in `core.css`. If not:
+All media should be constrained by the containment rules in the framework (`wordjs-ui.css`). If not:
 
 ```css
 img, iframe, video {

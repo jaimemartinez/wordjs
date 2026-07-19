@@ -26,16 +26,17 @@ CrashGuard is a stability mechanism designed to prevent "Boot Loops" caused by f
 
 **Location:** `backend/src/config/database.ts` (manager) + `backend/src/drivers/*` (drivers)
 
-The database layer is a driver-abstraction over SQLite and PostgreSQL. Plugins and models always write **SQLite-flavoured SQL with `?` placeholders**; the core normalizes for PostgreSQL when needed (placeholder rewriting lives in the Postgres driver's `normalizeSql`, the single source of truth).
+The database layer is a driver-abstraction over SQLite, PostgreSQL, and MySQL/MariaDB. Plugins and models always write **SQLite-flavoured SQL with `?` placeholders**; each non-SQLite driver translates that dialect at its own boundary (placeholder rewriting lives in the Postgres driver's `normalizeSql`; the MySQL driver has a fuller SQLite→MySQL translation layer). `getDbType()` exposes `{ isPostgres, isMySQL, isSQLite, driver }` — note `isSQLite` stays **true** for MySQL so the many binary `isPostgres ? … : sqlite` branches keep taking the SQLite path the MySQL driver translates.
 
 ### Driver selection
 *   **`sqlite-native`** (better-sqlite3) — the canonical SQLite driver and the manager **default** (`config.dbDriver`).
-*   **`sqlite-legacy`** (sql.js / pure-JS WASM) — the **automatic fallback** used only when the native binary fails to load. It reads the same database file. The manager falls back to it on any SQLite failure or default path; a failed *non-SQLite* override (e.g. an explicit `postgres`) is **not** silently downgraded.
+*   **`sqlite-legacy`** (sql.js / pure-JS WASM) — the **automatic fallback** used only when the native binary fails to load. It reads the same database file. The manager falls back to it on any SQLite failure or default path; a failed *non-SQLite* override (e.g. an explicit `postgres`/`mysql`) is **not** silently downgraded.
 *   **`postgres`** (the `pg` client) — connects to an **external** PostgreSQL by default.
+*   **`mysql`** (or `mariadb`, the `mysql2` client) — connects to an **external** MySQL 8.0+ / MariaDB. The driver rewrites SQLite-dialect DDL/DML to MySQL (`TEXT`→`VARCHAR`/`LONGTEXT`, `AUTOINCREMENT`→`AUTO_INCREMENT`, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, `sql_mode=ANSI_QUOTES`). Like Postgres it is async-only (the sync handle throws).
 
 ### Driver interface & conformance
 *   All drivers implement a common interface — `connect / get / all / run / exec / transaction / close` — defined in `backend/src/drivers/interface.ts`.
-*   A conformance test (`backend/src/tests/driver-conformance.test.ts`) exercises every **async-interface** driver (`sqlite-native` + `postgres`) against the same contract; the sync `sqlite-legacy` (sql.js) fallback is intentionally out of scope. **Adding a new database = implement the interface + add a conformance block.**
+*   A conformance test (`backend/src/tests/driver-conformance.test.ts`) exercises the **async-interface** drivers it has descriptor blocks for (`sqlite-native` + `postgres`) against the same contract, each skipping gracefully when its backend isn't reachable; the sync `sqlite-legacy` (sql.js) fallback is intentionally out of scope. **Adding a new database = implement the interface + add a conformance block.**
 
 ---
 
@@ -158,11 +159,11 @@ Monkey-patches `fs` inside the isolated child so plugin code is confined to its 
 
 **Location:** `backend/src/routes/marketplace.ts` (route) + `backend/scripts/build-marketplace.js` (catalog builder)
 
-One-click install of first-party plugins distributed **outside** the core build. The builder (`npm run build:marketplace` from the repo root) packs every plugin under `marketplace/plugins/<slug>/` into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` (id/name/version/category/permissions/size + **sha256** per zip). The `dist/` output is **committed**, so plugin releases are decoupled from core releases.
+One-click install of first-party plugins distributed **outside** the core build. The builder (`npm run build:marketplace` from the repo root) packs every plugin under `marketplace/plugins/<slug>/` into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` (id/name/version/category/permissions/size + **sha256** per zip). The `dist/` output is a **build artifact — NOT committed** (it is gitignored by `**/dist/`); `release.yml` builds it on a `v*` tag and publishes it as **GitHub Release assets**, so plugin releases are decoupled from the core-code bundle.
 
 ### Logic
-*   **Source resolution** (`resolveSource()`): the `marketplace_source` option wins (an `http(s)` URL fetched server-side, or a local directory for dev/air-gapped installs); unset, it uses the repo-local `marketplace/dist/` when present (dev), else the default `raw.githubusercontent.com/.../main/marketplace/dist` URL. Remote sources must be **https** (or `http://localhost` in dev); a tagged-release asset URL can pin a fixed catalog.
-*   **Endpoints** (both `authenticate` + `isAdmin`): `GET /api/v1/marketplace/catalog` returns the catalog annotated with installed/active/`updateAvailable` state per entry (5-minute in-memory cache, `?refresh=1` busts it); `POST /api/v1/marketplace/install` takes a catalog `id`.
+*   **Source resolution** (`resolveSources()` — plural, **admin-configurable**): the ordered source list is resolved by precedence: (1) the admin-managed `marketplace_sources` option (a JSON **array** of `https` catalogs set from the Marketplace UI — official + private), else (2) the legacy single `marketplace_source` option (back-compat), else (3) the repo-local `marketplace/dist/` when present (dev), else (4) the built-in default `https://github.com/jaimemartinez/wordjs/releases/latest/download` (release assets — **not** a `raw.githubusercontent.com/.../marketplace/dist` URL, which 404s because `dist` isn't committed). Multiple sources are **merged** (dedup by `id`, earlier sources win) with **per-source error isolation** — one bad URL is reported but never hides the rest. Remote sources must be **https** (or `http://localhost` in dev).
+*   **Endpoints** (all `authenticate` + `isAdmin`): `GET /api/v1/marketplace/catalog` returns the merged catalog annotated with installed/active/`updateAvailable` state + a per-source status array (5-minute in-memory cache keyed by the source set, `?refresh=1` busts it); `POST /api/v1/marketplace/install` takes a catalog `id` and installs from the exact source that entry was listed under; `GET`/`PUT /api/v1/marketplace/sources` read/replace the admin source list (each URL must pass the same https/localhost check; capped at 12).
 *   **Install hardening:** the catalog `file` name must match a strict `SAFE_FILE_RE` (no path smuggling from a hostile catalog; local reads are additionally resolved-path-confined to the dist dir), the download is size-capped (**10 MB**, mirroring the upload route's multer cap), and the bytes are **sha256-verified** against the catalog entry before install.
 *   **Shared pipeline:** the verified zip is written to a temp file and handed to `installPluginFromZip()` from `routes/plugins.ts` — the exact pipeline manual uploads use (zip-bomb budget via `zip-guard`, Zip Slip/slug validation, squat refusal, manifest + AST scan) — so the marketplace adds no new install surface beyond the catalog fetch. Installed plugins land inactive with **default-deny** grants (§4a).
 
@@ -203,7 +204,7 @@ A native, privacy-focused analytics engine built directly into WordJS to track t
 
 ### Architecture
 *   **Database:** Uses a dedicated table `wordjs_analytics` (indexed on `created_at`) for high-volume writes.
-*   **Performance:** Uses `dbAsync` (SQLite WAL mode or Postgres) for non-blocking writes.
+*   **Performance:** Uses `dbAsync` (SQLite WAL mode, Postgres, or MySQL) for non-blocking writes.
 *   **Privacy:** Tracks anonymized sessions using **SHA-256 hashing** with daily rotation (the day is mixed in as salt). Raw IP addresses are **never** stored.
 
 ### Key Features
