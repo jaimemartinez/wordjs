@@ -1,7 +1,7 @@
 "use client";
 
-import { Puck, Config, Data, migrate, useGetPuck, createUsePuck } from "@measured/puck";
-import "@measured/puck/puck.css";
+import { Puck, Config, Data, migrate, useGetPuck, createUsePuck } from "@wordjs/puck";
+import "@wordjs/puck/puck.css";
 import "./puck-theme.css";
 import React, { useState, useEffect, useRef } from "react";
 import ModernSelect from "./ModernSelect";

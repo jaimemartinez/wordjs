@@ -8,7 +8,7 @@ import { pageConfig } from "@/components/puckConfig";
 import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
-import { Data } from "@measured/puck";
+import { Data } from "@wordjs/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";

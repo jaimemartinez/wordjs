@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { Drawer, Render } from "@measured/puck";
+import { Drawer, Render } from "@wordjs/puck";
 import {
     PATTERNS,
     insertPattern,
