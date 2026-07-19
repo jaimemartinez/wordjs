@@ -22,9 +22,22 @@ require('../config/app'); // preload config (host context)
 // differ per database. The CONTRACT (run returns {lastID, changes}; get/all shapes) is identical.
 const SQLITE = { autoPk: 'INTEGER PRIMARY KEY AUTOINCREMENT', ph: (_i: number) => '?', ret: '' };
 const PG = { autoPk: 'SERIAL PRIMARY KEY', ph: (i: number) => `$${i}`, ret: ' RETURNING id' };
+// MySQL speaks the SQLite dialect AT THE APP BOUNDARY — the driver's translateCreateTable/translateSql
+// rewrite it before it hits mysqld (AUTOINCREMENT→AUTO_INCREMENT, TEXT→VARCHAR, '?' stays '?',
+// insertId→lastID). So we deliberately feed the SAME SQLite-dialect SQL the app emits and assert the
+// TRANSLATED result actually runs on a real MySQL 8 — this block is the only CI coverage of that layer.
+const MYSQL = { autoPk: 'INTEGER PRIMARY KEY AUTOINCREMENT', ph: (_i: number) => '?', ret: '' };
 
 const withTimeout = (p: Promise<any>, ms: number) =>
     Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
+
+// A missing backend is a graceful skip locally, but in CI (WORDJS_CI_DB=1) the service container is
+// wired precisely so the driver IS exercised — there, an unreachable/unloadable driver is a hard
+// FAILURE, never a silent green. Keeps the postgres+mysql conformance from quietly no-op'ing in CI.
+function skipOrFail(t: any, reason: string): void {
+    if (process.env.WORDJS_CI_DB === '1') assert.fail(reason);
+    return t.skip(reason);
+}
 
 // Assumes the driver is already connected. Exercises the full contract, then closes (finally).
 async function runContract(driver: any, d: any) {
@@ -83,12 +96,40 @@ test('driver conformance: postgres satisfies the interface contract (skipped if 
     try {
         driver = require('../drivers/postgres');
     } catch (e: any) {
-        return (t as any).skip(`pg driver not loadable: ${e && e.message}`);
+        return skipOrFail(t, `pg driver not loadable: ${e && e.message}`);
     }
     try {
+        // No explicit config: connect() falls back to config.db, whose defaults (localhost:5432,
+        // user postgres, password 'password', db 'wordjs') match the CI postgres:16 service.
         await withTimeout(driver.connect(), 3000);
     } catch (e: any) {
-        return (t as any).skip(`no reachable Postgres: ${e && e.message}`);
+        return skipOrFail(t, `no reachable Postgres: ${e && e.message}`);
     }
     await runContract(driver, PG);
+});
+
+// --- MySQL (mysql2 client): SQLite-dialect in, driver TRANSLATES. Runs against a real MySQL if reachable. ---
+test('driver conformance: mysql satisfies the interface contract (skipped if no MySQL reachable)', async (t: any) => {
+    let driver: any;
+    try {
+        driver = require('../drivers/mysql');
+    } catch (e: any) {
+        return skipOrFail(t, `mysql2 driver not loadable: ${e && e.message}`);
+    }
+    // config.db's port default is 5432 (Postgres), so MySQL must be pointed EXPLICITLY. Coordinates come
+    // from env with defaults matching the CI mysql:8 service (127.0.0.1:3306, root/password, db 'wordjs').
+    // 127.0.0.1 (not 'localhost') forces TCP so mysql2 doesn't try a non-existent unix socket.
+    driver.config = {
+        host: process.env.MYSQL_HOST || '127.0.0.1',
+        port: Number(process.env.MYSQL_PORT) || 3306,
+        user: process.env.MYSQL_USER || 'root',
+        password: process.env.MYSQL_PASSWORD ?? 'password',
+        name: process.env.MYSQL_DB || 'wordjs',
+    };
+    try {
+        await withTimeout(driver.connect(), 5000);
+    } catch (e: any) {
+        return skipOrFail(t, `no reachable MySQL: ${e && e.message}`);
+    }
+    await runContract(driver, MYSQL);
 });
