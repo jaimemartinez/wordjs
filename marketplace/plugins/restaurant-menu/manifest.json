@@ -1,8 +1,8 @@
 {
     "id": "restaurant-menu",
     "name": "Restaurant Menu",
-    "version": "1.0.0",
-    "description": "Menu sections and dishes with prices, photos and diet tags, rendered by an elegant Puck block. Optional simple online ordering: client-side cart, order saved server-side and handed off to WhatsApp with a prebuilt summary.",
+    "version": "2.0.0",
+    "description": "Restaurante completo: menú por secciones con modificadores (tamaños/extras), alérgenos e i18n es/en, horarios de apertura, pedidos en línea y en mesa por código QR, reservas, pago en línea con Stripe, cocina en vivo e informes con CSV. Entrega por WhatsApp incluida.",
     "author": "WordJS",
     "isolated": true,
     "backend": {
@@ -27,17 +27,17 @@
         {
             "scope": "database",
             "access": "read",
-            "reason": "Read menu sections, dishes and incoming orders."
+            "reason": "Read menu sections, dishes, modifiers, tables, reservations and incoming orders."
         },
         {
             "scope": "database",
             "access": "write",
-            "reason": "Create/update menu sections and dishes, and store incoming orders."
+            "reason": "Create/update menu, modifiers, tables and reservations; store orders and their payment state; keep the write-only Stripe key in the plugin's own settings table."
         },
         {
             "scope": "settings",
             "access": "read",
-            "reason": "Read the restaurant configuration (currency, ordering toggle, WhatsApp number, delivery fee, labels)."
+            "reason": "Read the restaurant configuration (currency, ordering toggle, WhatsApp number, opening hours, delivery fee, labels, reservation and payment toggles)."
         },
         {
             "scope": "settings",
@@ -47,7 +47,7 @@
         {
             "scope": "express",
             "access": "register_route",
-            "reason": "Public menu/config/order endpoints and the admin CRUD endpoints."
+            "reason": "Public menu/config/order/reservation/payment endpoints and the admin CRUD, kitchen and reports endpoints."
         },
         {
             "scope": "admin_menu",
@@ -57,7 +57,16 @@
         {
             "scope": "email",
             "access": "admin",
-            "reason": "Notify the configured email address when a new order arrives (optional, degrades gracefully)."
+            "reason": "Notify the restaurant about new orders and reservations, and send reservation confirmations to customers (optional, degrades gracefully)."
+        },
+        {
+            "scope": "network",
+            "reason": "Call the Stripe API (api.stripe.com) to create and verify Checkout Sessions when online payment is enabled."
+        },
+        {
+            "scope": "notifications",
+            "access": "send",
+            "reason": "Zero-PII SSE broadcasts so the live kitchen board updates in real time when orders arrive or change."
         }
     ]
 }
