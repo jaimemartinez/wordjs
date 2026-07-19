@@ -8,10 +8,13 @@ import { pageConfig } from "@/components/puckConfig";
 import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
+import EditorLoadError from "@/components/EditorLoadError";
+import { unhydratedSaveBlocked } from "@/lib/editorGuards";
 import { Data } from "@wordjs/puck";
 import { useUnsavedChanges } from "@/contexts/UnsavedChangesContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { trStr } from "@/lib/puckI18n";
 import { useAuth } from "@/contexts/AuthContext";
 
 export default function PageEditorPage() {
@@ -38,6 +41,11 @@ export default function PageEditorPage() {
     const [status, setStatus] = useState("draft");
     const [saving, setSaving] = useState(false);
     const [isLoading, setIsLoading] = useState(!isNew);
+    // Data-safety hydration tracking: `loaded` is true only once the EXISTING page's content has loaded;
+    // `loadError` blocks the editor on failure. Saves are refused until hydrated so a blank editor can
+    // never overwrite the real page. New pages have nothing to hydrate.
+    const [loaded, setLoaded] = useState(isNew);
+    const [loadError, setLoadError] = useState<unknown>(null);
     const [lastSyncedTitle, setLastSyncedTitle] = useState("");
     const [slugManuallyEdited, setSlugManuallyEdited] = useState(false);
     const { isDirty, setIsDirty } = useUnsavedChanges();
@@ -95,6 +103,9 @@ export default function PageEditorPage() {
     }, [pageId]);
 
     const loadPage = async () => {
+        setLoadError(null);
+        setLoaded(false); // never carry a previous record's hydrated state into a new load / retry
+        setIsLoading(true);
         try {
             const page = await postsApi.get(pageId!);
             setTitle(page.title);
@@ -106,6 +117,7 @@ export default function PageEditorPage() {
             if (page.meta && page.meta._puck_data) {
                 setInitialPuckData(page.meta._puck_data);
                 puckDataRef.current = page.meta._puck_data;
+                legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
                 if (page.meta._puck_data.root?.title) {
                     setTitle(page.meta._puck_data.root.title);
                 }
@@ -125,9 +137,14 @@ export default function PageEditorPage() {
                 };
                 setInitialPuckData(seededData);
                 puckDataRef.current = seededData;
+                // Legacy page: its real body is HTML in `content` (the canvas is BLANK). Remember it so a
+                // save from the still-empty canvas preserves it instead of blanking the page.
+                legacyHtmlRef.current = page.content || null;
             }
+            setLoaded(true); // content is now hydrated — saving is safe
         } catch (error) {
             console.error("Failed to load page:", error);
+            setLoadError(error); // block the editor so a blank stand-in can't overwrite the real page
         } finally {
             setIsLoading(false);
         }
@@ -138,11 +155,22 @@ export default function PageEditorPage() {
     // Once a NEW page is first saved, remember its id — before this, every save created ANOTHER
     // page (params.id stays "new"). Also lets autosave create the draft once and then update it.
     const createdIdRef = useRef<number | null>(null);
+    // Holds a legacy page's original HTML body while its Puck canvas is still empty (see loadPage).
+    // Cleared once the user builds real blocks, after which the normal block→HTML path takes over.
+    const legacyHtmlRef = useRef<string | null>(null);
 
     const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }) => {
         const isAutosave = !!(e && "autosave" in e && e.autosave);
         if (e && "preventDefault" in e) e.preventDefault();
         setSaving(true);
+
+        // DATA-SAFETY: never write an existing page whose content hasn't hydrated — a blank/failed-load
+        // editor must not overwrite the real body (autosave especially, which skips the revision snapshot).
+        if (unhydratedSaveBlocked({ isNew, loaded })) {
+            if (!isAutosave) await alert(trStr("No se pudo cargar el contenido; el guardado está deshabilitado para no sobrescribir la página.", language));
+            setSaving(false);
+            return;
+        }
 
         try {
             // Flush any open inline editor (so its latest keystrokes land in Puck's store), then read
@@ -173,6 +201,13 @@ export default function PageEditorPage() {
                 // Autosaves skip the revision snapshot server-side (see routes/posts.ts).
                 ...(isAutosave ? { autosave: true } : {})
             };
+
+            // Legacy body preservation: a legacy page still on a blank canvas must not be blanked — keep
+            // its original HTML and don't stamp empty Puck data over it (which would orphan the body).
+            if (!(liveData.content && liveData.content.length) && legacyHtmlRef.current) {
+                pageData.content = legacyHtmlRef.current;
+                delete (pageData.meta as any)._puck_data;
+            }
 
             const effectiveId = pageId ?? createdIdRef.current;
             if (effectiveId) {
@@ -208,6 +243,12 @@ export default function PageEditorPage() {
         return <PuckEditorSkeleton />;
     }
 
+    // Load failed → show a blocking error (with retry) instead of an empty, savable editor that would
+    // silently overwrite the real page on the next save/autosave.
+    if (loadError) {
+        return <EditorLoadError onRetry={loadPage} onBack={() => router.back()} />;
+    }
+
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
             <PuckEditor
@@ -240,7 +281,10 @@ export default function PageEditorPage() {
                         setSlugManuallyEdited(true);
                         setSlug(newSlug);
                     }
-                    // Generate fallback HTML
+                    // Regenerate fallback HTML from blocks — EXCEPT a legacy page still on a blank canvas
+                    // (its body is HTML in `content`, not blocks): don't clobber it to "".
+                    if (data.content.length > 0) legacyHtmlRef.current = null;
+                    if (!(data.content.length === 0 && legacyHtmlRef.current)) {
                     let html = "";
                     data.content.forEach((item: any) => {
                         const props = item.props;
@@ -265,6 +309,7 @@ export default function PageEditorPage() {
                         }
                     });
                     setContent(html);
+                    }
                 }}
             />
         </div>
