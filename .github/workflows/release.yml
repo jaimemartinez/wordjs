@@ -41,6 +41,40 @@ jobs:
       - name: Build compiled release ZIP
         run: npm run bundle-release
 
+      # SMOKE-BOOT the compiled bundle BEFORE it can be published. This closes the exact gap that
+      # shipped v1.6.0 unbootable ("Cannot find module './marketplace'"): CI + tests only ever run the
+      # SOURCE (ts-node), and make-release just builds+zips — a file present in src/ but stripped from
+      # the compiled dist/ ZIP slips through until a real machine runs it. Here we extract the ZIP,
+      # install prod deps, boot the monolith in plain HTTP, and require /healthz to answer (it is
+      # registered ABOVE the install guard, so a booting bundle returns 200 even before setup; a
+      # crash-on-boot bundle never answers). If it can't boot, the job fails and nothing is published.
+      - name: Smoke-boot the compiled bundle (fail the release if it can't boot)
+        run: |
+          set -uo pipefail
+          work="$(mktemp -d)"
+          unzip -q release/wordjs-compiled-release.zip -d "$work"
+          # The ZIP may extract flat or under a single top-level dir — locate the app root by its
+          # start:mono script rather than assuming a layout.
+          pkg="$(grep -l '"start:mono"' "$work"/package.json "$work"/*/package.json 2>/dev/null | head -1)"
+          [ -n "$pkg" ] || { echo "::error::no package.json with a start:mono script found in the bundle"; exit 1; }
+          app="$(dirname "$pkg")"
+          echo "app root: $app"
+          ( cd "$app" && npm run release:install ) || { echo "::error::release:install failed in the extracted bundle"; exit 1; }
+          ( cd "$app" && WORDJS_HTTP=1 npm run start:mono ) > "$work/mono.log" 2>&1 &
+          pid=$!
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://localhost:3000/healthz >/dev/null 2>&1; then ok=1; echo "healthz answered after ~$((i*2))s"; break; fi
+            kill -0 "$pid" 2>/dev/null || { echo "::error::monolith process exited during boot"; break; }
+            sleep 2
+          done
+          kill "$pid" 2>/dev/null || true
+          if [ "$ok" != 1 ]; then
+            echo "==== monolith boot log ===="; cat "$work/mono.log" 2>/dev/null || true
+            echo "::error::the compiled bundle did NOT serve /healthz — refusing to publish an unbootable release"; exit 1
+          fi
+          echo "✅ compiled bundle boots and serves /healthz"
+
       # Marketplace plugins ship as SEPARATE release assets (one zip per plugin + the catalog
       # index), never inside the core bundle — installs happen from the admin Marketplace tab.
       - name: Build marketplace catalog + plugin zips
