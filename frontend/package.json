@@ -6,15 +6,18 @@
   "engines": {
     "node": ">=20.9.0"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
-    "predev": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js",
-    "prebuild": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js",
+    "build:editor": "npm run build -w @wordjs/puck",
+    "predev": "npm run build:editor && node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js",
+    "prebuild": "npm run build:editor && node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js && node scripts/generate-puck-plugin-registry.js",
     "dev": "node scripts/start-frontend.js dev",
     "build": "next build",
     "start": "node scripts/start-frontend.js prod",
     "lint": "eslint .",
     "test": "vitest run",
-    "postinstall": "node scripts/patch-puck-actions.js",
     "generate-plugins": "node scripts/generate-plugin-registry.js && node scripts/generate-admin-plugin-registry.js"
   },
   "dependencies": {
@@ -27,7 +30,6 @@
     "@editorjs/list": "^2.0.9",
     "@editorjs/paragraph": "^2.11.7",
     "@editorjs/quote": "^2.7.6",
-    "@measured/puck": "^0.20.2",
     "@tailwindcss/typography": "^0.5.19",
     "@tiptap/extension-bubble-menu": "^3.27.1",
     "@tiptap/extension-color": "^3.27.1",
@@ -39,6 +41,7 @@
     "@tiptap/pm": "^3.27.1",
     "@tiptap/react": "^3.27.1",
     "@tiptap/starter-kit": "^3.27.1",
+    "@wordjs/puck": "*",
     "date-fns": "^4.1.0",
     "dompurify": "^3.3.1",
     "editorjs-html": "^4.0.5",

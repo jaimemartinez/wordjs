@@ -38,6 +38,7 @@
   ],
   "exclude": [
     "node_modules",
-    "_backups"
+    "_backups",
+    "packages"
   ]
 }
