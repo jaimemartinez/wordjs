@@ -180,6 +180,17 @@ test('recreateTableOnTarget maps plugin TEXT → LONGTEXT for MySQL (no silent V
     assert.ok(!/\bTEXT\b/.test(sql), 'no bare TEXT type left to be capped at VARCHAR(255)');
 });
 
+test('recreateTableOnTarget keeps a TEXT PRIMARY KEY as TEXT for MySQL (a LONGTEXT/TEXT key needs a length)', async () => {
+    const execed: string[] = [];
+    await migration.recreateTableOnTarget('schema_migrations', {
+        schemaByTable: { schema_migrations: { sql: 'CREATE TABLE schema_migrations (id TEXT PRIMARY KEY, note TEXT)', columns: [] } },
+        sourceIsSqlite: true, targetKind: 'mysql', readAll: async () => [], targetExec: async (s: string) => { execed.push(s); },
+    });
+    const sql = execed.join('\n');
+    assert.ok(/id\s+TEXT\s+PRIMARY\s+KEY/i.test(sql), 'a TEXT PRIMARY KEY column stays TEXT (driver maps it to a bounded VARCHAR key)');
+    assert.ok(/note\s+LONGTEXT/i.test(sql), 'a non-key TEXT column still becomes LONGTEXT (no truncation)');
+});
+
 test('recreateTableOnTarget uses the captured raw sqlite_master CREATE (full fidelity) for a SQLite source', async () => {
     const execed: string[] = [];
     await migration.recreateTableOnTarget('wjp_legacy', {
@@ -288,7 +299,11 @@ for (const target of ['postgres', 'mysql']) {
             const schemaByTable: Record<string, any> = {};
             for (const tbl of tables) {
                 const r = seeded.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(tbl);
-                schemaByTable[tbl] = { sql: r && r.sql, columns: [] };
+                // Match the handler: capture BOTH the raw CREATE (MySQL/SQLite path) and a quoted PRAGMA
+                // column list (the Postgres path, since PG exec can't translate raw SQLite DDL).
+                const cols = seeded.db.prepare(`PRAGMA table_info("${tbl}")`).all()
+                    .map((c: any) => `"${c.name}" ${c.type || 'TEXT'}`);
+                schemaByTable[tbl] = { sql: r && r.sql, columns: cols };
             }
 
             await migration.copyAllTables({

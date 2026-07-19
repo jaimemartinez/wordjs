@@ -85,6 +85,18 @@ async function listSourceTables(readAll, sourceDriverName) {
 // UNIQUE) when the target driver TRANSLATES it (MySQL) or IS SQLite; for Postgres — whose exec does no
 // DDL translation — build from the normalized column list mapped to Postgres types. MySQL TEXT → LONGTEXT
 // so plugin content is never silently capped at VARCHAR(255).
+// Build a QUOTED column list for a SQLite table from PRAGMA table_info. Used so a Postgres target —
+// whose exec can't translate raw SQLite DDL — always has a column list to recreate from, even when the
+// source driver has no getTableSchema (sqlite-legacy). Names are quoted (reserved-word / hyphenated
+// columns are safe); types stay generic and buildTargetCreate maps them to the target dialect.
+async function sqliteColumnsFromPragma(readAll, table) {
+    let rows;
+    try { rows = await readAll(`PRAGMA table_info(${quoteIdent(table)})`); } catch (_) { return []; }
+    return (rows || [])
+        .filter((c) => c && c.name)
+        .map((c) => `${quoteIdent(c.name)} ${(c.type && String(c.type).trim()) || 'TEXT'}`);
+}
+
 function buildTargetCreate(table, schema, targetKind) {
     const qt = quoteIdent(table);
     const rawSql = schema && schema.sql;
@@ -97,7 +109,13 @@ function buildTargetCreate(table, schema, targetKind) {
             /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|[A-Za-z0-9_]+)/i,
             `CREATE TABLE IF NOT EXISTS ${qt}`
         );
-        if (targetKind === 'mysql') sql = sql.replace(/\bTEXT\b/g, 'LONGTEXT');
+        if (targetKind === 'mysql') {
+            // TEXT → LONGTEXT so plugin content isn't capped at VARCHAR(255) — but NOT when the column is
+            // an inline PRIMARY KEY / UNIQUE: MySQL rejects a TEXT/BLOB key without a prefix length, so a
+            // `id TEXT PRIMARY KEY` (e.g. schema_migrations) must stay TEXT → the driver maps it to a
+            // bounded VARCHAR(255) key. The negative lookahead leaves those key columns alone.
+            sql = sql.replace(/\bTEXT\b(?!\s+(?:PRIMARY|UNIQUE))/gi, 'LONGTEXT');
+        }
         return sql;
     }
     if (!cols.length) {
@@ -356,15 +374,23 @@ exports.runMigration = async (req, res) => {
         const nonCore = allTables.filter((t) => !CORE_TABLES.has(t));
 
         // Capture non-core schema from the live source now (before the target can alias the connection).
+        // For a SQLite source we capture BOTH: the raw CREATE (full-fidelity path for MySQL/SQLite targets)
+        // AND a PRAGMA column list (the ONLY path a Postgres target can use, since its exec can't translate
+        // SQLite DDL) — so no target dialect is left without a usable schema.
         const schemaByTable = {};
         for (const t of nonCore) {
             let s = null;
             if (liveIntrospector) { try { s = await liveIntrospector.getTableSchema(t); } catch (_) { s = null; } }
-            if ((!s || (!s.sql && !(s.columns || []).length)) && !sourceIsAsync) {
-                const r = await liveReadAll(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${escLit(t)}'`);
-                s = { sql: r && r[0] && r[0].sql, columns: (s && s.columns) || [] };
+            let sqlText = s && s.sql;
+            let columns = (s && s.columns) || [];
+            if (!sourceIsAsync) {
+                if (!sqlText) {
+                    const r = await liveReadAll(`SELECT sql FROM sqlite_master WHERE type='table' AND name='${escLit(t)}'`);
+                    sqlText = r && r[0] && r[0].sql;
+                }
+                columns = await sqliteColumnsFromPragma(liveReadAll, t);
             }
-            schemaByTable[t] = s;
+            schemaByTable[t] = { sql: sqlText || null, columns };
         }
 
         // Same-engine async re-migration aliases source↔target on one singleton → snapshot rows NOW (the
