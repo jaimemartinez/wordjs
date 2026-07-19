@@ -616,6 +616,93 @@ async function deleteTheme(slug: string) {
 }
 
 /**
+ * Install a theme by COPYING an on-disk directory into the themes dir — the "companion theme" path
+ * (a plugin's bundled theme/, plugin-completeness program option B). Applies the same guarantees as
+ * the /themes/upload zip path, translated from zip entries to directory entries:
+ *   - footprint budget (entry count + total bytes, zip-guard's theme numbers),
+ *   - containment (no symlinks anywhere in the tree — the dir-copy equivalent of zip-slip: a link
+ *     could otherwise read from or, on later writes, escape to arbitrary host paths),
+ *   - never overwrites an existing theme (`.code = 'THEME_EXISTS'`).
+ * The source must LOOK like a theme (style.css or theme.json at its root) so a stray folder can't
+ * install as a broken empty theme. Validation failures throw with `.code = 'THEME_INVALID'`.
+ * Like an uploaded theme, the copied code is NOT trusted: activation still runs the AST scan and
+ * loads functions.js OS-isolated (theme-engine.loadThemeLogic).
+ * `opts` ({ themesDir, maxTotalBytes, maxEntries }) exists for tests.
+ */
+function installThemeFromDir(sourceDir: string, targetSlug: string, opts: { themesDir?: string; maxTotalBytes?: number; maxEntries?: number } = {}) {
+  const fail = (message: string, code = 'THEME_INVALID') => {
+    const err: any = new Error(message);
+    err.code = code;
+    throw err;
+  };
+
+  // Same numbers as zip-guard's defaults for the 'theme' kind.
+  const maxTotalBytes = opts.maxTotalBytes ?? 200 * 1024 * 1024;
+  const maxEntries = opts.maxEntries ?? 5000;
+  const themesDir = path.resolve(opts.themesDir || THEMES_DIR);
+
+  // Target slug must be a single safe path segment (same charset theme-engine.init later enforces).
+  if (typeof targetSlug !== 'string' || !/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(targetSlug)) {
+    fail(`Invalid theme slug: ${JSON.stringify(targetSlug)}`);
+  }
+  const targetDir = path.resolve(themesDir, targetSlug);
+  if (targetDir === themesDir || !targetDir.startsWith(themesDir + path.sep)) {
+    fail('Invalid theme slug: resolves outside the themes directory');
+  }
+
+  const src = path.resolve(sourceDir);
+  let srcStat = null;
+  try { srcStat = fs.lstatSync(src); } catch { /* missing */ }
+  if (!srcStat || !srcStat.isDirectory()) fail('Theme source is not a directory');
+  if (!fs.existsSync(path.join(src, 'style.css')) && !fs.existsSync(path.join(src, 'theme.json'))) {
+    fail('Theme source has no style.css or theme.json — not a theme');
+  }
+  if (fs.existsSync(targetDir)) {
+    fail(`Theme "${targetSlug}" already exists`, 'THEME_EXISTS');
+  }
+
+  // Enumerate with lstat (never following links) and enforce the budget BEFORE writing anything.
+  const files: Array<{ abs: string; rel: string }> = [];
+  let totalBytes = 0;
+  let entries = 0;
+  const walk = (dir: string, rel: string) => {
+    for (const entry of fs.readdirSync(dir)) {
+      const abs = path.join(dir, entry);
+      const st = fs.lstatSync(abs);
+      if (st.isSymbolicLink()) fail(`Theme source contains a symlink (${rel}${entry}) — refusing to install`);
+      entries += 1;
+      if (entries > maxEntries) fail(`Theme has over ${maxEntries} entries — refusing to install`);
+      if (st.isDirectory()) {
+        walk(abs, `${rel}${entry}/`);
+      } else if (st.isFile()) {
+        totalBytes += st.size;
+        if (totalBytes > maxTotalBytes) fail('Theme exceeds the size budget — refusing to install');
+        files.push({ abs, rel: `${rel}${entry}` });
+      } else {
+        // FIFOs, sockets, devices: nothing a theme legitimately ships — fail closed.
+        fail(`Theme source contains an unsupported file type (${rel}${entry})`);
+      }
+    }
+  };
+  walk(src, '');
+
+  fs.mkdirSync(targetDir, { recursive: true });
+  try {
+    for (const f of files) {
+      const dest = path.join(targetDir, f.rel);
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.copyFileSync(f.abs, dest);
+    }
+  } catch (e) {
+    // Never leave a half-copied theme behind.
+    try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* best effort */ }
+    throw e;
+  }
+
+  return { slug: targetSlug, files: files.length };
+}
+
+/**
  * Create a zip of a theme for download
  */
 async function createThemeZip(slug: string) {
@@ -723,5 +810,6 @@ module.exports = {
   deleteTheme,
   createThemeZip,
   installThemeFromZip,
+  installThemeFromDir,
   THEMES_DIR
 };

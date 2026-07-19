@@ -203,6 +203,8 @@ export interface Plugin {
     author?: string;
     homepage?: string;
     runtime?: PluginRuntime | null;   // live isolate health when active (null if inactive / not an isolate)
+    hasTheme?: boolean;               // plugin bundles a companion theme/ folder (installable via installTheme)
+    themeInstalled?: boolean;         // themes/<slug>-theme already exists
 }
 
 export interface PluginRuntime {
@@ -380,6 +382,11 @@ export const pluginsApi = {
      * refuses to disable anything with a 409 CONSENT_REQUIRED). */
     freePort: (slug: string, port: number, allowDisable = false) =>
         apiPost<{ success: boolean; freed: boolean; alreadyFree?: boolean; port: number; service?: string; label?: string; reloaded: boolean }>(`/plugins/${slug}/free-port`, { port, allowDisable }),
+
+    /** Install the companion theme a plugin bundles (its theme/ folder) as themes/<slug>-theme.
+     * `activate` = also switch the site to it (one click, plugin-completeness option B). */
+    installTheme: (slug: string, activate = false) =>
+        apiPost<{ success: boolean; slug: string; activated: boolean; message: string }>(`/plugins/${slug}/install-theme`, { activate }),
 
     // Android-style per-permission grants (default-deny). `granted` = the "scope:access" tokens the admin
     // approves; `network` = grant outbound network to an untrusted plugin.
