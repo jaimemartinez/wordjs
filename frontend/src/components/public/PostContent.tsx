@@ -10,8 +10,8 @@
  */
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Render, Config } from "@measured/puck";
-import "@measured/puck/puck.css";
+import { Render, Config } from "@wordjs/puck";
+import "@wordjs/puck/puck.css";
 import { postConfig, pageConfig } from "@/components/puckConfig";
 import CommentsSection from "@/components/CommentsSection";
 import { sanitizeHTML } from "@/lib/sanitize";
