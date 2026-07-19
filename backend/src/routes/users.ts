@@ -91,7 +91,7 @@ router.get('/', authenticate, can('list_users'), asyncHandler(async (req: any, r
         order: safeOrder
     });
 
-    const total = await User.count({ search });
+    const total = await User.count({ search, role });
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
