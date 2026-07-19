@@ -52,7 +52,13 @@ export default function DbMigrationPage() {
     };
 
     const initMigration = (target: string) => {
-        if (target === 'postgres') {
+        if (target === 'postgres' || target === 'mysql') {
+            // Swap the connection defaults to the engine's conventions unless the user already edited them.
+            setPgConfig(prev => ({
+                ...prev,
+                dbPort: (prev.dbPort === '5432' || prev.dbPort === '3306') ? (target === 'mysql' ? '3306' : '5432') : prev.dbPort,
+                dbUser: (prev.dbUser === 'postgres' || prev.dbUser === 'root') ? (target === 'mysql' ? 'root' : 'postgres') : prev.dbUser,
+            }));
             setModal({ isOpen: true, target, type: 'form' });
         } else {
             setModal({ isOpen: true, target, type: 'confirm' });
@@ -90,7 +96,7 @@ export default function DbMigrationPage() {
         }, 500);
 
         const payload: any = { targetDriver: target };
-        if (target === 'postgres') {
+        if (target === 'postgres' || target === 'mysql') {
             Object.assign(payload, pgConfig);
         }
 
@@ -212,13 +218,15 @@ export default function DbMigrationPage() {
                                     </div>
                                     <span className="text-3xl font-black text-gray-800 tracking-tight leading-none">
                                         {status.currentDriver === 'sqlite-native' ? 'Native SQLite' :
-                                            status.currentDriver === 'postgres' ? 'PostgreSQL' : 'Legacy SQLite'}
+                                            status.currentDriver === 'postgres' ? 'PostgreSQL' :
+                                                status.currentDriver === 'mysql' ? 'MySQL / MariaDB' : 'Legacy SQLite'}
                                     </span>
                                 </div>
 
                                 <div className="text-sm bg-gray-50/80 rounded-2xl p-5 border border-gray-100 text-gray-600 leading-relaxed font-medium">
                                     {status.currentDriver === 'sqlite-native' && "⚡ High-performance file-based storage with WAL mode enabled. Recommended for most users."}
                                     {status.currentDriver === 'postgres' && "🐘 Production-grade relational database engine. Best for scaling and high concurrency."}
+                                    {status.currentDriver === 'mysql' && "🐬 The world's most popular open-source database. Great for shared hosting and existing MySQL infrastructure."}
                                     {status.currentDriver === 'sqlite-legacy' && "🐢 Compatibility mode using standard file locking. Slower, but works on all file systems."}
                                 </div>
                             </div>
@@ -336,6 +344,35 @@ export default function DbMigrationPage() {
                                 </div>
                             )}
 
+                            {/* Option: MySQL / MariaDB */}
+                            {status.currentDriver !== 'mysql' && status.availableDrivers?.includes('mysql') && (
+                                <div className="group bg-white p-6 md:p-8 rounded-[40px] border border-gray-100 shadow-lg hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 relative overflow-hidden">
+                                    <div className="absolute inset-0 bg-gradient-to-r from-teal-50/50 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+                                    <div className="relative flex flex-col md:flex-row md:items-center justify-between gap-6">
+                                        <div className="flex items-start gap-6">
+                                            <div className="w-16 h-16 bg-teal-100 text-teal-600 rounded-2xl flex-shrink-0 flex items-center justify-center text-3xl shadow-teal-100 group-hover:scale-110 group-hover:rotate-3 transition-all duration-300">
+                                                <i className="fa-solid fa-database"></i>
+                                            </div>
+                                            <div>
+                                                <h3 className="text-xl font-bold text-gray-900 group-hover:text-teal-700 transition-colors">Switch to MySQL / MariaDB</h3>
+                                                <p className="text-gray-500 font-medium mt-1">Use the world's most popular open-source database.</p>
+                                                <div className="flex gap-2 mt-3">
+                                                    <span className="px-2 py-1 bg-teal-50 text-teal-700 text-xs font-bold rounded uppercase">Popular</span>
+                                                    <span className="px-2 py-1 bg-gray-100 text-gray-600 text-xs font-bold rounded uppercase">MySQL 8+</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <button
+                                            onClick={() => initMigration('mysql')}
+                                            disabled={loading}
+                                            className="px-8 py-4 bg-gray-900 text-white font-bold rounded-xl hover:bg-teal-600 hover:shadow-lg hover:shadow-teal-500/30 transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0"
+                                        >
+                                            Configure
+                                        </button>
+                                    </div>
+                                </div>
+                            )}
+
                             {/* Option: Legacy */}
                             {status.currentDriver !== 'sqlite-legacy' && status.availableDrivers?.includes('sqlite-legacy') && (
                                 <div className="group bg-white/40 p-6 md:p-8 rounded-[40px] border-2 border-dashed border-gray-200 hover:border-gray-300 hover:bg-white transition-all duration-300">
@@ -417,7 +454,7 @@ export default function DbMigrationPage() {
                         ) : (
                             <div className="p-8">
                                 <div className="flex items-center justify-between mb-8">
-                                    <h3 className="text-2xl font-black text-gray-900">PostgreSQL Setup</h3>
+                                    <h3 className="text-2xl font-black text-gray-900">{modal.target === 'mysql' ? 'MySQL / MariaDB Setup' : 'PostgreSQL Setup'}</h3>
                                     <button onClick={() => setModal({ ...modal, isOpen: false })} className="text-gray-400 hover:text-gray-600">
                                         <i className="fa-solid fa-xmark text-xl"></i>
                                     </button>
@@ -442,7 +479,7 @@ export default function DbMigrationPage() {
                                                 value={pgConfig.dbPort}
                                                 onChange={e => setPgConfig({ ...pgConfig, dbPort: e.target.value })}
                                                 className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 font-medium transition-colors"
-                                                placeholder="5432"
+                                                placeholder={modal.target === 'mysql' ? '3306' : '5432'}
                                             />
                                         </div>
                                         <div>
@@ -464,7 +501,7 @@ export default function DbMigrationPage() {
                                                 value={pgConfig.dbUser}
                                                 onChange={e => setPgConfig({ ...pgConfig, dbUser: e.target.value })}
                                                 className="w-full px-4 py-3 bg-gray-50 border-2 border-gray-100 rounded-xl focus:border-indigo-500 focus:ring-0 font-medium transition-colors"
-                                                placeholder="postgres"
+                                                placeholder={modal.target === 'mysql' ? 'root' : 'postgres'}
                                             />
                                         </div>
                                         <div>

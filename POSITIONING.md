@@ -172,9 +172,11 @@ The sandbox + AST scanner are the *enabling technology* for a marketplace where 
 install" is a verifiable claim**, not a vibe.
 
 **The marketplace *mechanism* now ships in OSS** (no longer a proposal): a curated catalog of
-**25 first-party plugins** (`marketplace/plugins/` → committed catalog + zips built by
-`backend/scripts/build-marketplace.js`, served from the repo or a release / any admin-configured
-source), a Plugins → Marketplace admin tab with one-click installs, **sha256-verified** downloads
+**25 first-party plugins** (`marketplace/plugins/` → catalog + zips built by
+`backend/scripts/build-marketplace.js` into `marketplace/dist/`, a gitignored build output published
+as GitHub Release assets; installs default to `releases/latest/download` but the sources are
+**admin-configurable** — option `marketplace_sources`, any number of HTTPS catalogs merged), a
+Plugins → Marketplace admin tab with one-click installs, **sha256-verified** downloads
 routed through the *same* hardened upload pipeline (zip guards + AST scan;
 `backend/src/routes/marketplace.ts`), and per-capability grant disclosure at install. What
 follows below — the trust badge, the third-party review pipeline, and the revenue model — is the
@@ -246,7 +248,7 @@ enlarges the trust surface:
   auditable core" thesis; it has been **removed**. Postgres support remains via the `pg` client to
   an external server.
 - **Pick ONE database.** The code ships multiple drivers (`sqlite-legacy`, `sqlite-native`,
-  `postgres`) with fallback logic. Standardize on **Postgres** (the serious,
+  `postgres`, and `mysql`) with fallback logic. Standardize on **Postgres** (the serious,
   multi-tenant-capable target) for the product; keep SQLite as a dev-only convenience at most.
   Multiple DB paths multiply the test / security matrix for zero positioning value.
 - **General principle:** anything requiring **high-risk capabilities** (raw network, mail

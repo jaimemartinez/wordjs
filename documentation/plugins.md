@@ -224,12 +224,16 @@ WordJS is highly sophisticated about how it handles React.
 ### The Marketplace (one click)
 First-party plugins distributed outside the core build live in the **Marketplace** tab of
 `/admin/plugins`. Installing from there downloads the plugin ZIP from the catalog
-(`marketplace/dist/marketplace-index.json`, built by `npm run build:marketplace` from
-`marketplace/plugins/` and served from the repo or a GitHub release), **verifies its sha256**
-against the catalog entry, and hands it to the **same upload pipeline** described below
-(zip-bomb budget, manifest check, AST scan) — a marketplace install is not privileged in any way.
-Backend API: `GET /api/v1/marketplace/catalog` / `POST /api/v1/marketplace/install` (admin-only);
-the catalog source is configurable via the `marketplace_source` option. See
+(`marketplace-index.json`, built by `npm run build:marketplace` from `marketplace/plugins/` and
+published as **GitHub release assets** — `marketplace/dist/` is a build output and is **not**
+committed), **verifies its sha256** against the catalog entry, and hands it to the **same upload
+pipeline** described below (zip-bomb budget, manifest check, AST scan) — a marketplace install is
+not privileged in any way. Backend API: `GET /api/v1/marketplace/catalog` /
+`POST /api/v1/marketplace/install` (admin-only). The catalog **sources are admin-configurable**
+from the Marketplace UI (`GET`/`PUT /api/v1/marketplace/sources`, persisted in the
+`marketplace_sources` option as a list of https catalogs, merged with per-source error isolation);
+with none configured the default is the GitHub release assets
+(`https://github.com/jaimemartinez/wordjs/releases/latest/download`). See
 **[Plugins Reference §10](plugins-reference.md)** for the catalog.
 
 ### The Distribution Workflow (Standard)
@@ -491,7 +495,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
 | `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Always creates a `wjp_<slug>_`-prefixed table; core table names blocked. |
-| `wordjs.db.getType()` | `database:read` | Returns an object `{ isPostgres, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, or `'postgres'`) — check `isPostgres`/`isSQLite` to branch your DDL. |
+| `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, or `'mysql'`) — branch your DDL on `isPostgres`/`isMySQL`. Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. |

@@ -7,24 +7,21 @@
  * a builder modal (client, dynamic item rows, tax %, discount, dates, notes, live totals),
  * per-row actions (edit / copy public link / send mail / status / delete), CSV export and a
  * config tab (business identity + public invoice page URL + footer note).
+ *
+ * Visual identity lives in the plugin's OWN stylesheet (client/admin/admin.css, injected by the
+ * host admin shell and scoped to .plugin-admin-invoices) — the markup below only uses cf-*
+ * classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const inputSmCls = "w-full px-3 py-2 bg-gray-50/60 border-2 border-gray-100 rounded-xl focus:ring-2 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none text-sm";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnDark = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhost = "px-5 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnMini = "px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all disabled:opacity-40";
-
 const STATUS_META = {
-    draft: { label: "Borrador", cls: "bg-gray-100 text-gray-600" },
-    sent: { label: "Enviada", cls: "bg-blue-100 text-blue-700" },
-    paid: { label: "Pagada", cls: "bg-green-100 text-green-700" },
-    overdue: { label: "Vencida", cls: "bg-red-100 text-red-700" },
-    void: { label: "Anulada", cls: "bg-gray-200 text-gray-500 line-through" },
+    draft: { label: "Borrador", cls: "is-draft" },
+    sent: { label: "Enviada", cls: "is-sent" },
+    paid: { label: "Pagada", cls: "is-paid" },
+    overdue: { label: "Vencida", cls: "is-overdue" },
+    void: { label: "Anulada", cls: "is-void" },
 };
 
 const money = (cents, symbol) => `${symbol || "$"}${((Number(cents) || 0) / 100).toFixed(2)}`;
@@ -61,6 +58,44 @@ function previewTotals(rows, taxPctStr, discountStr) {
 
 let rowSeq = 1;
 const emptyRow = () => ({ key: rowSeq++, description: "", qty: "1", unit: "" });
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconInvoice = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <path d="M14 2v6h6" />
+        <path d="M16 13H8" />
+        <path d="M16 17H8" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconDownload = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+    </svg>
+);
+const IconX = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M18 6 6 18M6 6l12 12" />
+    </svg>
+);
+const IconMinus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M5 12h14" />
+    </svg>
+);
 
 // Module-level (never define a component inside a component — remounting steals input focus).
 function InvoiceModal({ initial, config, onClose, onDone }) {
@@ -127,105 +162,110 @@ function InvoiceModal({ initial, config, onClose, onDone }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 bg-black/40 flex items-start justify-center overflow-y-auto p-4" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-            <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl my-8 p-6 sm:p-8">
-                <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-xl font-black text-gray-900 tracking-tight">
-                        {isEdit ? `Editar factura ${initial.number}` : "Nueva factura"}
-                    </h2>
-                    <button type="button" onClick={onClose} className="w-9 h-9 rounded-full bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold">×</button>
-                </div>
+        <div className="cf-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+            <div className="cf-letter is-wide" role="dialog" aria-modal="true" aria-label={isEdit ? `Editar factura ${initial.number}` : "Nueva factura"}>
+                <div className="cf-letter-body">
+                    <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem" }}>
+                        <h2 className="cf-editor-title" style={{ marginBottom: 0 }}>
+                            <IconPen />
+                            {isEdit ? `Editar factura ${initial.number}` : "Nueva factura"}
+                        </h2>
+                        <button type="button" onClick={onClose} aria-label="Cerrar" className="cf-iconbtn"><IconX /></button>
+                    </div>
 
-                {/* Client */}
-                <div className="grid sm:grid-cols-2 gap-4 mb-5">
-                    <div>
-                        <label className={labelCls}>Cliente *</label>
-                        <input type="text" value={clientName} onChange={(e) => setClientName(e.target.value)} className={inputCls} placeholder="Nombre o razón social" />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Correo del cliente</label>
-                        <input type="email" value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} className={inputCls} placeholder="cliente@ejemplo.com" />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Dirección</label>
-                        <input type="text" value={clientAddress} onChange={(e) => setClientAddress(e.target.value)} className={inputCls} placeholder="Calle, ciudad…" />
-                    </div>
-                    <div>
-                        <label className={labelCls}>NIF / RFC / Tax ID</label>
-                        <input type="text" value={clientTaxId} onChange={(e) => setClientTaxId(e.target.value)} className={inputCls} />
-                    </div>
-                </div>
-
-                {/* Items */}
-                <label className={labelCls}>Conceptos</label>
-                <div className="space-y-2 mb-3">
-                    {rows.map((r) => (
-                        <div key={r.key} className="flex gap-2 items-center">
-                            <input type="text" value={r.description} onChange={(e) => setRow(r.key, { description: e.target.value })} className={inputSmCls + " flex-1"} placeholder="Descripción" />
-                            <input type="text" inputMode="decimal" value={r.qty} onChange={(e) => setRow(r.key, { qty: e.target.value })} className={inputSmCls + " w-20 text-right"} placeholder="Cant." title="Cantidad" />
-                            <input type="text" inputMode="decimal" value={r.unit} onChange={(e) => setRow(r.key, { unit: e.target.value })} className={inputSmCls + " w-28 text-right"} placeholder="Precio" title="Precio unitario" />
-                            <div className="w-24 text-right text-sm font-bold text-gray-700 tabular-nums">
-                                {money(Math.round((parseFloat(String(r.qty).replace(",", ".")) || 0) * toCents(r.unit)), symbol)}
-                            </div>
-                            <button type="button" onClick={() => removeRow(r.key)} disabled={rows.length === 1} className="w-8 h-8 rounded-lg bg-red-50 hover:bg-red-100 text-red-500 font-bold disabled:opacity-30" title="Quitar concepto">−</button>
+                    {/* Client */}
+                    <div className="cf-grid" style={{ marginTop: "1.35rem", marginBottom: "1.35rem" }}>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-client">Cliente *</label>
+                            <input id="inv-client" type="text" value={clientName} onChange={(e) => setClientName(e.target.value)} className="cf-input" placeholder="Nombre o razón social" />
                         </div>
-                    ))}
-                </div>
-                <button type="button" onClick={addRow} disabled={rows.length >= 50} className="text-xs font-black uppercase tracking-widest text-blue-600 hover:text-blue-800 mb-5 disabled:opacity-40">
-                    + Agregar concepto
-                </button>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-cemail">Correo del cliente</label>
+                            <input id="inv-cemail" type="email" value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} className="cf-input" placeholder="cliente@ejemplo.com" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-caddr">Dirección</label>
+                            <input id="inv-caddr" type="text" value={clientAddress} onChange={(e) => setClientAddress(e.target.value)} className="cf-input" placeholder="Calle, ciudad…" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-ctax">NIF / RFC / Tax ID</label>
+                            <input id="inv-ctax" type="text" value={clientTaxId} onChange={(e) => setClientTaxId(e.target.value)} className="cf-input" />
+                        </div>
+                    </div>
 
-                {/* Tax / discount / dates */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-5">
-                    <div>
-                        <label className={labelCls}>Impuesto %</label>
-                        <input type="number" min="0" max="100" value={taxPct} onChange={(e) => setTaxPct(e.target.value)} className={inputSmCls} />
+                    {/* Items */}
+                    <span className="cf-label">Conceptos</span>
+                    <div style={{ marginBottom: "0.8rem" }}>
+                        {rows.map((r) => (
+                            <div key={r.key} className="cf-item-row">
+                                <input type="text" value={r.description} onChange={(e) => setRow(r.key, { description: e.target.value })} className="cf-input" style={{ flex: 1 }} placeholder="Descripción" aria-label="Descripción" />
+                                <input type="text" inputMode="decimal" value={r.qty} onChange={(e) => setRow(r.key, { qty: e.target.value })} className="cf-input" style={{ width: "5rem", flex: "0 0 auto", textAlign: "right" }} placeholder="Cant." title="Cantidad" aria-label="Cantidad" />
+                                <input type="text" inputMode="decimal" value={r.unit} onChange={(e) => setRow(r.key, { unit: e.target.value })} className="cf-input" style={{ width: "7rem", flex: "0 0 auto", textAlign: "right" }} placeholder="Precio" title="Precio unitario" aria-label="Precio unitario" />
+                                <div className="cf-line-total">
+                                    {money(Math.round((parseFloat(String(r.qty).replace(",", ".")) || 0) * toCents(r.unit)), symbol)}
+                                </div>
+                                <button type="button" onClick={() => removeRow(r.key)} disabled={rows.length === 1} className="cf-iconbtn is-danger" title="Quitar concepto" aria-label="Quitar concepto"><IconMinus /></button>
+                            </div>
+                        ))}
                     </div>
-                    <div>
-                        <label className={labelCls}>Descuento ({symbol})</label>
-                        <input type="text" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} className={inputSmCls} placeholder="0.00" />
+                    <div style={{ marginBottom: "1.35rem" }}>
+                        <button type="button" onClick={addRow} disabled={rows.length >= 50} className="cf-btn-ghost">
+                            <IconPlus /> Agregar concepto
+                        </button>
                     </div>
-                    <div>
-                        <label className={labelCls}>Fecha de emisión</label>
-                        <input type="date" value={issuedAt} onChange={(e) => setIssuedAt(e.target.value)} className={inputSmCls} />
-                    </div>
-                    <div>
-                        <label className={labelCls}>Vencimiento</label>
-                        <input type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} className={inputSmCls} />
-                    </div>
-                </div>
 
-                <div className="mb-5">
-                    <label className={labelCls}>Notas (visibles en la factura)</label>
-                    <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className={inputSmCls} placeholder="Condiciones de pago, cuenta bancaria…" />
-                </div>
+                    {/* Tax / discount / dates */}
+                    <div className="cf-grid-4" style={{ marginBottom: "1.35rem" }}>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-tax">Impuesto %</label>
+                            <input id="inv-tax" type="number" min="0" max="100" value={taxPct} onChange={(e) => setTaxPct(e.target.value)} className="cf-input" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-discount">Descuento ({symbol})</label>
+                            <input id="inv-discount" type="text" inputMode="decimal" value={discount} onChange={(e) => setDiscount(e.target.value)} className="cf-input" placeholder="0.00" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-issued">Fecha de emisión</label>
+                            <input id="inv-issued" type="date" value={issuedAt} onChange={(e) => setIssuedAt(e.target.value)} className="cf-input" />
+                        </div>
+                        <div>
+                            <label className="cf-label" htmlFor="inv-due">Vencimiento</label>
+                            <input id="inv-due" type="date" value={dueAt} onChange={(e) => setDueAt(e.target.value)} className="cf-input" />
+                        </div>
+                    </div>
 
-                {/* Live totals preview */}
-                <div className="bg-gray-50 rounded-2xl p-4 mb-5 ml-auto sm:w-72 text-sm">
-                    <div className="flex justify-between py-1"><span className="text-gray-500">Subtotal</span><span className="font-bold tabular-nums">{money(totals.subtotal, symbol)}</span></div>
-                    {totals.discount > 0 && (
-                        <div className="flex justify-between py-1"><span className="text-gray-500">Descuento</span><span className="font-bold tabular-nums text-red-600">−{money(totals.discount, symbol)}</span></div>
+                    <div style={{ marginBottom: "1.35rem" }}>
+                        <label className="cf-label" htmlFor="inv-notes">Notas (visibles en la factura)</label>
+                        <textarea id="inv-notes" value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} className="cf-input" placeholder="Condiciones de pago, cuenta bancaria…" />
+                    </div>
+
+                    {/* Live totals preview */}
+                    <div className="cf-totals">
+                        <div className="cf-totals-row"><span>Subtotal</span><span className="cf-totals-val">{money(totals.subtotal, symbol)}</span></div>
+                        {totals.discount > 0 && (
+                            <div className="cf-totals-row"><span>Descuento</span><span className="cf-totals-val is-danger">−{money(totals.discount, symbol)}</span></div>
+                        )}
+                        <div className="cf-totals-row"><span>Impuesto ({totals.taxPct}%)</span><span className="cf-totals-val">{money(totals.tax, symbol)}</span></div>
+                        <div className="cf-totals-total"><span>Total</span><span>{money(totals.total, symbol)}</span></div>
+                    </div>
+
+                    {error && <div className="cf-flash is-error" role="alert">{error}</div>}
+                    {!config?.invoicePageUrl && (
+                        <div className="cf-note">
+                            Para enviar por correo o copiar el enlace público, configura primero la URL de la página de facturas en la pestaña Configuración.
+                        </div>
                     )}
-                    <div className="flex justify-between py-1"><span className="text-gray-500">Impuesto ({totals.taxPct}%)</span><span className="font-bold tabular-nums">{money(totals.tax, symbol)}</span></div>
-                    <div className="flex justify-between py-2 border-t border-gray-200 mt-1"><span className="font-black">Total</span><span className="font-black tabular-nums">{money(totals.total, symbol)}</span></div>
-                </div>
 
-                {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600 mb-4">{error}</div>}
-                {!config?.invoicePageUrl && (
-                    <div className="text-[11px] px-4 py-3 rounded-xl bg-amber-50 text-amber-700 mb-4">
-                        Para enviar por correo o copiar el enlace público, configura primero la URL de la página de facturas en la pestaña Configuración.
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "flex-end" }}>
+                        <button type="button" onClick={onClose} className="cf-btn-ghost">Cancelar</button>
+                        <button type="button" onClick={() => doSave(false)} disabled={busy} className="cf-btn-ghost">
+                            {busy ? "Guardando…" : isEdit ? "Guardar cambios" : "Guardar borrador"}
+                        </button>
+                        <button type="button" onClick={() => doSave(true)} disabled={busy || !canSendMail} className="cf-btn"
+                            title={canSendMail ? "Guardar y enviar el enlace por correo" : "Necesita correo del cliente y la URL de la página de facturas"}>
+                            {busy ? "Enviando…" : "Guardar y enviar por correo"}
+                        </button>
                     </div>
-                )}
-
-                <div className="flex flex-wrap gap-3 justify-end">
-                    <button type="button" onClick={onClose} className={btnGhost}>Cancelar</button>
-                    <button type="button" onClick={() => doSave(false)} disabled={busy} className={btnGhost}>
-                        {busy ? "Guardando…" : isEdit ? "Guardar cambios" : "Guardar borrador"}
-                    </button>
-                    <button type="button" onClick={() => doSave(true)} disabled={busy || !canSendMail} className={btnDark}
-                        title={canSendMail ? "Guardar y enviar el enlace por correo" : "Necesita correo del cliente y la URL de la página de facturas"}>
-                        {busy ? "Enviando…" : "Guardar y enviar por correo"}
-                    </button>
                 </div>
             </div>
         </div>
@@ -367,59 +407,80 @@ export default function InvoicesAdminPage() {
     const setCfg = (key, value) => setConfig((c) => ({ ...(c || {}), [key]: value }));
 
     return (
-        <div className="max-w-5xl mx-auto p-4 sm:p-8">
-            <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconInvoice /></div>
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Facturas</h1>
-                    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                        Facturas con enlace público imprimible y envío por correo
-                    </p>
+                    <h1 className="cf-title">Facturas</h1>
+                    <p className="cf-subtitle">Facturas con enlace público imprimible y envío por correo</p>
                 </div>
-                <div className="flex gap-2">
-                    <button type="button" onClick={() => setTab("list")} className={tab === "list" ? btnDark : btnGhost}>Facturas</button>
-                    <button type="button" onClick={() => setTab("config")} className={tab === "config" ? btnDark : btnGhost}>Configuración</button>
-                </div>
+            </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
+
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "list"}
+                    onClick={() => setTab("list")}
+                    className={`cf-tab ${tab === "list" ? "is-active" : ""}`}
+                >
+                    Facturas
+                </button>
+                <button
+                    type="button"
+                    role="tab"
+                    aria-selected={tab === "config"}
+                    onClick={() => setTab("config")}
+                    className={`cf-tab ${tab === "config" ? "is-active" : ""}`}
+                >
+                    Configuración
+                </button>
             </div>
 
             {message && (
-                <div className="text-sm px-4 py-3 rounded-xl bg-blue-50 text-blue-700 mb-6 flex justify-between items-center gap-3">
+                <div role="status" className="cf-flash is-info">
                     <span>{message}</span>
-                    <button type="button" onClick={() => setMessage("")} className="text-blue-400 hover:text-blue-700 font-bold">×</button>
+                    <button type="button" onClick={() => setMessage("")} aria-label="Cerrar mensaje" className="cf-iconbtn" style={{ flex: "0 0 auto" }}><IconX /></button>
                 </div>
             )}
 
             {tab === "list" && (
                 <>
                     {/* Dashboard cards */}
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-                        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6">
-                            <p className={labelCls}>Facturado (pagadas)</p>
-                            <p className="text-2xl font-black text-green-600 tabular-nums">{money(summary?.paid_cents, symbol)}</p>
-                            <p className="text-[11px] text-gray-400 mt-1">{summary?.count_paid ?? 0} facturas pagadas</p>
+                    <div className="cf-stat-grid">
+                        <div className="cf-stat">
+                            <p className="cf-label" style={{ marginBottom: 0 }}>Facturado (pagadas)</p>
+                            <p className="cf-stat-value is-ok">{money(summary?.paid_cents, symbol)}</p>
+                            <p className="cf-stat-sub">{summary?.count_paid ?? 0} facturas pagadas</p>
                         </div>
-                        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6">
-                            <p className={labelCls}>Pendiente (enviadas + vencidas)</p>
-                            <p className="text-2xl font-black text-blue-600 tabular-nums">{money(summary?.pending_cents, symbol)}</p>
-                            <p className="text-[11px] text-gray-400 mt-1">{(summary?.count_sent ?? 0) + (summary?.count_overdue ?? 0)} facturas por cobrar</p>
+                        <div className="cf-stat">
+                            <p className="cf-label" style={{ marginBottom: 0 }}>Pendiente (enviadas + vencidas)</p>
+                            <p className="cf-stat-value is-accent">{money(summary?.pending_cents, symbol)}</p>
+                            <p className="cf-stat-sub">{(summary?.count_sent ?? 0) + (summary?.count_overdue ?? 0)} facturas por cobrar</p>
                         </div>
-                        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6">
-                            <p className={labelCls}>Vencido</p>
-                            <p className="text-2xl font-black text-red-600 tabular-nums">{money(summary?.overdue_cents, symbol)}</p>
-                            <p className="text-[11px] text-gray-400 mt-1">{summary?.count_overdue ?? 0} facturas vencidas</p>
+                        <div className="cf-stat">
+                            <p className="cf-label" style={{ marginBottom: 0 }}>Vencido</p>
+                            <p className="cf-stat-value is-danger">{money(summary?.overdue_cents, symbol)}</p>
+                            <p className="cf-stat-sub">{summary?.count_overdue ?? 0} facturas vencidas</p>
                         </div>
                     </div>
 
                     {/* Toolbar */}
-                    <div className="flex flex-wrap items-center gap-3 mb-4">
+                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.75rem", marginBottom: "1.15rem" }}>
                         <input
                             type="text" value={search}
                             onChange={(e) => setSearch(e.target.value)}
                             onKeyDown={(e) => { if (e.key === "Enter") load(); }}
                             placeholder="Buscar por número, cliente o correo…"
-                            className={inputSmCls + " max-w-xs"}
+                            aria-label="Buscar facturas"
+                            className="cf-input"
+                            style={{ maxWidth: "18rem" }}
                         />
-                        <button type="button" onClick={() => load()} className={btnGhost + " !py-2"}>Buscar</button>
-                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className={inputSmCls + " w-40"}>
+                        <button type="button" onClick={() => load()} className="cf-btn-ghost">Buscar</button>
+                        <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} aria-label="Filtrar por estado" className="cf-select" style={{ width: "11rem" }}>
                             <option value="">Todos los estados</option>
                             <option value="draft">Borrador</option>
                             <option value="sent">Enviada</option>
@@ -427,117 +488,123 @@ export default function InvoicesAdminPage() {
                             <option value="overdue">Vencida</option>
                             <option value="void">Anulada</option>
                         </select>
-                        <div className="flex-1" />
-                        <button type="button" onClick={exportCsv} className={btnGhost + " !py-2"}>Exportar CSV</button>
-                        <button type="button" onClick={() => setModal({ initial: null })} className={btnDark + " !py-2"}>+ Nueva factura</button>
+                        <div style={{ flex: 1 }} />
+                        <button type="button" onClick={exportCsv} className="cf-btn-ghost"><IconDownload /> Exportar CSV</button>
+                        <button type="button" onClick={() => setModal({ initial: null })} className="cf-btn"><IconPlus /> Nueva factura</button>
                     </div>
 
                     {/* List */}
-                    <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 overflow-x-auto">
-                        {invoices.length === 0 ? (
-                            <p className="text-sm text-gray-400 p-8 text-center">No hay facturas todavía — crea la primera con "Nueva factura".</p>
-                        ) : (
-                            <table className="w-full text-sm min-w-[720px]">
-                                <thead>
-                                    <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                        <th className="px-5 py-4">Número</th>
-                                        <th className="px-3 py-4">Cliente</th>
-                                        <th className="px-3 py-4">Emitida</th>
-                                        <th className="px-3 py-4">Vence</th>
-                                        <th className="px-3 py-4 text-right">Total</th>
-                                        <th className="px-3 py-4">Estado</th>
-                                        <th className="px-5 py-4 text-right">Acciones</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {invoices.map((inv) => {
-                                        const meta = STATUS_META[inv.effective_status] || STATUS_META.draft;
-                                        return (
-                                            <tr key={inv.id} className="border-b border-gray-50 hover:bg-gray-50/60">
-                                                <td className="px-5 py-3 font-black text-gray-800">{inv.number}</td>
-                                                <td className="px-3 py-3">
-                                                    <div className="font-bold text-gray-700">{inv.client_name}</div>
-                                                    {inv.client_email && <div className="text-[11px] text-gray-400">{inv.client_email}</div>}
-                                                </td>
-                                                <td className="px-3 py-3 text-gray-500">{(inv.issued_at || "").slice(0, 10) || "—"}</td>
-                                                <td className="px-3 py-3 text-gray-500">{(inv.due_at || "").slice(0, 10) || "—"}</td>
-                                                <td className="px-3 py-3 text-right font-bold tabular-nums">{money(inv.total_cents, inv.currency_symbol)}</td>
-                                                <td className="px-3 py-3">
-                                                    <span className={`inline-block px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider ${meta.cls}`}>{meta.label}</span>
-                                                </td>
-                                                <td className="px-5 py-3">
-                                                    <div className="flex items-center justify-end gap-1.5 flex-wrap">
-                                                        <button type="button" onClick={() => setModal({ initial: inv })} disabled={busyId === inv.id} className={btnMini + " bg-gray-100 hover:bg-gray-200 text-gray-700"}>Editar</button>
-                                                        <button type="button" onClick={() => copyLink(inv)} disabled={busyId === inv.id} className={btnMini + " bg-gray-100 hover:bg-gray-200 text-gray-700"} title="Copiar enlace público">Enlace</button>
-                                                        <button type="button" onClick={() => sendMail(inv)} disabled={busyId === inv.id || !inv.client_email} className={btnMini + " bg-blue-50 hover:bg-blue-100 text-blue-700"} title={inv.client_email ? "Enviar por correo" : "La factura no tiene correo del cliente"}>Correo</button>
-                                                        <select
-                                                            value={inv.status}
-                                                            onChange={(e) => changeStatus(inv, e.target.value)}
-                                                            disabled={busyId === inv.id}
-                                                            className="px-2 py-1.5 rounded-lg text-[11px] font-bold bg-gray-50 border border-gray-200 outline-none"
-                                                            title="Cambiar estado"
-                                                        >
-                                                            <option value="draft">Borrador</option>
-                                                            <option value="sent">Enviada</option>
-                                                            <option value="paid">Pagada</option>
-                                                            <option value="overdue">Vencida</option>
-                                                            <option value="void">Anulada</option>
-                                                        </select>
-                                                        <button type="button" onClick={() => remove(inv)} disabled={busyId === inv.id} className={btnMini + " bg-red-50 hover:bg-red-100 text-red-600"}>Eliminar</button>
-                                                    </div>
-                                                </td>
-                                            </tr>
-                                        );
-                                    })}
-                                </tbody>
-                            </table>
-                        )}
-                    </div>
+                    {invoices.length === 0 ? (
+                        <div className="cf-empty">
+                            <IconInvoice />
+                            <span>No hay facturas todavía — crea la primera con "Nueva factura".</span>
+                        </div>
+                    ) : (
+                        <div className="cf-card-item">
+                            <div className="cf-table-wrap">
+                                <table className="cf-table" style={{ minWidth: "720px" }}>
+                                    <thead>
+                                        <tr>
+                                            <th>Número</th>
+                                            <th>Cliente</th>
+                                            <th>Emitida</th>
+                                            <th>Vence</th>
+                                            <th style={{ textAlign: "right" }}>Total</th>
+                                            <th>Estado</th>
+                                            <th style={{ textAlign: "right" }}>Acciones</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {invoices.map((inv) => {
+                                            const meta = STATUS_META[inv.effective_status] || STATUS_META.draft;
+                                            return (
+                                                <tr key={inv.id}>
+                                                    <td className="cf-cell-num">{inv.number}</td>
+                                                    <td>
+                                                        <div className="cf-client-name">{inv.client_name}</div>
+                                                        {inv.client_email && <div className="cf-client-email">{inv.client_email}</div>}
+                                                    </td>
+                                                    <td className="cf-cell-date">{(inv.issued_at || "").slice(0, 10) || "—"}</td>
+                                                    <td className="cf-cell-date">{(inv.due_at || "").slice(0, 10) || "—"}</td>
+                                                    <td className="cf-cell-money">{money(inv.total_cents, inv.currency_symbol)}</td>
+                                                    <td>
+                                                        <span className={`cf-pill ${meta.cls}`}>{meta.label}</span>
+                                                    </td>
+                                                    <td>
+                                                        <div className="cf-rowact">
+                                                            <button type="button" onClick={() => setModal({ initial: inv })} disabled={busyId === inv.id} className="cf-btn-mini">Editar</button>
+                                                            <button type="button" onClick={() => copyLink(inv)} disabled={busyId === inv.id} className="cf-btn-mini" title="Copiar enlace público">Enlace</button>
+                                                            <button type="button" onClick={() => sendMail(inv)} disabled={busyId === inv.id || !inv.client_email} className="cf-btn-mini is-accent" title={inv.client_email ? "Enviar por correo" : "La factura no tiene correo del cliente"}>Correo</button>
+                                                            <select
+                                                                value={inv.status}
+                                                                onChange={(e) => changeStatus(inv, e.target.value)}
+                                                                disabled={busyId === inv.id}
+                                                                className="cf-select-mini"
+                                                                title="Cambiar estado"
+                                                                aria-label="Cambiar estado"
+                                                            >
+                                                                <option value="draft">Borrador</option>
+                                                                <option value="sent">Enviada</option>
+                                                                <option value="paid">Pagada</option>
+                                                                <option value="overdue">Vencida</option>
+                                                                <option value="void">Anulada</option>
+                                                            </select>
+                                                            <button type="button" onClick={() => remove(inv)} disabled={busyId === inv.id} className="cf-btn-mini is-danger">Eliminar</button>
+                                                        </div>
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
                 </>
             )}
 
             {tab === "config" && (
-                <form onSubmit={saveConfig} className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8 space-y-5 max-w-2xl">
-                    <h2 className="font-bold text-gray-800">Identidad del negocio</h2>
-                    <div className="grid sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className={labelCls}>Nombre del negocio</label>
-                            <input type="text" value={config?.businessName || ""} onChange={(e) => setCfg("businessName", e.target.value)} className={inputCls} />
+                <form onSubmit={saveConfig} className="cf-editor" style={{ maxWidth: "42rem" }}>
+                    <div className="cf-editor-body">
+                        <h2 className="cf-editor-title"><IconPen /> Identidad del negocio</h2>
+                        <div className="cf-grid">
+                            <div>
+                                <label className="cf-label" htmlFor="inv-cfg-name">Nombre del negocio</label>
+                                <input id="inv-cfg-name" type="text" value={config?.businessName || ""} onChange={(e) => setCfg("businessName", e.target.value)} className="cf-input" />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="inv-cfg-taxid">NIF / RFC / Tax ID</label>
+                                <input id="inv-cfg-taxid" type="text" value={config?.businessTaxId || ""} onChange={(e) => setCfg("businessTaxId", e.target.value)} className="cf-input" />
+                            </div>
+                            <div className="cf-span-2">
+                                <label className="cf-label" htmlFor="inv-cfg-address">Dirección</label>
+                                <input id="inv-cfg-address" type="text" value={config?.businessAddress || ""} onChange={(e) => setCfg("businessAddress", e.target.value)} className="cf-input" />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="inv-cfg-email">Correo del negocio</label>
+                                <input id="inv-cfg-email" type="email" value={config?.businessEmail || ""} onChange={(e) => setCfg("businessEmail", e.target.value)} className="cf-input" />
+                            </div>
+                            <div>
+                                <label className="cf-label" htmlFor="inv-cfg-symbol">Símbolo de moneda</label>
+                                <input id="inv-cfg-symbol" type="text" value={config?.currencySymbol || ""} onChange={(e) => setCfg("currencySymbol", e.target.value)} className="cf-input" placeholder="$" />
+                            </div>
+                            <div className="cf-span-2">
+                                <label className="cf-label" htmlFor="inv-cfg-url">URL de la página pública de facturas</label>
+                                <input id="inv-cfg-url" type="text" value={config?.invoicePageUrl || ""} onChange={(e) => setCfg("invoicePageUrl", e.target.value)} className="cf-input" placeholder="/factura o https://misitio.com/factura" />
+                                <p className="cf-help">
+                                    La página pública que contiene el bloque <strong>Invoices</strong> del editor visual. Los enlaces
+                                    enviados a los clientes tienen la forma <code>{"<URL>?inv=<token>"}</code>.
+                                </p>
+                            </div>
+                            <div className="cf-span-2">
+                                <label className="cf-label" htmlFor="inv-cfg-footer">Nota al pie de la factura</label>
+                                <input id="inv-cfg-footer" type="text" value={config?.footerNote || ""} onChange={(e) => setCfg("footerNote", e.target.value)} className="cf-input" placeholder="Gracias por su confianza." />
+                            </div>
                         </div>
-                        <div>
-                            <label className={labelCls}>NIF / RFC / Tax ID</label>
-                            <input type="text" value={config?.businessTaxId || ""} onChange={(e) => setCfg("businessTaxId", e.target.value)} className={inputCls} />
+                        <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.5rem" }}>
+                            {cfgMsg && <span className={`cf-inline-msg ${/Error/i.test(cfgMsg) ? "is-error" : "is-ok"}`}>{cfgMsg}</span>}
+                            <button type="submit" disabled={cfgBusy || !config} className="cf-btn">{cfgBusy ? "Guardando…" : "Guardar configuración"}</button>
                         </div>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Dirección</label>
-                        <input type="text" value={config?.businessAddress || ""} onChange={(e) => setCfg("businessAddress", e.target.value)} className={inputCls} />
-                    </div>
-                    <div className="grid sm:grid-cols-2 gap-4">
-                        <div>
-                            <label className={labelCls}>Correo del negocio</label>
-                            <input type="email" value={config?.businessEmail || ""} onChange={(e) => setCfg("businessEmail", e.target.value)} className={inputCls} />
-                        </div>
-                        <div>
-                            <label className={labelCls}>Símbolo de moneda</label>
-                            <input type="text" value={config?.currencySymbol || ""} onChange={(e) => setCfg("currencySymbol", e.target.value)} className={inputCls} placeholder="$" />
-                        </div>
-                    </div>
-                    <div>
-                        <label className={labelCls}>URL de la página pública de facturas</label>
-                        <input type="text" value={config?.invoicePageUrl || ""} onChange={(e) => setCfg("invoicePageUrl", e.target.value)} className={inputCls} placeholder="/factura o https://misitio.com/factura" />
-                        <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
-                            La página pública que contiene el bloque <strong>Invoices</strong> del editor visual. Los enlaces
-                            enviados a los clientes tienen la forma <code>{"<URL>?inv=<token>"}</code>.
-                        </p>
-                    </div>
-                    <div>
-                        <label className={labelCls}>Nota al pie de la factura</label>
-                        <input type="text" value={config?.footerNote || ""} onChange={(e) => setCfg("footerNote", e.target.value)} className={inputCls} placeholder="Gracias por su confianza." />
-                    </div>
-                    <div className="flex items-center justify-end gap-3">
-                        {cfgMsg && <span className={`text-sm ${/Error/i.test(cfgMsg) ? "text-red-600" : "text-green-600"}`}>{cfgMsg}</span>}
-                        <button type="submit" disabled={cfgBusy || !config} className={btnDark}>{cfgBusy ? "Guardando…" : "Guardar configuración"}</button>
                     </div>
                 </form>
             )}

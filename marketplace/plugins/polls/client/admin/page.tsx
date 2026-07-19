@@ -6,35 +6,67 @@
  * Lists every poll (status pill, total votes, inline mini result bars) with open/close, edit and
  * delete actions, plus a create/edit modal (question, dynamic option rows, results-visibility).
  * API calls go through the host's api helpers (session cookie).
+ *
+ * Visual identity (premium/modern) lives in the plugin's OWN stylesheet (client/admin/admin.css,
+ * injected by the host admin shell and scoped to .plugin-admin-polls) — the markup below only
+ * uses cf-* classes plus sparse inline styles for one-off layout.
  */
 
 import React, { useEffect, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
 
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-5 py-3 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-
 const SHOW_RESULTS_LABELS = { after: "Tras votar", always: "Siempre", never: "Nunca" };
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 12;
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconChart = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M3 3v18h18" />
+        <path d="M7 16v-5" />
+        <path d="M12 16V8" />
+        <path d="M17 16v-3" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconLock = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="3" y="11" width="18" height="11" rx="2" />
+        <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+    </svg>
+);
+const IconUnlock = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="3" y="11" width="18" height="11" rx="2" />
+        <path d="M7 11V7a5 5 0 0 1 9.9-1" />
+    </svg>
+);
 
 // Module-level (never define a component inside a component — remounting steals input focus).
 function MiniBars({ poll }) {
     const total = Number(poll.total) || 0;
     return (
-        <div className="space-y-1.5 mt-3">
+        <div className="cf-minibars">
             {(poll.options || []).map((o) => {
                 const count = Number((poll.results || {})[o.id]) || 0;
                 const pct = total > 0 ? Math.round((count / total) * 100) : 0;
                 return (
-                    <div key={o.id} className="flex items-center gap-2">
-                        <span className="text-[11px] text-gray-500 w-32 sm:w-44 truncate" title={o.label}>{o.label}</span>
-                        <div className="flex-1 h-2 bg-gray-100 rounded-full overflow-hidden">
-                            <div className="h-full bg-blue-500 rounded-full transition-all" style={{ width: pct + "%" }} />
+                    <div key={o.id} className="cf-minibar-row">
+                        <span className="cf-minibar-label" title={o.label}>{o.label}</span>
+                        <div className="cf-minibar-track">
+                            <div className="cf-minibar-fill" style={{ width: pct + "%" }} />
                         </div>
-                        <span className="text-[11px] text-gray-400 tabular-nums w-16 text-right">{pct}% ({count})</span>
+                        <span className="cf-minibar-value">{pct}% ({count})</span>
                     </div>
                 );
             })}
@@ -86,67 +118,78 @@ function PollModal({ initial, onClose, onSaved }) {
     };
 
     return (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-            <form onSubmit={save} className="bg-white rounded-3xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 sm:p-8 space-y-5">
-                <h2 className="text-xl font-black text-gray-900 italic tracking-tighter">
-                    {initial && initial.id ? "Editar encuesta" : "Nueva encuesta"}
-                </h2>
+        <div className="cf-overlay" onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+            <form
+                onSubmit={save}
+                className="cf-letter"
+                role="dialog"
+                aria-modal="true"
+                aria-label={initial && initial.id ? "Editar encuesta" : "Nueva encuesta"}
+            >
+                <div className="cf-letter-body">
+                    <h2 className="cf-editor-title">
+                        <IconPen />
+                        {initial && initial.id ? "Editar encuesta" : "Nueva encuesta"}
+                    </h2>
 
-                <div>
-                    <label className={labelCls}>Pregunta</label>
-                    <input type="text" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="¿Cuál es tu opción favorita?" className={inputCls} required />
-                </div>
-
-                <div>
-                    <label className={labelCls}>Opciones ({options.length}/{MAX_OPTIONS})</label>
-                    <div className="space-y-2">
-                        {options.map((o, i) => (
-                            <div key={o.id != null ? "opt-" + o.id : "new-" + i} className="flex items-center gap-2">
-                                <input
-                                    type="text"
-                                    value={o.label}
-                                    onChange={(e) => setOptionLabel(i, e.target.value)}
-                                    placeholder={"Opción " + (i + 1)}
-                                    className={inputCls}
-                                />
-                                <button
-                                    type="button"
-                                    onClick={() => removeOption(i)}
-                                    disabled={options.length <= MIN_OPTIONS}
-                                    className="shrink-0 w-10 h-10 rounded-xl bg-gray-100 hover:bg-red-100 hover:text-red-600 text-gray-400 font-black transition-all disabled:opacity-30 disabled:hover:bg-gray-100 disabled:hover:text-gray-400"
-                                    title="Quitar opción"
-                                >
-                                    ×
-                                </button>
-                            </div>
-                        ))}
+                    <div>
+                        <label className="cf-label" htmlFor="cf-poll-question">Pregunta</label>
+                        <input id="cf-poll-question" type="text" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="¿Cuál es tu opción favorita?" className="cf-input" required />
                     </div>
-                    {options.length < MAX_OPTIONS && (
-                        <button type="button" onClick={addOption} className="mt-2 text-xs font-black uppercase tracking-widest text-blue-600 hover:text-blue-800 transition-colors">
-                            + Agregar opción
-                        </button>
-                    )}
-                    {initial && initial.id ? (
-                        <p className="text-[11px] text-gray-400 mt-2 leading-relaxed">
-                            Al editar se conservan los votos de las opciones existentes; quitar una opción no borra sus votos.
-                        </p>
-                    ) : null}
-                </div>
 
-                <div>
-                    <label className={labelCls}>Mostrar resultados</label>
-                    <select value={showResults} onChange={(e) => setShowResults(e.target.value)} className={inputCls}>
-                        <option value="after">{SHOW_RESULTS_LABELS.after}</option>
-                        <option value="always">{SHOW_RESULTS_LABELS.always}</option>
-                        <option value="never">{SHOW_RESULTS_LABELS.never}</option>
-                    </select>
-                </div>
+                    <div style={{ marginTop: "1.15rem" }}>
+                        <span className="cf-label">Opciones ({options.length}/{MAX_OPTIONS})</span>
+                        <div>
+                            {options.map((o, i) => (
+                                <div key={o.id != null ? "opt-" + o.id : "new-" + i} className="cf-option-row">
+                                    <input
+                                        type="text"
+                                        value={o.label}
+                                        onChange={(e) => setOptionLabel(i, e.target.value)}
+                                        placeholder={"Opción " + (i + 1)}
+                                        aria-label={"Opción " + (i + 1)}
+                                        className="cf-input"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => removeOption(i)}
+                                        disabled={options.length <= MIN_OPTIONS}
+                                        className="cf-iconbtn is-danger"
+                                        title="Quitar opción"
+                                        aria-label="Quitar opción"
+                                    >
+                                        ×
+                                    </button>
+                                </div>
+                            ))}
+                        </div>
+                        {options.length < MAX_OPTIONS && (
+                            <button type="button" onClick={addOption} className="cf-btn-ghost" style={{ marginTop: "0.7rem" }}>
+                                <IconPlus /> Agregar opción
+                            </button>
+                        )}
+                        {initial && initial.id ? (
+                            <p className="cf-help">
+                                Al editar se conservan los votos de las opciones existentes; quitar una opción no borra sus votos.
+                            </p>
+                        ) : null}
+                    </div>
 
-                {error && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600">{error}</div>}
+                    <div style={{ marginTop: "1.15rem" }}>
+                        <label className="cf-label" htmlFor="cf-poll-show-results">Mostrar resultados</label>
+                        <select id="cf-poll-show-results" value={showResults} onChange={(e) => setShowResults(e.target.value)} className="cf-select">
+                            <option value="after">{SHOW_RESULTS_LABELS.after}</option>
+                            <option value="always">{SHOW_RESULTS_LABELS.always}</option>
+                            <option value="never">{SHOW_RESULTS_LABELS.never}</option>
+                        </select>
+                    </div>
 
-                <div className="flex items-center justify-end gap-3 pt-1">
-                    <button type="button" onClick={onClose} disabled={busy} className={btnGhostCls}>Cancelar</button>
-                    <button type="submit" disabled={busy} className={btnCls}>{busy ? "Guardando…" : "Guardar"}</button>
+                    {error && <div role="alert" className="cf-flash is-error" style={{ margin: "1.15rem 0 0" }}>{error}</div>}
+
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "flex-end", gap: "0.75rem", marginTop: "1.4rem" }}>
+                        <button type="button" onClick={onClose} disabled={busy} className="cf-btn-ghost">Cancelar</button>
+                        <button type="submit" disabled={busy} className="cf-btn">{busy ? "Guardando…" : "Guardar"}</button>
+                    </div>
                 </div>
             </form>
         </div>
@@ -195,55 +238,65 @@ export default function PollsAdminPage() {
     };
 
     return (
-        <div className="max-w-3xl mx-auto p-4 sm:p-8">
-            <div className="mb-8 flex flex-wrap items-end justify-between gap-4">
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconChart /></div>
                 <div>
-                    <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Encuestas</h1>
-                    <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
+                    <h1 className="cf-title">Encuestas</h1>
+                    <p className="cf-subtitle">
                         Crea encuestas y publícalas con el bloque Polls del editor visual
                     </p>
                 </div>
-                <button type="button" onClick={() => setModal({})} className={btnCls}>+ Nueva encuesta</button>
+            </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
+
+            <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+                <button type="button" onClick={() => setModal({})} className="cf-btn"><IconPlus /> Nueva encuesta</button>
             </div>
 
-            {message && <div className="text-sm px-4 py-3 rounded-xl bg-red-50 text-red-600 mb-6">{message}</div>}
+            {message && <div role="alert" className="cf-flash is-error">{message}</div>}
 
             {polls === null ? (
-                <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-8 text-sm text-gray-400">Cargando…</div>
+                <div className="cf-empty">
+                    <span>Cargando…</span>
+                </div>
             ) : polls.length === 0 ? (
-                <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-8 text-center">
-                    <p className="text-sm text-gray-400">Todavía no hay encuestas. Crea la primera con "Nueva encuesta".</p>
+                <div className="cf-empty">
+                    <IconChart />
+                    <span>Todavía no hay encuestas. Crea la primera con "Nueva encuesta".</span>
                 </div>
             ) : (
-                <div className="space-y-4">
+                <div>
                     {polls.map((p) => (
-                        <div key={p.id} className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-7">
-                            <div className="flex flex-wrap items-start justify-between gap-3">
-                                <div className="min-w-0">
-                                    <div className="flex flex-wrap items-center gap-2">
-                                        <h2 className="font-bold text-gray-800 break-words">{p.question}</h2>
-                                        <span className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-widest ${Number(p.is_open) ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+                        <div key={p.id} className="cf-card-item">
+                            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem" }}>
+                                <div style={{ minWidth: 0 }}>
+                                    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
+                                        <h2 className="cf-form-name" style={{ wordBreak: "break-word" }}>{p.question}</h2>
+                                        <span className={`cf-pill ${Number(p.is_open) ? "is-open" : "is-closed"}`}>
                                             {Number(p.is_open) ? "Abierta" : "Cerrada"}
                                         </span>
                                     </div>
-                                    <p className="text-[11px] font-bold uppercase tracking-widest text-gray-400 mt-1">
+                                    <p className="cf-meta">
                                         {p.total} {p.total === 1 ? "voto" : "votos"} · Resultados: {SHOW_RESULTS_LABELS[p.show_results] || SHOW_RESULTS_LABELS.after}
                                     </p>
                                 </div>
-                                <div className="flex flex-wrap items-center gap-2">
-                                    <button type="button" onClick={() => toggle(p)} disabled={busyId === p.id} className="px-3.5 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
+                                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: "0.5rem" }}>
+                                    <button type="button" onClick={() => toggle(p)} disabled={busyId === p.id} className="cf-btn-ghost">
+                                        {Number(p.is_open) ? <IconLock /> : <IconUnlock />}
                                         {Number(p.is_open) ? "Cerrar" : "Abrir"}
                                     </button>
-                                    <button type="button" onClick={() => setModal(p)} disabled={busyId === p.id} className="px-3.5 py-2 bg-gray-100 hover:bg-blue-100 hover:text-blue-700 text-gray-700 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
-                                        Editar
+                                    <button type="button" onClick={() => setModal(p)} disabled={busyId === p.id} className="cf-btn-ghost">
+                                        <IconPen /> Editar
                                     </button>
-                                    <button type="button" onClick={() => remove(p)} disabled={busyId === p.id} className="px-3.5 py-2 bg-gray-100 hover:bg-red-100 hover:text-red-600 text-gray-700 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50">
+                                    <button type="button" onClick={() => remove(p)} disabled={busyId === p.id} className="cf-btn-danger">
                                         Eliminar
                                     </button>
                                 </div>
                             </div>
                             <MiniBars poll={p} />
-                            <p className="text-[11px] text-gray-400 mt-4">
+                            <p className="cf-usage">
                                 Usa el bloque <strong>Polls</strong> con el ID <strong>{p.id}</strong>.
                             </p>
                         </div>

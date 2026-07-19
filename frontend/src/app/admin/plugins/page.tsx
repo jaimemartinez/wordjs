@@ -445,7 +445,7 @@ export default function PluginsPage() {
                             />
                             <span className="text-xs text-slate-700 leading-normal font-semibold">
                                 <span className="font-extrabold text-rose-700 block mb-0.5">Also delete this plugin&apos;s data / tables</span>
-                                <span className="block text-[10px] text-slate-400/90 font-medium">This drops the plugin&apos;s database tables. Cannot be undone. Leave off to keep its data for a future reinstall.</span>
+                                <span className="block text-[10px] text-slate-400/90 font-medium">This drops the plugin&apos;s database tables AND its data folder (keys, attachments). Cannot be undone. Leave off to keep both for a future reinstall.</span>
                             </span>
                         </label>
 

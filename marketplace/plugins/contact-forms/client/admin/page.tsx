@@ -7,16 +7,14 @@
  * submissions inbox (per-form filter, mark-read on open, delete, CSV export). The CSV export comes
  * back as JSON ({csv, filename}) because the isolate cannot stream raw text bodies — the Blob
  * download is built here on the client.
+ *
+ * Visual identity ("correspondencia postal") lives in the plugin's OWN stylesheet
+ * (client/admin/admin.css, injected by the host admin shell and scoped to
+ * .plugin-admin-contact-forms) — the markup below only uses cf-* classes.
  */
 
 import React, { useEffect, useMemo, useState } from "react";
 import { api, apiPost, apiDelete } from "@/lib/api";
-
-const inputCls = "w-full px-4 py-3 bg-gray-50/60 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium";
-const labelCls = "block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2";
-const btnCls = "px-5 py-3 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest transition-all disabled:opacity-50";
-const btnGhostCls = "px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50";
-const btnDangerCls = "px-4 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50";
 
 const FIELD_TYPE_OPTIONS = [
     { value: "text", label: "Texto" },
@@ -42,6 +40,38 @@ const fmtDate = (v) => {
     const d = new Date(s.includes("T") ? s : s.replace(" ", "T") + "Z");
     return isNaN(d.getTime()) ? s : d.toLocaleString();
 };
+
+/* Tiny inline icon set (stroke 2, currentColor) so the identity needs no icon-font. */
+const IconEnvelope = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <rect x="2" y="4" width="20" height="16" rx="2" />
+        <path d="m22 7-10 6L2 7" />
+    </svg>
+);
+const IconPlus = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true" {...props}>
+        <path d="M12 5v14M5 12h14" />
+    </svg>
+);
+const IconPen = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M12 20h9" />
+        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+    </svg>
+);
+const IconDownload = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <path d="m7 10 5 5 5-5" />
+        <path d="M12 15V3" />
+    </svg>
+);
+const IconInboxEmpty = (props) => (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+        <path d="M22 12h-6l-2 3h-4l-2-3H2" />
+        <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+    </svg>
+);
 
 export default function ContactFormsAdminPage() {
     const [forms, setForms] = useState([]);
@@ -256,180 +286,186 @@ export default function ContactFormsAdminPage() {
 
     const pageCount = Math.max(1, Math.ceil(total / LIMIT));
     const page = Math.floor(offset / LIMIT) + 1;
+    const isErrorMsg = /Error|obligatorio|inválido|Selecciona|necesitan/i.test(message);
 
     return (
-        <div className="max-w-5xl mx-auto p-4 sm:p-8">
-            <div className="mb-8">
-                <h1 className="text-2xl sm:text-3xl font-black text-gray-900 italic tracking-tighter">Formularios de contacto</h1>
-                <p className="text-xs font-bold uppercase tracking-widest text-gray-400 mt-1">
-                    Crea formularios, insértalos con el bloque "ContactForms" y recibe los mensajes aquí
-                </p>
+        <div className="cf-shell">
+            {/* header: stamp + title + airmail rule */}
+            <div className="cf-header">
+                <div className="cf-stamp" aria-hidden="true"><IconEnvelope /></div>
+                <div>
+                    <h1 className="cf-title">Formularios de contacto</h1>
+                    <p className="cf-subtitle">Crea formularios · insértalos con el bloque «ContactForms» · recibe el correo aquí</p>
+                </div>
             </div>
+            <div className="cf-airmail-rule" aria-hidden="true"></div>
 
-            {/* Tabs */}
-            <div className="flex gap-2 mb-6">
+            {/* tabs */}
+            <div className="cf-tabs" role="tablist">
                 <button
                     type="button"
+                    role="tab"
+                    aria-selected={tab === "forms"}
                     onClick={() => setTab("forms")}
-                    className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all ${tab === "forms" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                    className={`cf-tab ${tab === "forms" ? "is-active" : ""}`}
                 >
                     Formularios
                 </button>
                 <button
                     type="button"
+                    role="tab"
+                    aria-selected={tab === "inbox"}
                     onClick={() => { setTab("inbox"); setOffset(0); }}
-                    className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === "inbox" ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-500 hover:bg-gray-200"}`}
+                    className={`cf-tab ${tab === "inbox" ? "is-active" : ""}`}
                 >
                     Bandeja de entrada
-                    {totalUnread > 0 && (
-                        <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-black">
-                            {totalUnread}
-                        </span>
-                    )}
+                    {totalUnread > 0 && <span className="cf-badge">{totalUnread}</span>}
                 </button>
             </div>
 
             {message && (
-                <div className={`text-sm px-4 py-3 rounded-xl mb-6 ${/Error|obligatorio|inválido|Selecciona/i.test(message) ? "bg-red-50 text-red-600" : "bg-green-50 text-green-700"}`}>
+                <div role={isErrorMsg ? "alert" : "status"} className={`cf-flash ${isErrorMsg ? "is-error" : "is-ok"}`}>
                     {message}
                 </div>
             )}
 
             {/* ============================== FORMS TAB ============================== */}
             {tab === "forms" && (
-                <div className="space-y-6">
+                <div>
                     {!editing && (
-                        <div className="flex justify-end">
-                            <button type="button" className={btnCls} onClick={() => { setMessage(""); setEditing(emptyDraft()); }}>
-                                + Nuevo formulario
+                        <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+                            <button type="button" className="cf-btn" onClick={() => { setMessage(""); setEditing(emptyDraft()); }}>
+                                <IconPlus /> Nuevo formulario
                             </button>
                         </div>
                     )}
 
-                    {/* Editor */}
+                    {/* editor: the letter being written */}
                     {editing && (
-                        <form onSubmit={saveForm} className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8 space-y-5">
-                            <h2 className="font-bold text-gray-800">
-                                {editing.id ? `Editar formulario #${editing.id}` : "Nuevo formulario"}
-                            </h2>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="md:col-span-2">
-                                    <label className={labelCls}>Nombre del formulario</label>
-                                    <input type="text" value={editing.name} onChange={(e) => setEditing((p) => ({ ...p, name: e.target.value }))} placeholder="Contacto general" className={inputCls} required />
-                                </div>
-                                <div>
-                                    <label className={labelCls}>Correo de notificación (opcional)</label>
-                                    <input type="email" value={editing.notify_email} onChange={(e) => setEditing((p) => ({ ...p, notify_email: e.target.value }))} placeholder="dueño@midominio.com" className={inputCls} />
-                                    <p className="text-[11px] text-gray-400 mt-1">Si lo configuras, cada mensaje nuevo se envía a este correo (requiere proveedor de correo activo).</p>
-                                </div>
-                                <div>
-                                    <label className={labelCls}>Mensaje de éxito (opcional)</label>
-                                    <input type="text" value={editing.success_message} onChange={(e) => setEditing((p) => ({ ...p, success_message: e.target.value }))} placeholder="¡Mensaje enviado!" className={inputCls} />
-                                </div>
-                            </div>
-
-                            {/* Field builder */}
-                            <div>
-                                <div className="flex items-center justify-between mb-3">
-                                    <label className={labelCls + " mb-0"}>Campos del formulario</label>
-                                    <button type="button" className={btnGhostCls} onClick={addField}>+ Agregar campo</button>
-                                </div>
-                                {editing.fields.length === 0 ? (
-                                    <p className="text-sm text-gray-400 border border-dashed border-gray-200 rounded-2xl px-4 py-6 text-center">
-                                        Sin campos todavía — agrega al menos uno (por ejemplo: Nombre, Correo, Mensaje).
-                                    </p>
-                                ) : (
-                                    <div className="space-y-3">
-                                        {editing.fields.map((f, idx) => (
-                                            <div key={f.name} className="border border-gray-100 rounded-2xl p-4 bg-gray-50/40">
-                                                <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
-                                                    <div className="md:col-span-4">
-                                                        <label className={labelCls}>Etiqueta</label>
-                                                        <input type="text" value={f.label} onChange={(e) => patchField(idx, { label: e.target.value })} placeholder="Nombre completo" className={inputCls} />
-                                                    </div>
-                                                    <div className="md:col-span-3">
-                                                        <label className={labelCls}>Tipo</label>
-                                                        <select value={f.type} onChange={(e) => patchField(idx, { type: e.target.value })} className={inputCls}>
-                                                            {FIELD_TYPE_OPTIONS.map((o) => (
-                                                                <option key={o.value} value={o.value}>{o.label}</option>
-                                                            ))}
-                                                        </select>
-                                                    </div>
-                                                    <div className="md:col-span-2">
-                                                        <label className={labelCls}>Ancho</label>
-                                                        <select value={String(f.width)} onChange={(e) => patchField(idx, { width: Number(e.target.value) })} className={inputCls}>
-                                                            <option value="100">100%</option>
-                                                            <option value="50">50%</option>
-                                                        </select>
-                                                    </div>
-                                                    <div className="md:col-span-3 flex items-center justify-between gap-2 pb-2">
-                                                        <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer select-none">
-                                                            <input type="checkbox" checked={!!f.required} onChange={(e) => patchField(idx, { required: e.target.checked ? 1 : 0 })} />
-                                                            Obligatorio
-                                                        </label>
-                                                        <div className="flex gap-1">
-                                                            <button type="button" title="Subir" disabled={idx === 0} onClick={() => moveField(idx, -1)} className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-30 font-bold">↑</button>
-                                                            <button type="button" title="Bajar" disabled={idx === editing.fields.length - 1} onClick={() => moveField(idx, 1)} className="w-8 h-8 rounded-lg bg-white border border-gray-200 text-gray-500 hover:bg-gray-100 disabled:opacity-30 font-bold">↓</button>
-                                                            <button type="button" title="Eliminar campo" onClick={() => removeField(idx)} className="w-8 h-8 rounded-lg bg-red-50 border border-red-100 text-red-500 hover:bg-red-100 font-bold">×</button>
-                                                        </div>
-                                                    </div>
-                                                    {f.type === "select" && (
-                                                        <div className="md:col-span-12">
-                                                            <label className={labelCls}>Opciones (separadas por coma)</label>
-                                                            <input type="text" value={f.options} onChange={(e) => patchField(idx, { options: e.target.value })} placeholder="Opción 1, Opción 2, Opción 3" className={inputCls} />
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        ))}
+                        <form onSubmit={saveForm} className="cf-editor">
+                            <div className="cf-editor-body">
+                                <h2 className="cf-editor-title">
+                                    <IconPen />
+                                    {editing.id ? `Editar formulario #${editing.id}` : "Nuevo formulario"}
+                                </h2>
+                                <div className="cf-grid">
+                                    <div className="cf-span-2">
+                                        <label className="cf-label" htmlFor="cf-name">Nombre del formulario</label>
+                                        <input id="cf-name" type="text" value={editing.name} onChange={(e) => setEditing((p) => ({ ...p, name: e.target.value }))} placeholder="Contacto general" className="cf-input" required />
                                     </div>
-                                )}
-                            </div>
+                                    <div>
+                                        <label className="cf-label" htmlFor="cf-notify">Correo de notificación (opcional)</label>
+                                        <input id="cf-notify" type="email" value={editing.notify_email} onChange={(e) => setEditing((p) => ({ ...p, notify_email: e.target.value }))} placeholder="dueño@midominio.com" className="cf-input" />
+                                        <p className="cf-help">Si lo configuras, cada mensaje nuevo se envía a este correo (requiere proveedor de correo activo).</p>
+                                    </div>
+                                    <div>
+                                        <label className="cf-label" htmlFor="cf-success">Mensaje de éxito (opcional)</label>
+                                        <input id="cf-success" type="text" value={editing.success_message} onChange={(e) => setEditing((p) => ({ ...p, success_message: e.target.value }))} placeholder="¡Mensaje enviado!" className="cf-input" />
+                                    </div>
+                                </div>
 
-                            <div className="flex flex-wrap items-center gap-3 justify-end">
-                                <button type="button" className={btnGhostCls} onClick={() => setEditing(null)} disabled={busy}>Cancelar</button>
-                                <button type="submit" className={btnCls} disabled={busy}>{busy ? "Guardando…" : "Guardar formulario"}</button>
+                                {/* field builder: numbered postal stubs */}
+                                <div style={{ marginTop: "1.5rem" }}>
+                                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.9rem" }}>
+                                        <span className="cf-label" style={{ marginBottom: 0 }}>Campos del formulario</span>
+                                        <button type="button" className="cf-btn-ghost" onClick={addField}><IconPlus /> Agregar campo</button>
+                                    </div>
+                                    {editing.fields.length === 0 ? (
+                                        <div className="cf-empty">
+                                            <IconEnvelope />
+                                            <span>Sin campos todavía — agrega al menos uno (por ejemplo: Nombre, Correo, Mensaje).</span>
+                                        </div>
+                                    ) : (
+                                        <div>
+                                            {editing.fields.map((f, idx) => (
+                                                <div key={f.name} className="cf-field-row">
+                                                    <span className="cf-field-num">Campo {String(idx + 1).padStart(2, "0")}</span>
+                                                    <div className="cf-field-grid">
+                                                        <div>
+                                                            <label className="cf-label" htmlFor={`cf-fl-${f.name}`}>Etiqueta</label>
+                                                            <input id={`cf-fl-${f.name}`} type="text" value={f.label} onChange={(e) => patchField(idx, { label: e.target.value })} placeholder="Nombre completo" className="cf-input" />
+                                                        </div>
+                                                        <div>
+                                                            <label className="cf-label" htmlFor={`cf-ft-${f.name}`}>Tipo</label>
+                                                            <select id={`cf-ft-${f.name}`} value={f.type} onChange={(e) => patchField(idx, { type: e.target.value })} className="cf-select">
+                                                                {FIELD_TYPE_OPTIONS.map((o) => (
+                                                                    <option key={o.value} value={o.value}>{o.label}</option>
+                                                                ))}
+                                                            </select>
+                                                        </div>
+                                                        <div>
+                                                            <label className="cf-label" htmlFor={`cf-fw-${f.name}`}>Ancho</label>
+                                                            <select id={`cf-fw-${f.name}`} value={String(f.width)} onChange={(e) => patchField(idx, { width: Number(e.target.value) })} className="cf-select">
+                                                                <option value="100">100%</option>
+                                                                <option value="50">50%</option>
+                                                            </select>
+                                                        </div>
+                                                        <div className="cf-field-actions">
+                                                            <label className="cf-check">
+                                                                <input type="checkbox" checked={!!f.required} onChange={(e) => patchField(idx, { required: e.target.checked ? 1 : 0 })} />
+                                                                Obligatorio
+                                                            </label>
+                                                            <div style={{ display: "flex", gap: "0.35rem" }}>
+                                                                <button type="button" title="Subir" aria-label="Subir campo" disabled={idx === 0} onClick={() => moveField(idx, -1)} className="cf-iconbtn">↑</button>
+                                                                <button type="button" title="Bajar" aria-label="Bajar campo" disabled={idx === editing.fields.length - 1} onClick={() => moveField(idx, 1)} className="cf-iconbtn">↓</button>
+                                                                <button type="button" title="Eliminar campo" aria-label="Eliminar campo" onClick={() => removeField(idx)} className="cf-iconbtn is-danger">×</button>
+                                                            </div>
+                                                        </div>
+                                                        {f.type === "select" && (
+                                                            <div className="cf-span-full">
+                                                                <label className="cf-label" htmlFor={`cf-fo-${f.name}`}>Opciones (separadas por coma)</label>
+                                                                <input id={`cf-fo-${f.name}`} type="text" value={f.options} onChange={(e) => patchField(idx, { options: e.target.value })} placeholder="Opción 1, Opción 2, Opción 3" className="cf-input" />
+                                                            </div>
+                                                        )}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", justifyContent: "flex-end", marginTop: "1.5rem" }}>
+                                    <button type="button" className="cf-btn-ghost" onClick={() => setEditing(null)} disabled={busy}>Cancelar</button>
+                                    <button type="submit" className="cf-btn" disabled={busy}>{busy ? "Guardando…" : "Guardar formulario"}</button>
+                                </div>
                             </div>
                         </form>
                     )}
 
-                    {/* Forms list */}
+                    {/* forms list */}
                     {forms.length === 0 && !editing ? (
-                        <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-10 text-center">
-                            <p className="text-sm text-gray-400">
-                                Sin formularios todavía — crea el primero con "Nuevo formulario".
-                            </p>
+                        <div className="cf-empty">
+                            <IconEnvelope />
+                            <span>Sin formularios todavía — crea el primero con «Nuevo formulario».</span>
                         </div>
                     ) : (
                         forms.map((f) => (
-                            <div key={f.id} className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8">
-                                <div className="flex flex-wrap items-start justify-between gap-4">
-                                    <div className="min-w-0">
-                                        <div className="flex items-center gap-2 flex-wrap">
-                                            <h3 className="font-bold text-gray-900 truncate">{f.name}</h3>
-                                            <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 bg-gray-100 rounded-full px-2 py-0.5">ID {f.id}</span>
+                            <div key={f.id} className="cf-card-item">
+                                <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-start", justifyContent: "space-between", gap: "1rem" }}>
+                                    <div style={{ minWidth: 0 }}>
+                                        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                                            <h3 className="cf-form-name">{f.name}</h3>
+                                            <span className="cf-chip">ID {f.id}</span>
                                             {Number(f.unread_count) > 0 && (
-                                                <span className="inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full bg-red-500 text-white text-[10px] font-black">
-                                                    {f.unread_count} sin leer
-                                                </span>
+                                                <span className="cf-chip is-unread">{f.unread_count} sin leer</span>
                                             )}
                                         </div>
-                                        <p className="text-xs text-gray-400 mt-1">
+                                        <p className="cf-meta">
                                             {(f.fields || []).length} campos · {f.submission_count || 0} mensajes
                                             {f.notify_email ? ` · notifica a ${f.notify_email}` : ""}
                                         </p>
-                                        <p className="text-[11px] text-gray-400 mt-2 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 inline-block">
-                                            Usa el bloque <strong>"ContactForms"</strong> en el editor visual con el ID <strong>{f.id}</strong>
+                                        <p className="cf-usage">
+                                            Usa el bloque <strong>«ContactForms»</strong> en el editor visual con el ID <strong>{f.id}</strong>
                                         </p>
                                     </div>
-                                    <div className="flex flex-wrap gap-2">
-                                        <button type="button" className={btnGhostCls} onClick={() => { setMessage(""); setEditing({ id: f.id, name: f.name || "", notify_email: f.notify_email || "", success_message: f.success_message || "", fields: (f.fields || []).map((x) => ({ ...x })) }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
-                                            Editar
+                                    <div style={{ display: "flex", flexWrap: "wrap", gap: "0.5rem" }}>
+                                        <button type="button" className="cf-btn-ghost" onClick={() => { setMessage(""); setEditing({ id: f.id, name: f.name || "", notify_email: f.notify_email || "", success_message: f.success_message || "", fields: (f.fields || []).map((x) => ({ ...x })) }); window.scrollTo({ top: 0, behavior: "smooth" }); }}>
+                                            <IconPen /> Editar
                                         </button>
-                                        <button type="button" className={btnGhostCls} onClick={() => { setFilterFormId(String(f.id)); setOffset(0); setTab("inbox"); }}>
-                                            Mensajes
+                                        <button type="button" className="cf-btn-ghost" onClick={() => { setFilterFormId(String(f.id)); setOffset(0); setTab("inbox"); }}>
+                                            <IconEnvelope /> Mensajes
                                         </button>
-                                        <button type="button" className={btnDangerCls} onClick={() => deleteForm(f)} disabled={busy}>
+                                        <button type="button" className="cf-btn-danger" onClick={() => deleteForm(f)} disabled={busy}>
                                             Eliminar
                                         </button>
                                     </div>
@@ -442,14 +478,15 @@ export default function ContactFormsAdminPage() {
 
             {/* ============================== INBOX TAB ============================== */}
             {tab === "inbox" && (
-                <div className="bg-white rounded-3xl border border-gray-100 shadow-xl shadow-gray-200/40 p-6 sm:p-8">
-                    <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
-                        <div className="flex items-center gap-3">
-                            <label className={labelCls + " mb-0"}>Formulario</label>
+                <div className="cf-card-item">
+                    <div className="cf-toolbar">
+                        <div className="cf-toolbar-left">
+                            <label className="cf-label" style={{ marginBottom: 0 }} htmlFor="cf-filter">Formulario</label>
                             <select
+                                id="cf-filter"
                                 value={filterFormId}
                                 onChange={(e) => { setFilterFormId(e.target.value); setOffset(0); }}
-                                className="px-4 py-2.5 bg-gray-50/60 border-2 border-gray-100 rounded-2xl outline-none font-medium text-sm"
+                                className="cf-select"
                             >
                                 <option value="">Todos los formularios</option>
                                 {forms.map((f) => (
@@ -459,26 +496,27 @@ export default function ContactFormsAdminPage() {
                                 ))}
                             </select>
                         </div>
-                        <button type="button" className={btnCls} onClick={exportCsv} disabled={busy || !filterFormId} title={filterFormId ? "Descargar CSV" : "Selecciona un formulario primero"}>
-                            Exportar CSV
+                        <button type="button" className="cf-btn" onClick={exportCsv} disabled={busy || !filterFormId} title={filterFormId ? "Descargar CSV" : "Selecciona un formulario primero"}>
+                            <IconDownload /> Exportar CSV
                         </button>
                     </div>
 
                     {submissions.length === 0 ? (
-                        <p className="text-sm text-gray-400 border border-dashed border-gray-200 rounded-2xl px-4 py-8 text-center">
-                            Sin mensajes todavía.
-                        </p>
+                        <div className="cf-empty">
+                            <IconInboxEmpty />
+                            <span>Sin mensajes todavía.</span>
+                        </div>
                     ) : (
-                        <div className="overflow-x-auto">
-                            <table className="w-full text-sm">
+                        <div className="cf-table-wrap">
+                            <table className="cf-table">
                                 <thead>
-                                    <tr className="text-left text-[10px] font-black uppercase tracking-widest text-gray-400 border-b border-gray-100">
-                                        <th className="py-3 pr-3 w-4"></th>
-                                        <th className="py-3 pr-4 whitespace-nowrap">Fecha</th>
-                                        {!filterFormId && <th className="py-3 pr-4">Formulario</th>}
-                                        <th className="py-3 pr-4">Vista previa</th>
-                                        <th className="py-3 pr-4">Página</th>
-                                        <th className="py-3 w-10"></th>
+                                    <tr>
+                                        <th style={{ width: "1rem" }}></th>
+                                        <th>Fecha</th>
+                                        {!filterFormId && <th>Formulario</th>}
+                                        <th>Vista previa</th>
+                                        <th>Página</th>
+                                        <th style={{ width: "2.5rem" }}></th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -486,23 +524,24 @@ export default function ContactFormsAdminPage() {
                                         <tr
                                             key={s.id}
                                             onClick={() => openSubmission(s)}
-                                            className={`border-b border-gray-50 cursor-pointer hover:bg-blue-50/40 transition ${s.is_read ? "text-gray-500" : "font-semibold text-gray-900"}`}
+                                            className={s.is_read ? "" : "is-unread"}
                                         >
-                                            <td className="py-3 pr-3">
-                                                {!s.is_read && <span className="inline-block w-2 h-2 rounded-full bg-blue-500" title="Sin leer"></span>}
+                                            <td>
+                                                {!s.is_read && <span className="cf-dot" title="Sin leer"></span>}
                                             </td>
-                                            <td className="py-3 pr-4 whitespace-nowrap">{fmtDate(s.created_at)}</td>
+                                            <td className="cf-cell-date">{fmtDate(s.created_at)}</td>
                                             {!filterFormId && (
-                                                <td className="py-3 pr-4 whitespace-nowrap">{formsById[s.form_id]?.name || `#${s.form_id}`}</td>
+                                                <td style={{ whiteSpace: "nowrap" }}>{formsById[s.form_id]?.name || `#${s.form_id}`}</td>
                                             )}
-                                            <td className="py-3 pr-4 max-w-[320px] truncate">{previewOf(s) || <span className="text-gray-300">(vacío)</span>}</td>
-                                            <td className="py-3 pr-4 max-w-[180px] truncate text-gray-400">{s.page_url || ""}</td>
-                                            <td className="py-3 text-right">
+                                            <td className="cf-cell-preview">{previewOf(s) || <span className="cf-void">(vacío)</span>}</td>
+                                            <td className="cf-cell-url">{s.page_url || ""}</td>
+                                            <td style={{ textAlign: "right" }}>
                                                 <button
                                                     type="button"
                                                     title="Eliminar mensaje"
+                                                    aria-label="Eliminar mensaje"
                                                     onClick={(e) => { e.stopPropagation(); deleteSubmission(s.id); }}
-                                                    className="w-8 h-8 rounded-lg bg-red-50 border border-red-100 text-red-500 hover:bg-red-100 font-bold"
+                                                    className="cf-iconbtn is-danger"
                                                 >
                                                     ×
                                                 </button>
@@ -515,14 +554,14 @@ export default function ContactFormsAdminPage() {
                     )}
 
                     {total > LIMIT && (
-                        <div className="flex items-center justify-between mt-5">
-                            <button type="button" className={btnGhostCls} disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>
+                        <div className="cf-pager">
+                            <button type="button" className="cf-btn-ghost" disabled={offset === 0} onClick={() => setOffset(Math.max(0, offset - LIMIT))}>
                                 ← Anterior
                             </button>
-                            <span className="text-[11px] font-bold uppercase tracking-widest text-gray-400">
+                            <span className="cf-pager-info">
                                 Página {page} de {pageCount} · {total} mensajes
                             </span>
-                            <button type="button" className={btnGhostCls} disabled={offset + LIMIT >= total} onClick={() => setOffset(offset + LIMIT)}>
+                            <button type="button" className="cf-btn-ghost" disabled={offset + LIMIT >= total} onClick={() => setOffset(offset + LIMIT)}>
                                 Siguiente →
                             </button>
                         </div>
@@ -530,42 +569,42 @@ export default function ContactFormsAdminPage() {
                 </div>
             )}
 
-            {/* ============================== SUBMISSION MODAL ============================== */}
+            {/* ============================== SUBMISSION MODAL: the opened letter ============================== */}
             {selected && (
-                <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4" onClick={() => setSelected(null)}>
-                    <div className="bg-white rounded-3xl shadow-2xl max-w-lg w-full max-h-[85vh] overflow-y-auto p-6 sm:p-8" onClick={(e) => e.stopPropagation()}>
-                        <div className="flex items-start justify-between gap-3 mb-4">
-                            <div>
-                                <h3 className="font-black text-gray-900">Mensaje #{selected.id}</h3>
-                                <p className="text-xs text-gray-400 mt-0.5">
-                                    {formsById[selected.form_id]?.name || `Formulario #${selected.form_id}`} · {fmtDate(selected.created_at)}
-                                </p>
-                            </div>
-                            <button type="button" onClick={() => setSelected(null)} className="w-9 h-9 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-500 font-bold shrink-0">✕</button>
-                        </div>
-
-                        <dl className="space-y-3">
-                            {detailRows(selected).map((row) => (
-                                <div key={row.key} className="border border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/40">
-                                    <dt className="text-[10px] font-black uppercase tracking-widest text-gray-400">{row.label}</dt>
-                                    <dd className="text-sm text-gray-800 mt-1 whitespace-pre-wrap break-words">
-                                        {row.value == null || String(row.value).trim() === "" ? <span className="text-gray-300">(vacío)</span> : String(row.value)}
-                                    </dd>
+                <div className="cf-overlay" onClick={() => setSelected(null)}>
+                    <div className="cf-letter" role="dialog" aria-modal="true" aria-label={`Mensaje #${selected.id}`} onClick={(e) => e.stopPropagation()}>
+                        <div className="cf-letter-body">
+                            <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: "0.75rem" }}>
+                                <div>
+                                    <h3 className="cf-editor-title" style={{ marginBottom: 0 }}><IconEnvelope /> Mensaje #{selected.id}</h3>
+                                    <p className="cf-postmark">
+                                        {formsById[selected.form_id]?.name || `Formulario #${selected.form_id}`} · {fmtDate(selected.created_at)}
+                                    </p>
                                 </div>
-                            ))}
-                        </dl>
+                                <button type="button" onClick={() => setSelected(null)} aria-label="Cerrar" className="cf-iconbtn">✕</button>
+                            </div>
 
-                        {selected.page_url && (
-                            <p className="text-[11px] text-gray-400 mt-4 break-all">
-                                Enviado desde: {selected.page_url}
-                            </p>
-                        )}
+                            <dl className="cf-letter-rows">
+                                {detailRows(selected).map((row) => (
+                                    <div key={row.key} className="cf-letter-row">
+                                        <dt>{row.label}</dt>
+                                        <dd>
+                                            {row.value == null || String(row.value).trim() === "" ? <span className="cf-void">(vacío)</span> : String(row.value)}
+                                        </dd>
+                                    </div>
+                                ))}
+                            </dl>
 
-                        <div className="flex justify-end gap-2 mt-6">
-                            <button type="button" className={btnDangerCls} onClick={() => deleteSubmission(selected.id)} disabled={busy}>
-                                Eliminar mensaje
-                            </button>
-                            <button type="button" className={btnGhostCls} onClick={() => setSelected(null)}>Cerrar</button>
+                            {selected.page_url && (
+                                <p className="cf-letter-from">Enviado desde: {selected.page_url}</p>
+                            )}
+
+                            <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem", marginTop: "1.4rem" }}>
+                                <button type="button" className="cf-btn-danger" onClick={() => deleteSubmission(selected.id)} disabled={busy}>
+                                    Eliminar mensaje
+                                </button>
+                                <button type="button" className="cf-btn-ghost" onClick={() => setSelected(null)}>Cerrar</button>
+                            </div>
                         </div>
                     </div>
                 </div>

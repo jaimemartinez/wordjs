@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { themesApi, Theme } from "@/lib/api";
+import { themesApi, themesMarketplaceApi, Theme, ThemeMarketplaceEntry } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
@@ -15,11 +15,107 @@ export default function ThemesPage() {
     const [message, setMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
 
+    // Theme marketplace (same catalog system as plugins, with its OWN configurable sources)
+    const [tab, setTab] = useState<"installed" | "market">("installed");
+    const [market, setMarket] = useState<ThemeMarketplaceEntry[] | null>(null);
+    const [marketLoading, setMarketLoading] = useState(false);
+    const [installingId, setInstallingId] = useState<string | null>(null);
+    const [showSources, setShowSources] = useState(false);
+    const [srcList, setSrcList] = useState<string[]>([]);
+    const [defaultSrc, setDefaultSrc] = useState("");
+    const [newSrc, setNewSrc] = useState("");
+    const [savingSrc, setSavingSrc] = useState(false);
+
     const { confirm } = useModal();
 
     useEffect(() => {
         loadThemes();
     }, []);
+
+    useEffect(() => {
+        if (tab === "market" && market === null) loadMarket();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [tab]);
+
+    const loadMarket = async (refresh = false) => {
+        setMarketLoading(true);
+        try {
+            const data = await themesMarketplaceApi.catalog(refresh);
+            setMarket(data.themes || []);
+        } catch (error: any) {
+            setMessage({ type: "error", text: error.message || "No se pudo cargar el catálogo de temas." });
+            setMarket([]);
+        } finally {
+            setMarketLoading(false);
+        }
+    };
+
+    const openSources = async () => {
+        setShowSources((v) => !v);
+        try {
+            const s = await themesMarketplaceApi.getSources();
+            setDefaultSrc(s.default);
+            setSrcList(s.usingDefault ? [s.default] : s.configured);
+        } catch (error: any) {
+            setMessage({ type: "error", text: error.message || "No se pudieron cargar las fuentes de temas." });
+        }
+    };
+
+    const addSource = () => {
+        const v = newSrc.trim().replace(/\/+$/, "");
+        if (!v) return;
+        if (!/^https:\/\//i.test(v) && !/^http:\/\/localhost/i.test(v)) {
+            setMessage({ type: "error", text: "La fuente debe ser una URL https://" });
+            return;
+        }
+        setNewSrc("");
+        if (!srcList.includes(v)) setSrcList((l) => [...l, v]);
+    };
+
+    const saveSources = async () => {
+        setSavingSrc(true);
+        try {
+            const res = await themesMarketplaceApi.setSources(srcList);
+            setSrcList(res.configured);
+            setMessage({ type: "success", text: srcList.length ? "Fuentes de temas guardadas." : "Marketplace de temas sin fuentes — catálogo remoto desactivado." });
+            setShowSources(false);
+            await loadMarket(true);
+        } catch (error: any) {
+            setMessage({ type: "error", text: error.message || "No se pudieron guardar las fuentes." });
+        } finally {
+            setSavingSrc(false);
+        }
+    };
+
+    const resetSources = async () => {
+        setSavingSrc(true);
+        try {
+            const res = await themesMarketplaceApi.resetSources();
+            setSrcList([res.default]);
+            setMessage({ type: "success", text: "Fuentes de temas restablecidas al catálogo oficial." });
+            setShowSources(false);
+            await loadMarket(true);
+        } catch (error: any) {
+            setMessage({ type: "error", text: error.message || "No se pudieron restablecer las fuentes." });
+        } finally {
+            setSavingSrc(false);
+        }
+    };
+
+    const installFromMarket = async (entry: ThemeMarketplaceEntry) => {
+        setInstallingId(entry.id);
+        setMessage(null);
+        try {
+            const res = await themesMarketplaceApi.install(entry.id);
+            setMessage({ type: "success", text: res.message || `Tema "${entry.name}" instalado.` });
+            await loadThemes();
+            await loadMarket(true);
+        } catch (error: any) {
+            setMessage({ type: "error", text: error.message || "No se pudo instalar el tema." });
+        } finally {
+            setInstallingId(null);
+        }
+    };
 
     const loadThemes = async () => {
         try {
@@ -115,6 +211,84 @@ export default function ThemesPage() {
                     }
                 />
 
+                {/* Tabs: Instalados | Marketplace */}
+                <div className="max-w-7xl mx-auto mb-8 flex gap-2">
+                    <button
+                        type="button"
+                        onClick={() => setTab("installed")}
+                        className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === "installed" ? "bg-gray-900 text-white" : "bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"}`}
+                    >
+                        <i className="fa-solid fa-palette"></i> Instalados
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setTab("market")}
+                        className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === "market" ? "bg-gray-900 text-white" : "bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"}`}
+                    >
+                        <i className="fa-solid fa-store"></i> Marketplace
+                    </button>
+                    {tab === "market" && (
+                        <div className="ml-auto flex gap-2">
+                            <button
+                                type="button"
+                                onClick={openSources}
+                                title="Fuentes del marketplace de temas"
+                                className={`px-4 py-3 rounded-2xl border transition-all ${showSources ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-500 hover:bg-gray-100 border-gray-200"}`}
+                            >
+                                <i className="fa-solid fa-gear"></i>
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => loadMarket(true)}
+                                disabled={marketLoading}
+                                title="Refrescar catálogo"
+                                className="px-4 py-3 rounded-2xl bg-white text-gray-500 hover:bg-gray-100 border border-gray-200 transition-all disabled:opacity-50"
+                            >
+                                <i className={`fa-solid fa-rotate ${marketLoading ? "fa-spin" : ""}`}></i>
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                {/* Theme sources manager — OWN list, independent from the plugin marketplace */}
+                {tab === "market" && showSources && (
+                    <div className="max-w-7xl mx-auto mb-8 bg-white rounded-3xl border border-gray-200 p-6 animate-in fade-in slide-in-from-top-4 duration-300">
+                        <div className="flex items-center justify-between mb-2">
+                            <h3 className="font-black text-gray-900 flex items-center gap-2"><i className="fa-solid fa-gear text-gray-400"></i> Fuentes del marketplace de temas</h3>
+                            <button type="button" onClick={() => setShowSources(false)} className="text-xs font-bold text-gray-400 hover:text-gray-700 uppercase tracking-widest">Cerrar</button>
+                        </div>
+                        <p className="text-xs text-gray-400 mb-4">
+                            Lista propia, independiente de la de plugins. Agregá uno o varios catálogos (URLs <span className="font-mono">https</span>) — se combinan con prioridad por orden. Podés dejarla vacía para desactivar el catálogo remoto de temas; «Restablecer al default» vuelve al oficial.
+                        </p>
+                        <div className="space-y-2 mb-4">
+                            {srcList.map((u, i) => (
+                                <div key={u} className="flex items-center gap-2 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
+                                    <span className="text-[10px] font-mono text-gray-400 w-4 shrink-0">{i + 1}</span>
+                                    <span className="flex-1 font-mono text-[11px] text-gray-700 truncate" title={u}>{u}</span>
+                                    {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
+                                    <button type="button" onClick={() => setSrcList((l) => l.filter((x) => x !== u))} aria-label="Quitar fuente" className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-rose-500 hover:border-rose-200 transition-colors shrink-0"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                                </div>
+                            ))}
+                            {srcList.length === 0 && <div className="text-[11px] text-gray-400 italic px-1">Sin fuentes — el catálogo remoto de temas queda desactivado al guardar.</div>}
+                        </div>
+                        <div className="flex items-center gap-2 mb-4">
+                            <input
+                                type="text"
+                                value={newSrc}
+                                onChange={(e) => setNewSrc(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSource(); } }}
+                                placeholder="https://mi-marketplace.com/catalogo-temas"
+                                className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl outline-none font-mono text-xs focus:border-gray-400 transition-colors"
+                            />
+                            <Button onClick={addSource}><i className="fa-solid fa-plus mr-1.5 text-[10px]"></i> Agregar</Button>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-100">
+                            <button type="button" onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-gray-500 hover:text-gray-800 disabled:opacity-50 uppercase tracking-widest">Restablecer al default</button>
+                            <Button onClick={saveSources} disabled={savingSrc}>{savingSrc ? "Guardando…" : "Guardar fuentes"}</Button>
+                        </div>
+                    </div>
+                )}
+
                 {message && (
                     <div className={`
                     max-w-7xl mx-auto mb-8 p-5 rounded-2xl flex items-center gap-4 animate-in fade-in slide-in-from-top-4 duration-300
@@ -128,6 +302,7 @@ export default function ThemesPage() {
                     </div>
                 )}
 
+                {tab === "installed" && (
                 <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-10 pb-20">
                     {loading ? (
                         Array.from({ length: 3 }).map((_, i) => (
@@ -247,6 +422,91 @@ export default function ThemesPage() {
                         ))
                     )}
                 </div>
+                )}
+
+                {/* ============================== THEME MARKETPLACE ============================== */}
+                {tab === "market" && (
+                <div className="max-w-7xl mx-auto grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-10 pb-20">
+                    {marketLoading && market === null ? (
+                        Array.from({ length: 3 }).map((_, i) => (
+                            <div key={i} className="bg-gray-100 rounded-[32px] h-[320px] animate-pulse"></div>
+                        ))
+                    ) : !market || market.length === 0 ? (
+                        <div className="col-span-full">
+                            <EmptyState
+                                icon="fa-store-slash"
+                                title="Marketplace sin temas"
+                                description="No hay temas en el catálogo (o el catálogo remoto está desactivado). Gestiona las fuentes desde Plugins → Marketplace ⚙️."
+                            />
+                        </div>
+                    ) : (
+                        market.map((entry, index) => (
+                            <div
+                                key={entry.id}
+                                className="group bg-white rounded-[40px] border border-gray-200 shadow-[0_15px_40px_-15px_rgba(0,0,0,0.04)] hover:shadow-[0_30px_70px_-15px_rgba(0,0,0,0.08)] hover:-translate-y-2 transition-all duration-500 relative flex flex-col h-full overflow-hidden animate-in fade-in slide-in-from-bottom-8 fill-mode-both"
+                                style={{ animationDelay: `${index * 80}ms` }}
+                            >
+                                <div className="aspect-[4/3] overflow-hidden relative">
+                                    <div className="w-full h-full bg-gradient-to-br from-indigo-50 via-white to-blue-50 flex items-center justify-center relative">
+                                        <div className="w-20 h-20 rounded-3xl bg-white shadow-xl flex items-center justify-center text-3xl text-blue-500 relative z-10 border border-blue-50 group-hover:rotate-12 transition-transform duration-500">
+                                            <i className="fa-solid fa-palette"></i>
+                                        </div>
+                                    </div>
+                                    {entry.active && (
+                                        <div className="absolute top-6 right-6 bg-blue-600 text-white px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest shadow-lg shadow-blue-500/50">
+                                            {t('themes.active')}
+                                        </div>
+                                    )}
+                                    {!entry.active && entry.installed && (
+                                        <div className="absolute top-6 right-6 bg-emerald-500 text-white px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest shadow-lg shadow-emerald-500/40">
+                                            Instalado
+                                        </div>
+                                    )}
+                                </div>
+                                <div className="p-8 flex-1 flex flex-col">
+                                    <div className="mb-4">
+                                        <div className="flex items-center justify-between gap-4 mb-2">
+                                            <h3 className="text-2xl font-black text-gray-900 group-hover:text-blue-600 transition-colors truncate">{entry.name}</h3>
+                                            <span className="text-[10px] font-black text-gray-400 uppercase tracking-[0.2em] bg-gray-50 px-2 py-1 rounded-md">v{entry.version}</span>
+                                        </div>
+                                        <p className="text-gray-500 font-medium text-sm leading-relaxed line-clamp-2">{entry.description || t('themes.defaultDescription')}</p>
+                                    </div>
+                                    <div className="mt-auto pt-6 flex flex-col gap-3">
+                                        <div className="flex items-center justify-between text-xs font-bold text-gray-400 mb-2">
+                                            <span>{t('themes.by')} <span className="text-gray-900">{entry.author || 'WordJS'}</span></span>
+                                            {entry.updateAvailable && (
+                                                <span className="text-amber-600 bg-amber-50 border border-amber-100 px-2 py-1 rounded-md uppercase tracking-wider text-[10px]">v{entry.installedVersion} instalada</span>
+                                            )}
+                                        </div>
+                                        {entry.installed ? (
+                                            <button
+                                                type="button"
+                                                onClick={() => setTab("installed")}
+                                                className="w-full bg-gray-50 text-gray-600 font-black py-4 rounded-2xl border border-gray-100 hover:bg-gray-100 transition-all"
+                                            >
+                                                Ver en Instalados
+                                            </button>
+                                        ) : (
+                                            <button
+                                                type="button"
+                                                disabled={installingId !== null}
+                                                onClick={() => installFromMarket(entry)}
+                                                className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl transition-all duration-300 hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
+                                            >
+                                                {installingId === entry.id ? (
+                                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> Instalando…</>
+                                                ) : (
+                                                    <><i className="fa-solid fa-download text-xs opacity-60"></i> Instalar</>
+                                                )}
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            </div>
+                        ))
+                    )}
+                </div>
+                )}
             </div>
         </div>
     );

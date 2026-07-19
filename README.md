@@ -119,13 +119,16 @@ because their entire ecosystems assume plugins run with full trust.
   one-click installs from a curated catalog of **25 first-party plugins** (contact forms,
   newsletter, events calendar, online store, bookings, donations, event tickets, FAQ, polls,
   testimonials, SEO helpers, and more). Plugin sources live in `marketplace/plugins/`, outside
-  the core build; `npm run build:marketplace` packs them into a committed catalog + zips
-  (`marketplace/dist/`, also attached to GitHub Releases), served to installs from the repo or
-  any admin-configured HTTPS/local source. Downloads are **sha256-verified** against the catalog
-  and go through the **same hardened install pipeline** as manual zip uploads (zip-bomb budget,
-  Zip Slip, slug validation, manifest + AST scan) — a marketplace plugin is sandboxed and
-  permission-gated exactly like any other. All catalog plugins are first-party today;
-  third-party submissions and review are roadmap.
+  the core build; `npm run build:marketplace` packs them into a catalog (`marketplace-index.json`)
+  plus one sha256'd zip per plugin under `marketplace/dist/` — a **build output that is gitignored,
+  not committed**, and published by CI as **GitHub Release assets**. Installs default to the newest
+  release (`releases/latest/download`), and the catalog **sources are admin-configurable** from the
+  Marketplace tab (option `marketplace_sources`, via `GET`/`PUT /api/v1/marketplace/sources`): point
+  WordJS at any number of HTTPS catalogs (or a local dir) and they're merged (dedup by id, per-source
+  error isolation). Downloads are **sha256-verified** against the catalog and go through the **same
+  hardened install pipeline** as manual zip uploads (zip-bomb budget, Zip Slip, slug validation,
+  manifest + AST scan) — a marketplace plugin is sandboxed and permission-gated exactly like any
+  other. All catalog plugins are first-party today; third-party submissions and review are roadmap.
 - **Real server-side rendering.** The public routes (home, posts, pages, search) are async
   React Server Components that fetch on the server (`frontend/src/lib/server-api.ts`), so the
   initial HTML sent to crawlers and the first paint already contain the real title/body —
@@ -196,9 +199,12 @@ because their entire ecosystems assume plugins run with full trust.
   (`config.metrics.token` or the `METRICS_TOKEN` env var); scrape with
   `Authorization: Bearer <token>`. Routed publicly via the gateway and in monolith mode, and
   never exposed without a token.
-- **Pluggable storage**: SQLite via `sql.js` (WASM, "legacy") or `better-sqlite3` (native),
-  and PostgreSQL via `pg`, with a migration system to move
-  between them.
+- **Pluggable storage**: SQLite via `better-sqlite3` (native, **default**) or `sql.js`
+  (WASM, "legacy"), PostgreSQL via `pg`, and **MySQL 8+ / MariaDB** via `mysql2` — the MySQL
+  driver is a SQLite→MySQL dialect-translation layer (`TEXT`→`VARCHAR`/`LONGTEXT`, `AUTO_INCREMENT`,
+  `ON CONFLICT`→`ON DUPLICATE KEY`, `RETURNING`→`insertId`, ANSI_QUOTES). All drivers implement a
+  common interface, with a migration system to move between them. The install wizard offers
+  SQLite/PostgreSQL; MySQL is selected via `dbDriver: "mysql"` (`dbPort: 3306`) in the config.
 - **Native mail server** (shipped as an optional, fully sandboxed first-party plugin,
   pre-granted the `network`/`email:provider` capabilities it needs): inbound SMTP
   (`smtp-server`), direct-MX outbound delivery (`nodemailer`), DKIM signing, and attachment
@@ -215,7 +221,7 @@ graph TD
     User((User)) --> Gateway[Gateway:3000]
     Gateway --> Frontend[Next.js Frontend:3001]
     Gateway --> Backend[TypeScript Backend:4000]
-    Backend --> DB[(SQLite / PostgreSQL)]
+    Backend --> DB[(SQLite / PostgreSQL / MySQL)]
     Backend --> Plugins{Isolated Plugins}
 ```
 
@@ -246,12 +252,13 @@ between them. Monolith and split are mutually exclusive (both bind the public po
   headers, compression, SEO rewrites) are handled locally. Simplest to deploy (one process
   behind a single reverse proxy or a small VM/container).
 - **Separate — the three services on different machines:** the same split, spread across a gateway
-  box, a backend box, and a frontend box, joined into one cluster over **mutual TLS**. The gateway
-  is the cluster CA; `node scripts/cluster.js init` mints it, and per-node **single-use, role-bound
-  join tokens** (`node scripts/cluster.js token <backend|frontend>`) let each new machine enroll
-  (`node scripts/node-join.js …`) — the gateway signs the node an mTLS identity, so no cert is ever
-  hand-copied. See the [**Separate-mode guide**](documentation/separate-mode.md) for the full
-  enrollment walkthrough.
+  box, a backend box, and a frontend box, joined into one cluster over **mutual TLS**. One command
+  per machine: `npx create-wordjs gateway --host <ip>` makes the first box the cluster CA and prints
+  ready-to-paste join commands with **single-use, role-bound join tokens**; then
+  `npx create-wordjs join backend|frontend …` on each other box downloads the release, enrolls
+  (the gateway signs the node an mTLS identity — no cert is ever hand-copied) and starts the
+  service. See the [**Separate-mode guide**](documentation/separate-mode.md) for the walkthrough
+  and the manual (source-checkout) procedure.
 
 ```mermaid
 graph LR
@@ -379,8 +386,8 @@ no `ts-node` at runtime. In development it runs in-place via `ts-node`. From `ba
 > script. To apply pending **schema** migrations without starting the server (e.g. in a deploy
 > pipeline), run the root `npm run migrate` (`setup/index.js --migrate` → `backend/scripts/migrate.js`);
 > it's **idempotent** (the same migrations also run at boot). Switching the DB *driver* itself
-> (copying data between SQLite and PostgreSQL) is a **separate** operation in the admin panel
-> (Admin → Database), not `npm run migrate`.
+> (copying data between SQLite, PostgreSQL, and MySQL) is a **separate** operation in the admin
+> panel (Admin → Database), not `npm run migrate`.
 
 > `strict` is **on** (`strictNullChecks`, `strictFunctionTypes`, etc. are enforced) and
 > `noImplicitAny` is now **enforced** (all implicit-any sites annotated — real types where
@@ -432,8 +439,8 @@ real data or real users.
 - **Sandbox:** `child_process` OS-process isolation (`worker_threads` fallback) + `acorn` AST scanning + runtime require proxies + layered memory caps (cgroup/Windows-Job-Object/RSS-poll/RLIMIT_AS)
 - **TLS:** `acme-client` (Let's Encrypt HTTP-01 / DNS-01)
 - **Mail:** `smtp-server`, `nodemailer`, `mailparser`, DKIM (isolated plugin)
-- **Database:** SQLite (`sql.js` WASM / `better-sqlite3`) or PostgreSQL (`pg`),
-  interchangeable via the migration system
+- **Database:** SQLite (`better-sqlite3` native / `sql.js` WASM), PostgreSQL (`pg`), or
+  MySQL 8+ / MariaDB (`mysql2`), interchangeable via the migration system
 - **Tooling:** ESLint + Prettier, `node:test`, GitHub Actions CI
 
 ---
