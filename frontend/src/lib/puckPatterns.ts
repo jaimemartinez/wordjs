@@ -174,6 +174,36 @@ export function insertPattern(pattern: Pattern, components: Record<string, any>)
     return appendItems(buildPatternBlocks(pattern, components));
 }
 
+/**
+ * Insert a SINGLE block (by type) — the ⌘K command palette's action. Merges the block's real
+ * defaultProps from the live config + a fresh id. Positioning mirrors block paste: after the current
+ * root selection when one exists, otherwise appended to the end. Returns false if the type isn't
+ * registered in this config or Puck's dispatch isn't ready yet.
+ */
+export function insertBlock(
+    type: string,
+    components: Record<string, any>,
+    sel?: { index: number; zone?: string } | null
+): boolean {
+    if (!components || !components[type]) return false;
+    const item = { type, props: { ...(components[type]?.defaultProps || {}), id: genId(type) } };
+    const dispatch = (window as any).puckDispatch || (window.parent as any)?.puckDispatch;
+    if (!dispatch) return false;
+    dispatch({
+        type: "setData",
+        data: (prev: any) => {
+            const content = [...(prev.content || [])];
+            // Insert after the selection when it lives in the root content; otherwise append.
+            const inRoot = sel && (!sel.zone || /(^|:)(default-zone|content)$/.test(sel.zone));
+            const at = inRoot ? Math.min(sel!.index + 1, content.length) : content.length;
+            content.splice(at, 0, item);
+            return { ...prev, content };
+        },
+        recordHistory: true, // programmatic setData skips history by default → keep ⌘K inserts undoable
+    });
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // User patterns — captured from the live page, persisted per browser.
 // ---------------------------------------------------------------------------
