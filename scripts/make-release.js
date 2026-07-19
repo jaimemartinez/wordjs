@@ -72,7 +72,9 @@ const IGNORE_PATTERNS = [
 // Top-level runtime DB/cert/TLS dirs + EACH plugin's own data/ dir (plugins store runtime secrets at
 // rest there, e.g. mail-server's AES root key data/.mailenc — DEPLOY-MAILENC-02). The plugins/<x>/data/
 // match is specific (not a bare nested data/ anywhere), so it never drops legit source like
-// frontend/src/lib/data/.
+// frontend/src/lib/data/. A plugin's theme/ (its COMPANION THEME, installable via
+// POST /plugins/<slug>/install-theme) is SOURCE, not runtime state — it must keep shipping, so never
+// widen this regex (or IGNORE_PATTERNS) to match theme/ or themes/.
 const SECRET_DIR_RE = /^(?:backend\/|gateway\/)?(?:data|certs)\/|^gateway\/ssl\/|(?:^|\/)plugins\/[^/]+\/data\//;
 const SECRET_EXTENSIONS = ['.db', '.sqlite', '.sqlite3', '.key', '.pem', '.mailenc'];
 

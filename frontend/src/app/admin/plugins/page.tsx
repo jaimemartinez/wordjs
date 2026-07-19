@@ -1,12 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { pluginsApi, Plugin, PluginPortConflict } from "@/lib/api";
+import { pluginsApi, themesApi, Plugin, PluginPortConflict } from "@/lib/api";
 import { permMeta, PermissionRisk } from "@/lib/permissionMeta";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore } from "react-icons/fa";
+import { FaPlug, FaTrash, FaDownload, FaPowerOff, FaCheck, FaExclamationTriangle, FaSlidersH, FaSearch, FaSyncAlt, FaInfoCircle, FaTimes, FaShieldAlt, FaBan, FaUnlock, FaStore, FaPalette } from "react-icons/fa";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 import MarketplaceTab from "./MarketplaceTab";
 
@@ -94,6 +94,11 @@ export default function PluginsPage() {
 
     // Restart-in-flight tracking (per slug) for the health card button.
     const [restarting, setRestarting] = useState<Record<string, boolean>>({});
+
+    // Companion-theme install in flight (per slug) + post-install "switch to it now?" prompt.
+    const [installingTheme, setInstallingTheme] = useState<Record<string, boolean>>({});
+    const [themeSwitchPrompt, setThemeSwitchPrompt] = useState<{ pluginName: string; themeSlug: string } | null>(null);
+    const [switchingTheme, setSwitchingTheme] = useState(false);
 
     // Search + status filter (rank 11).
     const [searchInput, setSearchInput] = useState("");
@@ -289,6 +294,37 @@ export default function PluginsPage() {
         }
     };
 
+    // Companion theme (plugin-completeness option B): one click copies the plugin's bundled theme/
+    // to themes/<slug>-theme (host-side, validated like an uploaded theme), then offers the switch
+    // via a non-blocking modal (matches the page's modal pattern — no window.confirm).
+    const handleInstallTheme = async (plugin: Plugin) => {
+        setInstallingTheme(prev => ({ ...prev, [plugin.slug]: true }));
+        try {
+            const res = await pluginsApi.installTheme(plugin.slug, false);
+            addToast(res.message || `Theme "${res.slug}" installed`, "success");
+            loadPlugins();
+            setThemeSwitchPrompt({ pluginName: plugin.name, themeSlug: res.slug });
+        } catch (error: any) {
+            addToast("Theme install failed: " + (error.message || "Unknown error"), "error", 0);
+        } finally {
+            setInstallingTheme(prev => ({ ...prev, [plugin.slug]: false }));
+        }
+    };
+
+    const confirmThemeSwitch = async () => {
+        if (!themeSwitchPrompt) return;
+        setSwitchingTheme(true);
+        try {
+            await themesApi.activate(themeSwitchPrompt.themeSlug);
+            addToast(`Theme "${themeSwitchPrompt.themeSlug}" is now active`, "success");
+            setThemeSwitchPrompt(null);
+        } catch (error: any) {
+            addToast("Theme switch failed: " + (error.message || "Unknown error"), "error", 0);
+        } finally {
+            setSwitchingTheme(false);
+        }
+    };
+
     const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
         if (!file) return;
@@ -395,6 +431,43 @@ export default function PluginsPage() {
                                 className="px-6 py-3 bg-amber-600 hover:bg-amber-700 text-white text-xs font-extrabold uppercase tracking-widest rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-amber-500/20 hover:scale-102 active:scale-98"
                             >
                                 {freeingPort ? (<><FaSyncAlt className="animate-spin" /> {t('plugins.freeport.freeing')}</>) : (<><FaUnlock /> {t('plugins.freeport.confirm')}</>)}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Companion-theme installed: offer the optional one-click switch (option B). */}
+            {themeSwitchPrompt && (
+                <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-md flex items-center justify-center p-4 z-50 animate-in fade-in duration-300">
+                    <div className="bg-white/95 backdrop-blur-lg rounded-[32px] p-8 max-w-md w-full shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 transform transition-all scale-100">
+                        <div className="flex items-center gap-4 mb-6">
+                            <div className="w-14 h-14 rounded-2xl bg-violet-50 border border-violet-100 flex items-center justify-center flex-shrink-0 text-violet-600 shadow-sm">
+                                <FaPalette className="text-xl" />
+                            </div>
+                            <h3 className="text-xl font-extrabold text-slate-900">Theme installed</h3>
+                        </div>
+                        <div className="mb-6 text-slate-550 leading-relaxed space-y-3.5 text-xs font-semibold">
+                            <p>
+                                <strong className="text-slate-900 font-extrabold">{themeSwitchPrompt.pluginName}</strong>&apos;s theme is now installed as{' '}
+                                <code className="text-[10px] font-mono bg-violet-50 px-1 py-0.5 rounded">{themeSwitchPrompt.themeSlug}</code>.
+                            </p>
+                            <p>Switch the site to this theme now? You can also do it later in Appearance → Themes.</p>
+                        </div>
+                        <div className="flex justify-end gap-3 pt-2">
+                            <button
+                                onClick={() => setThemeSwitchPrompt(null)}
+                                disabled={switchingTheme}
+                                className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all disabled:opacity-50"
+                            >
+                                Keep current theme
+                            </button>
+                            <button
+                                onClick={confirmThemeSwitch}
+                                disabled={switchingTheme}
+                                className="px-6 py-3 bg-violet-600 hover:bg-violet-700 text-white text-xs font-extrabold uppercase tracking-widest rounded-xl transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-violet-500/20 hover:scale-102 active:scale-98"
+                            >
+                                {switchingTheme ? (<><FaSyncAlt className="animate-spin" /> Switching…</>) : (<><FaPalette /> Switch now</>)}
                             </button>
                         </div>
                     </div>
@@ -1009,6 +1082,22 @@ export default function PluginsPage() {
                                         >
                                             <FaSlidersH className="text-[10px]" /> Permissions
                                         </button>
+                                        {plugin.hasTheme && (
+                                            <button
+                                                onClick={() => handleInstallTheme(plugin)}
+                                                disabled={plugin.themeInstalled || !!installingTheme[plugin.slug]}
+                                                title={plugin.themeInstalled
+                                                    ? "This plugin's theme is already installed (manage it in Appearance → Themes)"
+                                                    : "Install this plugin's theme"}
+                                                className="text-[9px] font-extrabold uppercase tracking-widest px-2.5 py-1.5 rounded-lg border flex items-center gap-1 transition-all bg-slate-50 hover:bg-violet-50 hover:text-violet-600 text-slate-500 border-slate-200/60 shadow-sm hover:scale-105 active:scale-95 disabled:opacity-60 disabled:hover:scale-100 disabled:hover:bg-slate-50 disabled:hover:text-slate-500"
+                                            >
+                                                {installingTheme[plugin.slug]
+                                                    ? (<><FaSyncAlt className="text-[10px] animate-spin" /> Installing…</>)
+                                                    : plugin.themeInstalled
+                                                        ? (<><FaCheck className="text-[10px]" /> Theme installed</>)
+                                                        : (<><FaPalette className="text-[10px]" /> Install theme</>)}
+                                            </button>
+                                        )}
                                     </div>
 
                                     <button

@@ -70,6 +70,8 @@ function buildOne(slug) {
         // data/.mailenc, user attachments) — it must never ship in a catalog zip. Anchored to the
         // plugin root so a legit nested source dir named data/ (client/data/...) is unaffected.
         if (rel === 'data' || rel.startsWith('data/')) continue;
+        // A top-level theme/ is the plugin's COMPANION THEME (plugin-completeness option B) and MUST
+        // ship: POST /plugins/<slug>/install-theme copies it to themes/<slug>-theme after install.
         zip.addFile(`${slug}/${rel}`, fs.readFileSync(abs));
     }
     for (const entry of zip.getEntries()) entry.header.time = FIXED_DATE;

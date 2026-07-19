@@ -505,15 +505,22 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
     // Live runtime health per isolate (running/crashed/crash-looping/restarting + rss/restarts) so the
     // admin sees the TRUE state, not just the persisted 'active' flag which can lie after a crash.
     const { getIsolateStatus } = require('../core/plugin-isolate');
+    const { THEMES_DIR } = require('../core/themes');
     res.json(plugins.map((p: any) => {
         const requested = Array.from(new Set((p.permissions || [])
             .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
             .filter(Boolean)));
+        // Companion theme (option B): does this plugin bundle a theme/, and is it installed already?
+        // lstat (not stat) so a symlinked theme/ reads as "no theme" — install-theme refuses it anyway.
+        let hasTheme = false;
+        try { hasTheme = fs.lstatSync(path.join(PLUGINS_DIR, p.slug, 'theme')).isDirectory(); } catch { /* none */ }
         return {
             ...p,
             requestedPermissions: requested,
             grantedPermissions: getGrants(p.slug),
             runtime: p.active ? (getIsolateStatus(p.slug) || null) : null,
+            hasTheme,
+            themeInstalled: hasTheme && fs.existsSync(path.join(THEMES_DIR, `${p.slug}-theme`)),
         };
     }));
 }));
@@ -694,6 +701,93 @@ router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Req
     }
     await reloadIsolatedPlugin(slug);
     res.json({ success: true, slug, message: `Isolate for '${slug}' reloaded.` });
+}));
+
+/**
+ * @swagger
+ * /plugins/{slug}/install-theme:
+ *   post:
+ *     summary: Install the companion theme a plugin bundles (its top-level theme/ folder)
+ *     description: >
+ *       Copies plugins/<slug>/theme/ to themes/<slug>-theme, validated like an uploaded theme
+ *       (footprint budget, no symlinks, never overwrites). Optionally switches the site to it.
+ *       HOST-side and admin-only by design (plugin-completeness program, option B) — the plugin
+ *       process gains no new capability and is not involved at all.
+ *     tags: [Plugins]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: slug
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               activate:
+ *                 type: boolean
+ *                 description: Switch the active theme to the installed one
+ *     responses:
+ *       200:
+ *         description: Theme installed (and optionally activated)
+ *       400:
+ *         description: Invalid slug / theme folder failed validation
+ *       404:
+ *         description: Plugin not found or bundles no theme
+ *       409:
+ *         description: The companion theme is already installed
+ */
+router.post('/:slug/install-theme', authenticate, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    // Throws 400 on any traversal-shaped slug BEFORE any fs op (single choke point).
+    const pluginDir = resolveSafePluginDir(req.params.slug);
+    const slug = req.params.slug as string;
+    if (!fs.existsSync(pluginDir)) {
+        return res.status(404).json({ error: `Plugin '${slug}' is not installed` });
+    }
+
+    // The bundled theme must be a REAL directory — lstat so a symlinked theme/ (pointing anywhere
+    // on the host) is refused, not followed.
+    const themeSrc = path.join(pluginDir, 'theme');
+    let srcStat: any = null;
+    try { srcStat = fs.lstatSync(themeSrc); } catch { /* absent */ }
+    if (!srcStat || !srcStat.isDirectory()) {
+        return res.status(404).json({ error: `Plugin '${slug}' does not bundle a theme` });
+    }
+
+    const { installThemeFromDir, switchTheme } = require('../core/themes');
+    const targetSlug = `${slug}-theme`;
+    try {
+        installThemeFromDir(themeSrc, targetSlug);
+    } catch (e: any) {
+        if (e && e.code === 'THEME_EXISTS') {
+            return res.status(409).json({ error: `Theme "${targetSlug}" is already installed. Delete it in Appearance → Themes to reinstall.` });
+        }
+        if (e && e.code === 'THEME_INVALID') {
+            return res.status(400).json({ error: e.message });
+        }
+        throw e;
+    }
+
+    // Optional one-click switch. Runs AFTER a successful copy; switchTheme re-runs the theme
+    // engine init (AST scan + isolated functions.js), same as activating any theme.
+    let activated = false;
+    if (req.body && req.body.activate === true) {
+        await switchTheme(targetSlug);
+        activated = true;
+    }
+
+    res.json({
+        success: true,
+        slug: targetSlug,
+        activated,
+        message: activated
+            ? `Theme "${targetSlug}" installed and activated`
+            : `Theme "${targetSlug}" installed`
+    });
 }));
 
 // Ports a plugin declares it needs to bind (manifest `claimPorts: [25]`). Only these are eligible
