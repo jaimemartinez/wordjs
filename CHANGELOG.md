@@ -4,6 +4,79 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.8.0] - 2026-07-19
+
+Two **critical, silent data-loss fixes** plus a **⌘K command palette** for the visual editor.
+Recommended upgrade for every site — especially any site with plugins installed or that edits
+legacy/imported posts. This is a drop-in minor upgrade: no configuration, schema, or public-API
+changes. Internally the editor now bundles an in-tree fork of Puck (`@wordjs/puck`); this is
+transparent to the compiled bundle and requires nothing from operators.
+
+### Added
+
+- **⌘K / Ctrl+K command palette in the visual editor.** Open it anywhere in the editor — including
+  with focus inside the canvas iframe — and insert any block from a searchable, keyboard-navigable
+  list (arrow-nav, type-to-filter, Enter or click to insert) without touching the mouse. A header
+  button with a `⌘K` hint makes it discoverable, and a palette insert is a single undo (Ctrl+Z).
+  Built entirely on the editor's public API; block metadata is now shared between the palette and the
+  sidebar inserter so both present blocks identically.
+
+### Fixed
+
+- **CRITICAL — switching database engine no longer destroys your data.** Any site with plugin,
+  analytics, or custom tables that used **Admin → Database** to switch engine (e.g. SQLite →
+  Postgres/MySQL) was affected: the old migration copied only a hardcoded 11-table list, so every
+  plugin `wjp_*` table plus `wordjs_analytics`, `schema_migrations`, and `notifications` (store
+  orders/stock, restaurant reservations, conference inscriptions) was **silently and irrecoverably
+  dropped** while the UI reported *"Migration successful."* It was also non-atomic (a cross-connection
+  "transaction" plus `TRUNCATE`) and verified by warning only. The migration now enumerates **all**
+  user tables dynamically, recreates non-core schema on the target with correct per-dialect types
+  (MySQL `TEXT`→`LONGTEXT`, Postgres type mapping, all identifiers quoted), copies inside a **real
+  single-connection transaction** using `DELETE` (never `TRUNCATE`), and **fails closed** — a
+  per-table row-count mismatch rolls back and keeps the original database live, so a half-copied
+  target can never silently become your site.
+- **CRITICAL — a blank editor can no longer overwrite a real post.** Anyone editing posts/pages when
+  a page-load hiccuped, and anyone editing a WordPress-imported or pre-Puck (legacy HTML) post, was
+  affected: two paths let an empty canvas save empty content over the real body, made **unrecoverable**
+  because the 8-second autosave skips the revision snapshot. Now (1) a failed content load renders a
+  **blocking error card** (Retry / Back) instead of a savable empty editor, and saving an existing
+  record is refused until hydration is confirmed — no editor mounts and no `PUT` is issued on a failed
+  load; (2) a legacy HTML post preserves its original body — the blank Puck canvas no longer
+  regenerates empty content or stamps empty block data over it.
+- **Revision pruning and user listing are now portable across database drivers.** On Postgres/MySQL
+  (invisible on SQLite): revision pruning used a `DELETE … WHERE id IN (SELECT … LIMIT ?)` that
+  **MySQL rejects** (ER 1093 / ER 1235), so pruning threw, revisions grew unbounded, and restoring a
+  post with more than 10 revisions returned a 500; it now selects the oldest ids then deletes by
+  explicit list (and cleans up the orphaned `post_meta` the old query left behind). Separately, the
+  users admin list reported **wrong `X-WP-Total`/`X-WP-TotalPages`** because `count()` ignored the
+  active `role`/`search` filter, and the whitelisted sort was a silent no-op for lack of an
+  `ORDER BY`; both now share one filter builder and apply a deterministic `ORDER BY` with an `id`
+  tiebreak.
+
+### Changed
+
+- **Puck is now an in-tree fork (`@wordjs/puck`), replacing `@measured/puck` and its fragile
+  install-time patch.** WordJS's one editor-specific change — a per-block **Edit** action for
+  Text/Heading blocks, which Puck's public API can't express — previously required regex-rewriting
+  Puck's minified `dist` on every install (silently breaking on any version bump). The fork
+  (Puck v0.20.2, MIT, with `NOTICE.md`) puts that change in source; the editor `dist` is built by
+  `build:editor` in `predev`/`prebuild` and a dedicated CI step. No behavior change for sites.
+- **The release pipeline now smoke-boots the compiled bundle before publishing.** After building the
+  ZIP, CI extracts it, installs, boots the monolith over HTTP, and requires `/healthz` to answer — if
+  the bundle can't boot, **nothing is published**. Closes the gap that once shipped an unbootable
+  bundle.
+- **The MySQL driver is now exercised against a real MySQL 8 in CI.** A `mysql:8` service plus a
+  conformance case feed the SQLite-dialect SQL the app actually emits through the translation layer;
+  `WORDJS_CI_DB=1` promotes the Postgres and MySQL blocks from graceful skips to hard failures so a
+  missing service can't slip through green.
+
+### Notes
+
+- **Postgres migration target — documented limitation (not data loss).** When migrating *to* Postgres,
+  non-core (plugin) tables are recreated from their column list (Postgres can't translate SQLite DDL),
+  so they are **data-complete but may lack their primary key / autoincrement** until the plugin
+  re-establishes its schema on activation. SQLite → MySQL and SQLite → SQLite keep full fidelity.
+
 ## [1.7.0] - 2026-07-19
 
 ### Added
