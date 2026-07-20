@@ -121,6 +121,65 @@ const MIGRATIONS: Migration[] = [
             await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens (token_hash)');
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens (user_id)');
         }
+    },
+    {
+        // Outgoing webhook SUBSCRIPTIONS (roadmap: open the platform — the other half of headless).
+        // Each row is an endpoint the operator registers; when a content event fires, a signed POST is
+        // delivered to `url`. The HMAC signing secret is stored ENCRYPTED (secret_enc, AES-256-GCM keyed
+        // off the app secret) because — unlike an API token — it must be re-read as plaintext to sign
+        // every delivery, so a one-way hash won't do. `events` is a comma list of subscribed event names
+        // or '*'. `failure_count` auto-pauses a chronically-failing endpoint.
+        id: '0003_create_webhooks',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS webhooks (` +
+                `id ${INT_PK}, ` +
+                `user_id INTEGER NOT NULL, ` +
+                `name TEXT NOT NULL DEFAULT '', ` +
+                `url TEXT NOT NULL, ` +
+                `events TEXT NOT NULL DEFAULT '*', ` +
+                `secret_enc TEXT NOT NULL, ` +
+                `secret_prefix TEXT NOT NULL DEFAULT '', ` +
+                `active INTEGER NOT NULL DEFAULT 1, ` +
+                `failure_count INTEGER NOT NULL DEFAULT 0, ` +
+                `last_delivery_at INTEGER, ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_webhooks_active ON webhooks (active)');
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_webhooks_user ON webhooks (user_id)');
+        }
+    },
+    {
+        // Outgoing webhook DELIVERY queue + audit log. This table IS the durable retry queue (survives a
+        // restart): one row per (webhook, event) delivery attempt-set. A single-statement atomic CLAIM
+        // (see WebhookDelivery.claim) makes dispatch safe across nodes WITHOUT a distributed lock — the
+        // claiming UPDATE moves next_attempt_at into the future so a racing node's guarded UPDATE matches
+        // 0 rows. next_attempt_at/delivered_at are epoch SECONDS (INTEGER) so backoff math never hits the
+        // SQLite UTC-text-vs-JS-local ambiguity.
+        id: '0004_create_webhook_deliveries',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS webhook_deliveries (` +
+                `id ${INT_PK}, ` +
+                `webhook_id INTEGER NOT NULL, ` +
+                `event TEXT NOT NULL, ` +
+                `payload TEXT NOT NULL, ` +
+                `status TEXT NOT NULL DEFAULT 'pending', ` +
+                `attempts INTEGER NOT NULL DEFAULT 0, ` +
+                `next_attempt_at INTEGER NOT NULL DEFAULT 0, ` +
+                `response_status INTEGER, ` +
+                `error TEXT, ` +
+                `delivered_at INTEGER, ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            // The dispatcher scans by (status, next_attempt_at); the admin log lists by webhook.
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_wh_deliveries_due ON webhook_deliveries (status, next_attempt_at)');
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_wh_deliveries_webhook ON webhook_deliveries (webhook_id, id)');
+        }
     }
 ];
 
