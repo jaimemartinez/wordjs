@@ -594,6 +594,9 @@ async function initialize() {
         require('./core/coherence').initCoherence();
         require('./core/notifications').initClusterBus();
 
+        // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
+        require('./core/webhooks').initWebhooks();
+
         // Expose Cron API to Plugins via global.wordjs
         global.wordjs = global.wordjs || {};
         global.wordjs.scheduleEvent = scheduleEvent;
