@@ -525,7 +525,10 @@ router.get('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, r
 /**
  * POST /auth/tokens
  * Mint a new API token for the current user. The plaintext token is returned ONCE and is unrecoverable.
- * Body: { name?, scopes?: 'read'|'write'|['read','write']|'*', expiresInDays?: number }
+ * Body: { name?, scopes?, expiresInDays?: number }
+ *   scopes: a global 'read'|'write'|'*' (all resources), and/or per-resource grants like
+ *   'posts:write','media:read' (comma-string or array). write implies read; a token holding only
+ *   resource scopes is confined to those resources. Unrecognized scopes are REJECTED (400).
  */
 router.post('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
     const { name, scopes, expiresInDays } = req.body || {};
@@ -545,6 +548,18 @@ router.post('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, 
         return res.status(400).json({
             code: 'rest_invalid_param',
             message: 'expiresInDays must be a positive number of days.',
+            data: { status: 400 }
+        });
+    }
+
+    // Reject unrecognized scopes rather than silently dropping them: a dropped scope either empties the set
+    // (which must NOT become a global-read token) or narrows the grant below what the caller asked for — a
+    // typo like `posts:*` should fail loudly, not mint a surprising token.
+    const badScopes = ApiToken.invalidScopes(scopes);
+    if (badScopes.length) {
+        return res.status(400).json({
+            code: 'rest_invalid_scope',
+            message: `Unrecognized token scope(s): ${badScopes.join(', ')}. Use "read", "write", "*", or "<resource>:read" / "<resource>:write" (e.g. posts:write).`,
             data: { status: 400 }
         });
     }

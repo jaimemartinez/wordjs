@@ -151,6 +151,92 @@ test('a WRITE token cannot exceed the issuing user role (subscriber ∩ write = 
     assert.notStrictEqual(res.body.code, 'rest_token_scope_insufficient');
 });
 
+// ── Per-resource scopes: true least-privilege (posts:write, media:read, …) ────────────────────────
+const ApiToken = require('../models/ApiToken');
+
+test('normalizeScopes expands per-resource write⇒read and orders deterministically', () => {
+    assert.deepStrictEqual(ApiToken.normalizeScopes('posts:write'), ['posts:read', 'posts:write']);
+    assert.deepStrictEqual(ApiToken.normalizeScopes('posts:read,media:write'), ['media:read', 'media:write', 'posts:read']);
+    assert.deepStrictEqual(ApiToken.normalizeScopes('write,posts:read'), ['read', 'write', 'posts:read']);
+    // case-insensitive; a mix of junk + valid keeps only the valid.
+    assert.deepStrictEqual(ApiToken.normalizeScopes('bogus,PageS:Read'), ['pages:read']);
+    assert.deepStrictEqual(ApiToken.normalizeScopes(''), ['read']);
+});
+
+test('normalizeScopes never widens an all-invalid non-empty input to global read', () => {
+    // Regression for the confinement bug: `posts:*` (etc.) must NOT silently become a whole-API read token.
+    assert.deepStrictEqual(ApiToken.normalizeScopes('posts:*'), []);
+    assert.deepStrictEqual(ApiToken.normalizeScopes('bogus'), []);
+    assert.deepStrictEqual(ApiToken.normalizeScopes('*:write'), []);
+    assert.deepStrictEqual(ApiToken.normalizeScopes('posts:delete'), []);
+    // Only a truly absent/empty input defaults to least-privilege read.
+    assert.deepStrictEqual(ApiToken.normalizeScopes(''), ['read']);
+    assert.deepStrictEqual(ApiToken.normalizeScopes(undefined), ['read']);
+    assert.deepStrictEqual(ApiToken.normalizeScopes([]), ['read']);
+    // invalidScopes flags exactly the unrecognized tokens.
+    assert.deepStrictEqual(ApiToken.invalidScopes('posts:*,read'), ['posts:*']);
+    assert.deepStrictEqual(ApiToken.invalidScopes('read,posts:write,*'), []);
+});
+
+test('POST /auth/tokens rejects unrecognized scopes with 400 (no surprising token minted)', async () => {
+    for (const bad of ['posts:*', 'admin', 'posts:delete', 'read,bogus']) {
+        const res = await mintToken('admin', { name: 'bad', scopes: bad });
+        assert.strictEqual(res.status, 400, `expected 400 for scopes="${bad}", got ${res.status}`);
+        assert.strictEqual(res.body.code, 'rest_invalid_scope');
+    }
+    // A stored token can therefore never come back as an unintended global-read grant.
+    const good = await mintToken('admin', { name: 'ok', scopes: 'posts:read' });
+    assert.strictEqual(good.status, 201);
+    assert.deepStrictEqual(good.body.scopes, ['posts:read']);
+});
+
+test('scopeAllows confines a resource-scoped token to that resource', () => {
+    // posts:read → reads posts only, never writes, never other resources.
+    assert.ok(ApiToken.scopeAllows(['posts:read'], 'GET', 'posts'));
+    assert.ok(!ApiToken.scopeAllows(['posts:read'], 'GET', 'media'), 'confined to its resource');
+    assert.ok(!ApiToken.scopeAllows(['posts:read'], 'POST', 'posts'), 'read ≠ write');
+    // posts:write implies posts:read, but is still confined to posts.
+    const pw = ApiToken.normalizeScopes('posts:write');
+    assert.ok(ApiToken.scopeAllows(pw, 'POST', 'posts'));
+    assert.ok(ApiToken.scopeAllows(pw, 'GET', 'posts'));
+    assert.ok(!ApiToken.scopeAllows(pw, 'POST', 'media'), 'write scope is per-resource');
+    // Global read/write span every resource (backward compatible).
+    assert.ok(ApiToken.scopeAllows(['read'], 'GET', 'anything'));
+    assert.ok(!ApiToken.scopeAllows(['read'], 'POST', 'anything'));
+    assert.ok(ApiToken.scopeAllows(['read', 'write'], 'DELETE', 'users'));
+    // Unclassifiable resource ('') → only global scopes satisfy (fail-closed for resource-scoped tokens).
+    assert.ok(ApiToken.scopeAllows(['read'], 'GET', ''));
+    assert.ok(!ApiToken.scopeAllows(['posts:read'], 'GET', ''));
+});
+
+test('POST /auth/tokens accepts per-resource scopes and stores them normalized', async () => {
+    const res = await mintToken('admin', { name: 'posts-only', scopes: 'posts:write' });
+    assert.strictEqual(res.status, 201);
+    assert.deepStrictEqual(res.body.scopes, ['posts:read', 'posts:write']);
+});
+
+test('a posts:write token CAN create a post (its own resource passes the gate)', async () => {
+    const { body } = await mintToken('admin', { name: 'posts-writer', scopes: 'posts:write' });
+    const res = await request(app).post('/api/v1/posts').set('Authorization', `Bearer ${body.token}`)
+        .send({ title: 'From a posts:write token', content: 'hi', status: 'draft' });
+    assert.strictEqual(res.status, 201, `expected create to succeed, got ${res.status} ${JSON.stringify(res.body)}`);
+});
+
+test('a posts:write token CANNOT write a different resource (403 scope, before the handler)', async () => {
+    const { body } = await mintToken('admin', { name: 'posts-writer-2', scopes: 'posts:write' });
+    // Same token, a mutating request on /media → the scope gate fires before can()/multer ever run.
+    const res = await request(app).post('/api/v1/media').set('Authorization', `Bearer ${body.token}`).send({});
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'rest_token_scope_insufficient');
+});
+
+test('a media:read token cannot write media (read scope never mutates, even its own resource)', async () => {
+    const { body } = await mintToken('admin', { name: 'media-reader', scopes: 'media:read' });
+    const res = await request(app).post('/api/v1/media').set('Authorization', `Bearer ${body.token}`).send({});
+    assert.strictEqual(res.status, 403);
+    assert.strictEqual(res.body.code, 'rest_token_scope_insufficient');
+});
+
 // ── Revocation & expiry ──────────────────────────────────────────────────────────────────────────
 test('a revoked token stops working', async () => {
     const { body } = await mintToken('admin', { name: 'to-revoke', scopes: 'read' });
