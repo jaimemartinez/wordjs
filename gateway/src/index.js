@@ -370,7 +370,25 @@ if (cluster.isPrimary) {
                     next();
                 };
 
+                // A registering node may only claim routes that belong to its ROLE (its cert CN) — mTLS
+                // proves *who* the peer is, but without this it could serve *anything*. The exploit: a
+                // compromised/least-privileged `frontend` node registers `/api/v1/auth` → the proxy's
+                // longest-prefix match then routes 100% of login/reset traffic to it (credential capture).
+                // These sets mirror exactly what the backend (index.ts) and frontend (instrumentation.ts)
+                // legitimately declare, so authorized registration is unaffected; anything else is refused.
+                const ROLE_ROUTES = {
+                    backend: new Set(['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics']),
+                    frontend: new Set(['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']),
+                };
                 internalApp.post('/register', requireIdentity(['backend', 'frontend']), (req, res) => {
+                    const cn = req.socket.getPeerCertificate()?.subject?.CN;
+                    const allowed = ROLE_ROUTES[cn];
+                    const declared = Array.isArray(req.body && req.body.routes) ? req.body.routes : [];
+                    const bad = declared.filter(r => !allowed || !allowed.has(r));
+                    if (!allowed || bad.length) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not serve route(s): ${bad.join(', ') || '(no routes declared)'}`);
+                        return res.status(403).json({ error: 'One or more declared routes are not permitted for this identity.', routes: bad });
+                    }
                     handleRegistration(req.body);
                     res.json({ success: true });
                 });
@@ -578,10 +596,28 @@ if (cluster.isPrimary) {
                 return res.status(403).json({ error: chk.reason });
             }
             try {
-                // SECURITY: CN is forced to the token's role (not taken from the CSR); SANs come from the
-                // node's advertised host (and any host the token pinned) so the gateway can verify the
-                // backend's server cert when it later health-checks/proxies to it.
-                const sans = [advertiseHost, chk.host].filter(Boolean);
+                // SECURITY (#11): CN is forced to the token's role (not the CSR). The SAN must NOT be
+                // attacker-controlled — a join-token holder could otherwise put ANY host in advertiseHost and
+                // mint a cluster-CA cert that impersonates the gateway to the frontend (on-path MITM of SSR
+                // traffic). The authoritative host is the one the TOKEN pinned; if the token pinned a host,
+                // the client's advertiseHost must equal it. If the token did NOT pin one, we only allow a SAN
+                // for the address the node is actually connecting FROM — never an arbitrary declared host.
+                const peerHost = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+                let sanHost;
+                if (chk.host) {
+                    if (advertiseHost && advertiseHost !== chk.host) {
+                        logger.warn(`[Gateway] [Enroll] DENIED ${role}: advertiseHost '${advertiseHost}' != token-pinned host '${chk.host}'`);
+                        return res.status(400).json({ error: 'advertiseHost does not match the host pinned by the enrollment token.' });
+                    }
+                    sanHost = chk.host;
+                } else {
+                    if (advertiseHost && advertiseHost !== peerHost) {
+                        logger.warn(`[Gateway] [Enroll] DENIED ${role}: unpinned token; advertiseHost '${advertiseHost}' != connecting address '${peerHost}'`);
+                        return res.status(400).json({ error: 'This token did not pin an advertise host; mint a host-pinned token, or connect from the advertised host.' });
+                    }
+                    sanHost = advertiseHost || peerHost;
+                }
+                const sans = [sanHost].filter(Boolean);
                 const certPem = clusterCa.signCsr({ caKeyPem, caCertPem, csrPem: csr, cn: role, sans });
                 logger.info(`[Gateway] [Enroll] ISSUED CN=${role} advertiseHost=${advertiseHost || '-'} to ${req.socket.remoteAddress}`);
                 return res.json({

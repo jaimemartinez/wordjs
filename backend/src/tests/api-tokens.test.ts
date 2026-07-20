@@ -28,6 +28,7 @@ config.dbPath = TMP_DB;
 config.dbDriver = 'sqlite-native';
 const database = require('../config/database');
 const roles = require('../core/roles');
+const User = require('../models/User');
 const { csrfProtection } = require('../middleware/auth');
 
 const express = require('express');
@@ -244,6 +245,18 @@ test('a revoked token stops working', async () => {
     assert.strictEqual(del.status, 200);
     const res = await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${body.token}`);
     assert.strictEqual(res.status, 401);
+});
+
+test('a password change hard-revokes the user\'s API tokens (compromise recovery)', async () => {
+    await seedUser('pwvictim', 'administrator');
+    const { body } = await mintToken('pwvictim', { name: 'pre-change', scopes: 'read' });
+    let res = await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${body.token}`);
+    assert.strictEqual(res.status, 200, 'token works before the password change');
+    // Changing the password stamps token_valid_after (kills JWT cookies) AND now revokes every API token —
+    // the "revokes every session" guarantee must reach the wjt_ path, or a stolen token survives the reset.
+    await User.update(U.pwvictim, { password: 'A-Brand-New-Pass-9!' });
+    res = await request(app).get('/api/v1/auth/me').set('Authorization', `Bearer ${body.token}`);
+    assert.strictEqual(res.status, 401, 'token is dead after the password change');
 });
 
 test('an expired token is rejected', async () => {

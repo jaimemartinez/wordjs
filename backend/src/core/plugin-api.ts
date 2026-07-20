@@ -62,10 +62,14 @@ const PROTECTED_OPTION_NAMES = new Set([
     // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to
     // dodge the supervisor. All off-limits to untrusted plugins.
     'cron', 'plugin_strikes', 'plugin_health',
-    // 'marketplace_source' is the base URL the HOST fetches the plugin catalog + zips from. A plugin with
-    // settings:write could point it at http://127.0.0.1:… / cloud-metadata and drive host-side SSRF that
-    // bypasses the plugin egress guard (options are global, not namespaced) (audit MEDIUM).
-    'marketplace_source', 'marketplace_url', 'marketplace_catalog_url',
+    // The marketplace source lists are the URLs the HOST fetches the plugin/theme catalog + zips from. A
+    // plugin with settings:write could point them at http://127.0.0.1:… / cloud-metadata and drive host-side
+    // SSRF that bypasses the plugin egress guard (options are global, not namespaced), OR swap in a catalog
+    // whose sha256 it also controls → admin-assisted supply-chain RCE (audit MEDIUM). The ACTIVE option keys
+    // are the PLURAL `marketplace_sources` / `marketplace_theme_sources` (routes/marketplace.ts); the earlier
+    // singular-only list left the real keys writable. Cover both singular and plural, plugins and themes.
+    'marketplace_source', 'marketplace_sources', 'marketplace_url', 'marketplace_catalog_url',
+    'marketplace_theme_source', 'marketplace_theme_sources', 'marketplace_themes_source', 'marketplace_themes_sources',
     // 'template'/'stylesheet' select the ACTIVE THEME. A settings:write plugin could otherwise point them
     // at '../plugins/<own-slug>' and, because theme-engine.init() require()s the selected dir's
     // functions.js IN-PROCESS on the host, re-introduce in-process execution (DoS / prototype pollution /
@@ -103,7 +107,14 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
     const isWord = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '_' || c === '$' || c === '.';
     while (i < n) {
         const c = s[i];
-        if (c === '-' && s[i + 1] === '-') { i += 2; while (i < n && s[i] !== '\n') i++; cleaned += ' '; continue; }        // -- line comment
+        // `--` line comment — but ONLY when the next char is whitespace/control or EOL, matching MySQL/
+        // MariaDB (SQLite/Postgres treat any `--` as a comment; MySQL treats `--0` as arithmetic `- -0`).
+        // Taking the STRICTEST rule here means `--x` is NOT swallowed, so a `WHERE 2=1--0 UNION SELECT
+        // user_pass FROM users` stays fully visible to the table-scoping walker on every driver — closing
+        // the MySQL-only comment-divergence scoping bypass.
+        if (c === '-' && s[i + 1] === '-' && (i + 2 >= n || s[i + 2] === ' ' || s[i + 2] === '\t' || s[i + 2] === '\n' || s[i + 2] === '\r' || s[i + 2] === '\v' || s[i + 2] === '\f')) {
+            i += 2; while (i < n && s[i] !== '\n') i++; cleaned += ' '; continue;
+        }
         if (c === '/' && s[i + 1] === '*') { i += 2; while (i < n && !(s[i] === '*' && s[i + 1] === '/')) i++; i += 2; cleaned += ' '; continue; } // /* block */
         if (c === "'") { // string literal ('' escapes a quote) — content is NEVER structure/keywords/tables
             i++;
@@ -181,6 +192,13 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     // comment/literal text) ever runs on an unbounded string.
     if (raw.length > 20000) {
         throw new Error(`🛡️ Plugin DB access denied: SQL statement too long.`);
+    }
+    // MySQL/MariaDB "executable comments" (`/*! … */`, optionally version-gated `/*!50000 … */`) run the
+    // wrapped SQL on those engines while the generic `/* */` lexer below blanks it — the same comment-
+    // divergence class as `--0`. Checked on the RAW string BEFORE the lexer strips it. A plugin never needs
+    // version-gated SQL, so deny the marker outright rather than trying to reconcile per-engine semantics.
+    if (raw.includes('/*!')) {
+        throw new Error(`🛡️ Plugin DB access denied: MySQL executable comments (/*! ... */) are not permitted.`);
     }
     // ONE lexer pass recognizes comments + string literals + quoted identifiers TOGETHER, so attacker text
     // inside any of them can't splice out structure (the comment-vs-literal ordering bug #2 and the

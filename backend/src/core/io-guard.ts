@@ -331,6 +331,26 @@ function enforceGrowQuota(slug: string, n: number): void {
     if (w.bytes + n > PLUGIN_GROW_QUOTA) throw quotaErr(slug, `append/stream growth quota of ${PLUGIN_GROW_QUOTA} bytes per ${GROW_WINDOW_MS / 1000}s exceeded`);
     w.bytes += n;
 }
+// (#7) Count the directory entries a mkdir will actually create so each can be charged the block floor:
+// 1 for a non-recursive mkdir, and for recursive:true the number of not-yet-existing ancestors up to the
+// first existing dir (so a single deep `mkdir -p` is metered per NEW component, not once). Best-effort —
+// stat errors fall back to 1, and a hard depth cap guarantees this can never loop unbounded. Uses the
+// unpatched fs.existsSync (existence only, no content) exactly as the copyFile metering below uses statSync.
+function mkdirCreateCount(target: any, recursive: boolean): number {
+    if (!recursive) return 1;
+    let count = 0;
+    let cur = path.resolve(String(target));
+    for (let i = 0; i < 4096; i++) {           // hard cap; real filesystem path depth is far below this
+        let exists = false;
+        try { exists = fs.existsSync(cur); } catch { exists = false; }
+        if (exists) break;
+        count++;
+        const parent = path.dirname(cur);
+        if (parent === cur) break;             // reached the filesystem root
+        cur = parent;
+    }
+    return Math.max(1, count);
+}
 // Patch fs.WriteStream.PROTOTYPE._write/_writev ONCE (context-gated) — the instance-level stream.write
 // shadow in wrapQuotaStream is trivially bypassed via Object.getPrototypeOf(stream).write.call(stream)
 // (#14, same class of hole as FileHandle). _write/_writev are the single funnel EVERY buffered write
@@ -477,6 +497,27 @@ function patch(methodName: string, isSync = false) {
                 try {
                     let sz = 0; try { sz = fs.statSync(args[0]).size; } catch { sz = 0; }
                     enforceGrowQuota(cslug, sz);
+                } catch (error: any) {
+                    if (isSync) throw error;
+                    const cb = args[args.length - 1];
+                    if (typeof cb === 'function') { cb(error); return; }
+                    throw error;
+                }
+            }
+        }
+        // (#7) mkdir/mkdirSync CREATE directory entries — an inode/dir-entry producer QUOTA_METHODS omits, so
+        // an unbounded mkdir loop (each dir in the plugin's OWN dir, no grant needed) exhausts inodes / fills
+        // the shared volume → ENOSPC on data/wordjs.db → full-site outage, entirely unmetered. Charge each
+        // directory actually created at least one filesystem-block floor (4096 B) against the SAME rolling
+        // grow-quota the write ops use; for recursive:true, charge per not-yet-existing component so one deep
+        // tree is metered per new dir, not once. (Metered only under a plugin context; core/host is unmetered.
+        // Runs only after isPathSafe() passed above, so mkdir's normal path-safety checks stay intact.)
+        if (methodName === 'mkdir' || methodName === 'mkdirSync') {
+            const cslug = getEffectivePlugin();
+            if (cslug) {
+                try {
+                    const opts = (args[1] && typeof args[1] === 'object') ? args[1] : null;
+                    enforceGrowQuota(cslug, 4096 * mkdirCreateCount(args[0], !!(opts && opts.recursive)));
                 } catch (error: any) {
                     if (isSync) throw error;
                     const cb = args[args.length - 1];
