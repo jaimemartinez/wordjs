@@ -20,25 +20,13 @@ const sanitizeHtml = require('sanitize-html');
 // previously lived inline in this file.
 const { sanitize, sanitizeMetaValue } = require('../core/sanitize-meta');
 
-// Resolve the capability family for a post type (post → edit_posts, page → edit_pages, custom →
-// edit_<type>s) so an author holding only POST caps cannot create/edit/publish/delete PAGES.
-// Pure capability-name builder for a capability_type family. NEVER null — used as the guaranteed
-// fallback for an EXISTING post whose registered type may since have been removed.
-function capsFor(c: string) {
-    return {
-        edit: `edit_${c}s`, publish: `publish_${c}s`, del: `delete_${c}s`,
-        editPublished: `edit_published_${c}s`, deletePublished: `delete_published_${c}s`,
-        editOthers: `edit_others_${c}s`, deleteOthers: `delete_others_${c}s`,
-    };
-}
-// Returns null for an UNREGISTERED type so the CREATE path can reject it (400). Callers editing an
-// existing post fall back to capsFor('post') instead of relying on this nullable result.
-function capsForType(type: string) {
-    const { getPostType } = require('../core/post-types');
-    const pt = getPostType(String(type || 'post'));
-    if (!pt) return null;
-    return capsFor(pt.capability_type || 'post');
-}
+// capsFor / capsForType resolve a post type to its capability family (post → edit_posts, page →
+// edit_pages, custom → edit_<type>s, plus the *_published_* / *_others_* variants). They live in a
+// shared core module so routes/revisions.ts enforces the EXACT same type-aware + publish-aware gate on
+// restore/delete — the two write surfaces previously drifted (revisions used a weaker, post-only,
+// publish-blind gate). capsForType returns null for an unregistered type (the CREATE path rejects it);
+// callers editing an existing post fall back to capsFor('post').
+const { capsFor, capsForType } = require('../core/post-capabilities');
 
 /**
  * @swagger

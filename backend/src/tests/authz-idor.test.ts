@@ -55,7 +55,15 @@ config.gatewaySecret = GATEWAY_SECRET;
 
 // Persona ids, filled during seeding.
 const U: Record<string, number> = {};
-let postA = 0, postB = 0, mediaA = 0, commentA = 0;
+let postA = 0, postB = 0, mediaA = 0, mediaDraft = 0, commentA = 0;
+// Revision-authz fixtures: a PUBLISHED post owned by the contributor + revisions of it, and a DRAFT
+// PAGE owned by authorA + a revision of it. These isolate the two halves of the revisions gate — the
+// edit-vs-publish boundary (published post) and the type-family boundary (page vs post).
+let pubPostC = 0, revRestore = 0, revDelNeg = 0, revDelPos = 0, pageA = 0, revPage = 0;
+// A published post owned by the 'reviewer' custom role (edit_published_posts but NOT delete_published_posts)
+// + revisions — the only way to prove restore is gated on the EDIT family while delete is gated on the
+// DELETE family (both are publish-aware, so no DEFAULT role can tell the two families apart).
+let pubPostR = 0, revR_restore = 0, revR_delete = 0;
 let _seq = 0;
 
 const tok = (id: number, login: string) => jwt.sign({ userId: id, username: login }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
@@ -81,12 +89,14 @@ async function seedPost(authorId: number, status: string) {
         [authorId, `Post ${_seq}`, status, `authz-post-${_seq}`]);
     return r.lastID;
 }
-async function seedMedia(authorId: number) {
+async function seedMedia(authorId: number, parent = 0) {
     _seq++;
+    // post_parent = the post this attachment is attached to (0 = unattached). Attachments are
+    // post_status='inherit', so GET /media/:id derives visibility from this parent's status.
     const r = await dbAsync.run(
-        `INSERT INTO posts (author_id, post_title, post_status, post_type, post_name, post_mime_type, guid)
-         VALUES (?, ?, 'inherit', 'attachment', ?, 'image/png', ?)`,
-        [authorId, `att ${_seq}`, `authz-att-${_seq}`, `/uploads/authz-${_seq}.png`]);
+        `INSERT INTO posts (author_id, post_title, post_status, post_type, post_name, post_mime_type, guid, post_parent)
+         VALUES (?, ?, 'inherit', 'attachment', ?, 'image/png', ?, ?)`,
+        [authorId, `att ${_seq}`, `authz-att-${_seq}`, `/uploads/authz-${_seq}.png`, parent]);
     return r.lastID;
 }
 async function seedComment(postId: number, userId: number, status = '0') {
@@ -96,11 +106,35 @@ async function seedComment(postId: number, userId: number, status = '0') {
         [postId, 'a comment', status, userId]);
     return r.lastID;
 }
+async function seedPage(authorId: number, status: string) {
+    _seq++;
+    const r = await dbAsync.run(
+        `INSERT INTO posts (author_id, post_title, post_status, post_type, post_name) VALUES (?, ?, ?, 'page', ?)`,
+        [authorId, `Page ${_seq}`, status, `authz-page-${_seq}`]);
+    return r.lastID;
+}
+// A revision is a posts row (post_type='revision', post_parent=<parent>) — exactly what core/revisions
+// getRevision()/restoreRevision() read. author_id carries the parent's author so ownership resolves the
+// same way the real revision-save path records it.
+async function seedRevision(parentId: number, authorId: number) {
+    _seq++;
+    const r = await dbAsync.run(
+        `INSERT INTO posts (author_id, post_title, post_content, post_status, post_type, post_parent, post_name)
+         VALUES (?, ?, ?, 'inherit', 'revision', ?, ?)`,
+        [authorId, `Rev ${_seq}`, `rev body ${_seq}`, parentId, `authz-rev-${_seq}`]);
+    return r.lastID;
+}
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
     await database.initializeDatabase();
     dbAsync = database.getDbAsync();
+
+    // Register the default post types (post/page/attachment/revision) — the app initializer does this
+    // after DB connect, but this test harness doesn't boot it. Without it getPostType('page') is null and
+    // the type-aware gate falls back to the post family, so a PAGE would be authorized as a POST (which is
+    // exactly the bug the revisions type-family test asserts against — it must resolve pages as pages).
+    await require('../core/post-types').initPostTypes();
 
     // Register a custom role that can EDIT comments but not MODERATE them (no default role grants
     // edit_comments) — the only way to prove the moderation boundary on PUT /comments/:id.
@@ -110,6 +144,9 @@ before(async () => {
     // guard is the sole barrier to self-promotion (a subscriber is also blocked by lacking promote_users,
     // which would let the self-promotion test pass even if the self-guard were deleted).
     await roles.setRole('promoter', { name: 'Promoter', capabilities: ['read', 'access_admin_panel', 'edit_users', 'promote_users'] });
+    // A custom role that CAN edit published posts but CANNOT delete published ones — isolates the
+    // restore(edit-family) vs delete(delete-family) split on revisions. No default role has this shape.
+    await roles.setRole('reviewer', { name: 'Reviewer', capabilities: ['read', 'access_admin_panel', 'edit_posts', 'edit_published_posts', 'delete_posts'] });
 
     await seedUser('admin', 'administrator');
     await seedUser('editor', 'editor');
@@ -118,11 +155,35 @@ before(async () => {
     await seedUser('subscriber', 'subscriber');
     await seedUser('commentEditor', 'comment_editor');
     await seedUser('promoter', 'promoter');
+    // contributor: edit_posts + delete_posts but NOT edit_published_posts, edit_others_posts, or any
+    // page cap. The ONLY persona for whom the revisions edit-vs-publish gate is the sole barrier to
+    // rolling back their own already-published post (author would pass — it HAS edit_published_posts).
+    await seedUser('contributor', 'contributor');
+    await seedUser('reviewer', 'reviewer');
 
     postA = await seedPost(U.authorA, 'draft');   // authorA's DRAFT (also tests read-leak)
     postB = await seedPost(U.authorB, 'publish');
-    mediaA = await seedMedia(U.authorA);
+    mediaA = await seedMedia(U.authorA);           // UNATTACHED (post_parent = 0) → public by id
+    mediaDraft = await seedMedia(U.authorA, postA); // attached to authorA's DRAFT post → inherits its non-public visibility
     commentA = await seedComment(postA, 0, '0');   // a pending comment on authorA's post
+
+    // Revision fixtures. pubPostC is PUBLISHED and owned by the contributor (as if an editor published
+    // the contributor's draft): the contributor stays the author but can no longer edit published
+    // content. Separate revisions per assertion so a positive-control restore/delete (which mutates)
+    // never disturbs the negative case.
+    pubPostC = await seedPost(U.contributor, 'publish');
+    revRestore = await seedRevision(pubPostC, U.contributor);
+    revDelNeg = await seedRevision(pubPostC, U.contributor);
+    revDelPos = await seedRevision(pubPostC, U.contributor);
+    // A DRAFT page owned by authorA: draft removes the publish gate so this isolates the TYPE-family
+    // boundary — author holds edit_posts/edit_published_posts but NO edit_pages.
+    pageA = await seedPage(U.authorA, 'draft');
+    revPage = await seedRevision(pageA, U.authorA);
+    // reviewer's own PUBLISHED post + revisions: they may restore (has edit_published_posts) but must
+    // NOT delete (lacks delete_published_posts).
+    pubPostR = await seedPost(U.reviewer, 'publish');
+    revR_restore = await seedRevision(pubPostR, U.reviewer);
+    revR_delete = await seedRevision(pubPostR, U.reviewer);
 });
 
 after(async () => {
@@ -217,6 +278,67 @@ describe('authz: posts IDOR (ownership boundary)', () => {
     });
 });
 
+// ── Revisions: restore/delete must clear the SAME edit-vs-publish + type-family bar as PUT/DELETE
+//    /posts/:id. Restoring a revision rewrites the parent's live content; deleting one removes history.
+//    Gating only on edit_posts (own) let a contributor roll back their own ALREADY-PUBLISHED post and
+//    treated pages as posts — the same privilege-separation class as the comment moderation boundary. ──
+describe('authz: revisions honor edit-vs-publish + type-family (not just edit_posts)', () => {
+    test('contributor CANNOT restore a revision of their OWN already-published post (needs edit_published_posts)', async () => {
+        // contributor IS the owner and HAS edit_posts, so the only thing that can produce a 403 is the
+        // edit_published_posts gate — this assertion is load-bearing precisely because of that.
+        const r = await as('contributor', 'post', `/revisions/${revRestore}/restore`);
+        assert.strictEqual(r.status, 403, `restoring an own PUBLISHED post's revision without edit_published_posts must be 403, got ${r.status}`);
+        assert.strictEqual(r.body.code, 'rest_forbidden', `must be the authz gate, got ${JSON.stringify(r.body)}`);
+    });
+    test('editor (has edit_published_posts + edit_others_posts) CAN restore that revision (positive control)', async () => {
+        // Proves the route works and the contributor 403 is the publish gate — not a broken route,
+        // a missing revision, or an ownership mismatch.
+        const r = await as('editor', 'post', `/revisions/${revRestore}/restore`);
+        assert.ok(r.status < 400, `a holder of edit_published_posts + edit_others_posts must be able to restore, got ${r.status} ${JSON.stringify(r.body)}`);
+    });
+    test('author CANNOT restore a revision of their OWN page (post caps do not cover pages)', async () => {
+        // pageA is a DRAFT (publish gate not in play), so this isolates the TYPE family: author holds
+        // edit_posts/edit_published_posts but NOT edit_pages — before the fix, edit_posts alone passed.
+        const r = await as('authorA', 'post', `/revisions/${revPage}/restore`);
+        assert.strictEqual(r.status, 403, `restoring a PAGE revision with only post caps must be 403, got ${r.status}`);
+        assert.strictEqual(r.body.code, 'rest_forbidden', `must be the authz gate, got ${JSON.stringify(r.body)}`);
+    });
+    test('editor (has edit_pages/edit_others_pages) CAN restore the page revision (positive control)', async () => {
+        const r = await as('editor', 'post', `/revisions/${revPage}/restore`);
+        assert.ok(r.status < 400, `a holder of edit_others_pages must be able to restore a page revision, got ${r.status} ${JSON.stringify(r.body)}`);
+    });
+    test('DELETE /revisions/:id mirrors DELETE /posts (delete family): contributor 403 on own published, editor 200', async () => {
+        // Deleting a revision removes history → it is gated on the DELETE family, not edit. The contributor
+        // holds delete_posts but NOT delete_published_posts, so deleting a revision of their OWN PUBLISHED
+        // post is 403 (an edit-family-only gate would have wrongly used edit_posts here).
+        const neg = await as('contributor', 'delete', `/revisions/${revDelNeg}`);
+        assert.strictEqual(neg.status, 403, `deleting an own PUBLISHED post's revision without delete_published_posts must be 403, got ${neg.status}`);
+        assert.strictEqual(neg.body.code, 'rest_forbidden', `must be the authz gate, got ${JSON.stringify(neg.body)}`);
+        // The negative case's revision must still exist (a 403 that silently deleted would be a false pass).
+        const stillThere = await dbAsync.get(`SELECT id FROM posts WHERE id = ? AND post_type = 'revision'`, [revDelNeg]);
+        assert.ok(stillThere, 'a denied delete must not have removed the revision');
+        // Positive control: editor holds delete_published_posts + delete_others_posts.
+        const pos = await as('editor', 'delete', `/revisions/${revDelPos}`);
+        assert.ok(pos.status < 400, `a holder of delete_published_posts + delete_others_posts must be able to delete a revision, got ${pos.status}`);
+        const gone = await dbAsync.get(`SELECT id FROM posts WHERE id = ? AND post_type = 'revision'`, [revDelPos]);
+        assert.ok(!gone, 'the authorized delete genuinely removed the revision (proves the route works)');
+    });
+    test('restore is gated on the EDIT family, delete on the DELETE family (same persona, opposite outcomes)', async () => {
+        // reviewer holds edit_published_posts but NOT delete_published_posts. On their OWN published post:
+        //   • restore SUCCEEDS — proves restore uses edit_published_posts (edit family), and
+        //   • delete is 403 — proves delete uses delete_published_posts (delete family), NOT edit_published.
+        // A delete gate that reused the EDIT family would wrongly ALLOW this delete (reviewer HAS
+        // edit_published_posts) — so this single persona pins both halves of the restore/delete split.
+        const restored = await as('reviewer', 'post', `/revisions/${revR_restore}/restore`);
+        assert.ok(restored.status < 400, `reviewer with edit_published_posts must be able to restore, got ${restored.status} ${JSON.stringify(restored.body)}`);
+        const del = await as('reviewer', 'delete', `/revisions/${revR_delete}`);
+        assert.strictEqual(del.status, 403, `reviewer without delete_published_posts must NOT delete a published post's revision, got ${del.status}`);
+        assert.strictEqual(del.body.code, 'rest_forbidden', `must be the authz gate, got ${JSON.stringify(del.body)}`);
+        const stillThere = await dbAsync.get(`SELECT id FROM posts WHERE id = ? AND post_type = 'revision'`, [revR_delete]);
+        assert.ok(stillThere, 'the denied delete must not have removed the revision');
+    });
+});
+
 // ── Media: same ownership boundary via delete_posts/edit_posts vs *_others_* ──────────────────────────
 describe('authz: media IDOR', () => {
     test('author cannot edit/delete another author\'s media; owner + editor can', async () => {
@@ -227,14 +349,28 @@ describe('authz: media IDOR', () => {
     test('uploading media requires upload_files', async () => {
         assert.strictEqual((await as('subscriber', 'post', '/media')).status, 403); // subscriber lacks upload_files
     });
-    test('KNOWN BOUNDARY: GET /media/:id returns attachment metadata to anyone (media is public by id)', async () => {
-        // Unlike GET /posts/:id (which hides non-published posts from non-owners), GET /media/:id uses
-        // optionalAuth with no status/ownership check, so an attachment parented to a DRAFT post (mediaA is
-        // exactly that) is readable by anon — a metadata leak (guid/author/title). Pinned as current
-        // behavior and flagged for a separate product decision on whether draft-post attachments should be
-        // gated; if that policy changes, flip this assertion. (Tracked as a follow-up task.)
+    // GET /media/:id inherits its parent post's visibility, mirroring GET /posts/:id. An attachment
+    // parented to a non-published (draft/private) post must NOT leak its metadata (guid/file path,
+    // author, title) to anon or to a non-owner lacking edit_others_posts.
+    test('draft-parented attachment does NOT leak to anon / non-owner; parent owner + editor CAN read', async () => {
+        // mediaDraft is attached to postA — authorA's DRAFT. Its visibility is inherited from that draft.
+        assert.strictEqual((await anon('get', `/media/${mediaDraft}`)).status, 404,
+            'anon must not read a draft-parented attachment (no metadata leak)');
+        assert.strictEqual((await as('authorB', 'get', `/media/${mediaDraft}`)).status, 404,
+            'a non-owner author (no edit_others_posts) must not read it either');
+        // POSITIVE CONTROLS — the 404s above are AUTHZ, not a broken route or a missing row:
+        const owner = await as('authorA', 'get', `/media/${mediaDraft}`);
+        assert.strictEqual(owner.status, 200, 'the parent-post owner CAN read their own draft attachment');
+        assert.strictEqual(owner.body.id, mediaDraft, 'and it is genuinely mediaDraft (so the 404s are authz, not absence)');
+        assert.strictEqual((await as('editor', 'get', `/media/${mediaDraft}`)).status, 200,
+            'a holder of edit_others_posts CAN read it');
+    });
+    test('unattached attachment stays publicly readable by id (gate is scoped, not a blanket lockout)', async () => {
+        // mediaA has no parent (post_parent = 0): nothing to inherit, so it remains public — the media
+        // library is addressable by URL regardless. This proves the gate above is scoped to non-public parents.
         const r = await anon('get', `/media/${mediaA}`);
-        assert.strictEqual(r.status, 200, `documents the current public-read boundary, got ${r.status}`);
+        assert.strictEqual(r.status, 200, `unattached attachment must stay public, got ${r.status}`);
+        assert.strictEqual(r.body.id, mediaA);
     });
 });
 
