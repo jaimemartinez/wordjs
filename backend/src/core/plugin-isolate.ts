@@ -694,7 +694,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             // (preserves the fork-style IPC fd, probe-verified) instead of a plain fork, so the child
             // still gets the unprivileged-uid / dropped-caps / no-new-privs / namespace confinement. The
             // resident RSS poll below sums the bwrap subtree so the memory cap keeps biting.
-            child = spawn('bwrap', [...seccompArgs, ...bwrapProfile(APP_ROOT), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
+            child = spawn('bwrap', [...seccompArgs, ...bwrapProfile(sandboxWritable), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
