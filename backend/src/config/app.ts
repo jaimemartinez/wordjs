@@ -291,13 +291,19 @@ const config: AppConfig = {
         // user namespaces, read-only root fs, and a seccomp syscall denylist. Probe-gated: bwrap + rootless
         // userns + the IPC round-trip must all work on THIS host, else it falls back to the standard fork launch.
         useKernelHardening: fileConfig.sandbox?.useKernelHardening !== false,
-        // Linux: PREVENTIVE resident-memory cap via cgroup v2 (systemd-run --user --scope MemoryMax) so the
-        // kernel OOM-kills a runaway plugin instead of the reactive /proc poll. OPT-IN (default off): the fixed
-        // 768 MB budget is fine for a COMPILED prod worker but too tight for a ts-node dev/test worker (ts-node
-        // compiling the backend inside the child overshoots it → the kernel OOM-kills the plugin at startup, which
-        // is exactly what real-systemd CI caught). Default-ON is a follow-up gated on a ts-node-aware / larger
-        // budget. Probe-gated regardless → falls back to the /proc poll where systemd --user is unavailable.
-        useCgroupMemoryCap: fileConfig.sandbox?.useCgroupMemoryCap === true,
+        // Linux: PREVENTIVE per-plugin resource caps via cgroup v2 (systemd-run --user --scope). DEFAULT-ON,
+        // probe-validated → falls back to the /proc RSS poll where systemd --user is unavailable. Applies a
+        // kernel MemoryMax (so a runaway plugin is OOM-killed instead of racing the reactive poll) AND a
+        // CPUQuota (so a busy-loop plugin can't monopolize the cores — the DoS the poll can't stop). The
+        // MemoryMax is applied ONLY to a COMPILED prod worker: a ts-node dev/test/CI worker compiles the
+        // backend inside the child and transiently overshoots the 768 MB budget → the kernel would OOM-kill it
+        // at startup (real-systemd CI caught this), so under ts-node the scope carries the CPUQuota but NOT the
+        // memory cap (the poll stays the dev backstop). See core/plugin-isolate.ts cgroupScopeProps().
+        useCgroupMemoryCap: fileConfig.sandbox?.useCgroupMemoryCap !== false,
+        // CPU quota per isolated plugin as a % of ONE core, enforced by the cgroup scope above (0 = no CPU cap).
+        // 100 = one full core per plugin: generous for a Node web plugin, but stops a busy loop from starving
+        // co-tenant plugins + the host. Raise it for a legitimately CPU-heavy plugin.
+        cpuQuotaPercent: fileConfig.sandbox?.cpuQuotaPercent !== undefined ? Math.max(0, Number(fileConfig.sandbox.cpuQuotaPercent) || 0) : 100,
         // Windows: preventive per-plugin memory cap via a Job Object. Probe-gated → falls back to the poll.
         useJobObjectMemoryCap: fileConfig.sandbox?.useJobObjectMemoryCap !== false,
         // Virtual-address-space backstop (MB) via RLIMIT_AS on the non-cgroup Linux path (loose by design —

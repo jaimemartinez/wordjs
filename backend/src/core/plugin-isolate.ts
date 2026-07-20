@@ -245,6 +245,22 @@ function probeOsMemoryCap(): Promise<number | null> {
 // available (Windows, macOS, non-systemd / no user manager, e.g. CI) this stays OFF and we fall back to
 // the fork + RLIMIT_AS + cross-platform RSS poll path — zero regression.
 let cgroupSeq = 0;
+// A ts-node worker (dev/test/CI) compiles the backend it requires INSIDE the child and transiently
+// overshoots the compiled-prod resident budget — a fixed MemoryMax would OOM-kill it at startup (real
+// systemd CI caught exactly this). So under ts-node the cgroup scope carries only the CPUQuota and SKIPS
+// the memory cap (the /proc RSS poll stays the dev backstop); a COMPILED prod worker gets the real MemoryMax.
+const IS_TSNODE = process.execArgv.some((a: string) => /ts-node/.test(String(a))) || !!(require as any).extensions?.['.ts'];
+// systemd-run --scope resource properties ('-p KEY=VAL' …), SHARED by the probe (which must validate the
+// REAL props on this host) and the launch. Returns [] only when every cap is disabled → cgroup mode is then
+// pointless and the caller should fall back to the rlimit/poll path.
+function cgroupScopeProps(budgetBytes: number): string[] {
+    const props: string[] = [];
+    if (!IS_TSNODE) props.push('-p', `MemoryMax=${budgetBytes}`, '-p', 'MemorySwapMax=0');
+    let cpu = 100;
+    try { const s = require('../config/app').sandbox; if (s && s.cpuQuotaPercent !== undefined) cpu = Number(s.cpuQuotaPercent) || 0; } catch { /* default 100% */ }
+    if (cpu > 0) props.push('-p', `CPUQuota=${cpu}%`);
+    return props;
+}
 let cgroupProbe: Promise<boolean> | undefined;
 function probeCgroupCap(): Promise<boolean> {
     if (cgroupProbe) return cgroupProbe;
@@ -258,7 +274,8 @@ function probeCgroupCap(): Promise<boolean> {
         let enabled = false;
         try { const s = require('../config/app').sandbox; enabled = !!(s && s.useCgroupMemoryCap); } catch { /* default off */ }
         if (!enabled) return false;
-        const budget = 768 * 1024 * 1024;
+        const scopeProps = cgroupScopeProps(768 * 1024 * 1024);
+        if (scopeProps.length === 0) return false; // every cap disabled → cgroup mode is pointless, use the poll
         const unit = `wjp-probe-${process.pid}.scope`;
         // The probe child boots, confirms IPC works through --scope's fd inheritance (sends "ok" and
         // stays alive), then we tear it down via the SAME path real teardown uses and require an exit —
@@ -271,7 +288,7 @@ function probeCgroupCap(): Promise<boolean> {
             if ((overall as any).unref) (overall as any).unref();
             try {
                 proc = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', unit,
-                    '-p', `MemoryMax=${budget}`, '-p', 'MemorySwapMax=0', '--', process.execPath, '-e', src],
+                    ...scopeProps, '--', process.execPath, '-e', src],
                     { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 18000 });
             } catch { clearTimeout(overall); return res(false); }
             proc.on('message', (m: any) => {
@@ -284,8 +301,8 @@ function probeCgroupCap(): Promise<boolean> {
             proc.on('error', () => { clearTimeout(overall); finish(false); });
             proc.on('exit', () => { clearTimeout(overall); finish(gotOk); }); // exit AFTER ok ⇒ kill worked
         });
-        if (ok) console.log('[Sandbox] preventive cgroup memory cap ACTIVE (systemd-run --user --scope, MemoryMax=768 MB per child).');
-        else console.warn('[Sandbox] sandbox.useCgroupMemoryCap is set but the cgroup probe failed (no usable --user scope) — falling back to the RSS poll.');
+        if (ok) console.log(`[Sandbox] preventive cgroup resource caps ACTIVE (systemd-run --user --scope: ${scopeProps.join(' ')}${IS_TSNODE ? ' — MemoryMax skipped under ts-node' : ''} per child).`);
+        else console.warn('[Sandbox] cgroup caps enabled but the probe failed (no usable systemd --user scope) — falling back to the RSS poll + rlimit.');
         return ok;
     })();
     return cgroupProbe;
@@ -675,7 +692,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             // child.pid is systemd-run and the kernel is the cap, so the /proc poll is skipped below.
             cgroupUnit = `wjp-${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${process.pid}-${++cgroupSeq}.scope`;
             child = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', cgroupUnit,
-                '-p', `MemoryMax=${RSS_BUDGET_BYTES}`, '-p', 'MemorySwapMax=0', '--',
+                ...cgroupScopeProps(RSS_BUDGET_BYTES), '--',
                 ...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 { stdio: childStdio, serialization: 'advanced', env: workerEnv });
         } else if (capKb) {
