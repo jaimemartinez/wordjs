@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { usersApi } from "@/lib/api";
+import MfaSetup from "@/components/MfaSetup";
 
 // Self-service account page — reachable by EVERY logged-in user (cap 'read'), including subscribers
 // who have no access to the admin Users editor. Lets any user update their profile + personal/recovery
@@ -111,6 +112,10 @@ export default function AccountPage() {
                     <button type="submit" disabled={changingPw} className={btnCls}>{changingPw ? t('account.changing') : t('account.changePassword')}</button>
                 </div>
             </form>
+
+            <div className="mt-8">
+                <MfaSetup />
+            </div>
         </div>
     );
 }
