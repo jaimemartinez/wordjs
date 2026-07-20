@@ -82,13 +82,16 @@ async function listSourceTables(readAll, sourceDriverName) {
 
 // Build a target-dialect CREATE TABLE for a non-core table from the source's schema ({sql, columns} —
 // the real getTableSchema() shape). Prefer the raw SQLite CREATE (full fidelity: PK, AUTOINCREMENT,
-// UNIQUE) when the target driver TRANSLATES it (MySQL) or IS SQLite; for Postgres — whose exec does no
-// DDL translation — build from the normalized column list mapped to Postgres types. MySQL TEXT → LONGTEXT
-// so plugin content is never silently capped at VARCHAR(255).
-// Build a QUOTED column list for a SQLite table from PRAGMA table_info. Used so a Postgres target —
-// whose exec can't translate raw SQLite DDL — always has a column list to recreate from, even when the
-// source driver has no getTableSchema (sqlite-legacy). Names are quoted (reserved-word / hyphenated
-// columns are safe); types stay generic and buildTargetCreate maps them to the target dialect.
+// UNIQUE) whenever it's available, because EVERY async target driver now TRANSLATES it at its boundary
+// (MySQL: AUTOINCREMENT→AUTO_INCREMENT, TEXT→VARCHAR/LONGTEXT; Postgres: INTEGER PRIMARY KEY
+// AUTOINCREMENT→SERIAL PRIMARY KEY, DATETIME→TIMESTAMP, BLOB→BYTEA) and SQLite IS the source dialect.
+// Only a source with NO raw CREATE (a Postgres/MySQL source, whose getTableSchema returns sql:null)
+// falls back to the normalized column list mapped to the target's types. MySQL TEXT → LONGTEXT so
+// plugin content is never silently capped at VARCHAR(255).
+// Build a QUOTED column list for a SQLite table from PRAGMA table_info. Used as the fallback recreate
+// path when no raw CREATE is available (e.g. a sqlite-legacy source that has no getTableSchema). Names
+// are quoted (reserved-word / hyphenated columns are safe); types stay generic and buildTargetCreate
+// maps them to the target dialect.
 async function sqliteColumnsFromPragma(readAll, table) {
     let rows;
     try { rows = await readAll(`PRAGMA table_info(${quoteIdent(table)})`); } catch (_) { return []; }
@@ -101,19 +104,26 @@ function buildTargetCreate(table, schema, targetKind) {
     const qt = quoteIdent(table);
     const rawSql = schema && schema.sql;
     const cols = (schema && schema.columns) || [];
-    if (rawSql && (targetKind === 'mysql' || targetKind === 'sqlite')) {
+    if (rawSql) {
+        // Full-fidelity path (PK / AUTOINCREMENT / UNIQUE preserved). Every target dialect can take the
+        // raw SQLite CREATE now: SQLite IS the source dialect, and the MySQL and Postgres drivers each
+        // TRANSLATE it at their exec boundary (see drivers/mysql.ts, drivers/postgres.ts).
+        //
         // Rewrite only the `CREATE TABLE [IF NOT EXISTS] <name>` PREFIX, matching a quoted/bracketed name
         // (any chars) OR a bare identifier — so a hyphenated name like "order-items" isn't truncated by a
-        // \w+ name token (which would splice a broken CREATE). Everything after the name is preserved.
+        // \w+ name token (which would splice a broken CREATE). Everything after the name is preserved and
+        // handed to the driver, which does the dialect rewrite (INTEGER PRIMARY KEY AUTOINCREMENT →
+        // SERIAL PRIMARY KEY / AUTO_INCREMENT, DATETIME → TIMESTAMP, BLOB → BYTEA, TEXT → LONGTEXT, …).
         let sql = rawSql.replace(
             /^\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|[A-Za-z0-9_]+)/i,
             `CREATE TABLE IF NOT EXISTS ${qt}`
         );
         if (targetKind === 'mysql') {
-            // TEXT → LONGTEXT so plugin content isn't capped at VARCHAR(255) — but NOT when the column is
-            // an inline PRIMARY KEY / UNIQUE: MySQL rejects a TEXT/BLOB key without a prefix length, so a
-            // `id TEXT PRIMARY KEY` (e.g. schema_migrations) must stay TEXT → the driver maps it to a
-            // bounded VARCHAR(255) key. The negative lookahead leaves those key columns alone.
+            // MySQL is the one dialect where a bare-statement TEXT→LONGTEXT rewrite must happen HERE (not
+            // only in the driver): plugin content must not be capped at VARCHAR(255) — but NOT when the
+            // column is an inline PRIMARY KEY / UNIQUE: MySQL rejects a TEXT/BLOB key without a prefix
+            // length, so a `id TEXT PRIMARY KEY` (e.g. schema_migrations) must stay TEXT → the driver maps
+            // it to a bounded VARCHAR(255) key. The negative lookahead leaves those key columns alone.
             sql = sql.replace(/\bTEXT\b(?!\s+(?:PRIMARY|UNIQUE))/gi, 'LONGTEXT');
         }
         return sql;
@@ -121,11 +131,12 @@ function buildTargetCreate(table, schema, targetKind) {
     if (!cols.length) {
         throw new Error(`Cannot recreate table '${table}' on ${targetKind}: no schema (raw CREATE or columns) available from the source.`);
     }
-    // KNOWN LIMITATION: the column path (Postgres target, or a Postgres/MySQL source with no raw CREATE)
-    // reconstructs from getTableSchema().columns, which does NOT expose PRIMARY KEY / autoincrement — so
-    // the recreated plugin table is DATA-complete (every row copies, ids preserved) but may lack its
-    // PK/serial. This is not data loss; plugins re-establish their own schema on activation. SQLite→MySQL
-    // and SQLite→SQLite keep full fidelity via the raw CREATE above.
+    // FALLBACK column path — reached ONLY when the source exposes no raw CREATE (a Postgres/MySQL source,
+    // whose getTableSchema returns sql:null). getTableSchema().columns does NOT expose PRIMARY KEY /
+    // autoincrement, so a table recreated this way is DATA-complete (every row copies, ids preserved) but
+    // may lack its PK/serial. This is not data loss; plugins re-establish their own schema on activation.
+    // A SQLite source (the common case) always has the raw CREATE above, so it keeps full fidelity on
+    // EVERY target, Postgres included.
     const mapType = (def) => {
         if (targetKind === 'postgres') return def.replace(/\bDATETIME\b/g, 'TIMESTAMP').replace(/\bBLOB\b/g, 'BYTEA');
         if (targetKind === 'mysql') return def.replace(/\bTEXT\b/g, 'LONGTEXT');
