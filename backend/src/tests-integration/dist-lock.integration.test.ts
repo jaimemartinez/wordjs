@@ -17,12 +17,20 @@ require('../config/app');
 const withTimeout = (p: Promise<any>, ms: number) =>
     Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
 
+// In CI (WORDJS_CI_DB=1) the postgres service container is wired up, so an UNREACHABLE Postgres is a
+// HARD failure — never a silent green skip that lets the only dist-lock CAS coverage no-op away
+// (mirrors driver-conformance.test.ts). Locally, with no service, it stays a graceful skip.
+const skipOrFail = (t: any, reason: string) => {
+    if (process.env.WORDJS_CI_DB === '1') assert.fail(reason);
+    return (t as any).skip(reason);
+};
+
 test('dist-lock: lease CAS semantics against Postgres (skipped if no PG reachable)', async (t: any) => {
     const db = require('../config/database');
     try {
         await withTimeout(db.init({ driver: 'postgres' }), 4000);
     } catch (e: any) {
-        return (t as any).skip(`no reachable Postgres: ${e && e.message}`);
+        return skipOrFail(t, `no reachable Postgres: ${e && e.message}`);
     }
     if (!db.getDbType().isPostgres) return (t as any).skip('not running on the postgres driver');
 

@@ -12,6 +12,14 @@ require('../config/app');
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// In CI (WORDJS_CI_DB=1) the redis service container is wired up, so an UNREACHABLE Redis is a HARD
+// failure — never a silent green skip that lets the only multi-node coherence coverage no-op away
+// (mirrors driver-conformance.test.ts). Locally, with no service, it stays a graceful skip.
+const skipOrFail = (t: any, reason: string) => {
+    if (process.env.WORDJS_CI_DB === '1') assert.fail(reason);
+    return (t as any).skip(reason);
+};
+
 // Close the shared Redis connections ONCE after ALL tests. closeAll() quits the singleton
 // connections, so a per-test close would break a later test in the same process (the bug this
 // replaces). --test-force-exit is the backstop that exits even if a handle lingers.
@@ -23,7 +31,7 @@ test('coherence: Redis pub/sub round-trip (skipped if no Redis reachable)', asyn
     // Wait for the publisher connection to come up (config.redis.enabled must be set, e.g. REDIS_ENABLED=true).
     let up = false;
     for (let i = 0; i < 30; i++) { if (cache.pubsubAvailable()) { up = true; break; } await sleep(100); }
-    if (!up) { await cache.closeAll(); return (t as any).skip('no reachable Redis (pubsubAvailable=false)'); }
+    if (!up) { await cache.closeAll(); return skipOrFail(t, 'no reachable Redis (pubsubAvailable=false)'); }
 
     const CH = `test:coherence:${process.pid}`;
     let received: any = null;
@@ -45,7 +53,7 @@ test('coherence: wordjs:plugin-changed propagates across nodes via Redis (skippe
     const cache = require('../core/cache');
     let up = false;
     for (let i = 0; i < 30; i++) { if (cache.pubsubAvailable()) { up = true; break; } await sleep(100); }
-    if (!up) { await cache.closeAll(); return (t as any).skip('no reachable Redis (pubsubAvailable=false)'); }
+    if (!up) { await cache.closeAll(); return skipOrFail(t, 'no reachable Redis (pubsubAvailable=false)'); }
 
     // Simulate the receiving node: subscribe the REAL coherence handler with stubbed plugin load/unload
     // so a published activate/deactivate (from a DIFFERENT origin) drives the cross-node dispatch.
