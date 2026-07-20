@@ -21,11 +21,9 @@
         "helmet": "^8.0.0",
         "http-proxy": "^1.18.1",
         "morgan": "^1.10.0",
+        "node-forge": "^1.4.0",
         "uuid": "^10.0.0",
         "winston": "^3.17.0",
         "winston-daily-rotate-file": "^5.0.0"
-    },
-    "devDependencies": {
-        "node-forge": "^1.4.0"
     }
 }
