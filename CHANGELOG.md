@@ -4,6 +4,31 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.9.1] - 2026-07-20
+
+Patch release fixing the compiled bundle's **split** (`npm start`) and **separate / multi-node** modes,
+which were broken in v1.9.0: two runtime dependencies were misfiled as `devDependencies` and therefore
+skipped by `release:install` (`npm install --omit=dev`). The **monolith** (`npm run start:mono`) was
+unaffected — this only hit the gateway-based deployment modes, which is why the release smoke-boot (which
+boots the monolith) didn't catch it.
+
+### Fixed
+
+- **The gateway could not start in the compiled release (`node-forge` was a devDependency).** The gateway
+  loads `gateway/src/cluster-ca.js` (the cluster PKI + join-token engine) on every boot, and that requires
+  `node-forge` — but it was under the gateway's `devDependencies`, so `release:install` skipped it and the
+  gateway crashed at startup with `MODULE_NOT_FOUND`. This broke **both** the single-host split
+  (`npm start`) and separate mode (`npx create-wordjs gateway` / `node scripts/cluster.js init`). Moved
+  `node-forge` to the gateway's `dependencies`.
+- **`npm start` (the 3-service split launcher) failed with `concurrently: not found`.** `concurrently`,
+  which the root `start`/`dev` scripts invoke, was a devDependency and thus absent from the compiled
+  release. Moved it to `dependencies`.
+
+Validated end-to-end on a fresh unprivileged LXC (Node 22, real systemd): `cluster init` mints the CA,
+`node scripts/node-join.js` enrolls the backend + frontend via the token → CSR → signed-cert flow, both
+register with the gateway over mTLS, and `GET https://<gateway>:3000/` returns **200** serving the site
+(frontend SSR pulling from the backend, every hop mutually authenticated).
+
 ## [1.9.0] - 2026-07-20
 
 A **security-hardening** release centered on the plugin sandbox, plus authorization/data-leak fixes,
