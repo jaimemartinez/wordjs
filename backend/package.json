@@ -10,7 +10,7 @@
     "prebuild": "npm run clean",
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
-    "test": "node --test -r ts-node/register src/tests/*.test.ts",
+    "test": "node --test --test-force-exit -r ts-node/register src/tests/*.test.ts",
     "test:integration": "node --test --test-force-exit -r ts-node/register src/tests-integration/*.test.ts",
     "lint": "eslint \"src/**/*.ts\"",
     "format": "prettier --write \"src/**/*.ts\""
