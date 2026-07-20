@@ -747,3 +747,70 @@ export const importApi = {
         });
     },
 };
+
+// ── Scoped API tokens (personal access tokens for headless clients) ────────────────────────────────
+export interface ApiToken {
+    id: number;
+    name: string;
+    tokenPrefix: string;
+    scopes: string[];
+    lastUsedAt: number | null;
+    expiresAt: number | null;
+    revoked: boolean;
+    createdAt: string;
+}
+export interface ApiTokenCreated {
+    id: number;
+    token: string; // plaintext — shown once
+    tokenPrefix: string;
+    name: string;
+    scopes: string[];
+    expiresAt: number | null;
+}
+export const tokensApi = {
+    list: () => apiGet<{ tokens: ApiToken[] }>("/auth/tokens"),
+    create: (data: { name: string; scopes: string; expiresInDays?: number | null }) =>
+        apiPost<ApiTokenCreated>("/auth/tokens", data),
+    revoke: (id: number) => apiDelete<{ revoked: boolean; id: number }>(`/auth/tokens/${id}`),
+};
+
+// ── Outgoing webhooks ──────────────────────────────────────────────────────────────────────────────
+export interface Webhook {
+    id: number;
+    userId: number;
+    name: string;
+    url: string;
+    events: string[];
+    secretPrefix: string;
+    active: boolean;
+    failureCount: number;
+    lastDeliveryAt: number | null;
+    createdAt: string;
+}
+export interface WebhookDelivery {
+    id: number;
+    webhookId: number;
+    event: string;
+    status: string;
+    attempts: number;
+    responseStatus: number | null;
+    error: string | null;
+    nextAttemptAt: number | null;
+    deliveredAt: number | null;
+    createdAt: string;
+    payload?: string;
+}
+export const webhooksApi = {
+    list: () => apiGet<{ webhooks: Webhook[] }>("/webhooks"),
+    events: () => apiGet<{ events: string[] }>("/webhooks/events"),
+    create: (data: { name?: string; url: string; events?: string[]; active?: boolean }) =>
+        apiPost<Webhook & { secret: string; message: string }>("/webhooks", data),
+    update: (id: number, data: { name?: string; url?: string; events?: string[]; active?: boolean }) =>
+        api<Webhook>(`/webhooks/${id}`, { method: "PATCH", body: data }),
+    rotateSecret: (id: number) =>
+        apiPost<{ id: number; secret: string; secretPrefix: string; message: string }>(`/webhooks/${id}/rotate-secret`, {}),
+    remove: (id: number) => apiDelete<{ deleted: boolean; id: number }>(`/webhooks/${id}`),
+    deliveries: (id: number) => apiGet<{ deliveries: WebhookDelivery[] }>(`/webhooks/${id}/deliveries`),
+    redeliver: (deliveryId: number) =>
+        apiPost<{ requeued: boolean; id: number }>(`/webhooks/deliveries/${deliveryId}/redeliver`, {}),
+};

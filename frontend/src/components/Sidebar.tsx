@@ -39,8 +39,11 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/security", label: "Security", icon: "fa-lock", cap: "manage_options" },
     { href: "/admin/hooks", label: "Hooks Registry", icon: "fa-microscope", cap: "manage_options" },
     { href: "/admin/db-migration", label: "DB Migration", icon: "fa-database", cap: "manage_options" },
-    // Self-service account (change password + personal/recovery email). cap 'read' → every logged-in
-    // user, including subscribers who have no other admin access.
+    // Outgoing webhooks — admin only (they can exfiltrate content changes), mirrors the backend isAdmin gate.
+    { href: "/admin/webhooks", label: "Webhooks", icon: "fa-bolt", cap: "manage_options" },
+    // Self-service API tokens + account. cap 'read' → every logged-in user (tokens act with the user's own
+    // permissions), including non-admins who reach the panel.
+    { href: "/admin/tokens", label: "API Tokens", icon: "fa-key", cap: "read" },
     { href: "/admin/account", label: "nav.account", icon: "fa-user-gear", cap: "read" },
 ];
 
