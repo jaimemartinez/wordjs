@@ -9,6 +9,9 @@
  *       it to payload.js" trick, and direct .js writes into its own dir, are denied. Data files stay OK.
  *   #3  secure-require denies a plugin/theme module require()-ing code out of a writable data dir
  *       (uploads/data/os-tmp/logs) — so a planted payload there can't be loaded even if it existed.
+ *   #4  io-guard now also patches open/openSync/opendir/readlink (previously UNPATCHED): a plugin doing
+ *       fs.openSync(p,'r') + fs.readSync(fd) read ANY file's CONTENT, bypassing the readFile guard. open is
+ *       FLAG-AWARE — open-for-write is confined as a write (read-only-zone / exec-ext blocks apply).
  *
  * Each fix is asserted BOTH ways: the attack is blocked AND a legitimate equivalent still works.
  */
@@ -134,4 +137,55 @@ test('#3 a plugin module CANNOT require code out of a writable data dir (os-tmp)
 test('#3 a plugin module CAN still require its OWN sibling module (no regression)', () => {
     const loader = require(path.join(dir, 'loader.js'));
     assert.strictEqual(loader('./util'), 'own-module-ok');
+});
+
+// ---- Fix #4: open / opendir read-family confinement (open is flag-aware) ----
+
+test('#4 a plugin CANNOT open an out-of-zone file for reading (arbitrary-read bypass closed)', () => {
+    runWithContext(SLUG, () => {
+        const e = expectEACCES(() => fs.openSync(OUTSIDE, 'r'));
+        assert.strictEqual(e.code, 'EACCES');
+    });
+});
+
+test('#4 a plugin CAN still open its OWN data file for reading (no regression)', () => {
+    runWithContext(SLUG, () => {
+        const fd = fs.openSync(path.join(dir, 'data.txt'), 'r');
+        assert.ok(fd >= 0);
+        fs.closeSync(fd);
+    });
+});
+
+test('#4 open is FLAG-AWARE: open-for-WRITE into a read-only zone (src/) is denied as a write', () => {
+    // src/ is a READ safe-zone (so plugins can require core) but NOT a write zone. If open were treated as
+    // a read this would be waved through; the flag check confines it as the write it is.
+    const probe = path.join(ROOT_DIR, 'src', `wjs-open-probe-${process.pid}.txt`);
+    runWithContext(SLUG, () => {
+        const e = expectEACCES(() => fs.openSync(probe, 'w'));
+        assert.strictEqual(e.code, 'EACCES');
+    });
+    assert.ok(!fs.existsSync(probe), 'no probe file may be created in the read-only src/ zone');
+});
+
+test('#4 open-for-write of a .js in the plugin dir is still blocked (exec-ext, via the open path)', () => {
+    runWithContext(SLUG, () => {
+        const e = expectEACCES(() => fs.openSync(path.join(dir, 'viaopen.js'), 'w'));
+        assert.strictEqual(e.code, 'EACCES');
+    });
+    assert.ok(!fs.existsSync(path.join(dir, 'viaopen.js')));
+});
+
+test('#4 opendir on an out-of-zone directory is blocked', () => {
+    runWithContext(SLUG, () => {
+        const e = expectEACCES(() => fs.opendirSync(os.tmpdir()));
+        assert.strictEqual(e.code, 'EACCES');
+    });
+});
+
+test('#4 a plugin CAN still opendir its OWN dir (no regression)', () => {
+    runWithContext(SLUG, () => {
+        const d = fs.opendirSync(dir);
+        assert.ok(d);
+        d.closeSync();
+    });
 });

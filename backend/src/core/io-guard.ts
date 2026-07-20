@@ -71,7 +71,16 @@ const ORIGINALS = {
     readdir: fs.readdir,
     readdirSync: fs.readdirSync,
     createReadStream: fs.createReadStream,
-    createWriteStream: fs.createWriteStream
+    createWriteStream: fs.createWriteStream,
+    // open/opendir/readlink take a PATH that readFile/readdir do NOT funnel through: a plugin doing
+    // fs.openSync(p, 'r') + fs.readSync(fd) reads arbitrary file CONTENT completely unguarded (the biggest
+    // read hole), opendir enumerates any dir, readlink discloses any symlink target. Confine them too.
+    open: fs.open,
+    openSync: fs.openSync,
+    opendir: fs.opendir,
+    opendirSync: fs.opendirSync,
+    readlink: fs.readlink,
+    readlinkSync: fs.readlinkSync
 };
 
 const ROOT_DIR = path.resolve(__dirname, '../../');
@@ -376,6 +385,21 @@ function wrapQuotaStream(slug: string, stream: any): any {
     return stream;
 }
 
+// fs.open(path, flags?, mode?, cb) decides READ vs WRITE by its flags (default 'r' = read). A plugin that
+// opens a file for WRITING outside its write-zones (e.g. into node_modules, a read-only zone) must be
+// write-confined, not waved through as a read — else open is a write-confinement bypass. Handles the
+// string forms (w/a/r+/w+/a+/wx/ax…, all of which contain w, a, or +; plain 'r'/'rs' do not) and the
+// numeric O_* bitmask; a missing/callback flags arg means the default 'r'.
+function openFlagsAreWrite(flags: any): boolean {
+    if (flags == null || typeof flags === 'function') return false;
+    if (typeof flags === 'number') {
+        const acc = flags & 0o3; // O_ACCMODE: 0=RDONLY, 1=WRONLY, 2=RDWR
+        const wbits = fs.constants.O_CREAT | fs.constants.O_APPEND | fs.constants.O_TRUNC;
+        return acc !== 0 || (flags & wbits) !== 0;
+    }
+    return /[wa+]/.test(String(flags));
+}
+
 // === PATCHES ===
 
 function patch(methodName: string, isSync = false) {
@@ -410,6 +434,10 @@ function patch(methodName: string, isSync = false) {
             // rename modifies BOTH ends; symlink writes the link path. Check both with write semantics
             // (secret/DB source is still denied regardless, and rename-into-x.js is caught on the dest).
             pathsToCheck = [[args[0], true], [args[1], true]];
+        } else if (methodName === 'open' || methodName === 'openSync') {
+            // open's read/write intent lives in its flags (args[1]); confine with the correct semantics so
+            // open-for-write outside the write-zones is denied as a write, not passed through as a read.
+            pathsToCheck = [[args[0], openFlagsAreWrite(args[1])]];
         }
 
         for (const [p, w] of pathsToCheck) {
@@ -514,6 +542,13 @@ patch('link'); patch('linkSync', true);
 patch('readFile'); patch('readFileSync', true);
 patch('readdir'); patch('readdirSync', true);
 patch('createReadStream');
+// Path-taking read ops the readFile/readdir patches don't funnel through. open is flag-aware (write flags →
+// write-confined). None are used by io-guard internally, so no original-capture is needed. NOTE: stat/lstat/
+// access/realpath are intentionally left UNPATCHED for now — they are used during require() resolution and by
+// io-guard's own metering, so guarding them risks breaking plugin loading; deferred to a separate change.
+patch('open'); patch('openSync', true);
+patch('opendir'); patch('opendirSync', true);
+patch('readlink'); patch('readlinkSync', true);
 
 module.exports = {
     isPathSafe,
