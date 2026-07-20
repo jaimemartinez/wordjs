@@ -9,6 +9,7 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/app');
 const User = require('../models/User');
 const ApiToken = require('../models/ApiToken');
+const mfa = require('../core/mfa');
 
 // Normalize the API prefix once (e.g. '/api/v1', no trailing slash) for resource extraction below.
 const API_PREFIX = String(config.api?.prefix || '/api/v1').replace(/\/+$/, '');
@@ -30,6 +31,95 @@ function apiResourceOf(req: any): string {
     const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path;
     const m = /^\/([a-z][a-z0-9-]*)(?:\/|$)/.exec(rest);
     return m ? m[1] : '';
+}
+
+// The request sub-path after the API prefix (lowercased, trailing slash trimmed) — e.g. '/auth/mfa/enable'.
+function pathAfterApiPrefix(req: any): string {
+    const path = String(req.originalUrl || req.url || '').split('?')[0].toLowerCase();
+    const prefix = API_PREFIX.toLowerCase();
+    const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path;
+    return rest.replace(/\/+$/, '') || '/';
+}
+
+// Routes an MFA-enforced (past-grace, un-enrolled) user may STILL reach — the enrollment escape hatch plus
+// session maintenance. Deliberately EXCLUDES /auth/mfa/policy (admin config: an enforced admin must enroll
+// before reconfiguring, else compromising a 2FA-less admin password lets the attacker just disable the
+// policy) and /auth/tokens (minting a headless token would sidestep the whole gate).
+const MFA_ENFORCE_EXEMPT = new Set([
+    '/auth/me', '/auth/logout', '/auth/refresh',
+    '/auth/mfa/setup', '/auth/mfa/enable', '/auth/mfa/status', '/auth/mfa/backup-codes', '/auth/mfa/disable',
+]);
+function isMfaEnforceExempt(req: any): boolean {
+    return MFA_ENFORCE_EXEMPT.has(pathAfterApiPrefix(req));
+}
+
+/**
+ * Global gate for the admin-enforced MFA-by-role policy. Mounted at the API prefix, it runs BEFORE the
+ * per-route auth and returns 403 `mfa_enrollment_required` for a COOKIE session whose user is past their
+ * grace window without 2FA — except on the enrollment/session allowlist. It never authenticates a request
+ * (the route's own `authenticate` still does the real auth below); it only adds a pre-filter.
+ *
+ * Cheap when the feature is off (empty requiredRoles → one cached getOption). Bearer/API-token clients are
+ * exempt (headless, can't enroll; a NEW token can't be minted because POST /auth/tokens is not exempt).
+ * Fails OPEN on an internal error — enforcement is a policy layer on top of auth, and breaking it must not
+ * take the whole site down; the underlying session auth is unaffected.
+ */
+async function mfaComplianceGate(req: any, res: Response, next: NextFunction) {
+    // Reading the policy is site-wide; if it can't be read we can't enforce anything, so fail OPEN here
+    // (blocking everyone on a transient option-store blip would be worse than skipping enforcement once).
+    let policy: any;
+    try { policy = await mfa.getPolicy(); }
+    catch (e: any) { console.warn('[mfa] gate: policy read failed, skipping:', e && e.message); return next(); }
+    if (!policy.requiredRoles.length) return next();
+
+    // Resolve the interactive session token from EITHER transport, mirroring authenticate()'s priority
+    // (Authorization header first, then cookie). A genuine `wjt_` API token is headless and exempt; but a
+    // raw SESSION JWT presented as `Authorization: Bearer <jwt>` authenticates a full session and MUST be
+    // enforced — exempting all Bearer requests let an un-enrolled admin replay their own session JWT as a
+    // header to skip the gate entirely (and then mint a wjt_ token). Only the wjt_ prefix is exempt.
+    const authHeader = req.headers.authorization;
+    let token: string | null = null;
+    if (authHeader && authHeader.startsWith('Bearer ') && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined') {
+        const bearer = authHeader.slice(7);
+        if (bearer.startsWith(ApiToken.PREFIX)) return next(); // headless API token — exempt (see note below)
+        token = bearer; // a session JWT over the Bearer transport — subject to enforcement
+    }
+    if (!token && req.cookies && req.cookies.wordjs_token) token = req.cookies.wordjs_token;
+    if (!token) return next(); // no session — nothing to enforce (the route's own auth still applies)
+
+    if (isMfaEnforceExempt(req)) return next();
+
+    let decoded: any;
+    try { decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] }); }
+    catch { return next(); } // invalid/expired — the route's authenticate will 401 it
+    if (!decoded || decoded.purpose) return next(); // challenge/special-purpose tokens are not sessions
+
+    // A valid, non-exempt session is present — the only question left is compliance. If we can't determine
+    // it, fail CLOSED for this one request (the enrollment/logout allowlist above stays reachable, so the
+    // user is never bricked): silently skipping here would let an enforced user through on any hiccup.
+    try {
+        const user = await User.findById(decoded.userId);
+        if (!user) return next();
+        const status = await mfa.evaluate(user);
+        if (status.enforced) {
+            return res.status(403).json({
+                code: 'mfa_enrollment_required',
+                message: 'Two-factor authentication is required for your role. Enroll now to continue.',
+                data: { status: 403, graceDeadline: status.graceDeadline }
+            });
+        }
+        return next();
+    } catch (e: any) {
+        console.warn('[mfa] gate: compliance check failed, failing closed:', e && e.message);
+        return res.status(503).json({
+            code: 'mfa_check_failed',
+            message: 'Could not verify two-factor compliance. Please try again.',
+            data: { status: 503 }
+        });
+    }
+    // NOTE (documented residual, adversarial review #2): a `wjt_` API token minted BEFORE the policy took
+    // effect keeps working for a required-role user — token clients are categorically exempt (they cannot
+    // perform interactive 2FA). Revoke such tokens if a role's headless access must also be gated.
 }
 
 /**
@@ -400,5 +490,6 @@ module.exports = {
     optionalAuth,
     generateToken,
     verifyToken,
-    csrfProtection
+    csrfProtection,
+    mfaComplianceGate
 };

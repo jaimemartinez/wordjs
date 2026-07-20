@@ -1,6 +1,7 @@
 "use client";
 
 import { useI18n } from "@/contexts/I18nContext";
+import Link from "next/link";
 import SSLCertManager from "./SSLCertManager";
 import AutoRenewalPanel from "./AutoRenewalPanel";
 import { useEffect, useState } from "react";
@@ -93,6 +94,19 @@ export default function SecurityPage() {
                         </div>
                         <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
                             <GatewayConfigForm />
+                        </div>
+                    </div>
+
+                    {/* Two-Factor Enforcement Policy */}
+                    <div className="glass-panel rounded-[40px] shadow-2xl overflow-hidden border-t-4 border-emerald-500 transition-all hover:shadow-emerald-900/10">
+                        <div className="px-8 py-6 border-b border-gray-100/50 bg-white/40 backdrop-blur-md">
+                            <h2 className="text-xl font-bold text-gray-900 dark:text-white flex items-center gap-3">
+                                <i className="fa-solid fa-shield-halved text-emerald-500 text-xl"></i>
+                                Two-Factor Enforcement
+                            </h2>
+                        </div>
+                        <div className="p-8 md:p-10 bg-white/40 dark:bg-black/20">
+                            <MfaPolicyForm />
                         </div>
                     </div>
                 </div>
@@ -264,5 +278,122 @@ function GatewayConfigForm() {
                 </button>
             </div>
         </form>
+    );
+}
+
+import { mfaApi, rolesApi, type Role } from "@/lib/api";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/contexts/ToastContext";
+
+// Admin editor for the MFA-by-role enforcement policy: pick which roles must have 2FA + a grace period.
+function MfaPolicyForm() {
+    const { addToast } = useToast();
+    const { user } = useAuth();
+    const [roles, setRoles] = useState<Record<string, Role>>({});
+    const [required, setRequired] = useState<string[]>([]);
+    const [graceDays, setGraceDays] = useState(7);
+    const [loading, setLoading] = useState(true);
+    const [saving, setSaving] = useState(false);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const [rolesData, { policy }] = await Promise.all([rolesApi.list(), mfaApi.getPolicy()]);
+                setRoles(rolesData);
+                setRequired(policy.requiredRoles || []);
+                setGraceDays(typeof policy.graceDays === "number" ? policy.graceDays : 7);
+            } catch (e: any) {
+                addToast(e?.message || "Failed to load the MFA policy", "error");
+            } finally {
+                setLoading(false);
+            }
+        })();
+    }, [addToast]);
+
+    const toggle = (slug: string) =>
+        setRequired((prev) => (prev.includes(slug) ? prev.filter((r) => r !== slug) : [...prev, slug]));
+
+    const save = async () => {
+        setSaving(true);
+        try {
+            const { policy } = await mfaApi.savePolicy({ requiredRoles: required, graceDays: Number(graceDays) || 0 });
+            setRequired(policy.requiredRoles);
+            addToast(policy.requiredRoles.length ? "Two-factor enforcement updated" : "Two-factor enforcement disabled", "success");
+        } catch (e: any) {
+            addToast(e?.message || "Failed to save the MFA policy", "error");
+        } finally {
+            setSaving(false);
+        }
+    };
+
+    // Warn when the admin is about to require 2FA for their OWN role without having it enabled — after the
+    // grace period they'd be forced into the enrolment screen.
+    const selfAtRisk = user?.role != null && required.includes(user.role) && user.mfa?.enabled === false;
+
+    if (loading) return <p className="text-gray-500 font-medium">Loading policy…</p>;
+
+    return (
+        <div className="space-y-6">
+            <p className="text-sm text-gray-600 dark:text-gray-300 leading-relaxed">
+                Require members of the selected roles to enable two-factor authentication. They get a grace
+                window to enrol, after which they&apos;re blocked from the dashboard until 2FA is on. Leave all
+                roles unchecked to turn enforcement off.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {Object.entries(roles).map(([slug, role]) => {
+                    const on = required.includes(slug);
+                    return (
+                        <button
+                            type="button"
+                            key={slug}
+                            onClick={() => toggle(slug)}
+                            aria-pressed={on}
+                            className={`flex items-center justify-between gap-3 px-4 py-3 rounded-2xl border-2 text-left transition-all ${on
+                                ? "border-emerald-500 bg-emerald-50/60 dark:bg-emerald-500/10"
+                                : "border-gray-200 dark:border-gray-700 hover:border-gray-300 bg-white/40 dark:bg-black/10"}`}
+                        >
+                            <span>
+                                <span className="block font-bold text-gray-800 dark:text-gray-100">{role.name || slug}</span>
+                                <span className="block text-[11px] font-mono text-gray-400">{slug}</span>
+                            </span>
+                            <i className={`fa-solid ${on ? "fa-circle-check text-emerald-500" : "fa-circle text-gray-300"} text-lg`}></i>
+                        </button>
+                    );
+                })}
+            </div>
+
+            <div className="flex flex-wrap items-end gap-4">
+                <div>
+                    <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Grace period (days)</label>
+                    <input
+                        type="number"
+                        min={0}
+                        value={graceDays}
+                        onChange={(e) => setGraceDays(Math.max(0, Number(e.target.value)))}
+                        className="w-40 px-4 py-3 bg-white/60 dark:bg-black/20 border-2 border-gray-200 dark:border-gray-700 rounded-2xl focus:ring-4 focus:ring-emerald-100 focus:border-emerald-500 outline-none font-bold"
+                    />
+                    <p className="text-[11px] text-gray-400 mt-1.5">0 = enforce immediately.</p>
+                </div>
+                <button
+                    onClick={save}
+                    disabled={saving}
+                    className="px-6 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-2xl font-black text-xs uppercase tracking-widest shadow-lg shadow-emerald-500/25 transition-all disabled:opacity-50"
+                >
+                    {saving ? "Saving…" : "Save policy"}
+                </button>
+            </div>
+
+            {selfAtRisk && (
+                <div className="flex items-start gap-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/30 rounded-2xl px-4 py-3 text-sm text-amber-800 dark:text-amber-300">
+                    <i className="fa-solid fa-triangle-exclamation mt-0.5"></i>
+                    <span>
+                        Your role (<strong>{roles[user!.role]?.name || user!.role}</strong>) is selected and you don&apos;t have 2FA enabled.
+                        Once the grace period ends you&apos;ll be required to enrol before using the dashboard.{" "}
+                        <Link href="/admin/account" className="font-bold underline underline-offset-2">Enable it now</Link>.
+                    </span>
+                </div>
+            )}
+        </div>
     );
 }

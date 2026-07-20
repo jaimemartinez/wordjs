@@ -14,6 +14,8 @@ const jwt = require('jsonwebtoken');
 const config = require('../config/app');
 const User = require('../models/User');
 const totp = require('./totp');
+const { getOption, updateOption } = require('./options');
+const { getRoles } = require('./roles');
 
 const META = { enabled: 'mfa_enabled', secret: 'mfa_totp_secret', pending: 'mfa_pending_secret', backup: 'mfa_recovery_codes', lastStep: 'mfa_totp_last_step' };
 const N_BACKUP = 10;
@@ -128,8 +130,104 @@ async function backupCount(userId: number): Promise<number> {
     try { return JSON.parse(raw).length; } catch { return 0; }
 }
 
+// ─── Admin-enforced MFA-by-role policy ─────────────────────────────────────────────────────────────
+// An admin can require specific roles to have 2FA. A subject user gets a grace window to enroll, then is
+// hard-blocked (by mfaComplianceGate) from everything except the enrollment flow. The policy is a single
+// JSON option so it invalidates cross-node for free (never module-cache it — see options.ts pub/sub).
+const POLICY_OPTION = 'mfa_policy';
+const DEFAULT_POLICY = { requiredRoles: [] as string[], graceDays: 0, enforcedAt: null as number | null };
+// Cap the grace window (~10 years) so a fat-fingered huge value can't silently turn enforcement into a
+// permanent no-op (adversarial review #5).
+const MAX_GRACE_DAYS = 3650;
+function clampGraceDays(v: any): number {
+    const n = Number(v);
+    return Number.isFinite(n) && n >= 0 ? Math.min(MAX_GRACE_DAYS, Math.floor(n)) : 0;
+}
+
+/** Read the enforcement policy, always fully-shaped + validated (getOption may return a partial/legacy row). */
+async function getPolicy(): Promise<{ requiredRoles: string[]; graceDays: number; enforcedAt: number | null }> {
+    const p = await getOption(POLICY_OPTION, DEFAULT_POLICY);
+    const requiredRoles = Array.isArray(p && p.requiredRoles)
+        ? [...new Set(p.requiredRoles.map((r: any) => String(r)))] as string[]
+        : [];
+    const graceDays = clampGraceDays(p && p.graceDays);
+    const enforcedAtNum = Number(p && p.enforcedAt);
+    const enforcedAt = p && p.enforcedAt != null && Number.isFinite(enforcedAtNum) ? enforcedAtNum : null;
+    return { requiredRoles, graceDays, enforcedAt };
+}
+
+/**
+ * Persist the policy (validating role slugs against the live role map, graceDays as a non-negative int).
+ * `enforcedAt` (epoch seconds) marks when enforcement STARTED and is managed here, not by the caller: it is
+ * stamped when the policy first requires ≥1 role and cleared when it requires none — so it can't be back-
+ * dated to retroactively expire everyone's grace, and toggling the feature off then on restarts the clock.
+ */
+async function setPolicy(input: any): Promise<{ requiredRoles: string[]; graceDays: number; enforcedAt: number | null }> {
+    const validRoles = getRoles() || {};
+    const requiredRoles = (Array.isArray(input && input.requiredRoles)
+        ? ([...new Set(input.requiredRoles.map((r: any) => String(r)))] as string[])
+        : []).filter((r: string) => Object.prototype.hasOwnProperty.call(validRoles, r));
+    const graceDays = clampGraceDays(input && input.graceDays);
+
+    const prev = await getPolicy();
+    let enforcedAt = prev.enforcedAt;
+    if (requiredRoles.length === 0) enforcedAt = null;                          // feature off → clear the clock
+    else if (!enforcedAt) enforcedAt = Math.floor(Date.now() / 1000);          // just turned on → stamp now
+
+    const policy = { requiredRoles, graceDays, enforcedAt };
+    await updateOption(POLICY_OPTION, policy);
+    return policy;
+}
+
+/** Parse a `user_registered` datetime string to epoch seconds (0 if absent/unparseable). */
+function registeredEpoch(user: any): number {
+    const raw = user && user.userRegistered;
+    if (!raw) return 0;
+    let s = String(raw);
+    // SQLite CURRENT_TIMESTAMP is 'YYYY-MM-DD HH:MM:SS' in UTC with NO zone marker; bare, Date.parse would
+    // read it as LOCAL time and land the epoch off by the machine's UTC offset. Pin a bare timestamp to UTC.
+    if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(s)) s = s.replace(' ', 'T') + 'Z';
+    const ms = Date.parse(s);
+    return Number.isFinite(ms) ? Math.floor(ms / 1000) : 0;
+}
+
+/**
+ * Compliance status for a user against the current policy. READ-ONLY + stateless (no meta writes on this
+ * hot path). A subject-but-unenrolled user is `withinGrace` until the deadline, then `enforced` (hard
+ * block). The grace anchor is max(enforcedAt, the user's registration) so existing users get grace from
+ * when the policy switched on and brand-new users get it from signup.
+ *
+ * Shape is the exact object surfaced to the client on login / /auth/me: { required, enabled, enforced,
+ * withinGrace, graceDeadline(epoch seconds|null) }.
+ */
+async function evaluate(user: any): Promise<{ required: boolean; enabled: boolean; enforced: boolean; withinGrace: boolean; graceDeadline: number | null }> {
+    const userId = user && (typeof user === 'object' ? user.id : user);
+    if (userId == null) return { required: false, enabled: false, enforced: false, withinGrace: false, graceDeadline: null };
+    const policy = await getPolicy();
+    const enabled = await isEnabled(userId);
+
+    // Read the role authoritatively from user_meta rather than trusting instance hydration (a freshly
+    // authenticated user in the login handler may not have loadMeta()'d its role yet).
+    const role = (await User.getMeta(userId, 'role')) || 'subscriber';
+
+    const required = policy.requiredRoles.includes(role);
+    if (!required || enabled) {
+        return { required, enabled, enforced: false, withinGrace: false, graceDeadline: null };
+    }
+    // Subject + not enrolled → within grace until the deadline, then enforced. The anchor is the later of
+    // the policy's enforcement start and the user's registration, but never in the future (clamp to now —
+    // both are inherently past-or-present, so a future value can only be a mis-parse and must not extend
+    // grace, which would let graceDays:0 fail to enforce).
+    const nowSec = Math.floor(Date.now() / 1000);
+    const anchor = Math.min(nowSec, Math.max(policy.enforcedAt || 0, registeredEpoch(user)));
+    const graceDeadline = anchor + policy.graceDays * 86400;
+    const withinGrace = nowSec < graceDeadline;
+    return { required: true, enabled: false, enforced: !withinGrace, withinGrace, graceDeadline };
+}
+
 module.exports = {
     META, N_BACKUP,
     signChallenge, verifyChallenge, isEnabled, verifyLoginCode,
-    beginEnroll, completeEnroll, regenerateBackupCodes, disable, backupCount, hashBackup
+    beginEnroll, completeEnroll, regenerateBackupCodes, disable, backupCount, hashBackup,
+    getPolicy, setPolicy, evaluate, POLICY_OPTION, DEFAULT_POLICY
 };
