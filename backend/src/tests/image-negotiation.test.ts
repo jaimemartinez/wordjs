@@ -57,7 +57,12 @@ test('never transcodes SVG — passes through untouched', async () => {
 
 test('caches the derivative on disk (second request is a cache hit)', async () => {
     await request(app).get('/uploads/pic.jpg').set('Accept', 'image/avif'); // warm the cache
-    assert.ok(fs.existsSync(path.join(dir, '.derivatives', 'pic.jpg.avif')), 'derivative should be cached under .derivatives');
+    // The derivative filename is a content hash (no user-controlled data on disk), so assert that SOME
+    // derivative now exists under .derivatives rather than a fixed name.
+    const derivDir = path.join(dir, '.derivatives');
+    const walk = (d: string): string[] => fs.readdirSync(d, { withFileTypes: true })
+        .flatMap((e: any) => (e.isDirectory() ? walk(path.join(d, e.name)) : [path.join(d, e.name)]));
+    assert.ok(fs.existsSync(derivDir) && walk(derivDir).length > 0, 'a derivative should be cached under .derivatives');
     // and it still serves correctly from cache
     const res = await request(app).get('/uploads/pic.jpg').set('Accept', 'image/avif');
     assert.strictEqual(res.headers['content-type'], 'image/avif');
