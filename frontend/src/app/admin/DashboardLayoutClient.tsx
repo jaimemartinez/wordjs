@@ -2,14 +2,16 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Sidebar from "@/components/Sidebar";
 import NotificationCenter from "@/components/NotificationCenter";
+import MfaSetup from "@/components/MfaSetup";
 import { UnsavedChangesProvider } from "@/contexts/UnsavedChangesContext";
 import { initPlugins } from "@/lib/plugins";
 
 function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
-    const { user, isLoading, logout, can } = useAuth();
+    const { user, isLoading, logout, can, refreshUser } = useAuth();
     const router = useRouter();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
@@ -71,6 +73,38 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
 
     if (!user) return null;
 
+    // Admin-enforced MFA: a required-role user past their grace window is hard-blocked from the whole admin
+    // until they enrol. We render ONLY the enrolment flow (the backend also 403s every non-exempt API call,
+    // so this isn't merely cosmetic). onEnabled → refreshUser() clears user.mfa.enforced and lifts the block.
+    if (user.mfa?.enforced && !user.mfa?.enabled) {
+        return (
+            <div className="min-h-screen bg-gradient-to-br from-slate-100 to-blue-50 flex items-center justify-center p-4">
+                <div className="w-full max-w-lg">
+                    <div className="text-center mb-6">
+                        <div className="inline-flex w-14 h-14 rounded-2xl bg-blue-600 text-white items-center justify-center mb-4 shadow-lg shadow-blue-500/30">
+                            <i className="fa-solid fa-shield-halved text-2xl"></i>
+                        </div>
+                        <h1 className="text-2xl font-black italic tracking-tight text-gray-900">Two-factor authentication required</h1>
+                        <p className="text-sm text-gray-500 mt-2 max-w-md mx-auto">
+                            Your role requires 2FA and the grace period has ended. Set it up now to regain access to the dashboard.
+                        </p>
+                    </div>
+                    <MfaSetup onEnabled={refreshUser} />
+                    <div className="text-center mt-6">
+                        <button onClick={logout} className="text-sm text-gray-400 hover:text-blue-600 font-medium">
+                            <i className="fa-solid fa-arrow-right-from-bracket mr-1"></i> Sign out
+                        </button>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    // Nudge: required-role user still inside the grace window — a slim persistent bar with the deadline.
+    const graceDaysLeft = user.mfa?.withinGrace && user.mfa.graceDeadline != null
+        ? Math.max(0, Math.ceil((user.mfa.graceDeadline * 1000 - Date.now()) / 86400000))
+        : null;
+
     return (
         <div className="flex h-screen bg-gray-100 overflow-hidden relative">
             <Sidebar
@@ -112,6 +146,19 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
                     </div>
                     <NotificationCenter variant="inline" />
                 </header>
+
+                {graceDaysLeft !== null && (
+                    <div className="flex-shrink-0 bg-amber-50 border-b border-amber-200 px-4 py-2.5 flex items-center justify-center gap-3 text-sm">
+                        <i className="fa-solid fa-shield-halved text-amber-500"></i>
+                        <span className="text-amber-800 font-medium">
+                            Two-factor authentication is required for your role
+                            {graceDaysLeft > 0 ? ` within ${graceDaysLeft} day${graceDaysLeft === 1 ? "" : "s"}` : " — enrol today"}.
+                        </span>
+                        <Link href="/admin/account" className="text-amber-900 font-bold underline underline-offset-2 hover:text-amber-950 whitespace-nowrap">
+                            Set it up
+                        </Link>
+                    </div>
+                )}
 
                 <main className="flex-1 relative bg-white flex flex-col h-full overflow-hidden">
                     {children}

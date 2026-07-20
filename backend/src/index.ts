@@ -408,6 +408,12 @@ app.use((req: Request, res: Response, next: NextFunction) => {
     next();
 });
 
+// Admin-enforced MFA-by-role gate: blocks a past-grace, un-enrolled cookie session (of a policy-required
+// role) from everything but the enrollment/session allowlist. Mounted AFTER csrf + the setup gate and
+// BEFORE the routers; a no-op (one cached option read) when no role requires MFA.
+const { mfaComplianceGate } = require('./middleware/auth');
+app.use(config.api.prefix, mfaComplianceGate);
+
 // API routes
 app.use(config.api.prefix, routes);
 
