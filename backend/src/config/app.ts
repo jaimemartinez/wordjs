@@ -298,6 +298,16 @@ const config: AppConfig = {
         // is exactly what real-systemd CI caught). Default-ON is a follow-up gated on a ts-node-aware / larger
         // budget. Probe-gated regardless → falls back to the /proc poll where systemd --user is unavailable.
         useCgroupMemoryCap: fileConfig.sandbox?.useCgroupMemoryCap === true,
+        // Linux: PREVENTIVE per-plugin CPU quota in the SAME cgroup scope as the memory cap (CPUQuota=N% of
+        // ONE core — 100 = a full core, 50 = half) so a runaway/malicious plugin can't peg every core
+        // (anti-DoS). OPT-IN (default 0 = off) AND only takes effect together with useCgroupMemoryCap: both
+        // share one systemd --user scope, and that scope's memory.max is what makes skipping the /proc RSS
+        // poll safe (under a scope, child.pid is systemd-run, so the poll can't read the node child). Needs a
+        // systemd host whose `cpu` controller is delegated to the user cgroup — TRUE on bare metal + Proxmox
+        // LXC (end-to-end validated on real systemd 252: IPC survives the scope, a 25% quota ⇒ ~4x slower, the
+        // mem cap OOM-kills at budget), NOT on ephemeral CI runners. The probe validates the EXACT scope
+        // (mem+cpu) before activating, so enabling it where cpu isn't delegated falls back to the normal launch.
+        cpuQuotaPercent: Number(fileConfig.sandbox?.cpuQuotaPercent) > 0 ? Number(fileConfig.sandbox.cpuQuotaPercent) : 0,
         // Windows: preventive per-plugin memory cap via a Job Object. Probe-gated → falls back to the poll.
         useJobObjectMemoryCap: fileConfig.sandbox?.useJobObjectMemoryCap !== false,
         // Virtual-address-space backstop (MB) via RLIMIT_AS on the non-cgroup Linux path (loose by design —
