@@ -309,8 +309,16 @@ test('listSourceTables enumerates dynamically and NO LONGER silently drops odd-b
 });
 
 // ── Integration: real cross-engine round-trip (only where a real engine is reachable) ────────────
-const withTimeout = (p: Promise<any>, ms: number) =>
-    Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
+// clearTimeout is load-bearing: a race decided by `p` leaves the ref'd timer armed, keeping this
+// test-file subprocess alive for `ms` after the suite finishes → `--test-force-exit` hard-kills it
+// mid-IPC → the intermittent "Unable to deserialize cloned data" flake. Drain it so we exit cleanly.
+const withTimeout = (p: Promise<any>, ms: number) => {
+    let timer: any;
+    return Promise.race([
+        p,
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms); }),
+    ]).finally(() => clearTimeout(timer));
+};
 
 async function seedSqliteSource(dbFile: string) {
     let Database: any;

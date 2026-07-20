@@ -292,10 +292,16 @@ const GRANTED_INIT = `
 let ungrantedDir = '';
 let grantedDir = '';
 
-const loadWithTimeout = (slug: string, entry: string, ms = 45000) => Promise.race([
-    loadIsolatedPlugin(slug, entry),
-    new Promise((_, rej) => setTimeout(() => rej(new Error(`isolated plugin load timed out: ${slug}`)), ms)),
-]);
+// clearTimeout is load-bearing: on the common path the load resolves well before `ms`, leaving the
+// ref'd 45s timer armed and keeping this subprocess alive → `--test-force-exit` hard-kills it mid-IPC →
+// the intermittent "Unable to deserialize cloned data" flake. Drain it so the subprocess exits cleanly.
+const loadWithTimeout = (slug: string, entry: string, ms = 45000) => {
+    let timer: any;
+    return Promise.race([
+        loadIsolatedPlugin(slug, entry),
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`isolated plugin load timed out: ${slug}`)), ms); }),
+    ]).finally(() => clearTimeout(timer));
+};
 
 before(async () => {
     setApp(app);
