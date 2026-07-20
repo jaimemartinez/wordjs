@@ -526,18 +526,25 @@ function getSeccompBpfPath(): string | null {
     seccompBpfPath = result;
     return result;
 }
+// Cached snapshot of the kernel-hardening outcome for THIS process, so operators + health checks can see
+// whether isolated plugins actually get the OS backstop (vs the silent JS-guards-only fallback):
+//   'unsupported' = non-Linux (kernel features N/A) · 'disabled' = useKernelHardening=false ·
+//   'active' = bwrap+seccomp probe passed · 'degraded' = enabled but the probe FAILED (running WITHOUT the
+//   kernel backstop). 'degraded' is the dangerous "looks secure but isn't" state requireHardening guards.
+let sandboxHardeningState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
+function getSandboxHardeningState() { return sandboxHardeningState; }
 let hardenProbe: Promise<boolean> | undefined;
 function probeKernelHardening(): Promise<boolean> {
     if (hardenProbe) return hardenProbe;
     hardenProbe = (async () => {
-        if (process.platform !== 'linux') return false; // seccomp/userns/uid-drop are Linux-kernel features
+        if (process.platform !== 'linux') { sandboxHardeningState = 'unsupported'; return false; } // seccomp/userns/uid-drop are Linux-kernel features
         // DEFAULT-ON (opt-out via config.sandbox.useKernelHardening=false). Auto-enabling is SAFE precisely
         // because the probe below actually validates bwrap + unprivileged-userns + the fork-IPC round-trip on
         // THIS host before activating, and falls back cleanly to the standard fork launch on ANY failure — so a
         // host where user namespaces are disabled degrades to plain process isolation instead of breaking.
         let enabled = false;
         try { const s = require('../config/app').sandbox; enabled = !!(s && s.useKernelHardening); } catch { /* config unavailable → treat as off */ }
-        if (!enabled) return false;
+        if (!enabled) { sandboxHardeningState = 'disabled'; return false; }
         // Self-validate on THIS host: a node child launched through the FULL profile must keep its
         // fork-style IPC channel (serialization 'advanced') — the exact launch this module performs. Only
         // activate if spawn + IPC round-trip + clean exit all work; otherwise fall back to the standard launch.
@@ -563,8 +570,13 @@ function probeKernelHardening(): Promise<boolean> {
             proc.on('exit', (code: number) => { clearTimeout(overall); finish(got && code === 0); });
         });
         try { if (dir) fsmod.rmSync(dir, { recursive: true, force: true }); } catch { /* */ }
+        sandboxHardeningState = ok ? 'active' : 'degraded';
         if (ok) console.log('[Sandbox] kernel hardening ACTIVE (bwrap: unprivileged uid + dropped caps + no-new-privs + PID/IPC/UTS namespaces + read-only fs' + (getSeccompBpfPath() ? ' + seccomp syscall denylist' : '') + ' per isolated child).');
-        else console.warn('[Sandbox] sandbox.useKernelHardening is set but the bwrap probe failed (bwrap missing or rootless userns unavailable) — falling back to the standard isolated launch.');
+        else {
+            let requireHardening = false;
+            try { requireHardening = !!require('../config/app').sandbox?.requireHardening; } catch { /* */ }
+            console.warn('[Sandbox] ⚠️  DEGRADED: sandbox.useKernelHardening is ON but the bwrap probe FAILED (bwrap missing or unprivileged user namespaces unavailable) — isolated plugins run WITHOUT the OS backstop, confined only by the in-process JS guards. Install bubblewrap + enable unprivileged userns to restore it' + (requireHardening ? ', or plugins will be REFUSED (sandbox.requireHardening is ON).' : ', or set sandbox.requireHardening=true to fail closed.'));
+        }
         return ok;
     })();
     return hardenProbe;
@@ -630,6 +642,15 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
     const cgroupOk = await probeCgroupCap();
     const capKb = cgroupOk ? null : await probeOsMemoryCap();
     const hardened = await probeKernelHardening(); // opt-in bwrap confinement (Linux); false ⇒ no-op
+    // FAIL-CLOSED: if the operator requires the OS backstop, REFUSE to launch when it isn't actually ACTIVE
+    // (non-Linux, disabled, or the probe failed) instead of silently degrading to JS-guards-only isolation.
+    if (!hardened) {
+        let requireHardening = false;
+        try { requireHardening = !!require('../config/app').sandbox?.requireHardening; } catch { /* */ }
+        if (requireHardening) {
+            throw new Error(`[Sandbox] refusing to launch isolated plugin '${slug}': sandbox.requireHardening is ON but kernel hardening is '${sandboxHardeningState}' (not ACTIVE). Install bubblewrap + enable unprivileged user namespaces on this host, or set sandbox.requireHardening=false to allow the degraded (JS-guards-only) launch.`);
+        }
+    }
     const jobCapOk = await probeJobObjectCap();     // preventive memory cap on Windows (Job Object); false elsewhere
     return new Promise((resolve, reject) => {
         // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
@@ -1373,4 +1394,4 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     return result;
 }
 
-module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), getIsolateStatus, getAllIsolateStatuses, assignProcessToJobObject, probeJobObjectCap };
+module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), getIsolateStatus, getAllIsolateStatuses, assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState };
