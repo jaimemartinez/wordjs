@@ -488,6 +488,99 @@ router.post('/reset-password', asyncHandler(async (req: any, res: Response) => {
     res.json({ ok: true, message: 'Your password has been reset. You can now log in with your new password.' });
 }));
 
+// ─── Scoped API tokens (personal access tokens for headless/machine clients) ───────────────────────
+// Self-service: a user manages their OWN tokens. Token management MUST be driven by an interactive
+// session (JWT/cookie), never by an API token itself — otherwise a single leaked write-scoped token
+// could mint fresh tokens (persistence) or revoke others. `sessionOnly` enforces that.
+const ApiToken = require('../models/ApiToken');
+const MAX_ACTIVE_TOKENS_PER_USER = 100;
+
+function sessionOnly(req: any, res: Response, next: any) {
+    if (req.apiToken) {
+        return res.status(403).json({
+            code: 'rest_token_management_forbidden',
+            message: 'API tokens cannot manage API tokens. Sign in interactively to create or revoke tokens.',
+            data: { status: 403 }
+        });
+    }
+    next();
+}
+
+/**
+ * GET /auth/tokens
+ * List the current user's API tokens (metadata only — the secret is never returned after creation).
+ */
+router.get('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    const tokens = await ApiToken.listForUser(req.user.id);
+    res.json({ tokens });
+}));
+
+/**
+ * POST /auth/tokens
+ * Mint a new API token for the current user. The plaintext token is returned ONCE and is unrecoverable.
+ * Body: { name?, scopes?: 'read'|'write'|['read','write']|'*', expiresInDays?: number }
+ */
+router.post('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    const { name, scopes, expiresInDays } = req.body || {};
+
+    // Soft cap on active (non-revoked, unexpired) tokens to bound abuse / accidental runaway creation.
+    const existing = await ApiToken.listForUser(req.user.id);
+    const activeCount = existing.filter((t: any) => !t.revoked && (t.expiresAt == null || t.expiresAt * 1000 > Date.now())).length;
+    if (activeCount >= MAX_ACTIVE_TOKENS_PER_USER) {
+        return res.status(400).json({
+            code: 'rest_token_limit',
+            message: `You have reached the maximum of ${MAX_ACTIVE_TOKENS_PER_USER} active API tokens. Revoke one first.`,
+            data: { status: 400 }
+        });
+    }
+
+    if (expiresInDays != null && (!Number.isFinite(Number(expiresInDays)) || Number(expiresInDays) <= 0)) {
+        return res.status(400).json({
+            code: 'rest_invalid_param',
+            message: 'expiresInDays must be a positive number of days.',
+            data: { status: 400 }
+        });
+    }
+
+    const created = await ApiToken.generate({
+        userId: req.user.id,
+        name,
+        scopes,
+        expiresInDays: expiresInDays != null ? Number(expiresInDays) : null
+    });
+
+    // `token` is the plaintext — surface it now; it can never be shown again.
+    res.status(201).json({
+        id: created.id,
+        token: created.token,
+        tokenPrefix: created.tokenPrefix,
+        name: created.name,
+        scopes: created.scopes,
+        expiresAt: created.expiresAt,
+        message: 'Save this token now — it will not be shown again.'
+    });
+}));
+
+/**
+ * DELETE /auth/tokens/:id
+ * Revoke one of the current user's tokens. Idempotent-ish: 404 if it isn't the caller's or is already gone.
+ */
+router.delete('/tokens/:id', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isInteger(id) || id <= 0) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid token id.', data: { status: 400 } });
+    }
+    const ok = await ApiToken.revoke(id, req.user.id);
+    if (!ok) {
+        return res.status(404).json({
+            code: 'rest_token_not_found',
+            message: 'Token not found or already revoked.',
+            data: { status: 404 }
+        });
+    }
+    res.json({ revoked: true, id });
+}));
+
 module.exports = router;
 // Exposed so other credential-checking endpoints (e.g. /setup/migrate) share the SAME per-account
 // lockout — otherwise they become an unthrottled password oracle that bypasses this one (audit MEDIUM).
