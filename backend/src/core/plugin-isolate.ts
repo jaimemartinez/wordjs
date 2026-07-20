@@ -423,13 +423,17 @@ function probeJobObjectCap(): Promise<boolean> {
 //   goal is already met by the read-only mount namespace; the Landlock LSM itself would need a native dep,
 //   contrary to this sandbox's no-native-deps design, for redundant protection — so it is intentionally not
 //   added.) Requires the `bubblewrap` (bwrap) binary. Validate with backend/scripts/verify-sandbox-hardening.js.
-function bwrapProfile(writableDir: string): string[] {
+function bwrapProfile(writableDirs: string | string[]): string[] {
+    // Root is read-only; only the explicitly-listed zones are writable. --bind-try skips a zone that
+    // doesn't exist on this install (a missing uploads/data/logs dir must not fail the whole launch).
+    const binds: string[] = [];
+    for (const d of (Array.isArray(writableDirs) ? writableDirs : [writableDirs])) { binds.push('--bind-try', d, d); }
     return [
         '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
         '--uid', '65534', '--gid', '65534',
         '--ro-bind', '/', '/',
         '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
-        '--bind', writableDir, writableDir,
+        ...binds,
         '--die-with-parent', '--new-session',
     ];
 }
@@ -638,17 +642,29 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         // Kernel hardening (DEFAULT-ON, opt-out via config.sandbox.useKernelHardening=false): when active
         // (Linux + probe passed), launch node THROUGH bwrap so the child runs unprivileged (nobody) with
         // dropped caps / no-new-privs / PID-IPC-UTS + user namespaces / read-only fs + a seccomp denylist.
-        // APP_ROOT (backend/) is the writable bind so plugin storage keeps working. Composes with the
-        // memory-cap wrapper below; the IPC fd survives (probe-verified). When off (or the probe fails),
+        // Only the plugin's own dir + the io-guard write-zones are bound writable (sandboxWritable below);
+        // the rest of backend/ is read-only. Composes with the memory-cap wrapper below; the IPC fd survives
+        // (probe-verified). When off (or the probe fails),
         // bwrapPre is empty and every launch path is byte-identical to the plain fork (zero regression).
         const APP_ROOT = path.resolve(__dirname, '..', '..');
+        // Under bwrap, bind WRITABLE only the zones io-guard already permits a plugin to write: its OWN dir
+        // (plugins/<slug>, or themes/<name> for a theme) + uploads/data/logs/os-tmp/themes. Everything else in
+        // APP_ROOT (src, node_modules, sibling plugins/<other>) stays READ-ONLY at the kernel level too — so a
+        // plugin that somehow escapes the JS io-guard STILL cannot persist a payload into core source, a shared
+        // dependency, or another plugin. Mirrors core/io-guard.ts SAFE_WRITE_DIRS + ownDir; --bind-try skips any
+        // zone missing on this install. (node_modules/src stay readable via the --ro-bind so require() works.)
+        const sandboxWritable = [
+            slug.startsWith('theme:') ? path.join(APP_ROOT, 'themes', slug.slice('theme:'.length)) : path.join(APP_ROOT, 'plugins', slug),
+            path.join(APP_ROOT, 'uploads'), path.join(APP_ROOT, 'data'), path.join(APP_ROOT, 'logs'),
+            path.join(APP_ROOT, 'os-tmp'), path.join(APP_ROOT, 'themes'),
+        ];
         // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
         // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
         // after the child is spawned (the child kept its own dup).
         let bpfFd = -1;
         if (hardened) { const p = getSeccompBpfPath(); if (p) { try { bpfFd = require('fs').openSync(p, 'r'); } catch { bpfFd = -1; } } }
         const seccompArgs = bpfFd >= 0 ? ['--seccomp', '4'] : [];
-        const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(APP_ROOT), '--'] : [];
+        const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(sandboxWritable), '--'] : [];
         const childStdio: any = bpfFd >= 0 ? [...IPC_STDIO, bpfFd] : IPC_STDIO;
         let child: any;
         let cgroupUnit: string | null = null;
