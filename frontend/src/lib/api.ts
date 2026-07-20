@@ -814,3 +814,16 @@ export const webhooksApi = {
     redeliver: (deliveryId: number) =>
         apiPost<{ requeued: boolean; id: number }>(`/webhooks/deliveries/${deliveryId}/redeliver`, {}),
 };
+
+// ── Multi-factor auth (TOTP) ─────────────────────────────────────────────────────────────────────
+export interface MfaStatus {
+    enabled: boolean;
+    backupCodesRemaining: number;
+}
+export const mfaApi = {
+    status: () => apiGet<MfaStatus>("/auth/mfa/status"),
+    setup: () => apiPost<{ secret: string; otpauthUri: string }>("/auth/mfa/setup", {}),
+    enable: (code: string) => apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code }),
+    disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
+    regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
+};

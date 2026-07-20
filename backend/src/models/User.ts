@@ -428,6 +428,19 @@ class User {
         return true;
     }
 
+    /**
+     * Atomic compare-and-set on a meta value: set `key` to `next` only if it currently equals `expected`.
+     * A single guarded UPDATE (the SQL WHERE re-checks under the row lock), so two concurrent callers can
+     * never both win. Returns true iff THIS call made the change. The row must already exist. Used to close
+     * TOCTOU races on single-use consumption (backup codes) and the monotonic TOTP last-step counter.
+     */
+    static async compareAndSetMeta(userId: number, key: string, expected: string, next: string): Promise<boolean> {
+        const result = await dbAsync.run(
+            'UPDATE user_meta SET meta_value = ? WHERE user_id = ? AND meta_key = ? AND meta_value = ?',
+            [String(next), userId, key, String(expected)]);
+        return !!(result && (result.changes > 0 || result.rowCount > 0));
+    }
+
     toJSON() {
         // Essential for frontend (camelCase)
         // AND legacy backend compatibility (snake_case)
