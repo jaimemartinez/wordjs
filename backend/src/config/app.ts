@@ -278,6 +278,31 @@ const config: AppConfig = {
         password: fileConfig.redis?.password || process.env.REDIS_PASSWORD || undefined,
         db: parseInt(fileConfig.redis?.db || process.env.REDIS_DB || '0', 10),
         prefix: fileConfig.redis?.prefix || 'wordjs:'
+    },
+    // Plugin sandbox hardening (see core/plugin-isolate.ts). Isolated plugins already run in a separate
+    // child_process; these fields control the KERNEL-level confinement layered on top. Defaults are
+    // HARDENED where the host supports it — every field is PROBE-VALIDATED at runtime and falls back to
+    // plain process isolation if the kernel feature is missing, so turning them on cannot break a host that
+    // lacks bwrap / unprivileged user-namespaces / cgroup-v2. Operators opt OUT per field via a "sandbox"
+    // block in wordjs-config.json. (Previously these had no config surface at all, so the whole OS-isolation
+    // layer was unreachable/dead-code on every stock install; default-ON activates it where it actually works.)
+    sandbox: {
+        // Linux: run each isolated plugin under bwrap — uid 65534, dropped caps, no-new-privs, PID/IPC/UTS +
+        // user namespaces, read-only root fs, and a seccomp syscall denylist. Probe-gated: bwrap + rootless
+        // userns + the IPC round-trip must all work on THIS host, else it falls back to the standard fork launch.
+        useKernelHardening: fileConfig.sandbox?.useKernelHardening !== false,
+        // Linux: PREVENTIVE resident-memory cap via cgroup v2 (systemd-run --user --scope MemoryMax) so the
+        // kernel OOM-kills a runaway plugin instead of the reactive /proc poll. OPT-IN (default off): the fixed
+        // 768 MB budget is fine for a COMPILED prod worker but too tight for a ts-node dev/test worker (ts-node
+        // compiling the backend inside the child overshoots it → the kernel OOM-kills the plugin at startup, which
+        // is exactly what real-systemd CI caught). Default-ON is a follow-up gated on a ts-node-aware / larger
+        // budget. Probe-gated regardless → falls back to the /proc poll where systemd --user is unavailable.
+        useCgroupMemoryCap: fileConfig.sandbox?.useCgroupMemoryCap === true,
+        // Windows: preventive per-plugin memory cap via a Job Object. Probe-gated → falls back to the poll.
+        useJobObjectMemoryCap: fileConfig.sandbox?.useJobObjectMemoryCap !== false,
+        // Virtual-address-space backstop (MB) via RLIMIT_AS on the non-cgroup Linux path (loose by design —
+        // V8's pointer-compression cage forces it high; the precise cap is the cgroup/Job-Object/poll).
+        addressSpaceCapMb: Number(fileConfig.sandbox?.addressSpaceCapMb) > 0 ? Number(fileConfig.sandbox.addressSpaceCapMb) : 16384,
     }
 };
 
