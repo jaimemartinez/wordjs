@@ -106,9 +106,16 @@ export default function PostEditorPage() {
                     setTitle(post.meta._puck_data.root.title);
                 }
             } else {
-                // Seed Puck data with existing info for legacy posts
+                // Seed Puck data with existing info for legacy posts. A legacy/imported post keeps its
+                // body as HTML in `content` with no _puck_data. Wrap that HTML in an HTMLEmbed block so it
+                // is VISIBLE and editable in the canvas instead of opening blank. The block renders the
+                // HTML sanitized (see puckConfig HTMLEmbed); the onChange serializer round-trips props.html
+                // back into `content`, so the body is preserved (and updated when edited).
+                const legacyHtml = post.content || "";
                 const seededData: any = {
-                    content: [],
+                    content: legacyHtml
+                        ? [{ type: "HTMLEmbed", props: { id: `HTMLEmbed-legacy-${postId}`, html: legacyHtml } }]
+                        : [],
                     root: {
                         title: post.title,
                         slug: post.slug,
@@ -121,9 +128,10 @@ export default function PostEditorPage() {
                     }
                 };
                 setPuckData(seededData);
-                // Legacy post: its real body is HTML in `content` (the Puck canvas is BLANK). Remember it
-                // so a save from the still-empty canvas preserves it instead of blanking the post.
-                legacyHtmlRef.current = post.content || null;
+                // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
+                // the post if the HTMLEmbed block is deleted before its HTML round-trips. Once the block
+                // round-trips through onChange (content.length > 0), legacyHtmlRef is cleared.
+                legacyHtmlRef.current = legacyHtml || null;
             }
             setLoaded(true); // content is now hydrated — saving is safe
         } catch (error) {
@@ -289,6 +297,11 @@ export default function PostEditorPage() {
                                 html += `<div class="prose">${props.content}</div>`;
                             } else if (item.type === 'Image') {
                                 html += `<img src="${props.src}" alt="${props.alt}" class="max-w-full my-4 rounded"/>`;
+                            } else if (item.type === 'HTMLEmbed') {
+                                // Legacy/custom HTML block: emit its raw HTML verbatim so a legacy post's
+                                // body round-trips into `content` unchanged (sanitized once on save,
+                                // server-side). Editing the block updates the body via the same path.
+                                html += props.html || '';
                             }
                         });
                         setContent(html);
