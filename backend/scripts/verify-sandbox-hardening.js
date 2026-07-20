@@ -51,9 +51,12 @@ if (ver.error) {
 console.log(`bwrap: ${(ver.stdout || '').trim()}`);
 
 // ---- seccomp cBPF denylist (must mirror plugin-isolate.ts buildSeccompBpf) -----------------------
+// Mirrors plugin-isolate.ts buildSeccompBpf (incl. the unified nr 425-433 modern-escape additions:
+// io_uring_setup/enter/register + the new mount API open_tree/move_mount/fsopen/fsconfig/fsmount/fspick).
+// clone3 (435) is intentionally NOT blocked — glibc pthread_create needs it (blocking SIGABRTs Node).
 const SECCOMP_ARCHES = {
-    x64: { audit: 0xC000003E, x32: true, nr: [101, 246, 320, 175, 313, 176, 174, 177, 178, 321, 298, 323, 310, 311, 312, 248, 249, 250, 165, 166, 155, 167, 168, 169, 308, 304, 303, 180, 156] },
-    arm64: { audit: 0xC00000B7, nr: [117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219, 40, 39, 41, 224, 225, 142, 268, 265, 264] },
+    x64: { audit: 0xC000003E, x32: true, nr: [101, 246, 320, 175, 313, 176, 174, 177, 178, 321, 298, 323, 310, 311, 312, 248, 249, 250, 165, 166, 155, 167, 168, 169, 308, 304, 303, 180, 156, 425, 426, 427, 428, 429, 430, 431, 432, 433] },
+    arm64: { audit: 0xC00000B7, nr: [117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219, 40, 39, 41, 224, 225, 142, 268, 265, 264, 425, 426, 427, 428, 429, 430, 431, 432, 433] },
 };
 function buildSeccompBpf(archKey) {
     const a = SECCOMP_ARCHES[archKey];
