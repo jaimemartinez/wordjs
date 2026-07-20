@@ -444,9 +444,18 @@ function bwrapProfile(writableDir: string): string[] {
 const SECCOMP_ARCHES: Record<string, { audit: number; x32?: boolean; nr: number[] }> = {
     // nr lists: ptrace, kexec_load, kexec_file_load, init_module, finit_module, delete_module, [create/get_kernel_syms/
     // query_module, _sysctl, nfsservctl on x64 only], bpf, perf_event_open, userfaultfd, process_vm_readv/writev, kcmp,
-    // add_key, request_key, keyctl, mount, umount2, pivot_root, swapon, swapoff, reboot, setns, open_by_handle_at, name_to_handle_at
-    x64: { audit: 0xC000003E, x32: true, nr: [101, 246, 320, 175, 313, 176, 174, 177, 178, 321, 298, 323, 310, 311, 312, 248, 249, 250, 165, 166, 155, 167, 168, 169, 308, 304, 303, 180, 156] },
-    arm64: { audit: 0xC00000B7, nr: [117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219, 40, 39, 41, 224, 225, 142, 268, 265, 264] },
+    // add_key, request_key, keyctl, mount, umount2, pivot_root, swapon, swapoff, reboot, setns, open_by_handle_at, name_to_handle_at,
+    // + the UNIFIED modern escape surface (nr 425-433, arch-INDEPENDENT, identical on x64/arm64): io_uring_setup/
+    // enter/register (out-of-band file+network I/O that bypasses the openat/socket/connect syscalls entirely — a
+    // classic sandbox-escape + kernel-attack-surface vector; libuv gracefully falls back to its thread pool when
+    // it EPERMs), and the new mount API open_tree/move_mount/fsopen/fsconfig/fsmount/fspick (alternate mount
+    // primitives that sidestep the already-blocked mount()). None are issued by a web plugin. NOTE: clone3 (435)
+    // is deliberately NOT blocked — glibc's pthread_create uses it, so an EPERM SIGABRTs Node's V8 worker threads
+    // at startup (verified in a Linux container: BASE+clone3 → exit 134); the namespace-creation risk of clone3 is
+    // bounded by no-new-privs + the setns/mount denials already here. probeKernelHardening boots node under this
+    // exact filter (incl. io_uring) to prove it doesn't break the runtime on the host before activating.
+    x64: { audit: 0xC000003E, x32: true, nr: [101, 246, 320, 175, 313, 176, 174, 177, 178, 321, 298, 323, 310, 311, 312, 248, 249, 250, 165, 166, 155, 167, 168, 169, 308, 304, 303, 180, 156, 425, 426, 427, 428, 429, 430, 431, 432, 433] },
+    arm64: { audit: 0xC00000B7, nr: [117, 104, 294, 105, 273, 106, 280, 241, 282, 270, 271, 272, 217, 218, 219, 40, 39, 41, 224, 225, 142, 268, 265, 264, 425, 426, 427, 428, 429, 430, 431, 432, 433] },
 };
 function buildSeccompBpf(archKey: string): Buffer | null {
     const a = SECCOMP_ARCHES[archKey];
@@ -490,11 +499,12 @@ function probeKernelHardening(): Promise<boolean> {
     if (hardenProbe) return hardenProbe;
     hardenProbe = (async () => {
         if (process.platform !== 'linux') return false; // seccomp/userns/uid-drop are Linux-kernel features
-        // OPT-IN: bwrap presence + rootless-userns support varies by host/kernel, and auto-enabling could
-        // break a host where unprivileged user namespaces are disabled. Require the operator to turn it on;
-        // the probe below STILL validates it works before activating, and any failure falls back cleanly.
+        // DEFAULT-ON (opt-out via config.sandbox.useKernelHardening=false). Auto-enabling is SAFE precisely
+        // because the probe below actually validates bwrap + unprivileged-userns + the fork-IPC round-trip on
+        // THIS host before activating, and falls back cleanly to the standard fork launch on ANY failure — so a
+        // host where user namespaces are disabled degrades to plain process isolation instead of breaking.
         let enabled = false;
-        try { const s = require('../config/app').sandbox; enabled = !!(s && s.useKernelHardening); } catch { /* default off */ }
+        try { const s = require('../config/app').sandbox; enabled = !!(s && s.useKernelHardening); } catch { /* config unavailable → treat as off */ }
         if (!enabled) return false;
         // Self-validate on THIS host: a node child launched through the FULL profile must keep its
         // fork-style IPC channel (serialization 'advanced') — the exact launch this module performs. Only
@@ -622,13 +632,15 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         // (and a raw JSON channel) would lose them — match the worker_threads postMessage fidelity.
         // PIPE the child's stdout/stderr (was 'inherit') so a plugin console.log flood can't stream
         // straight to the operator's (possibly unbounded) log sink → disk-fill. attachLogLimiter forwards
-        // them slug-tagged through a per-plugin rate/volume cap. stdin stays inherited; fd3 = ipc.
-        const IPC_STDIO: any = ['inherit', 'pipe', 'pipe', 'ipc'];
-        // OPT-IN kernel hardening: when active (Linux + probe passed), launch node THROUGH bwrap so the
-        // child runs unprivileged (nobody) with dropped caps / no-new-privs / PID-IPC-UTS namespaces /
-        // read-only fs. APP_ROOT (backend/) is the single writable bind so plugin storage keeps working.
-        // Composes with the memory-cap wrapper below; the IPC fd survives (probe-verified). When off,
-        // bwrapPre is empty and every launch path is byte-identical to before (zero regression).
+        // them slug-tagged through a per-plugin rate/volume cap. stdin is IGNORED (=/dev/null): plugins
+        // never read the operator's stdin/tty, so don't hand it to them. fd3 = ipc.
+        const IPC_STDIO: any = ['ignore', 'pipe', 'pipe', 'ipc'];
+        // Kernel hardening (DEFAULT-ON, opt-out via config.sandbox.useKernelHardening=false): when active
+        // (Linux + probe passed), launch node THROUGH bwrap so the child runs unprivileged (nobody) with
+        // dropped caps / no-new-privs / PID-IPC-UTS + user namespaces / read-only fs + a seccomp denylist.
+        // APP_ROOT (backend/) is the writable bind so plugin storage keeps working. Composes with the
+        // memory-cap wrapper below; the IPC fd survives (probe-verified). When off (or the probe fails),
+        // bwrapPre is empty and every launch path is byte-identical to the plain fork (zero regression).
         const APP_ROOT = path.resolve(__dirname, '..', '..');
         // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
         // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
