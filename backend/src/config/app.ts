@@ -291,6 +291,12 @@ const config: AppConfig = {
         // user namespaces, read-only root fs, and a seccomp syscall denylist. Probe-gated: bwrap + rootless
         // userns + the IPC round-trip must all work on THIS host, else it falls back to the standard fork launch.
         useKernelHardening: fileConfig.sandbox?.useKernelHardening !== false,
+        // FAIL-CLOSED switch (opt-in, default off): when true, an isolated plugin REFUSES to launch unless
+        // kernel hardening is actually ACTIVE on this host — instead of silently degrading to the JS-guards-
+        // only fork where bwrap / unprivileged-userns is missing (the "looks secure but isn't" gap). Off by
+        // default so a stock host still runs plugins; turn it ON for hosts that must never run an untrusted
+        // plugin without the OS backstop. The true hardening state is surfaced on admin GET /health/details.
+        requireHardening: fileConfig.sandbox?.requireHardening === true,
         // Linux: PREVENTIVE resident-memory cap via cgroup v2 (systemd-run --user --scope MemoryMax) so the
         // kernel OOM-kills a runaway plugin instead of the reactive /proc poll. OPT-IN (default off): the fixed
         // 768 MB budget is fine for a COMPILED prod worker but too tight for a ts-node dev/test worker (ts-node
