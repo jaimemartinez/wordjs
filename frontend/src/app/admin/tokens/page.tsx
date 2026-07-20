@@ -13,6 +13,21 @@ const fmtDate = (v: number | null | string | undefined) => {
     return Number.isFinite(ms) ? new Date(ms).toLocaleDateString() : "—";
 };
 
+// Resources a token can be confined to (the URL segment after /api/v1). The backend accepts any resource
+// slug, but these are the common ones a headless client scopes against; picking per-resource read/write
+// yields a least-privilege token that can touch nothing else.
+type ResAction = "none" | "read" | "write";
+const RESOURCES: { slug: string; label: string; icon: string }[] = [
+    { slug: "posts", label: "Posts", icon: "fa-newspaper" },
+    { slug: "media", label: "Media", icon: "fa-image" },
+    { slug: "comments", label: "Comments", icon: "fa-comments" },
+    { slug: "categories", label: "Categories", icon: "fa-folder" },
+    { slug: "tags", label: "Tags", icon: "fa-tags" },
+    { slug: "menus", label: "Menus", icon: "fa-bars" },
+    { slug: "users", label: "Users", icon: "fa-users" },
+    { slug: "settings", label: "Settings", icon: "fa-gear" },
+];
+
 const isExpired = (t: ApiToken) => t.expiresAt != null && t.expiresAt * 1000 <= Date.now();
 
 export default function TokensPage() {
@@ -21,7 +36,8 @@ export default function TokensPage() {
     const [tokens, setTokens] = useState<ApiToken[]>([]);
     const [loading, setLoading] = useState(true);
     const [name, setName] = useState("");
-    const [scopes, setScopes] = useState("read");
+    const [scopeMode, setScopeMode] = useState<"read" | "write" | "custom">("read");
+    const [resourceScopes, setResourceScopes] = useState<Record<string, ResAction>>({});
     const [expiry, setExpiry] = useState("");
     const [creating, setCreating] = useState(false);
     const [revealed, setRevealed] = useState<string | null>(null);
@@ -38,8 +54,26 @@ export default function TokensPage() {
     };
     useEffect(() => { load(); }, []);
 
+    const setResScope = (slug: string, val: ResAction) =>
+        setResourceScopes((prev) => ({ ...prev, [slug]: val }));
+
     const handleCreate = async (e: React.FormEvent) => {
         e.preventDefault();
+        // Build the scope string: a global 'read'/'write', or a comma list of <resource>:<action> pairs.
+        let scopes: string;
+        if (scopeMode === "custom") {
+            const parts = RESOURCES
+                .map((r) => r.slug)
+                .filter((slug) => resourceScopes[slug] && resourceScopes[slug] !== "none")
+                .map((slug) => `${slug}:${resourceScopes[slug]}`);
+            if (parts.length === 0) {
+                addToast("Grant read or write on at least one resource, or choose a global scope.", "error");
+                return;
+            }
+            scopes = parts.join(",");
+        } else {
+            scopes = scopeMode;
+        }
         setCreating(true);
         try {
             const res = await tokensApi.create({
@@ -49,7 +83,8 @@ export default function TokensPage() {
             });
             setRevealed(res.token);
             setName("");
-            setScopes("read");
+            setScopeMode("read");
+            setResourceScopes({});
             setExpiry("");
             await load();
         } catch (e: any) {
@@ -90,13 +125,48 @@ export default function TokensPage() {
                         <div>
                             <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Scope</label>
                             <Select
-                                value={scopes}
-                                onChange={setScopes}
+                                value={scopeMode}
+                                onChange={(v) => setScopeMode(v as "read" | "write" | "custom")}
                                 options={[
-                                    { value: "read", label: "Read-only (GET)" },
-                                    { value: "write", label: "Read & write" },
+                                    { value: "read", label: "Read-only — all resources" },
+                                    { value: "write", label: "Read & write — all resources" },
+                                    { value: "custom", label: "Custom — per resource…" },
                                 ]}
                             />
+                            {scopeMode === "custom" && (
+                                <div className="mt-3 rounded-2xl border border-gray-100 bg-gray-50/40 p-3 space-y-1.5 max-h-64 overflow-auto">
+                                    <p className="text-[10px] text-gray-400 leading-relaxed mb-1.5">
+                                        Grant read or write per resource. The token can touch <span className="font-bold">nothing else</span> — least privilege for a headless client.
+                                    </p>
+                                    {RESOURCES.map((r) => {
+                                        const cur = resourceScopes[r.slug] || "none";
+                                        return (
+                                            <div key={r.slug} className="flex items-center justify-between gap-2">
+                                                <span className="text-xs font-bold text-gray-600 flex items-center gap-2">
+                                                    <i className={`fa-solid ${r.icon} text-gray-300 w-4 text-center`}></i>{r.label}
+                                                </span>
+                                                <div className="flex rounded-lg overflow-hidden border border-gray-200 text-[10px] font-black uppercase tracking-wider">
+                                                    {(["none", "read", "write"] as const).map((opt) => (
+                                                        <button
+                                                            type="button"
+                                                            key={opt}
+                                                            onClick={() => setResScope(r.slug, opt)}
+                                                            aria-pressed={cur === opt}
+                                                            className={`px-2.5 py-1 transition-colors ${cur === opt
+                                                                ? opt === "write" ? "bg-blue-600 text-white"
+                                                                    : opt === "read" ? "bg-blue-100 text-blue-700"
+                                                                        : "bg-gray-200 text-gray-500"
+                                                                : "bg-white text-gray-400 hover:bg-gray-50"}`}
+                                                        >
+                                                            {opt === "none" ? "—" : opt}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            )}
                         </div>
                         <div>
                             <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Expires</label>
