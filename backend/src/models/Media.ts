@@ -132,6 +132,10 @@ class Media {
             caption: post.postExcerpt,
             alt,
             author: post.authorId,
+            // Parent post this attachment is attached to (0 = unattached). Attachments carry
+            // post_status='inherit', so their visibility is derived from this parent — the media
+            // route uses it to hide draft/private-parented attachments from non-owners.
+            parent: post.postParent || 0,
             mimeType: post.postMimeType,
             guid: absoluteUrl,      // RSS requires absolute URLs (globally unique)
             sourceUrl: relativePath, // Use relative path (e.g. /uploads/file.jpg) for internal app flexibility
