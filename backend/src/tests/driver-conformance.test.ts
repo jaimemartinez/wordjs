@@ -28,8 +28,19 @@ const PG = { autoPk: 'SERIAL PRIMARY KEY', ph: (i: number) => `$${i}`, ret: ' RE
 // TRANSLATED result actually runs on a real MySQL 8 — this block is the only CI coverage of that layer.
 const MYSQL = { autoPk: 'INTEGER PRIMARY KEY AUTOINCREMENT', ph: (_i: number) => '?', ret: '' };
 
-const withTimeout = (p: Promise<any>, ms: number) =>
-    Promise.race([p, new Promise((_, rej) => setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms))]);
+// clearTimeout is load-bearing, not tidiness: if the race is decided by `p` (e.g. connect() rejects
+// fast with ECONNREFUSED in the no-DB `Test` step) the timer is left ARMED and, being ref'd, keeps this
+// test-file subprocess's event loop alive for the full `ms` after the suite is done. `--test-force-exit`
+// then HARD-KILLS the still-live subprocess, racing its final IPC result flush to the runner → the
+// intermittent "Unable to deserialize cloned data" file-level failure. Draining the timer lets the
+// subprocess exit cleanly on its own, so force-exit never has to kill it mid-message.
+const withTimeout = (p: Promise<any>, ms: number) => {
+    let timer: any;
+    return Promise.race([
+        p,
+        new Promise((_, rej) => { timer = setTimeout(() => rej(new Error(`timeout after ${ms}ms`)), ms); }),
+    ]).finally(() => clearTimeout(timer));
+};
 
 // A missing backend is a graceful skip locally, but in CI (WORDJS_CI_DB=1) the service container is
 // wired precisely so the driver IS exercised — there, an unreachable/unloadable driver is a hard
