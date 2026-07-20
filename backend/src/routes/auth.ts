@@ -8,6 +8,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { authenticate, generateToken, verifyToken } = require('../middleware/auth');
+const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
 const config = require('../config/app');
@@ -296,7 +297,7 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
 
         const token = generateToken(user);
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
-        res.json({ user: user.toJSON() });
+        res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } catch (error) {
         await recordLoginFail(lockId);
         return res.status(401).json({
@@ -311,9 +312,10 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
  * GET /auth/me
  * Get current user
  */
-router.get('/me', authenticate, (req: any, res: Response) => {
-    res.json(req.user.toJSON());
-});
+router.get('/me', authenticate, asyncHandler(async (req: any, res: Response) => {
+    // mfa is an EXTRA top-level key (the client reads /auth/me as the user object directly — do not re-wrap).
+    res.json({ ...req.user.toJSON(), mfa: await mfa.evaluate(req.user) });
+}));
 
 /**
  * POST /auth/validate
@@ -635,7 +637,7 @@ router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
     await clearLoginFails(lockKey);
     const token = generateToken(user);
     res.cookie('wordjs_token', token, COOKIE_OPTIONS);
-    res.json({ user: user.toJSON() });
+    res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
 }));
 
 /** GET /auth/mfa/status — is MFA on for the current user + how many backup codes remain. */
@@ -692,6 +694,30 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
     }
     await clearLoginFails(lk);
     res.json({ backupCodes: await mfa.regenerateBackupCodes(req.user.id), message: 'Save these backup codes now — they replace your previous set.' });
+}));
+
+// ─── Admin-enforced MFA-by-role policy ─────────────────────────────────────────────────────────────
+// sessionOnly (not just isAdmin): the policy governs interactive-login security, so a headless API token
+// — even an admin's — must never reconfigure it. NOT on the mfaComplianceGate exempt list, so an enforced
+// (un-enrolled, past-grace) admin must enroll before they can change the policy, closing the "disable the
+// requirement instead of enrolling" bypass.
+
+/** GET /auth/mfa/policy — read the enforcement policy (admin only). */
+router.get('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (_req: any, res: Response) => {
+    res.json({ policy: await mfa.getPolicy() });
+}));
+
+/** PUT /auth/mfa/policy — set which roles require MFA + the grace period (admin only). Body: { requiredRoles, graceDays }. */
+router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: any, res: Response) => {
+    const { requiredRoles, graceDays } = req.body || {};
+    if (requiredRoles != null && !Array.isArray(requiredRoles)) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'requiredRoles must be an array of role slugs.', data: { status: 400 } });
+    }
+    if (graceDays != null && (!Number.isFinite(Number(graceDays)) || Number(graceDays) < 0)) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'graceDays must be a non-negative number.', data: { status: 400 } });
+    }
+    // setPolicy validates role slugs against the live role map + manages enforcedAt.
+    res.json({ policy: await mfa.setPolicy({ requiredRoles, graceDays }) });
 }));
 
 module.exports = router;

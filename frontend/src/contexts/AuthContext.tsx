@@ -3,6 +3,14 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from "react";
 import { useRouter } from "next/navigation";
 
+interface MfaStatus {
+    required: boolean;      // the user's role is subject to the enforced-MFA policy
+    enabled: boolean;       // the user has TOTP enabled
+    enforced: boolean;      // required && !enabled && past the grace window → hard block
+    withinGrace: boolean;   // required && !enabled but still inside the grace window → nudge only
+    graceDeadline: number | null; // epoch seconds the grace window ends
+}
+
 interface User {
     id: number;
     username: string;
@@ -11,6 +19,7 @@ interface User {
     role: string;
     capabilities: string[];
     personalEmail?: string | null;
+    mfa?: MfaStatus;
 }
 
 interface LoginResult {
@@ -25,6 +34,7 @@ interface AuthContextType {
     login: (username: string, password: string) => Promise<LoginResult>;
     verifyMfa: (mfaToken: string, code: string) => Promise<LoginResult>;
     logout: () => void;
+    refreshUser: () => Promise<void>;
     isLoading: boolean;
     can: (capability: string) => boolean;
 }
@@ -124,7 +134,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     // the caller must collect a code and call verifyMfa(mfaToken, code).
                     return { success: false, mfaRequired: true, mfaToken: data.mfaToken };
                 }
-                setUser(data.user);
+                // `mfa` is a SIBLING of `user` in the login/mfa response (not on data.user) — merge it so the
+                // policy status travels with the user object the app reads.
+                setUser({ ...data.user, mfa: data.mfa });
                 return { success: true };
             }
 
@@ -159,7 +171,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             });
             if (res.ok) {
                 const data = await res.json();
-                setUser(data.user);
+                setUser({ ...data.user, mfa: data.mfa });
                 return { success: true };
             }
             let error: string | undefined;
@@ -168,6 +180,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         } catch (error) {
             console.error("MFA verify error:", error);
             return { success: false };
+        }
+    }, []);
+
+    // Re-fetch /auth/me and update the user in place (used by the forced-enroll gate to lift the block once
+    // MFA is enabled, without a full page reload).
+    const refreshUser = useCallback(async () => {
+        try {
+            const res = await fetch(`${API_URL}/auth/me`, { credentials: "include" });
+            if (res.ok) setUser(await res.json());
+        } catch (err) {
+            console.error("refreshUser error:", err);
         }
     }, []);
 
@@ -194,8 +217,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, [user]);
 
     const value = useMemo(
-        () => ({ user, login, verifyMfa, logout, isLoading, can }),
-        [user, login, verifyMfa, logout, isLoading, can]
+        () => ({ user, login, verifyMfa, logout, refreshUser, isLoading, can }),
+        [user, login, verifyMfa, logout, refreshUser, isLoading, can]
     );
 
     return (

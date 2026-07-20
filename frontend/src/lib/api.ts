@@ -98,6 +98,15 @@ export async function api<T>(endpoint: string, options: ApiOptions = {}): Promis
                 }
             }
 
+            // Enforced MFA: a required-role user past their grace window is blocked from every non-exempt
+            // call. Funnel them to the account page, where the layout's forced-enrolment gate takes over.
+            if (typeof window !== 'undefined' && res.status === 403 && error.code === 'mfa_enrollment_required') {
+                if (!window.location.pathname.startsWith('/admin/account')) {
+                    window.location.href = '/admin/account';
+                    throw new Error('Two-factor authentication is required. Redirecting…');
+                }
+            }
+
             errorMessage = error.message || error.error || errorMessage;
         } else if (raw) {
             // Not JSON (e.g. HTML 500 error): include the raw text snippet.
@@ -180,6 +189,13 @@ export interface User {
     role: string;
     capabilities: string[];
     personalEmail?: string | null;
+    mfa?: {
+        required: boolean;
+        enabled: boolean;
+        enforced: boolean;
+        withinGrace: boolean;
+        graceDeadline: number | null;
+    };
 }
 
 export interface Role {
@@ -820,10 +836,18 @@ export interface MfaStatus {
     enabled: boolean;
     backupCodesRemaining: number;
 }
+// Admin-enforced MFA-by-role policy.
+export interface MfaPolicy {
+    requiredRoles: string[];
+    graceDays: number;
+    enforcedAt: number | null;
+}
 export const mfaApi = {
     status: () => apiGet<MfaStatus>("/auth/mfa/status"),
     setup: () => apiPost<{ secret: string; otpauthUri: string }>("/auth/mfa/setup", {}),
     enable: (code: string) => apiPost<{ enabled: boolean; backupCodes: string[]; message: string }>("/auth/mfa/enable", { code }),
     disable: (code: string) => apiPost<{ disabled: boolean }>("/auth/mfa/disable", { code }),
     regenerateBackupCodes: (code: string) => apiPost<{ backupCodes: string[]; message: string }>("/auth/mfa/backup-codes", { code }),
+    getPolicy: () => apiGet<{ policy: MfaPolicy }>("/auth/mfa/policy"),
+    savePolicy: (policy: { requiredRoles: string[]; graceDays: number }) => apiPut<{ policy: MfaPolicy }>("/auth/mfa/policy", policy),
 };
