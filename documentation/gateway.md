@@ -42,6 +42,10 @@ The proxy and upstream-agent construction live in `gateway/src/proxy-config.js`,
 *   **`createProxyServer()`** — builds the `http-proxy` server with `{ xfwd: true, changeOrigin: true }`. With `changeOrigin`, the upstream receives the target's Host, while the gateway pins the **original client Host** into `X-Forwarded-Host`. The backend's CSRF check reads `X-Forwarded-Host` and requires an **exact origin match** against the configured site URL.
 *   **`createUpstreamAgent({ ca, key, cert })`** — builds the mTLS agent described under Security. Both the worker proxy agent and the primary health-check agent use it, so no internal call uses `rejectUnauthorized: false`.
 
+### SEO Rewrites
+
+The SPLIT-mode gateway worker maps root-level SEO paths onto the backend's `/api/v1/seo/*` endpoints before proxying: `/sitemap.xml` → `/api/v1/seo/sitemap.xml`, `/robots.txt` → `/api/v1/seo/robots.txt`, and `/feed` | `/feed.xml` | `/rss.xml` → `/api/v1/seo/feed.xml`. (MONOLITH re-implements the sitemap/robots rewrites as local middleware in `monolith.js`; the feed rewrite is gateway-only.)
+
 ## Service Registration
 
 Services register themselves dynamically on startup over the **internal mTLS control server** (not a public route). The endpoint is mutual-TLS only and gated by the client-certificate CN allow-list:
@@ -85,4 +89,4 @@ cd gateway
 npm test
 ```
 
-`node-forge` is a gateway devDependency used to generate test certificates.
+`node-forge` is a gateway **dependency** (not dev-only): it is used at boot by `gateway/src/cluster-ca.js` to mint the cluster CA and sign join-token enrollment certs, and by this integration test to generate test certificates.

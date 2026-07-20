@@ -54,7 +54,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `db.get(sql, params)` | `db.get` | Same scoping as `db.all`. |
 | `db.run(sql, params)` | `db.run` | Same scoping. |
 | `db.createTable(name, cols)` | `db.createTable` | Creates a `wjp_<slug>_`-prefixed table. |
-| `db.getType()` | `db.getType` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` for dialect branches (`driver` ∈ `sqlite-native`/`sqlite-legacy`/`postgres`/`mysql`; `isSQLite` stays true under MySQL, so gate `PRAGMA`/`sqlite_master` on `isMySQL`). |
+| `db.getType()` | `db.getType` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` for dialect branches (`driver` ∈ `sqlite-native`/`sqlite-legacy`/`postgres`/`mysql`/`mariadb`; `isSQLite` stays true under MySQL, so gate `PRAGMA`/`sqlite_master` on `isMySQL` — MariaDB reports `driver: 'mariadb'` but `isMySQL` is true, so branch on `isMySQL` not the raw `driver` string). |
 | `users.findByEmail / findByLogin / findById / search` | `users.*` | `users:read` grant. Returns a **safe projection** `{id, userLogin, username, userEmail, displayName, role}` — never `user_pass`. |
 | `site.url / domain / adminEmail` | `site.*` | `settings:read` grant. Read-only site identity. |
 | `db.tablePrefix` | (local) | A string property (`wjp_<slug>_`), not an RPC — the required prefix for the plugin's own tables. |
@@ -65,6 +65,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `notify(notification)` | `notify` | Dispatch a core notification. |
 | `adminMenu.add(item)` | `adminMenu.add` | Add a Sidebar item (capped per plugin). |
 | `cron.schedule(ts, recurring, hook, args)` | `cron.schedule` | Schedule a recurring/one-shot hook fire. |
+| `crypto.randomToken(bytes=16)` / `crypto.randomInt(min, max)` | `crypto.randomToken` / `crypto.randomInt` | CSPRNG helpers (no data access, no permission gate) — use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host), so `await` them. |
 | `assets.enqueueScript(spec)` / `assets.enqueueStyle(spec)` | `assets.enqueueScript` / `assets.enqueueStyle` | `assets:write` grant. Enqueue a `<script>`/`<style>` from **inside your own plugin dir** onto public pages; the host emits a **sanitized** tag served from `/plugins/<slug>/`. |
 | `slug` | (local) | The plugin's slug string. |
 
@@ -123,7 +124,7 @@ Manages YouTube video carousels.
 A complete SMTP server and email manager. Allows sending and receiving emails directly within WordJS.
 
 *   **Features:**
-    *   Inbound SMTP server (listens on port 2525 by default — operator-configurable via the `smtp_listen_port` option) + direct-MX outbound delivery (connects to remote MTAs on port 25) — runs inside the child process
+    *   Inbound SMTP server (listens on port 25 by default — operator-configurable via the `smtp_listen_port` option — automatically falling back to the unprivileged port 2525 when 25 cannot be bound) + direct-MX outbound delivery (connects to remote MTAs on port 25) — runs inside the child process
     *   Attachment handling (multipart upload parsed by the host, forwarded to the isolate)
     *   DKIM signing (private key stored in the plugin's own DB/files, not a core secret option)
     *   Registers the host-wide mail sender (`provideMail`) and a notification transport
@@ -203,6 +204,7 @@ Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Pu
 with title filtering and a video-count limit. Works **keyless** out of the box via the channel RSS
 feed (latest 15 videos); add a YouTube Data API v3 key for the full upload history.
 
+*   **Distribution:** first-party **marketplace** plugin (installed via the Marketplace catalog in §10) — not bundled with core.
 *   **Routes:** `GET /`, `GET /status`, `POST /refresh`, `POST /settings` (namespaced under `/api/v1/plugin/youtube-videos/*`)
 *   **Puck Component:** `YoutubeVideosPuck` (carousel with title filter + count limit)
 *   **Admin page:** `/admin/plugin/youtube`
@@ -213,10 +215,12 @@ feed (latest 15 videos); add a YouTube Data API v3 key for the full upload histo
 
 ## 10. Plugin Marketplace 🛒
 
-Beyond the bundled plugins above, WordJS ships a **Marketplace** of first-party plugins distributed
-**outside** the core build:
+Beyond the plugins above, WordJS ships a **Marketplace** of first-party plugins distributed
+**outside** the core build (the Mail Server, Conference Manager, and YouTube Videos sections above are
+themselves marketplace plugins — only Photo Carousel, Card Gallery, Video Gallery, Hello World, and
+Test Schema are bundled with core):
 
-*   **Sources:** `marketplace/plugins/<slug>/` in the repo (25 plugins, listed below).
+*   **Sources:** `marketplace/plugins/<slug>/` in the repo (28 plugins, listed below).
 *   **Catalog build:** `npm run build:marketplace` (`backend/scripts/build-marketplace.js`) packs each
     plugin into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json`
     (id, version, description, category, file, **sha256**). `marketplace/dist/` is a **build output and is
@@ -244,7 +248,7 @@ Beyond the bundled plugins above, WordJS ships a **Marketplace** of first-party 
 *   **Sandbox:** marketplace plugins are ordinary plugins — `"isolated": true`, bridge-only,
     default-deny grants, AST-scanned. Nothing about the marketplace bypasses the sandbox.
 
-### Catalog (25 plugins)
+### Catalog (28 plugins)
 
 | Slug | What it does | Key requested capabilities |
 | --- | --- | --- |
@@ -252,6 +256,7 @@ Beyond the bundled plugins above, WordJS ships a **Marketplace** of first-party 
 | `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Puck block with optional BreadcrumbList JSON-LD | — (frontend-only) |
+| `conference-manager` | Conference inscriptions/registration, hotel & room auto-assignment, per-inscription payments, attendee portal, reports + CSV export | `database` r/w, routes, admin menu |
 | `contact-forms` | Form builder with Puck embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
 | `digital-downloads` | Sell/give away downloadable products with expiring token-gated download links | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
@@ -262,6 +267,7 @@ Beyond the bundled plugins above, WordJS ships a **Marketplace** of first-party 
 | `image-lightbox` | Site-wide click-to-zoom lightbox for content images (captions, keyboard nav) | `settings` r/w, routes, admin menu, `assets:write` |
 | `invoices` | Invoices with statuses, dashboard totals, CSV export, public token URL + print view, email to client | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `job-board` | Job listings with anti-spam public application form, applications inbox, filterable Puck block | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
+| `mail-server` | Full SMTP server: inbound listener + direct-MX outbound delivery, DKIM signing, host-wide mail sender + email notification transport | `settings` r/w, `database` r/w, `email:admin`+provider, `notifications`, `filesystem` r/w, `users` read, `network` |
 | `newsletter` | Subscriptions (double opt-in when mail is configured), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
 | `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
 | `online-store` | Product catalog + cart + checkout with server-side price validation, coupons, orders admin, optional Stripe | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
@@ -273,6 +279,7 @@ Beyond the bundled plugins above, WordJS ships a **Marketplace** of first-party 
 | `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
 | `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Puck block | `database` r/w, `settings` r/w, routes, admin menu |
 | `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |
+| `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Puck carousel block | `settings` r/w, `database` r/w, `network` |
 
 *(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is
 manifest-requested and admin-granted, default-deny, exactly like the bundled plugins.)*

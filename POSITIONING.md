@@ -85,22 +85,28 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
 - **DoS containment**: process separation (a child OOM / crash / infinite loop cannot take
   down the host — the host event loop is in a different process), a JS-heap cap
   (`--max-old-space-size`), an opt-in **preventive cgroup `MemoryMax`** per child on systemd Linux
-  (`systemd-run --user --scope`, probe-gated), a **default-on preventive Windows Job Object** cap
+  (`systemd-run --user --scope`, probe-gated), an opt-in **preventive per-plugin CPU quota** on
+  systemd Linux (`sandbox.cpuQuotaPercent` → `CPUQuota` in the same cgroup scope, probe-gated), a
+  **default-on preventive Windows Job Object** cap
   (pure-JS PowerShell P/Invoke, probe-gated), a host-side **RSS poll** elsewhere / as a backstop
   (Linux `/proc`, Windows `tasklist`, macOS `ps` → `SIGKILL`) and a loose `RLIMIT_AS` backstop,
   per-child bridge-call rate + message-rate caps, RPC timeouts with wedged-child recycling, bounded
   in-flight calls, inbound/outbound payload caps, fs-write disk quota.
 
 **Residual gaps (state these plainly — they shape the roadmap):**
-- It is now **OS process isolation**, plus an **opt-in Linux hardening layer** (bubblewrap;
-  `sandbox.useKernelHardening`, probe-gated, default-off) that runs the child as an
+- It is now **OS process isolation**, plus an **on-by-default Linux hardening layer** (bubblewrap;
+  `sandbox.useKernelHardening`, default-on / opt-out via `=false`, probe-gated — it falls back to the
+  plain fork where `bwrap` / rootless user-namespaces are unavailable) that runs the child as an
   **unprivileged uid with all capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a
   read-only filesystem, and a `seccomp` syscall denylist** (EPERM on ptrace/mount/kexec/keyctl/
   userfaultfd/… — syscalls Node/plugins never issue). `fs` / `child_process` inside the child are
   additionally narrowed by **JS-level proxies** (defense-in-depth). It can no longer reach the host
   heap or crash the host. What's intentionally NOT added: the **Landlock LSM** — its fs-confinement
   goal is already met by the read-only mount namespace, and the LSM itself would need a native dep
-  contrary to the no-native-deps design. (The uid-drop trades away privileged-port binding.)
+  contrary to the no-native-deps design. (The uid-drop trades away privileged-port binding.) A
+  **fail-closed** mode (`sandbox.requireHardening`, opt-in, default off) refuses to launch an isolated
+  plugin unless kernel hardening is actually **active** on the host, and the live hardening state
+  ('active' / 'degraded' / 'unsupported') is surfaced on admin `GET /health/details`.
 - The per-child memory cap is layered: (a) **preventive** — on systemd Linux each child can run in a
   transient **cgroup v2 scope with `MemoryMax`** (`systemd-run --user --scope`, no root; operator
   opt-in via `sandbox.useCgroupMemoryCap` and additionally probe-gated so it only activates where
@@ -114,7 +120,7 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   only bounds pathological allocation). The remaining preventive-cap gap is **non-systemd Linux and
   macOS**; there the reactive poll + process separation apply.
 - **Dropped uid + capability-drop + `no-new-privs` + namespaces + a `seccomp` syscall denylist**
-  now ship as the opt-in bubblewrap layer above, so the child's syscall surface is shrunk "by
+  now ship as the default-on (opt-out) bubblewrap layer above, so the child's syscall surface is shrunk "by
   construction". The Landlock LSM is intentionally not added — the read-only mount namespace already
   provides the filesystem confinement Landlock would, and the LSM needs a native dependency.
 - The model has had several red-team passes (ten rounds) plus the OS-isolation pivot; it has
@@ -172,10 +178,13 @@ The sandbox + AST scanner are the *enabling technology* for a marketplace where 
 install" is a verifiable claim**, not a vibe.
 
 **The marketplace *mechanism* now ships in OSS** (no longer a proposal): a curated catalog of
-**25 first-party plugins** (`marketplace/plugins/` → catalog + zips built by
-`backend/scripts/build-marketplace.js` into `marketplace/dist/`, a gitignored build output published
+**28 first-party plugins** (`marketplace/plugins/`) and **12 first-party themes** (`marketplace/themes/`),
+both built into catalog + zips by
+`backend/scripts/build-marketplace.js` into `marketplace/dist/` (separate plugin and theme indexes,
+a gitignored build output published
 as GitHub Release assets; installs default to `releases/latest/download` but the sources are
-**admin-configurable** — option `marketplace_sources`, any number of HTTPS catalogs merged), a
+**admin-configurable** — option `marketplace_sources` for plugins and the independent option
+`marketplace_theme_sources` for themes, any number of HTTPS catalogs merged), a
 Plugins → Marketplace admin tab with one-click installs, **sha256-verified** downloads
 routed through the *same* hardened upload pipeline (zip guards + AST scan;
 `backend/src/routes/marketplace.ts`), and per-capability grant disclosure at install. What
@@ -236,7 +245,7 @@ sandbox**. Today the core carries heavyweight infrastructure that dilutes the st
 enlarges the trust surface:
 
 - **Mail / MTA → optional add-on.** The mail-server runs an inbound SMTP listener (configurable
-  `smtp_listen_port`, default 2525) + outbound MX delivery on port 25 + DKIM. With the trust tier gone, it ships as a normal sandboxed first-party
+  `smtp_listen_port`, default 25) + outbound MX delivery on port 25 + DKIM. With the trust tier gone, it ships as a normal sandboxed first-party
   plugin pre-granted the capabilities it declares (`network` for SMTP/MX, `email:provider`).
   It should ship as an **optional add-on**, not a core dependency: direct-MX deliverability is
   an ops liability most users don't want in core, and a high-capability plugin enlarges the
@@ -263,8 +272,8 @@ enlarges the trust surface:
 
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
-| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **25 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem. | First-party seeding is done (25 catalog plugins across commerce / marketing / content / SEO); next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
-| **Kernel-surface hardening gap** | Plugins run in a separate OS process (host-crash / heap-escape closed), and an opt-in Linux layer (bubblewrap) drops uid + caps and adds no-new-privs / namespaces / read-only-fs / a **seccomp syscall denylist**. The child's syscall surface is now shrunk by construction (not just JS guards). A skeptical security buyer will probe this. | Opt-in deprivileging + seccomp layer shipped (Linux); a default-on preventive Windows Job Object memory cap shipped (the Win32 cgroup analog); remaining: an independent audit; message §2 honestly; never claim "unbreakable." |
+| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **28 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem. | First-party seeding is done (28 catalog plugins across commerce / marketing / content / SEO); next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
+| **Kernel-surface hardening gap** | Plugins run in a separate OS process (host-crash / heap-escape closed), and an on-by-default Linux layer (bubblewrap) drops uid + caps and adds no-new-privs / namespaces / read-only-fs / a **seccomp syscall denylist**. The child's syscall surface is now shrunk by construction (not just JS guards). A skeptical security buyer will probe this. | Default-on (opt-out) deprivileging + seccomp layer shipped (Linux); a default-on preventive Windows Job Object memory cap shipped (the Win32 cgroup analog); remaining: an independent audit; message §2 honestly; never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
 | **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + default-deny capability grants are the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
 | **License** *(resolved)* | A commercial marketplace + hosted offering needs a license that permits monetization. | **Done:** the project is now consistently **MIT** (no copyleft prod deps; see `THIRD-PARTY-NOTICES.md` + the CI license gate). Optionally revisit a source-available (BSL-style) license later if a hosted clone becomes a threat. |
@@ -279,7 +288,7 @@ The sandbox is **genuinely differentiated and genuinely implemented** — isolat
 for *every* plugin, a permission-checked bridge, admin-granted default-deny capabilities (no
 trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-table lockdown.
 We win by being honest about the remaining kernel-level hardening while building on the
-marketplace mechanism that now ships (a curated, sha256-verified catalog of 25 first-party
+marketplace mechanism that now ships (a curated, sha256-verified catalog of 28 first-party
 plugins installed through the hardened pipeline) and the hosted offering that turn "your plugins
 can't compromise your site" into the product. The work to get there is **a third-party
 ecosystem (review pipeline + badge), an external audit, the kernel-level hardening on
