@@ -8,6 +8,100 @@ const { Pool } = require('pg');
 const config = require('../config/app');
 
 /**
+ * ── SQLite/generic DDL → Postgres translation ──────────────────────────────────────────────────
+ * WordJS models, the core schema and plugins all speak ONE dialect: SQLite. Reads and writes only
+ * need `?`→`$n` (see normalizeSql). DDL, however, is not all valid Postgres: SQLite's
+ * `INTEGER PRIMARY KEY AUTOINCREMENT`, plus `DATETIME`/`BLOB`, are foreign to Postgres.
+ *
+ * Historically exec() ran DDL RAW, with two consequences:
+ *   • the cross-driver migration (core/db-admin/migration.js) recreated a SQLite plugin table on a
+ *     Postgres target from a normalized COLUMN LIST — data-complete, but WITHOUT its PRIMARY KEY /
+ *     autoincrement (SERIAL), so the table lacked its PK until the plugin re-ran its own schema; and
+ *   • initializeSchema() emits DDL in the SOURCE driver's dialect during a migration (its driverName
+ *     is still the source), so a SQLite→Postgres migration sent `INTEGER PRIMARY KEY AUTOINCREMENT`
+ *     core DDL to Postgres untranslated.
+ *
+ * This translation layer (mirroring drivers/mysql.ts) rewrites, at the driver boundary, the handful
+ * of constructs that differ, so exec() can run the RAW SQLite CREATE with full PK/autoincrement
+ * fidelity:
+ *   - `INTEGER PRIMARY KEY AUTOINCREMENT`  → `SERIAL PRIMARY KEY`  (an int column backed by a sequence)
+ *   - `DATETIME`                           → `TIMESTAMP`
+ *   - `BLOB`                               → `BYTEA`
+ *
+ * Placeholders and quoting are already Postgres-compatible (WordJS single-quotes literals and
+ * double-quotes identifiers), and Postgres natively supports `CREATE [UNIQUE] INDEX IF NOT EXISTS`,
+ * functional (`LOWER(x)`) and partial (`WHERE …`) indexes — so ONLY `CREATE TABLE` is rewritten;
+ * every other statement passes through unchanged.
+ */
+
+// Strip `-- line` and `/* block */` comments (string-literal aware) so a comma inside a comment can't
+// break the top-level column split. Mirrors the mysql driver.
+function stripSqlComments(sql: string): string {
+    let out = '', i = 0; const n = sql.length;
+    while (i < n) {
+        const c = sql[i];
+        if (c === "'") {                                   // copy a string literal verbatim ('' = escape)
+            out += c; i++;
+            while (i < n) { out += sql[i]; if (sql[i] === "'") { if (sql[i + 1] === "'") { out += sql[i + 1]; i += 2; continue; } i++; break; } i++; }
+            continue;
+        }
+        if (c === '-' && sql[i + 1] === '-') { while (i < n && sql[i] !== '\n') i++; continue; }
+        if (c === '/' && sql[i + 1] === '*') { i += 2; while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i++; i += 2; continue; }
+        out += c; i++;
+    }
+    return out;
+}
+
+// Split a CREATE TABLE column list on top-level commas only (so `PRIMARY KEY (a, b)` stays intact).
+function splitTopLevel(body: string): string[] {
+    const parts: string[] = [];
+    let depth = 0, cur = '';
+    for (const ch of body) {
+        if (ch === '(') depth++;
+        else if (ch === ')') depth--;
+        if (ch === ',' && depth === 0) { parts.push(cur); cur = ''; }
+        else cur += ch;
+    }
+    if (cur.trim()) parts.push(cur);
+    return parts;
+}
+
+function translateColumnDef(def: string): string {
+    // Table-level constraints (composite PK, UNIQUE(...), etc.) pass through unchanged.
+    if (/^\s*(PRIMARY\s+KEY|UNIQUE|FOREIGN\s+KEY|CONSTRAINT|CHECK|KEY|INDEX)\b/i.test(def)) return def;
+
+    let d = def;
+    // Auto-increment primary key: SQLite's `INTEGER PRIMARY KEY AUTOINCREMENT` → a real Postgres SERIAL
+    // (int column + backing sequence). Do the full-phrase rewrite first, then strip any stray
+    // AUTOINCREMENT keyword Postgres would reject.
+    d = d.replace(/\bINTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT\b/i, 'SERIAL PRIMARY KEY');
+    d = d.replace(/\s*\bAUTOINCREMENT\b/gi, '');
+    // Type keywords Postgres doesn't have.
+    d = d.replace(/\bDATETIME\b/gi, 'TIMESTAMP');
+    d = d.replace(/\bBLOB\b/gi, 'BYTEA');
+    return d;
+}
+
+function translateCreateTable(sql: string): string {
+    sql = stripSqlComments(sql);
+    // Match a quoted/bracketed name (any chars, so a hyphenated `"wjp-orders"` isn't truncated) OR a
+    // bare identifier; everything inside the outer parens is the column list. If it doesn't match this
+    // shape, leave it alone.
+    const m = sql.match(/^(\s*CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"[^"]*"|`[^`]*`|\[[^\]]*\]|[A-Za-z0-9_]+)\s*)\(([\s\S]*)\)(\s*)$/i);
+    if (!m) return sql;
+    const cols = splitTopLevel(m[2]).map((c) => c.trim()).filter(Boolean).map(translateColumnDef);
+    return `${m[1]}(\n  ${cols.join(',\n  ')}\n)${m[3] || ''}`;
+}
+
+/** Rewrite one SQLite-dialect statement to Postgres. Only CREATE TABLE needs it; all else is already
+ *  Postgres-compatible and passes through untouched. */
+function translateSql(sql: string): string {
+    if (typeof sql !== 'string') return sql;
+    if (/^\s*CREATE\s+TABLE\b/i.test(sql)) return translateCreateTable(sql);
+    return sql;
+}
+
+/**
  * Derive lastID from an INSERT ... RETURNING * result set, but ONLY from a genuine `id`/`ID` column.
  * Tables without an `id` column (post_meta=meta_id, options=option_id, term_relationships=composite PK)
  * must NOT report their first arbitrary column (e.g. meta_id/option_id/object_id) as `lastID` — callers
@@ -142,10 +236,14 @@ class PostgresDriver extends DatabaseDriverInterface {
     }
 
     async exec(sql: string) {
+        // Translate SQLite-dialect DDL (CREATE TABLE) to Postgres at the boundary — so a raw SQLite
+        // CREATE from the cross-driver migration, or source-dialect DDL from initializeSchema(), runs
+        // with full PK/autoincrement fidelity (INTEGER PRIMARY KEY AUTOINCREMENT → SERIAL PRIMARY KEY,
+        // DATETIME → TIMESTAMP, BLOB → BYTEA). Every non-CREATE-TABLE statement passes through unchanged.
         try {
-            await this.pool.query(sql);
+            await this.pool.query(translateSql(sql));
         } catch (err) {
-            console.error('❌ Postgres Exec Error:', err.message);
+            console.error('❌ Postgres Exec Error:', err.message, '\nSQL:', sql);
             throw err;
         }
     }
@@ -188,7 +286,8 @@ class PostgresDriver extends DatabaseDriverInterface {
                 return { lastID: extractLastId(res.rows), changes: res.rowCount };
             },
             exec: async (sql: string) => {
-                await client.query(sql);
+                // Same DDL translation as the top-level exec(), on the pinned connection.
+                await client.query(translateSql(sql));
             }
         };
 
@@ -284,3 +383,6 @@ class PostgresDriver extends DatabaseDriverInterface {
 }
 
 module.exports = new PostgresDriver();
+// Exported for unit tests of the dialect translation.
+module.exports.translateSql = translateSql;
+module.exports.translateCreateTable = translateCreateTable;

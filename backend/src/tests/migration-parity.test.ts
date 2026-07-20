@@ -11,6 +11,10 @@
  * Plus the adversarial-review hardening: identifiers are quoted (reserved-word plugin cols), a
  * row-count mismatch FAILS CLOSED, plugin TEXT is recreated as MySQL LONGTEXT (no VARCHAR(255) cap),
  * odd-but-safe table names are NOT dropped, and a same-engine re-migration snapshots the source first.
+ * And the cross-driver DDL fidelity: a SQLite plugin table migrated to Postgres keeps its PRIMARY KEY
+ * and autoincrement sequence, because the Postgres driver now TRANSLATES the raw SQLite CREATE at its
+ * exec boundary (INTEGER PRIMARY KEY AUTOINCREMENT → SERIAL PRIMARY KEY, DATETIME → TIMESTAMP, BLOB →
+ * BYTEA) — no more PK-less column-list fallback.
  *
  * Unit tests run everywhere; the integration test round-trips a real SQLite → Postgres/MySQL only
  * where a real engine is reachable (WORDJS_CI_DB=1 in CI).
@@ -205,7 +209,62 @@ test('recreateTableOnTarget uses the captured raw sqlite_master CREATE (full fid
     assert.ok(/AUTOINCREMENT/i.test(sql), 'PK/AUTOINCREMENT preserved from the raw CREATE');
 });
 
-test('recreateTableOnTarget maps DATETIME → TIMESTAMP for a Postgres target (whose exec does not translate)', async () => {
+// ── Postgres DDL translation boundary (drivers/postgres.ts) ──────────────────────────────────────
+// The migration now hands a Postgres target the RAW SQLite CREATE (full PK/autoincrement fidelity) and
+// relies on the driver to rewrite it. These are pure-function tests of that boundary — no DB needed, so
+// they run everywhere (the real round-trip below is gated on WORDJS_CI_DB).
+test('postgres driver translateCreateTable maps SQLite DDL → Postgres (SERIAL PRIMARY KEY / TIMESTAMP / BYTEA)', () => {
+    let pg: any;
+    try { pg = require('../drivers/postgres'); } catch (e: any) { assert.fail(`pg driver not loadable: ${e && e.message}`); }
+    const out = pg.translateCreateTable(
+        'CREATE TABLE IF NOT EXISTS "wjp-orders" (id INTEGER PRIMARY KEY AUTOINCREMENT, created DATETIME, payload BLOB, note TEXT)'
+    );
+    assert.ok(/\bid\s+SERIAL\s+PRIMARY\s+KEY\b/i.test(out), 'INTEGER PRIMARY KEY AUTOINCREMENT → SERIAL PRIMARY KEY (real sequence)');
+    assert.ok(!/AUTOINCREMENT/i.test(out), 'no stray AUTOINCREMENT keyword left for Postgres to reject');
+    assert.ok(/\bcreated\s+TIMESTAMP\b/i.test(out), 'DATETIME → TIMESTAMP');
+    assert.ok(/\bpayload\s+BYTEA\b/i.test(out), 'BLOB → BYTEA');
+    assert.ok(/CREATE TABLE IF NOT EXISTS "wjp-orders"/i.test(out), 'hyphenated quoted table name preserved intact');
+    assert.ok(/\bnote\s+TEXT\b/i.test(out), 'TEXT is a valid Postgres type and is left untouched');
+});
+
+test('postgres driver translateSql passes non-CREATE-TABLE statements (indexes, already-Postgres DDL) through unchanged', () => {
+    const pg = require('../drivers/postgres');
+    // Already-Postgres DDL is a fixed point (SERIAL is not rewritten to anything else).
+    assert.ok(/id\s+SERIAL\s+PRIMARY\s+KEY/i.test(pg.translateSql('CREATE TABLE t (id SERIAL PRIMARY KEY, n INTEGER)')), 'SERIAL survives');
+    // Postgres natively supports these — they must NOT be mangled by the translator.
+    const idx = 'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))';
+    assert.strictEqual(pg.translateSql(idx), idx, 'functional unique index passes through verbatim');
+    const partial = "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_name_type ON posts (post_name, post_type) WHERE post_name <> ''";
+    assert.strictEqual(pg.translateSql(partial), partial, 'partial index passes through verbatim');
+    assert.strictEqual(pg.translateSql('DELETE FROM "wjp_orders"'), 'DELETE FROM "wjp_orders"', 'DML passes through verbatim');
+});
+
+test('recreateTableOnTarget hands a Postgres target the RAW sqlite CREATE, which the driver translates to a real SERIAL PK', async () => {
+    // Full chain, no DB: the migration emits the raw CREATE for a Postgres target (proving it no longer
+    // uses the PK-less column fallback), and the driver's translation turns it into a SERIAL PRIMARY KEY.
+    const execed: string[] = [];
+    await migration.recreateTableOnTarget('wjp_store_orders', {
+        schemaByTable: { wjp_store_orders: { sql: 'CREATE TABLE wjp_store_orders (id INTEGER PRIMARY KEY AUTOINCREMENT, total INTEGER, note TEXT)', columns: [] } },
+        sourceIsSqlite: true,
+        targetKind: 'postgres',
+        readAll: async () => [],
+        targetExec: async (s: string) => { execed.push(s); },
+    });
+    const emitted = execed.join('\n');
+    // 1. The migration used the RAW CREATE branch (autoincrement PK intact, quoted name) — NOT the
+    //    column-list fallback (which would have dropped the PRIMARY KEY / autoincrement entirely).
+    assert.ok(/CREATE TABLE IF NOT EXISTS "wjp_store_orders"/i.test(emitted), 'recreated idempotently with a quoted name');
+    assert.ok(/INTEGER\s+PRIMARY\s+KEY\s+AUTOINCREMENT/i.test(emitted), 'raw CREATE carries the PK/autoincrement to the driver boundary');
+    // 2. The Postgres driver boundary turns that into a real serial-backed PRIMARY KEY.
+    const pg = require('../drivers/postgres');
+    const translated = pg.translateSql(emitted);
+    assert.ok(/\bid\s+SERIAL\s+PRIMARY\s+KEY\b/i.test(translated), 'driver translates it to SERIAL PRIMARY KEY (a real sequence)');
+    assert.ok(!/AUTOINCREMENT/i.test(translated), 'the SQLite-only AUTOINCREMENT keyword does not reach Postgres');
+});
+
+test('recreateTableOnTarget maps DATETIME → TIMESTAMP for a Postgres target on the FALLBACK column path (source has no raw CREATE)', async () => {
+    // sql:null models a Postgres/MySQL SOURCE (getTableSchema returns only a column list), so there is no
+    // raw CREATE to hand the driver — buildTargetCreate must pre-map the generic types to Postgres here.
     const execed: string[] = [];
     await migration.recreateTableOnTarget('wjp_evt', {
         schemaByTable: { wjp_evt: { sql: null, columns: ['id INTEGER', 'created DATETIME', 'note TEXT'] } },
@@ -216,7 +275,7 @@ test('recreateTableOnTarget maps DATETIME → TIMESTAMP for a Postgres target (w
     });
     const sql = execed.join('\n');
     assert.ok(/created\s+TIMESTAMP/i.test(sql), 'DATETIME mapped to TIMESTAMP for Postgres');
-    assert.ok(!/DATETIME/i.test(sql), 'no invalid DATETIME left for the untranslating Postgres exec');
+    assert.ok(!/DATETIME/i.test(sql), 'no invalid DATETIME left in the fallback column-path DDL');
 });
 
 test('recreateTableOnTarget preserves a hyphenated table name (no CREATE-prefix corruption)', async () => {
@@ -280,11 +339,14 @@ for (const target of ['postgres', 'mysql']) {
 
         let driver: any;
         try { driver = require(`../drivers/${target}`); } catch (e: any) { return t.skip(`${target} driver not loadable: ${e && e.message}`); }
+        // Coordinates come from env with defaults matching the CI service containers (postgres:16 on
+        // 5432, mysql:8 on 3306; both user/db 'wordjs'-ish, password 'password'). Both async drivers read
+        // this via `this.config`, so setting driver.config points them without touching the global config.
         const cfg = target === 'mysql'
             ? { host: process.env.MYSQL_HOST || '127.0.0.1', port: Number(process.env.MYSQL_PORT) || 3306, user: process.env.MYSQL_USER || 'root', password: process.env.MYSQL_PASSWORD ?? 'password', name: process.env.MYSQL_DB || 'wordjs' }
-            : {};
+            : { host: process.env.PGHOST || '127.0.0.1', port: Number(process.env.PGPORT) || 5432, user: process.env.PGUSER || 'postgres', password: process.env.PGPASSWORD ?? 'password', name: process.env.PGDATABASE || 'wordjs' };
         try {
-            if (target === 'mysql') driver.config = cfg;
+            driver.config = cfg;
             await withTimeout(driver.connect(), 5000);
         } catch (e: any) { return t.skip(`no reachable ${target}: ${e && e.message}`); }
 
@@ -299,8 +361,9 @@ for (const target of ['postgres', 'mysql']) {
             const schemaByTable: Record<string, any> = {};
             for (const tbl of tables) {
                 const r = seeded.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name=?").get(tbl);
-                // Match the handler: capture BOTH the raw CREATE (MySQL/SQLite path) and a quoted PRAGMA
-                // column list (the Postgres path, since PG exec can't translate raw SQLite DDL).
+                // Match the handler: capture BOTH the raw CREATE (the full-fidelity path every target now
+                // uses via its driver translation) and a quoted PRAGMA column list (the fallback for a
+                // source that exposes no raw CREATE).
                 const cols = seeded.db.prepare(`PRAGMA table_info("${tbl}")`).all()
                     .map((c: any) => `"${c.name}" ${c.type || 'TEXT'}`);
                 schemaByTable[tbl] = { sql: r && r.sql, columns: cols };
@@ -329,6 +392,21 @@ for (const target of ['postgres', 'mysql']) {
             assert.strictEqual(back[0].note.length, 2000, `plugin TEXT not truncated on ${target}`);
             const uni = await driver.all('SELECT body FROM "notifications" WHERE user_id = 1');
             assert.ok(uni[0].body.includes('日本語') && uni[0].body.includes('🎉'), `unicode preserved on ${target}`);
+
+            if (target === 'postgres') {
+                // The core fix: a plugin table migrated to Postgres from the raw SQLite CREATE keeps its
+                // PRIMARY KEY and a real backing sequence (SERIAL) — NOT the old PK-less column fallback.
+                const pk = await driver.all(
+                    `SELECT kcu.column_name AS col
+                       FROM information_schema.table_constraints tc
+                       JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name
+                      WHERE tc.table_name = 'wjp_store_orders' AND tc.constraint_type = 'PRIMARY KEY'`
+                );
+                assert.strictEqual(pk.length, 1, 'migrated Postgres plugin table has exactly one PRIMARY KEY column');
+                assert.strictEqual(pk[0].col, 'id', 'the PRIMARY KEY is on the id column (from INTEGER PRIMARY KEY AUTOINCREMENT)');
+                const seq = await driver.all(`SELECT pg_get_serial_sequence('wjp_store_orders', 'id') AS seq`);
+                assert.ok(seq[0].seq, 'the id column is serial-backed (a sequence exists) — full autoincrement fidelity');
+            }
         } finally {
             try { for (const tbl of tables) await driver.exec(`DROP TABLE IF EXISTS "${tbl}"`); } catch { /* */ }
             try { await driver.close(); } catch { /* */ }
