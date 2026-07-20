@@ -1,0 +1,3 @@
+# WXR fixtures are asserted byte-for-byte (including newlines inside CDATA) by wxr-import.test.ts.
+# Pin them to LF so the parsed content matches on every platform regardless of core.autocrlf.
+*.wxr text eol=lf
