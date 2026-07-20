@@ -55,7 +55,7 @@ config.gatewaySecret = GATEWAY_SECRET;
 
 // Persona ids, filled during seeding.
 const U: Record<string, number> = {};
-let postA = 0, postB = 0, mediaA = 0, commentA = 0;
+let postA = 0, postB = 0, mediaA = 0, mediaDraft = 0, commentA = 0;
 let _seq = 0;
 
 const tok = (id: number, login: string) => jwt.sign({ userId: id, username: login }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
@@ -81,12 +81,14 @@ async function seedPost(authorId: number, status: string) {
         [authorId, `Post ${_seq}`, status, `authz-post-${_seq}`]);
     return r.lastID;
 }
-async function seedMedia(authorId: number) {
+async function seedMedia(authorId: number, parent = 0) {
     _seq++;
+    // post_parent = the post this attachment is attached to (0 = unattached). Attachments are
+    // post_status='inherit', so GET /media/:id derives visibility from this parent's status.
     const r = await dbAsync.run(
-        `INSERT INTO posts (author_id, post_title, post_status, post_type, post_name, post_mime_type, guid)
-         VALUES (?, ?, 'inherit', 'attachment', ?, 'image/png', ?)`,
-        [authorId, `att ${_seq}`, `authz-att-${_seq}`, `/uploads/authz-${_seq}.png`]);
+        `INSERT INTO posts (author_id, post_title, post_status, post_type, post_name, post_mime_type, guid, post_parent)
+         VALUES (?, ?, 'inherit', 'attachment', ?, 'image/png', ?, ?)`,
+        [authorId, `att ${_seq}`, `authz-att-${_seq}`, `/uploads/authz-${_seq}.png`, parent]);
     return r.lastID;
 }
 async function seedComment(postId: number, userId: number, status = '0') {
@@ -121,7 +123,8 @@ before(async () => {
 
     postA = await seedPost(U.authorA, 'draft');   // authorA's DRAFT (also tests read-leak)
     postB = await seedPost(U.authorB, 'publish');
-    mediaA = await seedMedia(U.authorA);
+    mediaA = await seedMedia(U.authorA);           // UNATTACHED (post_parent = 0) → public by id
+    mediaDraft = await seedMedia(U.authorA, postA); // attached to authorA's DRAFT post → inherits its non-public visibility
     commentA = await seedComment(postA, 0, '0');   // a pending comment on authorA's post
 });
 
@@ -227,14 +230,28 @@ describe('authz: media IDOR', () => {
     test('uploading media requires upload_files', async () => {
         assert.strictEqual((await as('subscriber', 'post', '/media')).status, 403); // subscriber lacks upload_files
     });
-    test('KNOWN BOUNDARY: GET /media/:id returns attachment metadata to anyone (media is public by id)', async () => {
-        // Unlike GET /posts/:id (which hides non-published posts from non-owners), GET /media/:id uses
-        // optionalAuth with no status/ownership check, so an attachment parented to a DRAFT post (mediaA is
-        // exactly that) is readable by anon — a metadata leak (guid/author/title). Pinned as current
-        // behavior and flagged for a separate product decision on whether draft-post attachments should be
-        // gated; if that policy changes, flip this assertion. (Tracked as a follow-up task.)
+    // GET /media/:id inherits its parent post's visibility, mirroring GET /posts/:id. An attachment
+    // parented to a non-published (draft/private) post must NOT leak its metadata (guid/file path,
+    // author, title) to anon or to a non-owner lacking edit_others_posts.
+    test('draft-parented attachment does NOT leak to anon / non-owner; parent owner + editor CAN read', async () => {
+        // mediaDraft is attached to postA — authorA's DRAFT. Its visibility is inherited from that draft.
+        assert.strictEqual((await anon('get', `/media/${mediaDraft}`)).status, 404,
+            'anon must not read a draft-parented attachment (no metadata leak)');
+        assert.strictEqual((await as('authorB', 'get', `/media/${mediaDraft}`)).status, 404,
+            'a non-owner author (no edit_others_posts) must not read it either');
+        // POSITIVE CONTROLS — the 404s above are AUTHZ, not a broken route or a missing row:
+        const owner = await as('authorA', 'get', `/media/${mediaDraft}`);
+        assert.strictEqual(owner.status, 200, 'the parent-post owner CAN read their own draft attachment');
+        assert.strictEqual(owner.body.id, mediaDraft, 'and it is genuinely mediaDraft (so the 404s are authz, not absence)');
+        assert.strictEqual((await as('editor', 'get', `/media/${mediaDraft}`)).status, 200,
+            'a holder of edit_others_posts CAN read it');
+    });
+    test('unattached attachment stays publicly readable by id (gate is scoped, not a blanket lockout)', async () => {
+        // mediaA has no parent (post_parent = 0): nothing to inherit, so it remains public — the media
+        // library is addressable by URL regardless. This proves the gate above is scoped to non-public parents.
         const r = await anon('get', `/media/${mediaA}`);
-        assert.strictEqual(r.status, 200, `documents the current public-read boundary, got ${r.status}`);
+        assert.strictEqual(r.status, 200, `unattached attachment must stay public, got ${r.status}`);
+        assert.strictEqual(r.body.id, mediaA);
     });
 });
 

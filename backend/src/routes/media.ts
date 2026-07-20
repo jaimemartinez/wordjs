@@ -10,6 +10,7 @@ const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const Media = require('../models/Media');
+const Post = require('../models/Post');
 const config = require('../config/app');
 
 /**
@@ -188,6 +189,27 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
             message: 'Invalid media ID.',
             data: { status: 404 }
         });
+    }
+
+    // SECURITY (metadata leak): an attachment carries post_status='inherit', i.e. it inherits its
+    // visibility from its PARENT post. If that parent is non-published (draft/pending/private),
+    // the attachment's metadata (guid/file path, author, title) must be hidden from non-owners
+    // lacking edit_others_posts — exactly the rule GET /posts/:id applies to the post itself.
+    // Unattached attachments (post_parent = 0) have no parent to inherit from and stay public
+    // (WordPress treats inherit + no parent as published; the media library is addressable by URL
+    // anyway). A dangling parent (deleted post) resolves to null and is likewise treated as public.
+    if (media.parent) {
+        const parent = await Post.findById(media.parent);
+        if (parent && parent.postStatus !== 'publish') {
+            if (!req.user || (parent.authorId !== req.user.id && !req.user.can('edit_others_posts'))) {
+                // Mirror GET /posts/:id: 404 (not 403) so a hidden attachment's existence is not revealed.
+                return res.status(404).json({
+                    code: 'rest_post_invalid_id',
+                    message: 'Invalid media ID.',
+                    data: { status: 404 }
+                });
+            }
+        }
     }
 
     res.json(media);
