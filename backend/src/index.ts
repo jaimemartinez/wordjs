@@ -226,6 +226,11 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 // broke legitimate rendering (logos, theme fonts). SVG is special: served as image/svg+xml so it renders
 // as a logo/icon, with a sandbox CSP so a direct navigation can't run any embedded script either.
 const EXECUTABLE_DOC_EXTS = new Set(['.html', '.htm', '.xhtml', '.xht', '.shtml', '.shtm', '.js', '.mjs', '.cjs', '.xml', '.svgz']);
+// AVIF/WebP negotiation runs BEFORE the static handler: for browsers that accept a modern format it serves
+// a cached, transcoded derivative (same URL, ~50% fewer bytes); on any error / unsupported / non-raster it
+// falls through to express.static below, which serves the original exactly as before.
+const { imageNegotiation } = require('./middleware/image-negotiation');
+app.use('/uploads', imageNegotiation(config.uploads.dir));
 app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
     dotfiles: 'deny',
     // Media filenames are UUID-unique (never overwritten at the same URL), so they are safe to cache
@@ -235,6 +240,10 @@ app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
     setHeaders: (res: Response, filePath: string) => {
         res.setHeader('X-Content-Type-Options', 'nosniff');
         const ext = path.extname(filePath).toLowerCase();
+        // A raster image's URL may serve AVIF/WebP to capable browsers (imageNegotiation above), so a shared
+        // cache must key the ORIGINAL response on Accept too — otherwise it could hand an AVIF to a browser
+        // that didn't ask for it (or vice-versa).
+        if (ext === '.jpg' || ext === '.jpeg' || ext === '.png') res.setHeader('Vary', 'Accept');
         if (ext === '.svg') {
             res.setHeader('Content-Type', 'image/svg+xml');
             res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox");
