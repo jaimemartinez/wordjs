@@ -12,7 +12,7 @@ import SecretRevealModal from "@/components/SecretRevealModal";
  * qrcode-generator (pure JS) to draw the otpauth QR client-side; also shows the raw secret for manual
  * entry. Backup codes are surfaced once via the shared SecretRevealModal.
  */
-export default function MfaSetup() {
+export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {}) {
     const { addToast } = useToast();
     const [status, setStatus] = useState<MfaStatus | null>(null);
     const [loading, setLoading] = useState(true);
@@ -23,6 +23,10 @@ export default function MfaSetup() {
     // one code field reused by the enabled-state actions (disable / regenerate)
     const [manageCode, setManageCode] = useState("");
     const [backupReveal, setBackupReveal] = useState<string | null>(null);
+    // When enrolment (not a regenerate) triggered the backup-codes modal, defer onEnabled until the user
+    // CLOSES it — otherwise a host that re-renders on onEnabled (the forced-enrol gate) unmounts us and the
+    // codes are never seen.
+    const [enrolledPendingClose, setEnrolledPendingClose] = useState(false);
 
     const loadStatus = async () => {
         try { setStatus(await mfaApi.status()); }
@@ -50,6 +54,7 @@ export default function MfaSetup() {
         try {
             const res = await mfaApi.enable(code.trim());
             setBackupReveal(res.backupCodes.join("\n"));
+            setEnrolledPendingClose(true); // fire onEnabled when the user closes the backup-codes modal
             setEnroll(null);
             setCode("");
             addToast("Two-factor authentication enabled", "success");
@@ -148,7 +153,10 @@ export default function MfaSetup() {
                 secret={backupReveal}
                 title="Your backup codes"
                 description="Each code works once if you lose access to your authenticator. Store them somewhere safe."
-                onClose={() => setBackupReveal(null)}
+                onClose={() => {
+                    setBackupReveal(null);
+                    if (enrolledPendingClose) { setEnrolledPendingClose(false); onEnabled?.(); }
+                }}
             />
         </div>
     );
