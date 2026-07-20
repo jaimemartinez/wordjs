@@ -250,6 +250,13 @@ let cgroupProbe: Promise<boolean> | undefined;
 // AND the Windows Job-Object cap, kept as ONE source of truth (they must agree). 768 MB fits a compiled
 // prod worker with headroom; a ts-node dev/test worker overshoots it (why the cgroup mem cap is opt-in).
 const RSS_BUDGET_BYTES = 768 * 1024 * 1024;
+// Anti-exhaustion caps so a plugin can't drain host kernel tables: FD_CAP bounds per-plugin file
+// descriptors via RLIMIT_NOFILE on the rlimit launch path (per-PROCESS, safe to default — RLIMIT_NPROC is
+// deliberately NOT used because it is per-UID and would count the host's own processes); PIDS_MAX bounds
+// tasks/threads via cgroup TasksMax on the systemd-scope path (per-CGROUP, so it caps a fork/thread-bomb
+// to the plugin without touching the host). Both are generous — no legitimate plugin approaches them.
+const FD_CAP = 4096;
+const PIDS_MAX = 512;
 // The cgroup-scope resource caps, built ONCE so probeCgroupCap and the real launch apply the IDENTICAL
 // set. A mismatch is exactly what broke the first CPU-quota attempt (#192): the probe validated a
 // memory-only scope while the launch ALSO passed CPUQuota, so it green-lit a config that then failed to
@@ -261,7 +268,10 @@ function cgroupResourceProps(): string[] {
     let mem = false, cpu = 0;
     try { const s = require('../config/app').sandbox; mem = !!(s && s.useCgroupMemoryCap); cpu = (s && Number(s.cpuQuotaPercent)) || 0; } catch { /* config unavailable ⇒ no caps */ }
     if (!mem) return [];
-    const props = ['-p', `MemoryMax=${RSS_BUDGET_BYTES}`, '-p', 'MemorySwapMax=0'];
+    // TasksMax is a cgroup resource-control property (valid on a --scope, unlike exec-context rlimits) → it
+    // caps the pids controller for THIS plugin's cgroup, so a fork/thread-bomb hits its own PIDS_MAX, not
+    // the host task table. Bundled with the memory cap in the same scope (probe validates the exact set).
+    const props = ['-p', `MemoryMax=${RSS_BUDGET_BYTES}`, '-p', 'MemorySwapMax=0', '-p', `TasksMax=${PIDS_MAX}`];
     if (cpu > 0) props.push('-p', `CPUQuota=${cpu}%`);
     return props;
 }
@@ -705,7 +715,9 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
             // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
             const nodeArgv = [...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
-            child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
+            // Also cap file descriptors (RLIMIT_NOFILE, per-process) alongside the RLIMIT_AS memory backstop,
+            // so a plugin can't exhaust the host fd table. Best-effort (2>/dev/null); exec runs regardless.
+            child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; ulimit -n ${FD_CAP} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
