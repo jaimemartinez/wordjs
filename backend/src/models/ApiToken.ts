@@ -18,46 +18,109 @@ const { dbAsync } = require('../config/database');
 const crypto = require('crypto');
 
 const PREFIX = 'wjt_';
-// Recognized scopes. 'read' = safe methods only; 'write' also permits mutations (and implies read).
-const ALLOWED_SCOPES = ['read', 'write'];
+// Recognized GLOBAL scopes. 'read' = safe methods on ANY resource; 'write' also permits mutations on any
+// resource (and implies read). These are the coarse, all-resource grants.
+const GLOBAL_SCOPES = ['read', 'write'];
+// Backward-compatible alias (was the whole scope vocabulary before per-resource scopes existed).
+const ALLOWED_SCOPES = GLOBAL_SCOPES;
+// A per-resource scope is `<resource>:<action>`, e.g. `posts:write`, `media:read`. The resource is the
+// first URL path segment after the API prefix (posts, pages, media, comments, users, …). A token carrying
+// only resource scopes is confined to those resources — true least privilege for a headless client that
+// should, say, publish posts but never touch users. Resource names are plain lowercase slugs.
+const RESOURCE_SCOPE_RE = /^([a-z][a-z0-9-]*):(read|write)$/;
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 
 function hashToken(raw: string): string {
     return crypto.createHash('sha256').update(raw).digest('hex');
 }
 
-/**
- * Coerce arbitrary scope input (array or comma-string, possibly with '*'/'all'/'full' shorthands) into
- * the canonical, deduped, ordered set. Falls back to the least-privilege ['read'] when nothing valid is
- * given — a token is never created with more power than was explicitly requested.
- */
-function normalizeScopes(input: any): string[] {
+/** Split raw scope input (array or comma-string) into trimmed, lowercased, non-empty tokens. */
+function scopeTokens(input: any): string[] {
     let parts: string[];
     if (Array.isArray(input)) parts = input.map((s) => String(s));
     else if (typeof input === 'string') parts = input.split(',');
     else parts = [];
-    const wanted = new Set<string>();
-    for (const raw of parts) {
-        const s = raw.trim().toLowerCase();
-        if (!s) continue;
-        if (s === '*' || s === 'all' || s === 'full') { wanted.add('read'); wanted.add('write'); continue; }
-        if (ALLOWED_SCOPES.includes(s)) wanted.add(s);
-    }
-    // 'write' implies 'read' so a full token can also fetch.
-    if (wanted.has('write')) wanted.add('read');
-    if (wanted.size === 0) wanted.add('read');
-    // Stable order (read before write) for deterministic storage/tests.
-    return ALLOWED_SCOPES.filter((s) => wanted.has(s));
+    return parts.map((s) => s.trim().toLowerCase()).filter(Boolean);
+}
+
+/** Is a single scope token recognized (a global/shorthand, or a `<resource>:read|write`)? */
+function isKnownScope(s: string): boolean {
+    return s === '*' || s === 'all' || s === 'full' || GLOBAL_SCOPES.includes(s) || RESOURCE_SCOPE_RE.test(s);
 }
 
 /**
- * Does a token with `scopes` permit an HTTP `method`? Safe methods need 'read'; anything mutating needs
- * 'write'. (normalizeScopes guarantees 'write' ⇒ 'read', so a write token also passes the read gate.)
+ * The supplied scope tokens that are NOT recognized. The create route rejects a request with any of these
+ * (400) rather than silently dropping them — silent-drop is dangerous when it empties the set (see
+ * normalizeScopes), and confusing when it merely narrows the grant below what was asked for.
+ */
+function invalidScopes(input: any): string[] {
+    return scopeTokens(input).filter((s) => !isKnownScope(s));
+}
+
+/**
+ * Coerce arbitrary scope input (array or comma-string, possibly with '*'/'all'/'full' shorthands) into
+ * the canonical, deduped, ordered set. A token is NEVER granted more power than was explicitly requested:
+ *   • no scopes supplied at all  → least-privilege ['read'] (the sensible default for an unspecified token);
+ *   • scopes supplied but NONE valid → [] (no access), NOT global read — silently widening a typo like
+ *     `posts:*` into an all-resource read token would break confinement. The create route 400s this case.
+ */
+function normalizeScopes(input: any): string[] {
+    const parts = scopeTokens(input);
+    const wanted = new Set<string>();
+    for (const s of parts) {
+        if (s === '*' || s === 'all' || s === 'full') { wanted.add('read'); wanted.add('write'); continue; }
+        if (GLOBAL_SCOPES.includes(s)) { wanted.add(s); continue; }
+        if (RESOURCE_SCOPE_RE.test(s)) { wanted.add(s); continue; }
+        // Unrecognized tokens are dropped here (defense in depth); the route rejects them before we get here.
+    }
+    // 'write' implies 'read' at the same level so a write grant can also fetch: globally, and per-resource
+    // (`posts:write` ⇒ `posts:read`).
+    if (wanted.has('write')) wanted.add('read');
+    for (const s of [...wanted]) {
+        const m = RESOURCE_SCOPE_RE.exec(s);
+        if (m && m[2] === 'write') wanted.add(`${m[1]}:read`);
+    }
+    if (wanted.size === 0) {
+        // No VALID scopes resulted. Default to least-privilege read ONLY when nothing was supplied; if the
+        // caller supplied scopes that were all unrecognized (e.g. `posts:*`), return [] (no access) rather
+        // than silently widening to global read. (The create route rejects this before it can be stored.)
+        return parts.length === 0 ? ['read'] : [];
+    }
+    // Stable order for deterministic storage/tests: global scopes first (read, write), then resource
+    // scopes sorted alphabetically.
+    const global = GLOBAL_SCOPES.filter((s) => wanted.has(s));
+    const resource = [...wanted].filter((s) => !GLOBAL_SCOPES.includes(s)).sort();
+    return [...global, ...resource];
+}
+
+/**
+ * Does a token with `scopes` permit an HTTP `method` against `resource` (the URL's resource segment, e.g.
+ * 'posts')? A request is allowed when the token holds EITHER the matching global scope OR the matching
+ * per-resource scope:
+ *   • safe method  → global 'read'/'write', or `<resource>:read`/`<resource>:write`
+ *   • mutating     → global 'write', or `<resource>:write`
+ * Self-contained (does not rely on normalizeScopes' write⇒read expansion) so it is correct for any stored
+ * or hand-crafted scope list. An empty/unknown `resource` matches ONLY the global scopes — a resource-
+ * scoped token is denied on a route we cannot classify (fail-closed / least privilege).
+ */
+function scopeAllows(scopes: string[] | string, method: string, resource: string): boolean {
+    const list = Array.isArray(scopes)
+        ? scopes
+        : String(scopes || '').split(',').map((s) => s.trim()).filter(Boolean);
+    const has = (s: string) => list.includes(s);
+    const r = String(resource || '').toLowerCase();
+    if (SAFE_METHODS.has(String(method).toUpperCase())) {
+        return has('read') || has('write') || (!!r && (has(`${r}:read`) || has(`${r}:write`)));
+    }
+    return has('write') || (!!r && has(`${r}:write`));
+}
+
+/**
+ * Back-compat shim: the old method-only gate, equivalent to scopeAllows with no resource context (global
+ * scopes only). Retained for any caller that cannot supply a resource.
  */
 function scopeAllowsMethod(scopes: string[], method: string): boolean {
-    const list = Array.isArray(scopes) ? scopes : String(scopes || '').split(',');
-    if (SAFE_METHODS.has(String(method).toUpperCase())) return list.includes('read');
-    return list.includes('write');
+    return scopeAllows(scopes, method, '');
 }
 
 // last_used_at is best-effort telemetry, so throttle the write to at most once/minute per token to avoid
@@ -120,7 +183,9 @@ class ApiToken {
             id: row.id,
             userId: row.user_id,
             name: row.name,
-            scopes: String(row.scopes || 'read').split(',').filter(Boolean),
+            // A NULL column (legacy/defensive) means 'read'; a genuinely EMPTY string means no access — do
+            // NOT let `|| 'read'` resurrect an empty scope set into a global-read token.
+            scopes: (row.scopes == null ? 'read' : String(row.scopes)).split(',').filter(Boolean),
             tokenPrefix: row.token_prefix,
             expiresAt: row.expires_at != null ? Number(row.expires_at) : null
         };
@@ -166,8 +231,11 @@ class ApiToken {
     }
 
     static normalizeScopes = normalizeScopes;
+    static invalidScopes = invalidScopes;
+    static scopeAllows = scopeAllows;
     static scopeAllowsMethod = scopeAllowsMethod;
     static ALLOWED_SCOPES = ALLOWED_SCOPES;
+    static GLOBAL_SCOPES = GLOBAL_SCOPES;
     static PREFIX = PREFIX;
 }
 
