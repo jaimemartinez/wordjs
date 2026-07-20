@@ -14,6 +14,7 @@
  */
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
 let sharp: any = null;
 try { sharp = require('sharp'); } catch { /* sharp unavailable on this host → middleware is a no-op */ }
 
@@ -36,16 +37,21 @@ export function imageNegotiation(uploadsDir: string) {
             accept.includes('image/avif') ? 'avif' : accept.includes('image/webp') ? 'webp' : null;
         if (!fmt) return next();
 
-        // Resolve + CONTAIN the source path within the uploads root (defeat path traversal). req.path is
-        // already mount-relative (this mw is mounted at /uploads).
+        // Sanitize the mount-relative path (req.path is already stripped of the /uploads mount). Restrict to
+        // a strict filename charset AND reject any '..' segment — a recognized path-injection barrier that
+        // genuinely prevents escaping the uploads root; anything else falls through to serve the original.
         let rel: string;
-        try { rel = decodeURIComponent(req.path).replace(/^[/\\]+/, ''); } catch { return next(); }
-        const srcPath = path.resolve(root, rel);
-        if (srcPath !== root && !srcPath.startsWith(root + path.sep)) return next();
+        try { rel = decodeURIComponent(req.path).replace(/\\/g, '/').replace(/^\/+/, ''); } catch { return next(); }
+        if (rel.includes('..')) return next(); // reject traversal — the CodeQL-recognized path-injection barrier
+        if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel)) return next(); // strict filename charset (defense-in-depth)
+        const srcPath = path.join(root, rel);
+        if (!srcPath.startsWith(root)) return next(); // path.join keeps a clean rel inside root; assert it anyway
         try { if (!fs.statSync(srcPath).isFile()) return next(); } catch { return next(); }
 
-        // Derive the cache path from the CONTAINED relative path (never from raw input).
-        const cachePath = path.join(cacheRoot, path.relative(root, srcPath) + '.' + fmt);
+        // The cache key is a HASH of the (already-sanitized) rel + format, so the derivative path carries NO
+        // user-controlled data into any filesystem call — only hex. Sharded by the first byte to keep dirs small.
+        const key = crypto.createHash('sha256').update(rel + '|' + fmt).digest('hex');
+        const cachePath = path.join(cacheRoot, key.slice(0, 2), key + '.' + fmt);
 
         const serveDerivative = (): void => {
             res.setHeader('Content-Type', 'image/' + fmt);
