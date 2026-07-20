@@ -15,7 +15,22 @@ const MAX_ADMIN_MENU_ITEMS = 50;
  * @param {string} pluginSlug - The plugin slug (used to remove menu when deactivated)
  * @param {object} item - Menu item { href, label, icon, order }
  */
+// A plugin's admin-menu href is rendered as a sidebar link. adminMenu.add is reachable WITHOUT a grant,
+// so an untrusted plugin can supply a `javascript:`/`data:` scheme, an off-site (`https://evil…`), or a
+// protocol-relative (`//evil…`) URL → an admin-panel phishing / UI-spoof primitive. Require a same-origin,
+// relative path: a single leading '/', not '//', and only safe URL-path characters. Matches every legit
+// admin route (/admin, /admin/posts?type=x, /admin/plugin/cards). 'core' (host code) is exempt.
+const SAFE_ADMIN_HREF = /^\/(?!\/)[\w\-./?=&%#]*$/;
+
 function registerAdminMenu(pluginSlug: string, item: any) {
+    item = item || {};
+    // SECURITY: validate the plugin-controlled href BEFORE it can enter the registry. Drop the item on a
+    // non-relative / dangerous-scheme href rather than register a phishable link (host 'core' is trusted).
+    if (pluginSlug !== 'core' && !SAFE_ADMIN_HREF.test(typeof item.href === 'string' ? item.href : '')) {
+        console.warn(`[Security] admin-menu item from plugin '${pluginSlug}' rejected: unsafe href ${JSON.stringify(item.href)} (must be a relative /admin path, no scheme).`);
+        return;
+    }
+
     // Clear existing items for this plugin to avoid duplicates on hot reload
     if (!adminMenuItems.has(pluginSlug)) {
         adminMenuItems.set(pluginSlug, []);
@@ -31,10 +46,12 @@ function registerAdminMenu(pluginSlug: string, item: any) {
     const alreadyExists = existingItems.some((existing: any) => existing.href === item.href);
 
     if (!alreadyExists) {
+        // Clamp plugin-controlled strings so a giant label/icon can't bloat the sidebar payload / host Map.
+        const clamp = (v: any, n: number) => (typeof v === 'string' ? v.slice(0, n) : v);
         existingItems.push({
             href: item.href,
-            label: item.label,
-            icon: item.icon || 'fa-puzzle-piece',
+            label: pluginSlug === 'core' ? item.label : clamp(item.label, 200),
+            icon: (pluginSlug === 'core' ? item.icon : clamp(item.icon, 64)) || 'fa-puzzle-piece',
             order: item.order || 100,
             cap: item.cap || item.capability || null,
             section: item.section || 'core',

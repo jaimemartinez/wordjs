@@ -313,6 +313,14 @@ const config: AppConfig = {
         // Virtual-address-space backstop (MB) via RLIMIT_AS on the non-cgroup Linux path (loose by design —
         // V8's pointer-compression cage forces it high; the precise cap is the cgroup/Job-Object/poll).
         addressSpaceCapMb: Number(fileConfig.sandbox?.addressSpaceCapMb) > 0 ? Number(fileConfig.sandbox.addressSpaceCapMb) : 16384,
+        // V8 hard block on RUNTIME code generation (eval / new Function(string)) via
+        // --disallow-code-generation-from-strings, layered under the install-time AST scanner (which only
+        // sees STATICALLY-visible eval/Function, not code assembled at runtime or inside an unscanned
+        // dependency). OPT-IN (default off): some plugin deps legitimately use Function() (e.g. template
+        // engines), and it is force-disabled under ts-node regardless (dev needs codegen to compile TS), so
+        // it only bites a COMPILED prod worker. Enable once you've confirmed your plugins' deps don't rely
+        // on runtime codegen. (Consumed in core/plugin-isolate.ts; previously read there but undeclared here.)
+        blockCodeGen: fileConfig.sandbox?.blockCodeGen === true,
     }
 };
 
