@@ -200,6 +200,15 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (raw.includes('/*!')) {
         throw new Error(`🛡️ Plugin DB access denied: MySQL executable comments (/*! ... */) are not permitted.`);
     }
+    // Backslash-escape divergence (adversarial re-verify): MySQL/MariaDB (unless NO_BACKSLASH_ESCAPES is set)
+    // treat `\'` as an ESCAPED quote, while this lexer + SQLite/Postgres treat `\` literally. A `'\''`
+    // sentinel therefore pairs the quotes differently in the guard vs MySQL, letting a `UNION`/stacked
+    // statement hide INSIDE what the guard scans as a string literal. Plugins pass literal data via BOUND
+    // params (?), never inline, so a backslash in untrusted SQL is never legitimate — deny it. This closes
+    // the whole class on every engine (belt-and-suspenders with NO_BACKSLASH_ESCAPES on the MySQL pool).
+    if (raw.includes('\\')) {
+        throw new Error(`🛡️ Plugin DB access denied: backslashes are not permitted in plugin SQL; pass literal data via bound parameters (?).`);
+    }
     // ONE lexer pass recognizes comments + string literals + quoted identifiers TOGETHER, so attacker text
     // inside any of them can't splice out structure (the comment-vs-literal ordering bug #2 and the
     // quoted-identifier phantom-paren #1). `cleaned` = lowercased, comments/literals blanked; `toks` feeds

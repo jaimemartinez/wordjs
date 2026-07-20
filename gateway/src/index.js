@@ -318,7 +318,13 @@ if (cluster.isPrimary) {
         if (changed) { saveRegistry(); broadcastRegistry(); }
     }, 30000);
 
-    const handleRegistration = (service) => {
+    // Which peer identity (cert CN) owns each registered target url. A peer may only add/evict targets it
+    // owns — adversarial re-verify showed the CN route-allowlist alone was insufficient: a frontend could
+    // echo the backend's url with routes:[] to EVICT /api, then register `/` so /api/v1/auth fell through
+    // to `/` (credential capture). The /register handler enforces the ownership check against this map.
+    const targetOwner = new Map();
+
+    const handleRegistration = (service, cn) => {
         registry.forEach((group, route) => {
             if (group.targets.has(service.url)) {
                 group.targets.delete(service.url);
@@ -329,6 +335,7 @@ if (cluster.isPrimary) {
             if (!registry.has(route)) registry.set(route, { name: service.name, targets: new Set(), index: 0, metrics: new Map() });
             registry.get(route).targets.add(service.url);
         });
+        if (cn) targetOwner.set(service.url, cn);
         saveRegistry();
         broadcastRegistry();
         logger.info(`[Gateway] Service registered: ${service.name} -> ${service.url}`);
@@ -341,9 +348,9 @@ if (cluster.isPrimary) {
     };
 
     cluster.on('message', (worker, message) => {
-        if (message.type === 'REGISTER_SERVICE') {
-            handleRegistration(message.service);
-        }
+        // NOTE: the former REGISTER_SERVICE branch was removed — nothing emits it, and it was an
+        // UNAUTHENTICATED path into handleRegistration. All registration now flows through the mTLS
+        // /register endpoint (identity-, route-, host- and owner-checked).
         if (message.type === 'RESTART_GATEWAY') {
             restartGateway();
         }
@@ -376,12 +383,26 @@ if (cluster.isPrimary) {
                 // longest-prefix match then routes 100% of login/reset traffic to it (credential capture).
                 // These sets mirror exactly what the backend (index.ts) and frontend (instrumentation.ts)
                 // legitimately declare, so authorized registration is unaffected; anything else is refused.
-                const ROLE_ROUTES = {
+                // null-proto so a CN like '__proto__' / 'constructor' can't make the lookup a truthy inherited value.
+                const ROLE_ROUTES = Object.assign(Object.create(null), {
                     backend: new Set(['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics']),
                     frontend: new Set(['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']),
+                });
+                // Does the peer's certificate cover `host` (a SAN entry, its CN, or loopback)? Binds a registered
+                // target to the identity the peer actually proved so it can't point a route at an external box.
+                // Loopback is always allowed (a local target can't be an external MITM; same-host cross-service
+                // eviction is caught by the ownership check below, not here).
+                const certCoversHost = (cert, host) => {
+                    if (!host) return false;
+                    const h = String(host).toLowerCase().replace(/^\[|\]$/g, '');
+                    if (h === '127.0.0.1' || h === 'localhost' || h === '::1') return true;
+                    if (cert && cert.subject && String(cert.subject.CN).toLowerCase() === h) return true;
+                    const san = (cert && cert.subjectaltname) || ''; // "DNS:host, IP Address:1.2.3.4"
+                    return san.split(',').some(e => { const v = e.trim(); const i = v.indexOf(':'); return (i >= 0 ? v.slice(i + 1) : v).trim().toLowerCase() === h; });
                 };
                 internalApp.post('/register', requireIdentity(['backend', 'frontend']), (req, res) => {
-                    const cn = req.socket.getPeerCertificate()?.subject?.CN;
+                    const cert = req.socket.getPeerCertificate();
+                    const cn = cert && cert.subject && cert.subject.CN;
                     const allowed = ROLE_ROUTES[cn];
                     const declared = Array.isArray(req.body && req.body.routes) ? req.body.routes : [];
                     const bad = declared.filter(r => !allowed || !allowed.has(r));
@@ -389,7 +410,23 @@ if (cluster.isPrimary) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not serve route(s): ${bad.join(', ') || '(no routes declared)'}`);
                         return res.status(403).json({ error: 'One or more declared routes are not permitted for this identity.', routes: bad });
                     }
-                    handleRegistration(req.body);
+                    // The target URL must be well-formed and its HOST covered by the peer's certificate, so a peer
+                    // can't register a target pointing at an attacker box or another host's address.
+                    let host;
+                    try { host = new URL(String(req.body && req.body.url)).hostname; } catch { host = null; }
+                    if (!host || !certCoversHost(cert, host)) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' target host '${host || '(invalid url)'}' not covered by its certificate`);
+                        return res.status(403).json({ error: 'Target URL host is invalid or not covered by your certificate identity.' });
+                    }
+                    // Ownership: a peer may only (re)register a target url that is unowned or already its own — it
+                    // can NEVER touch (and thus evict) another identity's target (e.g. the backend's /api, which
+                    // otherwise let a frontend evict it and capture /api/v1/auth via the `/` catch-all).
+                    const owner = targetOwner.get(req.body.url);
+                    if (owner && owner !== cn) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not register target '${req.body.url}' owned by '${owner}'`);
+                        return res.status(403).json({ error: 'That target is registered by another identity.' });
+                    }
+                    handleRegistration(req.body, cn);
                     res.json({ success: true });
                 });
 

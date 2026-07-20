@@ -183,11 +183,11 @@ class MysqlDriver extends DatabaseDriverInterface {
             // NOTE: the pool's 'connection' event hands back the RAW (callback-style) connection, not a
             // promise wrapper — so use a callback here, never .then/.catch (that throws "not a promise").
             this.pool.on('connection', (conn: any) => {
-                conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_ENGINE_SUBSTITUTION'", () => { });
+                conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES,NO_ENGINE_SUBSTITUTION'", () => { });
             });
 
             const conn = await this.pool.getConnection();
-            await conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_ENGINE_SUBSTITUTION'");
+            await conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES,NO_ENGINE_SUBSTITUTION'");
             const [rows] = await conn.query('SELECT VERSION() AS v');
             conn.release();
             console.log('✅ MySQL: Connected successfully to', rows[0].v);
