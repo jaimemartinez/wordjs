@@ -19,6 +19,11 @@
  *   media download is a future enhancement). nav_menu_item entries are skipped (menus differ enough).
  */
 
+// fast-xml-parser v5 is a drop-in here: the CommonJS entry (`require`) still exports { XMLParser },
+// and every option below (ignoreAttributes / attributeNamePrefix / parseTagValue /
+// parseAttributeValue / trimValues / processEntities) is unchanged from v4 and produces byte-identical
+// parse output for WXR — CDATA merging, attribute prefixing and entity decoding all match v4. This is
+// pinned by src/tests/wxr-import.test.ts against a representative export fixture.
 const { XMLParser } = require('fast-xml-parser');
 const Post = require('../models/Post');
 const User = require('../models/User');
