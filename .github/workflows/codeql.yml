@@ -32,6 +32,13 @@ jobs:
         with:
           language: ${{ matrix.language }}
           queries: security-and-quality
+          # Test code is not shipped and its fixtures aren't attacker-reachable, so exclude it from the
+          # security scan (avoids noise like "missing rate limiting" on a test's throwaway express app).
+          config: |
+            paths-ignore:
+              - '**/tests/**'
+              - '**/*.test.ts'
+              - '**/*.test.js'
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v3
