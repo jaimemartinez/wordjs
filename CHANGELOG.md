@@ -4,6 +4,79 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.10.0] - 2026-07-20
+
+A **platform + hardening** release: WordJS opens up as a headless backend (scoped API tokens and outgoing
+webhooks), gains real account security (TOTP two-factor with an admin-enforced-by-role policy), and serves
+images ~50–90% smaller automatically. Drop-in minor upgrade — no schema migration is required by the host
+(the token/webhook tables self-migrate on boot) and every new capability is **opt-in or transparent**;
+existing installs behave exactly as before until an admin turns something on.
+
+### Added
+
+- **Scoped API tokens (headless).** Personal access tokens (`Authorization: Bearer wjt_…`) for CI, JAMstack,
+  and automation. A token authenticates **as** its user on the CSRF-exempt Bearer path and is bounded by
+  **both** the user's live capabilities **and** the token's scope — effective permission = user ∩ token
+  (least privilege). Scopes are coarse `read`/`write` **or per-resource** (`posts:write`, `media:read`, …),
+  so a build token can be confined to exactly the resources it needs and touch nothing else. Only a sha256
+  of the token is stored (plaintext shown once, unrecoverable); tokens are revocable with an optional expiry.
+  Self-service at **`/admin/tokens`**. An API token can never manage tokens (no self-perpetuation).
+- **Outgoing HMAC-signed webhooks.** Registered endpoints receive signed `POST`s on content events
+  (`post.created/updated/published/deleted`, `comment.created/deleted`), each carrying an HMAC-SHA256
+  signature over the body. Delivery is **SSRF-safe** (connect-time IP validation blocks loopback/metadata/
+  RFC1918 and re-checks across redirects), with a durable retry queue and a delivery log + manual redeliver
+  at **`/admin/webhooks`**.
+- **Two-factor authentication (TOTP).** Opt-in RFC 6238 authenticator-app codes with QR enrollment,
+  single-use backup recovery codes, and a two-step login. Self-service on **`/admin/account`**; zero new
+  dependencies for the core codec.
+- **Admin-enforced MFA-by-role policy.** An admin can **require** chosen roles to have 2FA, with a grace
+  period to enrol. A required-role user is nudged during grace, then hard-blocked from the dashboard (except
+  the enrolment flow) until 2FA is on — enforced by a global backend gate, not just the UI. Configured in the
+  **Security Center** (`/admin/security`).
+- **Automatic image optimization.** A transparent `/uploads` layer transcodes JPEG/PNG to **AVIF/WebP** based
+  on the request `Accept` header, caches derivatives to disk, and serves the same URL with `Vary: Accept` +
+  immutable caching — typically **50–90% smaller** with no frontend change and a safe fallback to the original.
+- **Fail-closed sandbox hardening mode + visibility.** `config.sandbox.requireHardening` makes an isolated
+  plugin **refuse to launch** unless kernel hardening is actually active (instead of silently degrading), and
+  the live hardening state (`unsupported`/`disabled`/`active`/`degraded`) is surfaced on the admin
+  `GET /health/details`.
+- **Supply-chain CI.** CodeQL static analysis (SAST) on every PR, a per-release **CycloneDX SBOM** attached to
+  the GitHub Release, and widened Dependabot coverage.
+
+### Performance
+
+- **Automatic image optimization** (above) cuts image bytes 50–90% on supporting browsers.
+- **Postgres connection-pool tuning** — bounded `max`/idle/connection timeouts plus
+  `idle_in_transaction_session_timeout` to evict leaked-transaction connections that pin the pool (all
+  overridable in the db config; `statement_timeout` deliberately left off so legit long migrations/imports
+  aren't killed).
+
+### Security
+
+- **MFA challenge token can no longer authenticate a session.** The short-lived `mfa_challenge` JWT (issued
+  after the password step) is rejected by the auth middleware, so the second factor can't be skipped by
+  presenting the challenge token as a session credential.
+- **The MFA enforcement gate treats a session JWT as a session on every transport.** Only genuine `wjt_` API
+  tokens are exempt; a raw session JWT presented as a `Bearer` header is enforced exactly like the cookie, so
+  an un-enrolled required-role account can't opt out of enforcement by switching transports.
+- **Per-resource token scopes fail closed.** An all-unrecognized scope request (e.g. a typo like `posts:*`) is
+  **rejected** rather than silently widened to a global read token.
+- **TOTP anti-replay + atomic backup-code consumption**, a dedicated login-lockout bucket for the second
+  factor, and per-IP throttling on the MFA endpoints.
+- Third-party GitHub Actions are **pinned to immutable commit SHAs** (a moving tag can be repointed).
+
+### Fixed
+
+- **Webhook signing secret is stored in plaintext** (was AES-encrypted with a key derived from the rotatable
+  `jwt.secret`, which silently dead-lettered **every** delivery whenever that secret changed). At-rest
+  protection is the DB/disk's job.
+- **MFA grace-period anchor mis-parsed timestamps.** SQLite's UTC `user_registered` (`YYYY-MM-DD HH:MM:SS`,
+  no zone) was read as local time, pushing the grace deadline into the future on positive-offset servers so
+  `graceDays: 0` never enforced; timestamps are now UTC-pinned and the anchor clamped to now.
+- **CodeQL path-injection findings in the media pipeline** resolved with recognized `..`-containment +
+  `startsWith(root)` barriers.
+- **High-severity dependency advisories** swept (`brace-expansion` ReDoS, `js-yaml` quadratic-CPU merge keys).
+
 ## [1.9.1] - 2026-07-20
 
 Patch release fixing the compiled bundle's **split** (`npm start`) and **separate / multi-node** modes,
