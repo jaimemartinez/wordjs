@@ -11,7 +11,7 @@
         "wordjs-setup": "index.js"
     },
     "dependencies": {
-        "fs-extra": "^11.2.0",
+        "fs-extra": "^11.3.6",
         "node-forge": "^1.4.0"
     }
 }
