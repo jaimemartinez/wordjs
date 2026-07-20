@@ -6,12 +6,6 @@
 > the checklist (rotate `jwtSecret` / `gatewaySecret` / `db.password`, set a strong `gatewaySecret`)
 > before exposing an instance to the internet. See [`documentation/security.md`](documentation/security.md)
 > for the deeper defenses reference.
->
-> **Rotate if you cloned early.** A config backup file (`backend/wordjs-config.backup.json`) that contained
-> real secrets was previously committed. It has since been **purged from the entire git history**
-> (`git-filter-repo`) and is no longer present in any commit. However, anyone who cloned or forked the repo
-> **before** the purge still has those secrets in their local history — those operators **must** rotate
-> `jwtSecret`, `gatewaySecret`, and `db.password`.
 
 ## 🛡️ Security Features
 
@@ -78,10 +72,10 @@ Our team is committed to addressing security issues promptly.
 
 ## 📝 Supported Versions
 
-WordJS is pre-production; only the latest `main` and the current `1.6.x` release line are supported. There is no LTS line yet.
+WordJS is pre-production; only the latest `main` and the current `1.10.x` release line are supported. There is no LTS line yet.
 
-| Version  | Supported | Notes                                             |
-| :------- | :-------- | :------------------------------------------------ |
-| `main`   | ✅         | Latest development line (the only one patched)    |
-| `1.6.x`  | ✅         | Current release line (latest tag `v1.6.2`)        |
-| < `1.6`  | ⚠️        | Best-effort; upgrade to `1.6.x` or latest `main`  |
+| Version   | Supported | Notes                                              |
+| :-------- | :-------- | :------------------------------------------------- |
+| `main`    | ✅         | Latest development line (the only one patched)     |
+| `1.10.x`  | ✅         | Current release line (latest tag `v1.10.0`)        |
+| < `1.10`  | ⚠️        | Best-effort; upgrade to `1.10.x` or latest `main`  |

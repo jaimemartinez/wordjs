@@ -155,17 +155,18 @@ Monkey-patches `fs` inside the isolated child so plugin code is confined to its 
 
 ---
 
-## 4g. Plugin Marketplace 🛒
+## 4g. Plugin & Theme Marketplace 🛒
 
 **Location:** `backend/src/routes/marketplace.ts` (route) + `backend/scripts/build-marketplace.js` (catalog builder)
 
-One-click install of first-party plugins distributed **outside** the core build. The builder (`npm run build:marketplace` from the repo root) packs every plugin under `marketplace/plugins/<slug>/` into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` (id/name/version/category/permissions/size + **sha256** per zip). The `dist/` output is a **build artifact — NOT committed** (it is gitignored by `**/dist/`); `release.yml` builds it on a `v*` tag and publishes it as **GitHub Release assets**, so plugin releases are decoupled from the core-code bundle.
+One-click install of first-party plugins **and themes** distributed **outside** the core build. The builder (`npm run build:marketplace` from the repo root) packs every plugin under `marketplace/plugins/<slug>/` into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` (id/name/version/category/permissions/size + **sha256** per zip). The `dist/` output is a **build artifact — NOT committed** (it is gitignored by `**/dist/`); `release.yml` builds it on a `v*` tag and publishes it as **GitHub Release assets**, so plugin releases are decoupled from the core-code bundle.
 
 ### Logic
 *   **Source resolution** (`resolveSources()` — plural, **admin-configurable**): the ordered source list is resolved by precedence: (1) the admin-managed `marketplace_sources` option (a JSON **array** of `https` catalogs set from the Marketplace UI — official + private), else (2) the legacy single `marketplace_source` option (back-compat), else (3) the repo-local `marketplace/dist/` when present (dev), else (4) the built-in default `https://github.com/jaimemartinez/wordjs/releases/latest/download` (release assets — **not** a `raw.githubusercontent.com/.../marketplace/dist` URL, which 404s because `dist` isn't committed). Multiple sources are **merged** (dedup by `id`, earlier sources win) with **per-source error isolation** — one bad URL is reported but never hides the rest. Remote sources must be **https** (or `http://localhost` in dev).
 *   **Endpoints** (all `authenticate` + `isAdmin`): `GET /api/v1/marketplace/catalog` returns the merged catalog annotated with installed/active/`updateAvailable` state + a per-source status array (5-minute in-memory cache keyed by the source set, `?refresh=1` busts it); `POST /api/v1/marketplace/install` takes a catalog `id` and installs from the exact source that entry was listed under; `GET`/`PUT /api/v1/marketplace/sources` read/replace the admin source list (each URL must pass the same https/localhost check; capped at 12).
 *   **Install hardening:** the catalog `file` name must match a strict `SAFE_FILE_RE` (no path smuggling from a hostile catalog; local reads are additionally resolved-path-confined to the dist dir), the download is size-capped (**10 MB**, mirroring the upload route's multer cap), and the bytes are **sha256-verified** against the catalog entry before install.
 *   **Shared pipeline:** the verified zip is written to a temp file and handed to `installPluginFromZip()` from `routes/plugins.ts` — the exact pipeline manual uploads use (zip-bomb budget via `zip-guard`, Zip Slip/slug validation, squat refusal, manifest + AST scan) — so the marketplace adds no new install surface beyond the catalog fetch. Installed plugins land inactive with **default-deny** grants (§4a).
+*   **Themes ride the same mechanism:** the builder also packs `marketplace/themes/<slug>/` → `marketplace/dist/theme-<slug>-<version>.zip` + `marketplace/dist/marketplace-themes-index.json` (12 first-party themes ship today). A parallel set of admin endpoints serves a theme catalog — `GET /api/v1/marketplace/themes/catalog`, `POST /api/v1/marketplace/themes/install`, and `GET`/`PUT /api/v1/marketplace/themes/sources` — resolved by `resolveThemeSources()` against an **independent** `marketplace_theme_sources` option (`THEMES_INDEX_FILE = marketplace-themes-index.json`), so themes can point at a different origin than plugins. Verified theme zips install through `installThemeFromZip()` (`core/themes.ts`), the same hardened zip-guard/slug-validation pipeline.
 
 ---
 
@@ -274,6 +275,30 @@ The Puck page tree (`_puck_data`) is stored verbatim in `post_meta` and rendered
 *   **Operator override:** a `WORDJS_INSTALL_TOKEN` env value is honored **only if ≥ 16 chars** (else ignored with a warning, falling back to the random token).
 *   **Enforcement:** `routes/setup.ts` rejects any `/install` or `/test-db` request whose `x-install-token` header or `installToken` body field fails `verifyInstallToken()` (constant-time, **fail-closed** when no token was generated).
 *   **Lifecycle:** the token is held **in memory** (lost on restart, re-minted while uninstalled); `clearInstallTokenFile()` removes the on-disk mirror once the instance is installed.
+
+---
+
+## 9a. Scoped API Tokens 🎟️
+
+**Location:** `backend/src/models/ApiToken.ts` + `backend/src/routes/auth.ts`
+
+Personal access tokens for headless/machine callers, presented as `Authorization: Bearer wjt_<secret>`. The raw `wjt_…` is shown **once** at creation and stored **sha256-at-rest**. Each token carries per-token global scopes (`read`/`write`) plus per-resource scopes (e.g. `posts:write`, `media:read`); the **effective permission is the caller's capabilities ∩ the token's scope**, so a token can never exceed its owner. Managed via `GET`/`POST`/`DELETE /api/v1/auth/tokens` (session-only) with a self-service admin UI at `/admin/tokens`. The Bearer path is **CSRF-exempt** (no cookie, no CSRF surface).
+
+---
+
+## 9b. Two-Factor Auth (TOTP) 🔐
+
+**Location:** `backend/src/core/mfa.ts` + `backend/src/core/totp.ts`
+
+TOTP second factor. Enrolment and lifecycle live under `/api/v1/auth/mfa*`: `POST /auth/mfa` completes a login by verifying a TOTP or backup code for a pending challenge, and `/auth/mfa/setup`, `/enable`, `/disable`, `/status`, `/backup-codes` manage the factor (self-service admin UI at `/admin/account`). An **admin-enforced MFA-by-role policy** (`GET`/`PUT /auth/mfa/policy`, edited in the Security Center) is applied globally by the `mfaComplianceGate` middleware, which blocks a user who must enrol under the policy until they do.
+
+---
+
+## 9c. Outgoing Webhooks 🔔
+
+**Location:** `backend/src/core/webhooks.ts` + `backend/src/models/Webhook.ts`
+
+HMAC-signed outbound webhooks fired on content events. Subscriptions are managed via `/api/v1/webhooks` (admin UI at `/admin/webhooks`); each delivery is signed with the subscription's HMAC secret and is **SSRF-safe** — the destination IP is re-validated **at delivery time** (loopback/metadata/RFC1918 rejected), mirroring the egress posture in §4b. A delivery log and manual redeliver are exposed per subscription.
 
 ---
 

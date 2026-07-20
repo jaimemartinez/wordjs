@@ -27,22 +27,24 @@ Themes and plugins are separate systems today. Three options, in order of invasi
 - **A. Scoped public design (available NOW, zero core work)** — the plugin ships its complete public
   look inside its own blocks/components with plugin-scoped CSS. The site keeps its active theme;
   the store/restaurant pages still look fully branded. This is the default for the program.
-- **B. Companion theme (small core capability, recommended next)** — the plugin zip includes a
+- **B. Companion theme (SHIPPED)** — the plugin zip includes a
   `theme/` folder; on activation the admin sees "Install this plugin's theme" (one click copies it
-  to `backend/themes/<slug>-theme` and optionally switches). Requires one host-side, permission-gated
-  bridge (`theme:install`) reusable by every plugin. Estimated: one focused day, includes security
-  review (theme code runs isolated already post theme-isolation).
+  to `backend/themes/<slug>-theme` and optionally switches). Delivered as a core admin-only route
+  `POST /api/v1/plugins/:slug/install-theme` (`authenticate` + `isAdmin`) that calls
+  `installThemeFromDir()` with zip-guard/symlink/traversal validation and honours `{activate:true}`
+  (409 on re-install); `GET /plugins` advertises `hasTheme`/`themeInstalled`. Theme code runs
+  isolated already post theme-isolation.
 - **C. Virtual theme takeover** — plugin registers itself as the active theme. Most invasive,
   not planned.
 
 ## Flagship gap analysis
 
-### online-store v1 → v2 "tienda completa"
+### online-store v2 "tienda completa" — SHIPPED (v2.0.0)
 
-Has today: product catalog, client cart, checkout with server-side price validation, coupons,
-orders admin, optional Stripe Checkout, manual payment.
+Every row below shipped in v2.0.0. v1 base was: product catalog, client cart, checkout with
+server-side price validation, coupons, orders admin, optional Stripe Checkout, manual payment.
 
-| Gap | Notes |
+| Delivered in v2 | Notes |
 |---|---|
 | Product variants (size/color) + per-variant SKU & stock | atomic stock decrement at order time |
 | Multiple images per product + gallery | media picker reuse |
@@ -53,14 +55,15 @@ orders admin, optional Stripe Checkout, manual payment.
 | Refunds/returns | order state + Stripe refund call |
 | Product page with SEO (og tags) + catalog search/filters/categories | public routes |
 | Reports: sales by day/month, top products, CSV | admin tab |
-| Stripe webhooks (`payment_intent.succeeded`) | today the redirect is the only confirmation |
+| Stripe webhooks (`payment_intent.succeeded`) | webhook + verify-on-return + reconciler (the redirect is treated as an untrusted hint, not the only confirmation) |
 
-### restaurant-menu v1 → v2 "restaurante completo"
+### restaurant-menu v2 "restaurante completo" — SHIPPED (v2.0.0)
 
-Has today: sections/dishes with prices, photos, diet tags; elegant Puck block; simple online
-ordering with client cart; WhatsApp handoff; order board (Nuevo/Preparando/Listo) + config.
+Every row below shipped in v2.0.0. v1 base was: sections/dishes with prices, photos, diet tags;
+elegant Puck block; simple online ordering with client cart; WhatsApp handoff; order board
+(Nuevo/Preparando/Listo) + config.
 
-| Gap | Notes |
+| Delivered in v2 | Notes |
 |---|---|
 | Dish modifiers (size, extras with price) | per-line-item options |
 | Opening hours + accept-orders window + prep times | reject orders when closed |
@@ -73,7 +76,8 @@ ordering with client cart; WhatsApp handoff; order board (Nuevo/Preparando/Listo
 
 ## Tiers for the rest
 
-- **T1 — full product**: online-store, restaurant-menu, bookings, event-tickets, newsletter.
+- **T1 — full product**: online-store, restaurant-menu, conference-manager, bookings, event-tickets,
+  newsletter. (`mail-server` is infra, not a content plugin, so it sits outside these tiers.)
 - **T2 — solid feature (polish + emails + reports)**: donations, digital-downloads, invoices,
   job-board, auctions, vendor-marketplace, events-calendar, polls, testimonials, contact-forms.
 - **T3 — utilities (already near-complete)**: faq, social-share, cookie-consent, notification-bar,
@@ -84,8 +88,9 @@ ordering with client cart; WhatsApp handoff; order board (Nuevo/Preparando/Listo
 
 One plugin per cycle: freeze spec → build workflow (one builder per module → adversarial reviewer →
 fixer) → **real E2E on a running site** (a real order, a real test-mode payment) → gates (backend
-tests, tsc, AST scan, catalog rebuild) → ship to catalog. Order: online-store → restaurant-menu →
-bookings → event-tickets → newsletter → T2 sweep.
+tests, tsc, AST scan, catalog rebuild) → ship to catalog. Progress: online-store and restaurant-menu
+are done (both v2.0.0); conference-manager is complete at v2.1.0. Next: bookings → event-tickets →
+newsletter → T2 sweep.
 
 Sandbox cookbook every builder must respect: SQL guard (upsert = UPDATE-then-INSERT, never
 `ON CONFLICT`), no transactions on the db bridge, `res.json` (never `res.send(string)`), no

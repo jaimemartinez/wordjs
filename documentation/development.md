@@ -65,7 +65,7 @@ So **always run `npm run build` for production**; otherwise you silently get the
 
 ```bash
 cd backend
-npm run dev        # node --watch -r ./scripts/dev-env.js -r ts-node/register src/index.ts
+npm run dev        # node --watch-path=./src -r ./scripts/dev-env.js -r ts-node/register src/index.ts
 ```
 
 The dev script preloads `scripts/dev-env.js` first: it fail-safes `NODE_ENV` to `development` when unset, because `config/app.ts` now defaults `nodeEnv` to `production` (so a misconfigured deploy never boots in the relaxed mode). Without the preload the split-mode dev backend would boot in production mode and reject the localhost frontend's credentialed CORS requests.
@@ -88,15 +88,15 @@ npm run typecheck  # tsc --noEmit
 
 ```bash
 cd backend
-npm test               # node --test -r ts-node/register src/tests/*.test.ts (node:test + supertest)
+npm test               # node --test --test-force-exit -r ts-node/register src/tests/*.test.ts (node:test + supertest)
 npm run test:integration  # node --test … src/tests-integration/*.test.ts (needs Postgres + Redis)
 npm run lint           # eslint (flat config)
 npm run format
 ```
 
-`npm test` runs ~203 backend test cases (202 pass, 1 skip) across 25 `src/tests/*.test.ts` files. Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
+`npm test` runs the backend unit suite across 39 `src/tests/*.test.ts` files (node:test + supertest). Backend `lint`/`format` are **local commands** — backend ESLint is **not** a CI gate.
 
-The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers it has a dialect-descriptor block for (`sqlite-native` and `postgres`, each skipped gracefully when its backend isn't reachable) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The `mysql` (`mysql2`) driver implements the same interface but has no descriptor block in the suite yet. The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 7th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
+The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers it has a dialect-descriptor block for (`sqlite-native`, `postgres`, and `mysql`, each skipped gracefully when its backend isn't reachable — and hard-failed in CI via `WORDJS_CI_DB=1`) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The `mysql` (`mysql2`) block feeds the same SQLite-dialect SQL and asserts the driver's translation layer. The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 7th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 
 The **integration suite** (`src/tests-integration/`, run by `npm run test:integration` and in CI against real `postgres:16` + `redis:7` containers) exercises the multi-node coordination paths and full-app endpoints: distributed-lock lease CAS against Postgres (`dist-lock.integration.test.ts`), Redis pub/sub coherence (`coherence.integration.test.ts`), and the health/metrics endpoints (`health.integration.test.ts`).
 
@@ -191,7 +191,7 @@ Internally, the backend `src/index.ts` skips its self-listen and gateway self-re
 
 - **Monolith** — the simplest single-artifact deploy: one VM/container, TLS via its built-in HTTPS or a single reverse proxy in front.
 - **Split** — scale the services independently and get the gateway's clustering, health-checks, and load-balancing (all three on **one** host).
-- **Separate mode** — the split spread across **different** machines, joined via gateway-minted join tokens (mTLS). See [Separate mode (multi-node)](#-separate-mode-multi-node) above.
+- **Separate mode** — the split spread across **different** machines, joined via gateway-minted join tokens (mTLS). See [Separate mode (multi-node)](#-separate-mode-multi-node) below.
 
 ---
 
@@ -252,11 +252,13 @@ Behaviour: **idempotent / re-runnable** — existing users (by login/email), ter
 
 Every job first runs an **audit gate** (`npm audit --omit=dev --audit-level=high`) that fails on any high/critical **production** dependency CVE, then:
 
-- **Backend:** audit gate → strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers → **marketplace catalog freshness** (re-runs `node backend/scripts/build-marketplace.js` to confirm the catalog still builds; the build is **deterministic** — fixed zip timestamps, no generated-at field — so a plugin change is reproducible from source. `marketplace/dist/` is a gitignored build artifact published as Release assets by `release.yml`, not committed to the repo).
+- **Backend:** audit gate → strict typecheck (`tsc --noEmit`) → **build** (`npm run build`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`) → unit tests (run with `WORDJS_CI_DB=1` against a `mysql:8` service container, so the `postgres` + `mysql` driver-conformance blocks **hard-fail** instead of skipping — the only CI coverage of the SQLite→MySQL translation layer) → **integration tests** (`npm run test:integration`) against real `postgres:16` + `redis:7` service containers → **marketplace catalog freshness** (re-runs `node backend/scripts/build-marketplace.js` to confirm the catalog still builds; the build is **deterministic** — fixed zip timestamps, no generated-at field — so a plugin change is reproducible from source. `marketplace/dist/` is a gitignored build artifact published as Release assets by `release.yml`, not committed to the repo).
 - **Gateway:** audit gate → tests (proxy + mTLS integration).
 - **Frontend:** audit gate → **generate plugin registries** (`generate-plugin-registry.js` + `generate-admin-plugin-registry.js` + `generate-puck-plugin-registry.js`, so type-check/lint/build only reference the checked-out plugins) → strict typecheck (`tsc --noEmit`) → lint → **vitest** (`npm run test`) → production build (`next build`).
 
 The license gate keeps the distribution MIT-clean by failing on network-copyleft (AGPL/SSPL) production dependencies.
+
+A separate **`.github/workflows/codeql.yml`** runs **CodeQL** static analysis (SAST, `security-and-quality` queries, JavaScript/TypeScript) on push/PR to `main` and on a weekly schedule, reporting findings to the repo's **Security** tab without blocking merges.
 
 ---
 
@@ -275,7 +277,7 @@ Marketplace plugins (sources under `marketplace/plugins/`) are packaged separate
 
 The recipient unzips, then — **no build step** — runs `npm run release:install` (installs runtime deps only, `--omit=dev`), starts with `npm run start:mono` (single process, default `https://localhost:3000`) or `npm start` (3-service split), and finishes in the browser install wizard (pick SQLite or PostgreSQL, create the admin). No secrets ship; they're generated locally at install.
 
-In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs the same `install:all` + `bundle-release`, then `npm run build:marketplace`, and publishes a GitHub Release with `wordjs-<tag>.zip` **plus the marketplace assets** (`marketplace/dist/*` — one zip per plugin + `marketplace-index.json`) attached; `workflow_dispatch` builds the same bundles as workflow artifacts only (`wordjs-compiled-release` + `wordjs-marketplace`, no Release). On version tags a second job publishes `create-wordjs` to npm (version synced to the tag; skipped cleanly when the `NPM_TOKEN` secret is not configured).
+In CI, pushing a `v*` tag triggers `.github/workflows/release.yml`, which runs the same `install:all` + `bundle-release`, then `npm run build:marketplace`, and publishes a GitHub Release with `wordjs-<tag>.zip` **plus the marketplace assets** (`marketplace/dist/*` — one zip per plugin + `marketplace-index.json`) and a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`, generated by a SHA-pinned `anchore/sbom-action` step) attached; `workflow_dispatch` builds the same bundles as workflow artifacts only (`wordjs-compiled-release` + `wordjs-marketplace`, no Release). On version tags a second job publishes `create-wordjs` to npm (version synced to the tag; skipped cleanly when the `NPM_TOKEN` secret is not configured).
 
 ---
 

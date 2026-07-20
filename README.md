@@ -20,9 +20,9 @@ can't read password hashes, exfiltrate your config, or take down the host.
 The rest of the package is a modern, JavaScript-native CMS with a WordPress-style extension
 model (plugins, themes, hooks, shortcodes): real **SSR & SEO out of the box** (React Server
 Components, `generateMetadata`, sitemap/robots/RSS), a **no-code visual editor** (Puck with
-in-place rich text) in core rather than as a paid add-on, **13 token-driven themes** with a
-live customizer, a built-in **plugin marketplace** (25 first-party plugins, one-click
-sha256-verified installs), a **WordPress WXR importer** for switching, and a **one-process deploy** —
+in-place rich text) in core rather than as a paid add-on, **token-driven themes** with a
+live customizer, a built-in **plugin & theme marketplace** (28 first-party plugins and 12
+first-party themes, one-click sha256-verified installs), a **WordPress WXR importer** for switching, and a **one-process deploy** —
 a single Node process with SQLite by default, pre-compiled release ZIPs, no PHP, no MySQL
 server, no build step on the server.
 
@@ -61,10 +61,10 @@ visual editor ([Puck](https://puckeditor.com)) ships in **core**, not as a paid 
 | **Deploy footprint** | 1 Node process, SQLite default | PHP + MySQL | Node + MySQL | Node + DB + your frontend | Node + DB (Next-native) |
 | **Stack** | TypeScript + Next.js | PHP | Node + Handlebars | Node | TypeScript + Next.js |
 | **License** | MIT | GPLv2 | MIT | MIT (paid EE) | MIT (paid cloud) |
-| **Ecosystem size** | ⚠️ young — built-in marketplace, 25 first-party plugins, no third-party authors yet | 60k+ plugins | large | large marketplace | growing |
+| **Ecosystem size** | ⚠️ young — built-in marketplace, 28 first-party plugins, no third-party authors yet | 60k+ plugins | large | large marketplace | growing |
 
 The last row is the honest one: WordJS now ships a built-in plugin marketplace with one-click,
-sha256-verified installs — but all 25 plugins in it are first-party, and there is no third-party
+sha256-verified installs — but all 28 plugins in it are first-party, and there is no third-party
 author community yet. What it has is the row at the top — the one no incumbent can retrofit,
 because their entire ecosystems assume plugins run with full trust.
 
@@ -115,8 +115,10 @@ because their entire ecosystems assume plugins run with full trust.
   via pure-JS PowerShell P/Invoke, probe-gated; opt out via `sandbox.useJobObjectMemoryCap`); a
   **reactive host-side RSS poll** that `SIGKILL`s a child over budget (Linux `/proc`, Windows
   `tasklist`, macOS `ps`); and a loose `RLIMIT_AS` virtual backstop plus a `--max-old-space-size` JS-heap cap.
-- **Plugin marketplace (first-party).** The admin plugins page has a **Marketplace tab** with
-  one-click installs from a curated catalog of **25 first-party plugins** (contact forms,
+  An **opt-in per-plugin CPU quota** (`sandbox.cpuQuotaPercent` → systemd `CPUQuota`, in the same
+  `--user` cgroup scope) adds a preventive CPU backstop.
+- **Plugin & theme marketplace (first-party).** The admin plugins page has a **Marketplace tab** with
+  one-click installs from a curated catalog of **28 first-party plugins** (contact forms,
   newsletter, events calendar, online store, bookings, donations, event tickets, FAQ, polls,
   testimonials, SEO helpers, and more). Plugin sources live in `marketplace/plugins/`, outside
   the core build; `npm run build:marketplace` packs them into a catalog (`marketplace-index.json`)
@@ -128,7 +130,10 @@ because their entire ecosystems assume plugins run with full trust.
   error isolation). Downloads are **sha256-verified** against the catalog and go through the **same
   hardened install pipeline** as manual zip uploads (zip-bomb budget, Zip Slip, slug validation,
   manifest + AST scan) — a marketplace plugin is sandboxed and permission-gated exactly like any
-  other. All catalog plugins are first-party today; third-party submissions and review are roadmap.
+  other. All catalog plugins are first-party today; third-party submissions and review are roadmap. A
+  parallel **Themes marketplace** (Admin → Themes) ships **12 first-party themes** through the same
+  sha256-verified install pipeline, with its own admin-configurable sources (option
+  `marketplace_theme_sources`, via `GET`/`PUT /api/v1/marketplace/themes/sources`).
 - **Real server-side rendering.** The public routes (home, posts, pages, search) are async
   React Server Components that fetch on the server (`frontend/src/lib/server-api.ts`), so the
   initial HTML sent to crawlers and the first paint already contain the real title/body —
@@ -149,10 +154,10 @@ because their entire ecosystems assume plugins run with full trust.
   so the responsive layout matches the live site exactly.
 - **Hooks & filters** event system, with admin-side hook inspection.
 - **Shortcodes** (WordPress-style) for dynamic content, including from plugins.
-- **YouTube videos plugin** (bundled): point it at a channel to get a synced video list —
+- **YouTube videos plugin** (first-party marketplace plugin): point it at a channel to get a synced video list —
   keyless via the channel's RSS feed, or via the YouTube Data API with a key — plus a Puck
   **carousel block** with filtering for embedding the videos on any page.
-- **Themes** with CSS-variable theming (13 first-party themes ship in-repo). The theme
+- **Themes** with CSS-variable theming (the default theme ships bundled; 12 first-party themes are available via the theme marketplace). The theme
   system ships a **token-driven, Bootstrap-like CSS framework** (`backend/public/css/wordjs-ui.css`):
   one shared stylesheet that auto-styles every HTML element plus opt-in components
   (`.btn`/`.card`/`.alert`/`.table`/`.nav`/a flexbox grid/…) and a utility layer, all driven by
@@ -209,6 +214,17 @@ because their entire ecosystems assume plugins run with full trust.
   pre-granted the `network`/`email:provider` capabilities it needs): inbound SMTP
   (`smtp-server`), direct-MX outbound delivery (`nodemailer`), DKIM signing, and attachment
   handling.
+- **Scoped API tokens** for headless/machine clients — `Authorization: Bearer wjt_<secret>` with
+  per-token, per-resource scopes (e.g. `posts:write`, `media:read`); a token's effective permission
+  is the token scope **intersected with** the owner's capabilities. Self-service management at
+  `/admin/tokens` (`GET`/`POST`/`DELETE /api/v1/auth/tokens`); secrets are shown once and stored as
+  sha256 at rest, and the `Bearer` path is CSRF-exempt.
+- **Outgoing webhooks** — HMAC-signed, SSRF-safe webhooks fire on content events to admin-configured
+  endpoints, managed at `/admin/webhooks`; destinations are re-validated at delivery time
+  (loopback / cloud-metadata / RFC1918 rejected).
+- **Transparent image optimization** — served `/uploads` images are content-negotiated to
+  **AVIF/WebP** from the client's `Accept` header (same URL, cached derivatives, `Vary: Accept`,
+  fail-safe to the original).
 
 ---
 
@@ -416,10 +432,10 @@ Treat it as **beta**:
   risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
 - The backend **compiles to `dist/` for production** (no `ts-node` at runtime) with a
   **strict type-check enforced in CI** (details under [Backend scripts](#backend-scripts)).
-- The ecosystem is **entirely first-party**. A built-in **plugin marketplace** now ships
-  (25 first-party plugins with sha256-verified one-click installs), alongside the bundled
-  plugins and 13 themes — but there is **no third-party plugin community or public
-  submission/review pipeline yet**.
+- The ecosystem is **entirely first-party**. A built-in **plugin & theme marketplace** now ships
+  (28 first-party plugins and 12 first-party themes with sha256-verified one-click installs),
+  alongside the bundled plugins and the default theme — but there is **no third-party plugin
+  community or public submission/review pipeline yet**.
 
 Use it to build, learn, and experiment. Do your own review before trusting it with
 real data or real users.
@@ -433,7 +449,7 @@ real data or real users.
 - **Frontend:** Next.js (React 19)
 - **Styling:** Vanilla CSS + Tailwind
 - **Editor:** Puck
-- **Communication:** REST + JWT + WebSockets/SSE
+- **Communication:** REST + JWT + scoped API tokens + WebSockets/SSE
 - **Logging:** Structured JSON via Winston (daily-rotated)
 - **Gateway:** Express + Node `cluster`, http-proxy, mTLS internal channel
 - **Sandbox:** `child_process` OS-process isolation (`worker_threads` fallback) + `acorn` AST scanning + runtime require proxies + layered memory caps (cgroup/Windows-Job-Object/RSS-poll/RLIMIT_AS)
@@ -469,21 +485,30 @@ OOM, or heap escape to that one process.
 - **AST static scan at install** (acorn, fail-closed) — always on. It's pattern-based: one layer that raises the cost of obfuscation, **not** a proof.
 - **Capability bridge + DB/secret scoping** — always on. A plugin reaches core only through permission-checked RPC; its storage is its own `wjp_<slug>_` tables; core `users`/`options`/`sessions` and secrets are unreachable.
 - **Egress guard** (only when `network` is granted) — confines outbound to public IPs; blocks loopback, cloud-metadata (`169.254.169.254`), RFC1918/CGNAT/ULA, validated against the **resolved** IP at connect time (anti-DNS-rebinding).
-- **Kernel hardening** (unprivileged uid, dropped caps, `seccomp` denylist, namespaces, read-only fs) — **Linux, opt-in.** Windows gets a Job Object memory cap; macOS relies on process isolation + the bridge.
+- **Kernel hardening** (unprivileged uid, dropped caps, `seccomp` denylist, namespaces, read-only fs) — **Linux, default-on (opt out via `sandbox.useKernelHardening=false`), probe-gated** — it falls back to plain process isolation where `bwrap` / unprivileged user-namespaces are unavailable. Windows gets a Job Object memory cap; macOS relies on process isolation + the bridge.
 
 There is **no independent third-party audit** yet — internal red-team passes only. Don't treat the sandbox as "unbreakable"; treat it as designed to fail closed.
 
-On Linux, an **opt-in** layer
+On Linux, a **default-on (opt-out)** layer
 (`config.sandbox.useKernelHardening`, via [bubblewrap](https://github.com/containers/bubblewrap))
 additionally runs each plugin child as an **unprivileged uid with all capabilities dropped,
 `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (probe-validated per host,
-default-off, a no-op on Windows/macOS), **plus a `seccomp` syscall denylist** (`EPERM` on
+default-on — opt out with `sandbox.useKernelHardening=false` — a no-op on Windows/macOS), **plus a `seccomp` syscall denylist** (`EPERM` on
 `ptrace`/`mount`/`kexec`/`keyctl`/`userfaultfd`/… — syscalls a Node app/plugin never issues). The
 read-only-filesystem confinement covers what `Landlock` would add, so the Landlock LSM itself isn't
 used (it would need a native dependency). (The uid-drop trades away privileged-port binding — a
-plugin needing a port `<1024` won't bind it under hardening.) Further hardening is tracked in
+plugin needing a port `<1024` won't bind it under hardening.) A fail-closed mode
+(`config.sandbox.requireHardening`, opt-in, default off) makes an isolated plugin **refuse to launch**
+unless kernel hardening is verified **active** — instead of silently degrading to the JS-guards-only
+fork — and the live hardening state (`active`/`degraded`/`unsupported`) is reported on admin
+`GET /health/details`. Further hardening is tracked in
 [POSITIONING.md](POSITIONING.md). Found a vulnerability? Please follow the disclosure process in
 [SECURITY.md](SECURITY.md).
+
+**Account authentication.** Beyond session JWTs, WordJS ships **TOTP two-factor auth** — enroll and
+verify with backup codes (`/auth/mfa/setup` → `/auth/mfa/enable`, verified at login via
+`POST /auth/mfa`), self-service at `/admin/account` — plus an **admin-enforced MFA-by-role policy**
+(`GET`/`PUT /auth/mfa/policy`) with a global compliance gate that can require two-factor for chosen roles.
 
 ---
 
@@ -491,13 +516,13 @@ plugin needing a port `<1024` won't bind it under hardening.) Further hardening 
 
 Planned, **not yet implemented**:
 
-- **🧩 Third-party marketplace submissions** — the built-in marketplace ships today with 25
-  first-party plugins; opening it to community authors, with a review pipeline where
+- **🧩 Third-party marketplace submissions** — the built-in marketplace ships today with 28
+  first-party plugins (and 12 first-party themes); opening it to community authors, with a review pipeline where
   "sandboxed & reviewed" is a verifiable trust badge, is the next step
   (see [POSITIONING.md](POSITIONING.md)).
 - **☁️ Media CDN integration** — S3-compatible object storage.
 - **🌐 Multi-site** — manage multiple domains/sites from one install.
-- **🛡️ Kernel-level plugin hardening** — OS-process isolation ships, and an **opt-in** Linux
+- **🛡️ Kernel-level plugin hardening** — OS-process isolation ships, and a **default-on (opt-out)** Linux
   layer (bubblewrap) drops uid + capabilities and adds `no-new-privs` / namespaces / read-only-fs
   / a **`seccomp` syscall denylist**, plus a **preventive Windows memory cap** (Job Object via
   pure-JS PowerShell P/Invoke, default-on + probe-gated).
