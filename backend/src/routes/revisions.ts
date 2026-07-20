@@ -14,14 +14,26 @@ const {
 } = require('../core/revisions');
 const { authenticate } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
+// Same capability-family resolver routes/posts.ts uses for its PUT/DELETE gate — imported (not
+// re-implemented) so the restore/delete authorization here cannot drift from the post-edit gate.
+const { capsFor, capsForType } = require('../core/post-capabilities');
 
 /**
- * Resolve the parent post id for a revision and check whether the current
- * user may act on it. `edit` distinguishes mutating actions (restore/delete)
- * from read/compare actions. Returns the parent post on success, or an error
- * descriptor `{ code, status }` the caller should send.
+ * Resolve the parent post id for a revision and check whether the current user may act on it.
+ * `action` is 'read' (default, for get/compare), 'edit' (restore), or 'delete'. Returns the parent post
+ * on success, or an error descriptor `{ code, status }` the caller should send.
+ *
+ * The mutating checks mirror routes/posts.ts /:id EXACTLY, per action:
+ *   • RESTORE rewrites the parent's live title/content/excerpt — an EDIT — so it mirrors PUT /posts/:id:
+ *     edit_<type>s (own) / edit_others_<type>s, plus edit_published_<type>s when the post is published.
+ *   • DELETE removes revision history — a DELETE — so it mirrors DELETE /posts/:id: delete_<type>s (own) /
+ *     delete_others_<type>s, plus delete_published_<type>s when the post is published.
+ * In both cases the parent post's TYPE picks the capability family (a post-only author must not touch a
+ * PAGE). Without this, a contributor with plain edit_posts (but not edit_published_posts) could revert or
+ * unpublish their OWN editor-published post via restore, and a role with edit but not delete caps could
+ * purge history via delete — the same edit-vs-publish/type privilege separation posts.ts already enforces.
  */
-async function authorizeForPost(req: any, postId: any, { edit = false } = {}) {
+async function authorizeForPost(req: any, postId: any, { action = 'read' } = {}) {
     if (postId == null) {
         return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
@@ -29,13 +41,22 @@ async function authorizeForPost(req: any, postId: any, { edit = false } = {}) {
     if (!post) {
         return { error: { code: 'rest_post_invalid_id', status: 404 } };
     }
+    // Fall back to capsFor('post') for a post whose registered type was since removed (capsForType null).
+    const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
     const isOwner = post.authorId === req.user.id;
-    if (isOwner) {
-        // Owner needs the edit capability to mutate; reading/comparing is allowed.
-        if (edit && !req.user.can('edit_posts')) {
+    if (action === 'edit' || action === 'delete') {
+        // restore → edit family (mirrors PUT); delete → delete family (mirrors DELETE).
+        const ownCap = action === 'delete' ? caps.del : caps.edit;
+        const othersCap = action === 'delete' ? caps.deleteOthers : caps.editOthers;
+        const publishedCap = action === 'delete' ? caps.deletePublished : caps.editPublished;
+        let allowed = isOwner ? req.user.can(ownCap) : req.user.can(othersCap);
+        if (post.postStatus === 'publish' && !req.user.can(publishedCap)) allowed = false;
+        if (!allowed) {
             return { error: { code: 'rest_forbidden', status: 403 } };
         }
-    } else if (!req.user.can('edit_others_posts')) {
+    } else if (!isOwner && !req.user.can(caps.editOthers)) {
+        // Read/compare: the owner may always view their own revisions; a non-owner needs the
+        // type-appropriate edit_others_<type>s (was hardcoded edit_others_posts — now type-aware).
         return { error: { code: 'rest_forbidden', status: 403 } };
     }
     return { post };
@@ -153,7 +174,7 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req: any, res: Res
         return res.status(404).json({ error: 'Revision not found' });
     }
 
-    const auth = await authorizeForPost(req, revision.postId, { edit: true });
+    const auth = await authorizeForPost(req, revision.postId, { action: 'edit' });
     if (auth.error) {
         return res.status(auth.error.status).json({
             code: auth.error.code,
@@ -196,7 +217,7 @@ router.delete('/:id', authenticate, asyncHandler(async (req: any, res: Response)
         return res.status(404).json({ error: 'Revision not found' });
     }
 
-    const auth = await authorizeForPost(req, revision.postId, { edit: true });
+    const auth = await authorizeForPost(req, revision.postId, { action: 'delete' });
     if (auth.error) {
         return res.status(auth.error.status).json({
             code: auth.error.code,
