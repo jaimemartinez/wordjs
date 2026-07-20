@@ -85,6 +85,13 @@ async function mfaComplianceGate(req: any, res: Response, next: NextFunction) {
         token = bearer; // a session JWT over the Bearer transport — subject to enforcement
     }
     if (!token && req.cookies && req.cookies.wordjs_token) token = req.cookies.wordjs_token;
+    // Also cover the `?token=` transport that authenticateAllowQuery honors (e.g. the plugin-bundle download),
+    // so an enforced user can't slip a session JWT past the gate via the query string. A wjt_ token there is
+    // exempt exactly like on the Bearer path.
+    if (!token && req.query && typeof req.query.token === 'string' && req.query.token) {
+        if (req.query.token.startsWith(ApiToken.PREFIX)) return next();
+        token = req.query.token;
+    }
     if (!token) return next(); // no session — nothing to enforce (the route's own auth still applies)
 
     if (isMfaEnforceExempt(req)) return next();

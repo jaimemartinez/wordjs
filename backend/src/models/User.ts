@@ -280,6 +280,12 @@ class User {
         // stamp a security epoch the auth middleware checks against the token's iat. See auth.ts.
         if (passwordChanged) {
             await User.updateMeta(id, 'token_valid_after', String(Math.floor(Date.now() / 1000)));
+            // Also hard-revoke the user's scoped API tokens. token_valid_after only gates the JWT path, so
+            // without this a stolen `wjt_` token would survive a password reset — the compromise-recovery
+            // action — contradicting the "revokes every session" guarantee. Done on password change/reset,
+            // NOT on logout (which stamps the epoch separately): logging out of a browser must not kill a
+            // user's headless CI tokens.
+            try { await require('./ApiToken').revokeAllForUser(id); } catch { /* best-effort; the JWT epoch still applies */ }
         }
 
         // Update meta if provided

@@ -122,6 +122,13 @@ export function isBlockedIp(ip: string): boolean {
         if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
             return isBlockedV4(`${b[12]}.${b[13]}.${b[14]}.${b[15]}`);
         }
+        // 6to4 prefix 2002::/16 (RFC 3056) embeds the site's IPv4 in bytes 2-5 (2002:V4V4:V4V4::/48) which
+        // a 6to4 relay routes to that v4 address — so a 6to4 address wrapping an RFC1918/loopback/link-local
+        // v4 reaches the internal host the same way NAT64 does. Extract + classify the embedded v4; block only
+        // when it is itself private (public 6to4 targets stay allowed). (Finding #8, low)
+        if (b[0] === 0x20 && b[1] === 0x02) {
+            return isBlockedV4(`${b[2]}.${b[3]}.${b[4]}.${b[5]}`);
+        }
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;  // fec0::/10 deprecated site-local (RFC 3879)
         if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 unique-local (ULA)
@@ -544,17 +551,48 @@ function guardDgram(mod: any): any {
     return wrapModule(mod, overrides);
 }
 
+// The raw c-ares resolver surface (resolve*/resolveAny/Resolver/setServers/setLocalAddress) does DIRECT
+// UDP/TCP DNS to arbitrary servers and returns raw records — it bypasses BOTH egress chokepoints (the
+// connect-time IP guard + validatingLookup, which only sit on the getaddrinfo/socket paths), letting a
+// network-granted plugin probe internal ip:port (RFC1918/loopback) for recon. So we do NOT hand plugins
+// the real dns module: we return a guarded dns that DENIES the resolver surface and leaves only
+// dns.lookup / dns.lookupService, which go through getaddrinfo and are IP-guarded on the connect paths.
+// (Finding #8, medium) A member access that returns a throwing stub (rather than the property being
+// absent) keeps both the callback and the dns.promises shapes failing loudly with a clear reason.
+const DNS_DENIED_MEMBERS = new Set<string>([
+    'resolve', 'resolve4', 'resolve6', 'resolveAny', 'resolveCname', 'resolveCaa', 'resolveMx',
+    'resolveNaptr', 'resolveNs', 'resolvePtr', 'resolveSoa', 'resolveSrv', 'resolveTxt', 'reverse',
+    'Resolver', 'setServers', 'getServers', 'setLocalAddress',
+]);
+function dnsDenied(name: string): never {
+    throw new Error(`[sandbox] dns.${name} is not permitted for plugins — the raw DNS resolver bypasses egress filtering; use dns.lookup (getaddrinfo) instead`);
+}
+function guardDns(mod: any): any {
+    // dns.promises has the SAME resolver surface, so guard it with the same deny-list.
+    const guardMembers = (target: any) => new Proxy(target, {
+        get(t, prop) {
+            // A plain function (not an arrow) so BOTH `dns.resolve(...)` and `new dns.Resolver(...)` run the
+            // body and throw our clear message (an arrow under `new` would throw a vaguer "not a constructor").
+            if (typeof prop === 'string' && DNS_DENIED_MEMBERS.has(prop)) return function (..._a: any[]): never { return dnsDenied(prop); };
+            if (prop === 'promises') return t.promises ? guardMembers(t.promises) : t.promises;
+            return Reflect.get(t, prop);
+        },
+    });
+    return guardMembers(mod);
+}
+
 const guardedCache: Record<string, any> = {};
 
 /**
  * Return the egress-guarded version of a network builtin for a plugin, or undefined to let the loader
- * hand back the real module (dns: resolution itself is not the SSRF sink — the connect is).
+ * hand back the real module. (dns is guarded — not passed through — because the raw resolver surface
+ * bypasses the connect-time egress filter; see guardDns / Finding #8.)
  */
 export function getGuardedModule(base: string): any {
-    if (base === 'dns') return undefined;
     if (guardedCache[base]) return guardedCache[base];
     let g: any;
     switch (base) {
+        case 'dns': g = guardDns(realDns); break;
         case 'net': g = guardNet(realNet); break;
         case 'tls': g = realTls ? guardTls(realTls) : undefined; break;
         case 'http': g = realHttp ? guardHttp(realHttp) : undefined; break;

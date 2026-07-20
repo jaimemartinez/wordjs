@@ -13,6 +13,11 @@ const Media = require('../models/Media');
 const Post = require('../models/Post');
 const config = require('../config/app');
 
+// SECURITY (DoS): cap decoded pixels for EVERY sharp() pipeline in this file so a maliciously
+// oversized image (a "pixel bomb") can't exhaust memory and OOM/CPU-kill the single-process
+// backend during upload processing. ~40 megapixels is far above any legitimate web image.
+const MAX_SHARP_INPUT_PIXELS = 40_000_000;
+
 /**
  * @swagger
  * components:
@@ -167,13 +172,40 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         order: ['asc', 'desc'].includes(order.toLowerCase()) ? order.toUpperCase() : 'DESC'
     });
 
-    const total = await Media.count({ search });
+    // SECURITY (Finding #9, BOLA / metadata leak): the media LIST must apply the SAME
+    // parent-visibility rule as GET /media/:id. Attachments carry post_status='inherit', so
+    // an attachment parented to a non-published (draft/pending/private) post inherits that
+    // hidden visibility and must NOT leak its metadata (guid/file URL, author, title) to a
+    // caller who neither owns the parent nor holds edit_others_posts. Unattached uploads
+    // (parent=0) and dangling parents (deleted post → null) stay visible, exactly as the
+    // single-item route treats them. A caller with edit_others_posts sees everything, so we
+    // only pay the parent lookups when the caller lacks that cross-user capability.
+    let visibleMedia = media;
+    if (!req.user || !req.user.can('edit_others_posts')) {
+        const parentIds = [...new Set(media.filter((m: any) => m.parent).map((m: any) => m.parent))];
+        const parents = await Promise.all(parentIds.map((pid: any) => Post.findById(pid)));
+        const parentById = new Map<any, any>();
+        parentIds.forEach((pid: any, i: number) => parentById.set(pid, parents[i]));
+
+        visibleMedia = media.filter((m: any) => {
+            if (!m.parent) return true; // unattached upload → public
+            const parent = parentById.get(m.parent);
+            if (!parent || parent.postStatus === 'publish') return true; // dangling/published → public
+            // Non-published parent: visible only to its owner (edit_others_posts already handled above).
+            return !!req.user && parent.authorId === req.user.id;
+        });
+    }
+
+    // Discount the attachments hidden on THIS page so the pager total does not advertise the
+    // existence of items the caller was just denied (mirrors GET /:id returning 404, not 403).
+    const hiddenOnPage = media.length - visibleMedia.length;
+    const total = Math.max(0, (await Media.count({ search })) - hiddenOnPage);
     const totalPages = Math.ceil(total / limit);
 
     res.set('X-WP-Total', total);
     res.set('X-WP-TotalPages', totalPages);
 
-    res.json(media);
+    res.json(visibleMedia);
 }));
 
 /**
@@ -405,7 +437,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
 
     if (req.file.mimetype.startsWith('image/') && req.file.mimetype !== 'image/svg+xml') {
         try {
-            const image = sharp(req.file.path);
+            const image = sharp(req.file.path, { limitInputPixels: MAX_SHARP_INPUT_PIXELS });
             const metadata = await image.metadata();
             width = metadata.width;
             height = metadata.height;
@@ -435,7 +467,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                 const sizeFilename = `${baseName}-${s.w}x${s.h}${ext}`;
                 const sizePath = path.join(dir, sizeFilename);
 
-                let resizeOp = sharp(req.file.path);
+                let resizeOp = sharp(req.file.path, { limitInputPixels: MAX_SHARP_INPUT_PIXELS });
                 if (s.crop) {
                     resizeOp = resizeOp.resize(s.w, s.h, { fit: 'cover' });
                 } else {

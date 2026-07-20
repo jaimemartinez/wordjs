@@ -416,8 +416,9 @@ function secureModuleFor(id: any) {
         if (netGranted) {
             // Network is granted — but confine egress to PUBLIC destinations (block loopback / private /
             // link-local / 169.254.169.254 metadata) so the grant isn't a full SSRF + exfil surface.
-            // getGuardedModule returns the wrapped builtin, or undefined for dns (resolution is fine; the
-            // connect is the sink) → fall through to the real module. Fail CLOSED if the guard errors.
+            // getGuardedModule returns the egress-guarded builtin (dns is now GUARDED too — its raw
+            // resolver surface bypasses the connect-time filter), or undefined for a module it doesn't wrap.
+            // Fail CLOSED if the guard errors.
             try {
                 const guarded = egressGuard.getGuardedModule(base);
                 return guarded !== undefined ? guarded : undefined;
@@ -879,6 +880,14 @@ function meterPromiseWrite(slug: string, prop: string, args: any[]): void {
         if (d != null && typeof d !== 'string' && !Buffer.isBuffer(d) && !ArrayBuffer.isView(d)) {
             throw createSecurityError(slug, `fs.promises.${prop}`, 'streaming/iterable write data is not permitted in the sandbox (use a string or Buffer)');
         }
+    }
+    if (prop === 'mkdir') {
+        // Directory creation consumes inodes/dir-entries; meter it so a `fs.promises.mkdir` flood can't
+        // inode-exhaust the shared volume (the io-guard callback path is metered separately — this closes
+        // the fs.promises hole). One FS-block floor per call bounds the flood at the same rate as the
+        // distinct-filename writeFile floor; the per-call charge is what stops the loop.
+        io.enforceGrowQuota(slug, 4096);
+        return;
     }
     if (prop === 'appendFile') { io.enforceGrowQuota(slug, io.byteLenOf(args[1])); return; }
     if (prop === 'truncate') { io.enforceGrowQuota(slug, Math.max(0, Number(args[1]) || 0)); return; } // truncate(path,len): len allocates (#24)

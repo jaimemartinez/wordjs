@@ -444,18 +444,26 @@ router.post('/migrate', async (req: any, res: Response) => {
         // recordLoginFail here, so account lockout never trips it).
         //
         // #26 fix WITHOUT reintroducing #25's DoS:
-        //   (a) still respect an existing per-account lock set by the real /auth/login (isLoginLocked below) but
-        //       NEVER recordLoginFail from this unauthenticated path (that shared-lock write was #25's DoS lever);
+        //   (a) throttle this route under its OWN dedicated per-account bucket keyed with a SEPARATE
+        //       'migrate:' prefix (Finding #14, LOW). Earlier we only READ the shared /auth/login bucket and
+        //       never wrote to it (recordLoginFail on the SHARED lock was #25's DoS lever — an unauthenticated
+        //       caller could lock the real admin out of interactive login). But because this route never
+        //       incremented that bucket, its own password guesses were unthrottled per-account, leaving a
+        //       distributed brute-force ORACLE that only the per-IP authLimiter (defeatable by a botnet)
+        //       covered. A DISTINCT 'migrate:' bucket lets us recordLoginFail on failures here safely: it
+        //       cannot touch the interactive-login lock, so a brute-forcer only rate-limits themselves out of
+        //       /setup/migrate, never the admin's real login;
         //   (b) collapse the wrong-password AND correct-non-admin branches into ONE uniform 401 (identical status
         //       + body), so the ONLY distinguishable outcome is a correct ADMINISTRATOR credential — which is the
         //       legitimate migration path, not information an attacker profits from;
         //   (c) this route is additionally throttled by the strict authLimiter (10/hr/IP, mounted in index.ts on
         //       /setup/migrate), far tighter than the setupLimiter (20/15min) guarding the pre-install endpoints.
         // clearLoginFails on a SUCCESSFUL admin auth stays (it requires the correct password, so it's not an
-        // unauthenticated lever).
+        // unauthenticated lever), and clears only the dedicated 'migrate:' bucket.
         const auth = require('./auth');
-        const lockId = await auth.resolveLockIdentifier(username);
-        if (await auth.isLoginLocked(lockId)) {
+        // Finding #14: dedicated 'migrate:' throttle bucket, mirroring the 'mfa:' pattern in routes/auth.ts.
+        const lockKey = 'migrate:' + (await auth.resolveLockIdentifier(username));
+        if (await auth.isLoginLocked(lockKey)) {
             return res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
         }
         const User = require('../models/User');
@@ -464,12 +472,13 @@ router.post('/migrate', async (req: any, res: Response) => {
 
         // UNIFORM response for BOTH wrong password (user === null) and correct-password-non-admin (#26): same
         // status + body so neither is distinguishable from the other — only a correct administrator credential
-        // proceeds past this point. NO recordLoginFail here (#25: an unauthenticated caller must not drive the
-        // shared per-account lockout).
+        // proceeds past this point. recordLoginFail (Finding #14) increments the DEDICATED 'migrate:' bucket
+        // only — never the interactive-login lock — so it throttles this oracle without the #25 DoS.
         if (!user || user.getRole() !== 'administrator') {
+            await auth.recordLoginFail(lockKey);
             return res.status(401).json({ error: 'Invalid credentials' });
         }
-        await auth.clearLoginFails(lockId);
+        await auth.clearLoginFails(lockKey);
 
         // Fix: Trust upstream Gateway protocol
         const protocol = req.get('x-forwarded-proto') || req.protocol;
