@@ -8,6 +8,7 @@ import type { Response, NextFunction } from 'express';
 const jwt = require('jsonwebtoken');
 const config = require('../config/app');
 const User = require('../models/User');
+const ApiToken = require('../models/ApiToken');
 
 /**
  * Authenticate request with JWT token (Strict: Headers Only)
@@ -62,6 +63,53 @@ async function verifyAndAttachUser(token: string, req: any, res: Response, next:
 }
 
 /**
+ * Authenticate a request bearing a scoped API token (`Authorization: Bearer wjt_...`). Mirrors
+ * verifyAndAttachUser's contract: calls next() on success, sends a 401/403 on failure.
+ *
+ * The token acts AS its issuing user, so req.user is the real user object and EVERY downstream capability
+ * check (req.user.can / isAdmin) still applies — a token can never exceed the user's own permissions. On
+ * top of that we enforce the token's read/write scope here (a read token cannot drive a mutating method).
+ */
+async function verifyApiTokenAndAttachUser(token: string, req: any, res: Response, next: NextFunction) {
+    try {
+        const record = await ApiToken.findByRawToken(token);
+        if (!record) {
+            return res.status(401).json({
+                code: 'rest_token_invalid',
+                message: 'Invalid or expired API token.',
+                data: { status: 401 }
+            });
+        }
+        const user = await User.findById(record.userId);
+        if (!user) {
+            return res.status(401).json({
+                code: 'rest_user_invalid',
+                message: 'User not found.',
+                data: { status: 401 }
+            });
+        }
+        if (!ApiToken.scopeAllowsMethod(record.scopes, req.method)) {
+            return res.status(403).json({
+                code: 'rest_token_scope_insufficient',
+                message: `This API token is read-only and cannot perform ${req.method} requests.`,
+                data: { status: 403 }
+            });
+        }
+        req.user = user;
+        req.userId = user.id;
+        req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
+        ApiToken.touch(record.id);
+        next();
+    } catch (error) {
+        return res.status(401).json({
+            code: 'rest_token_invalid',
+            message: 'Invalid API token.',
+            data: { status: 401 }
+        });
+    }
+}
+
+/**
  * Authenticate request with JWT token (Strict: Headers Only, with Cookie fallback)
  */
 async function authenticate(req: any, res: Response, next: NextFunction) {
@@ -87,6 +135,10 @@ async function authenticate(req: any, res: Response, next: NextFunction) {
         });
     }
 
+    // Scoped API tokens (wjt_ prefix) take the machine-client path; everything else is a JWT session.
+    if (token.startsWith(ApiToken.PREFIX)) {
+        return await verifyApiTokenAndAttachUser(token, req, res, next);
+    }
     await verifyAndAttachUser(token, req, res, next);
 }
 
@@ -122,6 +174,9 @@ async function authenticateAllowQuery(req: any, res: Response, next: NextFunctio
         });
     }
 
+    if (token.startsWith(ApiToken.PREFIX)) {
+        return await verifyApiTokenAndAttachUser(token, req, res, next);
+    }
     await verifyAndAttachUser(token, req, res, next);
 }
 
@@ -141,6 +196,29 @@ async function optionalAuth(req: any, res: Response, next: NextFunction) {
     if (!token) {
         req.user = null;
         req.userId = null;
+        return next();
+    }
+
+    // Scoped API token — resolve it, but degrade to anonymous (never 401) on any failure, matching this
+    // middleware's optional contract. The read/write scope is still honored (a read token can't drive a
+    // mutating request even on an optional-auth route).
+    if (token.startsWith(ApiToken.PREFIX)) {
+        try {
+            const record = await ApiToken.findByRawToken(token);
+            const user = record ? await User.findById(record.userId) : null;
+            if (user && ApiToken.scopeAllowsMethod(record.scopes, req.method)) {
+                req.user = user;
+                req.userId = user.id;
+                req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
+                ApiToken.touch(record.id);
+            } else {
+                req.user = null;
+                req.userId = null;
+            }
+        } catch {
+            req.user = null;
+            req.userId = null;
+        }
         return next();
     }
 
