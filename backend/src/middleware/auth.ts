@@ -10,6 +10,28 @@ const config = require('../config/app');
 const User = require('../models/User');
 const ApiToken = require('../models/ApiToken');
 
+// Normalize the API prefix once (e.g. '/api/v1', no trailing slash) for resource extraction below.
+const API_PREFIX = String(config.api?.prefix || '/api/v1').replace(/\/+$/, '');
+
+/**
+ * The "resource" a request targets, for per-resource API-token scope checks: the first path segment after
+ * the API prefix. `/api/v1/posts/5` → 'posts', `/api/v1/media` → 'media'. Derived from req.originalUrl (the
+ * full, un-rewritten URL, reliable regardless of how deeply the router is mounted). Returns '' when the
+ * first segment isn't a clean lowercase slug — scopeAllows then treats it as unclassifiable and only global
+ * scopes satisfy it (fail-closed for resource-scoped tokens). Only a clean `slug` immediately followed by
+ * '/' or end matches, so `..`/encoded-path oddities never masquerade as a real resource.
+ */
+function apiResourceOf(req: any): string {
+    // Lowercased so it matches Express's case-insensitive routing key (a `posts:write` token must work on
+    // `/api/v1/Posts` exactly as on `/posts`). This never widens access: the extracted slug must still equal
+    // the resource Express actually routes to, so it can't masquerade as a different resource's handler.
+    const path = String(req.originalUrl || req.url || '').split('?')[0].toLowerCase();
+    const prefix = API_PREFIX.toLowerCase();
+    const rest = path.startsWith(prefix) ? path.slice(prefix.length) : path;
+    const m = /^\/([a-z][a-z0-9-]*)(?:\/|$)/.exec(rest);
+    return m ? m[1] : '';
+}
+
 /**
  * Authenticate request with JWT token (Strict: Headers Only)
  */
@@ -96,10 +118,14 @@ async function verifyApiTokenAndAttachUser(token: string, req: any, res: Respons
                 data: { status: 401 }
             });
         }
-        if (!ApiToken.scopeAllowsMethod(record.scopes, req.method)) {
+        const resource = apiResourceOf(req);
+        if (!ApiToken.scopeAllows(record.scopes, req.method, resource)) {
+            const isWrite = !['GET', 'HEAD', 'OPTIONS'].includes(String(req.method).toUpperCase());
             return res.status(403).json({
                 code: 'rest_token_scope_insufficient',
-                message: `This API token is read-only and cannot perform ${req.method} requests.`,
+                message: isWrite
+                    ? `This API token cannot ${req.method}${resource ? ` the "${resource}" resource` : ''}. Its scope does not grant write access here.`
+                    : `This API token's scope does not grant read access${resource ? ` to the "${resource}" resource` : ''}.`,
                 data: { status: 403 }
             });
         }
@@ -214,7 +240,7 @@ async function optionalAuth(req: any, res: Response, next: NextFunction) {
         try {
             const record = await ApiToken.findByRawToken(token);
             const user = record ? await User.findById(record.userId) : null;
-            if (user && ApiToken.scopeAllowsMethod(record.scopes, req.method)) {
+            if (user && ApiToken.scopeAllows(record.scopes, req.method, apiResourceOf(req))) {
                 req.user = user;
                 req.userId = user.id;
                 req.apiToken = { id: record.id, scopes: record.scopes, name: record.name };
