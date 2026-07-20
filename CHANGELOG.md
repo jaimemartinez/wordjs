@@ -4,6 +4,76 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.9.0] - 2026-07-20
+
+A **security-hardening** release centered on the plugin sandbox, plus authorization/data-leak fixes,
+a full-fidelity Postgres engine-switch, and an editable legacy-HTML editor block. Drop-in minor
+upgrade: no schema or public-API changes, and every new sandbox behavior is **probe-validated with a
+safe fallback** or **opt-in** — a host lacking a kernel feature is never broken, and stock installs
+need no configuration.
+
+### Added
+
+- **Kernel-level plugin isolation is now ON by default on Linux.** Each isolated plugin (and theme
+  `functions.js`) runs through `bubblewrap` — unprivileged `nobody` uid in a rootless user namespace,
+  all capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a compiled seccomp-bpf syscall
+  denylist (pure-JS, no native dep) — so a heap escape that defeats the in-process guards still hits an
+  OS wall. The launch is validated per host (bwrap + rootless-userns + an IPC round-trip must work) and
+  falls back cleanly to the standard isolated launch on any host without the feature
+  (`config.sandbox.useKernelHardening`, opt-out). Previously this layer existed but was dead code
+  (off, and not even configurable).
+- **Read-only core filesystem for plugins.** Under kernel hardening, only the plugin's own dir + the
+  IO-Guard write-zones (`uploads`/`data`/`logs`/`os-tmp`/`themes`) are bound writable; the rest of the
+  install — core `src/`, `node_modules`, sibling plugins — is read-only **at the kernel level**, so a
+  plugin that somehow escaped the JS IO Guard still cannot persist a payload into core source.
+- **Per-plugin resource caps (anti-DoS).** A file-descriptor cap (`RLIMIT_NOFILE`) so a plugin can't
+  drain the host fd table; and, with the opt-in cgroup layer enabled, a per-plugin **CPU quota**
+  (`config.sandbox.cpuQuotaPercent`, cgroup `CPUQuota`) and a **task/pid cap** (`TasksMax`, fork/thread-
+  bomb containment) in the same systemd scope. Validated end-to-end on real systemd (bare metal +
+  Proxmox LXC).
+- **`config.sandbox.blockCodeGen`** — an opt-in engine-level block on runtime code generation
+  (`eval` / `new Function(string)`) for compiled production builds, layered under the install-time AST
+  scanner.
+- **Editable legacy content.** A legacy or WordPress-imported (pre-Puck) post's HTML now opens as an
+  editable HTMLEmbed block instead of a blank canvas.
+- **Full-fidelity Postgres engine switch.** New DDL translation (`AUTOINCREMENT`→`SERIAL`,
+  `DATETIME`→`TIMESTAMP`, `BLOB`→`BYTEA`, full primary-key fidelity) when migrating *to* Postgres.
+
+### Fixed
+
+- **Authorization — revision restore/delete.** Restoring or deleting a post revision was gated only on
+  `edit_posts`, so a contributor could restore their own **published** post (and pages-as-posts) past
+  the publish gate; it now mirrors the PUT/DELETE capability family (edit/delete + `*_published`) and is
+  post-type aware.
+- **Authorization — comment moderation bypass.** Changing a comment's status via `PUT /comments/:id`
+  now requires `moderate_comments`.
+- **Media leak.** `GET /media/:id` is now gated by the parent post's visibility — a draft post's
+  attachment could previously be fetched by URL.
+- **Sandbox — admin-sidebar phishing.** `adminMenu.add` (reachable without a grant) stored a plugin's
+  `href` verbatim; a `javascript:`/off-site href was a UI-spoof primitive. Plugin hrefs are now required
+  to be same-origin relative admin paths.
+- **Sandbox — arbitrary-read bypass.** The IO Guard now also confines `open`/`openSync`/`opendir`/
+  `readlink` (open is flag-aware); a plugin doing `fs.openSync(p,'r') + fs.readSync(fd)` previously read
+  any file's content past the `readFile` guard.
+- **Sandbox — seccomp + bind hardening.** The seccomp denylist now covers `io_uring` and the new mount
+  API; the bwrap writable bind was tightened to the plugin's own write-zones on every launch branch.
+- **CI reliability.** Fixed the intermittent *"Unable to deserialize cloned data"* test flake (a leaked
+  `Promise.race` timer that `--test-force-exit` then hard-killed mid-IPC); the integration suite now
+  hard-fails under `WORDJS_CI_DB` instead of silently skipping; and every PR now smoke-boots the compiled
+  bundle.
+
+### Changed
+
+- **Dependencies:** `fast-xml-parser` v4 → v5 (drop-in, byte-identical WXR) and `uuid` v10 → v11, with a
+  new WXR-import round-trip test.
+
+### Security
+
+- The sandbox hardening above (default-ON kernel isolation, read-only core, resource caps, wider seccomp,
+  IO-Guard read coverage) materially raises the cost of a plugin escape on Linux hosts. See `SECURITY.md`
+  for the current model and its documented limitations (notably: network egress is confined by an
+  in-process guard, not a kernel network namespace).
+
 ## [1.8.0] - 2026-07-19
 
 Two **critical, silent data-loss fixes** plus a **⌘K command palette** for the visual editor.
