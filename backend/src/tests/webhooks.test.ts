@@ -29,7 +29,6 @@ config.dbDriver = 'sqlite-native';
 const database = require('../config/database');
 const roles = require('../core/roles');
 const { csrfProtection } = require('../middleware/auth');
-const cryptoUtils = require('../core/crypto-utils');
 const webhooks = require('../core/webhooks');
 const { doAction } = require('../core/hooks');
 const Webhook = require('../models/Webhook');
@@ -70,9 +69,9 @@ async function seedUser(login: string, role: string) {
 async function insertWebhook(opts: { url: string; events?: string; secret?: string; active?: number }) {
     const secret = opts.secret || 'whsec_' + 'x'.repeat(43);
     const r = await dbAsync.run(
-        `INSERT INTO webhooks (user_id, name, url, events, secret_enc, secret_prefix, active, failure_count)
+        `INSERT INTO webhooks (user_id, name, url, events, secret, secret_prefix, active, failure_count)
          VALUES (?, 'test', ?, ?, ?, ?, ?, 0) RETURNING id`,
-        [U.admin, opts.url, opts.events || '*', cryptoUtils.encryptSecret(secret), secret.slice(0, 14), opts.active == null ? 1 : opts.active]);
+        [U.admin, opts.url, opts.events || '*', secret, secret.slice(0, 14), opts.active == null ? 1 : opts.active]);
     return { id: r.lastID, secret };
 }
 
@@ -123,17 +122,20 @@ after(async () => {
     delete process.env.WORDJS_WEBHOOK_ALLOW_PRIVATE_TARGETS_UNSAFE;
 });
 
-// ── crypto ───────────────────────────────────────────────────────────────────────────────────────
-test('crypto-utils: secret encrypts reversibly and a tampered envelope fails', () => {
-    const secret = 'whsec_topsecret';
-    const env = cryptoUtils.encryptSecret(secret);
-    assert.ok(env.startsWith('enc:v1:'));
-    assert.ok(!env.includes(secret), 'ciphertext must not contain the plaintext');
-    assert.strictEqual(cryptoUtils.decryptSecret(env), secret);
-    // flip a byte in the ciphertext → GCM auth tag rejects it
-    const parts = env.split(':');
-    parts[4] = Buffer.from('different-ciphertext').toString('base64');
-    assert.throws(() => cryptoUtils.decryptSecret(parts.join(':')));
+// ── secret stability (regression: the secret must NOT depend on a rotatable app key) ───────────────
+test('a signing secret is retrievable verbatim and survives a jwt.secret change', async () => {
+    const wh = await Webhook.create({ userId: U.admin, url: 'https://example.com/stable', events: 'post.published' });
+    // This is the exact failure that shipped: the secret used to be AES-encrypted with a key derived from
+    // config.jwt.secret, so a jwt.secret rotation / boot-time config regeneration made it undecryptable and
+    // SILENTLY dead-lettered every delivery. Rotating the app secret must now have zero effect.
+    const savedJwt = config.jwt.secret;
+    config.jwt.secret = 'a-completely-different-secret-' + savedJwt;
+    try {
+        const sig = await Webhook.getSigning(wh.id);
+        assert.strictEqual(sig!.secret, wh.secret, 'the signing secret must read back verbatim regardless of jwt.secret');
+    } finally {
+        config.jwt.secret = savedJwt;
+    }
 });
 
 test('signPayload = sha256=<HMAC of `timestamp.body`>', () => {

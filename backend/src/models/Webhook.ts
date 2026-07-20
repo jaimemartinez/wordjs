@@ -2,14 +2,15 @@
  * WordJS - Webhook model (outgoing webhook subscriptions).
  *
  * A row is an endpoint the operator registers to receive signed POSTs when content events fire. The
- * per-endpoint signing secret is stored ENCRYPTED (secret_enc) via crypto-utils — it must be re-read as
- * plaintext to sign each delivery, so a one-way hash is not usable. The plaintext secret is returned ONCE
- * at creation/rotation and never again; list/detail views expose only a non-secret prefix.
+ * per-endpoint signing secret is stored in PLAINTEXT (column `secret`) — it must be re-read verbatim to
+ * sign each delivery AND stay stable across restarts and all deploy modes; app-level encryption keyed off
+ * a rotatable app secret silently broke deliveries when that secret changed (see crypto-utils.ts). The
+ * secret is returned ONCE at creation/rotation and never again; list/detail views expose only a non-secret
+ * prefix, and it is never logged. At-rest protection is deferred to DB/disk encryption.
  */
 
 const { dbAsync } = require('../config/database');
 const crypto = require('crypto');
-const { encryptSecret, decryptSecret } = require('../core/crypto-utils');
 const egress = require('../core/egress-guard');
 
 // The canonical catalog of events a webhook can subscribe to. Kept here (the model) so both the routes
@@ -124,9 +125,9 @@ class Webhook {
         const secret = newSigningSecret();
         const active = opts.active === false ? 0 : 1;
         const result = await dbAsync.run(
-            `INSERT INTO webhooks (user_id, name, url, events, secret_enc, secret_prefix, active, failure_count)
+            `INSERT INTO webhooks (user_id, name, url, events, secret, secret_prefix, active, failure_count)
              VALUES (?, ?, ?, ?, ?, ?, ?, 0) RETURNING id`,
-            [opts.userId, name, url, events.join(','), encryptSecret(secret), secret.slice(0, 14), active]
+            [opts.userId, name, url, events.join(','), secret, secret.slice(0, 14), active]
         );
         const row = await dbAsync.get('SELECT * FROM webhooks WHERE id = ?', [result.lastID]);
         return { ...toDisplay(row), secret };
@@ -164,8 +165,8 @@ class Webhook {
         const exists = await dbAsync.get('SELECT id FROM webhooks WHERE id = ?', [id]);
         if (!exists) return null;
         const secret = newSigningSecret();
-        await dbAsync.run('UPDATE webhooks SET secret_enc = ?, secret_prefix = ? WHERE id = ?',
-            [encryptSecret(secret), secret.slice(0, 14), id]);
+        await dbAsync.run('UPDATE webhooks SET secret = ?, secret_prefix = ? WHERE id = ?',
+            [secret, secret.slice(0, 14), id]);
         return { id, secret, secretPrefix: secret.slice(0, 14) };
     }
 
@@ -190,16 +191,13 @@ class Webhook {
     }
 
     /**
-     * INTERNAL (dispatcher delivery path): a webhook's url + DECRYPTED signing secret by id. Never expose
-     * the result to an HTTP response. `secret` is null if it fails to decrypt (e.g. after a jwt.secret
-     * rotation) so the caller can dead-letter the delivery instead of crashing.
+     * INTERNAL (dispatcher delivery path): a webhook's url + signing secret by id. Never expose the result
+     * to an HTTP response.
      */
     static async getSigning(id: number): Promise<null | { id: number; url: string; active: boolean; secret: string | null }> {
         const row = await dbAsync.get('SELECT * FROM webhooks WHERE id = ?', [id]);
         if (!row) return null;
-        let secret: string | null = null;
-        try { secret = decryptSecret(row.secret_enc); } catch { secret = null; }
-        return { id: row.id, url: row.url, active: !!row.active, secret };
+        return { id: row.id, url: row.url, active: !!row.active, secret: row.secret || null };
     }
 
     /**

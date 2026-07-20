@@ -180,6 +180,23 @@ const MIGRATIONS: Migration[] = [
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_wh_deliveries_due ON webhook_deliveries (status, next_attempt_at)');
             await ctx.exec('CREATE INDEX IF NOT EXISTS idx_wh_deliveries_webhook ON webhook_deliveries (webhook_id, id)');
         }
+    },
+    {
+        // The webhook signing secret is now stored in PLAINTEXT (see models/Webhook.ts + core/crypto-utils.ts):
+        // encrypting it with a key derived from a rotatable app secret (jwt.secret) silently dead-lettered
+        // EVERY delivery whenever that secret changed (rotation / a boot-time config regeneration), across
+        // all deploy modes. Rename the column from the misleading `secret_enc` to `secret`. Tolerant: on a
+        // DB that already has `secret` (or where RENAME is unsupported) it is a non-fatal no-op. Any secret
+        // value that was previously AES-encrypted is now treated as the literal secret — operators must
+        // rotate those endpoints' secrets (the feature is unreleased, so no production endpoints exist).
+        id: '0005_webhook_secret_plaintext',
+        up: async (ctx: MigrationCtx) => {
+            try {
+                await ctx.exec('ALTER TABLE webhooks RENAME COLUMN secret_enc TO secret');
+            } catch (e: any) {
+                console.warn(`   [migration 0005] webhooks.secret_enc→secret rename skipped (non-fatal): ${e && e.message}`);
+            }
+        }
     }
 ];
 
