@@ -147,6 +147,7 @@ class PostgresDriver extends DatabaseDriverInterface {
         console.log(`🔌 Postgres: Connecting to ${dbConfig.host}:${dbConfig.port || 5432}/${dbConfig.name}...`);
 
         try {
+            const num = (v: any, d: number) => (Number.isFinite(Number(v)) ? Number(v) : d);
             this.pool = new Pool({
                 host: dbConfig.host,
                 port: dbConfig.port || 5432,
@@ -156,7 +157,17 @@ class PostgresDriver extends DatabaseDriverInterface {
                 ssl: dbConfig.ssl ? { rejectUnauthorized: false } : false,
                 // Force UTF-8 encoding to prevent errors on Windows servers with WIN1252 defaults
                 connectionString: undefined, // ensure pool uses individual params
-                client_encoding: 'UTF8'
+                client_encoding: 'UTF8',
+                // Pool sizing + resilience — safe defaults (override per-field via the db config block).
+                max: num(dbConfig.poolMax, 10) > 0 ? num(dbConfig.poolMax, 10) : 10,
+                idleTimeoutMillis: num(dbConfig.poolIdleMs, 30000),          // reclaim idle clients
+                connectionTimeoutMillis: num(dbConfig.poolConnectTimeoutMs, 10000), // fail fast on an unreachable DB instead of hanging forever
+                // Evict a connection left IDLE inside a transaction (a leaked/hung txn that would pin a pool
+                // slot) — NOT an actively-running long query, so this doesn't break legit long migrations/imports.
+                idle_in_transaction_session_timeout: num(dbConfig.idleInTxnTimeoutMs, 30000),
+                // statement_timeout is OFF by default on purpose: a blanket per-statement cap would kill legit
+                // long operations (engine-switch migration, large WXR import, backup). Opt-in via db.statementTimeoutMs.
+                ...(num(dbConfig.statementTimeoutMs, 0) > 0 ? { statement_timeout: num(dbConfig.statementTimeoutMs, 0) } : {})
             });
 
             // Verify connection
