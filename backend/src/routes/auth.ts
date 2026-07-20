@@ -12,6 +12,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
 const config = require('../config/app');
 const crypto = require('crypto');
+const mfa = require('../core/mfa');
 
 // Per-account login lockout: the per-IP rate limiter is defeated by a botnet/proxy pool targeting a
 // single account, and there was no account-level throttle. Lock an account for a cooldown after N
@@ -286,9 +287,15 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
     try {
         const user = await User.authenticate(username, password);
         await clearLoginFails(lockId);
+
+        // Second factor: if the account has MFA enabled, do NOT issue the session yet. Return a short-lived
+        // challenge token; the client must call POST /auth/mfa with a valid TOTP or backup code to finish.
+        if (await mfa.isEnabled(user.id)) {
+            return res.json({ mfaRequired: true, mfaToken: mfa.signChallenge(user.id) });
+        }
+
         const token = generateToken(user);
         res.cookie('wordjs_token', token, COOKIE_OPTIONS);
-
         res.json({ user: user.toJSON() });
     } catch (error) {
         await recordLoginFail(lockId);
@@ -579,6 +586,97 @@ router.delete('/tokens/:id', authenticate, sessionOnly, asyncHandler(async (req:
         });
     }
     res.json({ revoked: true, id });
+}));
+
+// ─── Multi-factor auth (TOTP) ──────────────────────────────────────────────────────────────────────
+// The login step (POST /mfa) is public — it's the 2nd half of authentication, gated by the short-lived
+// challenge token that /auth/login issues only after the password check. Management routes are session-
+// only (an API token, even one leaked, must never be able to enroll/disable MFA or mint backup codes).
+
+/**
+ * POST /auth/mfa — complete a login that requires a second factor. Body: { mfaToken, code }.
+ * The challenge token proves the password step passed; verify a TOTP/backup code, then issue the session.
+ */
+router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
+    const { mfaToken, code } = req.body || {};
+    const challenge = mfa.verifyChallenge(mfaToken);
+    if (!challenge) {
+        return res.status(401).json({ code: 'rest_mfa_challenge_invalid', message: 'Your login session expired. Please sign in again.', data: { status: 401 } });
+    }
+    const user = await User.findById(challenge.userId);
+    if (!user) return res.status(401).json({ code: 'rest_user_invalid', message: 'User not found.', data: { status: 401 } });
+
+    // Throttle code guesses under a SEPARATE 'mfa:' lockout bucket. Crucially this is NOT the password
+    // bucket (user.userLogin) that /login clears on a correct password — otherwise an attacker who knows
+    // the password could reset the throttle and brute-force the 6-digit code.
+    const lockKey = 'mfa:' + user.userLogin;
+    if (await isLoginLocked(lockKey)) {
+        return res.status(429).json({ code: 'rest_account_locked', message: 'Account temporarily locked due to too many failed attempts. Try again later.', data: { status: 429 } });
+    }
+    if (!(await mfa.verifyLoginCode(user.id, code))) {
+        await recordLoginFail(lockKey);
+        return res.status(401).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 401 } });
+    }
+    await clearLoginFails(lockKey);
+    const token = generateToken(user);
+    res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+    res.json({ user: user.toJSON() });
+}));
+
+/** GET /auth/mfa/status — is MFA on for the current user + how many backup codes remain. */
+router.get('/mfa/status', authenticate, asyncHandler(async (req: any, res: Response) => {
+    res.json({ enabled: await mfa.isEnabled(req.user.id), backupCodesRemaining: await mfa.backupCount(req.user.id) });
+}));
+
+/** POST /auth/mfa/setup — begin enrollment: returns a new secret + otpauth URI (for the QR). */
+router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    if (await mfa.isEnabled(req.user.id)) {
+        return res.status(400).json({ code: 'rest_mfa_already_enabled', message: 'MFA is already enabled. Disable it first to re-enroll.', data: { status: 400 } });
+    }
+    const { secret, otpauthUri } = await mfa.beginEnroll(req.user.id, req.user.userEmail || req.user.userLogin);
+    res.json({ secret, otpauthUri });
+}));
+
+/** POST /auth/mfa/enable — verify a code against the pending secret, activate, return backup codes once. */
+router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    const lk = 'mfa:' + req.user.userLogin;
+    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
+    const result = await mfa.completeEnroll(req.user.id, (req.body || {}).code);
+    if (!result.ok) {
+        await recordLoginFail(lk);
+        return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid code. Check your device clock and try again.', data: { status: 400 } });
+    }
+    await clearLoginFails(lk);
+    res.json({ enabled: true, backupCodes: result.backupCodes, message: 'Save these backup codes now — they will not be shown again.' });
+}));
+
+/** POST /auth/mfa/disable — turn MFA off (requires a current TOTP or backup code). */
+router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    if (!(await mfa.isEnabled(req.user.id))) return res.json({ disabled: true });
+    const lk = 'mfa:' + req.user.userLogin;
+    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
+    if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
+        await recordLoginFail(lk);
+        return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+    }
+    await clearLoginFails(lk);
+    await mfa.disable(req.user.id);
+    res.json({ disabled: true });
+}));
+
+/** POST /auth/mfa/backup-codes — regenerate backup codes (requires a current code); returns them once. */
+router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    if (!(await mfa.isEnabled(req.user.id))) {
+        return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
+    }
+    const lk = 'mfa:' + req.user.userLogin;
+    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
+    if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
+        await recordLoginFail(lk);
+        return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+    }
+    await clearLoginFails(lk);
+    res.json({ backupCodes: await mfa.regenerateBackupCodes(req.user.id), message: 'Save these backup codes now — they replace your previous set.' });
 }));
 
 module.exports = router;

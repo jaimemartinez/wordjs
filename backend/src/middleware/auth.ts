@@ -17,6 +17,14 @@ const ApiToken = require('../models/ApiToken');
 async function verifyAndAttachUser(token: string, req: any, res: Response, next: NextFunction) {
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+
+        // A session token (generateToken) carries NO `purpose`. Special-purpose tokens signed with the
+        // same secret — notably the MFA `mfa_challenge` token — must NEVER authenticate a request, or the
+        // second factor could be skipped by presenting the challenge token as a session credential.
+        if (decoded.purpose) {
+            return res.status(401).json({ code: 'rest_token_invalid', message: 'Invalid token.', data: { status: 401 } });
+        }
+
         const user = await User.findById(decoded.userId);
 
         if (!user) {
@@ -224,6 +232,8 @@ async function optionalAuth(req: any, res: Response, next: NextFunction) {
 
     try {
         const decoded = jwt.verify(token, config.jwt.secret, { algorithms: ['HS256'] });
+        // Special-purpose tokens (e.g. the MFA challenge) are never a session — treat as anonymous.
+        if (decoded.purpose) { req.user = null; req.userId = null; return next(); }
         const user = await User.findById(decoded.userId);
         // Honor token revocation here too (see verifyAndAttachUser): treat a revoked token as anonymous.
         // Use <= so a token issued in the same second as logout/password-change is also revoked.

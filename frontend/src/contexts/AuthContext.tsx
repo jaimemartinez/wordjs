@@ -16,11 +16,14 @@ interface User {
 interface LoginResult {
     success: boolean;
     error?: string;
+    mfaRequired?: boolean; // password OK, but a second factor is needed
+    mfaToken?: string;     // short-lived challenge to pass to verifyMfa()
 }
 
 interface AuthContextType {
     user: User | null;
     login: (username: string, password: string) => Promise<LoginResult>;
+    verifyMfa: (mfaToken: string, code: string) => Promise<LoginResult>;
     logout: () => void;
     isLoading: boolean;
     can: (capability: string) => boolean;
@@ -116,6 +119,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             if (res.ok) {
                 const data = await res.json();
+                if (data.mfaRequired) {
+                    // Password verified, but the account needs a second factor. Do NOT set the user yet;
+                    // the caller must collect a code and call verifyMfa(mfaToken, code).
+                    return { success: false, mfaRequired: true, mfaToken: data.mfaToken };
+                }
                 setUser(data.user);
                 return { success: true };
             }
@@ -137,6 +145,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             return { success: false, error };
         } catch (error) {
             console.error("Login error:", error);
+            return { success: false };
+        }
+    }, []);
+
+    const verifyMfa = useCallback(async (mfaToken: string, code: string): Promise<LoginResult> => {
+        try {
+            const res = await fetch(`${API_URL}/auth/mfa`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ mfaToken, code }),
+                credentials: "include",
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setUser(data.user);
+                return { success: true };
+            }
+            let error: string | undefined;
+            try { const d = await res.json(); error = d?.message || d?.error; } catch { /* non-JSON */ }
+            return { success: false, error };
+        } catch (error) {
+            console.error("MFA verify error:", error);
             return { success: false };
         }
     }, []);
@@ -164,8 +194,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }, [user]);
 
     const value = useMemo(
-        () => ({ user, login, logout, isLoading, can }),
-        [user, login, logout, isLoading, can]
+        () => ({ user, login, verifyMfa, logout, isLoading, can }),
+        [user, login, verifyMfa, logout, isLoading, can]
     );
 
     return (

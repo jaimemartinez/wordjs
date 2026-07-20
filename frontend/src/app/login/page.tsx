@@ -13,8 +13,12 @@ function LoginForm() {
     const [loading, setLoading] = useState(false);
     // "Forgot password?" is only offered when self-service reset can actually deliver mail (probe below).
     const [resetAvailable, setResetAvailable] = useState(false);
-    const { login } = useAuth();
+    const { login, verifyMfa } = useAuth();
     const router = useRouter();
+    // When the account has MFA on, the password step returns a challenge token and we switch to a
+    // second view asking for the authenticator (or backup) code.
+    const [mfaToken, setMfaToken] = useState<string | null>(null);
+    const [mfaCode, setMfaCode] = useState("");
 
     useEffect(() => {
         let active = true;
@@ -31,12 +35,28 @@ function LoginForm() {
 
         const result = await login(username, password);
 
-        if (result.success) {
+        if (result.mfaRequired && result.mfaToken) {
+            setMfaToken(result.mfaToken); // password OK → ask for the second factor
+        } else if (result.success) {
             router.push("/admin");
         } else {
             setError(result.error || "Invalid username or password");
         }
 
+        setLoading(false);
+    };
+
+    const handleMfaSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!mfaToken) return;
+        setError("");
+        setLoading(true);
+        const result = await verifyMfa(mfaToken, mfaCode.trim());
+        if (result.success) {
+            router.push("/admin");
+        } else {
+            setError(result.error || "Invalid authentication code");
+        }
         setLoading(false);
     };
 
@@ -51,6 +71,45 @@ function LoginForm() {
                     <p className="text-gray-500 mt-2">Admin Dashboard</p>
                 </div>
 
+                {mfaToken ? (
+                    <form onSubmit={handleMfaSubmit} className="space-y-6">
+                        <div className="text-center">
+                            <i className="fa-solid fa-shield-halved text-blue-600 text-2xl mb-2"></i>
+                            <p className="text-sm text-gray-500">Enter the 6-digit code from your authenticator app, or a backup code.</p>
+                        </div>
+                        <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-2">Authentication code</label>
+                            <input
+                                type="text"
+                                inputMode="numeric"
+                                autoComplete="one-time-code"
+                                autoFocus
+                                value={mfaCode}
+                                onChange={(e) => setMfaCode(e.target.value)}
+                                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent transition text-gray-900 tracking-widest text-center text-lg"
+                                placeholder="123456"
+                                required
+                            />
+                        </div>
+                        {error && (
+                            <div className="bg-red-50 text-red-600 px-4 py-3 rounded-lg text-sm">{error}</div>
+                        )}
+                        <button
+                            type="submit"
+                            disabled={loading}
+                            className="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-blue-400 text-white py-3 px-4 rounded-lg font-medium transition-colors"
+                        >
+                            {loading ? "Verifying..." : "Verify"}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { setMfaToken(null); setMfaCode(""); setError(""); }}
+                            className="w-full text-sm text-gray-500 hover:text-blue-600"
+                        >
+                            &larr; Back to sign in
+                        </button>
+                    </form>
+                ) : (
                 <form onSubmit={handleSubmit} className="space-y-6">
                     <div>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -111,6 +170,7 @@ function LoginForm() {
                         </div>
                     )}
                 </form>
+                )}
 
                 <div className="mt-6 text-center">
                     <a href="/" className="text-sm text-gray-500 hover:text-blue-600">
