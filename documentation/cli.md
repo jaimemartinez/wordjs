@@ -13,11 +13,11 @@ Run from `backend/`.
 | Script              | Command                                          | Purpose                                                              |
 | :------------------ | :----------------------------------------------- | :------------------------------------------------------------------ |
 | `npm start`         | `node server.js`                                 | Production launcher (supervisor). Runs `dist/index.js` if built, else falls back to ts-node. |
-| `npm run dev`       | `node --watch -r ./scripts/dev-env.js -r ts-node/register src/index.ts` | Development server with auto-reload via ts-node. The `dev-env.js` preload forces `NODE_ENV=development` (unless already set) so the split-mode dev backend accepts the localhost frontend's credentialed CORS. |
+| `npm run dev`       | `node --watch-path=./src -r ./scripts/dev-env.js -r ts-node/register src/index.ts` | Development server with auto-reload via ts-node. The `dev-env.js` preload forces `NODE_ENV=development` (unless already set) so the split-mode dev backend accepts the localhost frontend's credentialed CORS. |
 | `npm run build`     | `tsc -p tsconfig.build.json`                      | Compile TypeScript to `dist/` for production (runs `clean` first).  |
 | `npm run clean`     | removes `dist/`                                   | Wipe the compiled output (also runs automatically before `build`).  |
 | `npm run typecheck` | `tsc --noEmit`                                    | Strict type-check with no emit (also run in CI).                    |
-| `npm test`          | `node --test -r ts-node/register src/tests/*.test.ts` | Run the unit test suite (includes the DB **driver conformance** suite). |
+| `npm test`          | `node --test --test-force-exit -r ts-node/register src/tests/*.test.ts` | Run the unit test suite (includes the DB **driver conformance** suite). |
 | `npm run test:integration` | `node --test --test-force-exit -r ts-node/register src/tests-integration/*.test.ts` | Multi-node / endpoint integration tests (run in CI against real `postgres:16` + `redis:7`). |
 | `npm run lint`      | `eslint "src/**/*.ts"`                            | Lint the backend.                                                   |
 | `npm run format`    | `prettier --write "src/**/*.ts"`                  | Format the backend.                                                 |
@@ -32,7 +32,7 @@ Run from `backend/`.
 
 ## 2. One-Command Site Bootstrap (`npx create-wordjs`)
 
-The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.6.2`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
+The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.10.0`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
 
 ```bash
 npx create-wordjs my-site

@@ -165,7 +165,7 @@ backend through the gateway) and `/api`, `/uploads`, `/themes` to the backend.
 
 The SQLite DB and `uploads/` stay on the **backend** node; the frontend reaches uploads through the
 gateway, so no shared filesystem is needed for a single backend. To scale to **multiple** backends, move
-to the Postgres driver + a shared Redis and pin an identical `jwtSecret` — see
+to a networked driver (Postgres or MySQL/MariaDB) + a shared Redis and pin an identical `jwtSecret` — see
 [multi-node.md](multi-node.md).
 
 ## Managing tokens (on the gateway)

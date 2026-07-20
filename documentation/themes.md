@@ -112,7 +112,7 @@ stays legible against that theme's palette.
   chrome built with utility/Tailwind classes keeps winning; in practice the framework styles raw
   content HTML and offers opt-in classes wherever it's loaded.
 
-**Responsive out of the box (v1.5.4).** All 13 bundled themes are browser-verified at mobile, tablet
+**Responsive out of the box (v1.5.4).** All 13 first-party themes are browser-verified at mobile, tablet
 and desktop widths. The framework contributes the shared guards: below `768px` it caps the
 visual-editor heading sizes through the `--wjs-h{1..6}-size` aliases (`min(var(--wjs-hN), cap)`, so a
 theme whose scale is already smaller wins), and at **every** width it contains wide content — tables
@@ -124,7 +124,7 @@ rules). When a theme hides or rearranges header pieces such as `.wjs-header-acti
 **scoped to the intended breakpoint/selector** — an unscoped `display: none` there also kills the
 mobile nav toggle.
 
-All 13 bundled themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
+All 13 first-party themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
 class reference, see [`documentation/theming.md`](./theming.md).
 
 ## Theme integration with the live site
@@ -304,6 +304,36 @@ header {
 ### 4. Add a Screenshot (Optional)
 
 Add a `screenshot.png` (400x300px recommended) for the theme picker.
+
+## Installing a Theme
+
+Building a theme by hand isn't the only way to add one. The **`default`** theme ships bundled in
+`backend/themes/`; the other twelve first-party themes listed above under *Available Themes* are
+distributed through the **theme marketplace** and installed on demand. WordJS ships two admin-only
+install paths — both land the theme in the same `backend/themes/{slug}/` layout described above.
+
+### From the theme marketplace
+
+In **Admin → Themes** the page has **Installed | Marketplace** tabs; the Marketplace tab lists the
+first-party catalog and installs a theme in one click. The frontend `themesMarketplaceApi`
+(`frontend/src/lib/api.ts`) drives the theme-catalog routes in `backend/src/routes/marketplace.ts` —
+`GET /marketplace/themes/catalog` (browse) and `POST /marketplace/themes/install` (fetch, verify, then
+unpack via `installThemeFromZip()`), both admin-gated. The catalog origin is admin-configurable and
+independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources` (backed by the
+`marketplace_theme_sources` option).
+
+### From a ZIP upload
+
+You can also upload a packaged theme ZIP directly. **Admin → Themes** exposes an upload control backed
+by `POST /themes/upload` (`backend/src/routes/themes.ts`, `authenticate` + `isAdmin`); the archive is
+validated by the shared **zip-guard** (`assertZipWithinBudget` — rejects decompression bombs and
+path-traversal entries) before it is extracted into `backend/themes/{slug}/`.
+
+### Exporting a theme
+
+Any installed theme can be packaged back into a ZIP for backup or transfer via
+**Admin → Themes → Download** (`GET /themes/:slug/download` → `createThemeZip()` in
+`backend/src/core/themes.ts`).
 
 ## Activating a Theme
 
