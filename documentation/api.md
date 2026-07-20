@@ -14,12 +14,15 @@ The backend follows a layered architecture inspired by WordPress but implemented
     *   `CORS`: Cross-Origin Resource Sharing.
     *   `RateLimit`: DoS protection (API, Auth, Uploads).
     *   `MigrationGuard`: Validates `Host` header against `siteUrl`.
+    *   `MfaComplianceGate`: Mounted on the API prefix (`backend/src/index.ts`); blocks a user who is required to enrol under the admin MFA-by-role policy (once past their grace period) until they complete MFA enrollment.
 4.  **Security Layers:**
     *   `AST Scanner`: Static analysis (acorn, fail-closed) of plugin code at install time.
     *   `Process Isolation`: Every plugin marked `"isolated": true` runs in a **separate OS process** (`child_process.fork` of `backend/src/core/plugin-worker.js`, IPC via v8 structured clone) and reaches the host only through the permission-checked `wordjs` capability bridge — a crash/OOM is contained to the child, never the host. There is **no "trusted" tier**: every plugin is sandboxed and the admin grants each capability per-plugin (Android-style, default-deny). First-party plugins are pre-granted their *declared* capabilities on first activation but are **not** privileged. A `network`-granted plugin's outbound connections are confined to **public IPs only** by `backend/src/core/egress-guard.ts` (loopback / link-local incl. cloud-metadata `169.254.169.254` / RFC1918 / CGNAT / IPv6 ULA are blocked, validated at connect time). Plugin DB tables are scoped to a `wjp_<slug>_` prefix. See `documentation/plugins.md` / `documentation/security.md`.
 5.  **Routing:** `backend/src/routes/index.ts` dispatches to controllers.
 6.  **Controller/Handler:** Executes business logic, interacts with Models/DB.
 7.  **Response:** JSON response sent back.
+
+> **Static uploads & image negotiation:** `GET /uploads/*.{jpg,jpeg,png}` passes through the `imageNegotiation` middleware (`backend/src/middleware/image-negotiation.ts`, mounted on `/uploads` ahead of `express.static`) before the static file is served. When the client's `Accept` header advertises AVIF/WebP, it transparently serves an on-demand AVIF/WebP derivative at the **same URL** (cached under `<uploads>/.derivatives`, `Vary: Accept`), failing safe to the original bytes on any error.
 
 ### 1.2 Database Abstraction
 WordJS loads a database **driver** behind a common interface (`backend/src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). Drivers are selected by the top-level `dbDriver` key (in `wordjs-config.json`) via the DB manager in `backend/src/config/database.ts`.
@@ -50,6 +53,8 @@ Authentication is handled via **JWT (JSON Web Tokens)**.
     *   Also accepted: `Authorization: Bearer <token>` header.
     *   Lifecycle: The JWT itself expires in **2 hours** (hardcoded `config.jwt.expiresIn`, not `.env`-configurable). The `wordjs_token` cookie carrying it has a 7-day `maxAge`, so the browser keeps sending the cookie after the token inside it has expired. Refresh via `POST /auth/refresh` (re-issues the cookie).
 3.  **Revocation:** JWTs are revoked via a per-user `token_valid_after` security epoch. `POST /auth/logout` and a password change bump it, immediately invalidating previously issued tokens.
+4.  **Scoped API tokens (headless / machine clients):** In addition to the browser cookie, long-lived personal access tokens authenticate non-browser callers via `Authorization: Bearer wjt_<secret>` (`backend/src/models/ApiToken.ts`). Each token carries **scopes** — a global `read`/`write`/`*` and/or per-resource grants like `posts:write`, `media:read` (`write` implies `read`). A request's effective permission is the token owner's capabilities **∩** the token's scope, so a token is always *narrower* than its owner. Tokens are managed at `/auth/tokens` (see §6.2.1); the raw secret is shown **once** at creation and stored only as a SHA-256 hash. A genuine `Authorization: Bearer` request is CSRF-exempt (§2.4).
+5.  **Two-factor authentication (TOTP):** Accounts can enrol a TOTP second factor with backup codes. When enabled, `POST /auth/login` returns a short-lived challenge instead of a session, and the caller completes login via `POST /auth/mfa`. An admin-enforced MFA-by-role policy (`/auth/mfa/policy`) plus the global `MfaComplianceGate` (§1.1) can require MFA for chosen roles. See §6.2.1.
 
 ### 2.2 Permissions Middleware (RBAC)
 Located in `backend/src/middleware/permissions.ts` (and `auth.ts`).
@@ -157,7 +162,7 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 - **Authentication**: `/auth` - Login, Register, Session management.
 - **Content**: `/posts`, `/pages` (alias for `?type=page`), `/media`, `/categories`, `/tags`, `/comments`.
 - **Users**: `/users`, `/roles` - Role-Based Access Control.
-- **System**: `/settings`, `/plugins`, `/marketplace` (plugin catalog — see §6.3.1), `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/system/certs`.
+- **System**: `/settings`, `/plugins`, `/marketplace` (plugin catalog — see §6.3.1), `/themes`, `/menus`, `/fonts`, `/health`, `/seo`, `/hooks`, `/notifications`, `/webhooks` (outgoing HMAC-signed webhooks — see §6.10), `/system/certs`.
 - **Observability**: `/metrics` (Prometheus, root-path, scrape-token-gated — see §6.8).
 - **Extensions**: `/widgets`, `/types` (Post Types), `/revisions`.
 - **Data**: `/export`, `/export/wxr`, `/import`, `/import/wordpress` (WordPress WXR migration — see §6.9), `/backups`, `/db-migration` (engine migration).
@@ -180,6 +185,19 @@ All errors should follow the structure defined in `backend/src/middleware/errorH
 | `GET`  | `/password-reset-available` | No   | Public probe: whether self-service password reset can work (mail configured + reachable recovery address model) |
 | `POST` | `/forgot-password`          | No   | Body `{ login }` (username or email). **Always returns 200** (anti-enumeration); emails a single-use reset link (30-min TTL; only the SHA-256 of the token is stored). Rate-limited by the auth limiter |
 | `POST` | `/reset-password`           | No   | Body `{ uid, token, password }`. Consumes the single-use token (constant-time hash compare) and revokes all existing sessions; `400 rest_invalid_reset` / `rest_weak_password` on failure |
+| `GET`  | `/tokens`                   | Session | List the caller's scoped API tokens (metadata only; secrets are never re-shown) |
+| `POST` | `/tokens`                   | Session | Mint a scoped API token. Body `{ name?, scopes?, expiresInDays? }`; the raw `wjt_…` secret is returned **once** (`201`). Unknown scopes → `400 rest_invalid_scope`; over the active-token cap → `400 rest_token_limit` |
+| `DELETE` | `/tokens/:id`             | Session | Revoke one of the caller's tokens (`404` if not the caller's or already gone) |
+| `POST` | `/mfa`                      | No   | Complete a login that requires a second factor. Body `{ mfaToken, code }` (TOTP or backup code); issues the session cookie on success (own `mfa:` lockout bucket) |
+| `GET`  | `/mfa/status`               | Yes  | Whether MFA is enabled for the caller + remaining backup-code count |
+| `POST` | `/mfa/setup`                | Session | Begin TOTP enrollment: returns a new `secret` + `otpauthUri` (for the QR) |
+| `POST` | `/mfa/enable`               | Session | Verify a code against the pending secret, activate MFA, and return backup codes **once** |
+| `POST` | `/mfa/disable`              | Session | Disable MFA (requires a current TOTP/backup code) |
+| `POST` | `/mfa/backup-codes`         | Session | Regenerate backup codes (requires a current code); returned **once** |
+| `GET`  | `/mfa/policy`               | Admin (session) | Read the admin-enforced MFA-by-role policy |
+| `PUT`  | `/mfa/policy`               | Admin (session) | Set which roles require MFA + the grace period. Body `{ requiredRoles, graceDays }` |
+
+> **Session-only management:** rows marked **Session** require an *interactive* session — an `Authorization: Bearer wjt_…` API token is rejected (`403 rest_token_management_forbidden`), so a leaked token can never mint further tokens, enrol/disable MFA, regenerate backup codes, or change the MFA policy. `POST /mfa` itself is public: it is the second half of login, gated by the short-lived challenge token `POST /auth/login` issues after the password check.
 
 ### 6.2 Content & Taxonomy
 | Method   | Endpoint            | Auth  | Description                                      |
@@ -400,6 +418,21 @@ Base path: `/api/v1/import`. Migrates an existing WordPress site from its **WXR*
 ```
 
 **Errors:** a missing upload returns `400 no_file`; an unreadable upload `400 read_failed`; a file that doesn't parse as a valid WXR returns `400 invalid_wxr`. Non-fatal per-item problems during a run are collected (capped at 100) in the summary's `errors[]` array rather than aborting the import.
+
+### 6.10 Outgoing Webhooks 🪝
+Base path: `/api/v1/webhooks` (`backend/src/routes/webhooks.ts`; core `backend/src/core/webhooks.ts`, models `Webhook.ts`/`WebhookDelivery.ts`). WordJS fans **content events** (e.g. `post.published`) out to admin-registered HTTP endpoints. Every delivery is **HMAC-signed** with the webhook's per-endpoint secret and **SSRF-safe** — the destination host is IP-validated **at delivery time**, so loopback / link-local (incl. the cloud-metadata address) / RFC1918 targets are rejected. The whole resource is **admin-only** (`authenticate` + `isAdmin`); all **mutations** are additionally **session-only** (an `Authorization: Bearer wjt_…` API token is rejected, so a leaked token can't plant an exfiltration endpoint or rotate a secret). Delivery is subscribed to content hooks and polled by `initWebhooks()` at boot.
+
+| Method   | Endpoint                            | Auth  | Description                                                        |
+| :------- | :---------------------------------- | :---- | :---------------------------------------------------------------- |
+| `GET`    | `/events`                           | Admin | The subscribable content-event catalog (`Webhook.EVENTS`)          |
+| `GET`    | `/`                                 | Admin | List all webhooks                                                  |
+| `POST`   | `/`                                 | Admin (session) | Create a webhook. Body `{ name?, url, events?, active? }`; the signing **secret is returned once** (`201`). Capped at 100 webhooks |
+| `GET`    | `/:id`                              | Admin | Get one webhook                                                    |
+| `PATCH`  | `/:id`                              | Admin (session) | Update `name`/`url`/`events`/`active`                    |
+| `DELETE` | `/:id`                              | Admin (session) | Delete a webhook                                          |
+| `POST`   | `/:id/rotate-secret`                | Admin (session) | Rotate the signing secret (returned **once**)            |
+| `GET`    | `/:id/deliveries`                   | Admin | Recent delivery attempts for a webhook (audit log)                 |
+| `POST`   | `/deliveries/:deliveryId/redeliver` | Admin (session) | Re-queue a specific delivery for another attempt         |
 
 ---
 

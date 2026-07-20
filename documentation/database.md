@@ -57,7 +57,7 @@ All async drivers extend `DatabaseDriverInterface` (`backend/src/drivers/interfa
 
 The base `interface.ts` default `transaction()` throws `transaction() not implemented`; every async driver (`sqlite-native-async`, `postgres`, `mysql`, `sqlite-legacy`) overrides it with a real atomic implementation — see [§1.2.1](#121-atomic-transactionfn) below.
 
-A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the *same* contract (create → insert → get → all → update → delete → drop) against the drivers it carries a dialect descriptor block for, asserting `run()` returns a truthy `lastID` and correct `changes`, that params bind, and that mutations persist. Today that is **`sqlite-native` and `postgres`** (adding a driver = add a descriptor block); the `mysql` driver satisfies the same interface but has no descriptor block wired in yet. Drivers whose backend isn't reachable **skip gracefully**: if `better-sqlite3` can't load it's treated as the sql.js-fallback case, and if no Postgres is reachable that block is skipped (3s connect timeout). The legacy sync `sqlite-legacy` driver is intentionally out of scope (the suite validates the async interface implementers).
+A **conformance test** (`backend/src/tests/driver-conformance.test.ts`) runs the *same* contract (create → insert → get → all → update → delete → drop) against the drivers it carries a dialect descriptor block for, asserting `run()` returns a truthy `lastID` and correct `changes`, that params bind, and that mutations persist. Today that is **`sqlite-native`, `postgres`, and `mysql`** (adding a driver = add a descriptor block). Drivers whose backend isn't reachable **skip gracefully**: if `better-sqlite3` can't load it's treated as the sql.js-fallback case, and if no Postgres is reachable that block is skipped (3s connect timeout). The legacy sync `sqlite-legacy` driver is intentionally out of scope (the suite validates the async interface implementers).
 
 #### 1.2.1 Atomic `transaction(fn)`
 
@@ -97,7 +97,7 @@ WordJS includes a **Zero Data Loss** migration tool for switching drivers withou
 
 > **Note:** For SQLite-to-SQLite migrations (e.g. Legacy -> Native), the system uses an atomic file swap mechanism to ensure no corruption.
 
-> **MySQL is not yet a migration target.** The DB-Admin migration tool's `availableDrivers` are `sqlite-legacy`, `sqlite-native`, and `postgres` only. MySQL/MariaDB is a fully supported **runtime** driver (§1.1), but moving existing data *into* it isn't wired into this UI yet — point a fresh install at MySQL via `dbDriver` instead.
+> **MySQL/MariaDB is now a supported migration target.** The DB-Admin migration tool's `availableDrivers` are `sqlite-legacy`, `sqlite-native`, `postgres`, and `mysql` — you can migrate existing data *into* MySQL/MariaDB from the admin UI just like Postgres (it is also a first-class **runtime** driver, §1.1). The tool recreates the non-core schema on the target, then performs an atomic, fail-closed row copy (`SET FOREIGN_KEY_CHECKS` off during the copy, `TEXT`→`LONGTEXT` for long-content columns via the target CREATE).
 
 The backing API is mounted at `/api/v1/db-migration` (guarded by `authenticate` + the `manage_options` permission).
 
@@ -321,6 +321,8 @@ On boot, the schema (`backend/src/config/database.ts`) creates a set of indexes 
 > `options.option_name` uniqueness is enforced by the **`idx_options_name` UNIQUE index** (created alongside the others), not by an inline column constraint.
 
 > **UNIQUE constraints (TOCTOU-closing).** `users (user_login)`, `users (LOWER(user_email))`, and `posts (post_name, post_type)` [partial, `WHERE post_name <> ''` — real slugs only] now carry UNIQUE indexes that close the check-then-insert race for duplicate logins/emails/slugs. The non-unique `idx_posts_name` (above) coexists with the new partial-unique `idx_posts_name_type` — both are real. **Fresh installs** create all three in `initializeSchema`. **Existing installs** get them via schema migration `0001_unique_constraints_users_posts`, which is **defensive**: it first detects and logs any duplicate groups, then attempts each `CREATE UNIQUE INDEX` in its own `try/catch`, and **never throws** — a residual duplicate logs a warning and boot continues (the migration is still recorded as applied so it doesn't retry every boot). This is a deliberate exception: the schema-migration runner is otherwise **fail-closed** (a failing migration aborts boot to avoid a half-migrated schema).
+
+> **Platform tables (migrations `0002`–`0005`).** Later schema migrations create the tables backing the scoped API tokens and outgoing HMAC-signed webhooks: `0002_create_api_tokens` (`api_tokens` + UNIQUE `idx_api_tokens_hash` and `idx_api_tokens_user`), `0003_create_webhooks` (`webhooks` + `idx_webhooks_active` and `idx_webhooks_user`), and `0004_create_webhook_deliveries` (`webhook_deliveries` + `idx_wh_deliveries_due` and `idx_wh_deliveries_webhook`), with `0005_webhook_secret_plaintext` adjusting how the webhook signing secret is stored. Unlike the defensive `0001`, these run under the normal **fail-closed** migration policy.
 
 ### Batched Meta Loading (N+1 avoidance)
 

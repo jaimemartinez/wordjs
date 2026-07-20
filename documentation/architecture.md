@@ -231,7 +231,7 @@ On top of per-theme `style.css`, the theme system ships **one shared static styl
 
 - **Driven by `--wjs-*` design tokens** declared in each theme's `style.css :root` (not `theme.json`). The framework carries safe fallbacks, so a theme re-skins everything just by setting tokens. Per-variant `--wjs-color-on-*` tokens hold the max-contrast (black/white) text computed per theme for each solid color.
 - **Where it loads:** on **public** pages (frontend `ThemeLoader.tsx`) and inside the **editor preview iframe** (frontend `PuckEditor.tsx`, for true WYSIWYG) — never the admin chrome. It is linked **before** `core.css` and the theme's own `style.css` so the theme wins at equal specificity. (The *legacy* Handlebars engine links it the same way in `wordjs_head` (`core/theme-engine.ts`), but that public path is no longer mounted — Next.js renders the live site.)
-- All 13 bundled themes tune a full `--wjs-*` token set to their palette (the `default` theme also keeps a few legacy bare aliases like `--primary` for backward-compat). Full reference: **[theming.md](theming.md)**.
+- The `default` theme ships bundled and 12 first-party themes are available through the theme marketplace — each tunes a full `--wjs-*` token set to its palette (the `default` theme also keeps a few legacy bare aliases like `--primary` for backward-compat). Full reference: **[theming.md](theming.md)**.
 
 ---
 
@@ -375,14 +375,16 @@ graph TB
     MainJS --> Cron
 ```
 
-### Plugin distribution — bundled + Marketplace
+### Plugin & theme distribution — bundled + Marketplace
 
 Plugins reach a site two ways:
 
-- **Bundled** (`backend/plugins/`) — first-party plugins that ship with core (card-gallery, conference-manager, hello-world, mail-server, photo-carousel, test-schema, video-gallery, youtube-videos).
+- **Bundled** (`backend/plugins/`) — first-party plugins that ship with core (card-gallery, hello-world, photo-carousel, test-schema, video-gallery).
 - **Marketplace** — first-party plugins whose sources live in `marketplace/plugins/`, distributed **outside** the core build. `backend/scripts/build-marketplace.js` (run as `npm run build:marketplace` from the repo root) packs each into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json` — the catalog (id/name/version/category/permissions/size + a **sha256** per zip). The `marketplace/dist/` output is a **build artifact and is NOT committed** (it is `.gitignore`d); `.github/workflows/release.yml` runs `build:marketplace` and publishes the catalog + zips as **GitHub Release assets**. So plugin releases are decoupled from core releases, and by default a site fetches the catalog from the release-assets URL `https://github.com/jaimemartinez/wordjs/releases/latest/download` (a dev/full checkout with a local `marketplace/dist/` uses that instead). Sources are **admin-configurable** — see below.
 
 The backend exposes it at **`/api/v1/marketplace`** (`backend/src/routes/marketplace.ts`, admin-only): `GET /catalog` fetches **every** configured source and returns the **merged** catalog (deduped by id, earlier sources winning, each source's errors isolated so one bad URL can't hide the rest) annotated with each entry's installed/active/update state (with a 5-minute in-memory cache); `POST /install` downloads the zip **server-side from the source the entry was listed under** (https-only, size-capped, strict filename shape), verifies its **sha256** against the catalog entry, and hands it to the **same** `installPluginFromZip()` pipeline as a manual upload (zip-bomb budget, Zip Slip/slug validation, manifest + AST security scan) — the marketplace adds no new install surface beyond the catalog fetch itself. **Sources are admin-configurable** via `GET`/`PUT /api/v1/marketplace/sources`, which read/write the `marketplace_sources` option (a JSON list of https catalogs, max 12; each must be https or `http://localhost`); precedence is that list → the legacy single `marketplace_source` option (back-compat) → the repo-local `marketplace/dist/` → the built-in release-assets default. The admin UI is the **Marketplace tab** of `/admin/plugins` (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`); an installed plugin lands **inactive with default-deny grants**, exactly like any other install.
+
+The **same mechanism also distributes first-party themes.** Theme sources live in `marketplace/themes/`; `build-marketplace.js` packs each into `marketplace/dist/theme-<slug>-<version>.zip` and emits a parallel `marketplace/dist/marketplace-themes-index.json` catalog. The backend serves them via a separate theme catalog on `GET /api/v1/marketplace/themes/catalog` and installs through `POST /api/v1/marketplace/themes/install` (the same hardened `installThemeFromZip()` pipeline, browsed from the Marketplace tab of `/admin/themes`). Theme sources are **independently** admin-configurable via `GET`/`PUT /api/v1/marketplace/themes/sources`, which read/write the `marketplace_theme_sources` option — separate from the plugin source list, so themes can point at a different origin than plugins.
 
 ### Isolated sandbox (separate OS process)
 
@@ -412,7 +414,7 @@ Host-level capabilities each gate on their own grant: becoming the host mail sen
 
 Process separation means a child OOM/crash never takes down the host on any platform.
 
-> **Honest residual:** the child still has the full Node API and a normal OS uid — it is not yet capability-minimal at the syscall level. The preventive cap is cgroup (opt-in, Linux) and a **Job Object** on Windows (default-on, probe-gated, pure-JS — no native helper); dropped-uid + a seccomp denylist ship as the opt-in bubblewrap layer (Linux), and landlock is intentionally not used. No independent third-party audit yet. See **POSITIONING.md** section 2 for the canonical honest posture.
+> **Honest residual:** the child still has the full Node API and a normal OS uid — it is not yet capability-minimal at the syscall level. The preventive cap is cgroup (opt-in, Linux) and a **Job Object** on Windows (default-on, probe-gated, pure-JS — no native helper); dropped-uid + a seccomp denylist ship as the **default-on / opt-out** bubblewrap layer (Linux, probe-gated — falls back to plain fork isolation where bwrap / rootless user-namespaces are unavailable), and landlock is intentionally not used. No independent third-party audit yet. See **POSITIONING.md** section 2 for the canonical honest posture.
 
 ---
 
@@ -447,6 +449,13 @@ sequenceDiagram
     G-->>F: Response
     F-->>U: Render Page
 ```
+
+### Additional auth paths
+
+Beyond the browser JWT cookie shown above, core ships two more authentication paths:
+
+- **Scoped API tokens** — headless/machine clients authenticate with `Authorization: Bearer wjt_<secret>` instead of the cookie. Tokens carry global (`read`/`write`/`*`) and per-resource scopes (e.g. `posts:write`, `media:read`); the effective permission is the owner's capabilities **∩** the token scope. Managed via `GET`/`POST`/`DELETE /api/v1/auth/tokens` (self-service UI at `/admin/tokens`), stored sha256-at-rest, and the Bearer path is CSRF-exempt.
+- **TOTP two-factor auth** — after password validation an MFA-enabled account completes login by submitting a TOTP or backup code to `POST /api/v1/auth/mfa` (enrol/manage via `/auth/mfa/setup|enable|disable|status|backup-codes`). An admin-enforced **MFA-by-role policy** (`GET`/`PUT /auth/mfa/policy` plus a global compliance gate) can require 2FA for chosen roles.
 
 ---
 
@@ -493,6 +502,10 @@ graph LR
     Roles --> options_table
     Capabilities --> options_table
 ```
+
+### Outgoing Webhooks
+
+Content events (e.g. `post.published`) fan out to admin-configured **outgoing webhooks** — `backend/src/core/webhooks.ts`, managed through the admin API at `/api/v1/webhooks` (subscription CRUD, a `GET /events` catalog of subscribable event types, per-webhook delivery log, and secret rotation). Deliveries are **HMAC-signed** and **SSRF-safe** — loopback / cloud-metadata / RFC1918 destinations are rejected, validated at delivery time.
 
 ### WordPress Importer (WXR)
 
@@ -594,9 +607,11 @@ wordjs/
 │   │       └── core.css        # Core Styles
 │   └── package.json
 │
-├── 📁 marketplace/              # Plugin Marketplace (distributed outside the core build)
+├── 📁 marketplace/              # Plugin & theme Marketplace (distributed outside the core build)
 │   ├── 📁 plugins/             # First-party plugin sources
+│   ├── 📁 themes/              # First-party theme sources
 │   └── 📁 dist/                # Build output (gitignored): marketplace-index.json + <slug>-<version>.zip
+│                               #   + marketplace-themes-index.json + theme-<slug>-<version>.zip
 │                               #   — published as GitHub Release assets, NOT committed
 │
 ├── 📁 documentation/            # Documentation
@@ -648,7 +663,7 @@ The backend is written in **TypeScript** (`backend/src/**/*.ts`). In **productio
 - **In-tree `.js` files compiled via `allowJs`:** `src/core/db-admin/*` (the in-core DB migration/admin runner that used to be the `db-migration` plugin) and `src/core/plugin-worker.js` (the plugin isolate worker) are carried into `dist/` by `allowJs`.
 - **DB drivers:** `src/drivers/` defines a driver interface (`interface.ts`: `connect/get/all/run/exec/transaction/close`, where `transaction(fn)` runs `fn` atomically on a single connection wrapped in BEGIN/COMMIT with ROLLBACK on throw) plus implementations (`sqlite-native`, `sqlite-native-async`, `sqlite-legacy`, `postgres`, and `mysql`). The driver is selected by `config.dbDriver` (`backend/src/config/database.ts`, default `sqlite-native`); `mysql` (aliased `mariadb`) targets MySQL 8.0+/MariaDB via `mysql2` and carries a SQLite→MySQL dialect-translation layer (TEXT→VARCHAR/LONGTEXT + expression defaults, AUTO_INCREMENT, `INSERT OR IGNORE`/`ON CONFLICT`→`INSERT IGNORE`/`ON DUPLICATE KEY UPDATE`, `RETURNING`→`insertId`, ANSI_QUOTES). `getDbType()` returns `{ isPostgres, isMySQL, isSQLite, driver }`. Adding a database = implement the interface + add a conformance block (`src/tests/driver-conformance.test.ts`).
 - **Plugins stay JavaScript:** code under `backend/plugins/*` remains `.js` on purpose, because the acorn AST security scanner and dynamic `require` assume `.js`. Plugins are excluded from the build.
-- **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs **strict typecheck → build → license gate (block AGPL/SSPL) → tests** for the backend, gateway tests, and frontend lint + build.
+- **Tooling & CI:** ESLint (flat config) + Prettier, a `node:test` suite (`src/tests/*.test.ts`, including supertest API integration tests). CI (`.github/workflows/ci.yml`) runs **strict typecheck → build → license gate (block AGPL/SSPL) → tests** for the backend, gateway tests, and frontend lint + build. Beyond `ci.yml`, a separate `.github/workflows/codeql.yml` runs **CodeQL SAST** (JavaScript/TypeScript) on push/PR to `main` and weekly, and `.github/workflows/release.yml` generates a **CycloneDX SBOM** (`wordjs-sbom.cdx.json`) as a release asset; third-party GitHub Actions are pinned to immutable commit SHAs for supply-chain integrity.
 
 ---
 

@@ -379,13 +379,19 @@ native addons, and an ESM resolution hook fails closed for the same builtins. Th
 **not** a safe zone, so you **cannot** read a sibling plugin's files — another plugin's `package.json`,
 `node_modules`, `data/`, or encryption-key files are unreachable (no cross-plugin data/secret exfiltration).
 
-> ⚠️ **Residual risk:** the baseline sandbox is OS-process isolation with userspace guards. Optional
-> **kernel hardening** now ships (`config.sandbox.useKernelHardening`, **Linux-only, default-off,
-> probe-gated**): bwrap runs the child as an unprivileged uid with all Linux capabilities dropped,
+> ⚠️ **Residual risk:** the baseline sandbox is OS-process isolation with userspace guards.
+> **Kernel hardening** ships **default-on** on Linux (`config.sandbox.useKernelHardening`, **opt-out
+> via `config.sandbox.useKernelHardening=false`, probe-gated** — it falls back to the plain isolated
+> fork where `bwrap` / unprivileged user-namespaces are unavailable; a no-op on Windows/macOS): bwrap
+> runs the child as an unprivileged uid with all Linux capabilities dropped,
 > no-new-privs, PID/IPC/UTS namespaces and a read-only filesystem, plus a **seccomp-bpf syscall denylist**.
 > Landlock is intentionally **not** used (the read-only mount namespace already meets its fs-confinement
 > goal and the LSM would need a native dep, against this sandbox's no-native-deps design). With hardening
-> off, the child is **not** capability-minimal at the syscall level. A *preventive* memory cap on Windows
+> off, the child is **not** capability-minimal at the syscall level. Set
+> `config.sandbox.requireHardening=true` (opt-in, default off) to **fail closed** — isolated plugins then
+> refuse to launch unless kernel hardening is actually active on the host, rather than silently degrading
+> to the JS-guards-only fork. The live hardening state (`active` / `degraded` / `unsupported`) is surfaced
+> on admin `GET /health/details`. A *preventive* memory cap on Windows
 > ships as a Job Object (default-on, probe-gated, pure-JS; the reactive RSS poll remains a backstop). The
 > outstanding gap is an **independent external security audit** — the sandbox is candidly **self-audited**.
 > See **[Plugin Isolation](plugin-isolation-proposal.md)**.
@@ -495,7 +501,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
 | `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Always creates a `wjp_<slug>_`-prefixed table; core table names blocked. |
-| `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, or `'mysql'`) — branch your DDL on `isPostgres`/`isMySQL`. Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
+| `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'`, or `'mariadb'`) — branch your DDL on the `isPostgres`/`isMySQL` booleans rather than the raw `driver` string (`isMySQL` is `true` for both `'mysql'` and `'mariadb'`). Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role }` — never `user_pass` or other credential fields. The sanctioned way to read users without core-table access. |
 | `wordjs.site.url / domain / adminEmail` | `settings:read` | Read-only site identity. |
 | `wordjs.hooks.addAction/addFilter(hook, cb, priority)` · `doAction(hook, ...args)` | — | Callback runs in the child process; host installs an RPC shim. Raw-HTML hooks (`wordjs_head`/`wordjs_footer`) are denied to every plugin. |
@@ -508,6 +514,7 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant). |
 | `wordjs.adminMenu.add(item)` | — | Declarative sidebar item. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process. |
+| `wordjs.crypto.randomToken(bytes=16)` / `randomInt(min, max)` | — | CSPRNG (no data access, no permission gate). Use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host) — `await` it. |
 | `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` from **inside your plugin dir** onto public pages. `spec = { handle, src (relative path), inFooter?, strategy?:'async'\|'defer', media? }`. The host validates the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
 
 ---

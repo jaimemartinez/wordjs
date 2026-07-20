@@ -257,13 +257,15 @@ Each isolated child is held to a **768 MB resident budget** plus a 256 MB JS hea
 
 Because each plugin is a **separate process**, an OOM or crash never takes down the host on *any* platform — even with no cap configured.
 
-### `config.sandbox.useKernelHardening` — opt-in kernel hardening (Linux)
+### `config.sandbox.useKernelHardening` — kernel hardening (Linux, default-on / opt-out)
 
-Beyond the memory caps, an **opt-in** layer runs each isolated plugin child through [bubblewrap](https://github.com/containers/bubblewrap) so it executes as an **unprivileged uid (`nobody`) in a rootless user namespace, with all Linux capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (the app root stays writable so plugin storage — `uploads/`, `data/`, `plugins/<slug>/` — keeps working; network is preserved and still egress-guarded). It is **OFF by default**, **Linux-only** (a no-op on Windows/macOS), and **probe-validated on the host before activating** — if `bwrap` is missing or rootless user namespaces are unavailable it logs a warning and falls back to the standard isolated launch (**zero regression**). It composes with the memory caps above (the resident RSS poll sums the bwrap subtree so the cap keeps biting). Requires the `bubblewrap` package (`sudo apt-get install -y bubblewrap`); validate it on the host with `node backend/scripts/verify-sandbox-hardening.js`.
+Beyond the memory caps, a **default-on (opt-out)** layer runs each isolated plugin child through [bubblewrap](https://github.com/containers/bubblewrap) so it executes as an **unprivileged uid (`nobody`) in a rootless user namespace, with all Linux capabilities dropped, `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (the app root stays writable so plugin storage — `uploads/`, `data/`, `plugins/<slug>/` — keeps working; network is preserved and still egress-guarded). It is **ON by default** on Linux (opt out with `sandbox.useKernelHardening: false`), a **no-op on Windows/macOS**, and **probe-validated on the host before activating** — if `bwrap` is missing or rootless user namespaces are unavailable it logs a warning and falls back to the standard isolated launch (**zero regression**). It composes with the memory caps above (the resident RSS poll sums the bwrap subtree so the cap keeps biting). Requires the `bubblewrap` package (`sudo apt-get install -y bubblewrap`); validate it on the host with `node backend/scripts/verify-sandbox-hardening.js`.
 
 ```json
-{ "sandbox": { "useKernelHardening": true } }
+{ "sandbox": { "useKernelHardening": false } }
 ```
+
+Set `sandbox.requireHardening: true` (default off) to **fail closed** — an isolated plugin then **refuses to launch** unless kernel hardening is actually ACTIVE on the host, instead of silently degrading to the JS-guards-only fork. The true hardening state (ACTIVE / DEGRADED / REFUSING / disabled / unsupported) is surfaced on admin `GET /health/details`.
 
 It also applies a **`seccomp`-bpf syscall denylist** (`ptrace`/`mount`/`kexec`/`*_module`/`bpf`/`keyctl`/`userfaultfd`/`setns`/`process_vm_*`/… → `EPERM`), assembled in pure JS and applied via `bwrap --seccomp`. (The `Landlock` LSM is **not** used — the read-only mount namespace already provides the filesystem confinement it would, and the LSM needs a native dependency.)
 
@@ -368,6 +370,8 @@ CI runs on every push and pull request via `.github/workflows/ci.yml`, on **Node
 - **Backend:** **audit gate** (`npm audit --omit=dev --audit-level=high`, blocks high/critical prod vulns) → strict type check (`npx tsc --noEmit`) → **build** (`npm run build`, compile to `dist/`) → **license gate** (`license-checker --production --failOn 'AGPL;SSPL'`, blocks network-copyleft deps) → unit tests (`npm test`) → **integration tests** (`npm run test:integration`). The integration tests run against real **`postgres:16`** and **`redis:7`** service containers and exercise the multi-node coordination paths — distributed-lock lease CAS against Postgres, Redis pub/sub cache/role coherence — plus the health and `/metrics` endpoints (`backend/src/tests-integration/`). The job ends with a **marketplace catalog** step that re-runs `node backend/scripts/build-marketplace.js` (deterministic output) to confirm the catalog builds. The catalog itself (`marketplace/dist/`) is **not** committed — it is a build output published as GitHub Release assets by `release.yml` — so this step validates the build rather than a checked-in artifact.
 - **Gateway:** audit gate → tests (`npm test`), including the proxy/mTLS integration test.
 - **Frontend:** audit gate → plugin-registry regeneration → type check → lint (`npm run lint`) → **unit tests** (`npm run test`, vitest — e.g. the XSS sanitizer) → production build (`npm run build`).
+
+Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAST** (`security-and-quality` queries, JavaScript/TypeScript) on push/PR to `main` and weekly, reporting to the repo's **Security** tab without blocking merges. The release pipeline (`release.yml`) also emits a **CycloneDX SBOM** (`release/wordjs-sbom.cdx.json`) attached as a release asset, and third-party Actions are **pinned to immutable commit SHAs** for supply-chain integrity.
 
 > **Note:** Production runs the **compiled** backend — the `server.js` supervisor launches `node dist/index.js` when `dist/` exists, and only falls back to `ts-node` in development or when no build is present. Run `npm run build` before deploying.
 
