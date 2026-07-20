@@ -604,8 +604,9 @@ class Post {
             await cache.del(`post:slug:any:${data.slug}`);
         }
 
-        // Fire action hook
-        await doAction('post_updated', id, data);
+        // Fire action hook. Pass the PRIOR status (post was fetched pre-update) so listeners can detect a
+        // real status transition (e.g. draft→publish, →trash) rather than re-firing on every re-save.
+        await doAction('post_updated', id, data, post.postStatus);
 
         return await Post.findById(id);
     }
@@ -635,7 +636,9 @@ class Post {
                 await cache.del(`post:slug:any:${post.postName}`);
             }
 
-            await doAction('deleted_post', id);
+            // Pass the prior status so a listener can avoid re-emitting "deleted" when the post was
+            // already trashed (the trash transition already signaled it).
+            await doAction('deleted_post', id, post.postStatus);
 
             return result.changes > 0;
         } else {

@@ -86,6 +86,7 @@ router.use('/system/certs', certsRoutes);
 router.use('/health', healthRoutes);
 router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
+router.use('/webhooks', require('./webhooks'));
 router.use('/import', require('./import'));
 router.use('/', exportRoutes);
 
