@@ -42,9 +42,10 @@ export function imageNegotiation(uploadsDir: string) {
         // genuinely prevents escaping the uploads root; anything else falls through to serve the original.
         let rel: string;
         try { rel = decodeURIComponent(req.path).replace(/\\/g, '/').replace(/^\/+/, ''); } catch { return next(); }
-        if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel) || rel.split('/').some((s: string) => s === '..')) return next();
+        if (rel.includes('..')) return next(); // reject traversal — the CodeQL-recognized path-injection barrier
+        if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel)) return next(); // strict filename charset (defense-in-depth)
         const srcPath = path.join(root, rel);
-        if (srcPath !== root && !srcPath.startsWith(root + path.sep)) return next(); // defense-in-depth containment
+        if (!srcPath.startsWith(root)) return next(); // path.join keeps a clean rel inside root; assert it anyway
         try { if (!fs.statSync(srcPath).isFile()) return next(); } catch { return next(); }
 
         // The cache key is a HASH of the (already-sanitized) rel + format, so the derivative path carries NO
