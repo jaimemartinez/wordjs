@@ -67,26 +67,34 @@ function totp(secretBase32: string, opts: { time?: number; step?: number; digits
 }
 
 /**
- * Verify a submitted code against the secret, allowing ±`window` steps of clock drift. Constant-time
- * per-candidate compare so a byte-by-byte timing side channel can't leak the expected code.
+ * Verify a submitted code against the secret, allowing ±`window` steps of clock drift, and return the
+ * MATCHED time-step counter (or -1 if no match). The counter is needed for anti-replay: the caller must
+ * reject a code whose step was already consumed (RFC 6238 §5.2 one-time-use). Constant-time per-candidate
+ * compare so a byte-by-byte timing side channel can't leak the expected code. Note: we do NOT early-exit
+ * on a match, so the compare work is independent of which step (if any) matched.
  */
-function verifyTotp(secretBase32: string, code: string, opts: { window?: number; step?: number; digits?: number; time?: number } = {}): boolean {
+function verifyTotpStep(secretBase32: string, code: string, opts: { window?: number; step?: number; digits?: number; time?: number } = {}): number {
     const digits = opts.digits || 6;
     const step = opts.step || 30;
     const window = opts.window != null ? opts.window : 1;
     const submitted = String(code || '').replace(/\s+/g, '');
-    if (!/^[0-9]+$/.test(submitted) || submitted.length !== digits) return false;
+    if (!/^[0-9]+$/.test(submitted) || submitted.length !== digits) return -1;
     let secretBuf: Buffer;
-    try { secretBuf = base32Decode(secretBase32); } catch { return false; }
+    try { secretBuf = base32Decode(secretBase32); } catch { return -1; }
     const counter = Math.floor((opts.time != null ? opts.time : Math.floor(Date.now() / 1000)) / step);
     const want = Buffer.from(submitted);
-    let ok = false;
+    let matched = -1;
     for (let w = -window; w <= window; w++) {
         const cand = Buffer.from(hotp(secretBuf, counter + w, digits));
         // timingSafeEqual needs equal lengths; both are exactly `digits` bytes.
-        if (cand.length === want.length && crypto.timingSafeEqual(cand, want)) ok = true;
+        if (cand.length === want.length && crypto.timingSafeEqual(cand, want)) matched = counter + w;
     }
-    return ok;
+    return matched;
+}
+
+/** Boolean form of verifyTotpStep (no replay tracking — callers needing one-time-use use verifyTotpStep). */
+function verifyTotp(secretBase32: string, code: string, opts: { window?: number; step?: number; digits?: number; time?: number } = {}): boolean {
+    return verifyTotpStep(secretBase32, code, opts) >= 0;
 }
 
 /** otpauth:// provisioning URI for authenticator apps / QR codes. */
@@ -102,4 +110,4 @@ function otpauthUri(secretBase32: string, opts: { issuer: string; account: strin
     return `otpauth://totp/${label}?${params.toString()}`;
 }
 
-module.exports = { base32Encode, base32Decode, generateSecret, hotp, totp, verifyTotp, otpauthUri };
+module.exports = { base32Encode, base32Decode, generateSecret, hotp, totp, verifyTotp, verifyTotpStep, otpauthUri };

@@ -186,6 +186,7 @@ app.use(config.api.prefix, apiLimiter);
 
 // Parse JSON bodies (apply authLimiter specifically to login routes if not applied globally below, but strict route matching is preferred)
 app.use(`${config.api.prefix}/auth/login`, authLimiter);
+app.use(`${config.api.prefix}/auth/mfa`, authLimiter); // second-factor verify — throttle per-IP like login
 app.use(`${config.api.prefix}/auth/register`, authLimiter);
 app.use(`${config.api.prefix}/auth/forgot-password`, authLimiter); // public, unauthenticated — throttle abuse
 app.use(`${config.api.prefix}/auth/reset-password`, authLimiter);

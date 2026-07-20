@@ -606,8 +606,10 @@ router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
     const user = await User.findById(challenge.userId);
     if (!user) return res.status(401).json({ code: 'rest_user_invalid', message: 'User not found.', data: { status: 401 } });
 
-    // Reuse the per-account lockout so the 6-digit code can't be brute-forced.
-    const lockKey = user.userLogin;
+    // Throttle code guesses under a SEPARATE 'mfa:' lockout bucket. Crucially this is NOT the password
+    // bucket (user.userLogin) that /login clears on a correct password — otherwise an attacker who knows
+    // the password could reset the throttle and brute-force the 6-digit code.
+    const lockKey = 'mfa:' + user.userLogin;
     if (await isLoginLocked(lockKey)) {
         return res.status(429).json({ code: 'rest_account_locked', message: 'Account temporarily locked due to too many failed attempts. Try again later.', data: { status: 429 } });
     }
@@ -637,19 +639,27 @@ router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: an
 
 /** POST /auth/mfa/enable — verify a code against the pending secret, activate, return backup codes once. */
 router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+    const lk = 'mfa:' + req.user.userLogin;
+    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
     const result = await mfa.completeEnroll(req.user.id, (req.body || {}).code);
     if (!result.ok) {
+        await recordLoginFail(lk);
         return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid code. Check your device clock and try again.', data: { status: 400 } });
     }
+    await clearLoginFails(lk);
     res.json({ enabled: true, backupCodes: result.backupCodes, message: 'Save these backup codes now — they will not be shown again.' });
 }));
 
 /** POST /auth/mfa/disable — turn MFA off (requires a current TOTP or backup code). */
 router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
     if (!(await mfa.isEnabled(req.user.id))) return res.json({ disabled: true });
+    const lk = 'mfa:' + req.user.userLogin;
+    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
     if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
+        await recordLoginFail(lk);
         return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
     }
+    await clearLoginFails(lk);
     await mfa.disable(req.user.id);
     res.json({ disabled: true });
 }));
@@ -659,9 +669,13 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
     if (!(await mfa.isEnabled(req.user.id))) {
         return res.status(400).json({ code: 'rest_mfa_not_enabled', message: 'MFA is not enabled.', data: { status: 400 } });
     }
+    const lk = 'mfa:' + req.user.userLogin;
+    if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
     if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
+        await recordLoginFail(lk);
         return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
     }
+    await clearLoginFails(lk);
     res.json({ backupCodes: await mfa.regenerateBackupCodes(req.user.id), message: 'Save these backup codes now — they replace your previous set.' });
 }));
 

@@ -15,7 +15,7 @@ const config = require('../config/app');
 const User = require('../models/User');
 const totp = require('./totp');
 
-const META = { enabled: 'mfa_enabled', secret: 'mfa_totp_secret', pending: 'mfa_pending_secret', backup: 'mfa_recovery_codes' };
+const META = { enabled: 'mfa_enabled', secret: 'mfa_totp_secret', pending: 'mfa_pending_secret', backup: 'mfa_recovery_codes', lastStep: 'mfa_totp_last_step' };
 const N_BACKUP = 10;
 const CHALLENGE_TTL = '5m';
 
@@ -61,8 +61,21 @@ async function isEnabled(userId: number): Promise<boolean> {
  */
 async function verifyLoginCode(userId: number, code: string): Promise<boolean> {
     const secret = await User.getMeta(userId, META.secret);
-    if (secret && totp.verifyTotp(secret, String(code || '').replace(/\s+/g, ''))) return true;
+    if (secret) {
+        const step = totp.verifyTotpStep(secret, String(code || '').replace(/\s+/g, ''));
+        if (step >= 0) {
+            // Anti-replay (RFC 6238 §5.2): a code's time-step is one-time-use. Track the last consumed
+            // step; reject a step <= it, and advance it ATOMICALLY so two concurrent submissions of the
+            // same step cannot both pass (the loser's compare-and-set finds a changed value).
+            const lastRaw = await User.getMeta(userId, META.lastStep);
+            const last = lastRaw != null ? parseInt(lastRaw, 10) : -1;
+            if (step <= last) return false;
+            return await User.compareAndSetMeta(userId, META.lastStep, String(last), String(step));
+        }
+    }
 
+    // Backup code — single-use, consumed ATOMICALLY (compare-and-set on the exact list we read, so two
+    // concurrent submissions of the same code cannot both consume it).
     const raw = await User.getMeta(userId, META.backup);
     if (!raw) return false;
     let hashes: string[];
@@ -70,9 +83,9 @@ async function verifyLoginCode(userId: number, code: string): Promise<boolean> {
     const h = hashBackup(code);
     const idx = hashes.findIndex((x) => x.length === h.length && crypto.timingSafeEqual(Buffer.from(x), Buffer.from(h)));
     if (idx === -1) return false;
-    hashes.splice(idx, 1); // single-use: consume it
-    await User.updateMeta(userId, META.backup, JSON.stringify(hashes));
-    return true;
+    const next = hashes.slice();
+    next.splice(idx, 1);
+    return await User.compareAndSetMeta(userId, META.backup, raw, JSON.stringify(next));
 }
 
 /** Enroll: stash a pending secret; return it + the provisioning URI for the QR. */
@@ -90,6 +103,7 @@ async function completeEnroll(userId: number, code: string): Promise<{ ok: boole
     const { codes, hashes } = generateBackupCodes();
     await User.updateMeta(userId, META.secret, pending);
     await User.updateMeta(userId, META.backup, JSON.stringify(hashes));
+    await User.updateMeta(userId, META.lastStep, '-1'); // replay counter row must exist for the atomic CAS
     await User.updateMeta(userId, META.enabled, '1');
     await User.deleteMeta(userId, META.pending);
     return { ok: true, backupCodes: codes };
