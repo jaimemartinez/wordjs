@@ -76,6 +76,9 @@ test('bridge blocks the MySQL comment-divergence SQL-scoping bypass (--0 / /*! *
         await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE 2=1--0 UNION SELECT user_pass FROM users`), /off-limits|not owned/i);
         // MySQL executable comment: content runs on MySQL, blanked by the generic lexer → denied by marker.
         await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE 1=1/*! UNION SELECT user_pass FROM users */`), /executable comment|off-limits|not owned/i);
+        // Backslash-escape divergence (re-verify): `'\''` desyncs MySQL's string-lexing from the guard's,
+        // hiding a UNION inside a "string". Any backslash in plugin SQL is denied outright.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b='\\'' UNION SELECT user_pass FROM users-- '`), /backslash|off-limits|not owned/i);
         // A LEGIT trailing `-- comment` (dash-dash-space) must still be stripped and the query scoped-OK
         // (it may fail on a real "no such table" DB error, but must NOT be a scoping denial).
         let err: any = null;
