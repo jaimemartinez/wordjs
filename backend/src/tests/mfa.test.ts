@@ -71,10 +71,12 @@ async function enroll() {
     assert.strictEqual(enable.status, 200, JSON.stringify(enable.body));
     return { secret, backupCodes: enable.body.backupCodes as string[] };
 }
-async function disableMfa(secret: string) {
+// Disable using a code the test hasn't consumed yet (a fresh backup code) — a just-used TOTP step is
+// now correctly rejected as a replay, so cleanup must not reuse it.
+async function disableMfa(code: string) {
     const res = await request(app).post(`${B}/auth/mfa/disable`).set('Authorization', bearer(jwtFor(uid, 'mfauser')))
-        .send({ code: totp.totp(secret) });
-    assert.strictEqual(res.status, 200);
+        .send({ code });
+    assert.strictEqual(res.status, 200, JSON.stringify(res.body));
 }
 
 test('TOTP core matches an RFC 6238 vector', () => {
@@ -97,11 +99,11 @@ test('enroll returns a secret + otpauth URI; enable activates + returns backup c
     const status = await request(app).get(`${B}/auth/mfa/status`).set('Authorization', bearer(jwtFor(uid, 'mfauser')));
     assert.strictEqual(status.body.enabled, true);
     assert.strictEqual(status.body.backupCodesRemaining, 10);
-    await disableMfa(setup.body.secret);
+    await disableMfa(good.body.backupCodes[9]);
 });
 
 test('login requires a second factor and completes with a valid TOTP code', async () => {
-    const { secret } = await enroll();
+    const { secret, backupCodes } = await enroll();
     // password step → mfaRequired, NO session cookie
     const login = await request(app).post(`${B}/auth/login`).send({ username: 'mfauser', password: PASSWORD });
     assert.strictEqual(login.status, 200);
@@ -113,11 +115,16 @@ test('login requires a second factor and completes with a valid TOTP code', asyn
     const wrong = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: login.body.mfaToken, code: '000000' });
     assert.strictEqual(wrong.status, 401);
     // correct code → session issued
-    const ok = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: login.body.mfaToken, code: totp.totp(secret) });
+    const usedCode = totp.totp(secret);
+    const ok = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: login.body.mfaToken, code: usedCode });
     assert.strictEqual(ok.status, 200);
     assert.strictEqual(ok.body.user.id, uid);
     assert.ok((ok.headers['set-cookie'] || []).some((c: string) => c.startsWith('wordjs_token=')));
-    await disableMfa(secret);
+    // REPLAY: the SAME code (same time-step) must not be reusable (RFC 6238 §5.2 one-time-use)
+    const l2 = await request(app).post(`${B}/auth/login`).send({ username: 'mfauser', password: PASSWORD });
+    const replay = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: l2.body.mfaToken, code: usedCode });
+    assert.strictEqual(replay.status, 401, 'a consumed TOTP step cannot be replayed');
+    await disableMfa(backupCodes[9]);
 });
 
 test('a backup code logs in once and is then consumed (single-use)', async () => {
@@ -135,13 +142,24 @@ test('a backup code logs in once and is then consumed (single-use)', async () =>
     const l3 = await request(app).post(`${B}/auth/login`).send({ username: 'mfauser', password: PASSWORD });
     const use3 = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: l3.body.mfaToken, code: totp.totp(secret) });
     assert.strictEqual(use3.status, 200);
-    await disableMfa(secret);
+    await disableMfa(backupCodes[9]);
 });
 
 test('an invalid/absent challenge token is rejected at the 2nd step', async () => {
     const res = await request(app).post(`${B}/auth/mfa`).send({ mfaToken: 'not-a-token', code: '123456' });
     assert.strictEqual(res.status, 401);
     assert.strictEqual(res.body.code, 'rest_mfa_challenge_invalid');
+});
+
+test('the MFA challenge token cannot authenticate a request (it is not a session credential)', async () => {
+    const { backupCodes } = await enroll();
+    const login = await request(app).post(`${B}/auth/login`).send({ username: 'mfauser', password: PASSWORD });
+    assert.ok(login.body.mfaToken);
+    // presenting the challenge token as a Bearer session MUST be rejected — otherwise the 2nd factor is
+    // bypassable with the password alone.
+    const me = await request(app).get(`${B}/auth/me`).set('Authorization', bearer(login.body.mfaToken));
+    assert.strictEqual(me.status, 401);
+    await disableMfa(backupCodes[9]);
 });
 
 test('disable requires a valid code; afterwards login no longer needs a 2nd factor', async () => {
@@ -165,7 +183,7 @@ test('an API token cannot manage MFA (sessionOnly hardening)', async () => {
 });
 
 test('the TOTP secret + backup hashes never leak through the user JSON', async () => {
-    const { secret } = await enroll();
+    const { secret, backupCodes } = await enroll();
     const me = await request(app).get(`${B}/auth/me`).set('Authorization', bearer(jwtFor(uid, 'mfauser')));
     assert.strictEqual(me.status, 200);
     const metaKeys = Object.keys(me.body.meta || {});
@@ -174,5 +192,5 @@ test('the TOTP secret + backup hashes never leak through the user JSON', async (
     const blob = JSON.stringify(me.body);
     assert.ok(!blob.includes(secret), 'the raw secret must not appear anywhere in the user JSON');
     // the non-sensitive enabled flag MAY be present (UI needs it) — that is fine.
-    await disableMfa(secret);
+    await disableMfa(backupCodes[9]);
 });
