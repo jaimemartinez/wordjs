@@ -31,6 +31,12 @@ export interface AppConfig {
         password: string;
         name: string;
         ssl: boolean;
+        // Optional Postgres pool tuning (safe defaults applied in drivers/postgres.ts)
+        poolMax?: number;
+        poolIdleMs?: number;
+        poolConnectTimeoutMs?: number;
+        idleInTxnTimeoutMs?: number;
+        statementTimeoutMs?: number;
     };
 
     // Uploads
@@ -210,7 +216,15 @@ const config: AppConfig = {
         user: fileConfig.dbUser || (fileConfig.db && fileConfig.db.user) || 'postgres',
         password: fileConfig.dbPassword || (fileConfig.db && fileConfig.db.password) || 'password',
         name: fileConfig.dbName || (fileConfig.db && fileConfig.db.name) || 'wordjs',
-        ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false
+        ssl: fileConfig.dbSsl === true || (fileConfig.db && fileConfig.db.ssl === true) || false,
+        // Postgres connection-pool tuning (safe defaults live in drivers/postgres.ts; override per-field via
+        // a "db" block in wordjs-config.json). statementTimeoutMs stays OFF unless set — a blanket cap would
+        // kill legit long migrations/imports/backups.
+        poolMax: fileConfig.db?.poolMax,
+        poolIdleMs: fileConfig.db?.poolIdleMs,
+        poolConnectTimeoutMs: fileConfig.db?.poolConnectTimeoutMs,
+        idleInTxnTimeoutMs: fileConfig.db?.idleInTxnTimeoutMs,
+        statementTimeoutMs: fileConfig.db?.statementTimeoutMs
     },
 
     // Uploads Configuration
