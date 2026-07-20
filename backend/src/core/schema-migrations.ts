@@ -92,6 +92,35 @@ const MIGRATIONS: Migration[] = [
             }
             // Intentionally no throw: recorded-as-applied even if some indexes were skipped.
         }
+    },
+    {
+        // Scoped, revocable API tokens for headless/machine clients (roadmap: open the platform).
+        // A token authenticates AS a user via `Authorization: Bearer wjt_...` (the CSRF-exempt Bearer
+        // path) and is bounded by BOTH the user's role capabilities AND the token's read/write scope.
+        // We store only a sha256 of the token — the plaintext is shown once at creation and never again.
+        // Timestamps that drive logic (expiry, last-used) are epoch SECONDS (INTEGER) to sidestep the
+        // SQLite CURRENT_TIMESTAMP-is-UTC-text-vs-JS-local-parse ambiguity; created_at is display-only.
+        id: '0002_create_api_tokens',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS api_tokens (` +
+                `id ${INT_PK}, ` +
+                `user_id INTEGER NOT NULL, ` +
+                `name TEXT NOT NULL DEFAULT '', ` +
+                `token_hash TEXT NOT NULL, ` +
+                `token_prefix TEXT NOT NULL DEFAULT '', ` +
+                `scopes TEXT NOT NULL DEFAULT 'read', ` +
+                `last_used_at INTEGER, ` +
+                `expires_at INTEGER, ` +
+                `revoked INTEGER NOT NULL DEFAULT 0, ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            // The hash is the lookup key on every authenticated API request — unique + indexed.
+            await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_api_tokens_hash ON api_tokens (token_hash)');
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens (user_id)');
+        }
     }
 ];
 
