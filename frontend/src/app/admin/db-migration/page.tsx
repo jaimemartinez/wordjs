@@ -186,7 +186,7 @@ export default function DbMigrationPage() {
     );
 
     return (
-        <div className="p-8 max-w-7xl mx-auto relative min-h-[85vh]">
+        <div className="p-8 max-w-7xl mx-auto relative min-h-[85vh] h-full overflow-y-auto">
             {/* Decorative Background Elements */}
             <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-purple-100/50 rounded-full blur-[100px] opacity-60 -z-10 translate-x-1/3 -translate-y-1/3 pointer-events-none"></div>
             <div className="absolute bottom-0 left-0 w-[500px] h-[500px] bg-blue-100/50 rounded-full blur-[100px] opacity-60 -z-10 -translate-x-1/3 translate-y-1/3 pointer-events-none"></div>
@@ -224,10 +224,10 @@ export default function DbMigrationPage() {
                                 </div>
 
                                 <div className="text-sm bg-gray-50/80 rounded-2xl p-5 border border-gray-100 text-gray-600 leading-relaxed font-medium">
-                                    {status.currentDriver === 'sqlite-native' && "⚡ High-performance file-based storage with WAL mode enabled. Recommended for most users."}
-                                    {status.currentDriver === 'postgres' && "🐘 Production-grade relational database engine. Best for scaling and high concurrency."}
-                                    {status.currentDriver === 'mysql' && "🐬 The world's most popular open-source database. Great for shared hosting and existing MySQL infrastructure."}
-                                    {status.currentDriver === 'sqlite-legacy' && "🐢 Compatibility mode using standard file locking. Slower, but works on all file systems."}
+                                    {status.currentDriver === 'sqlite-native' && (<><i className="fa-solid fa-bolt text-amber-500 mr-1.5"></i> High-performance file-based storage with WAL mode enabled. Recommended for most users.</>)}
+                                    {status.currentDriver === 'postgres' && (<><i className="fa-solid fa-database text-indigo-500 mr-1.5"></i> Production-grade relational database engine. Best for scaling and high concurrency.</>)}
+                                    {status.currentDriver === 'mysql' && (<><i className="fa-solid fa-fish text-teal-500 mr-1.5"></i> The world's most popular open-source database. Great for shared hosting and existing MySQL infrastructure.</>)}
+                                    {status.currentDriver === 'sqlite-legacy' && (<><i className="fa-solid fa-hard-drive text-gray-400 mr-1.5"></i> Compatibility mode using standard file locking. Slower, but works on all file systems.</>)}
                                 </div>
                             </div>
                         </div>

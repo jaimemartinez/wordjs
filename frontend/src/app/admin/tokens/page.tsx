@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { tokensApi, ApiToken } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, Card, EmptyState, Input, Select, StatusBadge } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
 
@@ -17,15 +18,15 @@ const fmtDate = (v: number | null | string | undefined) => {
 // slug, but these are the common ones a headless client scopes against; picking per-resource read/write
 // yields a least-privilege token that can touch nothing else.
 type ResAction = "none" | "read" | "write";
-const RESOURCES: { slug: string; label: string; icon: string }[] = [
-    { slug: "posts", label: "Posts", icon: "fa-newspaper" },
-    { slug: "media", label: "Media", icon: "fa-image" },
-    { slug: "comments", label: "Comments", icon: "fa-comments" },
-    { slug: "categories", label: "Categories", icon: "fa-folder" },
-    { slug: "tags", label: "Tags", icon: "fa-tags" },
-    { slug: "menus", label: "Menus", icon: "fa-bars" },
-    { slug: "users", label: "Users", icon: "fa-users" },
-    { slug: "settings", label: "Settings", icon: "fa-gear" },
+const RESOURCES: { slug: string; labelKey: string; icon: string }[] = [
+    { slug: "posts", labelKey: "nav.posts", icon: "fa-newspaper" },
+    { slug: "media", labelKey: "nav.media", icon: "fa-image" },
+    { slug: "comments", labelKey: "nav.comments", icon: "fa-comments" },
+    { slug: "categories", labelKey: "nav.categories", icon: "fa-folder" },
+    { slug: "tags", labelKey: "posts.tags", icon: "fa-tags" },
+    { slug: "menus", labelKey: "nav.menus", icon: "fa-bars" },
+    { slug: "users", labelKey: "nav.users", icon: "fa-users" },
+    { slug: "settings", labelKey: "nav.settings", icon: "fa-gear" },
 ];
 
 const isExpired = (t: ApiToken) => t.expiresAt != null && t.expiresAt * 1000 <= Date.now();
@@ -33,6 +34,7 @@ const isExpired = (t: ApiToken) => t.expiresAt != null && t.expiresAt * 1000 <= 
 export default function TokensPage() {
     const { confirm } = useModal();
     const { addToast } = useToast();
+    const { t } = useI18n();
     const [tokens, setTokens] = useState<ApiToken[]>([]);
     const [loading, setLoading] = useState(true);
     const [name, setName] = useState("");
@@ -47,7 +49,7 @@ export default function TokensPage() {
             const { tokens } = await tokensApi.list();
             setTokens(tokens);
         } catch (e: any) {
-            addToast(e?.message || "Failed to load tokens", "error");
+            addToast(e?.message || t("tokens.loadFailed"), "error");
         } finally {
             setLoading(false);
         }
@@ -67,7 +69,7 @@ export default function TokensPage() {
                 .filter((slug) => resourceScopes[slug] && resourceScopes[slug] !== "none")
                 .map((slug) => `${slug}:${resourceScopes[slug]}`);
             if (parts.length === 0) {
-                addToast("Grant read or write on at least one resource, or choose a global scope.", "error");
+                addToast(t("tokens.customScopeRequired"), "error");
                 return;
             }
             scopes = parts.join(",");
@@ -77,7 +79,7 @@ export default function TokensPage() {
         setCreating(true);
         try {
             const res = await tokensApi.create({
-                name: name.trim() || "API token",
+                name: name.trim() || t("tokens.defaultName"),
                 scopes,
                 expiresInDays: expiry ? Number(expiry) : null,
             });
@@ -88,28 +90,28 @@ export default function TokensPage() {
             setExpiry("");
             await load();
         } catch (e: any) {
-            addToast(e?.message || "Failed to create token", "error");
+            addToast(e?.message || t("tokens.createFailed"), "error");
         } finally {
             setCreating(false);
         }
     };
 
-    const handleRevoke = async (t: ApiToken) => {
-        if (!(await confirm(`Revoke "${t.name}"? Any client using this token will immediately lose access.`, "Revoke token", true))) return;
+    const handleRevoke = async (tok: ApiToken) => {
+        if (!(await confirm(t("tokens.revokeConfirm").replace("{name}", tok.name), t("tokens.revokeTitle"), true))) return;
         try {
-            await tokensApi.revoke(t.id);
-            addToast("Token revoked", "success");
+            await tokensApi.revoke(tok.id);
+            addToast(t("tokens.revoked"), "success");
             await load();
         } catch (e: any) {
-            addToast(e?.message || "Failed to revoke token", "error");
+            addToast(e?.message || t("tokens.revokeFailed"), "error");
         }
     };
 
     return (
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 min-h-full animate-in fade-in duration-500">
             <PageHeader
-                title="API Tokens"
-                subtitle="Personal access tokens for headless clients (CI, JAMstack, automation). A token acts with your permissions on the Authorization: Bearer path."
+                title={t("tokens.title")}
+                subtitle={t("tokens.subtitle")}
                 icon="fa-key"
             />
 
@@ -118,32 +120,32 @@ export default function TokensPage() {
                 <Card variant="default" padding="lg" className="h-fit">
                     <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-6 flex items-center gap-2">
                         <i className="fa-solid fa-plus-circle text-blue-500"></i>
-                        New token
+                        {t("tokens.newToken")}
                     </h2>
                     <form onSubmit={handleCreate} className="space-y-5">
-                        <Input label="Name" icon="fa-tag" value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. CI deploy key" />
+                        <Input label={t("tokens.name")} icon="fa-tag" value={name} onChange={(e) => setName(e.target.value)} placeholder={t("tokens.namePlaceholder")} />
                         <div>
-                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Scope</label>
+                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("tokens.scope")}</label>
                             <Select
                                 value={scopeMode}
                                 onChange={(v) => setScopeMode(v as "read" | "write" | "custom")}
                                 options={[
-                                    { value: "read", label: "Read-only — all resources" },
-                                    { value: "write", label: "Read & write — all resources" },
-                                    { value: "custom", label: "Custom — per resource…" },
+                                    { value: "read", label: t("tokens.scopeReadAll") },
+                                    { value: "write", label: t("tokens.scopeWriteAll") },
+                                    { value: "custom", label: t("tokens.scopeCustom") },
                                 ]}
                             />
                             {scopeMode === "custom" && (
                                 <div className="mt-3 rounded-2xl border border-gray-100 bg-gray-50/40 p-3 space-y-1.5 max-h-64 overflow-auto">
                                     <p className="text-[10px] text-gray-400 leading-relaxed mb-1.5">
-                                        Grant read or write per resource. The token can touch <span className="font-bold">nothing else</span> — least privilege for a headless client.
+                                        {t("tokens.customHelp.pre")}<span className="font-bold">{t("tokens.customHelp.nothing")}</span>{t("tokens.customHelp.post")}
                                     </p>
                                     {RESOURCES.map((r) => {
                                         const cur = resourceScopes[r.slug] || "none";
                                         return (
                                             <div key={r.slug} className="flex items-center justify-between gap-2">
                                                 <span className="text-xs font-bold text-gray-600 flex items-center gap-2">
-                                                    <i className={`fa-solid ${r.icon} text-gray-300 w-4 text-center`}></i>{r.label}
+                                                    <i className={`fa-solid ${r.icon} text-gray-300 w-4 text-center`}></i>{t(r.labelKey)}
                                                 </span>
                                                 <div className="flex rounded-lg overflow-hidden border border-gray-200 text-[10px] font-black uppercase tracking-wider">
                                                     {(["none", "read", "write"] as const).map((opt) => (
@@ -158,7 +160,7 @@ export default function TokensPage() {
                                                                         : "bg-gray-200 text-gray-500"
                                                                 : "bg-white text-gray-400 hover:bg-gray-50"}`}
                                                         >
-                                                            {opt === "none" ? "—" : opt}
+                                                            {opt === "none" ? "—" : opt === "read" ? t("tokens.optRead") : t("tokens.optWrite")}
                                                         </button>
                                                     ))}
                                                 </div>
@@ -169,20 +171,20 @@ export default function TokensPage() {
                             )}
                         </div>
                         <div>
-                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">Expires</label>
+                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">{t("tokens.expires")}</label>
                             <Select
                                 value={expiry}
                                 onChange={setExpiry}
                                 options={[
-                                    { value: "", label: "Never" },
-                                    { value: "30", label: "In 30 days" },
-                                    { value: "90", label: "In 90 days" },
-                                    { value: "365", label: "In 1 year" },
+                                    { value: "", label: t("tokens.expiryNever") },
+                                    { value: "30", label: t("tokens.expiry30") },
+                                    { value: "90", label: t("tokens.expiry90") },
+                                    { value: "365", label: t("tokens.expiry365") },
                                 ]}
                             />
                         </div>
                         <Button type="submit" icon="fa-plus" className="w-full" loading={creating}>
-                            Create token
+                            {t("tokens.createToken")}
                         </Button>
                     </form>
                 </Card>
@@ -193,48 +195,55 @@ export default function TokensPage() {
                         {loading ? (
                             <div className="p-20 text-center">
                                 <div className="inline-block w-8 h-8 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                                <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">Loading</p>
+                                <p className="text-gray-400 text-xs font-bold uppercase tracking-widest">{t("common.loading")}</p>
                             </div>
                         ) : tokens.length === 0 ? (
-                            <EmptyState icon="fa-key" title="No tokens yet" description="Create a token to call the REST API from a script or service." />
+                            <EmptyState icon="fa-key" title={t("tokens.emptyTitle")} description={t("tokens.emptyDescription")} />
                         ) : (
                             <div className="overflow-x-auto">
                                 <table className="w-full">
                                     <thead>
                                         <tr className="border-b border-gray-100/50 bg-gray-50/30">
-                                            {["Token", "Scopes", "Last used", "Expires", "Status", "Actions"].map((h, i) => (
-                                                <th key={h} className={`px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest ${i === 5 ? "text-right" : "text-left"}`}>{h}</th>
+                                            {[
+                                                { key: "token", label: t("tokens.colToken") },
+                                                { key: "scopes", label: t("tokens.colScopes") },
+                                                { key: "lastUsed", label: t("tokens.colLastUsed") },
+                                                { key: "expires", label: t("tokens.colExpires") },
+                                                { key: "status", label: t("tokens.colStatus") },
+                                                { key: "actions", label: t("actions") },
+                                            ].map((h, i) => (
+                                                <th key={h.key} className={`px-6 py-5 text-[10px] font-black text-gray-400 uppercase tracking-widest ${i === 5 ? "text-right" : "text-left"}`}>{h.label}</th>
                                             ))}
                                         </tr>
                                     </thead>
                                     <tbody className="divide-y divide-gray-50">
-                                        {tokens.map((t) => {
-                                            const expired = isExpired(t);
+                                        {tokens.map((tok) => {
+                                            const expired = isExpired(tok);
                                             return (
-                                                <tr key={t.id} className="group hover:bg-blue-50/5 transition-colors">
+                                                <tr key={tok.id} className="group hover:bg-blue-50/5 transition-colors">
                                                     <td className="px-6 py-5">
-                                                        <div className="font-bold text-gray-700 italic tracking-tight">{t.name}</div>
-                                                        <code className="text-xs font-mono text-gray-400">{t.tokenPrefix}…</code>
+                                                        <div className="font-bold text-gray-700 italic tracking-tight">{tok.name}</div>
+                                                        <code className="text-xs font-mono text-gray-400">{tok.tokenPrefix}…</code>
                                                     </td>
                                                     <td className="px-6 py-5">
                                                         <div className="flex flex-wrap gap-1">
-                                                            {t.scopes.map((s) => (
+                                                            {tok.scopes.map((s) => (
                                                                 <span key={s} className="text-[10px] font-black uppercase tracking-wider text-blue-600 bg-blue-50 px-2 py-1 rounded-md">{s}</span>
                                                             ))}
                                                         </div>
                                                     </td>
-                                                    <td className="px-6 py-5 text-sm text-gray-500">{fmtDate(t.lastUsedAt)}</td>
-                                                    <td className="px-6 py-5 text-sm text-gray-500">{t.expiresAt == null ? "Never" : fmtDate(t.expiresAt)}</td>
+                                                    <td className="px-6 py-5 text-sm text-gray-500">{fmtDate(tok.lastUsedAt)}</td>
+                                                    <td className="px-6 py-5 text-sm text-gray-500">{tok.expiresAt == null ? t("tokens.expiryNever") : fmtDate(tok.expiresAt)}</td>
                                                     <td className="px-6 py-5">
-                                                        {t.revoked ? <StatusBadge status="error" label="Revoked" />
-                                                            : expired ? <StatusBadge status="neutral" label="Expired" />
-                                                                : <StatusBadge status="success" label="Active" />}
+                                                        {tok.revoked ? <StatusBadge status="error" label={t("tokens.statusRevoked")} />
+                                                            : expired ? <StatusBadge status="neutral" label={t("tokens.statusExpired")} />
+                                                                : <StatusBadge status="success" label={t("tokens.statusActive")} />}
                                                     </td>
                                                     <td className="px-6 py-5 text-right">
-                                                        {!t.revoked && (
+                                                        {!tok.revoked && (
                                                             <button
-                                                                onClick={() => handleRevoke(t)}
-                                                                title="Revoke"
+                                                                onClick={() => handleRevoke(tok)}
+                                                                title={t("tokens.revoke")}
                                                                 className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm opacity-0 group-hover:opacity-100"
                                                             >
                                                                 <i className="fa-solid fa-ban text-xs"></i>
@@ -254,8 +263,8 @@ export default function TokensPage() {
 
             <SecretRevealModal
                 secret={revealed}
-                title="Your new API token"
-                description="Use it as a Bearer credential: Authorization: Bearer <token>. It bypasses the cookie/CSRF flow, so it's ideal for scripts and CI."
+                title={t("tokens.secretTitle")}
+                description={t("tokens.secretDescription")}
                 onClose={() => setRevealed(null)}
             />
         </div>

@@ -43,7 +43,7 @@ export default function ThemesPage() {
             const data = await themesMarketplaceApi.catalog(refresh);
             setMarket(data.themes || []);
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || "No se pudo cargar el catálogo de temas." });
+            setMessage({ type: "error", text: error.message || t('themes.market.loadError') });
             setMarket([]);
         } finally {
             setMarketLoading(false);
@@ -57,7 +57,7 @@ export default function ThemesPage() {
             setDefaultSrc(s.default);
             setSrcList(s.usingDefault ? [s.default] : s.configured);
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || "No se pudieron cargar las fuentes de temas." });
+            setMessage({ type: "error", text: error.message || t('themes.sources.loadError') });
         }
     };
 
@@ -65,7 +65,7 @@ export default function ThemesPage() {
         const v = newSrc.trim().replace(/\/+$/, "");
         if (!v) return;
         if (!/^https:\/\//i.test(v) && !/^http:\/\/localhost/i.test(v)) {
-            setMessage({ type: "error", text: "La fuente debe ser una URL https://" });
+            setMessage({ type: "error", text: t('themes.sources.invalidUrl') });
             return;
         }
         setNewSrc("");
@@ -77,11 +77,11 @@ export default function ThemesPage() {
         try {
             const res = await themesMarketplaceApi.setSources(srcList);
             setSrcList(res.configured);
-            setMessage({ type: "success", text: srcList.length ? "Fuentes de temas guardadas." : "Marketplace de temas sin fuentes — catálogo remoto desactivado." });
+            setMessage({ type: "success", text: srcList.length ? t('themes.sources.saved') : t('themes.sources.savedEmpty') });
             setShowSources(false);
             await loadMarket(true);
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || "No se pudieron guardar las fuentes." });
+            setMessage({ type: "error", text: error.message || t('themes.sources.saveError') });
         } finally {
             setSavingSrc(false);
         }
@@ -92,11 +92,11 @@ export default function ThemesPage() {
         try {
             const res = await themesMarketplaceApi.resetSources();
             setSrcList([res.default]);
-            setMessage({ type: "success", text: "Fuentes de temas restablecidas al catálogo oficial." });
+            setMessage({ type: "success", text: t('themes.sources.reset') });
             setShowSources(false);
             await loadMarket(true);
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || "No se pudieron restablecer las fuentes." });
+            setMessage({ type: "error", text: error.message || t('themes.sources.resetError') });
         } finally {
             setSavingSrc(false);
         }
@@ -107,11 +107,11 @@ export default function ThemesPage() {
         setMessage(null);
         try {
             const res = await themesMarketplaceApi.install(entry.id);
-            setMessage({ type: "success", text: res.message || `Tema "${entry.name}" instalado.` });
+            setMessage({ type: "success", text: res.message || `${t('themes.market.installedPrefix')}"${entry.name}"${t('themes.market.installedSuffix')}` });
             await loadThemes();
             await loadMarket(true);
         } catch (error: any) {
-            setMessage({ type: "error", text: error.message || "No se pudo instalar el tema." });
+            setMessage({ type: "error", text: error.message || t('themes.market.installError') });
         } finally {
             setInstallingId(null);
         }
@@ -190,7 +190,7 @@ export default function ThemesPage() {
                                 href="/admin/themes/customize"
                                 className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-gray-200 text-gray-700 hover:bg-gray-50 font-medium text-sm transition-colors"
                             >
-                                <i className="fa-solid fa-sliders"></i> Customize
+                                <i className="fa-solid fa-sliders"></i> {t('themes.customize')}
                             </a>
                             <Button
                                 onClick={() => fileInputRef.current?.click()}
@@ -218,21 +218,21 @@ export default function ThemesPage() {
                         onClick={() => setTab("installed")}
                         className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === "installed" ? "bg-gray-900 text-white" : "bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"}`}
                     >
-                        <i className="fa-solid fa-palette"></i> Instalados
+                        <i className="fa-solid fa-palette"></i> {t('themes.tab.installed')}
                     </button>
                     <button
                         type="button"
                         onClick={() => setTab("market")}
                         className={`px-5 py-3 rounded-2xl font-black text-xs uppercase tracking-widest transition-all flex items-center gap-2 ${tab === "market" ? "bg-gray-900 text-white" : "bg-white text-gray-500 hover:bg-gray-100 border border-gray-200"}`}
                     >
-                        <i className="fa-solid fa-store"></i> Marketplace
+                        <i className="fa-solid fa-store"></i> {t('themes.tab.market')}
                     </button>
                     {tab === "market" && (
                         <div className="ml-auto flex gap-2">
                             <button
                                 type="button"
                                 onClick={openSources}
-                                title="Fuentes del marketplace de temas"
+                                title={t('themes.sources.title')}
                                 className={`px-4 py-3 rounded-2xl border transition-all ${showSources ? "bg-gray-900 text-white border-gray-900" : "bg-white text-gray-500 hover:bg-gray-100 border-gray-200"}`}
                             >
                                 <i className="fa-solid fa-gear"></i>
@@ -241,7 +241,7 @@ export default function ThemesPage() {
                                 type="button"
                                 onClick={() => loadMarket(true)}
                                 disabled={marketLoading}
-                                title="Refrescar catálogo"
+                                title={t('themes.market.refresh')}
                                 className="px-4 py-3 rounded-2xl bg-white text-gray-500 hover:bg-gray-100 border border-gray-200 transition-all disabled:opacity-50"
                             >
                                 <i className={`fa-solid fa-rotate ${marketLoading ? "fa-spin" : ""}`}></i>
@@ -254,11 +254,11 @@ export default function ThemesPage() {
                 {tab === "market" && showSources && (
                     <div className="max-w-7xl mx-auto mb-8 bg-white rounded-3xl border border-gray-200 p-6 animate-in fade-in slide-in-from-top-4 duration-300">
                         <div className="flex items-center justify-between mb-2">
-                            <h3 className="font-black text-gray-900 flex items-center gap-2"><i className="fa-solid fa-gear text-gray-400"></i> Fuentes del marketplace de temas</h3>
-                            <button type="button" onClick={() => setShowSources(false)} className="text-xs font-bold text-gray-400 hover:text-gray-700 uppercase tracking-widest">Cerrar</button>
+                            <h3 className="font-black text-gray-900 flex items-center gap-2"><i className="fa-solid fa-gear text-gray-400"></i> {t('themes.sources.title')}</h3>
+                            <button type="button" onClick={() => setShowSources(false)} className="text-xs font-bold text-gray-400 hover:text-gray-700 uppercase tracking-widest">{t('common.close')}</button>
                         </div>
                         <p className="text-xs text-gray-400 mb-4">
-                            Lista propia, independiente de la de plugins. Agregá uno o varios catálogos (URLs <span className="font-mono">https</span>) — se combinan con prioridad por orden. Podés dejarla vacía para desactivar el catálogo remoto de temas; «Restablecer al default» vuelve al oficial.
+                            {t('themes.sources.description')}
                         </p>
                         <div className="space-y-2 mb-4">
                             {srcList.map((u, i) => (
@@ -266,10 +266,10 @@ export default function ThemesPage() {
                                     <span className="text-[10px] font-mono text-gray-400 w-4 shrink-0">{i + 1}</span>
                                     <span className="flex-1 font-mono text-[11px] text-gray-700 truncate" title={u}>{u}</span>
                                     {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
-                                    <button type="button" onClick={() => setSrcList((l) => l.filter((x) => x !== u))} aria-label="Quitar fuente" className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-rose-500 hover:border-rose-200 transition-colors shrink-0"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
+                                    <button type="button" onClick={() => setSrcList((l) => l.filter((x) => x !== u))} aria-label={t('themes.sources.remove')} className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-rose-500 hover:border-rose-200 transition-colors shrink-0"><i className="fa-solid fa-trash-can text-[10px]"></i></button>
                                 </div>
                             ))}
-                            {srcList.length === 0 && <div className="text-[11px] text-gray-400 italic px-1">Sin fuentes — el catálogo remoto de temas queda desactivado al guardar.</div>}
+                            {srcList.length === 0 && <div className="text-[11px] text-gray-400 italic px-1">{t('themes.sources.empty')}</div>}
                         </div>
                         <div className="flex items-center gap-2 mb-4">
                             <input
@@ -277,14 +277,14 @@ export default function ThemesPage() {
                                 value={newSrc}
                                 onChange={(e) => setNewSrc(e.target.value)}
                                 onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addSource(); } }}
-                                placeholder="https://mi-marketplace.com/catalogo-temas"
+                                placeholder={t('themes.sources.placeholder')}
                                 className="flex-1 px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl outline-none font-mono text-xs focus:border-gray-400 transition-colors"
                             />
-                            <Button onClick={addSource}><i className="fa-solid fa-plus mr-1.5 text-[10px]"></i> Agregar</Button>
+                            <Button onClick={addSource}><i className="fa-solid fa-plus mr-1.5 text-[10px]"></i> {t('common.add')}</Button>
                         </div>
                         <div className="flex items-center justify-between gap-2 pt-3 border-t border-gray-100">
-                            <button type="button" onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-gray-500 hover:text-gray-800 disabled:opacity-50 uppercase tracking-widest">Restablecer al default</button>
-                            <Button onClick={saveSources} disabled={savingSrc}>{savingSrc ? "Guardando…" : "Guardar fuentes"}</Button>
+                            <button type="button" onClick={resetSources} disabled={savingSrc} className="text-[11px] font-bold text-gray-500 hover:text-gray-800 disabled:opacity-50 uppercase tracking-widest">{t('themes.sources.resetDefault')}</button>
+                            <Button onClick={saveSources} disabled={savingSrc}>{savingSrc ? t('common.saving') : t('themes.sources.save')}</Button>
                         </div>
                     </div>
                 )}
@@ -435,8 +435,8 @@ export default function ThemesPage() {
                         <div className="col-span-full">
                             <EmptyState
                                 icon="fa-store-slash"
-                                title="Marketplace sin temas"
-                                description="No hay temas en el catálogo (o el catálogo remoto está desactivado). Gestiona las fuentes desde Plugins → Marketplace ⚙️."
+                                title={t('themes.market.emptyTitle')}
+                                description={t('themes.market.emptyDescription')}
                             />
                         </div>
                     ) : (
@@ -459,7 +459,7 @@ export default function ThemesPage() {
                                     )}
                                     {!entry.active && entry.installed && (
                                         <div className="absolute top-6 right-6 bg-emerald-500 text-white px-4 py-2 rounded-full text-xs font-black uppercase tracking-widest shadow-lg shadow-emerald-500/40">
-                                            Instalado
+                                            {t('themes.installedBadge')}
                                         </div>
                                     )}
                                 </div>
@@ -484,7 +484,7 @@ export default function ThemesPage() {
                                                 onClick={() => setTab("installed")}
                                                 className="w-full bg-gray-50 text-gray-600 font-black py-4 rounded-2xl border border-gray-100 hover:bg-gray-100 transition-all"
                                             >
-                                                Ver en Instalados
+                                                {t('themes.viewInstalled')}
                                             </button>
                                         ) : (
                                             <button
@@ -494,9 +494,9 @@ export default function ThemesPage() {
                                                 className="w-full bg-gray-900 text-white font-black py-4 rounded-2xl transition-all duration-300 hover:bg-blue-600 hover:shadow-xl hover:shadow-blue-500/30 active:scale-95 flex items-center justify-center gap-2 disabled:opacity-50"
                                             >
                                                 {installingId === entry.id ? (
-                                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> Instalando…</>
+                                                    <><i className="fa-solid fa-circle-notch fa-spin"></i> {t('themes.installing')}</>
                                                 ) : (
-                                                    <><i className="fa-solid fa-download text-xs opacity-60"></i> Instalar</>
+                                                    <><i className="fa-solid fa-download text-xs opacity-60"></i> {t('themes.installAction')}</>
                                                 )}
                                             </button>
                                         )}

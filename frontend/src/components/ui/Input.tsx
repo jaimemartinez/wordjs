@@ -1,6 +1,6 @@
 "use client";
 
-import React from "react";
+import React, { useId } from "react";
 
 type InputSize = "sm" | "md" | "lg";
 
@@ -27,8 +27,12 @@ export function Input({
     error,
     size = "lg",
     className = "",
+    id,
     ...props
 }: InputProps) {
+    const generatedId = useId();
+    const inputId = id ?? generatedId;
+    const errorId = `${inputId}-error`;
     const baseClasses = `
         w-full bg-gray-50/50 border-2 border-gray-100 
         focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white 
@@ -43,7 +47,7 @@ export function Input({
     return (
         <div className="w-full">
             {label && (
-                <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
+                <label htmlFor={inputId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-2">
                     {label}
                 </label>
             )}
@@ -52,10 +56,13 @@ export function Input({
                     <i className={`fa-solid ${icon} absolute left-4 top-1/2 -translate-y-1/2 text-gray-400`}></i>
                 )}
                 <input
+                    id={inputId}
+                    aria-invalid={error ? true : undefined}
+                    aria-describedby={error ? errorId : undefined}
                     className={`
-                        ${baseClasses} 
-                        ${sizeClasses[size]} 
-                        ${icon ? "pl-12" : ""} 
+                        ${baseClasses}
+                        ${sizeClasses[size]}
+                        ${icon ? "pl-12" : ""}
                         ${errorClasses}
                         ${className}
                     `}
@@ -63,7 +70,7 @@ export function Input({
                 />
             </div>
             {error && (
-                <p className="mt-1 text-xs text-red-500 font-medium">{error}</p>
+                <p id={errorId} className="mt-1 text-xs text-red-500 font-medium">{error}</p>
             )}
         </div>
     );
