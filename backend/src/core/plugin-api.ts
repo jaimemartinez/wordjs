@@ -157,7 +157,10 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
 // CTE reference must simply use the plugin's own wjp_<slug>_ prefix like any table — then it passes the
 // prefix check with no exemption at all.) Quoted-identifier tokens (q) are ALWAYS names, never keywords.
 function collectTableTokens(toks: SqlTok[]): string[] {
-    const OPENERS_FROM = new Set(['from', 'join', 'using']); // starts/continues a FROM table-list (comma → new table)
+    // `straight_join` is MySQL/MariaDB's single-token inner-join operator — it introduces a table exactly
+    // like JOIN, but lexes as ONE word (the `_` is a word char), so it MUST be an opener or the right-hand
+    // table (a core `users` or another plugin's table) is never captured/prefix-checked (adversarial pass 7).
+    const OPENERS_FROM = new Set(['from', 'join', 'using', 'straight_join']); // starts/continues a FROM table-list (comma → new table)
     const OPENERS_ONE = new Set(['into', 'update', 'table']); // single-table target (INSERT INTO / UPDATE / *TABLE)
     const ENDERS = new Set(['where', 'group', 'having', 'order', 'limit', 'offset', 'window', 'returning', 'values', 'set', 'union', 'intersect', 'except', 'select', 'with']);
     const out: string[] = [];
@@ -276,7 +279,10 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     // an INSERT column list or UPDATE SET) is NOT a false positive — only an actual table REFERENCE to a
     // core table is blocked. (The prefix allowlist below is the real enforcement.)
     for (const t of PROTECTED_TABLES) {
-        if (new RegExp(`\\b(?:from|join|into|update|using|table)\\s+["\\[\`]?${t}\\b`).test(lower)) {
+        // Allow the table-introducing keyword to be glued to a preceding `_` (e.g. MySQL `straight_join`),
+        // not just a word boundary — otherwise `\bjoin` never matches inside `straight_join users` and the
+        // core-table backstop misses it (adversarial pass 7).
+        if (new RegExp(`(?:\\b|_)(?:from|join|into|update|using|table)\\s+["\\[\`]?${t}\\b`).test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
         }
     }

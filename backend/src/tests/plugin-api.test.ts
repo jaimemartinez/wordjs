@@ -89,6 +89,10 @@ test('bridge blocks the MySQL comment-divergence SQL-scoping bypass (--0 / /*! *
         // Postgres `[...]` array-subscript can hold a subquery that reads another plugin's table, laundered
         // past the walker as an opaque token. Square brackets are denied outright.
         await assert.rejects(() => api.db.all(`SELECT v[(SELECT total FROM wjp_other_orders)] FROM ${PFX}t`), /bracket|square|off-limits|not owned/i);
+        // MySQL STRAIGHT_JOIN is a single-token join operator — the right-hand table must still be captured
+        // + prefix-checked, so a core (users) or another plugin's table can't be read through it.
+        await assert.rejects(() => api.db.all(`SELECT * FROM ${PFX}t STRAIGHT_JOIN users`), /off-limits|not owned/i);
+        await assert.rejects(() => api.db.all(`SELECT * FROM ${PFX}t STRAIGHT_JOIN wjp_other_orders`), /off-limits|not owned/i);
         // A LEGIT trailing `-- comment` (dash-dash-space) must still be stripped and the query scoped-OK
         // (it may fail on a real "no such table" DB error, but must NOT be a scoping denial).
         let err: any = null;
