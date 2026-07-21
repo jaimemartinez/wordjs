@@ -55,7 +55,7 @@ const logger = winston.createLogger({
 // Strip CR/LF and other control chars from an UNTRUSTED value before interpolating it into a log line,
 // so a crafted cert CN / request URL / advertiseHost can't forge or split log entries (CWE-117 log
 // injection). The explicit \r / \n class is the recognized line-break barrier.
-const logSafe = (v) => String(v).replace(/[\r\n]/g, ' ').replace(/[\u0000-\u001f\u007f]/g, ' ');
+const logSafe = (v) => String(v).replace(/\r\n|\r|\n/g, ' ');
 
 
 // --- GATEWAY CONFIG ---
