@@ -192,6 +192,11 @@ if (cluster.isPrimary) {
     });
 
     let registry = new Map();
+    // Which peer identity (cert CN) owns each registered target url. PERSISTED alongside the registry (see
+    // save/loadRegistry) so a gateway PRIMARY restart doesn't forget it — otherwise a compromised frontend
+    // could re-evict the backend's restored loopback /api (routes:[]) and route /api/v1/auth to itself
+    // (adversarial re-verify #3, "ownership amnesia"). Enforced in the mTLS /register handler.
+    const targetOwner = new Map();
 
     const saveRegistry = () => {
         try {
@@ -199,7 +204,10 @@ if (cluster.isPrimary) {
             registry.forEach((value, key) => {
                 const metricsObj = {};
                 if (value.metrics) value.metrics.forEach((m, url) => { metricsObj[url] = m; });
-                data[key] = { name: value.name, targets: Array.from(value.targets), metrics: metricsObj };
+                // Persist the owning CN for each target so ownership survives a primary restart.
+                const owners = {};
+                value.targets.forEach((url) => { if (targetOwner.has(url)) owners[url] = targetOwner.get(url); });
+                data[key] = { name: value.name, targets: Array.from(value.targets), owners, metrics: metricsObj };
             });
             fs.writeFileSync(REGISTRY_TEMP, JSON.stringify(data, null, 2));
             fs.renameSync(REGISTRY_TEMP, REGISTRY_FILE);
@@ -214,6 +222,9 @@ if (cluster.isPrimary) {
                     const metrics = new Map();
                     if (value.metrics) Object.entries(value.metrics).forEach(([url, m]) => metrics.set(url, m));
                     registry.set(key, { name: value.name, targets: new Set(value.targets), index: 0, metrics });
+                    // Re-seed target ownership so a restored /api→backend target still can't be evicted by
+                    // another identity after a primary restart.
+                    if (value.owners) Object.entries(value.owners).forEach(([url, cn]) => targetOwner.set(url, cn));
                 });
             }
         } catch (e) {
@@ -318,12 +329,6 @@ if (cluster.isPrimary) {
         if (changed) { saveRegistry(); broadcastRegistry(); }
     }, 30000);
 
-    // Which peer identity (cert CN) owns each registered target url. A peer may only add/evict targets it
-    // owns — adversarial re-verify showed the CN route-allowlist alone was insufficient: a frontend could
-    // echo the backend's url with routes:[] to EVICT /api, then register `/` so /api/v1/auth fell through
-    // to `/` (credential capture). The /register handler enforces the ownership check against this map.
-    const targetOwner = new Map();
-
     const handleRegistration = (service, cn) => {
         registry.forEach((group, route) => {
             if (group.targets.has(service.url)) {
@@ -405,6 +410,13 @@ if (cluster.isPrimary) {
                     const cn = cert && cert.subject && cert.subject.CN;
                     const allowed = ROLE_ROUTES[cn];
                     const declared = Array.isArray(req.body && req.body.routes) ? req.body.routes : [];
+                    // A registration with NO routes only ever EVICTS (handleRegistration removes the url from
+                    // every group and re-adds nothing) — a legitimate service always declares its routes.
+                    // Reject it so it can't be used as a pure-eviction primitive.
+                    if (!declared.length) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' declared no routes (eviction-only)`);
+                        return res.status(400).json({ error: 'At least one route must be declared.' });
+                    }
                     const bad = declared.filter(r => !allowed || !allowed.has(r));
                     if (!allowed || bad.length) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not serve route(s): ${bad.join(', ') || '(no routes declared)'}`);

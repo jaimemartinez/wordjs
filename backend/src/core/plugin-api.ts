@@ -209,6 +209,27 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (raw.includes('\\')) {
         throw new Error(`🛡️ Plugin DB access denied: backslashes are not permitted in plugin SQL; pass literal data via bound parameters (?).`);
     }
+    // Postgres dollar-quoting (`$$ … $$` / `$tag$ … $tag$`) is a string-literal form this lexer does NOT
+    // recognize, so a `'` inside a dollar-quote opens a PHANTOM guard-string that swallows a following UNION
+    // while Postgres executes it — the same divergence class as the backslash/`--` cases. Plugins pass
+    // literal data via bound params (?), never dollar-quotes; the guard runs on the ?-placeholder SQL BEFORE
+    // $N translation, so denying the dollar-quote marker can't hit a legitimate $1/$2 parameter.
+    if (/\$[A-Za-z0-9_]*\$/.test(raw)) {
+        throw new Error(`🛡️ Plugin DB access denied: dollar-quoted strings ($$ … $$) are not permitted; pass literal data via bound parameters (?).`);
+    }
+    // Postgres dollar-quoted string literals (`$$…$$` / `$tag$…$tag$`) are OPAQUE strings on Postgres, but
+    // this lexer treats `$` as an ordinary identifier char and only `'` as a string delimiter — so a `'`
+    // INSIDE a `$$…$$` string is seen by the guard as a REAL string opener. That single `'` desyncs the
+    // guard's literal state from Postgres: the guard blanks the rest of the statement as "string content"
+    // while Postgres runs it, hiding a `UNION SELECT … FROM users` or a stacked `; …` from the table walker
+    // and the multi-statement check (adversarial re-verify — same divergence class as backslash / `--0` /
+    // `/*!`, reachable with NO backslash). It can't be lexed-as-a-string safely either, because on
+    // SQLite/MySQL `$$` is NOT a string delimiter (a `;` between `$$…$$` is a real separator there) — so
+    // reconciling per-engine is impossible. Plugins pass literals via bound params (?), never inline
+    // dollar-quotes, so deny the delimiter outright (matches an opening `$`+optional-tag+`$`).
+    if (/\$(?:[A-Za-z_][A-Za-z0-9_]*)?\$/.test(raw)) {
+        throw new Error(`🛡️ Plugin DB access denied: dollar-quoted string literals ($$...$$) are not permitted; pass literal data via bound parameters (?).`);
+    }
     // ONE lexer pass recognizes comments + string literals + quoted identifiers TOGETHER, so attacker text
     // inside any of them can't splice out structure (the comment-vs-literal ordering bug #2 and the
     // quoted-identifier phantom-paren #1). `cleaned` = lowercased, comments/literals blanked; `toks` feeds
