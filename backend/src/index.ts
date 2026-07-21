@@ -191,7 +191,14 @@ app.use(config.api.prefix, apiLimiter);
 
 // Parse JSON bodies (apply authLimiter specifically to login routes if not applied globally below, but strict route matching is preferred)
 app.use(`${config.api.prefix}/auth/login`, authLimiter);
-app.use(`${config.api.prefix}/auth/mfa`, authLimiter); // second-factor verify — throttle per-IP like login
+// Scope the brute-force limiter to EXACTLY the second-factor verify (POST /auth/mfa), which is part of the
+// unauthenticated login and must be throttled per-IP like /auth/login. Using app.use() here was a PREFIX
+// mount that also swallowed the authenticated self-service management routes (/auth/mfa/status polled on
+// every account-page load, plus /setup, /enable, /disable, /backup-codes, /policy). A logged-in user
+// enabling then disabling their own 2FA burned the shared 10/hr/IP budget and locked THEMSELVES out of
+// login. app.post matches the full path exactly, so the sub-routes no longer count. Code-guess brute force
+// on those routes is still covered by the per-account 'mfa:' lockout inside routes/auth.ts.
+app.post(`${config.api.prefix}/auth/mfa`, authLimiter);
 app.use(`${config.api.prefix}/auth/register`, authLimiter);
 app.use(`${config.api.prefix}/auth/forgot-password`, authLimiter); // public, unauthenticated — throttle abuse
 app.use(`${config.api.prefix}/auth/reset-password`, authLimiter);
@@ -500,6 +507,7 @@ async function initialize() {
         // running site — new activations stay default-deny. Best-effort; never blocks boot.
         try {
             await require('./core/plugin-permissions').loadGrants();
+            await require('./core/plugin-permissions').loadEgressHosts();
             const { getActivePlugins, getAllPlugins } = require('./core/plugins');
             const active: string[] = await getActivePlugins();
             const all: any[] = await getAllPlugins();

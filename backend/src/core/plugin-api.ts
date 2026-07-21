@@ -57,6 +57,11 @@ const PROTECTED_OPTION_NAMES = new Set([
     // boot). A plugin with settings:write could otherwise options.set('plugin_grants', {self:[...all...]})
     // and self-escalate to every capability the admin never approved — a full default-deny escape.
     'plugin_grants',
+    // 'plugin_egress_hosts' IS the per-plugin egress-allowlist store (plugin-permissions.loadEgressHosts
+    // reads it verbatim at boot). A network+settings:write plugin could otherwise options.set it to widen
+    // its OWN egress (or tamper with other plugins' entries), routing around the setEgressAllowlist
+    // no-self-grant guard — same self-escalation class as plugin_grants. Off-limits to untrusted plugins.
+    'plugin_egress_hosts',
     // 'cron' is the scheduled-events blob. Writing it raw injects hook callbacks (spoofed/omitted
     // pluginSlug runs core & cross-plugin handlers) and bypasses the capacity caps that only sit on the
     // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to

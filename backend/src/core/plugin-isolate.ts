@@ -651,6 +651,13 @@ function isNetworkGrantedFor(slug: string): boolean {
     try { return require('./plugin-permissions').isNetworkGranted(slug); } catch { return false; }
 }
 
+// The admin-set per-plugin egress allowlist (bare hosts / IP literals), resolved host-side at spawn and
+// pushed into the child's cfg (→ egress-guard.setAllowedHosts). Empty ⇒ allow-all-public (unchanged
+// behavior). Only meaningful for a network-granted plugin; fail-OPEN (no allowlist) on any error.
+function getEgressAllowlistFor(slug: string): string[] {
+    try { const l = require('./plugin-permissions').getEgressAllowlist(slug); return Array.isArray(l) ? l : []; } catch { return []; }
+}
+
 // Hooks whose filter return value is emitted as RAW, UNESCAPED HTML into every server-rendered page
 // (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). A plugin shimming one of
 // these is a stored-XSS primitive (incl. the admin UI), so it is denied for EVERY plugin — no plugin
@@ -734,7 +741,9 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         // spawn (re-resolved on reload) so the child's network policy matches the current admin grant;
         // config travels in argv[2] (no secrets); env is the same secret-free allowlist.
         const netGranted = isNetworkGrantedFor(slug);
-        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted });
+        // allowedHosts only matters for a network-granted plugin (a non-network plugin has no egress at all);
+        // pushed into cfg so the child installs it as its egress-guard allowlist. Empty ⇒ allow-all-public.
+        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: netGranted ? getEgressAllowlistFor(slug) : [] });
         const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
         // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
         // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
