@@ -47,6 +47,9 @@ const { slug, entryFile, coreDir } = cfg;
 // a plugin can't self-grant network. `netAllowed` opens ONLY the network gates (raw socket modules +
 // fetch/WebSocket/EventSource) — child_process/fs/vm/etc. stay blocked for every plugin.
 Object.defineProperty(global, '__WORDJS_PLUGIN_NETWORK__', { value: !!cfg.network, writable: false, configurable: false, enumerable: false });
+// Per-plugin egress allowlist (host-resolved at spawn). Immutable so a plugin can't widen its own egress.
+// Empty ⇒ allow-all-public (unchanged); non-empty ⇒ egress-guard default-denies unlisted hosts.
+Object.defineProperty(global, '__WORDJS_PLUGIN_ALLOWED_HOSTS__', { value: Object.freeze(Array.isArray(cfg.allowedHosts) ? cfg.allowedHosts.slice() : []), writable: false, configurable: false, enumerable: false });
 const netAllowed = !!global.__WORDJS_PLUGIN_NETWORK__;
 if (!netAllowed) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
@@ -64,6 +67,9 @@ if (!netAllowed) {
     // FAIL CLOSED: if it can't load, block the network globals entirely rather than leave them unfiltered.
     try {
         const eg = require(path.join(coreDir, 'egress-guard'));
+        // Install this plugin's egress allowlist BEFORE the connect/dgram guards so the very first outbound
+        // connection is already policy-checked. Empty list ⇒ no-op (allow-all-public), so no regression.
+        try { eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__); } catch { /* best-effort */ }
         // PRIMARY enforcement: patch net.Socket.prototype.connect so EVERY outbound TCP connection in
         // this child is validated AT THE REAL CONNECT against the resolved IP — covers raw net/tls,
         // http/https (incl. custom agent/createConnection), the net.Stream alias, prototype-chain
@@ -135,14 +141,17 @@ try {
         'dns', 'dns/promises', 'worker_threads', 'vm', 'module', 'inspector', 'repl', 'test',
         'trace_events', 'cluster', 'async_hooks', 'v8'
     ]);
-    // A network-granted plugin may import() the TCP/HTTP/DNS modules (net/tls/http/https/http2/dns) —
+    // A network-granted plugin may import() the TCP/HTTP modules (net/tls/http/https/http2) —
     // installChildNetGuard locks net.Socket.prototype.connect, the single chokepoint every TCP path funnels
-    // through, so import() of those is safe. dgram is DIFFERENT and stays import-BLOCKED: import('dgram')
-    // returns the RAW module whose Socket constructor (a) honors a plugin-supplied `lookup` option baked at
-    // construction → DNS-rebind past the send/connect validation (#19/#27), and (b) exposes the native
-    // udp_wrap handle below the JS prototype (#22). The guarded require('dgram') path strips `lookup` and is
-    // the ONLY way a plugin should obtain UDP; blocking the ESM path removes the raw-ctor escape entirely.
-    if (netAllowed) for (const m of ['net', 'tls', 'http', 'https', 'http2', 'dns', 'dns/promises']) esmBlocked.delete(m);
+    // through, so import() of those is safe. dgram AND dns stay import-BLOCKED because their RAW modules sit
+    // BELOW the JS chokepoints: import('dgram') exposes a `lookup`-honoring Socket ctor + the native udp_wrap
+    // handle (#19/#22/#27); import('dns') exposes the c-ares Resolver surface (new Resolver().setServers(...)
+    // + resolve*/resolveTxt) which egresses over cares_wrap's OWN native sockets — NOT net.Socket.prototype
+    // .connect or the dgram prototype — so it bypasses BOTH the connect guard AND the per-plugin egress
+    // allowlist (a covert-channel / SSRF hole). The guarded require('dgram')/require('dns') paths (secure-
+    // require → egress-guard.getGuardedModule) strip `lookup` and deny the resolver surface while keeping
+    // dns.lookup (getaddrinfo, IP-checked at connect), so a plugin loses no legitimate capability.
+    if (netAllowed) for (const m of ['net', 'tls', 'http', 'https', 'http2']) esmBlocked.delete(m);
     let esmGuardInstalled = false;
     try {
         const nodeModule = require('module');

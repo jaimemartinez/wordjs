@@ -56,7 +56,7 @@ test('#03 genuine public IPv6/IPv4 are still allowed (no over-block)', () => {
 const { isProtectedOption } = require('../core/plugin-api');
 
 test('#02 security-critical option keys are protected; benign ones are not', () => {
-    for (const k of ['plugin_grants', 'cron', 'plugin_strikes', 'plugin_health', 'siteurl', 'active_plugins']) {
+    for (const k of ['plugin_grants', 'plugin_egress_hosts', 'cron', 'plugin_strikes', 'plugin_health', 'siteurl', 'active_plugins']) {
         assert.strictEqual(isProtectedOption(k), true, `expected option '${k}' to be PROTECTED`);
     }
     for (const k of ['my_plugin_setting', 'greeting', 'items_per_page']) {

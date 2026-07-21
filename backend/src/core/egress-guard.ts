@@ -142,10 +142,68 @@ function blockErr(target: string, host?: string): Error {
     return new Error(`[sandbox] network egress to ${target}${host && host !== target ? ` (${host})` : ''} is blocked — only public destinations are allowed for plugins`);
 }
 
+// ---- per-plugin egress ALLOWLIST (opt-in defense-in-depth) --------------------------------------
+// An isolated child == exactly ONE plugin, so this module-global list is that plugin's policy (the host
+// resolves it per-slug at spawn and the worker installs it here before the connect guard). null = NO
+// allowlist ⇒ today's "any public host" behavior (so a network-granted plugin with no list configured
+// does NOT regress). A non-empty list flips the plugin to default-DENY: only a listed host — or one of its
+// subdomains at a LABEL boundary — may be reached. This is ADDITIVE and runs ALONGSIDE isBlockedIp: it
+// never loosens the private/loopback/metadata block (a listed host resolving to a private IP is still
+// denied), it only narrows which PUBLIC hosts are reachable. NOTE: this is defense-in-depth (it runs in
+// the plugin's own process), not a containment boundary against arbitrary malicious code — see the netns
+// follow-up. Enforced at the authoritative connect chokepoints, never by editing isBlockedIp.
+let allowedHosts: string[] | null = null;
+export function setAllowedHosts(list: any): void {
+    if (!Array.isArray(list)) { allowedHosts = null; return; }
+    // Normalize each entry to a bare host: lowercase, trim, strip a leading '*.'/'.' and a trailing dot.
+    const clean = list
+        .map((h) => String(h).toLowerCase().trim().replace(/^\*?\./, '').replace(/\.$/, ''))
+        .filter(Boolean);
+    allowedHosts = clean.length ? Array.from(new Set(clean)) : null;
+}
+// Canonicalize an IP LITERAL (strip [] brackets, fold IPv6 to a normalized byte form) so equivalent
+// spellings — bracketed vs bare, compressed vs expanded IPv6 — compare equal. Returns null for a hostname.
+function canonIp(s: string): string | null {
+    const a = String(s).replace(/^\[|\]$/g, '');
+    const fam = realNet.isIP(a);
+    if (fam === 4) return 'v4:' + a;
+    if (fam === 6) { const b = ipv6ToBytes(a); return b ? 'v6:' + b.join('.') : null; }
+    return null;
+}
+export function isHostAllowed(host: string | undefined): boolean {
+    if (!allowedHosts) return true;               // no allowlist configured → unchanged behavior
+    if (!host) return false;                      // default-deny a no-host / default-localhost target
+    // Strip [] brackets (URL.hostname keeps them for IPv6) + trailing dot so URL-derived hosts compare
+    // equal to the bare entries the admin stored.
+    const raw = String(host).toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
+    const hIp = canonIp(raw);
+    for (const d of allowedHosts) {
+        if (raw === d) return true;               // exact string match (hostnames + identical IP spellings)
+        const dIp = canonIp(d);
+        if (dIp) { if (hIp && hIp === dIp) return true; continue; } // IP entry: canonical-IP compare only
+        if (hIp) continue;                        // host is an IP but entry is a hostname → never matches
+        if (raw.endsWith('.' + d)) return true;   // subdomain, at a LABEL boundary — never a substring
+    }
+    return false;
+}
+// Public IPs the JS dgram guard ALREADY validated against the allowlist (and pinned into the native call).
+// The native-handle guard (guardHandleFn) exempts these so a legitimate allowlisted-HOSTNAME datagram
+// (resolved → pinned public IP, which no longer suffix-matches the hostname entry) isn't wrongly rejected,
+// while a plugin that reflects an ARBITRARY off-allowlist IP straight to handle.send is still denied.
+const jsValidatedDgramTargets = new Set<string>();
+function noteDgramTarget(ip: any): void {
+    if (typeof ip === 'string' && ip) {
+        if (jsValidatedDgramTargets.size > 4096) jsValidatedDgramTargets.clear(); // bound memory
+        jsValidatedDgramTargets.add(ip);
+    }
+}
+
 /** dns.lookup-compatible function that rejects any hostname resolving to a blocked IP. */
 export function validatingLookup(hostname: string, options: any, callback?: any): void {
     if (typeof options === 'function') { callback = options; options = {}; }
     options = options || {};
+    // Per-plugin allowlist (opt-in): deny a hostname not on the list BEFORE resolving it.
+    if (allowedHosts && !isHostAllowed(hostname)) return callback(blockErr(String(hostname || '(no host)')));
     realDns.lookup(hostname, { ...options, all: true, verbatim: true }, (err: any, addresses: any) => {
         if (err) return callback(err);
         const list = Array.isArray(addresses) ? addresses : [{ address: addresses, family: options.family || 4 }];
@@ -158,6 +216,10 @@ export function validatingLookup(hostname: string, options: any, callback?: any)
 }
 
 function assertHostLiteral(host: string | undefined): void {
+    // Per-plugin allowlist (opt-in): deny any host — IP literal OR hostname — not on the list. This is the
+    // chokepoint every IP-literal connect path shares (secureConnect, assertUrlAllowed*, dgram), so it also
+    // covers WebSocket/EventSource + IP-literal fetch. Runs BEFORE (and never replaces) the private-IP block.
+    if (allowedHosts && !isHostAllowed(host)) throw blockErr(String(host || '(no host)'));
     if (host && realNet.isIP(host) && isBlockedIp(host)) throw blockErr(host);
 }
 
@@ -371,9 +433,11 @@ function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
         if (dgramConnectedSockets.has(thisArg)) return orig.apply(thisArg, args);
         const e = blockErr('127.0.0.1', '(dgram default)'); if (cb) { cb(e); return; } throw e;
     }
+    if (allowedHosts && !isHostAllowed(address)) { const e = blockErr(String(address)); if (cb) { cb(e); return; } throw e; }
     if (realNet.isIP(address)) {
         // Already an IP literal → no DNS, no rebind window; validate and pass straight through.
         try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
+        noteDgramTarget(address);
         return orig.apply(thisArg, args);
     }
     // Hostname: resolve, validate EVERY resolved IP, then REWRITE the address arg to the validated literal
@@ -382,7 +446,7 @@ function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
         if (err) { if (cb) cb(err); return; }
         const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
         for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
-        const pinned = args.slice(); pinned[idx] = pinDgramAddress(thisArg, list);
+        const pinned = args.slice(); const pinnedIp = pinDgramAddress(thisArg, list); pinned[idx] = pinnedIp; noteDgramTarget(pinnedIp);
         orig.apply(thisArg, pinned);
     });
 }
@@ -396,8 +460,10 @@ function secureDgramConnect(orig: any, thisArg: any, args: any[]): any {
         // connect(port) with no address defaults to 127.0.0.1 / ::1 — a loopback binding. Deny. (EG-3)
         const e = blockErr('127.0.0.1', '(dgram connect default)'); if (cb) { cb(e); return; } throw e;
     }
+    if (allowedHosts && !isHostAllowed(address)) { const e = blockErr(String(address)); if (cb) { cb(e); return; } throw e; }
     if (realNet.isIP(address)) {
         try { assertHostLiteral(address); } catch (e) { if (cb) { cb(e as Error); return; } throw e; }
+        noteDgramTarget(address);
         dgramConnectedSockets.add(thisArg);
         return orig.apply(thisArg, args);
     }
@@ -405,7 +471,7 @@ function secureDgramConnect(orig: any, thisArg: any, args: any[]): any {
         if (err) { if (cb) cb(err); return; }
         const list = Array.isArray(addrs) ? addrs : [{ address: addrs }];
         for (const a of list) { if (isBlockedIp(a.address)) { const e = blockErr(a.address, address); if (cb) cb(e); return; } }
-        const pinned = args.slice(); pinned[1] = pinDgramAddress(thisArg, list);
+        const pinned = args.slice(); const pinnedIp = pinDgramAddress(thisArg, list); pinned[1] = pinnedIp; noteDgramTarget(pinnedIp);
         dgramConnectedSockets.add(thisArg);
         orig.apply(thisArg, pinned);
     });
@@ -467,6 +533,9 @@ export function installChildDgramGuard(): void {
                 const addr = ha[addrIdx];
                 if (typeof addr === 'string' && !realNet.isIP(addr)) { /* hostname at native layer — deny (no rebind-safe resolve here) */ throw blockErr(addr, addr); }
                 if (typeof addr === 'string' && isBlockedIp(addr)) throw blockErr(addr, addr);
+                // Per-plugin allowlist: a reflected send to an arbitrary off-allowlist public IP is denied.
+                // IPs the JS guard already validated + pinned (allowlisted-hostname sends) are exempted.
+                if (typeof addr === 'string' && allowedHosts && !isHostAllowed(addr) && !jsValidatedDgramTargets.has(addr)) throw blockErr(addr, addr);
                 return ho.apply(this, ha);
             };
             const patchedBind = function (this: any, ...bargs: any[]) {
@@ -617,6 +686,7 @@ export async function assertUrlAllowed(rawUrl: string): Promise<void> {
     let host: string | undefined;
     try { host = new URL(String(rawUrl)).hostname; } catch { return; } // non-URL (e.g. relative) → let fetch handle
     if (!host) return;
+    if (allowedHosts && !isHostAllowed(host)) throw blockErr(host); // per-plugin allowlist (hostname path)
     if (realNet.isIP(host)) { assertHostLiteral(host); return; }
     await new Promise<void>((resolve, reject) => {
         realDns.lookup(host as string, { all: true, verbatim: true }, (err: any, addresses: any) => {
