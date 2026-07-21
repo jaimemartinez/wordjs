@@ -4,6 +4,58 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.11.0] - 2026-07-21
+
+A **sandbox-isolation + internationalization** release. Plugin isolation gains three new layers that move
+enforcement from the in-process JS guards down to the operating system and the database, and the whole
+interface gains full multilingual support. Drop-in minor upgrade — no schema migration is required, and
+every new isolation control is **transparent, probe-gated, or opt-in** with a graceful fallback, so existing
+installs behave exactly as before until the environment (or an admin) turns something on.
+
+### Added
+
+- **Per-plugin database isolation.** On PostgreSQL each active plugin's queries run under its own
+  low-privilege `NOLOGIN` role (`SET ROLE` on a pinned client); on MySQL/MariaDB under its own low-privilege
+  login user — each GRANTed access to **only its own `wjp_<slug>_` tables**. The database itself then denies
+  any cross-plugin or core-table read/write even if the SQL text-guard is bypassed. Default-on where the DB
+  user can provision roles/users; falls back gracefully to the text-guard on SQLite or where provisioning
+  isn't permitted (opt-out: `sandbox.pluginDbRoles=false`).
+- **Kernel network-namespace isolation.** On Linux, a plugin **without** the `network` grant is launched
+  into its own empty network namespace (bubblewrap `--unshare-net`), so it cannot reach the cloud metadata
+  endpoint, host loopback, or the public internet **at the kernel level** — not just via the in-process
+  egress guard. Probe-gated (a `--unshare-net` self-test must keep the RPC bridge alive on the host) and
+  fail-open everywhere it can't be proven; surfaced on `GET /health/details`. Opt-out: `sandbox.unshareNetwork=false`.
+- **Per-plugin egress allowlist.** Admins can restrict a network-granted plugin to a set of egress hosts at
+  **`/admin/plugins`**. Empty = allow all public hosts (unchanged); a non-empty list flips the plugin to
+  default-deny except the listed hosts and their subdomains (matched at a label boundary). Additive — it
+  never loosens the existing private/loopback/metadata IP block.
+- **Full UI internationalization (Spanish / English / Portuguese).** ~700 translation strings across the
+  admin and public interfaces, so the UI renders in the operator's language throughout.
+
+### Changed
+
+- **`ModernSelect` / `Select`** menus render through a portal so they escape a clipping `overflow-hidden`
+  ancestor (e.g. a rounded card), with keyboard highlight and arrow-key navigation. Assorted form and
+  component polish across the admin UI.
+
+### Security
+
+- **`plugin_egress_hosts` is a protected option** — a plugin can never widen its own egress via the generic
+  options bridge (same self-escalation guard as `plugin_grants`).
+- **Raw DNS-resolver egress hole closed.** `import('dns')` no longer hands a network-granted plugin the raw
+  c-ares `Resolver` (which egresses over its own sockets, bypassing the connect guard and the egress
+  allowlist); the guarded `dns.lookup` remains available.
+- **Log-injection (CWE-117) hardened.** Untrusted values (cert CN, request URL, plugin slug, error text) are
+  stripped of CR/LF before being logged in the gateway and plugin-DB layers.
+- The native UDP handle guard now also enforces the egress allowlist, and IPv6 allowlist entries match
+  correctly across URL-based egress paths.
+
+### Fixed
+
+- **Monolith-mode certificate panel.** The admin SSL/certificate view now reports the real port + served
+  certificate in monolith deployments (where there is no separate gateway to probe) instead of showing a
+  "Gateway Unreachable" error.
+
 ## [1.10.0] - 2026-07-20
 
 A **platform + hardening** release: WordJS opens up as a headless backend (scoped API tokens and outgoing
