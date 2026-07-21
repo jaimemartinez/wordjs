@@ -82,6 +82,8 @@ test('bridge blocks the MySQL comment-divergence SQL-scoping bypass (--0 / /*! *
         // Postgres dollar-quoting: `$q$'$q$` hides a `'` so a following UNION runs on PG while the guard
         // scans a phantom string. Dollar-quote markers are denied outright.
         await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=$q$'$q$ UNION SELECT user_pass FROM users`), /dollar|off-limits|not owned/i);
+        // Postgres ends a `--` comment at a bare CR (\r), not just \n; the tail after it must stay visible.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=1 -- x\rUNION SELECT user_pass FROM users`), /off-limits|not owned/i);
         // A LEGIT trailing `-- comment` (dash-dash-space) must still be stripped and the query scoped-OK
         // (it may fail on a real "no such table" DB error, but must NOT be a scoping denial).
         let err: any = null;
