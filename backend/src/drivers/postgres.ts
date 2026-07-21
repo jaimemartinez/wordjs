@@ -45,7 +45,7 @@ function stripSqlComments(sql: string): string {
             while (i < n) { out += sql[i]; if (sql[i] === "'") { if (sql[i + 1] === "'") { out += sql[i + 1]; i += 2; continue; } i++; break; } i++; }
             continue;
         }
-        if (c === '-' && sql[i + 1] === '-') { while (i < n && sql[i] !== '\n') i++; continue; }
+        if (c === '-' && sql[i + 1] === '-') { while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++; continue; } // Postgres ends `--` at \n OR \r
         if (c === '/' && sql[i + 1] === '*') { i += 2; while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i++; i += 2; continue; }
         out += c; i++;
     }

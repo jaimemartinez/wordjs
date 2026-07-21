@@ -22,6 +22,17 @@ try { sharp = require('sharp'); } catch { /* sharp unavailable on this host → 
 // left to express.static untouched.
 const RASTER = new Set(['.jpg', '.jpeg', '.png']);
 
+// SECURITY (DoS): on-demand transcoding is reachable by anonymous callers (public /uploads).
+// Two guards keep a burst of requests from OOM/CPU-killing the single-process backend:
+//   1. limitInputPixels caps decoded pixels per sharp() pipeline (a "pixel bomb" is rejected → original served).
+//   2. A global concurrency budget + a per-derivative in-flight lock stop parallel/duplicate transcodes from
+//      stacking sharp pipelines. Over budget → fail SAFE by serving the original untouched.
+const MAX_INPUT_PIXELS = 40_000_000; // ~40MP, far above any legitimate web image
+const MAX_CONCURRENT_TRANSCODES = 3;
+let activeTranscodes = 0;
+// Module-scoped so the budget/lock are shared across ALL requests (and any factory instances).
+const inFlight = new Map<string, Promise<void>>(); // cachePath -> ongoing transcode
+
 export function imageNegotiation(uploadsDir: string) {
     const root = path.resolve(uploadsDir);
     const cacheRoot = path.join(root, '.derivatives');
@@ -66,19 +77,40 @@ export function imageNegotiation(uploadsDir: string) {
         // Serve the cached derivative if present.
         try { if (fs.statSync(cachePath).isFile()) return serveDerivative(); } catch { /* not cached yet */ }
 
-        // Transcode once, publish atomically, then serve. On failure, fall through to the original.
-        (async () => {
+        // Not cached yet. If an identical derivative is already being produced, DON'T start a second
+        // sharp pipeline — wait for that one, then serve its result (or the original if it failed).
+        const pending = inFlight.get(cachePath);
+        if (pending) {
+            pending.then(
+                () => { try { if (fs.statSync(cachePath).isFile()) return serveDerivative(); } catch { /* failed */ } if (!res.headersSent) next(); },
+                () => { if (!res.headersSent) next(); }
+            );
+            return;
+        }
+
+        // SECURITY (DoS): over the concurrency budget → fail SAFE, serve the original untouched rather
+        // than queueing another CPU/memory-heavy transcode.
+        if (activeTranscodes >= MAX_CONCURRENT_TRANSCODES) return next();
+
+        // Transcode once, publish atomically, then serve. On failure/limit, fall through to the original.
+        activeTranscodes++;
+        const work = (async () => {
             try {
                 fs.mkdirSync(path.dirname(cachePath), { recursive: true });
                 const tmp = `${cachePath}.tmp-${process.pid}-${Date.now()}`;
-                const pipeline = sharp(srcPath, { failOn: 'none' });
+                const pipeline = sharp(srcPath, { failOn: 'none', limitInputPixels: MAX_INPUT_PIXELS });
                 if (fmt === 'avif') await pipeline.avif({ quality: 50, effort: 4 }).toFile(tmp);
                 else await pipeline.webp({ quality: 78 }).toFile(tmp);
                 fs.renameSync(tmp, cachePath); // atomic publish (same fs)
-                serveDerivative();
-            } catch {
-                if (!res.headersSent) next(); // transcode failed → serve the original
+            } finally {
+                activeTranscodes--;
+                inFlight.delete(cachePath);
             }
         })();
+        inFlight.set(cachePath, work);
+        work.then(
+            () => { serveDerivative(); },
+            () => { if (!res.headersSent) next(); } // transcode failed/limit exceeded → serve the original
+        );
     };
 }

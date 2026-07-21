@@ -192,6 +192,11 @@ if (cluster.isPrimary) {
     });
 
     let registry = new Map();
+    // Which peer identity (cert CN) owns each registered target url. PERSISTED alongside the registry (see
+    // save/loadRegistry) so a gateway PRIMARY restart doesn't forget it — otherwise a compromised frontend
+    // could re-evict the backend's restored loopback /api (routes:[]) and route /api/v1/auth to itself
+    // (adversarial re-verify #3, "ownership amnesia"). Enforced in the mTLS /register handler.
+    const targetOwner = new Map();
 
     const saveRegistry = () => {
         try {
@@ -199,7 +204,10 @@ if (cluster.isPrimary) {
             registry.forEach((value, key) => {
                 const metricsObj = {};
                 if (value.metrics) value.metrics.forEach((m, url) => { metricsObj[url] = m; });
-                data[key] = { name: value.name, targets: Array.from(value.targets), metrics: metricsObj };
+                // Persist the owning CN for each target so ownership survives a primary restart.
+                const owners = {};
+                value.targets.forEach((url) => { if (targetOwner.has(url)) owners[url] = targetOwner.get(url); });
+                data[key] = { name: value.name, targets: Array.from(value.targets), owners, metrics: metricsObj };
             });
             fs.writeFileSync(REGISTRY_TEMP, JSON.stringify(data, null, 2));
             fs.renameSync(REGISTRY_TEMP, REGISTRY_FILE);
@@ -214,6 +222,9 @@ if (cluster.isPrimary) {
                     const metrics = new Map();
                     if (value.metrics) Object.entries(value.metrics).forEach(([url, m]) => metrics.set(url, m));
                     registry.set(key, { name: value.name, targets: new Set(value.targets), index: 0, metrics });
+                    // Re-seed target ownership so a restored /api→backend target still can't be evicted by
+                    // another identity after a primary restart.
+                    if (value.owners) Object.entries(value.owners).forEach(([url, cn]) => targetOwner.set(url, cn));
                 });
             }
         } catch (e) {
@@ -318,7 +329,7 @@ if (cluster.isPrimary) {
         if (changed) { saveRegistry(); broadcastRegistry(); }
     }, 30000);
 
-    const handleRegistration = (service) => {
+    const handleRegistration = (service, cn) => {
         registry.forEach((group, route) => {
             if (group.targets.has(service.url)) {
                 group.targets.delete(service.url);
@@ -329,6 +340,7 @@ if (cluster.isPrimary) {
             if (!registry.has(route)) registry.set(route, { name: service.name, targets: new Set(), index: 0, metrics: new Map() });
             registry.get(route).targets.add(service.url);
         });
+        if (cn) targetOwner.set(service.url, cn);
         saveRegistry();
         broadcastRegistry();
         logger.info(`[Gateway] Service registered: ${service.name} -> ${service.url}`);
@@ -341,9 +353,9 @@ if (cluster.isPrimary) {
     };
 
     cluster.on('message', (worker, message) => {
-        if (message.type === 'REGISTER_SERVICE') {
-            handleRegistration(message.service);
-        }
+        // NOTE: the former REGISTER_SERVICE branch was removed — nothing emits it, and it was an
+        // UNAUTHENTICATED path into handleRegistration. All registration now flows through the mTLS
+        // /register endpoint (identity-, route-, host- and owner-checked).
         if (message.type === 'RESTART_GATEWAY') {
             restartGateway();
         }
@@ -370,8 +382,63 @@ if (cluster.isPrimary) {
                     next();
                 };
 
+                // A registering node may only claim routes that belong to its ROLE (its cert CN) — mTLS
+                // proves *who* the peer is, but without this it could serve *anything*. The exploit: a
+                // compromised/least-privileged `frontend` node registers `/api/v1/auth` → the proxy's
+                // longest-prefix match then routes 100% of login/reset traffic to it (credential capture).
+                // These sets mirror exactly what the backend (index.ts) and frontend (instrumentation.ts)
+                // legitimately declare, so authorized registration is unaffected; anything else is refused.
+                // null-proto so a CN like '__proto__' / 'constructor' can't make the lookup a truthy inherited value.
+                const ROLE_ROUTES = Object.assign(Object.create(null), {
+                    backend: new Set(['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics']),
+                    frontend: new Set(['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']),
+                });
+                // Does the peer's certificate cover `host` (a SAN entry, its CN, or loopback)? Binds a registered
+                // target to the identity the peer actually proved so it can't point a route at an external box.
+                // Loopback is always allowed (a local target can't be an external MITM; same-host cross-service
+                // eviction is caught by the ownership check below, not here).
+                const certCoversHost = (cert, host) => {
+                    if (!host) return false;
+                    const h = String(host).toLowerCase().replace(/^\[|\]$/g, '');
+                    if (h === '127.0.0.1' || h === 'localhost' || h === '::1') return true;
+                    if (cert && cert.subject && String(cert.subject.CN).toLowerCase() === h) return true;
+                    const san = (cert && cert.subjectaltname) || ''; // "DNS:host, IP Address:1.2.3.4"
+                    return san.split(',').some(e => { const v = e.trim(); const i = v.indexOf(':'); return (i >= 0 ? v.slice(i + 1) : v).trim().toLowerCase() === h; });
+                };
                 internalApp.post('/register', requireIdentity(['backend', 'frontend']), (req, res) => {
-                    handleRegistration(req.body);
+                    const cert = req.socket.getPeerCertificate();
+                    const cn = cert && cert.subject && cert.subject.CN;
+                    const allowed = ROLE_ROUTES[cn];
+                    const declared = Array.isArray(req.body && req.body.routes) ? req.body.routes : [];
+                    // A registration with NO routes only ever EVICTS (handleRegistration removes the url from
+                    // every group and re-adds nothing) — a legitimate service always declares its routes.
+                    // Reject it so it can't be used as a pure-eviction primitive.
+                    if (!declared.length) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' declared no routes (eviction-only)`);
+                        return res.status(400).json({ error: 'At least one route must be declared.' });
+                    }
+                    const bad = declared.filter(r => !allowed || !allowed.has(r));
+                    if (!allowed || bad.length) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not serve route(s): ${bad.join(', ') || '(no routes declared)'}`);
+                        return res.status(403).json({ error: 'One or more declared routes are not permitted for this identity.', routes: bad });
+                    }
+                    // The target URL must be well-formed and its HOST covered by the peer's certificate, so a peer
+                    // can't register a target pointing at an attacker box or another host's address.
+                    let host;
+                    try { host = new URL(String(req.body && req.body.url)).hostname; } catch { host = null; }
+                    if (!host || !certCoversHost(cert, host)) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' target host '${host || '(invalid url)'}' not covered by its certificate`);
+                        return res.status(403).json({ error: 'Target URL host is invalid or not covered by your certificate identity.' });
+                    }
+                    // Ownership: a peer may only (re)register a target url that is unowned or already its own — it
+                    // can NEVER touch (and thus evict) another identity's target (e.g. the backend's /api, which
+                    // otherwise let a frontend evict it and capture /api/v1/auth via the `/` catch-all).
+                    const owner = targetOwner.get(req.body.url);
+                    if (owner && owner !== cn) {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not register target '${req.body.url}' owned by '${owner}'`);
+                        return res.status(403).json({ error: 'That target is registered by another identity.' });
+                    }
+                    handleRegistration(req.body, cn);
                     res.json({ success: true });
                 });
 
@@ -578,10 +645,28 @@ if (cluster.isPrimary) {
                 return res.status(403).json({ error: chk.reason });
             }
             try {
-                // SECURITY: CN is forced to the token's role (not taken from the CSR); SANs come from the
-                // node's advertised host (and any host the token pinned) so the gateway can verify the
-                // backend's server cert when it later health-checks/proxies to it.
-                const sans = [advertiseHost, chk.host].filter(Boolean);
+                // SECURITY (#11): CN is forced to the token's role (not the CSR). The SAN must NOT be
+                // attacker-controlled — a join-token holder could otherwise put ANY host in advertiseHost and
+                // mint a cluster-CA cert that impersonates the gateway to the frontend (on-path MITM of SSR
+                // traffic). The authoritative host is the one the TOKEN pinned; if the token pinned a host,
+                // the client's advertiseHost must equal it. If the token did NOT pin one, we only allow a SAN
+                // for the address the node is actually connecting FROM — never an arbitrary declared host.
+                const peerHost = String(req.socket.remoteAddress || '').replace(/^::ffff:/, '');
+                let sanHost;
+                if (chk.host) {
+                    if (advertiseHost && advertiseHost !== chk.host) {
+                        logger.warn(`[Gateway] [Enroll] DENIED ${role}: advertiseHost '${advertiseHost}' != token-pinned host '${chk.host}'`);
+                        return res.status(400).json({ error: 'advertiseHost does not match the host pinned by the enrollment token.' });
+                    }
+                    sanHost = chk.host;
+                } else {
+                    if (advertiseHost && advertiseHost !== peerHost) {
+                        logger.warn(`[Gateway] [Enroll] DENIED ${role}: unpinned token; advertiseHost '${advertiseHost}' != connecting address '${peerHost}'`);
+                        return res.status(400).json({ error: 'This token did not pin an advertise host; mint a host-pinned token, or connect from the advertised host.' });
+                    }
+                    sanHost = advertiseHost || peerHost;
+                }
+                const sans = [sanHost].filter(Boolean);
                 const certPem = clusterCa.signCsr({ caKeyPem, caCertPem, csrPem: csr, cn: role, sans });
                 logger.info(`[Gateway] [Enroll] ISSUED CN=${role} advertiseHost=${advertiseHost || '-'} to ${req.socket.remoteAddress}`);
                 return res.json({

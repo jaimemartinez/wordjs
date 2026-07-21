@@ -566,6 +566,19 @@ router.post('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, 
         });
     }
 
+    // If the account is subject to the enforced-MFA-by-role policy but hasn't enrolled, refuse to mint a
+    // token — even DURING the grace window. Otherwise a required-role user could mint a `wjt_` token while
+    // still in grace and keep using it forever (API tokens are exempt from the compliance gate), permanently
+    // sidestepping the policy. They must enable 2FA first.
+    const mfaStatus = await mfa.evaluate(req.user);
+    if (mfaStatus.required && !mfaStatus.enabled) {
+        return res.status(403).json({
+            code: 'rest_mfa_required_for_tokens',
+            message: 'Your role requires two-factor authentication. Enable 2FA on your account before creating API tokens.',
+            data: { status: 403 }
+        });
+    }
+
     const created = await ApiToken.generate({
         userId: req.user.id,
         name,

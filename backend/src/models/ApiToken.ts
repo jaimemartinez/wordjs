@@ -219,6 +219,19 @@ class ApiToken {
         return !!(result && (result.changes > 0 || result.rowCount > 0));
     }
 
+    /**
+     * Revoke ALL of a user's still-active tokens at once. Called on password change/reset so that
+     * compromise recovery actually invalidates every credential (the JWT `token_valid_after` epoch does
+     * not reach the API-token path). Returns the number of tokens revoked.
+     */
+    static async revokeAllForUser(userId: number): Promise<number> {
+        const result = await dbAsync.run(
+            'UPDATE api_tokens SET revoked = 1 WHERE user_id = ? AND revoked = 0',
+            [userId]
+        );
+        return (result && (result.changes ?? result.rowCount)) || 0;
+    }
+
     /** Best-effort, throttled last-used stamp (epoch seconds). Never throws — telemetry, not correctness. */
     static touch(id: number): void {
         const now = Date.now();

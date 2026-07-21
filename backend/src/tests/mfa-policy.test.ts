@@ -229,6 +229,26 @@ test('setPolicy caps graceDays at a sane maximum (no accidental permanent no-op)
     await policyOff();
 });
 
+// ── Token minting is blocked for a policy-subject un-enrolled user (closes the grace-window bypass) ──
+test('token minting is refused for a required-role un-enrolled user, EVEN within grace', async () => {
+    // Within grace: the compliance gate does NOT 403 yet (enforced:false), so without the mint-time check a
+    // subject user could mint a forever-exempt wjt_ token now and sidestep the policy permanently.
+    await mfa.setPolicy({ requiredRoles: ['administrator'], graceDays: 3650 });
+    const jwtBearer = jwt.sign({ userId: U.boss }, SECRET, { algorithm: 'HS256', expiresIn: '1h' });
+    const blocked = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${jwtBearer}`).send({ name: 'sneaky', scopes: 'read' });
+    assert.strictEqual(blocked.status, 403);
+    assert.strictEqual(blocked.body.code, 'rest_mfa_required_for_tokens');
+
+    // After enrolling, minting works again.
+    await User.updateMeta(U.boss, mfa.META.enabled, '1');
+    const ok = await request(app).post('/api/v1/auth/tokens')
+        .set('Authorization', `Bearer ${jwtBearer}`).send({ name: 'ok-now', scopes: 'read' });
+    assert.strictEqual(ok.status, 201);
+    await User.deleteMeta(U.boss, mfa.META.enabled);
+    await policyOff();
+});
+
 // ── Policy route admin-gating ─────────────────────────────────────────────────────────────────────
 test('GET /auth/mfa/policy is admin-only', async () => {
     await policyOff(); // gate off so we isolate the isAdmin check
