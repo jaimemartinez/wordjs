@@ -95,11 +95,14 @@ because their entire ecosystems assume plugins run with full trust.
   block `worker_threads`/`vm`/`module`/`inspector`, `process.binding`, native `.node` addons,
   deferred timers, and event listeners). By default the binding-backed globals
   (`fetch`/`WebSocket`/`EventSource`) and raw sockets are trapped, so a plugin gets **no outbound
-  network** unless an admin grants it the `network` capability. An `io-guard` confines fs
+  network** unless an admin grants it the `network` capability — and on Linux a plugin without that
+  grant is additionally dropped into an **empty network namespace** (`--unshare-net`), so it can't
+  reach the network even at the kernel level, while a network-granted plugin's egress can be confined
+  to an admin-set **per-plugin host allowlist**. An `io-guard` confines fs
   reads/writes to the plugin's own dir and blocks reads of `.env`/secret files and the database
   files. Every plugin receives a **secret-scrubbed** view of config and a **table-scoped** DB
   handle, confined to its own `wjp_<slug>_` tables and refused raw SQL against core
-  credential/role/option tables. User/site data comes via the safe `wordjs.users.*` (projection
+  credential/role/option tables — and on **PostgreSQL/MySQL** the database enforces this itself, running each plugin's queries under its own low-privilege role/user GRANTed only its `wjp_<slug>_` tables. User/site data comes via the safe `wordjs.users.*` (projection
   only, never `user_pass`) and `wordjs.site.*` bridges.
 - **Android-style permission model — one tier, no bypass.** Plugins *request* scoped capabilities
   in `manifest.json` (filesystem, network, database, settings, `users:read`, `email:provider`,
@@ -483,9 +486,9 @@ OOM, or heap escape to that one process.
 
 - **Process isolation + per-child memory cap** — always on, all platforms.
 - **AST static scan at install** (acorn, fail-closed) — always on. It's pattern-based: one layer that raises the cost of obfuscation, **not** a proof.
-- **Capability bridge + DB/secret scoping** — always on. A plugin reaches core only through permission-checked RPC; its storage is its own `wjp_<slug>_` tables; core `users`/`options`/`sessions` and secrets are unreachable.
-- **Egress guard** (only when `network` is granted) — confines outbound to public IPs; blocks loopback, cloud-metadata (`169.254.169.254`), RFC1918/CGNAT/ULA, validated against the **resolved** IP at connect time (anti-DNS-rebinding).
-- **Kernel hardening** (unprivileged uid, dropped caps, `seccomp` denylist, namespaces, read-only fs) — **Linux, default-on (opt out via `sandbox.useKernelHardening=false`), probe-gated** — it falls back to plain process isolation where `bwrap` / unprivileged user-namespaces are unavailable. Windows gets a Job Object memory cap; macOS relies on process isolation + the bridge.
+- **Capability bridge + DB/secret scoping** — always on. A plugin reaches core only through permission-checked RPC; its storage is its own `wjp_<slug>_` tables; core `users`/`options`/`sessions` and secrets are unreachable. On **PostgreSQL/MySQL** each plugin's queries additionally run under its **own low-privilege DB role/user** GRANTed only its `wjp_<slug>_` tables (Postgres `NOLOGIN` role via `SET ROLE`; MySQL login user), so the **database itself** denies cross-plugin/core access even if the SQL text-guard is bypassed (default-on where the pool user can provision; graceful fallback to the text-guard on SQLite or without provisioning rights).
+- **Egress guard** (only when `network` is granted) — confines outbound to public IPs; blocks loopback, cloud-metadata (`169.254.169.254`), RFC1918/CGNAT/ULA, validated against the **resolved** IP at connect time (anti-DNS-rebinding). An admin can further restrict a network-granted plugin to a **per-plugin host allowlist** (empty = all public hosts; a non-empty list is default-deny except the listed hosts and their subdomains, matched at a label boundary).
+- **Kernel hardening** (unprivileged uid, dropped caps, `seccomp` denylist, PID/IPC/UTS namespaces, read-only fs — plus an **empty network namespace** (`--unshare-net`) for plugins **without** the `network` grant, so they can't reach the metadata endpoint / loopback / internet at the kernel level) — **Linux, default-on (opt out via `sandbox.useKernelHardening=false`), probe-gated** — it falls back to plain process isolation where `bwrap` / unprivileged user-namespaces are unavailable (the net-namespace layer is separately probe-gated and opt-out via `sandbox.unshareNetwork=false`). Windows gets a Job Object memory cap; macOS relies on process isolation + the bridge.
 
 There is **no independent third-party audit** yet — internal red-team passes only. Don't treat the sandbox as "unbreakable"; treat it as designed to fail closed.
 
@@ -494,7 +497,12 @@ On Linux, a **default-on (opt-out)** layer
 additionally runs each plugin child as an **unprivileged uid with all capabilities dropped,
 `no-new-privs`, PID/IPC/UTS namespaces, and a read-only filesystem** (probe-validated per host,
 default-on — opt out with `sandbox.useKernelHardening=false` — a no-op on Windows/macOS), **plus a `seccomp` syscall denylist** (`EPERM` on
-`ptrace`/`mount`/`kexec`/`keyctl`/`userfaultfd`/… — syscalls a Node app/plugin never issues). The
+`ptrace`/`mount`/`kexec`/`keyctl`/`userfaultfd`/… — syscalls a Node app/plugin never issues). A plugin
+**without** the `network` grant is additionally dropped into an **empty network namespace**
+(`--unshare-net`, separately probe-gated; opt out via `sandbox.unshareNetwork=false`), so it cannot reach
+the cloud-metadata endpoint, host loopback, or the internet **at the kernel level** — not merely through
+the in-process egress guard; a network-*granted* plugin keeps its egress (bounded by the egress guard and
+any per-plugin host allowlist). The
 read-only-filesystem confinement covers what `Landlock` would add, so the Landlock LSM itself isn't
 used (it would need a native dependency). (The uid-drop trades away privileged-port binding — a
 plugin needing a port `<1024` won't bind it under hardening.) A fail-closed mode
