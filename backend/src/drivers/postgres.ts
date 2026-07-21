@@ -124,12 +124,15 @@ function extractLastId(rows: any[]): any {
 }
 
 // Role/table/sequence names for the per-plugin isolation DDL are always slug-derived ([a-z0-9_]) or read
-// back from pg_catalog, but we validate before interpolating them into a `SET ROLE "…"` / GRANT statement
-// (which can't be parameterized) so a crafted slug or an unexpected catalog value can never inject SQL.
-function assertSafeIdent(name: string): void {
-    if (typeof name !== 'string' || !/^[a-z_][a-z0-9_]*$/.test(name) || name.length > 63) {
+// back from pg_catalog, but they're interpolated into `SET ROLE "…"` / GRANT statements (identifiers can't
+// be parameterized). Validate AND RETURN the value from the regex match — so the string used downstream
+// originates from the anchored allowlist regex (a barrier the SAST recognizes), never the tainted input.
+function safeIdent(name: string): string {
+    const m = /^[a-z_][a-z0-9_]*$/.exec(String(name));
+    if (!m || String(name).length > 63) {
         throw new Error(`unsafe SQL identifier for plugin role isolation: ${JSON.stringify(name)}`);
     }
+    return m[0];
 }
 
 class PostgresDriver extends DatabaseDriverInterface {
@@ -334,10 +337,10 @@ class PostgresDriver extends DatabaseDriverInterface {
     // bypassed. Identifiers are always slug-derived ([a-z0-9_]) but we re-validate as defense in depth.
     /** SET ROLE + run one query on a PINNED client + RESET ROLE — the role's GRANTs enforce table access. */
     async runAsRole(role: string, method: 'all' | 'get' | 'run', sql: string, params: any[] = []) {
-        assertSafeIdent(role);
+        const r = safeIdent(role);
         const client = await this.pool.connect();
         try {
-            await client.query(`SET ROLE "${role}"`);
+            await client.query(`SET ROLE "${r}"`);
             let normalizedSql = this.normalizeSql(sql);
             if (method === 'run' && /^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
                 normalizedSql += ' RETURNING *';
@@ -353,32 +356,33 @@ class PostgresDriver extends DatabaseDriverInterface {
     }
     /** Create the plugin's role (idempotent). Runs as the admin pool user (needs CREATEROLE). */
     async ensurePluginRole(role: string) {
-        assertSafeIdent(role);
-        await this.pool.query(`DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${role}') THEN CREATE ROLE "${role}" NOLOGIN NOINHERIT; END IF; END $do$;`);
+        const r = safeIdent(role);
+        await this.pool.query(`DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${r}') THEN CREATE ROLE "${r}" NOLOGIN NOINHERIT; END IF; END $do$;`);
         // A fresh role can reach NOTHING until GRANTed; give it only schema USAGE (tables are granted per-prefix).
-        await this.pool.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
+        await this.pool.query(`GRANT USAGE ON SCHEMA public TO "${r}"`);
         // The pool user must be a MEMBER of the role to `SET ROLE` to it (unless it's a superuser). Granting
         // membership is harmless — the role holds strictly FEWER privileges than the admin pool user.
-        await this.pool.query(`GRANT "${role}" TO CURRENT_USER`);
+        await this.pool.query(`GRANT "${r}" TO CURRENT_USER`);
     }
     /** GRANT the role CRUD on every existing wjp_<prefix> table + USAGE on their serial sequences. */
     async grantPluginPrefix(role: string, prefix: string) {
-        assertSafeIdent(role); assertSafeIdent(prefix.replace(/_+$/, ''));
+        const r = safeIdent(role);
+        safeIdent(prefix); // a wjp_<slug>_ prefix is itself a valid identifier (trailing _ is fine) — validate it
         const tbls = await this.pool.query(`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE $1`, [prefix + '%']);
-        for (const r of tbls.rows) { assertSafeIdent(r.tablename); await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "${r.tablename}" TO "${role}"`); }
+        for (const row of tbls.rows) { const tn = safeIdent(row.tablename); await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "${tn}" TO "${r}"`); }
         const seqs = await this.pool.query(`SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public' AND sequence_name LIKE $1`, [prefix + '%']);
-        for (const r of seqs.rows) { assertSafeIdent(r.sequence_name); await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE "${r.sequence_name}" TO "${role}"`); }
+        for (const row of seqs.rows) { const sn = safeIdent(row.sequence_name); await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE "${sn}" TO "${r}"`); }
     }
     /** GRANT the role CRUD on ONE newly-created table (called right after createTable). */
     async grantPluginTable(role: string, table: string) {
-        assertSafeIdent(role); assertSafeIdent(table);
-        await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "${table}" TO "${role}"`);
+        const r = safeIdent(role); const tn = safeIdent(table);
+        await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "${tn}" TO "${r}"`);
     }
     /** Drop the plugin's role on uninstall (best-effort; its tables are dropped separately). */
     async dropPluginRole(role: string) {
-        assertSafeIdent(role);
-        try { await this.pool.query(`DROP OWNED BY "${role}"`); } catch { /* role may own nothing */ }
-        await this.pool.query(`DROP ROLE IF EXISTS "${role}"`);
+        const r = safeIdent(role);
+        try { await this.pool.query(`DROP OWNED BY "${r}"`); } catch { /* role may own nothing */ }
+        await this.pool.query(`DROP ROLE IF EXISTS "${r}"`);
     }
 
     async getTables() {
