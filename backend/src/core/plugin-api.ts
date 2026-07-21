@@ -229,6 +229,17 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (raw.includes('$')) {
         throw new Error(`🛡️ Plugin DB access denied: '$' is not permitted in plugin SQL (dollar-quoting / dollar params); pass literal data via bound parameters (?).`);
     }
+    // Square brackets: SQLite treats `[...]` as identifier quoting and MySQL as a syntax error, but Postgres
+    // parses `[...]` as ARRAY SUBSCRIPTING whose index is a FULL expression — including a scalar subquery.
+    // lexSql collapses `[...]` to ONE opaque identifier token on every engine, so `v[(SELECT total FROM
+    // wjp_other_plugin_orders)]` launders a cross-plugin table reference past the toks-based prefix allowlist
+    // (the sole general table-attribution check) and Postgres then executes the subquery — a cross-plugin
+    // confidentiality break. Plugins never need bracket-quoted identifiers (the wjp_<slug>_ prefix + column
+    // names are [a-z0-9_]; use "…" for a reserved word). Deny `[`/`]` outright — same structural approach as
+    // `\` / `$` / `/*!`, and immune to the per-engine lexing divergence that opaque-token handling can't close.
+    if (raw.includes('[') || raw.includes(']')) {
+        throw new Error(`🛡️ Plugin DB access denied: square brackets [ ] are not permitted in plugin SQL; use "…" to quote an identifier, and bound parameters (?) for data.`);
+    }
     // ONE lexer pass recognizes comments + string literals + quoted identifiers TOGETHER, so attacker text
     // inside any of them can't splice out structure (the comment-vs-literal ordering bug #2 and the
     // quoted-identifier phantom-paren #1). `cleaned` = lowercased, comments/literals blanked; `toks` feeds
