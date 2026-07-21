@@ -108,7 +108,7 @@ export default async function SearchPage({ searchParams }: { searchParams: Promi
                                 </span>
                                 <span className="text-sm text-[var(--wjs-color-text-muted,#9ca3af)]">
                                     {post.date
-                                        ? new Date(post.date).toLocaleDateString("es-ES", { year: "numeric", month: "long", day: "numeric" })
+                                        ? new Date(post.date).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" })
                                         : ""}
                                 </span>
                             </div>

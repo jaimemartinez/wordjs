@@ -34,16 +34,16 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/themes", label: "nav.themes", icon: "fa-palette", cap: "switch_themes" },
     { href: "/admin/fonts", label: "nav.fonts", icon: "fa-font", cap: "manage_options" },
     { href: "/admin/settings", label: "nav.settings", icon: "fa-gear", cap: "manage_options" },
-    { href: "/admin/import", label: "Import", icon: "fa-file-import", cap: "manage_options" },
-    { href: "/admin/settings/backups", label: "Backups", icon: "fa-box-archive", cap: "manage_options" },
-    { href: "/admin/security", label: "Security", icon: "fa-lock", cap: "manage_options" },
-    { href: "/admin/hooks", label: "Hooks Registry", icon: "fa-microscope", cap: "manage_options" },
-    { href: "/admin/db-migration", label: "DB Migration", icon: "fa-database", cap: "manage_options" },
+    { href: "/admin/import", label: "nav.import", icon: "fa-file-import", cap: "manage_options" },
+    { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options" },
+    { href: "/admin/security", label: "nav.security", icon: "fa-lock", cap: "manage_options" },
+    { href: "/admin/hooks", label: "nav.hooks", icon: "fa-microscope", cap: "manage_options" },
+    { href: "/admin/db-migration", label: "nav.dbMigration", icon: "fa-database", cap: "manage_options" },
     // Outgoing webhooks — admin only (they can exfiltrate content changes), mirrors the backend isAdmin gate.
-    { href: "/admin/webhooks", label: "Webhooks", icon: "fa-bolt", cap: "manage_options" },
+    { href: "/admin/webhooks", label: "nav.webhooks", icon: "fa-bolt", cap: "manage_options" },
     // Self-service API tokens + account. cap 'read' → every logged-in user (tokens act with the user's own
     // permissions), including non-admins who reach the panel.
-    { href: "/admin/tokens", label: "API Tokens", icon: "fa-key", cap: "read" },
+    { href: "/admin/tokens", label: "nav.apiTokens", icon: "fa-key", cap: "read" },
     { href: "/admin/account", label: "nav.account", icon: "fa-user-gear", cap: "read" },
 ];
 
@@ -65,9 +65,9 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
     const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
 
     const languages = [
-        { code: 'es', label: 'Español', flag: '🇪🇸' },
-        { code: 'en', label: 'English', flag: '🇺🇸' },
-        { code: 'pt', label: 'Português', flag: '🇧🇷' },
+        { code: 'es', label: 'Español' },
+        { code: 'en', label: 'English' },
+        { code: 'pt', label: 'Português' },
     ];
 
     const currentLang = languages.find(l => l.code === language) || languages[0];
@@ -234,14 +234,14 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                 `}>
                     <div className="space-y-2">
                         <div className={`px-6 mb-3 ${isCollapsed ? "md:hidden block" : "block"}`}>
-                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500/80">Core</span>
+                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500/80">{t('nav.sectionCore')}</span>
                         </div>
                         {coreSectionItems.map((item) => renderMenuItem(item))}
                     </div>
 
                     <div className="space-y-2">
                         <div className={`px-6 mb-3 ${isCollapsed ? "md:hidden block" : "block"}`}>
-                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500/80">System</span>
+                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500/80">{t('nav.sectionSystem')}</span>
                         </div>
                         {managementSectionItems.map((item) => renderMenuItem(item))}
                     </div>
@@ -289,7 +289,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                                             }}
                                             className={`w-full px-5 py-3 text-left flex items-center gap-3 hover:bg-white/5 transition-colors text-sm ${language === lang.code ? 'bg-blue-600/20 text-blue-400 font-bold' : 'text-gray-300'}`}
                                         >
-                                            <span className="text-lg">{lang.flag}</span>
+                                            <span className="text-[11px] font-black uppercase tracking-wider w-7 text-center px-1.5 py-0.5 rounded-md bg-white/10">{lang.code.toUpperCase()}</span>
                                             <span>{lang.label}</span>
                                             {language === lang.code && <i className="fa-solid fa-check ml-auto text-blue-400"></i>}
                                         </button>
@@ -302,7 +302,7 @@ export default function Sidebar({ isOpen, onClose, isCollapsed = false }: Sideba
                             className="w-full px-4 py-3 bg-white/5 hover:bg-white/10 text-white text-sm rounded-2xl border border-white/5 flex items-center justify-between transition-all group hover:border-white/20"
                         >
                             <div className="flex items-center gap-3">
-                                <span className="text-lg leading-none grayscale group-hover:grayscale-0 transition-all">{currentLang.flag}</span>
+                                <span className="text-[11px] font-black uppercase tracking-wider w-7 text-center px-1.5 py-0.5 rounded-md bg-white/10 text-gray-300 group-hover:text-white transition-colors">{currentLang.code.toUpperCase()}</span>
                                 <span className="font-bold text-gray-400 group-hover:text-white transition-colors text-[11px] uppercase tracking-wider">{currentLang.label}</span>
                             </div>
                             <i className={`fa-solid fa-chevron-up text-[10px] text-gray-600 transition-transform duration-200 ${isLangMenuOpen ? 'rotate-180 text-blue-400' : ''}`}></i>

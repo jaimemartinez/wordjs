@@ -8,21 +8,21 @@ import { useToast } from "@/contexts/ToastContext";
 import { PageHeader, Button, EmptyState } from "@/components/ui";
 
 // Image Preview Modal
-function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => void }) {
+function ImagePreviewModal({ item, onClose, onRequestDelete }: { item: MediaItem; onClose: () => void; onRequestDelete: (id: number) => void }) {
     const { t } = useI18n();
     const { addToast } = useToast();
 
     if (!item) return null;
 
     const copyUrl = () => {
-        navigator.clipboard.writeText(item.guid);
+        navigator.clipboard.writeText(item.sourceUrl);
         addToast(t('media.url.copied'), "success");
     };
 
     return (
         <div className="fixed inset-0 z-[6000] flex items-center justify-center p-6 bg-black/90 backdrop-blur-md animate-in fade-in duration-300">
             <div className="absolute inset-0" onClick={onClose}></div>
-            <div className="relative bg-white rounded-[40px] overflow-hidden shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col md:flex-row animate-in zoom-in-95 duration-300">
+            <div className="relative bg-white rounded-[40px] overflow-y-auto md:overflow-hidden shadow-2xl max-w-5xl w-full max-h-[85vh] flex flex-col md:flex-row animate-in zoom-in-95 duration-300">
                 <div className="flex-1 bg-gray-100/50 flex items-center justify-center p-8 min-h-[300px] relative">
                     <div className="absolute inset-0 bg-[radial-gradient(#e5e7eb_1px,transparent_1px)] [background-size:16px_16px] opacity-50"></div>
                     {item.mimeType.startsWith('image/') ? (
@@ -38,7 +38,7 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
                     )}
                 </div>
                 <div className="w-full md:w-96 p-10 bg-white border-l border-gray-100 flex flex-col h-full overflow-y-auto">
-                    <button onClick={onClose} className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-900 flex items-center justify-center transition-colors">
+                    <button onClick={onClose} aria-label={t('common.close')} className="absolute top-6 right-6 w-10 h-10 rounded-full bg-gray-50 text-gray-400 hover:bg-gray-100 hover:text-gray-900 flex items-center justify-center transition-colors">
                         <i className="fa-solid fa-xmark text-lg"></i>
                     </button>
 
@@ -58,7 +58,7 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
                         <div>
                             <span className="text-[10px] font-black uppercase tracking-widest text-gray-400 block mb-2">URL</span>
                             <div className="bg-gray-50 rounded-xl p-3 border break-all text-xs font-mono text-gray-500 select-all border border-gray-200">
-                                {item.guid}
+                                {item.sourceUrl}
                             </div>
                         </div>
                     </div>
@@ -79,6 +79,12 @@ function ImagePreviewModal({ item, onClose }: { item: MediaItem; onClose: () => 
                         >
                             <i className="fa-solid fa-external-link-alt"></i> {t('media.open')}
                         </a>
+                        <button
+                            onClick={() => onRequestDelete(item.id)}
+                            className="w-full py-4 px-6 bg-red-50 hover:bg-red-600 text-red-600 hover:text-white rounded-2xl transition-all font-bold flex items-center justify-center gap-3 border border-red-100 hover:border-red-600"
+                        >
+                            <i className="fa-solid fa-trash-can"></i> {t('common.delete')}
+                        </button>
                     </div>
                 </div>
             </div>
@@ -116,7 +122,7 @@ export default function MediaPage() {
             setMedia(data);
         } catch (error) {
             console.error("Failed to load media:", error);
-            addToast("Failed to load media", "error");
+            addToast(t('media.load.failed'), "error");
         } finally {
             setLoading(false);
         }
@@ -214,7 +220,15 @@ export default function MediaPage() {
             />
 
             {previewItem && (
-                <ImagePreviewModal item={previewItem} onClose={() => setPreviewItem(null)} />
+                <ImagePreviewModal
+                    item={previewItem}
+                    onClose={() => setPreviewItem(null)}
+                    onRequestDelete={(id) => {
+                        setPreviewItem(null);
+                        setMediaToDelete(id);
+                        setDeleteModalOpen(true);
+                    }}
+                />
             )}
 
             {/* Drag Overlay */}
@@ -250,12 +264,14 @@ export default function MediaPage() {
                         <div className="flex bg-white rounded-2xl p-1.5 border-2 border-gray-100 shadow-sm">
                             <button
                                 onClick={() => setViewMode('grid')}
+                                aria-label={t('media.grid.view')}
                                 className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'grid' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
                             >
                                 <i className="fa-solid fa-grid-2"></i>
                             </button>
                             <button
                                 onClick={() => setViewMode('list')}
+                                aria-label={t('media.list.view')}
                                 className={`w-10 h-10 rounded-xl flex items-center justify-center text-sm transition-all duration-300 ${viewMode === 'list' ? 'bg-gray-100 text-gray-900 shadow-inner' : 'text-gray-400 hover:text-gray-600'}`}
                             >
                                 <i className="fa-solid fa-list"></i>
@@ -320,17 +336,19 @@ export default function MediaPage() {
                                     )}
 
                                     {/* Quick Actions Overlay */}
-                                    <div className="absolute inset-0 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 gap-3">
+                                    <div className="absolute inset-0 flex items-center justify-center opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity duration-300 gap-3">
                                         <button
                                             onClick={(e) => confirmDelete(e, item.id)}
-                                            className="w-12 h-12 bg-white text-red-500 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 hover:scale-110 hover:bg-red-50"
-                                            title="Eliminar"
+                                            className="w-12 h-12 bg-white text-red-500 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 md:translate-y-4 md:group-hover:translate-y-0 md:group-focus-within:translate-y-0 transition-all duration-300 hover:scale-110 hover:bg-red-50"
+                                            title={t('common.delete')}
+                                            aria-label={t('common.delete')}
                                         >
                                             <i className="fa-solid fa-trash-can"></i>
                                         </button>
                                         <button
-                                            className="w-12 h-12 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-4 group-hover:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
-                                            title="Ver"
+                                            className="w-12 h-12 bg-white text-blue-600 rounded-2xl shadow-xl flex items-center justify-center transform translate-y-0 md:translate-y-4 md:group-hover:translate-y-0 md:group-focus-within:translate-y-0 transition-all duration-300 delay-75 hover:scale-110 hover:bg-blue-50"
+                                            title={t('common.view')}
+                                            aria-label={t('common.view')}
                                         >
                                             <i className="fa-solid fa-eye"></i>
                                         </button>
@@ -357,11 +375,11 @@ export default function MediaPage() {
                             <table className="w-full text-left">
                                 <thead className="bg-gray-50/50 border-b border-gray-100">
                                     <tr>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Preview</th>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Name</th>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Type</th>
-                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">Date</th>
-                                        <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">Actions</th>
+                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.preview')}</th>
+                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.name')}</th>
+                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('media.type')}</th>
+                                        <th className="px-8 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.date')}</th>
+                                        <th className="px-8 py-6 text-right text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('common.actions')}</th>
                                     </tr>
                                 </thead>
                                 <tbody className="divide-y divide-gray-50">
@@ -388,7 +406,9 @@ export default function MediaPage() {
                                             <td className="px-8 py-4 text-right">
                                                 <button
                                                     onClick={(e) => confirmDelete(e, item.id)}
-                                                    className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 ml-auto opacity-0 group-hover:opacity-100 translate-x-2 group-hover:translate-x-0 duration-300"
+                                                    aria-label={t('common.delete')}
+                                                    title={t('common.delete')}
+                                                    className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-red-600 hover:text-white flex items-center justify-center transition-all shadow-sm hover:shadow-red-200 ml-auto opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 translate-x-0 md:translate-x-2 md:group-hover:translate-x-0 duration-300"
                                                 >
                                                     <i className="fa-solid fa-trash-can text-sm"></i>
                                                 </button>

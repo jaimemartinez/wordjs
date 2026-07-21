@@ -114,7 +114,7 @@ export default function RolesPage() {
     );
 
     return (
-        <div className="max-w-6xl mx-auto p-8">
+        <div className="max-w-6xl mx-auto p-8 h-full overflow-y-auto">
             <div className="flex flex-wrap justify-between items-center gap-4 mb-8">
                 <div>
                     <h1 className="text-3xl font-black text-gray-900 tracking-tight">{t('roles.title')}</h1>

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
 import Link from "next/link";
 
 interface Notification {
@@ -25,6 +26,7 @@ interface NotificationCenterProps {
 export default function NotificationCenter({ variant = 'floating', isCollapsed = false }: NotificationCenterProps) {
     const { user } = useAuth();
     const { addToast } = useToast();
+    const { t } = useI18n();
     const [notifications, setNotifications] = useState<Notification[]>([]);
     const [isOpen, setIsOpen] = useState(false);
     const unreadCount = useMemo(
@@ -122,7 +124,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
 
                     // Side-effects only fire for genuinely new frames (avoid double-toast
                     // on duplicate SSE deliveries).
-                    addToast(newNotification.title || "New Notification", "info");
+                    addToast(newNotification.title || t('notif.newNotification'), "info");
                     window.dispatchEvent(new CustomEvent('wordjs:notification', { detail: newNotification }));
                     if ("vibrate" in navigator) {
                         navigator.vibrate(100);
@@ -185,7 +187,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             });
             if (res.ok) {
                 setNotifications(prev => prev.map(n => ({ ...n, is_read: 1 })));
-                addToast("All notifications marked as read", "success");
+                addToast(t('notif.allMarkedRead'), "success");
             }
         } catch (error) {
             console.error("Mark all read error:", error);
@@ -268,7 +270,8 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
             <button
                 onClick={() => setIsOpen(!isOpen)}
                 className={`${buttonClasses} ${isOpen ? 'hidden md:flex' : 'flex'}`}
-                title={variant === 'inline' ? "Notifications" : undefined}
+                title={variant === 'inline' ? t('notif.title') : undefined}
+                aria-label={t('notif.title')}
             >
                 <div className="absolute inset-0 rounded-full bg-white opacity-0 group-hover:opacity-10 transition-opacity"></div>
                 {isOpen ? (
@@ -291,26 +294,28 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                     <div className="px-6 sm:px-10 py-8 flex items-center justify-between bg-white/50 border-b border-gray-50/50 flex-shrink-0">
                         <div className="flex flex-col gap-1">
                             <h3 className="text-xl sm:text-2xl font-black text-gray-900 tracking-tight flex items-center gap-3">
-                                Notifications
+                                {t('notif.title')}
                                 {unreadCount > 0 && (
                                     <span className="flex h-2 w-2 rounded-full bg-blue-500 shadow-[0_0_10px_rgba(59,130,246,0.5)]"></span>
                                 )}
                             </h3>
                             <p className="text-xs font-bold text-gray-400 uppercase tracking-[0.15em]">
-                                {unreadCount > 0 ? `${unreadCount} new messages` : 'Up to date'}
+                                {unreadCount > 0 ? `${unreadCount} ${t('notif.newMessages')}` : t('notif.upToDate')}
                             </p>
                         </div>
                         <div className="flex items-center gap-3">
                             <button
                                 onClick={markAllRead}
-                                title="Mark all as read"
+                                title={t('notif.markAllRead')}
+                                aria-label={t('notif.markAllRead')}
                                 className="w-11 h-11 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group"
                             >
                                 <i className="fa-solid fa-check-double text-sm transition-transform group-hover:scale-110"></i>
                             </button>
                             <button
                                 onClick={() => fetchNotifications()}
-                                title="Refresh"
+                                title={t('notif.refresh')}
+                                aria-label={t('notif.refresh')}
                                 className={`w-11 h-11 flex items-center justify-center rounded-2xl text-gray-400 hover:text-blue-600 hover:bg-blue-50/50 transition-all active:scale-95 group ${isRefreshing ? 'animate-spin text-blue-500' : ''}`}
                             >
                                 <i className="fa-solid fa-arrows-rotate text-sm transition-transform group-hover:rotate-45"></i>
@@ -319,7 +324,8 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                 <button
                                     onClick={() => setIsOpen(false)}
                                     className="w-11 h-11 flex items-center justify-center rounded-2xl bg-gray-50 text-gray-400 hover:text-red-500 hover:bg-red-50 transition-all active:scale-95 border border-gray-100/50 shadow-sm"
-                                    title="Close"
+                                    title={t('notif.close')}
+                                    aria-label={t('notif.close')}
                                 >
                                     <i className="fa-solid fa-xmark text-lg"></i>
                                 </button>
@@ -336,9 +342,9 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                     </div>
                                     <div className="absolute -inset-4 bg-blue-50/30 rounded-[48px] blur-2xl -z-0"></div>
                                 </div>
-                                <h4 className="text-xl font-black text-gray-900 mb-2">You&apos;re all set!</h4>
+                                <h4 className="text-xl font-black text-gray-900 mb-2">{t('notif.emptyTitle')}</h4>
                                 <p className="text-sm text-gray-400 font-medium leading-relaxed italic">
-                                    There are no new notifications to display right now. Check back later!
+                                    {t('notif.emptyBody')}
                                 </p>
                             </div>
                         ) : (
@@ -379,7 +385,8 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                                                 <button
                                                     onClick={(e) => deleteNotification(e, n.uuid)}
                                                     className="absolute -right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-rose-50 text-rose-500 opacity-0 group-hover:opacity-100 group-hover:right-4 transition-all duration-300 flex items-center justify-center hover:bg-rose-500 hover:text-white shadow-lg shadow-rose-200"
-                                                    title="Delete notification"
+                                                    title={t('notif.delete')}
+                                                    aria-label={t('notif.delete')}
                                                 >
                                                     <i className="fa-solid fa-trash-can text-sm"></i>
                                                 </button>
@@ -407,7 +414,7 @@ export default function NotificationCenter({ variant = 'floating', isCollapsed =
                     {notifications.length > 0 && (
                         <div className="px-10 py-8 bg-gray-50/30 flex items-center justify-center border-t border-gray-50/50">
                             <p className="text-[10px] font-black text-gray-400 uppercase tracking-[0.25em]">
-                                Notification History Ends Here
+                                {t('notif.historyEnd')}
                             </p>
                         </div>
                     )}

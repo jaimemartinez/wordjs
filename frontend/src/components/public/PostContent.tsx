@@ -112,7 +112,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                 <div className="w-full px-4 py-8">
                     <h1 className="text-4xl font-bold mb-8 text-center">{post.title}</h1>
                     <div
-                        className="wjs-content prose prose-lg max-w-none mx-auto"
+                        className="wjs-content prose prose-lg max-w-none mx-auto overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />
@@ -139,7 +139,7 @@ export default function PostContent({ post, settings, category, showComments }: 
                         </h1>
                     </div>
                     <div
-                        className="wjs-content prose prose-lg mx-auto p-8 rounded-2xl shadow-sm bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)]"
+                        className="wjs-content prose prose-lg mx-auto p-8 rounded-2xl shadow-sm bg-[var(--wjs-bg-surface,#ffffff)] border border-[var(--wjs-border-subtle,#e5e7eb)] overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto"
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(post.content) }}
                     />

@@ -46,8 +46,15 @@ export function Button({
     children,
     className = "",
     disabled,
+    type,
     ...props
 }: ButtonProps) {
+    // Icon-only buttons have no text label — require an accessible name so screen
+    // readers announce something. aria-label / title flow through `props`.
+    const isIconOnly = !!icon && !children;
+    if (process.env.NODE_ENV !== "production" && isIconOnly && !props["aria-label"] && !props.title) {
+        console.warn("Button: icon-only button is missing an accessible name — pass `aria-label` (or `title`).");
+    }
     const baseClasses =
         "font-black uppercase tracking-widest transition-all duration-300 active:scale-95 flex items-center justify-center";
 
@@ -59,6 +66,7 @@ export function Button({
 
     return (
         <button
+            type={type ?? "button"}
             className={`${baseClasses} ${variantClasses[variant]} ${sizeClasses[size]} ${className} ${disabled || loading ? "opacity-50 cursor-not-allowed" : ""
                 }`}
             disabled={disabled || loading}

@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import { useI18n } from "@/contexts/I18nContext";
 
 interface PageHeaderProps {
     title: string;
@@ -18,6 +19,7 @@ interface PageHeaderProps {
  * Matches the visual identity of conference-manager/db-migration plugins
  */
 export function PageHeader({ title, subtitle, icon, actions, backButton }: PageHeaderProps) {
+    const { t } = useI18n();
     return (
         <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12 flex-shrink-0">
             <div>
@@ -27,7 +29,7 @@ export function PageHeader({ title, subtitle, icon, actions, backButton }: PageH
                         className="flex items-center gap-2 text-gray-400 hover:text-gray-600 transition-colors mb-4 group"
                     >
                         <i className="fa-solid fa-arrow-left group-hover:-translate-x-1 transition-transform"></i>
-                        <span className="text-sm font-medium">{backButton.label || "Volver"}</span>
+                        <span className="text-sm font-medium">{backButton.label || t('common.back')}</span>
                     </button>
                 )}
                 <div className="flex items-center gap-4">
