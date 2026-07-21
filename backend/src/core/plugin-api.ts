@@ -113,7 +113,14 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
         // user_pass FROM users` stays fully visible to the table-scoping walker on every driver — closing
         // the MySQL-only comment-divergence scoping bypass.
         if (c === '-' && s[i + 1] === '-' && (i + 2 >= n || s[i + 2] === ' ' || s[i + 2] === '\t' || s[i + 2] === '\n' || s[i + 2] === '\r' || s[i + 2] === '\v' || s[i + 2] === '\f')) {
-            i += 2; while (i < n && s[i] !== '\n') i++; cleaned += ' '; continue;
+            // Terminate the comment body at `\n` OR a bare `\r`. Postgres' scanner defines newline as
+            // `[\n\r]`, so a lone carriage return ENDS a `--` comment there and the text after it runs as
+            // live SQL. Stopping only at `\n` (as before) let a plugin write `SELECT 1 -- x\rUNION SELECT
+            // user_pass FROM users`: the guard swallowed the whole tail (no `\n`) and saw only `SELECT 1`,
+            // while Postgres executed the UNION. Stopping at the STRICTEST terminator (`\r` too) keeps the
+            // tail visible to the table-scoping walker on every driver — SQLite/MySQL end `--` only at `\n`,
+            // so stopping earlier there just makes the guard see MORE structure (fail-safe).
+            i += 2; while (i < n && s[i] !== '\n' && s[i] !== '\r') i++; cleaned += ' '; continue;
         }
         if (c === '/' && s[i + 1] === '*') { i += 2; while (i < n && !(s[i] === '*' && s[i + 1] === '/')) i++; i += 2; cleaned += ' '; continue; } // /* block */
         if (c === "'") { // string literal ('' escapes a quote) — content is NEVER structure/keywords/tables
