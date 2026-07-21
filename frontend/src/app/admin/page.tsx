@@ -59,16 +59,21 @@ const QuickAction = ({ href, icon, label, subLabel, color }: { href: string, ico
 const HealthIndicator = ({ label, status, detail, icon }: { label: string, status: string, detail: string, icon: string }) => {
     const isOk = status === 'OK';
     const color = isOk ? 'emerald' : (status === 'WARNING' ? 'amber' : 'rose');
+    const C = {
+        emerald: { bg: 'bg-emerald-100', text: 'text-emerald-600', dot: 'bg-emerald-500' },
+        amber: { bg: 'bg-amber-100', text: 'text-amber-600', dot: 'bg-amber-500' },
+        rose: { bg: 'bg-rose-100', text: 'text-rose-600', dot: 'bg-rose-500' },
+    }[color];
 
     return (
         <div className="flex items-center gap-4 p-4 rounded-3xl bg-gray-50 border border-gray-100 group hover:bg-white hover:shadow-xl transition-all duration-300">
-            <div className={`w-10 h-10 rounded-2xl bg-${color}-100 text-${color}-600 flex items-center justify-center text-sm shadow-sm group-hover:scale-110 transition-transform`}>
+            <div className={`w-10 h-10 rounded-2xl ${C.bg} ${C.text} flex items-center justify-center text-sm shadow-sm group-hover:scale-110 transition-transform`}>
                 <i className={`fa-solid ${icon}`}></i>
             </div>
             <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between">
                     <p className="text-[10px] font-black uppercase tracking-widest text-gray-400">{label}</p>
-                    <span className={`flex h-2 w-2 rounded-full bg-${color}-500 animate-pulse`}></span>
+                    <span className={`flex h-2 w-2 rounded-full ${C.dot} animate-pulse`}></span>
                 </div>
                 <p className="text-xs font-bold text-gray-700 truncate">{detail}</p>
             </div>

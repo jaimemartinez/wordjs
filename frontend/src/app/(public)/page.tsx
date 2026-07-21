@@ -74,7 +74,7 @@ export default async function HomePage() {
         <div className="space-y-4">
             {siteJsonLd}
             <div className="border-b border-[var(--wjs-border-subtle,#e5e7eb)] pb-4 mb-8">
-                <h2 className="text-2xl font-bold text-[var(--wjs-color-heading,#1f2937)]">Latest Posts</h2>
+                <h1 className="text-2xl font-bold text-[var(--wjs-color-heading,#1f2937)]">Latest Posts</h1>
             </div>
 
             {published.length === 0 ? (
@@ -95,9 +95,9 @@ export default async function HomePage() {
                                 </div>
 
                                 <Link href={`/${post.slug || post.id}`} className="block group-hover:text-[var(--wjs-color-primary,#2563eb)] transition-colors">
-                                    <h3 className="text-3xl font-bold text-[var(--wjs-color-heading,#111827)] mb-4 leading-tight">
+                                    <h2 className="text-3xl font-bold text-[var(--wjs-color-heading,#111827)] mb-4 leading-tight">
                                         {post.title}
-                                    </h3>
+                                    </h2>
                                 </Link>
 
                                 <p className="text-[var(--wjs-color-text-muted,#4b5563)] mb-6 line-clamp-3 leading-relaxed">

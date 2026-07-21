@@ -28,8 +28,8 @@ export default function MenusPage() {
 
     // System Pages
     const systemPages = [
-        { title: 'Portal de Conferencias', url: '/portal/conference' },
-        { title: 'Login / Acceso', url: '/login' }
+        { title: t('menus.systemPortalConference'), url: '/portal/conference' },
+        { title: t('menus.systemLoginAccess'), url: '/login' }
     ];
     const [selectedSystemUrl, setSelectedSystemUrl] = useState<string>("");
 
@@ -231,6 +231,28 @@ export default function MenusPage() {
         }
     };
 
+    // Reorder a menu item by swapping positions with its neighbour and persisting
+    // the new `order` values via the existing update API. Index-based so it stays
+    // correct even if stored orders are sparse or duplicated.
+    const moveItem = async (item: MenuItem, direction: 'up' | 'down') => {
+        if (!activeMenu || !activeMenuId) return;
+        const sorted = [...activeMenu.items].sort((a, b) => a.order - b.order);
+        const idx = sorted.findIndex(i => i.id === item.id);
+        const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+        if (idx === -1 || swapIdx < 0 || swapIdx >= sorted.length) return;
+        const neighbor = sorted[swapIdx];
+        try {
+            await Promise.all([
+                menusApi.updateItem(item.id, { order: swapIdx }),
+                menusApi.updateItem(neighbor.id, { order: idx }),
+            ]);
+            loadMenu(activeMenuId);
+            addToast(t('menus.reorderSuccess'), "success");
+        } catch {
+            addToast(t('menus.itemUpdatedError'), "error");
+        }
+    };
+
     return (
         <div className="p-8 md:p-12 h-full overflow-auto bg-gray-50/50 flex flex-col pb-20">
             <ConfirmationModal
@@ -279,7 +301,8 @@ export default function MenusPage() {
                                 onClick={confirmDeleteMenu}
                                 disabled={!activeMenuId}
                                 className="w-12 h-12 bg-red-50 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all disabled:opacity-50 flex items-center justify-center shadow-lg hover:shadow-red-500/30 hover:-translate-y-1 transform"
-                                title="Eliminar Menú"
+                                title={t('menus.deleteMenu')}
+                                aria-label={t('menus.deleteMenu')}
                             >
                                 <i className="fa-solid fa-trash-can"></i>
                             </button>
@@ -296,7 +319,7 @@ export default function MenusPage() {
                                     className="flex-1 bg-gray-50 border-2 border-gray-100 rounded-xl px-4 py-3 text-sm font-bold text-gray-700 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 focus:outline-none transition-all placeholder:font-normal"
                                     required
                                 />
-                                <button type="submit" className="w-12 h-12 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl transition-all shadow-xl hover:shadow-blue-500/30 hover:-translate-y-1 flex items-center justify-center">
+                                <button type="submit" aria-label={t('menus.createMenuButton')} className="w-12 h-12 bg-gray-900 hover:bg-blue-600 text-white rounded-2xl transition-all shadow-xl hover:shadow-blue-500/30 hover:-translate-y-1 flex items-center justify-center">
                                     <i className="fa-solid fa-plus"></i>
                                 </button>
                             </form>
@@ -437,7 +460,7 @@ export default function MenusPage() {
                                     {activeMenu ? activeMenu.name : t('menus.menuStructure')}
                                 </h2>
                                 <p className="text-sm font-bold text-gray-400 uppercase tracking-wide">
-                                    {activeMenu ? t('menus.dragToReorder') : t('menus.selectMenuToStart')}
+                                    {activeMenu ? t('menus.reorderHint') : t('menus.selectMenuToStart')}
                                 </p>
                             </div>
                             {activeMenu && (
@@ -486,16 +509,31 @@ export default function MenusPage() {
                                 </div>
                             ) : (
                                 <div className="space-y-4 max-w-3xl mx-auto">
-                                    {[...activeMenu.items].sort((a, b) => a.order - b.order).map((item) => (
+                                    {[...activeMenu.items].sort((a, b) => a.order - b.order).map((item, index, arr) => (
                                         <div
                                             key={item.id}
                                             className={`group bg-white rounded-2xl shadow-sm hover:shadow-xl transition-all duration-300 ${editingItemId === item.id ? 'border-2 border-blue-500 ring-4 ring-blue-500/10 z-20 relative scale-[1.02]' : 'border border-gray-100 hover:border-blue-200 hover:-translate-y-1'}`}
                                         >
                                             {/* Item Header */}
-                                            <div className="p-4 pl-6 flex items-center justify-between cursor-move md:cursor-grab active:cursor-grabbing">
+                                            <div className="p-4 pl-6 flex items-center justify-between">
                                                 <div className="flex items-center gap-5">
-                                                    <div className="text-gray-300 hover:text-blue-500 transition-colors cursor-grab active:cursor-grabbing p-2">
-                                                        <i className="fa-solid fa-grip-vertical text-lg"></i>
+                                                    <div className="flex flex-col">
+                                                        <button
+                                                            onClick={() => moveItem(item, 'up')}
+                                                            disabled={index === 0}
+                                                            aria-label={t('menus.moveUp')}
+                                                            className="w-7 h-6 flex items-center justify-center text-gray-300 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                                                        >
+                                                            <i className="fa-solid fa-chevron-up text-sm"></i>
+                                                        </button>
+                                                        <button
+                                                            onClick={() => moveItem(item, 'down')}
+                                                            disabled={index === arr.length - 1}
+                                                            aria-label={t('menus.moveDown')}
+                                                            className="w-7 h-6 flex items-center justify-center text-gray-300 hover:text-blue-500 disabled:opacity-30 disabled:hover:text-gray-300 disabled:cursor-not-allowed transition-colors"
+                                                        >
+                                                            <i className="fa-solid fa-chevron-down text-sm"></i>
+                                                        </button>
                                                     </div>
                                                     <div>
                                                         <span className="font-bold text-gray-800 block text-base mb-1">{item.title}</span>

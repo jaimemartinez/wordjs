@@ -48,10 +48,16 @@ export default function PublicLayoutShell({
     return (
         <ActivePluginsProvider>
             <div className="min-h-screen flex flex-col" style={{ backgroundColor: 'var(--wjs-bg-canvas, #f8fafc)' }}>
+                <a
+                    href="#main-content"
+                    className="sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100] focus:px-4 focus:py-2 focus:rounded-lg focus:bg-[var(--wjs-color-primary,#2563eb)] focus:text-[var(--wjs-color-on-primary,#ffffff)] focus:shadow-lg"
+                >
+                    Skip to content
+                </a>
                 <ThemeLoader initialSlug={themeSlug} />
                 <ThemeTokenOverlay mods={mods} />
                 <Header initialMenu={headerMenu} initialSettings={settings} />
-                <main className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>
+                <main id="main-content" className="flex-1 pt-24 pb-10 container mx-auto px-4" style={mainStyle}>
                     <SidebarLayout enabled={sidebar}>{children}</SidebarLayout>
                 </main>
                 <Footer previewSettings={settings} previewMenu={footerMenu} previewSocials={footerSocials} />

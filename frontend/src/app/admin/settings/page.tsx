@@ -149,14 +149,14 @@ export default function SettingsPage() {
                                 </div>
                                 <div className="flex-1">
                                     <h3 className="text-sm font-bold text-gray-900 mb-2">{t('settings.site.logo')}</h3>
-                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">{t('settings.site.logo')}</p>
+                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">{t('settings.site.logo.help')}</p>
                                     <button
                                         type="button"
                                         onClick={() => setActivePicker("logo")}
                                         className="bg-white hover:bg-gray-50 text-gray-700 font-bold px-5 py-2.5 rounded-xl border-2 border-gray-100 transition-all flex items-center gap-2 text-sm shadow-sm"
                                     >
                                         <i className="fa-solid fa-cloud-arrow-up text-blue-500"></i>
-                                        {settings.site_logo ? t('settings.select.logo') : t('settings.select.logo')}
+                                        {settings.site_logo ? t('settings.change.logo') : t('settings.select.logo')}
                                     </button>
                                 </div>
                             </div>
@@ -188,14 +188,14 @@ export default function SettingsPage() {
                                 </div>
                                 <div className="flex-1">
                                     <h3 className="text-sm font-bold text-gray-900 mb-2">{t('settings.site.icon')}</h3>
-                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">{t('settings.site.icon')}</p>
+                                    <p className="text-sm text-gray-500 mb-4 leading-relaxed">{t('settings.site.icon.help')}</p>
                                     <button
                                         type="button"
                                         onClick={() => setActivePicker("icon")}
                                         className="bg-white hover:bg-gray-50 text-gray-700 font-bold px-5 py-2.5 rounded-xl border-2 border-gray-100 transition-all flex items-center gap-2 text-sm shadow-sm"
                                     >
                                         <i className="fa-solid fa-wand-magic-sparkles text-purple-500"></i>
-                                        {settings.site_icon ? t('settings.select.icon') : t('settings.select.icon')}
+                                        {settings.site_icon ? t('settings.change.icon') : t('settings.select.icon')}
                                     </button>
                                 </div>
                             </div>
@@ -298,6 +298,9 @@ export default function SettingsPage() {
                                     </div>
                                     <button
                                         type="button"
+                                        role="switch"
+                                        aria-checked={settings.users_can_register === "1"}
+                                        aria-label={t('settings.membership')}
                                         onClick={() => setSettings({ ...settings, users_can_register: settings.users_can_register === "1" ? "0" : "1" })}
                                         className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.users_can_register === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
                                     >
@@ -334,6 +337,9 @@ export default function SettingsPage() {
                                 </div>
                                 <button
                                     type="button"
+                                    role="switch"
+                                    aria-checked={settings.comments_enabled === "1"}
+                                    aria-label={t('settings.comments.enable')}
                                     onClick={() => setSettings({ ...settings, comments_enabled: settings.comments_enabled === "1" ? "0" : "1" })}
                                     className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-amber-500 focus:ring-offset-2 ${settings.comments_enabled === "1" ? 'bg-amber-500' : 'bg-gray-200'}`}
                                 >
@@ -355,6 +361,9 @@ export default function SettingsPage() {
                                 </div>
                                 <button
                                     type="button"
+                                    role="switch"
+                                    aria-checked={settings.comment_registration === "1"}
+                                    aria-label={t('settings.comments.registered')}
                                     onClick={() => setSettings({ ...settings, comment_registration: settings.comment_registration === "1" ? "0" : "1" })}
                                     className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:ring-offset-2 ${settings.comment_registration === "1" ? 'bg-emerald-500' : 'bg-gray-200'}`}
                                 >
@@ -385,6 +394,9 @@ export default function SettingsPage() {
                                 </div>
                                 <button
                                     type="button"
+                                    role="switch"
+                                    aria-checked={settings.redis_cache_enabled === "1"}
+                                    aria-label={t('settings.redis.cache')}
                                     onClick={() => setSettings({ ...settings, redis_cache_enabled: settings.redis_cache_enabled === "1" ? "0" : "1" })}
                                     className={`relative inline-flex h-7 w-12 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${settings.redis_cache_enabled === "1" ? 'bg-blue-500' : 'bg-gray-200'}`}
                                 >

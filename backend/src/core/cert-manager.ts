@@ -461,6 +461,63 @@ class CertManager {
      * Get Current Gateway Config & Cert Info
      */
     /**
+     * Monolith-mode config: read the port + TLS state served by monolith.js directly from the process
+     * env and the on-disk cert it presents (mirrors monolith.js resolveSSL's lookup order), instead of
+     * probing a gateway that doesn't exist in this deployment. Never throws — always returns a shape the
+     * UI can render, tagged source:'monolith'.
+     */
+    getMonolithConfig(defaultResult: any): any {
+        const httpOnly = process.env.WORDJS_HTTP === '1';
+        const result: any = {
+            ...defaultResult,
+            gatewayPort: Number(process.env.PORT) || defaultResult.gatewayPort,
+            sslEnabled: !httpOnly,
+            source: 'monolith',
+        };
+
+        if (httpOnly) {
+            result.certInfo = { message: 'Serving plain HTTP this session (WORDJS_HTTP=1) — no TLS certificate in use.' };
+            return result;
+        }
+
+        try {
+            const GATEWAY = path.resolve(__dirname, '../../../gateway');
+            let certPath: string | null = null;
+
+            // 1) An operator-configured cert referenced by gateway-config.json, then 2) the shared
+            // auto self-signed cert monolith.js and the gateway both use.
+            try {
+                const gw = JSON.parse(fs.readFileSync(path.join(GATEWAY, 'gateway-config.json'), 'utf8'));
+                if (gw && gw.ssl && gw.ssl.cert) {
+                    const p = path.resolve(GATEWAY, gw.ssl.cert);
+                    if (fs.existsSync(p)) certPath = p;
+                }
+            } catch { /* no gateway-config.json → fall through to the auto cert */ }
+            if (!certPath) {
+                const auto = path.join(GATEWAY, 'ssl-auto.crt');
+                if (fs.existsSync(auto)) certPath = auto;
+            }
+
+            if (certPath) {
+                const x509 = new (require('crypto').X509Certificate)(fs.readFileSync(certPath));
+                const issuer = String(x509.issuer || '');
+                const subject = String(x509.subject || '');
+                const cn = (subject.match(/CN=([^\n,]+)/) || [])[1] || 'localhost';
+                const issuerCn = (issuer.match(/CN=([^\n,]+)/) || [])[1] || issuer || cn;
+                let type = 'custom';
+                if (/let'?s encrypt/i.test(issuer)) type = 'letsencrypt';
+                else if (issuer === subject) type = 'self-signed';
+                result.certInfo = { commonName: cn, issuer: issuerCn, validTo: x509.validTo, type };
+            } else {
+                result.certInfo = { message: 'HTTPS is on but the served certificate could not be located on disk.' };
+            }
+        } catch {
+            result.certInfo = { message: 'HTTPS is on (certificate details unavailable in monolith mode).' };
+        }
+        return result;
+    }
+
+    /**
      * Get Current Gateway Config & Cert Info via Internal API
      */
     async getConfig(): Promise<any> {
@@ -471,6 +528,15 @@ class CertManager {
             siteUrl: null,
             source: 'fallback'
         };
+
+        // Monolith mode: there is NO separate gateway process on :3100, so the mTLS probe below would
+        // always fail with "Gateway Unreachable". In this deployment SSL + port are owned by monolith.js
+        // (PORT / WORDJS_HTTP env + the shared cert), read once at boot — there is no live gateway config
+        // API to talk to. Report the real local state and tag source:'monolith' so the UI renders it as
+        // read-only info instead of a connection error.
+        if (process.env.WORDJS_MODE === 'mono' || process.env.WORDJS_EMBEDDED === '1') {
+            return this.getMonolithConfig(defaultResult);
+        }
 
         try {
             // Read backend config to find cert paths for mTLS
