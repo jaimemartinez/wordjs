@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import qrcode from "qrcode-generator";
 import { mfaApi, MfaStatus } from "@/lib/api";
 import { useToast } from "@/contexts/ToastContext";
+import { useI18n } from "@/contexts/I18nContext";
 import { Button } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
 
@@ -14,6 +15,11 @@ import SecretRevealModal from "@/components/SecretRevealModal";
  */
 export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {}) {
     const { addToast } = useToast();
+    const { t } = useI18n();
+    const uid = useId();
+    const enrollCodeId = `${uid}-enroll-code`;
+    const manualKeyId = `${uid}-manual-key`;
+    const manageCodeId = `${uid}-manage-code`;
     const [status, setStatus] = useState<MfaStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [busy, setBusy] = useState(false);
@@ -30,7 +36,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
 
     const loadStatus = async () => {
         try { setStatus(await mfaApi.status()); }
-        catch (e: any) { addToast(e?.message || "Failed to load MFA status", "error"); }
+        catch (e: any) { addToast(e?.message || t("mfa.loadFailed"), "error"); }
         finally { setLoading(false); }
     };
     useEffect(() => { loadStatus(); }, []);
@@ -44,7 +50,7 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
             qr.make();
             setEnroll({ secret, qr: qr.createDataURL(5, 4) });
             setCode("");
-        } catch (e: any) { addToast(e?.message || "Could not start setup", "error"); }
+        } catch (e: any) { addToast(e?.message || t("mfa.setupFailed"), "error"); }
         finally { setBusy(false); }
     };
 
@@ -57,9 +63,9 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
             setEnrolledPendingClose(true); // fire onEnabled when the user closes the backup-codes modal
             setEnroll(null);
             setCode("");
-            addToast("Two-factor authentication enabled", "success");
+            addToast(t("mfa.enabledToast"), "success");
             await loadStatus();
-        } catch (e: any) { addToast(e?.message || "Invalid code — check your device clock", "error"); }
+        } catch (e: any) { addToast(e?.message || t("mfa.invalidCodeClock"), "error"); }
         finally { setBusy(false); }
     };
 
@@ -67,10 +73,10 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
         setBusy(true);
         try {
             await mfaApi.disable(manageCode.trim());
-            addToast("Two-factor authentication disabled", "success");
+            addToast(t("mfa.disabledToast"), "success");
             setManageCode("");
             await loadStatus();
-        } catch (e: any) { addToast(e?.message || "Invalid authentication code", "error"); }
+        } catch (e: any) { addToast(e?.message || t("mfa.invalidCode"), "error"); }
         finally { setBusy(false); }
     };
 
@@ -80,9 +86,9 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
             const res = await mfaApi.regenerateBackupCodes(manageCode.trim());
             setBackupReveal(res.backupCodes.join("\n"));
             setManageCode("");
-            addToast("New backup codes generated", "success");
+            addToast(t("mfa.backupRegenerated"), "success");
             await loadStatus();
-        } catch (e: any) { addToast(e?.message || "Invalid authentication code", "error"); }
+        } catch (e: any) { addToast(e?.message || t("mfa.invalidCode"), "error"); }
         finally { setBusy(false); }
     };
 
@@ -95,64 +101,64 @@ export default function MfaSetup({ onEnabled }: { onEnabled?: () => void } = {})
                     <i className="fa-solid fa-shield-halved"></i>
                 </div>
                 <div>
-                    <h2 className="text-lg font-black italic tracking-tight text-gray-800">Two-Factor Authentication</h2>
-                    <p className="text-xs text-gray-400">An authenticator app code (TOTP) required at sign-in.</p>
+                    <h2 className="text-lg font-black italic tracking-tight text-gray-800">{t("mfa.title")}</h2>
+                    <p className="text-xs text-gray-400">{t("mfa.subtitle")}</p>
                 </div>
                 {status && (
                     <span className={`ml-auto text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-full ${status.enabled ? "bg-emerald-50 text-emerald-600" : "bg-gray-100 text-gray-400"}`}>
-                        {status.enabled ? "Enabled" : "Off"}
+                        {status.enabled ? t("mfa.statusEnabled") : t("mfa.statusOff")}
                     </span>
                 )}
             </div>
 
             {loading ? (
-                <p className="text-sm text-gray-400 mt-4">Loading…</p>
+                <p className="text-sm text-gray-400 mt-4">{t("common.loading")}</p>
             ) : enroll ? (
                 // ── enrollment: show the QR + secret, then verify a code ──
                 <form onSubmit={confirmEnroll} className="mt-6 space-y-5">
-                    <p className="text-sm text-gray-500">Scan this with your authenticator app, or enter the key manually, then type the 6-digit code it shows.</p>
+                    <p className="text-sm text-gray-500">{t("mfa.enrollInstructions")}</p>
                     <div className="flex flex-col sm:flex-row gap-6 items-center">
                         {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img src={enroll.qr} alt="TOTP QR code" width={180} height={180} className="rounded-xl border border-gray-100" />
+                        <img src={enroll.qr} alt={t("mfa.qrAlt")} width={180} height={180} className="rounded-xl border border-gray-100" />
                         <div className="flex-1 w-full">
-                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Manual entry key</label>
-                            <code className="block break-all bg-gray-50 rounded-xl px-3 py-2 font-mono text-xs text-gray-600 mb-4">{enroll.secret}</code>
-                            <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">6-digit code</label>
-                            <input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" className={codeInput} required />
+                            <label htmlFor={manualKeyId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.manualKey")}</label>
+                            <code id={manualKeyId} className="block break-all bg-gray-50 rounded-xl px-3 py-2 font-mono text-xs text-gray-600 mb-4">{enroll.secret}</code>
+                            <label htmlFor={enrollCodeId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.codeLabel")}</label>
+                            <input id={enrollCodeId} value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456" className={codeInput} required />
                         </div>
                     </div>
                     <div className="flex gap-3">
-                        <Button type="submit" icon="fa-check" loading={busy}>Verify &amp; enable</Button>
-                        <Button type="button" variant="secondary" onClick={() => { setEnroll(null); setCode(""); }}>Cancel</Button>
+                        <Button type="submit" icon="fa-check" loading={busy}>{t("mfa.verifyEnable")}</Button>
+                        <Button type="button" variant="secondary" onClick={() => { setEnroll(null); setCode(""); }}>{t("common.cancel")}</Button>
                     </div>
                 </form>
             ) : status?.enabled ? (
                 // ── enabled: manage (disable / regenerate backup codes) ──
                 <div className="mt-6 space-y-4">
                     <p className="text-sm text-gray-500">
-                        {status.backupCodesRemaining} backup code{status.backupCodesRemaining === 1 ? "" : "s"} remaining.
+                        {(status.backupCodesRemaining === 1 ? t("mfa.backupRemaining.one") : t("mfa.backupRemaining.other")).replace("{count}", String(status.backupCodesRemaining))}
                     </p>
                     <div>
-                        <label className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">Enter a current code to make changes</label>
-                        <input value={manageCode} onChange={(e) => setManageCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder="123456 or a backup code" className={codeInput} />
+                        <label htmlFor={manageCodeId} className="block text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t("mfa.enterCurrentCode")}</label>
+                        <input id={manageCodeId} value={manageCode} onChange={(e) => setManageCode(e.target.value)} inputMode="numeric" autoComplete="one-time-code" placeholder={t("mfa.codePlaceholder")} className={codeInput} />
                     </div>
                     <div className="flex flex-wrap gap-3">
-                        <Button variant="secondary" icon="fa-rotate" onClick={regenerate} loading={busy} disabled={!manageCode.trim()}>Regenerate backup codes</Button>
-                        <Button variant="danger" icon="fa-shield-halved" onClick={disable} loading={busy} disabled={!manageCode.trim()}>Disable 2FA</Button>
+                        <Button variant="secondary" icon="fa-rotate" onClick={regenerate} loading={busy} disabled={!manageCode.trim()}>{t("mfa.regenerate")}</Button>
+                        <Button variant="danger" icon="fa-shield-halved" onClick={disable} loading={busy} disabled={!manageCode.trim()}>{t("mfa.disable")}</Button>
                     </div>
                 </div>
             ) : (
                 // ── off: offer to enable ──
                 <div className="mt-6">
-                    <p className="text-sm text-gray-500 mb-4">Protect your account with a time-based code from an authenticator app (Google Authenticator, 1Password, Authy, …).</p>
-                    <Button icon="fa-plus" onClick={startEnroll} loading={busy}>Enable two-factor authentication</Button>
+                    <p className="text-sm text-gray-500 mb-4">{t("mfa.offDescription")}</p>
+                    <Button icon="fa-plus" onClick={startEnroll} loading={busy}>{t("mfa.enable")}</Button>
                 </div>
             )}
 
             <SecretRevealModal
                 secret={backupReveal}
-                title="Your backup codes"
-                description="Each code works once if you lose access to your authenticator. Store them somewhere safe."
+                title={t("mfa.backupTitle")}
+                description={t("mfa.backupDescription")}
                 onClose={() => {
                     setBackupReveal(null);
                     if (enrolledPendingClose) { setEnrolledPendingClose(false); onEnabled?.(); }

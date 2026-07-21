@@ -66,18 +66,20 @@ export default function CommentsSection({ postId }: { postId: number }) {
         }
     };
 
-    if (loading) return <div className="py-8 text-center text-gray-500">Loading comments...</div>;
+    if (loading) return <div className="py-8 text-center text-[var(--wjs-color-text-muted,#6b7280)]">Loading comments...</div>;
+
+    const inputClass = "w-full px-4 py-2 border border-[var(--wjs-border-subtle,#e5e7eb)] rounded-lg bg-[var(--wjs-bg-surface,#fff)] text-[var(--wjs-color-text-main,#111827)] focus:ring-2 focus:ring-[var(--wjs-color-primary,#2563eb)] focus:border-transparent outline-none transition";
 
     return (
-        <div className="max-w-3xl mx-auto py-12 px-4 border-t border-gray-100 mt-12 bg-gray-50/50 rounded-xl">
-            <h3 className="text-2xl font-bold text-gray-900 mb-8">
+        <div className="max-w-3xl mx-auto py-12 px-4 border-t border-[var(--wjs-border-subtle,#e5e7eb)] mt-12 bg-[var(--wjs-bg-muted,#f9fafb)] rounded-xl">
+            <h3 className="text-2xl font-bold text-[var(--wjs-color-heading,#111827)] mb-8">
                 Comments ({comments.length})
             </h3>
 
             {/* Comments List */}
             <div className="space-y-8 mb-12">
                 {comments.length === 0 ? (
-                    <p className="text-gray-500 italic">No comments yet. Be the first to share your thoughts!</p>
+                    <p className="text-[var(--wjs-color-text-muted,#6b7280)] italic">No comments yet. Be the first to share your thoughts!</p>
                 ) : (
                     comments.map((comment) => (
                         <div key={comment.id} className="flex gap-4">
@@ -89,14 +91,14 @@ export default function CommentsSection({ postId }: { postId: number }) {
                                 />
                             </div>
                             <div className="flex-1 min-w-0">
-                                <div className="bg-white p-4 rounded-lg shadow-sm border border-gray-100">
+                                <div className="bg-[var(--wjs-bg-surface,#fff)] p-4 rounded-lg shadow-sm border border-[var(--wjs-border-subtle,#e5e7eb)]">
                                     <div className="flex justify-between items-start mb-2 gap-2">
-                                        <h4 className="font-bold text-gray-900 break-words min-w-0">{comment.author}</h4>
-                                        <span className="text-xs text-gray-500 shrink-0">
+                                        <h4 className="font-bold text-[var(--wjs-color-heading,#111827)] break-words min-w-0">{comment.author}</h4>
+                                        <span className="text-xs text-[var(--wjs-color-text-muted,#6b7280)] shrink-0">
                                             {new Date(comment.date).toLocaleDateString()}
                                         </span>
                                     </div>
-                                    <div className="prose prose-sm text-gray-700 max-w-none break-words" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
+                                    <div className="prose prose-sm text-[var(--wjs-color-text-main,#374151)] max-w-none break-words overflow-x-auto [&_table]:block [&_table]:overflow-x-auto [&_pre]:overflow-x-auto" dangerouslySetInnerHTML={{ __html: sanitizeHTML(comment.content) }} />
                                 </div>
                             </div>
                         </div>
@@ -105,17 +107,17 @@ export default function CommentsSection({ postId }: { postId: number }) {
             </div>
 
             {/* Comment Form */}
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100">
-                <h4 className="text-lg font-bold text-gray-900 mb-4">Leave a Reply</h4>
+            <div className="bg-[var(--wjs-bg-surface,#fff)] p-6 rounded-xl shadow-sm border border-[var(--wjs-border-subtle,#e5e7eb)]">
+                <h4 className="text-lg font-bold text-[var(--wjs-color-heading,#111827)] mb-4">Leave a Reply</h4>
 
                 {error && (
-                    <div className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4">
+                    <div role="alert" aria-live="polite" className="bg-red-50 text-red-600 p-3 rounded-lg text-sm mb-4">
                         {error}
                     </div>
                 )}
 
                 {successMessage && (
-                    <div className="bg-green-50 text-green-600 p-3 rounded-lg text-sm mb-4">
+                    <div role="alert" aria-live="polite" className="bg-green-50 text-green-600 p-3 rounded-lg text-sm mb-4">
                         {successMessage}
                     </div>
                 )}
@@ -123,49 +125,56 @@ export default function CommentsSection({ postId }: { postId: number }) {
                 <form onSubmit={handleSubmit} className="space-y-4">
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Name *</label>
+                            <label htmlFor="comment-author-name" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Name *</label>
                             <input
+                                id="comment-author-name"
                                 type="text"
                                 required
+                                aria-invalid={!!error && !authorName.trim()}
                                 value={authorName}
                                 onChange={(e) => setAuthorName(e.target.value)}
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                                className={inputClass}
                             />
                         </div>
                         <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Email *</label>
+                            <label htmlFor="comment-author-email" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Email *</label>
                             <input
+                                id="comment-author-email"
                                 type="email"
                                 required
+                                aria-invalid={!!error && !authorEmail.trim()}
                                 value={authorEmail}
                                 onChange={(e) => setAuthorEmail(e.target.value)}
-                                className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                                className={inputClass}
                             />
                         </div>
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Website</label>
+                        <label htmlFor="comment-author-url" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Website</label>
                         <input
+                            id="comment-author-url"
                             type="url"
                             value={authorUrl}
                             onChange={(e) => setAuthorUrl(e.target.value)}
-                            className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                            className={inputClass}
                         />
                     </div>
                     <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-1">Comment *</label>
+                        <label htmlFor="comment-content" className="block text-sm font-medium text-[var(--wjs-color-text-main,#374151)] mb-1">Comment *</label>
                         <textarea
+                            id="comment-content"
                             required
                             rows={4}
+                            aria-invalid={!!error && !content.trim()}
                             value={content}
                             onChange={(e) => setContent(e.target.value)}
-                            className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition"
+                            className={inputClass}
                         ></textarea>
                     </div>
                     <button
                         type="submit"
                         disabled={submitting}
-                        className="px-6 py-2 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 disabled:opacity-50 transition shadow-sm"
+                        className="px-6 py-2 bg-[var(--wjs-color-primary,#2563eb)] text-[var(--wjs-color-on-primary,#ffffff)] font-medium rounded-lg hover:opacity-90 disabled:opacity-50 transition shadow-sm"
                     >
                         {submitting ? "Posting..." : "Post Comment"}
                     </button>

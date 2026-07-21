@@ -67,7 +67,7 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
                     <div className="col-span-1 md:col-span-2">
                         {settings.site_logo || settings.blogname ? (
                             <h3 className="text-2xl font-bold mb-4 flex items-center gap-2">
-                                {settings.site_logo && <img src={settings.site_logo} alt="Logo" className="h-8 w-auto" />}
+                                {settings.site_logo && <img src={settings.site_logo} alt="Logo" width={128} height={32} className="h-8 w-auto" />}
                                 {settings.blogname}
                             </h3>
                         ) : null}
@@ -113,8 +113,9 @@ export default function Footer({ previewSettings, previewMenu, previewSocials }:
                                             rel="noopener noreferrer"
                                             className="w-10 h-10 rounded-full bg-[var(--wjs-bg-surface-hover,rgb(31,41,55))] flex items-center justify-center hover:bg-[var(--wjs-color-primary,blue)] text-[var(--wjs-color-text-footer-main,white)] transition-colors tooltip-trigger"
                                             title={link.platform}
+                                            aria-label={link.platform}
                                         >
-                                            <i className={link.icon}></i>
+                                            <i className={link.icon} aria-hidden="true"></i>
                                         </a>
                                     ))}
                                 </div>

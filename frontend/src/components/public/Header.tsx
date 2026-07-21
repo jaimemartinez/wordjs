@@ -127,7 +127,7 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
                 <div className="wjs-header-container container mx-auto px-4 flex justify-between items-center">
                     <Link href="/" className="wjs-header-logo flex items-center gap-2">
                         {logoUrl ? (
-                            <img src={logoUrl} alt={siteTitle} className="h-10 w-auto object-contain" />
+                            <img src={logoUrl} alt={siteTitle} width={160} height={40} className="h-10 w-auto object-contain" />
                         ) : siteTitle ? (
                             <span className="text-2xl font-bold text-[var(--wjs-color-text-main,gray)]">
                                 {siteTitle}
@@ -136,7 +136,7 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
                     </Link>
 
                     {/* Desktop Navigation */}
-                    <nav className="wjs-header-nav hidden md:flex items-center gap-8">
+                    <nav aria-label="Primary" className="wjs-header-nav hidden md:flex items-center gap-8">
                         {menuItems.length > 0 ? (
                             menuItems.map((item) => (
                                 <Link
@@ -157,6 +157,8 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
                             className="md:hidden w-11 h-11 rounded-full bg-[var(--wjs-color-primary,#2F6D86)] text-[var(--wjs-color-on-primary,#ffffff)] flex items-center justify-center shadow-lg hover:bg-[var(--wjs-color-primary-dark,#266073)] transition-colors"
                             onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
                             aria-label="Toggle menu"
+                            aria-expanded={mobileMenuOpen}
+                            aria-controls="mobile-menu-panel"
                         >
                             {mobileMenuOpen ? (
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="currentColor" className="w-6 h-6">
@@ -181,6 +183,9 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
 
             {/* Mobile Menu Panel */}
             <div
+                id="mobile-menu-panel"
+                inert={!mobileMenuOpen}
+                aria-hidden={!mobileMenuOpen}
                 className={`fixed top-0 right-0 z-50 h-full w-72 bg-[var(--wjs-bg-surface,white)] shadow-2xl transform transition-transform duration-300 ease-out md:hidden ${mobileMenuOpen ? "translate-x-0" : "translate-x-full"
                     }`}
             >
@@ -199,14 +204,14 @@ export default function Header({ disableSticky = false, initialMenu, initialSett
                     {/* Logo in Mobile Menu */}
                     <div className="mb-8 pt-8">
                         {logoUrl ? (
-                            <img src={logoUrl} alt={siteTitle} className="h-8 w-auto object-contain" />
+                            <img src={logoUrl} alt={siteTitle} width={128} height={32} className="h-8 w-auto object-contain" />
                         ) : siteTitle ? (
                             <span className="text-xl font-bold text-[var(--wjs-color-heading,#1f2937)]">{siteTitle}</span>
                         ) : null}
                     </div>
 
                     {/* Mobile Menu Items */}
-                    <nav className="flex flex-col gap-4">
+                    <nav aria-label="Mobile" className="flex flex-col gap-4">
                         {menuItems.length > 0 ? (
                             menuItems.map((item) => (
                                 <Link

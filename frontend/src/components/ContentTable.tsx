@@ -28,10 +28,10 @@ interface ContentTableProps {
 }
 
 const STATUS_TABS = [
-    { key: "any", label: "All" },
-    { key: "publish", label: "Published" },
-    { key: "draft", label: "Drafts" },
-    { key: "pending", label: "Pending" },
+    { key: "any", labelKey: "table.status.all" },
+    { key: "publish", labelKey: "table.status.published" },
+    { key: "draft", labelKey: "table.status.drafts" },
+    { key: "pending", labelKey: "table.status.pending" },
 ];
 
 export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, newLabel }: ContentTableProps) {
@@ -77,7 +77,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
     const toggleAll = () => setSelected((s) => (s.size === items.length ? new Set<number>() : new Set(items.map((p) => p.id))));
 
     const handleDelete = async (ids: number[]) => {
-        const msg = ids.length === 1 ? (t('posts.delete.message') || 'Delete this item?') : `Delete ${ids.length} items? This cannot be undone.`;
+        const msg = ids.length === 1 ? (t('posts.delete.message') || 'Delete this item?') : t('table.delete.many').replace('{n}', String(ids.length));
         if (!await confirm(msg, t('posts.delete.title') || 'Confirm delete', true)) return;
         setBusy(true);
         const failed: number[] = [];
@@ -85,7 +85,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
             try { await postsApi.delete(id); } catch { failed.push(id); }
         }
         setBusy(false);
-        if (failed.length) await alert(`${failed.length} item(s) could not be deleted.`);
+        if (failed.length) await alert(t('table.delete.failed').replace('{n}', String(failed.length)));
         load();
     };
 
@@ -125,6 +125,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                         value={searchInput}
                         onChange={(e) => setSearchInput(e.target.value)}
                         placeholder={t('search') || 'Search…'}
+                        aria-label={t('search') || 'Search…'}
                         className="w-full pl-10 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-blue-100 focus:border-blue-300"
                     />
                 </div>
@@ -135,17 +136,17 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                             onClick={() => { setStatus(tab.key); setPage(1); }}
                             className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${status === tab.key ? 'bg-blue-600 text-white shadow' : 'text-gray-400 hover:text-gray-600'}`}
                         >
-                            {tab.label}
+                            {t(tab.labelKey)}
                         </button>
                     ))}
                 </div>
-                <span className="ml-auto text-[10px] font-black text-gray-400 uppercase tracking-widest">{total} total</span>
+                <span className="ml-auto text-[10px] font-black text-gray-400 uppercase tracking-widest">{total} {t('table.total')}</span>
             </div>
 
             {/* Bulk bar */}
             {selected.size > 0 && (
                 <div className="px-8 py-3 bg-blue-50/60 border-b border-blue-100 flex items-center gap-4 animate-in fade-in duration-200">
-                    <span className="text-xs font-bold text-blue-700">{selected.size} selected</span>
+                    <span className="text-xs font-bold text-blue-700">{selected.size} {t('table.selected')}</span>
                     <button
                         onClick={() => handleDelete(Array.from(selected))}
                         disabled={busy}
@@ -153,7 +154,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                     >
                         <i className="fa-solid fa-trash mr-1.5"></i>{t('delete') || 'Delete'}
                     </button>
-                    <button onClick={() => setSelected(new Set())} className="text-xs font-bold text-gray-400 hover:text-gray-600">Clear</button>
+                    <button onClick={() => setSelected(new Set())} className="text-xs font-bold text-gray-400 hover:text-gray-600">{t('table.clear')}</button>
                 </div>
             )}
 
@@ -180,6 +181,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                             <tr className="border-b border-gray-100/50 bg-gray-50/30">
                                 <th className="pl-8 pr-2 py-6 w-10">
                                     <input type="checkbox" checked={selected.size === items.length && items.length > 0} onChange={toggleAll}
+                                        aria-label={t('table.selectAll')}
                                         className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400" />
                                 </th>
                                 <th className="px-6 py-6 text-left text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('posts.title.field')}</th>
@@ -194,6 +196,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                                 <tr key={post.id} className={`group transition-colors ${selected.has(post.id) ? 'bg-blue-50/40' : 'hover:bg-blue-50/5'}`}>
                                     <td className="pl-8 pr-2 py-6">
                                         <input type="checkbox" checked={selected.has(post.id)} onChange={() => toggle(post.id)}
+                                            aria-label={t('table.selectRow').replace('{title}', post.title || `#${post.id}`)}
                                             className="w-4 h-4 rounded border-gray-300 text-blue-600 focus:ring-blue-400" />
                                     </td>
                                     <td className="px-6 py-6">
@@ -224,7 +227,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                                         <span className="text-sm font-bold text-gray-500">{new Date(post.date).toLocaleDateString()}</span>
                                     </td>
                                     <td className="px-6 py-6 text-right">
-                                        <div className="flex items-center justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity translate-x-0 md:translate-x-4 md:group-hover:translate-x-0 duration-300">
+                                        <div className="flex items-center justify-end gap-2 opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 focus-visible:opacity-100 transition-opacity translate-x-0 md:translate-x-4 md:group-hover:translate-x-0 md:group-focus-within:translate-x-0 duration-300">
                                             <a href={viewHref(post)} target="_blank" rel="noopener noreferrer"
                                                 className="w-10 h-10 rounded-xl bg-gray-50 text-gray-400 hover:bg-emerald-600 hover:text-white flex items-center justify-center transition-all shadow-sm"
                                                 title={post.status === 'publish' ? 'View' : 'Preview draft'}>
@@ -259,12 +262,12 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
                 <div className="px-8 py-5 border-t border-gray-100/50 bg-gray-50/30 flex items-center justify-between">
                     <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}
                         className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all">
-                        <i className="fa-solid fa-chevron-left mr-2"></i>Previous
+                        <i className="fa-solid fa-chevron-left mr-2"></i>{t('table.previous')}
                     </button>
-                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Page {page} of {totalPages}</span>
+                    <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('table.pageOf').replace('{page}', String(page)).replace('{total}', String(totalPages))}</span>
                     <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}
                         className="px-4 py-2 rounded-xl border border-gray-200 text-xs font-bold text-gray-600 hover:border-blue-400 hover:text-blue-600 disabled:opacity-40 transition-all">
-                        Next<i className="fa-solid fa-chevron-right ml-2"></i>
+                        {t('table.next')}<i className="fa-solid fa-chevron-right ml-2"></i>
                     </button>
                 </div>
             )}

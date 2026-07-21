@@ -34,14 +34,13 @@ export function StatCard({ icon, value, label, color = "blue", trend, onClick }:
     const colors = colorClasses[color];
     const isClickable = !!onClick;
 
-    return (
-        <div
-            className={`bg-white rounded-[40px] p-6 border border-gray-100 shadow-xl shadow-gray-100/50 group overflow-hidden relative ${isClickable
-                ? "cursor-pointer hover:shadow-2xl hover:-translate-y-1 transition-all duration-300"
-                : ""
-                }`}
-            onClick={onClick}
-        >
+    const cardClasses = `bg-white rounded-[40px] p-6 border border-gray-100 shadow-xl shadow-gray-100/50 group overflow-hidden relative ${isClickable
+        ? "cursor-pointer hover:shadow-2xl hover:-translate-y-1 transition-all duration-300 text-left w-full"
+        : ""
+        }`;
+
+    const inner = (
+        <>
             {/* Decorative background */}
             <div
                 className={`absolute -right-6 -bottom-6 w-24 h-24 ${colors.bg} rounded-full opacity-50 group-hover:scale-150 transition-transform duration-500`}
@@ -73,8 +72,18 @@ export function StatCard({ icon, value, label, color = "blue", trend, onClick }:
                     </span>
                 </div>
             </div>
-        </div>
+        </>
     );
+
+    if (isClickable) {
+        return (
+            <button type="button" onClick={onClick} className={cardClasses}>
+                {inner}
+            </button>
+        );
+    }
+
+    return <div className={cardClasses}>{inner}</div>;
 }
 
 export default StatCard;

@@ -132,8 +132,10 @@ function GatewayConfigForm() {
                 // 1. Get Config
                 let data = await apiGet<any>('/system/certs/config?t=' + Date.now());
 
-                // 2. If valid response but no cert, try to auto-generate (Self-Signed) via check
-                if (data && (!data.certInfo || data.certInfo.type === 'none')) {
+                // 2. If valid response but no cert, try to auto-generate (Self-Signed) via check.
+                // Skip in monolith mode: /check pushes a cert to the (nonexistent) gateway and would
+                // fail — mono manages its own cert at boot, so there is nothing to generate here.
+                if (data && data.source !== 'monolith' && (!data.certInfo || data.certInfo.type === 'none')) {
                     await apiPost('/system/certs/check', {});
                     // Reload config
                     data = await apiGet<any>('/system/certs/config?t=' + Date.now());
@@ -179,6 +181,76 @@ function GatewayConfigForm() {
                     <h3 className="font-bold text-lg mb-1">Error Loading Configuration</h3>
                     <p className="text-sm opacity-90">{config.error}</p>
                     <button onClick={() => window.location.reload()} className="text-sm font-bold underline mt-3 hover:text-red-800 dark:hover:text-red-300">Retry Connection</button>
+                </div>
+            </div>
+        );
+    }
+
+    // Monolith mode: a single process serves the site — there is no separate gateway to reconfigure at
+    // runtime. Present the live port + TLS state as read-only, with the current certificate, and explain
+    // where these are actually set (env / config at startup) instead of showing an editable form whose
+    // Save would try to reach a gateway that isn't running.
+    if (config.source === 'monolith') {
+        const ci = config.certInfo || {};
+        return (
+            <div className="space-y-6">
+                <div className="p-5 bg-indigo-50/70 dark:bg-indigo-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 flex items-start gap-4">
+                    <i className="fa-solid fa-circle-info text-xl text-indigo-500 mt-0.5"></i>
+                    <div className="text-sm text-indigo-900/90 dark:text-indigo-200">
+                        <h3 className="font-bold text-base mb-1">Monolith mode</h3>
+                        <p className="opacity-90 leading-relaxed">
+                            One process serves the whole site, so there&apos;s no separate gateway to configure here.
+                            The port and TLS are set at startup (the <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">PORT</code> and{" "}
+                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">WORDJS_HTTP</code> env vars, or{" "}
+                            <code className="font-mono text-xs bg-white/60 dark:bg-black/30 px-1.5 py-0.5 rounded">gateway-config.json</code>) and take effect on restart. Live changes and ACME are available in split / gateway deployments.
+                        </p>
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-2xl border border-gray-100 dark:border-gray-700">
+                        <span className="block text-xs uppercase tracking-wider text-gray-400 font-bold mb-1">Public Port</span>
+                        <span className="font-mono font-bold text-gray-800 dark:text-gray-200 text-lg">:{config.gatewayPort ?? 3000}</span>
+                    </div>
+                    <div className="p-4 bg-gray-50 dark:bg-gray-800/60 rounded-2xl border border-gray-100 dark:border-gray-700 flex items-center justify-between">
+                        <div>
+                            <span className="block text-xs uppercase tracking-wider text-gray-400 font-bold mb-1">TLS</span>
+                            <span className={`font-bold ${config.sslEnabled ? 'text-emerald-600' : 'text-gray-500'}`}>
+                                {config.sslEnabled ? 'HTTPS enabled' : 'HTTP (no TLS)'}
+                            </span>
+                        </div>
+                        <i className={`fa-solid ${config.sslEnabled ? 'fa-lock text-emerald-500' : 'fa-lock-open text-gray-400'} text-xl`}></i>
+                    </div>
+                </div>
+
+                <div className="bg-gradient-to-br from-indigo-50/80 to-purple-50/80 dark:from-indigo-900/20 dark:to-purple-900/20 rounded-2xl border border-indigo-100 dark:border-indigo-800 p-6 shadow-sm">
+                    <h4 className="text-sm font-bold text-indigo-900 dark:text-indigo-300 mb-4 flex items-center gap-2 uppercase tracking-wide">
+                        <i className="fa-solid fa-certificate"></i> Current Active Certificate
+                    </h4>
+                    {ci.commonName ? (
+                        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-6 text-sm">
+                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Domain</span>
+                                <span className="font-bold text-gray-800 dark:text-gray-200 truncate block" title={ci.commonName}>{ci.commonName}</span>
+                            </div>
+                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Issuer</span>
+                                <span className="font-medium text-gray-700 dark:text-gray-300 truncate block" title={ci.issuer}>{ci.issuer}</span>
+                            </div>
+                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Expiry</span>
+                                <span className={`font-bold ${ci.validTo && new Date(ci.validTo) < new Date() ? 'text-red-600' : 'text-emerald-600'}`}>
+                                    {ci.validTo ? new Date(ci.validTo).toLocaleDateString() : '-'}
+                                </span>
+                            </div>
+                            <div className="p-3 bg-white/60 dark:bg-black/20 rounded-xl border border-indigo-50 dark:border-indigo-900/50">
+                                <span className="block text-xs uppercase tracking-wider text-indigo-400 font-bold mb-1">Type</span>
+                                <span className={`font-bold capitalize ${ci.type === 'letsencrypt' ? 'text-blue-600' : 'text-gray-700 dark:text-gray-300'}`}>{ci.type}</span>
+                            </div>
+                        </div>
+                    ) : (
+                        <p className="text-gray-500 dark:text-gray-400 font-medium italic">{ci.message || 'No certificate details available.'}</p>
+                    )}
                 </div>
             </div>
         );

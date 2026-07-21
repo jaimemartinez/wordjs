@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useCallback, useRef } from "react";
 import { settingsApi, themesApi, Theme } from "@/lib/api";
+import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button } from "@/components/ui";
 
 // The single settings key that stores the live theme overlay. The public site SSR-injects this
@@ -21,45 +22,46 @@ interface TokenGroup {
     tokens: TokenDef[];
 }
 
+// `title` and `label` hold i18n keys resolved through t() at render time.
 const TOKEN_GROUPS: TokenGroup[] = [
     {
-        title: "Colors",
+        title: "customizer.group.colors",
         icon: "fa-palette",
         tokens: [
-            { key: "--wjs-color-primary", label: "Primary", kind: "color" },
-            { key: "--wjs-color-primary-dark", label: "Primary (dark)", kind: "color" },
-            { key: "--wjs-color-secondary", label: "Secondary", kind: "color" },
-            { key: "--wjs-color-accent", label: "Accent", kind: "color" },
-            { key: "--wjs-color-success", label: "Success", kind: "color" },
-            { key: "--wjs-color-danger", label: "Danger", kind: "color" },
-            { key: "--wjs-color-warning", label: "Warning", kind: "color" },
-            { key: "--wjs-color-info", label: "Info", kind: "color" },
-            { key: "--wjs-bg-canvas", label: "Canvas background", kind: "color" },
-            { key: "--wjs-bg-surface", label: "Surface background", kind: "color" },
-            { key: "--wjs-bg-muted", label: "Muted background", kind: "color" },
-            { key: "--wjs-color-text-main", label: "Body text", kind: "color" },
-            { key: "--wjs-color-text-muted", label: "Muted text", kind: "color" },
-            { key: "--wjs-color-heading", label: "Headings", kind: "color" },
-            { key: "--wjs-color-link", label: "Links", kind: "color" },
-            { key: "--wjs-border-subtle", label: "Subtle border", kind: "color" },
+            { key: "--wjs-color-primary", label: "customizer.token.primary", kind: "color" },
+            { key: "--wjs-color-primary-dark", label: "customizer.token.primaryDark", kind: "color" },
+            { key: "--wjs-color-secondary", label: "customizer.token.secondary", kind: "color" },
+            { key: "--wjs-color-accent", label: "customizer.token.accent", kind: "color" },
+            { key: "--wjs-color-success", label: "customizer.token.success", kind: "color" },
+            { key: "--wjs-color-danger", label: "customizer.token.danger", kind: "color" },
+            { key: "--wjs-color-warning", label: "customizer.token.warning", kind: "color" },
+            { key: "--wjs-color-info", label: "customizer.token.info", kind: "color" },
+            { key: "--wjs-bg-canvas", label: "customizer.token.bgCanvas", kind: "color" },
+            { key: "--wjs-bg-surface", label: "customizer.token.bgSurface", kind: "color" },
+            { key: "--wjs-bg-muted", label: "customizer.token.bgMuted", kind: "color" },
+            { key: "--wjs-color-text-main", label: "customizer.token.textMain", kind: "color" },
+            { key: "--wjs-color-text-muted", label: "customizer.token.textMuted", kind: "color" },
+            { key: "--wjs-color-heading", label: "customizer.token.heading", kind: "color" },
+            { key: "--wjs-color-link", label: "customizer.token.link", kind: "color" },
+            { key: "--wjs-border-subtle", label: "customizer.token.borderSubtle", kind: "color" },
         ],
     },
     {
-        title: "Typography",
+        title: "customizer.group.typography",
         icon: "fa-font",
         tokens: [
-            { key: "--wjs-font-family-base", label: "Base font family", kind: "text" },
-            { key: "--wjs-font-family-heading", label: "Heading font family", kind: "text" },
-            { key: "--wjs-font-size-base", label: "Base font size", kind: "text" },
-            { key: "--wjs-line-height-base", label: "Base line height", kind: "text" },
+            { key: "--wjs-font-family-base", label: "customizer.token.fontFamilyBase", kind: "text" },
+            { key: "--wjs-font-family-heading", label: "customizer.token.fontFamilyHeading", kind: "text" },
+            { key: "--wjs-font-size-base", label: "customizer.token.fontSizeBase", kind: "text" },
+            { key: "--wjs-line-height-base", label: "customizer.token.lineHeightBase", kind: "text" },
         ],
     },
     {
-        title: "Shape",
+        title: "customizer.group.shape",
         icon: "fa-shapes",
         tokens: [
-            { key: "--wjs-radius", label: "Border radius", kind: "text" },
-            { key: "--wjs-spacer", label: "Spacer", kind: "text" },
+            { key: "--wjs-radius", label: "customizer.token.radius", kind: "text" },
+            { key: "--wjs-spacer", label: "customizer.token.spacer", kind: "text" },
         ],
     },
 ];
@@ -90,6 +92,7 @@ function isHexColor(v: string): boolean {
 type SaveState = "idle" | "saving" | "saved" | "error";
 
 export default function ThemeCustomizerPage() {
+    const { t } = useI18n();
     // Active theme (for the heading). null until loaded.
     const [activeTheme, setActiveTheme] = useState<Theme | null>(null);
     // The user's current (unsaved) overrides, keyed by token. Only tokens the user edited live here.
@@ -100,6 +103,9 @@ export default function ThemeCustomizerPage() {
     const [loading, setLoading] = useState(true);
     const [saveState, setSaveState] = useState<SaveState>("idle");
     const [errorText, setErrorText] = useState<string | null>(null);
+    // Set when the preview iframe is cross-origin (split/separate deploy): reading its contentDocument
+    // throws a SecurityError, so seeding/injection can never work — surface a notice instead of polling forever.
+    const [previewBlocked, setPreviewBlocked] = useState(false);
 
     const iframeRef = useRef<HTMLIFrameElement>(null);
 
@@ -139,7 +145,7 @@ export default function ThemeCustomizerPage() {
                 }
             } catch (err) {
                 if (!cancelled) {
-                    setErrorText(err instanceof Error ? err.message : "Failed to load theme settings");
+                    setErrorText(err instanceof Error ? err.message : t("customizer.loadError"));
                 }
             } finally {
                 if (!cancelled) setLoading(false);
@@ -156,18 +162,24 @@ export default function ThemeCustomizerPage() {
     useEffect(() => {
         let done = false;
         const read = (): boolean => {
-            const doc = iframeRef.current?.contentDocument;
-            const win = iframeRef.current?.contentWindow;
-            if (!doc?.documentElement || !win) return false;
-            const cs = win.getComputedStyle(doc.documentElement);
-            const next: Record<string, string> = {};
-            for (const tok of ALL_TOKENS) {
-                const val = cs.getPropertyValue(tok.key).trim();
-                if (val) next[tok.key] = val;
+            try {
+                const doc = iframeRef.current?.contentDocument;
+                const win = iframeRef.current?.contentWindow;
+                if (!doc?.documentElement || !win) return false;
+                const cs = win.getComputedStyle(doc.documentElement);
+                const next: Record<string, string> = {};
+                for (const tok of ALL_TOKENS) {
+                    const val = cs.getPropertyValue(tok.key).trim();
+                    if (val) next[tok.key] = val;
+                }
+                if (Object.keys(next).length === 0) return false; // styles not applied yet
+                setSeeded(next);
+                return true;
+            } catch {
+                // Cross-origin preview (split/separate deploy): can't read the iframe. Stop polling.
+                setPreviewBlocked(true);
+                return true;
             }
-            if (Object.keys(next).length === 0) return false; // styles not applied yet
-            setSeeded(next);
-            return true;
         };
         if (read()) return;
         const timer = setInterval(() => {
@@ -197,16 +209,22 @@ export default function ThemeCustomizerPage() {
 
         let done = false;
         const apply = (): boolean => {
-            const doc = iframeRef.current?.contentDocument;
-            if (!doc?.head) return false;
-            let styleEl = doc.getElementById(STYLE_ID) as HTMLStyleElement | null;
-            if (!styleEl) {
-                styleEl = doc.createElement("style");
-                styleEl.id = STYLE_ID;
-                doc.head.appendChild(styleEl);
+            try {
+                const doc = iframeRef.current?.contentDocument;
+                if (!doc?.head) return false;
+                let styleEl = doc.getElementById(STYLE_ID) as HTMLStyleElement | null;
+                if (!styleEl) {
+                    styleEl = doc.createElement("style");
+                    styleEl.id = STYLE_ID;
+                    doc.head.appendChild(styleEl);
+                }
+                styleEl.textContent = css;
+                return true;
+            } catch {
+                // Cross-origin preview (split/separate deploy): can't inject styles. Stop polling.
+                setPreviewBlocked(true);
+                return true;
             }
-            styleEl.textContent = css;
-            return true;
         };
         if (apply()) done = true;
         const timer = setInterval(() => {
@@ -248,9 +266,9 @@ export default function ThemeCustomizerPage() {
             setSaveState("saved");
         } catch (err) {
             setSaveState("error");
-            setErrorText(err instanceof Error ? err.message : "Failed to save changes");
+            setErrorText(err instanceof Error ? err.message : t("customizer.saveError"));
         }
-    }, [overrides]);
+    }, [overrides, t]);
 
     const handleReset = useCallback(async () => {
         setSaveState("saving");
@@ -261,9 +279,9 @@ export default function ThemeCustomizerPage() {
             setSaveState("saved");
         } catch (err) {
             setSaveState("error");
-            setErrorText(err instanceof Error ? err.message : "Failed to reset");
+            setErrorText(err instanceof Error ? err.message : t("customizer.resetError"));
         }
-    }, []);
+    }, [t]);
 
     const hasOverrides = Object.keys(sanitizeMods(overrides)).length > 0;
 
@@ -272,13 +290,13 @@ export default function ThemeCustomizerPage() {
             <div className="max-w-7xl mx-auto">
                 <PageHeader
                     icon="fa-paintbrush"
-                    title="Customize"
+                    title={t("customizer.title")}
                     subtitle={
                         activeTheme
-                            ? `Active theme: ${activeTheme.name}`
+                            ? t("customizer.activeTheme").replace("{name}", activeTheme.name)
                             : loading
-                              ? "Loading theme…"
-                              : "Theme customizer"
+                              ? t("customizer.loadingTheme")
+                              : t("customizer.subtitle")
                     }
                     actions={
                         <>
@@ -288,7 +306,7 @@ export default function ThemeCustomizerPage() {
                                 onClick={handleReset}
                                 disabled={saveState === "saving" || !hasOverrides}
                             >
-                                Reset
+                                {t("customizer.reset")}
                             </Button>
                             <Button
                                 icon={saveState === "saved" ? "fa-circle-check" : "fa-floppy-disk"}
@@ -296,7 +314,7 @@ export default function ThemeCustomizerPage() {
                                 onClick={handleSave}
                                 disabled={saveState === "saving"}
                             >
-                                {saveState === "saved" ? "Saved" : "Save changes"}
+                                {saveState === "saved" ? t("customizer.saved") : t("customizer.saveChanges")}
                             </Button>
                         </>
                     }
@@ -322,7 +340,7 @@ export default function ThemeCustomizerPage() {
                                         <i className={`fa-solid ${group.icon}`}></i>
                                     </div>
                                     <h2 className="text-lg font-black text-gray-900 italic tracking-tight">
-                                        {group.title}
+                                        {t(group.title)}
                                     </h2>
                                 </div>
 
@@ -336,7 +354,7 @@ export default function ThemeCustomizerPage() {
                                                     htmlFor={tok.key}
                                                     className="block text-[10px] font-black uppercase tracking-widest text-gray-400"
                                                 >
-                                                    {tok.label}
+                                                    {t(tok.label)}
                                                     <span className="ml-2 normal-case font-mono font-medium text-gray-300 tracking-normal">
                                                         {tok.key}
                                                     </span>
@@ -345,7 +363,7 @@ export default function ThemeCustomizerPage() {
                                                     {tok.kind === "color" && (
                                                         <input
                                                             type="color"
-                                                            aria-label={`${tok.label} color picker`}
+                                                            aria-label={`${t(tok.label)} ${t("customizer.colorPicker")}`}
                                                             value={
                                                                 isHexColor(value)
                                                                     ? value
@@ -363,7 +381,7 @@ export default function ThemeCustomizerPage() {
                                                         id={tok.key}
                                                         type="text"
                                                         value={value}
-                                                        placeholder={placeholder || "theme default"}
+                                                        placeholder={placeholder || t("customizer.themeDefault")}
                                                         onChange={(e) =>
                                                             setToken(tok.key, e.target.value)
                                                         }
@@ -372,8 +390,8 @@ export default function ThemeCustomizerPage() {
                                                     {value && (
                                                         <button
                                                             type="button"
-                                                            title="Clear override"
-                                                            aria-label={`Clear ${tok.label} override`}
+                                                            title={t("customizer.clearOverride")}
+                                                            aria-label={t("customizer.clearOverrideAria").replace("{label}", t(tok.label))}
                                                             onClick={() => setToken(tok.key, "")}
                                                             className="shrink-0 w-9 h-9 rounded-xl text-gray-300 hover:text-rose-500 hover:bg-rose-50 transition-colors flex items-center justify-center"
                                                         >
@@ -400,21 +418,28 @@ export default function ThemeCustomizerPage() {
                                 </div>
                                 <span className="text-[10px] font-black uppercase tracking-widest text-gray-400">
                                     <i className="fa-solid fa-eye mr-2"></i>
-                                    Live preview
+                                    {t("customizer.livePreview")}
                                 </span>
                             </div>
+                            {previewBlocked && (
+                                <div className="px-6 py-3 bg-amber-50 border-b border-amber-100 text-amber-700 text-xs font-medium flex items-center gap-2 shrink-0">
+                                    <i className="fa-solid fa-triangle-exclamation"></i>
+                                    {t("customizer.previewUnavailable")}
+                                </div>
+                            )}
                             <iframe
                                 ref={iframeRef}
                                 src="/"
-                                title="Theme live preview"
+                                title={t("customizer.previewTitle")}
                                 className="flex-1 w-full border-0 bg-white"
                             />
                         </div>
                         <p className="mt-4 text-xs font-medium text-gray-400 px-2">
-                            Edits preview instantly here. Click{" "}
-                            <span className="font-bold text-gray-600">Save changes</span> to apply them
-                            to the live site, or <span className="font-bold text-gray-600">Reset</span>{" "}
-                            to remove all overrides.
+                            {t("customizer.help.pre")}
+                            <span className="font-bold text-gray-600">{t("customizer.saveChanges")}</span>
+                            {t("customizer.help.mid")}
+                            <span className="font-bold text-gray-600">{t("customizer.reset")}</span>
+                            {t("customizer.help.post")}
                         </p>
                     </div>
                 </div>

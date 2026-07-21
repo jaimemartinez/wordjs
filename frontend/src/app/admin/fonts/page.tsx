@@ -92,7 +92,10 @@ const FontFamilyCard = ({ family, variants, isSystem, onDelete }: FontFamilyCard
                         return (
                             <div
                                 key={font.filename}
+                                role="button"
+                                tabIndex={0}
                                 onClick={() => setActiveVariant(font)}
+                                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setActiveVariant(font); } }}
                                 className={`
                                     relative group/pill flex items-center gap-2 pl-3 pr-2 py-1.5 rounded-full text-sm font-medium transition-all cursor-pointer border select-none
                                     ${isActive
@@ -139,7 +142,7 @@ import { useModal } from "@/contexts/ModalContext";
 
 export default function FontsPage() {
     const [fonts, setFonts] = useState<any[]>([]);
-    const [, setLoading] = useState(true);
+    const [loading, setLoading] = useState(true);
     const [uploading, setUploading] = useState(false);
     const [searchQuery, setSearchQuery] = useState('');
     const { alert, confirm } = useModal();
@@ -280,7 +283,7 @@ export default function FontsPage() {
                     {...getRootProps()}
                     className={`border-2 border-dashed rounded-2xl p-10 text-center transition-all cursor-pointer group ${isDragActive
                         ? 'border-blue-500 bg-blue-50'
-                        : 'border-white border-gray-200 hover:border-gray-300 hover:bg-white shadow-sm'
+                        : 'border-gray-200 hover:border-gray-300 hover:bg-white shadow-sm'
                         }`}
                 >
                     <input {...getInputProps()} />
@@ -304,7 +307,12 @@ export default function FontsPage() {
                         <span className="bg-gray-200 text-gray-600 text-xs px-2 py-0.5 rounded-full">{Object.keys(groupedFonts).length}</span>
                     </h2>
 
-                    {Object.entries(groupedFonts).length === 0 ? (
+                    {loading ? (
+                        <div className="text-center py-20 bg-white rounded-2xl border border-gray-200 border-dashed">
+                            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600 mx-auto"></div>
+                            <p className="text-sm text-gray-400 mt-4">{t('fonts.loading')}</p>
+                        </div>
+                    ) : Object.entries(groupedFonts).length === 0 ? (
                         <div className="text-center py-20 bg-white rounded-2xl border border-gray-200 border-dashed">
                             <i className="fa-regular fa-folder-open text-4xl text-gray-300 mb-4 block"></i>
                             <p className="text-gray-400 font-medium">{t('fonts.emptyTitle')}</p>

@@ -59,7 +59,7 @@ export default function ImportPage() {
     const c = analysis?.counts;
 
     return (
-        <div className="max-w-4xl mx-auto px-4 py-8 space-y-8">
+        <div className="max-w-4xl mx-auto px-4 py-8 space-y-8 h-full overflow-y-auto">
             {/* Header */}
             <div className="flex items-start gap-4">
                 <div className="h-12 w-12 rounded-2xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-500/30 shrink-0">
@@ -82,7 +82,11 @@ export default function ImportPage() {
                 onDrop={(e) => { e.preventDefault(); setDragOver(false); onPick(e.dataTransfer.files?.[0] || null); }}
                 className={`rounded-2xl border-2 border-dashed transition-all p-8 text-center cursor-pointer
                     ${dragOver ? "border-blue-500 bg-blue-50" : "border-gray-200 bg-white hover:border-blue-300 hover:bg-gray-50"}`}
+                role="button"
+                tabIndex={0}
+                aria-label="Upload a WordPress WXR export file, or drop it here"
                 onClick={() => fileInputRef.current?.click()}
+                onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); fileInputRef.current?.click(); } }}
             >
                 <input
                     ref={fileInputRef}

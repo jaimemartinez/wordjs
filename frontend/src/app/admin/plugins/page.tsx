@@ -399,7 +399,7 @@ export default function PluginsPage() {
                             <h3 className="text-xl font-extrabold text-slate-900">{t('plugins.freeport.title')} {portConflictPrompt.conflict.port}?</h3>
                         </div>
 
-                        <div className="mb-6 text-slate-550 leading-relaxed space-y-3.5 text-xs font-semibold">
+                        <div className="mb-6 text-slate-500 leading-relaxed space-y-3.5 text-xs font-semibold">
                             <p>
                                 <strong className="text-slate-900 font-extrabold">{portConflictPrompt.conflict.occupant?.label || '?'}</strong>{' '}
                                 {t('plugins.freeport.holding')} <strong className="text-slate-900 font-extrabold">{portConflictPrompt.conflict.port}</strong>;{' '}
@@ -447,7 +447,7 @@ export default function PluginsPage() {
                             </div>
                             <h3 className="text-xl font-extrabold text-slate-900">Theme installed</h3>
                         </div>
-                        <div className="mb-6 text-slate-550 leading-relaxed space-y-3.5 text-xs font-semibold">
+                        <div className="mb-6 text-slate-500 leading-relaxed space-y-3.5 text-xs font-semibold">
                             <p>
                                 <strong className="text-slate-900 font-extrabold">{themeSwitchPrompt.pluginName}</strong>&apos;s theme is now installed as{' '}
                                 <code className="text-[10px] font-mono bg-violet-50 px-1 py-0.5 rounded">{themeSwitchPrompt.themeSlug}</code>.
@@ -485,7 +485,7 @@ export default function PluginsPage() {
                             <h3 className="text-xl font-extrabold text-slate-900">{t('plugins.delete.title')}</h3>
                         </div>
 
-                        <p className="mb-6 text-slate-650 text-xs font-semibold leading-relaxed">
+                        <p className="mb-6 text-slate-600 text-xs font-semibold leading-relaxed">
                             {t('plugins.delete.message')} <strong className="text-slate-900 font-extrabold">{pluginToDelete?.name}</strong>?
                         </p>
 
@@ -509,7 +509,7 @@ export default function PluginsPage() {
                         </div>
 
                         {/* Also drop the plugin's data/tables (rank 2). Default OFF — destructive & irreversible. */}
-                        <label className="mb-6 flex items-start gap-3 p-4 rounded-2xl border border-rose-150/40 bg-rose-50/40 cursor-pointer select-none hover:bg-rose-50/60 transition-colors shadow-sm">
+                        <label className="mb-6 flex items-start gap-3 p-4 rounded-2xl border border-rose-100/40 bg-rose-50/40 cursor-pointer select-none hover:bg-rose-50/60 transition-colors shadow-sm">
                             <input
                                 type="checkbox"
                                 className="mt-0.5 h-4 w-4 rounded border-slate-300 text-rose-600 focus:ring-rose-500/20"
@@ -615,14 +615,14 @@ export default function PluginsPage() {
                                     <p className="text-[10px] text-slate-400 font-mono mt-0.5 truncate">{detailPlugin.slug} · v{detailPlugin.version}</p>
                                 </div>
                             </div>
-                            <button onClick={() => setDetailPlugin(null)} className="p-2 text-slate-450 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all">
+                            <button onClick={() => setDetailPlugin(null)} className="p-2 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition-all">
                                 <FaTimes className="text-sm" />
                             </button>
                         </div>
 
                         <div className="p-6 overflow-y-auto flex-1 custom-scrollbar space-y-6">
                             <div>
-                                <p className="text-xs text-slate-650 font-semibold leading-relaxed">{detailPlugin.description || 'No description provided.'}</p>
+                                <p className="text-xs text-slate-600 font-semibold leading-relaxed">{detailPlugin.description || 'No description provided.'}</p>
                                 {(detailPlugin.author || detailPlugin.homepage) && (
                                     <div className="mt-4 space-y-2 text-xs font-semibold text-slate-500 bg-slate-50 border border-slate-100 rounded-2xl p-4 shadow-sm">
                                         {detailPlugin.author && <div><span className="font-extrabold text-slate-400">Author: </span><span className="text-slate-700">{detailPlugin.author}</span></div>}
@@ -641,7 +641,7 @@ export default function PluginsPage() {
                                 <div>
                                     <h4 className="text-[10px] font-black uppercase tracking-widest text-slate-400 mb-2.5">Runtime health</h4>
                                     {detailPlugin.runtime ? (
-                                        <div className="rounded-2xl border border-slate-150/60 bg-slate-50/50 p-4 space-y-3 shadow-inner">
+                                        <div className="rounded-2xl border border-slate-200/60 bg-slate-50/50 p-4 space-y-3 shadow-inner">
                                             {(() => {
                                                 const rm = RUNTIME_META[detailPlugin.runtime.state] || RUNTIME_META.stopped;
                                                 const rss = fmtMB(detailPlugin.runtime.rssBytes);
@@ -677,7 +677,7 @@ export default function PluginsPage() {
                                             <button
                                                 onClick={() => handleRestart(detailPlugin)}
                                                 disabled={!!restarting[detailPlugin.slug]}
-                                                className="mt-1 inline-flex items-center gap-2 text-xs font-extrabold uppercase tracking-widest px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-650 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-all hover:scale-102 active:scale-98 shadow-sm cursor-pointer"
+                                                className="mt-1 inline-flex items-center gap-2 text-xs font-extrabold uppercase tracking-widest px-4 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-600 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-50 transition-all hover:scale-102 active:scale-98 shadow-sm cursor-pointer"
                                             >
                                                 <FaSyncAlt className={restarting[detailPlugin.slug] ? 'animate-spin' : ''} /> Reload
                                             </button>
@@ -706,7 +706,7 @@ export default function PluginsPage() {
                                                             <span className="text-xs font-extrabold text-slate-800">{meta.label}</span>
                                                             <RiskBadge risk={meta.risk} />
                                                         </div>
-                                                        <span className="text-[9px] font-mono text-slate-450/80 font-bold block mt-0.5">{token}</span>
+                                                        <span className="text-[9px] font-mono text-slate-400/80 font-bold block mt-0.5">{token}</span>
                                                     </div>
                                                     <span className={`text-[8px] font-black uppercase tracking-wider px-2.5 py-1 rounded-full shadow-sm ${granted ? 'bg-emerald-600 text-white shadow-emerald-500/10' : 'bg-slate-200 text-slate-600'}`}>
                                                         {granted ? 'granted' : 'denied'}
@@ -739,7 +739,7 @@ export default function PluginsPage() {
 
                         {/* Scrollable Content */}
                         <div className="px-8 overflow-y-auto flex-1 custom-scrollbar">
-                            <p className="mb-5 text-slate-650 text-xs font-semibold leading-relaxed">
+                            <p className="mb-5 text-slate-600 text-xs font-semibold leading-relaxed">
                                 {t('plugins.requests.permissions')} <strong className="text-slate-900 font-extrabold">{pluginToActivate.name}</strong>:
                             </p>
 
@@ -759,7 +759,7 @@ export default function PluginsPage() {
                                 )}
                             </div>
 
-                            <p className="text-[10px] text-slate-450/90 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold">
+                            <p className="text-[10px] text-slate-400/90 mb-2 p-3 bg-blue-50/45 rounded-xl border border-blue-100/50 italic leading-relaxed font-semibold">
                                 By activating this plugin, you are granting it strict access to these system capabilities.
                             </p>
                         </div>
@@ -810,10 +810,10 @@ export default function PluginsPage() {
                                     const meta = permMeta(token);
                                     const highRisk = meta.risk === 'high';
                                     const activeClasses = highRisk ? 'bg-rose-50/80 border-rose-200/70 shadow-sm' : meta.risk === 'med' ? 'bg-amber-50/80 border-amber-200/70 shadow-sm' : 'bg-emerald-50/85 border-emerald-200/70 shadow-sm';
-                                    const knobOn = highRisk ? 'bg-rose-505 shadow-[0_0_6px_rgba(244,63,94,0.3)]' : meta.risk === 'med' ? 'bg-amber-500 shadow-[0_0_6px_rgba(251,191,36,0.3)]' : 'bg-emerald-500 shadow-[0_0_6px_rgba(52,211,153,0.3)]';
+                                    const knobOn = highRisk ? 'bg-rose-500 shadow-[0_0_6px_rgba(244,63,94,0.3)]' : meta.risk === 'med' ? 'bg-amber-500 shadow-[0_0_6px_rgba(251,191,36,0.3)]' : 'bg-emerald-500 shadow-[0_0_6px_rgba(52,211,153,0.3)]';
                                     const reason = reasonFor(permsModalPlugin, token);
                                     return (
-                                        <div key={token} className={`rounded-2xl border transition-all duration-300 ${on ? activeClasses : 'bg-slate-50/50 border-slate-150/60 hover:bg-slate-50'}`}>
+                                        <div key={token} className={`rounded-2xl border transition-all duration-300 ${on ? activeClasses : 'bg-slate-50/50 border-slate-200/60 hover:bg-slate-50'}`}>
                                             <button
                                                 onClick={() => toggleGrant(token)}
                                                 className="w-full flex items-start justify-between gap-3 p-4 text-left cursor-pointer"
@@ -828,7 +828,7 @@ export default function PluginsPage() {
                                                     {meta.description && <span className="block text-xs text-slate-600 font-medium leading-relaxed mt-1.5">{meta.description}</span>}
                                                     {reason && <span className="block text-xs text-slate-500 font-semibold leading-relaxed mt-1.5 italic"><span className="not-italic font-bold text-slate-400">Plugin says: </span>{reason}</span>}
                                                 </span>
-                                                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 shrink-0 mt-0.5 ${on ? knobOn.split(' ')[0] : 'bg-slate-350'}`}>
+                                                <span className={`relative inline-flex h-6 w-11 items-center rounded-full transition-all duration-300 shrink-0 mt-0.5 ${on ? knobOn.split(' ')[0] : 'bg-slate-300'}`}>
                                                     <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform duration-300 ${on ? 'translate-x-6' : 'translate-x-1'} shadow-sm`} />
                                                 </span>
                                             </button>
@@ -881,13 +881,13 @@ export default function PluginsPage() {
                     onClick={() => setTab('installed')}
                     className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${tab === 'installed' ? 'bg-white text-slate-900 shadow-md border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
                 >
-                    <FaPlug className="text-xs" /> Instalados
+                    <FaPlug className="text-xs" /> {t('plugins.tab.installed')}
                 </button>
                 <button
                     onClick={() => setTab('marketplace')}
                     className={`px-6 py-2.5 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 flex items-center gap-2 ${tab === 'marketplace' ? 'bg-white text-slate-900 shadow-md border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
                 >
-                    <FaStore className="text-xs" /> Marketplace
+                    <FaStore className="text-xs" /> {t('plugins.tab.marketplace')}
                 </button>
             </div>
 
@@ -918,7 +918,7 @@ export default function PluginsPage() {
                                 onClick={() => setStatusFilter(f)}
                                 className={`px-4 py-2 rounded-xl text-xs font-black uppercase tracking-wider transition-all duration-300 ${statusFilter === f ? 'bg-white text-slate-900 shadow-sm border border-slate-100/50' : 'text-slate-500 hover:text-slate-800'}`}
                             >
-                                {f}
+                                {t(`plugins.filter.${f}`)}
                             </button>
                         ))}
                     </div>

@@ -317,7 +317,7 @@ export default function BackupsPage() {
                                             {formatSize(backup.size)}
                                         </td>
                                         <td className="p-6 text-right">
-                                            <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                            <div className="flex items-center justify-end gap-2 opacity-100 focus-within:opacity-100 md:opacity-0 md:group-hover:opacity-100 md:group-focus-within:opacity-100 transition-opacity">
                                                 <button
                                                     onClick={() => backupsApi.download(backup.filename)}
                                                     className="p-2 hover:bg-blue-50 text-blue-600 rounded-lg transition-colors"
