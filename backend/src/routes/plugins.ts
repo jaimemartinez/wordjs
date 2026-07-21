@@ -668,6 +668,56 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
 
 /**
  * @swagger
+ * /plugins/{slug}/egress-hosts:
+ *   get:
+ *     summary: Get a plugin's egress allowlist (admin). Only meaningful for a network-granted plugin.
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ *   post:
+ *     summary: Set a plugin's egress allowlist (admin). Empty = allow all public hosts; non-empty = default-deny except listed hosts + their subdomains.
+ *     tags: [Plugins]
+ *     security: [{ bearerAuth: [] }]
+ */
+router.get('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    if (!validateSlug(req.params.slug as string)) return res.status(400).json({ error: 'Invalid plugin slug' });
+    const slug = req.params.slug;
+    const { getEgressAllowlist, getGrants } = require('../core/plugin-permissions');
+    res.json({ slug, hosts: getEgressAllowlist(slug), network: getGrants(slug).includes('network') });
+}));
+
+router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    if (!validateSlug(req.params.slug as string)) return res.status(400).json({ error: 'Invalid plugin slug' });
+    const slug = req.params.slug;
+    const { setEgressAllowlist, getEgressAllowlist } = require('../core/plugin-permissions');
+    // Body: { hosts: ["api.stripe.com", "*.example.com", ...] }. Invalid entries (schemes/paths/ports) are
+    // dropped by setEgressAllowlist. An empty array clears the list (back to allow-all-public).
+    const body = req.body || {};
+    const hosts: string[] = Array.isArray(body.hosts) ? body.hosts.map((h: any) => String(h)) : [];
+    await setEgressAllowlist(slug, hosts);
+
+    // Re-spawn the isolate so the child re-installs the new allowlist (pushed in cfg → egress-guard.setAllowedHosts).
+    let reloaded = false;
+    try {
+        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
+    } catch (e: any) {
+        console.warn(`[EgressHosts] reload of '${slug}' after egress change failed:`, e && e.message);
+    }
+
+    const saved = getEgressAllowlist(slug);
+    res.json({
+        success: true,
+        slug,
+        hosts: saved,
+        reloaded,
+        message: saved.length
+            ? `Egress allowlist set for '${slug}' (${saved.length} host(s); all other public hosts now denied).${reloaded ? ' Isolate reloaded — in effect.' : ' Reactivate the plugin to apply.'}`
+            : `Egress allowlist cleared for '${slug}' (all public hosts allowed again).${reloaded ? ' Isolate reloaded — in effect.' : ''}`,
+    });
+}));
+
+/**
+ * @swagger
  * /plugins/{slug}/reload:
  *   post:
  *     summary: Hot-reload an isolated plugin's child process (e.g. after editing its files)

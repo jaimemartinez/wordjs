@@ -20,6 +20,21 @@
 const grants = new Map<string, Set<string>>();
 let loaded = false;
 
+// slug -> list of egress hosts a NETWORK-granted plugin may reach (bare hostname or IP literal). EMPTY /
+// absent = allow-all-public (today's behavior, so a granted plugin with no list does NOT regress); a
+// non-empty list flips that plugin to default-DENY at the egress-guard (only listed hosts + subdomains).
+// Manifest-independent, admin-set, stored SERVER-SIDE in the `plugin_egress_hosts` option.
+const egressHosts = new Map<string, string[]>();
+
+// A valid egress-host entry: a bare hostname (optionally a leading '*.'/'.'), or an IP literal. NEVER a
+// scheme, path, port, query, or whitespace — those are rejected so a poisoned option can't smuggle a URL.
+const VALID_EGRESS_HOST = /^(?:\*\.)?(?:[a-z0-9_-]+\.)*[a-z0-9_-]+$/i;
+function isValidEgressHost(h: string): boolean {
+    if (!h || h.length > 253) return false;
+    if (require('net').isIP(h)) return true;
+    return VALID_EGRESS_HOST.test(h);
+}
+
 /** The literal token used for the network grant (no access level). */
 const NETWORK_TOKEN = 'network';
 
@@ -129,12 +144,63 @@ async function backfillActive(entries: Array<{ slug: string; requested: string[]
  */
 async function removeGrants(slug: string): Promise<void> {
     grants.delete(slug);
+    egressHosts.delete(slug);
     const { getOption, updateOption } = require('./options');
     const stored = (await getOption('plugin_grants', {})) || {};
     if (Object.prototype.hasOwnProperty.call(stored, slug)) {
         delete stored[slug];
         await updateOption('plugin_grants', stored);
     }
+    // Also clear the egress allowlist so re-uploading the same slug can't silently inherit an old policy.
+    const eStored = (await getOption('plugin_egress_hosts', {})) || {};
+    if (Object.prototype.hasOwnProperty.call(eStored, slug)) {
+        delete eStored[slug];
+        await updateOption('plugin_egress_hosts', eStored);
+    }
+}
+
+/** Load the persisted per-plugin egress allowlists into memory. Call once at boot, after the DB is up. */
+async function loadEgressHosts(): Promise<void> {
+    try {
+        const { getOption } = require('./options');
+        const stored = await getOption('plugin_egress_hosts', {});
+        egressHosts.clear();
+        if (stored && typeof stored === 'object') {
+            for (const [slug, list] of Object.entries(stored)) {
+                if (!Array.isArray(list)) continue;
+                const clean: string[] = [];
+                for (const raw of list) {
+                    const h = String(raw).toLowerCase().trim();
+                    if (isValidEgressHost(h)) clean.push(h);
+                    else console.warn(`[PluginPermissions] Dropping malformed egress host '${raw}' for plugin '${slug}' from plugin_egress_hosts.`);
+                }
+                egressHosts.set(String(slug), clean);
+            }
+        }
+    } catch (e: any) {
+        console.warn('[PluginPermissions] Failed to load plugin_egress_hosts option:', e && e.message);
+    }
+}
+
+/** The egress allowlist for a plugin (for the admin API and the spawn-time childCfg). Empty = allow-all. */
+function getEgressAllowlist(slug: string): string[] {
+    return Array.from(egressHosts.get(slug) || []);
+}
+
+/**
+ * Replace a plugin's egress allowlist (admin action). Persists to `plugin_egress_hosts` + mirrors in
+ * memory. Same no-self-grant guard as setGrants: a plugin/theme context may NEVER widen its own egress.
+ */
+async function setEgressAllowlist(slug: string, hosts: string[]): Promise<void> {
+    if (require('./plugin-context').getEffectivePlugin()) {
+        throw new Error('🛡️ setEgressAllowlist is not permitted from plugin/theme context.');
+    }
+    const clean = Array.from(new Set((hosts || []).map(h => String(h).toLowerCase().trim()).filter(isValidEgressHost)));
+    egressHosts.set(slug, clean);
+    const { getOption, updateOption } = require('./options');
+    const stored = (await getOption('plugin_egress_hosts', {})) || {};
+    stored[slug] = clean;
+    await updateOption('plugin_egress_hosts', stored);
 }
 
 // Test-only: set a plugin's grants in memory WITHOUT persisting, so unit tests can grant the
@@ -148,4 +214,4 @@ function _setGrantsInMemory(slug: string, tokens: string[]): void {
     grants.set(slug, new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
 }
 
-module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory };
+module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory, loadEgressHosts, getEgressAllowlist, setEgressAllowlist };
