@@ -4,7 +4,7 @@
  */
 
 const DatabaseDriverInterface = require('./interface');
-const { Pool } = require('pg');
+const { Pool, escapeIdentifier, escapeLiteral } = require('pg');
 const config = require('../config/app');
 
 /**
@@ -337,10 +337,10 @@ class PostgresDriver extends DatabaseDriverInterface {
     // bypassed. Identifiers are always slug-derived ([a-z0-9_]) but we re-validate as defense in depth.
     /** SET ROLE + run one query on a PINNED client + RESET ROLE — the role's GRANTs enforce table access. */
     async runAsRole(role: string, method: 'all' | 'get' | 'run', sql: string, params: any[] = []) {
-        const r = safeIdent(role);
+        const r = escapeIdentifier(safeIdent(role));
         const client = await this.pool.connect();
         try {
-            await client.query(`SET ROLE "${r}"`);
+            await client.query(`SET ROLE ${r}`);
             let normalizedSql = this.normalizeSql(sql);
             if (method === 'run' && /^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
                 normalizedSql += ' RETURNING *';
@@ -356,33 +356,34 @@ class PostgresDriver extends DatabaseDriverInterface {
     }
     /** Create the plugin's role (idempotent). Runs as the admin pool user (needs CREATEROLE). */
     async ensurePluginRole(role: string) {
-        const r = safeIdent(role);
-        await this.pool.query(`DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = '${r}') THEN CREATE ROLE "${r}" NOLOGIN NOINHERIT; END IF; END $do$;`);
+        const rLit = escapeLiteral(safeIdent(role));   // string literal form for the pg_roles lookup
+        const r = escapeIdentifier(safeIdent(role));   // quoted-identifier form for CREATE ROLE / GRANT
+        await this.pool.query(`DO $do$ BEGIN IF NOT EXISTS (SELECT FROM pg_roles WHERE rolname = ${rLit}) THEN CREATE ROLE ${r} NOLOGIN NOINHERIT; END IF; END $do$;`);
         // A fresh role can reach NOTHING until GRANTed; give it only schema USAGE (tables are granted per-prefix).
-        await this.pool.query(`GRANT USAGE ON SCHEMA public TO "${r}"`);
+        await this.pool.query(`GRANT USAGE ON SCHEMA public TO ${r}`);
         // The pool user must be a MEMBER of the role to `SET ROLE` to it (unless it's a superuser). Granting
         // membership is harmless — the role holds strictly FEWER privileges than the admin pool user.
-        await this.pool.query(`GRANT "${r}" TO CURRENT_USER`);
+        await this.pool.query(`GRANT ${r} TO CURRENT_USER`);
     }
     /** GRANT the role CRUD on every existing wjp_<prefix> table + USAGE on their serial sequences. */
     async grantPluginPrefix(role: string, prefix: string) {
-        const r = safeIdent(role);
+        const r = escapeIdentifier(safeIdent(role));
         safeIdent(prefix); // a wjp_<slug>_ prefix is itself a valid identifier (trailing _ is fine) — validate it
         const tbls = await this.pool.query(`SELECT tablename FROM pg_tables WHERE schemaname='public' AND tablename LIKE $1`, [prefix + '%']);
-        for (const row of tbls.rows) { const tn = safeIdent(row.tablename); await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "${tn}" TO "${r}"`); }
+        for (const row of tbls.rows) { const tn = escapeIdentifier(safeIdent(row.tablename)); await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tn} TO ${r}`); }
         const seqs = await this.pool.query(`SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema='public' AND sequence_name LIKE $1`, [prefix + '%']);
-        for (const row of seqs.rows) { const sn = safeIdent(row.sequence_name); await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE "${sn}" TO "${r}"`); }
+        for (const row of seqs.rows) { const sn = escapeIdentifier(safeIdent(row.sequence_name)); await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE ${sn} TO ${r}`); }
     }
     /** GRANT the role CRUD on ONE newly-created table (called right after createTable). */
     async grantPluginTable(role: string, table: string) {
-        const r = safeIdent(role); const tn = safeIdent(table);
-        await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON "${tn}" TO "${r}"`);
+        const r = escapeIdentifier(safeIdent(role)); const tn = escapeIdentifier(safeIdent(table));
+        await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tn} TO ${r}`);
     }
     /** Drop the plugin's role on uninstall (best-effort; its tables are dropped separately). */
     async dropPluginRole(role: string) {
-        const r = safeIdent(role);
-        try { await this.pool.query(`DROP OWNED BY "${r}"`); } catch { /* role may own nothing */ }
-        await this.pool.query(`DROP ROLE IF EXISTS "${r}"`);
+        const r = escapeIdentifier(safeIdent(role));
+        try { await this.pool.query(`DROP OWNED BY ${r}`); } catch { /* role may own nothing */ }
+        await this.pool.query(`DROP ROLE IF EXISTS ${r}`);
     }
 
     async getTables() {
