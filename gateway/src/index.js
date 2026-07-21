@@ -52,6 +52,11 @@ const logger = winston.createLogger({
     ]
 });
 
+// Strip CR/LF and other control chars from an UNTRUSTED value before interpolating it into a log line,
+// so a crafted cert CN / request URL / advertiseHost can't forge or split log entries (CWE-117 log
+// injection). The explicit \r / \n class is the recognized line-break barrier.
+const logSafe = (v) => String(v).replace(/[\r\n]/g, ' ').replace(/[\u0000-\u001f\u007f]/g, ' ');
+
 
 // --- GATEWAY CONFIG ---
 const REGISTRY_FILE = path.resolve(__dirname, '../gateway-registry.json');
@@ -414,12 +419,12 @@ if (cluster.isPrimary) {
                     // every group and re-adds nothing) — a legitimate service always declares its routes.
                     // Reject it so it can't be used as a pure-eviction primitive.
                     if (!declared.length) {
-                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' declared no routes (eviction-only)`);
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' declared no routes (eviction-only)`);
                         return res.status(400).json({ error: 'At least one route must be declared.' });
                     }
                     const bad = declared.filter(r => !allowed || !allowed.has(r));
                     if (!allowed || bad.length) {
-                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not serve route(s): ${bad.join(', ') || '(no routes declared)'}`);
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' may not serve route(s): ${logSafe(bad.join(', ') || '(no routes declared)')}`);
                         return res.status(403).json({ error: 'One or more declared routes are not permitted for this identity.', routes: bad });
                     }
                     // The target URL must be well-formed and its HOST covered by the peer's certificate, so a peer
@@ -427,7 +432,7 @@ if (cluster.isPrimary) {
                     let host;
                     try { host = new URL(String(req.body && req.body.url)).hostname; } catch { host = null; }
                     if (!host || !certCoversHost(cert, host)) {
-                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' target host '${host || '(invalid url)'}' not covered by its certificate`);
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' target host '${logSafe(host || '(invalid url)')}' not covered by its certificate`);
                         return res.status(403).json({ error: 'Target URL host is invalid or not covered by your certificate identity.' });
                     }
                     // Ownership: a peer may only (re)register a target url that is unowned or already its own — it
@@ -435,7 +440,7 @@ if (cluster.isPrimary) {
                     // otherwise let a frontend evict it and capture /api/v1/auth via the `/` catch-all).
                     const owner = targetOwner.get(req.body.url);
                     if (owner && owner !== cn) {
-                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${cn}' may not register target '${req.body.url}' owned by '${owner}'`);
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' may not register target '${logSafe(req.body.url)}' owned by '${logSafe(owner)}'`);
                         return res.status(403).json({ error: 'That target is registered by another identity.' });
                     }
                     handleRegistration(req.body, cn);
@@ -655,13 +660,13 @@ if (cluster.isPrimary) {
                 let sanHost;
                 if (chk.host) {
                     if (advertiseHost && advertiseHost !== chk.host) {
-                        logger.warn(`[Gateway] [Enroll] DENIED ${role}: advertiseHost '${advertiseHost}' != token-pinned host '${chk.host}'`);
+                        logger.warn(`[Gateway] [Enroll] DENIED ${logSafe(role)}: advertiseHost '${logSafe(advertiseHost)}' != token-pinned host '${logSafe(chk.host)}'`);
                         return res.status(400).json({ error: 'advertiseHost does not match the host pinned by the enrollment token.' });
                     }
                     sanHost = chk.host;
                 } else {
                     if (advertiseHost && advertiseHost !== peerHost) {
-                        logger.warn(`[Gateway] [Enroll] DENIED ${role}: unpinned token; advertiseHost '${advertiseHost}' != connecting address '${peerHost}'`);
+                        logger.warn(`[Gateway] [Enroll] DENIED ${logSafe(role)}: unpinned token; advertiseHost '${logSafe(advertiseHost)}' != connecting address '${logSafe(peerHost)}'`);
                         return res.status(400).json({ error: 'This token did not pin an advertise host; mint a host-pinned token, or connect from the advertised host.' });
                     }
                     sanHost = advertiseHost || peerHost;
