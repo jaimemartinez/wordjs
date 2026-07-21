@@ -63,6 +63,44 @@ test('bridge blocks SQL touching core tables (incl. regex-evasion bypasses)', as
     });
 });
 
+// 2026-07-20 audit HIGH: the lexer treated ANY `--` as a to-EOL comment (SQLite/Postgres semantics), but
+// MySQL/MariaDB only comment `-- ` (dash-dash-whitespace) — `--0` is arithmetic there. So a plugin's
+// `... WHERE 2=1--0 UNION SELECT user_pass FROM users` was blanked by the guard yet EXECUTED by MySQL,
+// dumping password hashes. The lexer now requires whitespace/EOL after `--`, and MySQL executable comments
+// `/*! … */` (run on MySQL, blanked by the generic `/* */` lexer) are denied outright.
+test('bridge blocks the MySQL comment-divergence SQL-scoping bypass (--0 / /*! */)', async () => {
+    await runWithContext(SLUG, async () => {
+        const api = createPluginApi(SLUG);
+        const PFX = api.db.tablePrefix;
+        // `--0` is NOT a comment (no following whitespace) → the UNION + `users` stay visible → denied.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE 2=1--0 UNION SELECT user_pass FROM users`), /off-limits|not owned/i);
+        // MySQL executable comment: content runs on MySQL, blanked by the generic lexer → denied by marker.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE 1=1/*! UNION SELECT user_pass FROM users */`), /executable comment|off-limits|not owned/i);
+        // Backslash-escape divergence (re-verify): `'\''` desyncs MySQL's string-lexing from the guard's,
+        // hiding a UNION inside a "string". Any backslash in plugin SQL is denied outright.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b='\\'' UNION SELECT user_pass FROM users-- '`), /backslash|off-limits|not owned/i);
+        // Postgres dollar-quoting: `$q$'$q$` hides a `'` so a following UNION runs on PG while the guard
+        // scans a phantom string. Dollar-quote markers are denied outright.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=$q$'$q$ UNION SELECT user_pass FROM users`), /\$|dollar|off-limits|not owned/i);
+        // Non-ASCII dollar-quote tag ($café$) — Postgres accepts it; the deny-all-$ structural fix catches it.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=$café$'$café$ UNION SELECT user_pass FROM users`), /\$|dollar|off-limits|not owned/i);
+        // Postgres ends a `--` comment at a bare CR (\r), not just \n; the tail after it must stay visible.
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=1 -- x\rUNION SELECT user_pass FROM users`), /off-limits|not owned/i);
+        // Postgres `[...]` array-subscript can hold a subquery that reads another plugin's table, laundered
+        // past the walker as an opaque token. Square brackets are denied outright.
+        await assert.rejects(() => api.db.all(`SELECT v[(SELECT total FROM wjp_other_orders)] FROM ${PFX}t`), /bracket|square|off-limits|not owned/i);
+        // MySQL STRAIGHT_JOIN is a single-token join operator — the right-hand table must still be captured
+        // + prefix-checked, so a core (users) or another plugin's table can't be read through it.
+        await assert.rejects(() => api.db.all(`SELECT * FROM ${PFX}t STRAIGHT_JOIN users`), /off-limits|not owned/i);
+        await assert.rejects(() => api.db.all(`SELECT * FROM ${PFX}t STRAIGHT_JOIN wjp_other_orders`), /off-limits|not owned/i);
+        // A LEGIT trailing `-- comment` (dash-dash-space) must still be stripped and the query scoped-OK
+        // (it may fail on a real "no such table" DB error, but must NOT be a scoping denial).
+        let err: any = null;
+        try { await api.db.all(`SELECT a FROM ${PFX}t -- fetch the rows`); } catch (e) { err = e; }
+        assert.ok(!err || !/off-limits|not owned|executable/i.test(String(err.message)), `a real "-- " comment must still work: ${err && err.message}`);
+    });
+});
+
 // Regression: a plugin's OWN table may have a COLUMN named like a core table (conference-manager's
 // `fields` table has an `options` column). Writing it must NOT trip the core-table denylist — the
 // denylist only matches an actual table REFERENCE, not a column in an INSERT list / UPDATE SET.

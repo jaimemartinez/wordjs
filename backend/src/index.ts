@@ -109,9 +109,14 @@ app.use(cors((req: any, done: any) => {
     let originHost = '';
     try { originHost = new URL(origin).hostname.toLowerCase(); } catch { return deny(); }
 
-    // (2) same-origin (Origin host === the Host the request was actually sent to)
-    const hostHeader = hostnameOnly(req.headers.host || '');
-    if (hostHeader && originHost === hostHeader) return allow();
+    // (2) same-origin (Origin host === the host the request was actually sent to). Behind the gateway
+    // (changeOrigin:true) req.headers.host is the internal upstream (127.0.0.1:PORT), so matching on the raw
+    // Host would treat ANY `http://127.0.0.1[:port]` page as same-origin and hand it credentialed CORS. Use
+    // the gateway-PINNED X-Forwarded-Host first (it strips any client-supplied value), then fall back to Host
+    // for the direct monolith — the exact same trusted-host derivation csrfProtection uses, so the two agree.
+    const fwdHost = String(req.headers['x-forwarded-host'] || '').split(',')[0].trim();
+    const effectiveHost = hostnameOnly(fwdHost || req.headers.host || '');
+    if (effectiveHost && originHost === effectiveHost) return allow();
 
     // (3) dev localhost
     if (config.nodeEnv === 'development' && (originHost === 'localhost' || originHost === '127.0.0.1' || originHost === '::1')) return allow();
@@ -298,11 +303,14 @@ app.get('/healthz', (req: Request, res: Response) => {
 
 // Prometheus metrics (default Node/process metrics + app gauges). DISABLED unless a scrape token is
 // configured (config.metrics.token), so metrics are never exposed publicly by default. Scrape with
-// `Authorization: Bearer <token>` (or ?token=). Root-level so it's CSRF-free and not rate-limited.
+// `Authorization: Bearer <token>` — HEADER ONLY. Root-level so it's CSRF-free and not rate-limited.
 app.get('/metrics', async (req: Request, res: Response) => {
     const token = config.metrics && config.metrics.token;
     if (!token) return res.status(404).end();
-    const provided = (req.get('authorization') || '').replace(/^Bearer\s+/i, '') || (req.query.token as string) || '';
+    // Header-only: a `?token=` query string leaks the long-lived secret into access logs / Referer /
+    // browser history — matches the gateway's header-only management-secret policy. Prometheus supports
+    // header-based auth natively (authorization / bearer_token_file), so no scrape config needs the query.
+    const provided = (req.get('authorization') || '').replace(/^Bearer\s+/i, '');
     const a = Buffer.from(String(provided)); const b = Buffer.from(String(token));
     if (a.length !== b.length || !require('crypto').timingSafeEqual(a, b)) return res.status(401).end();
     try {

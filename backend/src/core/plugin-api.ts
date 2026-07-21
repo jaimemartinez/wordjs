@@ -62,10 +62,14 @@ const PROTECTED_OPTION_NAMES = new Set([
     // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to
     // dodge the supervisor. All off-limits to untrusted plugins.
     'cron', 'plugin_strikes', 'plugin_health',
-    // 'marketplace_source' is the base URL the HOST fetches the plugin catalog + zips from. A plugin with
-    // settings:write could point it at http://127.0.0.1:… / cloud-metadata and drive host-side SSRF that
-    // bypasses the plugin egress guard (options are global, not namespaced) (audit MEDIUM).
-    'marketplace_source', 'marketplace_url', 'marketplace_catalog_url',
+    // The marketplace source lists are the URLs the HOST fetches the plugin/theme catalog + zips from. A
+    // plugin with settings:write could point them at http://127.0.0.1:… / cloud-metadata and drive host-side
+    // SSRF that bypasses the plugin egress guard (options are global, not namespaced), OR swap in a catalog
+    // whose sha256 it also controls → admin-assisted supply-chain RCE (audit MEDIUM). The ACTIVE option keys
+    // are the PLURAL `marketplace_sources` / `marketplace_theme_sources` (routes/marketplace.ts); the earlier
+    // singular-only list left the real keys writable. Cover both singular and plural, plugins and themes.
+    'marketplace_source', 'marketplace_sources', 'marketplace_url', 'marketplace_catalog_url',
+    'marketplace_theme_source', 'marketplace_theme_sources', 'marketplace_themes_source', 'marketplace_themes_sources',
     // 'template'/'stylesheet' select the ACTIVE THEME. A settings:write plugin could otherwise point them
     // at '../plugins/<own-slug>' and, because theme-engine.init() require()s the selected dir's
     // functions.js IN-PROCESS on the host, re-introduce in-process execution (DoS / prototype pollution /
@@ -103,7 +107,21 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
     const isWord = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '_' || c === '$' || c === '.';
     while (i < n) {
         const c = s[i];
-        if (c === '-' && s[i + 1] === '-') { i += 2; while (i < n && s[i] !== '\n') i++; cleaned += ' '; continue; }        // -- line comment
+        // `--` line comment — but ONLY when the next char is whitespace/control or EOL, matching MySQL/
+        // MariaDB (SQLite/Postgres treat any `--` as a comment; MySQL treats `--0` as arithmetic `- -0`).
+        // Taking the STRICTEST rule here means `--x` is NOT swallowed, so a `WHERE 2=1--0 UNION SELECT
+        // user_pass FROM users` stays fully visible to the table-scoping walker on every driver — closing
+        // the MySQL-only comment-divergence scoping bypass.
+        if (c === '-' && s[i + 1] === '-' && (i + 2 >= n || s[i + 2] === ' ' || s[i + 2] === '\t' || s[i + 2] === '\n' || s[i + 2] === '\r' || s[i + 2] === '\v' || s[i + 2] === '\f')) {
+            // Terminate the comment body at `\n` OR a bare `\r`. Postgres' scanner defines newline as
+            // `[\n\r]`, so a lone carriage return ENDS a `--` comment there and the text after it runs as
+            // live SQL. Stopping only at `\n` (as before) let a plugin write `SELECT 1 -- x\rUNION SELECT
+            // user_pass FROM users`: the guard swallowed the whole tail (no `\n`) and saw only `SELECT 1`,
+            // while Postgres executed the UNION. Stopping at the STRICTEST terminator (`\r` too) keeps the
+            // tail visible to the table-scoping walker on every driver — SQLite/MySQL end `--` only at `\n`,
+            // so stopping earlier there just makes the guard see MORE structure (fail-safe).
+            i += 2; while (i < n && s[i] !== '\n' && s[i] !== '\r') i++; cleaned += ' '; continue;
+        }
         if (c === '/' && s[i + 1] === '*') { i += 2; while (i < n && !(s[i] === '*' && s[i + 1] === '/')) i++; i += 2; cleaned += ' '; continue; } // /* block */
         if (c === "'") { // string literal ('' escapes a quote) — content is NEVER structure/keywords/tables
             i++;
@@ -139,7 +157,10 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
 // CTE reference must simply use the plugin's own wjp_<slug>_ prefix like any table — then it passes the
 // prefix check with no exemption at all.) Quoted-identifier tokens (q) are ALWAYS names, never keywords.
 function collectTableTokens(toks: SqlTok[]): string[] {
-    const OPENERS_FROM = new Set(['from', 'join', 'using']); // starts/continues a FROM table-list (comma → new table)
+    // `straight_join` is MySQL/MariaDB's single-token inner-join operator — it introduces a table exactly
+    // like JOIN, but lexes as ONE word (the `_` is a word char), so it MUST be an opener or the right-hand
+    // table (a core `users` or another plugin's table) is never captured/prefix-checked (adversarial pass 7).
+    const OPENERS_FROM = new Set(['from', 'join', 'using', 'straight_join']); // starts/continues a FROM table-list (comma → new table)
     const OPENERS_ONE = new Set(['into', 'update', 'table']); // single-table target (INSERT INTO / UPDATE / *TABLE)
     const ENDERS = new Set(['where', 'group', 'having', 'order', 'limit', 'offset', 'window', 'returning', 'values', 'set', 'union', 'intersect', 'except', 'select', 'with']);
     const out: string[] = [];
@@ -182,6 +203,46 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (raw.length > 20000) {
         throw new Error(`🛡️ Plugin DB access denied: SQL statement too long.`);
     }
+    // MySQL/MariaDB "executable comments" (`/*! … */`, optionally version-gated `/*!50000 … */`) run the
+    // wrapped SQL on those engines while the generic `/* */` lexer below blanks it — the same comment-
+    // divergence class as `--0`. Checked on the RAW string BEFORE the lexer strips it. A plugin never needs
+    // version-gated SQL, so deny the marker outright rather than trying to reconcile per-engine semantics.
+    if (raw.includes('/*!')) {
+        throw new Error(`🛡️ Plugin DB access denied: MySQL executable comments (/*! ... */) are not permitted.`);
+    }
+    // Backslash-escape divergence (adversarial re-verify): MySQL/MariaDB (unless NO_BACKSLASH_ESCAPES is set)
+    // treat `\'` as an ESCAPED quote, while this lexer + SQLite/Postgres treat `\` literally. A `'\''`
+    // sentinel therefore pairs the quotes differently in the guard vs MySQL, letting a `UNION`/stacked
+    // statement hide INSIDE what the guard scans as a string literal. Plugins pass literal data via BOUND
+    // params (?), never inline, so a backslash in untrusted SQL is never legitimate — deny it. This closes
+    // the whole class on every engine (belt-and-suspenders with NO_BACKSLASH_ESCAPES on the MySQL pool).
+    if (raw.includes('\\')) {
+        throw new Error(`🛡️ Plugin DB access denied: backslashes are not permitted in plugin SQL; pass literal data via bound parameters (?).`);
+    }
+    // Postgres dollar-quoting (`$$ … $$` / `$tag$ … $tag$`, where the tag may include NON-ASCII letters such
+    // as `$café$`) is an OPAQUE string form this lexer does not recognize: it treats `$` as an ordinary word
+    // char and only `'` as a string delimiter, so a `'` INSIDE a dollar-quote opens a PHANTOM guard-string
+    // that swallows a following `UNION SELECT … FROM users` / stacked `; …` from the table walker + multi-
+    // statement check while Postgres executes it (same divergence class as backslash / `--0` / `/*!`, with
+    // NO backslash needed). Per-engine reconciliation is impossible (`$$` is not a delimiter on SQLite/MySQL,
+    // where a `;` between `$$…$$` is a real separator). The guard runs on ?-placeholder SQL BEFORE $N
+    // translation, so untrusted plugin SQL never legitimately contains ANY `$` — deny it OUTRIGHT. This
+    // closes the entire dollar-quote class (incl. non-ASCII tags) structurally, instead of chasing the
+    // Postgres tag charset with regexes (two prior ASCII-only regexes here each missed `$café$`).
+    if (raw.includes('$')) {
+        throw new Error(`🛡️ Plugin DB access denied: '$' is not permitted in plugin SQL (dollar-quoting / dollar params); pass literal data via bound parameters (?).`);
+    }
+    // Square brackets: SQLite treats `[...]` as identifier quoting and MySQL as a syntax error, but Postgres
+    // parses `[...]` as ARRAY SUBSCRIPTING whose index is a FULL expression — including a scalar subquery.
+    // lexSql collapses `[...]` to ONE opaque identifier token on every engine, so `v[(SELECT total FROM
+    // wjp_other_plugin_orders)]` launders a cross-plugin table reference past the toks-based prefix allowlist
+    // (the sole general table-attribution check) and Postgres then executes the subquery — a cross-plugin
+    // confidentiality break. Plugins never need bracket-quoted identifiers (the wjp_<slug>_ prefix + column
+    // names are [a-z0-9_]; use "…" for a reserved word). Deny `[`/`]` outright — same structural approach as
+    // `\` / `$` / `/*!`, and immune to the per-engine lexing divergence that opaque-token handling can't close.
+    if (raw.includes('[') || raw.includes(']')) {
+        throw new Error(`🛡️ Plugin DB access denied: square brackets [ ] are not permitted in plugin SQL; use "…" to quote an identifier, and bound parameters (?) for data.`);
+    }
     // ONE lexer pass recognizes comments + string literals + quoted identifiers TOGETHER, so attacker text
     // inside any of them can't splice out structure (the comment-vs-literal ordering bug #2 and the
     // quoted-identifier phantom-paren #1). `cleaned` = lowercased, comments/literals blanked; `toks` feeds
@@ -218,7 +279,10 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     // an INSERT column list or UPDATE SET) is NOT a false positive — only an actual table REFERENCE to a
     // core table is blocked. (The prefix allowlist below is the real enforcement.)
     for (const t of PROTECTED_TABLES) {
-        if (new RegExp(`\\b(?:from|join|into|update|using|table)\\s+["\\[\`]?${t}\\b`).test(lower)) {
+        // Allow the table-introducing keyword to be glued to a preceding `_` (e.g. MySQL `straight_join`),
+        // not just a word boundary — otherwise `\bjoin` never matches inside `straight_join users` and the
+        // core-table backstop misses it (adversarial pass 7).
+        if (new RegExp(`(?:\\b|_)(?:from|join|into|update|using|table)\\s+["\\[\`]?${t}\\b`).test(lower)) {
             throw new Error(`🛡️ Plugin DB access denied: query references core table '${t}', which is off-limits to plugins.`);
         }
     }
