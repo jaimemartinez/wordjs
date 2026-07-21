@@ -20,16 +20,25 @@ class SystemHealth {
     // signal" gap. The state is populated the first time an isolated plugin activates (the probe runs lazily).
     static checkSandbox() {
         let hardening = 'unknown';
-        try { hardening = require('./plugin-isolate').getSandboxHardeningState(); } catch { /* isolate module unavailable */ }
+        let netns = 'unknown';
+        try {
+            const iso = require('./plugin-isolate');
+            hardening = iso.getSandboxHardeningState();
+            if (typeof iso.getSandboxNetnsState === 'function') netns = iso.getSandboxNetnsState();
+        } catch { /* isolate module unavailable */ }
         const requireHardening = !!(config.sandbox && config.sandbox.requireHardening);
         const status =
             hardening === 'active' ? 'OK' :
             hardening === 'degraded' ? (requireHardening ? 'REFUSING' : 'DEGRADED') :
             hardening === 'unknown' ? 'UNKNOWN' :
             'NOT_HARDENED'; // 'unsupported' (non-Linux) or 'disabled'
-        const out: any = { status, hardening, requireHardening };
+        // netns is a SEPARATE kernel backstop for NON-network plugins (bwrap --unshare-net): 'active' = they
+        // get an empty net namespace; 'degraded' = base hardening active but this host restricts CLONE_NEWNET
+        // (non-network plugins keep the JS network neuter only). It never gates plugin launch.
+        const out: any = { status, hardening, netns, requireHardening };
         if (hardening === 'degraded') out.note = 'kernel hardening is ENABLED but unavailable on this host — isolated plugins run WITHOUT the OS backstop (install bubblewrap + unprivileged userns, or set sandbox.requireHardening=true to fail closed)';
         else if (hardening === 'unknown') out.note = 'no isolated plugin has activated yet (the hardening probe runs on first load)';
+        else if (hardening === 'active' && netns === 'degraded') out.note = 'kernel hardening ACTIVE, but network-namespace isolation (--unshare-net) is unavailable on this host (CLONE_NEWNET restricted or old bwrap) — non-network plugins keep the JS network neuter without the kernel netns backstop';
         return out;
     }
 

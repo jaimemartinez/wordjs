@@ -438,8 +438,11 @@ function probeJobObjectCap(): Promise<boolean> {
 // UNPRIVILEGED uid (nobody, in a rootless user namespace), with ALL Linux capabilities dropped,
 // no-new-privs (can't regain privilege via a setuid binary), PID/IPC/UTS namespaces (can't see or
 // signal host processes), and the filesystem READ-ONLY except the app root (so plugin storage —
-// uploads/, data/, plugins/<slug>/ — keeps working) plus a private tmpfs /tmp. NETWORK is PRESERVED
-// (egress stays bounded by egress-guard at the socket layer inside the child). This is defense-in-depth
+// uploads/, data/, plugins/<slug>/ — keeps working) plus a private tmpfs /tmp. NETWORK is per-plugin: a
+// NON-network plugin (no admin `network` grant) additionally gets an EMPTY network namespace
+// (--unshare-net, driven by `denyNetwork`) so it can't reach metadata/loopback/the internet at the KERNEL
+// level, not merely the JS egress-guard; a network-GRANTED plugin keeps the shared netns so its sockets
+// work, bounded by egress-guard at the socket layer inside the child. This is defense-in-depth
 // ON TOP OF the JS-level guards (secure-require/io-guard), never a replacement.
 //   OPT-IN (config.sandbox.useKernelHardening) + Linux-only + PROBE-VALIDATED on the host before
 //   activating + clean fallback to the standard launch on any failure ⇒ ZERO regression by construction
@@ -451,13 +454,17 @@ function probeJobObjectCap(): Promise<boolean> {
 //   goal is already met by the read-only mount namespace; the Landlock LSM itself would need a native dep,
 //   contrary to this sandbox's no-native-deps design, for redundant protection — so it is intentionally not
 //   added.) Requires the `bubblewrap` (bwrap) binary. Validate with backend/scripts/verify-sandbox-hardening.js.
-function bwrapProfile(writableDirs: string | string[]): string[] {
+function bwrapProfile(writableDirs: string | string[], denyNetwork = false): string[] {
     // Root is read-only; only the explicitly-listed zones are writable. --bind-try skips a zone that
     // doesn't exist on this install (a missing uploads/data/logs dir must not fail the whole launch).
     const binds: string[] = [];
     for (const d of (Array.isArray(writableDirs) ? writableDirs : [writableDirs])) { binds.push('--bind-try', d, d); }
     return [
         '--unshare-user', '--unshare-pid', '--unshare-ipc', '--unshare-uts', '--unshare-cgroup-try',
+        // --unshare-net drops the child into a FRESH, empty network namespace (bwrap brings `lo` up itself
+        // via loopback_setup, so no manual bring-up is needed, and the fork-IPC fd is netns-independent so
+        // the RPC bridge is unaffected). Applied ONLY to non-network plugins (denyNetwork), never granted ones.
+        ...(denyNetwork ? ['--unshare-net'] : []),
         '--uid', '65534', '--gid', '65534',
         '--ro-bind', '/', '/',
         '--dev', '/dev', '--proc', '/proc', '--tmpfs', '/tmp',
@@ -533,18 +540,27 @@ function getSeccompBpfPath(): string | null {
 //   kernel backstop). 'degraded' is the dangerous "looks secure but isn't" state requireHardening guards.
 let sandboxHardeningState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
 function getSandboxHardeningState() { return sandboxHardeningState; }
+// Whether THIS host can ADDITIONALLY drop a non-network plugin into its own empty network namespace
+// (bwrap --unshare-net), proven by a second probe leg. INDEPENDENT of sandboxHardeningState: a host that
+// allows unprivileged userns but restricts CLONE_NEWNET keeps full bwrap hardening and simply skips this
+// kernel netns backstop (non-network plugins stay confined by the JS network neuter alone).
+//   'unsupported' = non-Linux · 'disabled' = base hardening off OR sandbox.unshareNetwork=false ·
+//   'active' = --unshare-net probe passed · 'degraded' = base hardening active but the netns probe FAILED.
+let netnsHardeningSupported = false;
+let sandboxNetnsState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
+function getSandboxNetnsState() { return sandboxNetnsState; }
 let hardenProbe: Promise<boolean> | undefined;
 function probeKernelHardening(): Promise<boolean> {
     if (hardenProbe) return hardenProbe;
     hardenProbe = (async () => {
-        if (process.platform !== 'linux') { sandboxHardeningState = 'unsupported'; return false; } // seccomp/userns/uid-drop are Linux-kernel features
+        if (process.platform !== 'linux') { sandboxHardeningState = 'unsupported'; sandboxNetnsState = 'unsupported'; return false; } // seccomp/userns/uid-drop are Linux-kernel features
         // DEFAULT-ON (opt-out via config.sandbox.useKernelHardening=false). Auto-enabling is SAFE precisely
         // because the probe below actually validates bwrap + unprivileged-userns + the fork-IPC round-trip on
         // THIS host before activating, and falls back cleanly to the standard fork launch on ANY failure — so a
         // host where user namespaces are disabled degrades to plain process isolation instead of breaking.
         let enabled = false;
         try { const s = require('../config/app').sandbox; enabled = !!(s && s.useKernelHardening); } catch { /* config unavailable → treat as off */ }
-        if (!enabled) { sandboxHardeningState = 'disabled'; return false; }
+        if (!enabled) { sandboxHardeningState = 'disabled'; sandboxNetnsState = 'disabled'; return false; }
         // Self-validate on THIS host: a node child launched through the FULL profile must keep its
         // fork-style IPC channel (serialization 'advanced') — the exact launch this module performs. Only
         // activate if spawn + IPC round-trip + clean exit all work; otherwise fall back to the standard launch.
@@ -576,6 +592,45 @@ function probeKernelHardening(): Promise<boolean> {
             let requireHardening = false;
             try { requireHardening = !!require('../config/app').sandbox?.requireHardening; } catch { /* */ }
             console.warn('[Sandbox] ⚠️  DEGRADED: sandbox.useKernelHardening is ON but the bwrap probe FAILED (bwrap missing or unprivileged user namespaces unavailable) — isolated plugins run WITHOUT the OS backstop, confined only by the in-process JS guards. Install bubblewrap + enable unprivileged userns to restore it' + (requireHardening ? ', or plugins will be REFUSED (sandbox.requireHardening is ON).' : ', or set sandbox.requireHardening=true to fail closed.'));
+        }
+        // SECOND (netns) probe leg — only meaningful once base hardening passed. Boots node through the SAME
+        // profile PLUS --unshare-net and requires the identical fork-IPC 'ok' round-trip + clean exit, so a
+        // host only advertises netnsHardeningSupported after proving --unshare-net doesn't break the bridge
+        // ON THIS host. It NEVER mutates `ok`/sandboxHardeningState and NEVER throws — a failure just leaves
+        // non-network plugins on the JS neuter alone (sandboxNetnsState='degraded'). Opt-out: unshareNetwork=false.
+        if (ok) {
+            let netOptOut = false;
+            try { const s = require('../config/app').sandbox; netOptOut = !!(s && s.unshareNetwork === false); } catch { /* */ }
+            if (netOptOut) { sandboxNetnsState = 'disabled'; }
+            else {
+                try {
+                    const ndir = fsmod.mkdtempSync(pathmod.join(osmod.tmpdir(), 'wjs-netns-probe-'));
+                    const nbpf = getSeccompBpfPath();
+                    const netOk = await new Promise<boolean>((res) => {
+                        let proc: any, got = false, done = false, probeFd = -1;
+                        const finish = (v: boolean) => { if (!done) { done = true; try { proc && proc.kill('SIGKILL'); } catch { /* */ } try { if (probeFd >= 0) fsmod.closeSync(probeFd); } catch { /* */ } res(v); } };
+                        const overall = setTimeout(() => finish(false), 20000);
+                        if ((overall as any).unref) (overall as any).unref();
+                        const stdio: any[] = ['ignore', 'ignore', 'ignore', 'ipc'];
+                        const seccompArgs: string[] = [];
+                        if (nbpf) { try { probeFd = fsmod.openSync(nbpf, 'r'); stdio.push(probeFd); seccompArgs.push('--seccomp', '4'); } catch { probeFd = -1; } }
+                        try {
+                            proc = spawn('bwrap', [...seccompArgs, ...bwrapProfile(ndir, true), '--', process.execPath, '-e', src],
+                                { stdio, serialization: 'advanced', timeout: 18000 });
+                        } catch { clearTimeout(overall); finish(false); return; }
+                        proc.on('message', (m: any) => { if (m === 'ok') got = true; });
+                        proc.on('error', () => { clearTimeout(overall); finish(false); });
+                        proc.on('exit', (code: number) => { clearTimeout(overall); finish(got && code === 0); });
+                    });
+                    try { fsmod.rmSync(ndir, { recursive: true, force: true }); } catch { /* */ }
+                    netnsHardeningSupported = netOk;
+                    sandboxNetnsState = netOk ? 'active' : 'degraded';
+                    if (netOk) console.log('[Sandbox] network-namespace isolation ACTIVE (bwrap --unshare-net: a non-network plugin gets an EMPTY netns — no metadata/host-loopback/public egress at the kernel level, under the JS network neuter).');
+                    else console.warn('[Sandbox] network-namespace isolation UNAVAILABLE (--unshare-net probe failed: CLONE_NEWNET restricted or old bwrap) — non-network plugins keep full bwrap hardening but WITHOUT the kernel netns backstop.');
+                } catch { netnsHardeningSupported = false; sandboxNetnsState = 'degraded'; }
+            }
+        } else {
+            sandboxNetnsState = 'degraded'; // base hardening failed → no bwrap at all, so no netns either
         }
         return ok;
     })();
@@ -678,7 +733,8 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         // contained to the child and the host always survives. The network grant is resolved HERE at
         // spawn (re-resolved on reload) so the child's network policy matches the current admin grant;
         // config travels in argv[2] (no secrets); env is the same secret-free allowlist.
-        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: isNetworkGrantedFor(slug) });
+        const netGranted = isNetworkGrantedFor(slug);
+        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted });
         const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
         // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
         // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -714,7 +770,14 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         let bpfFd = -1;
         if (hardened) { const p = getSeccompBpfPath(); if (p) { try { bpfFd = require('fs').openSync(p, 'r'); } catch { bpfFd = -1; } } }
         const seccompArgs = bpfFd >= 0 ? ['--seccomp', '4'] : [];
-        const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(sandboxWritable), '--'] : [];
+        // A NON-network plugin (its fetch/WS/EventSource + raw sockets are ALREADY JS-neutered in the worker)
+        // additionally gets an empty network namespace (--unshare-net) as a KERNEL backstop — but only when
+        // this host proved it works (netnsHardeningSupported, set by the second probe leg) so a net-denied
+        // argv never ships un-probe-validated. Network-GRANTED plugins keep the shared netns (denyNetwork
+        // stays false) so their outbound sockets work, bounded by the JS egress-guard. Synchronous by design:
+        // this executes inside the non-async Promise executor, so it reads the memoized probe flag, not await.
+        const denyNetwork = hardened && netnsHardeningSupported && !netGranted;
+        const bwrapPre = hardened ? ['bwrap', ...seccompArgs, ...bwrapProfile(sandboxWritable, denyNetwork), '--'] : [];
         const childStdio: any = bpfFd >= 0 ? [...IPC_STDIO, bpfFd] : IPC_STDIO;
         let child: any;
         let cgroupUnit: string | null = null;
@@ -748,7 +811,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             // (preserves the fork-style IPC fd, probe-verified) instead of a plain fork, so the child
             // still gets the unprivileged-uid / dropped-caps / no-new-privs / namespace confinement. The
             // resident RSS poll below sums the bwrap subtree so the memory cap keeps biting.
-            child = spawn('bwrap', [...seccompArgs, ...bwrapProfile(sandboxWritable), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
+            child = spawn('bwrap', [...seccompArgs, ...bwrapProfile(sandboxWritable, denyNetwork), '--', process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
@@ -1394,4 +1457,4 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     return result;
 }
 
-module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), getIsolateStatus, getAllIsolateStatuses, assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState };
+module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), getIsolateStatus, getAllIsolateStatuses, assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState, __bwrapProfile: bwrapProfile };
