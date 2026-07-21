@@ -305,6 +305,13 @@ const config: AppConfig = {
         // user namespaces, read-only root fs, and a seccomp syscall denylist. Probe-gated: bwrap + rootless
         // userns + the IPC round-trip must all work on THIS host, else it falls back to the standard fork launch.
         useKernelHardening: fileConfig.sandbox?.useKernelHardening !== false,
+        // Linux: additionally drop a NON-network plugin (no admin `network` grant) into its OWN empty network
+        // namespace via bwrap --unshare-net, so it cannot reach the metadata endpoint / host loopback / the
+        // public internet at the KERNEL level — not merely the in-process JS egress-guard. DEFAULT-ON (opt-out),
+        // Linux + bwrap only, and separately probe-gated (a second --unshare-net IPC round-trip must pass on this
+        // host, else it's skipped and the plugin keeps the JS network neuter). Network-GRANTED plugins are never
+        // net-unshared (their sockets must work). Surfaced on admin GET /health/details as sandboxNetnsState.
+        unshareNetwork: fileConfig.sandbox?.unshareNetwork !== false,
         // FAIL-CLOSED switch (opt-in, default off): when true, an isolated plugin REFUSES to launch unless
         // kernel hardening is actually ACTIVE on this host — instead of silently degrading to the JS-guards-
         // only fork where bwrap / unprivileged-userns is missing (the "looks secure but isn't" gap). Off by
