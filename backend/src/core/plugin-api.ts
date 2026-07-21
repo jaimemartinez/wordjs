@@ -483,25 +483,35 @@ function createPluginApi(slug: string) {
             async all(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
                 assertSqlAllowed(sql, ['select', 'with'], tablePrefix, slug);
-                const { dbAsync } = require('../config/database');
-                return dbAsync.all(sql, params);
+                // Run under the plugin's DB role (Postgres) so the database itself denies any cross-plugin/
+                // core read even if the text-guard above is bypassed. Falls back to the shared connection
+                // (text-guard only) on SQLite/MySQL or when a role couldn't be provisioned.
+                return require('./plugin-db-isolation').runScoped(slug, 'all', sql, params);
             },
             async get(sql: string, params: any[] = []) {
                 verifyPermission('database', 'read');
                 assertSqlAllowed(sql, ['select', 'with'], tablePrefix, slug);
-                const { dbAsync } = require('../config/database');
-                return dbAsync.get(sql, params);
+                return require('./plugin-db-isolation').runScoped(slug, 'get', sql, params);
             },
             // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER) — always scoped to own tables.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
                 assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix, slug);
-                const { dbAsync } = require('../config/database');
-                const res = await dbAsync.run(sql, params);
-                // Record ownership of any table this CREATE just made (the guard above already forced it under
-                // the plugin's own prefix), so a later prefix-extension squatter can't claim it (#12).
+                const iso = require('./plugin-db-isolation');
+                // DDL (CREATE/ALTER/DROP) runs as the ADMIN user — a plugin's NOLOGIN role has no CREATE, and
+                // the text-guard above already forced the target under the plugin's own prefix. DML runs under
+                // the plugin's role so the database enforces table-level isolation.
+                let res;
+                if (/^\s*(?:create|alter|drop)\b/i.test(sql)) {
+                    const { dbAsync } = require('../config/database');
+                    res = await dbAsync.run(sql, params);
+                } else {
+                    res = await iso.runScoped(slug, 'run', sql, params);
+                }
+                // Record ownership of any table this CREATE just made (guard forced the prefix), so a later
+                // prefix-extension squatter can't claim it (#12), and GRANT the new table to the plugin's role.
                 const m = String(sql).toLowerCase().match(/\bcreate\s+(?:temp(?:orary)?\s+)?table\s+(?:if\s+not\s+exists\s+)?["[`]?([a-z_][a-z0-9_$.]*)/);
-                if (m) recordTableCreator(m[1], slug);
+                if (m) { recordTableCreator(m[1], slug); await iso.grantNewTable(slug, m[1]); }
                 return res;
             },
             // Create a table — ALWAYS under the plugin's own prefix (no trusted bypass), so it can't
@@ -514,6 +524,7 @@ function createPluginApi(slug: string) {
                 const { createPluginTable } = require('../config/database');
                 const r = await createPluginTable(name, columns);
                 recordTableCreator(name, slug); // authoritative creator record (#12)
+                await require('./plugin-db-isolation').grantNewTable(slug, name); // let the plugin role use it
                 return r;
             },
             // Which SQL dialect is active (so a plugin can branch on Postgres vs SQLite DDL).

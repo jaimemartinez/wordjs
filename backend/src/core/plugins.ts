@@ -986,6 +986,11 @@ async function activatePlugin(slug: string) {
             throw new Error(`Plugin '${slug}' must declare "isolated": true and use the wordjs bridge — legacy in-process plugins are no longer supported.`);
         }
 
+        // Provision the plugin's low-privilege DB role (Postgres) BEFORE the worker can issue a query, so
+        // its SELECT/DML runs under a role GRANTed only its own wjp_<slug>_ tables — the database enforces
+        // isolation below the SQL text-guard. No-op off Postgres; graceful if the pool user lacks CREATEROLE.
+        try { await require('./plugin-db-isolation').provision(slug); } catch { /* best-effort — text-guard remains */ }
+
         await loadIsolatedPlugin(slug, mainFile);
 
         // Reorder middleware to ensure plugin routes work
@@ -1184,6 +1189,10 @@ async function loadActivePlugins() {
             // MARK START
             CrashGuard.startLoading(slug);
 
+            // Reconcile the plugin's DB role BEFORE its worker can query — existing installs get a role +
+            // grants on their already-created wjp_<slug>_ tables. No-op off Postgres; graceful on failure.
+            try { await require('./plugin-db-isolation').provision(slug); } catch { /* text-guard remains */ }
+
             // Plugins run ISOLATED in a worker (separate heap; core only via the bridge). Legacy
             // in-process execution has been removed — a plugin MUST declare "isolated": true.
             if (manifest && manifest.isolated) {
@@ -1295,6 +1304,9 @@ async function uninstallPluginData(slug: string, { dropTables = false }: { dropT
             }
         } catch (e: any) { console.warn(`[uninstall ${slug}] table drop failed:`, e && e.message); }
     }
+    // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
+    try { await require('./plugin-db-isolation').deprovision(slug); }
+    catch (e: any) { console.warn(`[uninstall ${slug}] db role drop failed:`, e && e.message); }
     console.log(`[uninstall ${slug}] grants=${result.grantsRemoved} strikes=${result.strikesCleared} tablesDropped=${result.tablesDropped.length}`);
     return result;
 }
