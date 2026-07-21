@@ -25,7 +25,19 @@
 
 const DatabaseDriverInterface = require('./interface');
 const mysql = require('mysql2/promise');
+// Static SqlString helpers re-exported by mysql2 — escape() / escapeId() are CodeQL-recognized
+// SQL-injection barriers, used for the dynamic identifiers (user, table) in the role-isolation DDL below.
+const mysqlSync = require('mysql2');
 const config = require('../config/app');
+
+// Allowlist for any identifier interpolated into isolation DDL (plugin DB user, table name). A caller
+// only ever passes normalized wjp_<slug>_ names, but we re-validate at the driver boundary: reject
+// anything outside [a-z0-9_], not starting with a digit, or longer than a MySQL identifier (64).
+function safeIdent(name: string): string {
+    const s = String(name);
+    if (!/^[a-z_][a-z0-9_]*$/.test(s) || s.length > 64) throw new Error(`unsafe SQL identifier: ${JSON.stringify(name)}`);
+    return s;
+}
 
 // Core columns that legitimately hold long content and must become LONGTEXT (never VARCHAR(255), which
 // would truncate). Everything else maps to VARCHAR(255) so it stays indexable and can keep a literal
@@ -148,6 +160,8 @@ function isBenignDup(err: any, sql: string): boolean {
 class MysqlDriver extends DatabaseDriverInterface {
     pool: any;
     config: any;
+    // Per-plugin low-privilege pools, keyed by DB user name (see runAsUser / getScopedPool below).
+    scopedPools: Map<string, any> = new Map();
 
     constructor() {
         super();
@@ -325,7 +339,95 @@ class MysqlDriver extends DatabaseDriverInterface {
         }
     }
 
+    // ── Per-plugin DB user isolation (defense-in-depth BELOW the SQL text-guard) ──────────────────
+    // MySQL has no usable SET ROLE equivalent for this: SET ROLE only *activates already-granted roles*
+    // for the connected user and can't strip the admin user's DIRECT privileges, so a role switch on the
+    // admin connection would still see every table. True isolation therefore needs a SEPARATE login user
+    // per plugin, GRANTed only its own wjp_<slug>_ tables, with the plugin's DML/SELECT run on a pool
+    // authenticated AS that user — so the DATABASE denies any cross-plugin/core access. Requires the pool
+    // user to hold CREATE USER + GRANT OPTION; callers fall back to the text-guard alone if it doesn't.
+
+    /** CREATE (or reset the password of) a plugin's low-privilege login user. Idempotent. */
+    async ensurePluginUser(user: string, password: string): Promise<void> {
+        const uLit = mysqlSync.escape(safeIdent(user));
+        const pLit = mysqlSync.escape(String(password));
+        await this.pool.query(`CREATE USER IF NOT EXISTS ${uLit}@'%' IDENTIFIED BY ${pLit}`);
+        // Always (re)set the password so a fresh process boot owns the credential its scoped pool will use.
+        await this.pool.query(`ALTER USER ${uLit}@'%' IDENTIFIED BY ${pLit}`);
+    }
+
+    /** GRANT CRUD on ONE existing table to a plugin user. */
+    async grantPluginTableToUser(user: string, table: string): Promise<void> {
+        const uLit = mysqlSync.escape(safeIdent(user));
+        const db = mysqlSync.escapeId(String((this.config || config.db).name));
+        const tbl = mysqlSync.escapeId(safeIdent(table));
+        await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${db}.${tbl} TO ${uLit}@'%'`);
+    }
+
+    /** GRANT CRUD on every EXISTING wjp_<slug>_* table to a plugin user (initial provisioning). */
+    async grantPluginPrefixToUser(user: string, prefix: string): Promise<void> {
+        const dbName = String((this.config || config.db).name);
+        // Escape LIKE metacharacters in the literal prefix. sql_mode=NO_BACKSLASH_ESCAPES means '\' is NOT
+        // a LIKE escape here, so use an explicit ESCAPE clause with a char that never appears in a table name.
+        const likePat = String(prefix).replace(/[%_!]/g, (m) => '!' + m) + '%';
+        const [rows] = await this.pool.query(
+            "SELECT table_name AS t FROM information_schema.tables WHERE table_schema = ? AND table_name LIKE ? ESCAPE '!'",
+            [dbName, likePat]
+        );
+        for (const r of rows) {
+            const t = r.t || r.T || r.table_name;
+            if (t) await this.grantPluginTableToUser(user, String(t).toLowerCase());
+        }
+    }
+
+    /** DROP a plugin user (on uninstall) and dispose its scoped pool. */
+    async dropPluginUser(user: string): Promise<void> {
+        const key = safeIdent(user);
+        const p = this.scopedPools.get(key);
+        if (p) { try { await p.end(); } catch { /* */ } this.scopedPools.delete(key); }
+        const uLit = mysqlSync.escape(key);
+        await this.pool.query(`DROP USER IF EXISTS ${uLit}@'%'`);
+    }
+
+    /** Lazily build (and cache) a small pool authenticated AS the plugin user. multipleStatements OFF. */
+    getScopedPool(user: string, password: string): any {
+        const key = safeIdent(user);
+        let p = this.scopedPools.get(key);
+        if (p) return p;
+        const dbConfig = this.config || config.db;
+        p = mysql.createPool({
+            host: dbConfig.host,
+            port: dbConfig.port || 3306,
+            user: key,
+            password: String(password),
+            database: dbConfig.name,
+            waitForConnections: true,
+            connectionLimit: dbConfig.pluginConnectionLimit || 3,
+            multipleStatements: false, // a sandboxed plugin never runs stacked statements
+            charset: 'utf8mb4_unicode_ci',
+            dateStrings: true,
+            ssl: dbConfig.ssl ? { rejectUnauthorized: false } : undefined
+        });
+        p.on('connection', (conn: any) => {
+            conn.query("SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES,NO_ENGINE_SUBSTITUTION'", () => { });
+        });
+        this.scopedPools.set(key, p);
+        return p;
+    }
+
+    /** Run a plugin's DML/SELECT AS its low-privilege user — the DB enforces table isolation. */
+    async runAsUser(user: string, password: string, method: 'all' | 'get' | 'run', sql: string, params: any[] = []): Promise<any> {
+        const pool = this.getScopedPool(user, password);
+        const translated = translateSql(sql);
+        const [result] = await pool.query(translated, params);
+        if (method === 'all') return Array.isArray(result) ? result : [];
+        if (method === 'get') return Array.isArray(result) ? result[0] : undefined;
+        return { lastID: result.insertId || 0, changes: result.affectedRows || 0 };
+    }
+
     async close() {
+        for (const p of this.scopedPools.values()) { try { await p.end(); } catch { /* */ } }
+        this.scopedPools.clear();
         if (this.pool) {
             await this.pool.end();
             this.pool = null;
