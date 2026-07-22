@@ -28,6 +28,16 @@ const path = require('path');
 const { createProxyServer, createUpstreamAgent } = require('./proxy-config');
 const clusterCa = require('./cluster-ca');
 
+// mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
+// gateway/certs. LOCAL split (one machine, `npm start`): the install generates the cluster certs into
+// backend/certs (backend/core/certManager) and nothing populates gateway/certs — so fall back there when
+// gateway/certs hasn't been provisioned. Without this the internal mTLS + enroll listeners never start
+// and every proxied route 404s (nodes can't register). Resolved once; a fresh install must regenerate
+// certs before the gateway boots (or restart the gateway after the install wizard).
+const GW_CERTS = path.resolve(__dirname, '../certs');
+const BE_CERTS = path.resolve(__dirname, '../../backend/certs');
+const CERTS_DIR = fs.existsSync(path.join(GW_CERTS, 'gateway-internal.crt')) ? GW_CERTS : BE_CERTS;
+
 // --- LOGGER SETUP ---
 const logger = winston.createLogger({
     level: 'info',
@@ -250,9 +260,9 @@ if (cluster.isPrimary) {
     };
 
     // Prepare mTLS Agent for Health Checks
-    const MTLS_CA = path.resolve(__dirname, '../certs/cluster-ca.crt');
-    const MTLS_KEY = path.resolve(__dirname, '../certs/gateway-internal.key');
-    const MTLS_CERT = path.resolve(__dirname, '../certs/gateway-internal.crt');
+    const MTLS_CA = path.join(CERTS_DIR, 'cluster-ca.crt');
+    const MTLS_KEY = path.join(CERTS_DIR, 'gateway-internal.key');
+    const MTLS_CERT = path.join(CERTS_DIR, 'gateway-internal.crt');
     let healthAgent = null;
 
     if (fs.existsSync(MTLS_CA) && fs.existsSync(MTLS_KEY) && fs.existsSync(MTLS_CERT)) {
@@ -367,9 +377,9 @@ if (cluster.isPrimary) {
     });
 
     function startInternalServer() {
-        const MTLS_CA = path.resolve(__dirname, '../certs/cluster-ca.crt');
-        const MTLS_KEY = path.resolve(__dirname, '../certs/gateway-internal.key');
-        const MTLS_CERT = path.resolve(__dirname, '../certs/gateway-internal.crt');
+        const MTLS_CA = path.join(CERTS_DIR, 'cluster-ca.crt');
+        const MTLS_KEY = path.join(CERTS_DIR, 'gateway-internal.key');
+        const MTLS_CERT = path.join(CERTS_DIR, 'gateway-internal.crt');
 
         if (fs.existsSync(MTLS_CA) && fs.existsSync(MTLS_KEY) && fs.existsSync(MTLS_CERT)) {
             try {
@@ -621,10 +631,10 @@ if (cluster.isPrimary) {
     // (the enrolling node has none) — the token is the authorization; the mTLS /register server stays
     // strict (rejectUnauthorized:true) and untouched.
     function startEnrollServer() {
-        const CA_CRT = path.resolve(__dirname, '../certs/cluster-ca.crt');
-        const CA_KEY = path.resolve(__dirname, '../certs/cluster-ca.key');
-        const SRV_KEY = path.resolve(__dirname, '../certs/gateway-internal.key');
-        const SRV_CRT = path.resolve(__dirname, '../certs/gateway-internal.crt');
+        const CA_CRT = path.join(CERTS_DIR, 'cluster-ca.crt');
+        const CA_KEY = path.join(CERTS_DIR, 'cluster-ca.key');
+        const SRV_KEY = path.join(CERTS_DIR, 'gateway-internal.key');
+        const SRV_CRT = path.join(CERTS_DIR, 'gateway-internal.crt');
         if (![CA_CRT, CA_KEY, SRV_KEY, SRV_CRT].every((p) => fs.existsSync(p))) {
             logger.warn('[Gateway] [Enroll] ⚠️ cluster CA/identity not found — token enrollment DISABLED. Run: node scripts/cluster.js init');
             return;
@@ -740,9 +750,9 @@ if (cluster.isPrimary) {
 
     const proxy = createProxyServer();
 
-    const MTLS_CA = path.resolve(__dirname, '../certs/cluster-ca.crt');
-    const MTLS_KEY = path.resolve(__dirname, '../certs/gateway-internal.key');
-    const MTLS_CERT = path.resolve(__dirname, '../certs/gateway-internal.crt');
+    const MTLS_CA = path.join(CERTS_DIR, 'cluster-ca.crt');
+    const MTLS_KEY = path.join(CERTS_DIR, 'gateway-internal.key');
+    const MTLS_CERT = path.join(CERTS_DIR, 'gateway-internal.crt');
 
     let proxyAgent = null;
     if (fs.existsSync(MTLS_CA) && fs.existsSync(MTLS_KEY) && fs.existsSync(MTLS_CERT)) {

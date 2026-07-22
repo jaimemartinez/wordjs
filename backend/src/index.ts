@@ -673,7 +673,12 @@ async function initialize() {
         server = http.createServer(app);
     }
 
-    server.listen(config.port, config.host, () => {
+    // Bind IPv4 loopback when host is a loopback NAME: Node resolves 'localhost' to ::1 (IPv6) on a
+    // dual-stack box, but in split mode the backend advertises 127.0.0.1 (IPv4) to the gateway (below), so
+    // binding ::1 leaves the gateway's IPv4 proxy unable to connect — every proxied route then 404s (the
+    // local-split gateway bug). Explicit IPs (0.0.0.0 in separate mode, a LAN IP) pass through unchanged.
+    const bindHost = (config.host === 'localhost' || config.host === '::1') ? '127.0.0.1' : config.host;
+    server.listen(config.port, bindHost, () => {
         console.log('');
         console.log(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
         if (serverProtocol === 'https') {
