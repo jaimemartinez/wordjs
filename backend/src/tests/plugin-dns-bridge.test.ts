@@ -67,3 +67,43 @@ test('api.dns.resolve4 drops answers for an internal name (no recon)', async (t)
     }
     assert.deepEqual(out, [], 'loopback answer stripped — no internal IP handed to the plugin');
 });
+
+// Network-free proof that the private-IP filter delegates to egress-guard's isBlockedIp, which
+// classifies by NUMERIC bytes. Each of these forms was LEAKED by the previous hand-rolled filter
+// (textual prefix-match / dotted-only ::ffff regex / missing multicast+reserved+NAT64+6to4+fec0).
+// We inject synthetic resolver answers so the assertion is deterministic and offline.
+test('api.dns strips every private-IP spelling via isBlockedIp (synthetic resolver)', async () => {
+    perms._setGrantsInMemory(SLUG, ['network']);
+    const dnsP = require('dns').promises;
+    const origR4 = dnsP.resolve4;
+    const origR6 = dnsP.resolve6;
+    const api = createPluginApi(SLUG);
+    try {
+        dnsP.resolve4 = async () => [
+            '8.8.8.8',              // public — must survive
+            '10.0.0.5', '127.0.0.1', '169.254.169.254', '172.16.0.1', '192.168.1.1', '100.64.0.1',
+            '224.0.0.1',            // multicast   — hand-rolled MISSED
+            '240.0.0.1',            // reserved    — hand-rolled MISSED
+            '192.0.0.1',            // IETF protocol assignments — hand-rolled MISSED
+        ];
+        assert.deepEqual(await api.dns.resolve4('x.test'), ['8.8.8.8'], 'v4: only the public address survives');
+        assert.deepEqual(await api.dns.resolve('x.test'), ['8.8.8.8'], 'resolve() shares the v4 filter');
+
+        dnsP.resolve6 = async () => [
+            '2606:4700:4700::1111', // public (Cloudflare) — must survive
+            '::1',                  // loopback
+            '0:0:0:0:0:0:0:1',      // loopback, fully expanded — hand-rolled string-match MISSED
+            '::ffff:a9fe:a9fe',     // hex-form IPv4-mapped 169.254.169.254 metadata — hand-rolled MISSED
+            '64:ff9b::a9fe:a9fe',   // NAT64-wrapped metadata — hand-rolled MISSED
+            '2002:0a00:0001::',     // 6to4-wrapped 10.0.0.1 — hand-rolled MISSED
+            'fe80::1',              // link-local
+            'fec0::1',              // deprecated site-local — hand-rolled MISSED
+            'fc00::1',              // ULA
+            'ff02::1',              // multicast — hand-rolled MISSED
+        ];
+        assert.deepEqual(await api.dns.resolve6('x.test'), ['2606:4700:4700::1111'], 'v6: only the public address survives');
+    } finally {
+        dnsP.resolve4 = origR4;
+        dnsP.resolve6 = origR6;
+    }
+});
