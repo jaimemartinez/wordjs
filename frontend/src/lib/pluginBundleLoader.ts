@@ -175,6 +175,79 @@ export function createRemotePluginComponent(
     );
 }
 
+// ============================================
+// Puck block loading (runtime, marketplace plugins)
+// ============================================
+
+const blockConfigCache = new Map<string, Promise<Record<string, any>>>();
+const blockCssInjected = new Set<string>();
+
+function toPascalCase(slug: string): string {
+    return slug.split('-').map((p) => p.charAt(0).toUpperCase() + p.slice(1)).join('');
+}
+
+// Load the CSS esbuild extracted next to a plugin's block bundle (dist/component.bundle.css). Served via
+// the /plugins static route (which maps slug→folder), so the block's styles apply in editor + canvas.
+function injectBlockCss(pluginId: string): void {
+    if (typeof document === 'undefined' || blockCssInjected.has(pluginId)) return;
+    blockCssInjected.add(pluginId);
+    const href = `/plugins/${pluginId}/dist/component.bundle.css`;
+    if (document.querySelector(`link[data-plugin-block-css="${pluginId}"]`)) return;
+    const link = document.createElement('link');
+    link.rel = 'stylesheet';
+    link.href = href;
+    link.setAttribute('data-plugin-block-css', pluginId);
+    // A plugin may ship no block CSS — a 404 <link> is harmless (no error surfaced to the user).
+    document.head.appendChild(link);
+}
+
+/**
+ * Load a single plugin's Puck block config(s) at runtime from its pre-compiled `component` bundle.
+ * Returns a map keyed by BLOCK NAME (the `type` stored in Puck data), matching the build-time registry:
+ *   - single block: `{ [PascalName(pluginId)]: { ...puckComponentDef, render: default } }`
+ *   - multi block:  the plugin's own `puckComponents` map, spread as-is
+ * Empty object when the plugin ships no block bundle (404) or fails to evaluate — never throws.
+ */
+export async function loadPluginBlockConfigs(pluginId: string): Promise<Record<string, any>> {
+    const cached = blockConfigCache.get(pluginId);
+    if (cached) return cached;
+    const p = (async () => {
+        try {
+            const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=component`);
+            if (!response.ok) return {};
+            const code = await response.text();
+            const blob = new Blob([code], { type: 'application/javascript' });
+            const url = URL.createObjectURL(blob);
+            try {
+                const mod: any = await import(/* webpackIgnore: true */ url);
+                URL.revokeObjectURL(url);
+                injectBlockCss(pluginId);
+                if (mod.puckComponents && typeof mod.puckComponents === 'object') {
+                    return mod.puckComponents as Record<string, any>;
+                }
+                if (mod.puckComponentDef) {
+                    return { [toPascalCase(pluginId)]: { ...mod.puckComponentDef, render: mod.default } };
+                }
+                return {};
+            } catch (e) {
+                URL.revokeObjectURL(url);
+                console.warn(`[PluginLoader] Failed to evaluate block bundle for ${pluginId}:`, e);
+                return {};
+            }
+        } catch {
+            return {};
+        }
+    })();
+    blockConfigCache.set(pluginId, p);
+    return p;
+}
+
+/** Load + merge the Puck block configs of every given plugin (typically the ACTIVE plugins). */
+export async function loadActivePluginBlocks(pluginIds: string[]): Promise<Record<string, any>> {
+    const maps = await Promise.all(pluginIds.map((id) => loadPluginBlockConfigs(id).catch(() => ({}))));
+    return Object.assign({}, ...maps);
+}
+
 /**
  * Check if a plugin has a pre-compiled bundle available
  */

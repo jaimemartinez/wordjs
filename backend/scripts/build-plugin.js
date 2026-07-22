@@ -90,7 +90,18 @@ async function buildPlugin(slug) {
 
     // Find frontend entry points
     const adminEntry = manifest.frontend?.adminPage?.entry;
-    const componentEntry = manifest.frontend?.components?.[0]?.entry;
+    // The Puck block entry. Prefer the explicit puckComponents.entry (what plugins actually declare),
+    // then legacy components[0].entry, then the conventional client/puck/<Pascal>Puck.tsx — the SAME
+    // resolution generate-puck-plugin-registry.js uses. Without this the block bundle never built (the
+    // old code only read the unused `components[0]` key), so marketplace plugins shipped no runtime
+    // block and their Puck blocks couldn't load in production.
+    let componentEntry = manifest.frontend?.puckComponents?.entry || manifest.frontend?.components?.[0]?.entry;
+    if (!componentEntry) {
+        const pascal = String(manifest.id || path.basename(pluginDir)).split('-')
+            .map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join('');
+        const conv = `client/puck/${pascal}Puck.tsx`;
+        if (fs.existsSync(path.join(pluginDir, conv))) componentEntry = conv;
+    }
     const hooksEntry = manifest.frontend?.hooks;
 
     const entryPoints = [];
