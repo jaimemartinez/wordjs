@@ -10,6 +10,7 @@ import PluginLoader from "@/components/PluginLoader";
 import { Render } from "@wordjs/puck";
 import "@wordjs/puck/puck.css";
 import { pageConfig } from "@/components/puckConfig";
+import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
 
@@ -59,10 +60,13 @@ function renderContent(htmlContent: string) {
 }
 
 export default function HomeContent({ post }: { post: Post }) {
+    // Merge active marketplace plugins' Puck blocks in at runtime (called before any early return so the
+    // hook order is stable). No-op on first render → SSR/hydration match; blocks appear once loaded.
+    const config = useRuntimePuckConfig(pageConfig);
     if (post.meta?._puck_data) {
         return (
             <div className="puck-content w-full">
-                <Render config={pageConfig} data={post.meta._puck_data} />
+                <Render config={config} data={post.meta._puck_data} />
             </div>
         );
     }

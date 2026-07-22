@@ -4,6 +4,41 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.3] - 2026-07-22
+
+Marketplace plugins now work **fully** on a production install — both their admin pages and their
+Puck editor blocks load at runtime — and every plugin ships from the marketplace rather than the core
+bundle.
+
+### Fixed
+
+- **Marketplace-installed plugins render their admin page in production.** A plugin installed at runtime
+  from the marketplace showed **"Plugin Not Found"** (or a blank/unstyled panel) for its admin page on any
+  production (pre-built) install, because the admin UI was resolved only from a registry compiled into the
+  frontend at *build* time. The admin router now falls back to loading the plugin's pre-compiled
+  `dist/admin.bundle.js` **at runtime**; `build-marketplace` compiles each plugin's bundle into its catalog
+  zip; plugin bundles resolve `react` and the 12 host modules they use (`@/lib/api`, i18n, the modal/toast/
+  auth contexts, media picker, ui components — via the `@/` alias *or* legacy relative paths) to
+  host-injected `window.WordJS.*` globals; and the `/plugins` handler maps a plugin's admin URL slug to its
+  on-disk folder so `admin.css`/`manifest.json` resolve. (Hardening: request-slug filesystem access is
+  containment-checked; unmapped host imports fail the build loudly.)
+- **Marketplace plugins' Puck editor blocks load at runtime too.** Their blocks were likewise baked at
+  build time, so a marketplace plugin's blocks never appeared in the editor palette and rendered as
+  nothing on published pages. `build-plugin` now builds the block (`component`) bundle from
+  `puckComponents.entry`, and a new client hook merges active plugins' block configs into the Puck config
+  for the editor **and** the public site. Hydration-safe: SSR and the first client render use the base
+  config (Puck already skips unknown block types), then the block appears once its bundle loads.
+
+### Changed
+
+- **All first-party plugins now ship from the marketplace, not the core release bundle** (`card-gallery`,
+  `photo-carousel`, `video-gallery` moved to `marketplace/plugins/`). A fresh install ships with no
+  pre-bundled plugins; install what you need from the marketplace. (`toscano` stays private, unpublished.)
+
+Validated end-to-end on a clean production install (Proxmox LXC): a plugin installed from the marketplace
+renders its styled admin page, its block appears in the editor palette and canvas, and a published page
+renders the block with zero hydration errors.
+
 ## [1.12.2] - 2026-07-22
 
 A documentation patch.

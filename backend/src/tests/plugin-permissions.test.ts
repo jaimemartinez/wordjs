@@ -67,20 +67,20 @@ test('network grant: off by default, on after granting', () => {
     assert.equal(perms.isNetworkGranted(SLUG), true);
 });
 
-// No trust tier: even a bundled plugin (card-gallery) gets NOTHING without an explicit grant — there
-// is no bypass. It only gains a capability once an admin grants it (and the manifest declares it).
+// No trust tier: even a plugin present on disk gets NOTHING without an explicit grant — there is no
+// bypass. It only gains a capability once an admin grants it (and the manifest declares it).
 // hasPermission reads the plugin's manifest from backend/plugins/<slug>/, so this fixture must be a
-// plugin that ships BUNDLED there (marketplace plugins live under marketplace/plugins/ and are not
-// present until installed). card-gallery declares database:write in its manifest.
-test('no trust tier: even a bundled plugin needs grants (no bypass)', async () => {
-    perms._setGrantsInMemory('card-gallery', []); // no grants
-    await runWithContext('card-gallery', async () => {
-        assert.equal(hasPermission('database', 'write'), false);
+// plugin that ships there. Real plugins now live under marketplace/plugins/ and are not present until
+// installed; test-schema is a bundled fixture that declares database:admin in its manifest.
+test('no trust tier: even a disk-present plugin needs grants (no bypass)', async () => {
+    perms._setGrantsInMemory('test-schema', []); // no grants
+    await runWithContext('test-schema', async () => {
+        assert.equal(hasPermission('database', 'admin'), false);
         assert.equal(hasPermission('email', 'admin'), false);
     });
-    perms._setGrantsInMemory('card-gallery', ['database:write']);
-    await runWithContext('card-gallery', async () => {
-        assert.equal(hasPermission('database', 'write'), true);  // granted now
+    perms._setGrantsInMemory('test-schema', ['database:admin']);
+    await runWithContext('test-schema', async () => {
+        assert.equal(hasPermission('database', 'admin'), true);  // granted now
         assert.equal(hasPermission('email', 'admin'), false);    // still not granted
     });
 });

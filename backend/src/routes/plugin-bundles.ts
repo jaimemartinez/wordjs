@@ -19,6 +19,50 @@ const PLUGINS_DIR = path.resolve(__dirname, '../../plugins');
 const ALLOWED_BUNDLE_TYPES = new Set(['admin', 'component', 'hooks']);
 
 /**
+ * Resolve a request slug to the plugin's on-disk FOLDER.
+ *
+ * The admin URL uses `manifest.frontend.adminPage.slug` ("youtube"), which frequently DIFFERS from the
+ * folder ("youtube-videos") — so keying the bundle path off the raw slug 404s for every such plugin.
+ * Prefer an exact folder match (cheap, and what already-matching plugins rely on), else scan manifests
+ * for a declared adminPage slug. Returns null when nothing matches.
+ */
+// Join request-influenced segments under a root and confirm the result stays INSIDE it — the
+// path-injection barrier. Returns an absolute path, or null if the segments escape the root. Every
+// filesystem access below flows through this so a crafted slug can never read outside PLUGINS_DIR.
+function safeJoin(root: string, ...segs: string[]): string | null {
+    const base = path.resolve(root);
+    const resolved = path.resolve(base, ...segs);
+    if (resolved !== base && !resolved.startsWith(base + path.sep)) return null;
+    return resolved;
+}
+
+function resolvePluginDir(slug: string): string | null {
+    if (!/^[a-zA-Z0-9_-]+$/.test(slug)) return null;
+    const direct = safeJoin(PLUGINS_DIR, slug, 'manifest.json');
+    if (direct && fs.existsSync(direct)) return slug;
+    let entries: string[] = [];
+    try {
+        entries = fs.readdirSync(PLUGINS_DIR, { withFileTypes: true })
+            .filter((d: any) => d.isDirectory())
+            .map((d: any) => d.name);
+    } catch { return null; }
+    for (const folder of entries) {
+        if (!/^[a-zA-Z0-9_-]+$/.test(folder)) continue;   // never route to an odd dir name
+        const mp = safeJoin(PLUGINS_DIR, folder, 'manifest.json');
+        if (!mp) continue;
+        try {
+            const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
+            if (m?.frontend?.adminPage?.slug === slug) return folder;
+        } catch { /* unreadable/invalid manifest → skip */ }
+    }
+    return null;
+}
+
+function bundlePathFor(folder: string, bundleType: string): string | null {
+    return safeJoin(PLUGINS_DIR, folder, 'dist', `${bundleType}.bundle.js`);
+}
+
+/**
  * GET /api/v1/plugins/:slug/bundle
  * 
  * Returns the admin.bundle.js for a plugin.
@@ -39,12 +83,14 @@ router.get('/:slug/bundle', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Invalid bundle type' });
     }
 
-    const bundlePath = path.join(PLUGINS_DIR, slug, 'dist', `${bundleType}.bundle.js`);
+    // Map the ADMIN slug to the on-disk folder (they differ for most plugins).
+    const folder = resolvePluginDir(slug);
+    const bundlePath = folder ? bundlePathFor(folder, String(bundleType)) : null;
 
-    if (!fs.existsSync(bundlePath)) {
+    if (!bundlePath || !fs.existsSync(bundlePath)) {
         return res.status(404).json({
             error: 'Bundle not found',
-            hint: `Plugin '${slug}' may not have been built. Run: node scripts/build-plugin.js ${slug}`
+            hint: `Plugin '${slug}' may not have been built. Run: node scripts/build-plugin.js ${folder || slug}`
         });
     }
 
@@ -79,9 +125,10 @@ router.get('/:slug/bundle/manifest', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
 
-    const manifestPath = path.join(PLUGINS_DIR, slug, 'dist', 'manifest.build.json');
+    const folder = resolvePluginDir(slug) || slug;
+    const manifestPath = safeJoin(PLUGINS_DIR, folder, 'dist', 'manifest.build.json');
 
-    if (!fs.existsSync(manifestPath)) {
+    if (!manifestPath || !fs.existsSync(manifestPath)) {
         return res.status(404).json({ error: 'Build manifest not found' });
     }
 

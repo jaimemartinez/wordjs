@@ -18,7 +18,10 @@ const esbuild = require('esbuild');
 const fs = require('fs');
 const path = require('path');
 
-const PLUGINS_DIR = path.resolve(__dirname, '../plugins');
+// Defaults to backend/plugins (the installed set). build-marketplace.js points this at
+// marketplace/plugins so catalog zips ship their pre-compiled dist/*.bundle.js — without that, a
+// marketplace-installed plugin has no runtime bundle and its admin page can't load in production.
+const PLUGINS_DIR = path.resolve(process.env.WORDJS_PLUGINS_DIR || path.resolve(__dirname, '../plugins'));
 
 // ============================================
 // EXTERNALS CONFIGURATION (Critical for React Singleton)
@@ -87,7 +90,18 @@ async function buildPlugin(slug) {
 
     // Find frontend entry points
     const adminEntry = manifest.frontend?.adminPage?.entry;
-    const componentEntry = manifest.frontend?.components?.[0]?.entry;
+    // The Puck block entry. Prefer the explicit puckComponents.entry (what plugins actually declare),
+    // then legacy components[0].entry, then the conventional client/puck/<Pascal>Puck.tsx — the SAME
+    // resolution generate-puck-plugin-registry.js uses. Without this the block bundle never built (the
+    // old code only read the unused `components[0]` key), so marketplace plugins shipped no runtime
+    // block and their Puck blocks couldn't load in production.
+    let componentEntry = manifest.frontend?.puckComponents?.entry || manifest.frontend?.components?.[0]?.entry;
+    if (!componentEntry) {
+        const pascal = String(manifest.id || path.basename(pluginDir)).split('-')
+            .map((s) => s.charAt(0).toUpperCase() + s.slice(1)).join('');
+        const conv = `client/puck/${pascal}Puck.tsx`;
+        if (fs.existsSync(path.join(pluginDir, conv))) componentEntry = conv;
+    }
     const hooksEntry = manifest.frontend?.hooks;
 
     const entryPoints = [];
@@ -127,6 +141,97 @@ async function buildPlugin(slug) {
         fs.mkdirSync(distDir, { recursive: true });
     }
 
+    // ---- Host runtime surface exposed to plugin bundles ------------------------------------------
+    // A plugin bundle must NOT contain its own React or host modules: React must be a singleton (two
+    // copies → "Invalid Hook Call") and host modules must be the host's OWN instances (so a plugin's
+    // api() shares the host session and useI18n()/useModal() read the host's providers). We rewrite
+    // those imports to `globalThis.WordJS.*`, which pluginBundleLoader.ts populates. Leaving them as
+    // esbuild `external` instead emits a bare `import ... from "react"`, which a blob-URL module (how
+    // the loader evaluates the bundle) CANNOT resolve — that is why runtime plugin loading was dead.
+    //
+    // Plugins reach host modules TWO ways: the `@/…` path alias AND relative paths into the host tree
+    // (e.g. "../../../../../frontend/src/contexts/I18nContext" — older plugins predate the alias). Both
+    // are intercepted. Export NAMES are read from the real host source so the virtual module re-exports
+    // exactly what the module does (pluginBundleLoader injects each as a namespace, so every name is
+    // present at runtime). Keep HOST_MODULES in sync with the imports in pluginBundleLoader.ts — the
+    // loud-fail turns any drift into a build error instead of a blank panel in production.
+    const HOST_SRC = path.resolve(__dirname, '../../frontend/src');
+    const HOST_MODULES = [
+        'lib/api', 'lib/i18n', 'lib/plugin-hooks',
+        'contexts/ModalContext', 'contexts/I18nContext', 'contexts/ToastContext', 'contexts/AuthContext',
+        'components/MediaPickerModal',
+        'components/ui/StatCard', 'components/ui/PageHeader', 'components/ui/Card', 'components/ui/ActionCard',
+    ];
+    const REACT_GLOBALS = {
+        'react': ['WordJS.React', ['useState', 'useEffect', 'useMemo', 'useCallback', 'useRef', 'useContext', 'useReducer', 'useLayoutEffect', 'useImperativeHandle', 'useTransition', 'useDeferredValue', 'useId', 'useSyncExternalStore', 'createContext', 'createElement', 'cloneElement', 'isValidElement', 'Children', 'Fragment', 'StrictMode', 'Suspense', 'memo', 'forwardRef', 'lazy', 'startTransition', 'Component', 'PureComponent']],
+        'react-dom': ['WordJS.ReactDOM', ['createPortal', 'flushSync', 'render', 'unmountComponentAtNode', 'findDOMNode']],
+        'react-dom/client': ['WordJS.ReactDOMClient', ['createRoot', 'hydrateRoot']],
+        'react/jsx-runtime': ['WordJS.JSXRuntime', ['jsx', 'jsxs', 'Fragment']],
+        'react/jsx-dev-runtime': ['WordJS.JSXRuntime', ['jsx', 'jsxs', 'jsxDEV', 'Fragment']],
+    };
+    // Extract runtime export names from a host source file (values only — types are erased).
+    function hostExportNames(key) {
+        const base = path.join(HOST_SRC, key);
+        const file = ['.ts', '.tsx', '.js', '.jsx'].map((e) => base + e).find((f) => fs.existsSync(f));
+        if (!file) return [];
+        const src = fs.readFileSync(file, 'utf8');
+        const names = new Set();
+        let m;
+        const re1 = /export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z0-9_$]+)/g;
+        while ((m = re1.exec(src))) names.add(m[1]);
+        const re2 = /export\s*\{([^}]+)\}(?!\s*from)/g;   // `export { a, b as c }` (not re-exports)
+        while ((m = re2.exec(src))) {
+            for (const part of m[1].split(',')) {
+                const name = part.trim().split(/\s+as\s+/).pop().trim();
+                if (name && name !== 'default') names.add(name);
+            }
+        }
+        names.delete('default');
+        return [...names];
+    }
+    function shim(runtimeExpr, names) {
+        return [
+            `const __m = ${runtimeExpr};`,
+            `if (!__m) throw new Error(${JSON.stringify(`WordJS host did not provide ${runtimeExpr} — plugin bundle cannot run`)});`,
+            `export default (__m && __m.default !== undefined) ? __m.default : __m;`,
+            ...names.map((n) => `export const ${n} = __m[${JSON.stringify(n)}];`),
+        ].join('\n');
+    }
+    // Map an import path (alias or relative) to a host-module key, or null if it is not host source.
+    function hostKeyFor(importPath, resolveDir) {
+        if (importPath.startsWith('@/')) return importPath.slice(2);
+        if (/frontend[\\/]src[\\/]/.test(importPath)) {
+            const abs = path.resolve(resolveDir, importPath);
+            const root = path.resolve(HOST_SRC);
+            if (abs === root || abs.startsWith(root + path.sep)) {
+                return path.relative(root, abs).split(path.sep).join('/').replace(/\.(tsx?|jsx?)$/, '');
+            }
+        }
+        return null;
+    }
+    const wordjsGlobals = {
+        name: 'wordjs-globals',
+        setup(build) {
+            build.onResolve({ filter: /^(react($|\/)|react-dom($|\/))/ }, (args) => (
+                REACT_GLOBALS[args.path] ? { path: args.path, namespace: 'wjs-react' } : null
+            ));
+            build.onResolve({ filter: /(^@\/)|(frontend[\\/]src[\\/])/ }, (args) => {
+                const key = hostKeyFor(args.path, args.resolveDir);
+                if (key == null) return null;                         // a plugin-local relative path
+                if (HOST_MODULES.includes(key)) return { path: key, namespace: 'wjs-host' };
+                return { errors: [{ text: `Plugin imports host module "${args.path}" (${key}) which is not exposed to plugin bundles. Add it to HOST_MODULES in build-plugin.js and inject it in pluginBundleLoader.ts, or drop the import.` }] };
+            });
+            build.onLoad({ filter: /.*/, namespace: 'wjs-react' }, (args) => {
+                const [globalPath, names] = REACT_GLOBALS[args.path];
+                return { contents: shim(`globalThis.${globalPath}`, names), loader: 'js' };
+            });
+            build.onLoad({ filter: /.*/, namespace: 'wjs-host' }, (args) => {
+                const expr = `globalThis.WordJS.host && globalThis.WordJS.host[${JSON.stringify(args.path)}]`;
+                return { contents: shim(expr, hostExportNames(args.path)), loader: 'js' };
+            });
+        },
+    };
+
     // Build each entry point
     for (const entry of entryPoints) {
         const outfile = path.join(distDir, `${entry.name}.bundle.js`);
@@ -140,8 +245,10 @@ async function buildPlugin(slug) {
                 platform: 'browser',
                 outfile: outfile,
 
-                // CRITICAL: External dependencies (prevents React duplication)
-                external: EXTERNALS,
+                // React & friends resolve to the host-injected globals (see wordjsGlobals above);
+                // anything else in EXTERNALS stays a genuine external.
+                external: EXTERNALS.filter((e) => !/^(react|react-dom)(\/.*)?$/.test(e)),
+                plugins: [wordjsGlobals],
 
                 // Minify for production
                 minify: true,

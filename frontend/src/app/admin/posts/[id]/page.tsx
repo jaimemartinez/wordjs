@@ -4,6 +4,7 @@ import { useEffect, useState, useRef, useMemo } from "react";
 import { useRouter, useParams } from "next/navigation";
 import { postsApi, categoriesApi, Category } from "@/lib/api";
 import { postConfig } from "@/components/puckConfig";
+import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
 import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
@@ -238,6 +239,8 @@ export default function PostEditorPage() {
     };
 
     const localizedConfig = useMemo(() => localizeConfig(postConfig, language), [language]);
+    // Add active marketplace plugins' Puck blocks to the editor palette/canvas at runtime.
+    const runtimeConfig = useRuntimePuckConfig(localizedConfig);
 
     if (isLoading) {
         return <PuckEditorSkeleton />;
@@ -252,7 +255,7 @@ export default function PostEditorPage() {
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
             <PuckEditor
-                config={localizedConfig}
+                config={runtimeConfig}
                 initialData={puckData}
                 status={status}
                 onStatusChange={setStatus}
