@@ -13,6 +13,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const AdmZip = require('adm-zip');
+const { spawnSync } = require('child_process');
 
 const ROOT = path.resolve(__dirname, '../..');
 const SRC = path.join(ROOT, 'marketplace', 'plugins');
@@ -50,6 +51,26 @@ function toPascalCase(slug) {
     return String(slug).split(/[-_]/).filter(Boolean).map((s) => s[0].toUpperCase() + s.slice(1)).join('');
 }
 
+/**
+ * Compile a plugin's frontend entries (adminPage/component/hooks) into <plugin>/dist/*.bundle.js by
+ * running build-plugin.js against the MARKETPLACE source tree. No-op for plugins that declare no
+ * frontend entries. Failing to build is fatal: shipping a zip whose admin page can never load is
+ * worse than failing the catalog build loudly.
+ */
+function buildFrontendBundles(slug, manifest) {
+    const fe = manifest.frontend || {};
+    const hasEntries = Boolean(fe.adminPage?.entry || fe.component?.entry || fe.hooks?.entry);
+    if (!hasEntries) return;
+    const script = path.join(__dirname, 'build-plugin.js');
+    const r = spawnSync(process.execPath, [script, slug], {
+        env: { ...process.env, WORDJS_PLUGINS_DIR: SRC },
+        encoding: 'utf8',
+    });
+    if (r.status !== 0) {
+        throw new Error(`${slug}: frontend bundle build failed\n${r.stdout || ''}${r.stderr || ''}`);
+    }
+}
+
 function buildOne(slug) {
     const dir = path.join(SRC, slug);
     const manifestPath = path.join(dir, 'manifest.json');
@@ -58,6 +79,12 @@ function buildOne(slug) {
     if (manifest.id !== slug) throw new Error(`${slug}: manifest id "${manifest.id}" != folder name`);
     if (manifest.isolated !== true) throw new Error(`${slug}: manifest must declare "isolated": true`);
     const version = String(manifest.version || '1.0.0');
+
+    // Compile this plugin's frontend entries to dist/*.bundle.js BEFORE zipping, so the catalog zip
+    // ships them. dist/ is gitignored (`**/dist/`), so on a clean CI checkout it does not exist —
+    // without this step every marketplace plugin installs WITHOUT a runtime bundle and its admin page
+    // renders "Plugin Not Found" in production (the pre-built .next can only know build-time plugins).
+    buildFrontendBundles(slug, manifest);
 
     const zip = new AdmZip();
     // Sort for a stable entry order; fix entry mtimes so rebuilding unchanged sources yields

@@ -154,7 +154,8 @@ async function generateAdminRegistry() {
 
 import dynamic from "next/dynamic";
 import { useParams } from "next/navigation";
-import { useEffect, useState, Suspense } from "react";
+import { useEffect, useMemo, useState, Suspense } from "react";
+import { createRemotePluginComponent } from "@/lib/pluginBundleLoader";
 
 const PLUGIN_ADMIN_PAGES: Record<string, () => Promise<any>> = {
 ${imports}
@@ -235,16 +236,21 @@ export default function PluginAdminPage() {
             .catch(() => {});
     }, [slug, cssUrl, dir]);
 
-    if (!PLUGIN_ADMIN_PAGES[slug]) {
-        return <PluginNotFound slug={slug} />;
-    }
-
-    const PluginPage = dynamic(
-        () => PLUGIN_ADMIN_PAGES[slug]().catch(() => ({
-            default: () => <PluginNotFound slug={slug} />
-        })),
-        { loading: () => <LoadingFallback />, ssr: false }
-    );
+    // Plugins present at BUILD time are compiled into the map above. Plugins installed at RUNTIME
+    // (from the marketplace) can NEVER be in it: a production install ships a pre-built .next and has
+    // no rebuild step, so the map is frozen at whatever shipped. Fall back to the runtime loader,
+    // which fetches the plugin's pre-compiled dist/admin.bundle.js from the backend. Without this
+    // fallback EVERY marketplace-installed plugin's admin page renders "Plugin Not Found" in prod.
+    const PluginPage = useMemo(() => {
+        const staticLoader = PLUGIN_ADMIN_PAGES[slug];
+        if (staticLoader) {
+            return dynamic(
+                () => staticLoader().catch(() => ({ default: () => <PluginNotFound slug={slug} /> })),
+                { loading: () => <LoadingFallback />, ssr: false }
+            );
+        }
+        return createRemotePluginComponent(slug, "admin", () => <PluginNotFound slug={slug} />);
+    }, [slug]);
 
     return (
         <div className={\`plugin-admin-wrapper plugin-admin-\${slug} h-full overflow-y-auto custom-scrollbar\`}>

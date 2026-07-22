@@ -272,6 +272,55 @@ app.use('/uploads', express.static(path.resolve(config.uploads.dir), {
 // Theme/plugin assets CAN change in place on update, so cache 1h (not immutable) — the browser reuses
 // them for an hour, then ETag-revalidates (cheap 304). Big win without risking stale code after an update.
 app.use('/themes', express.static(path.resolve('./themes'), { dotfiles: 'deny', maxAge: '1h' }));
+
+// Plugins declare an admin-page URL slug (manifest.frontend.adminPage.slug) that frequently DIFFERS
+// from the on-disk folder (e.g. slug "youtube" → folder "youtube-videos"). The admin shell requests a
+// plugin's assets under the SLUG (/plugins/<slug>/client/admin/admin.css, /plugins/<slug>/manifest.json).
+// For plugins BAKED into the frontend build the slug→folder map is compiled in, but a plugin installed
+// at RUNTIME isn't in that map, so its stylesheet 404s and its admin page renders UNSTYLED. Rewrite the
+// leading path segment slug→folder before the static handler so any asset resolves regardless of how the
+// plugin was installed (cached; no-op when the segment is already a real folder).
+const PLUGINS_ROOT = path.resolve('./plugins');
+const adminSlugFolderCache = new Map<string, string>();
+// Resolve <folder>/manifest.json under PLUGINS_ROOT, confirming it stays inside the root (path-injection
+// barrier). Returns the absolute manifest path, or null if the segment escapes.
+function pluginManifestPath(folder: string): string | null {
+    const root = path.resolve(PLUGINS_ROOT);
+    const p = path.resolve(root, folder, 'manifest.json');
+    return p.startsWith(root + path.sep) ? p : null;
+}
+function resolveAdminSlugFolder(seg: string): string | null {
+    if (!/^[a-zA-Z0-9_-]+$/.test(seg)) return null;                        // reject traversal / odd names
+    const direct = pluginManifestPath(seg);
+    if (direct && fs.existsSync(direct)) return seg;                       // already a folder
+    const cached = adminSlugFolderCache.get(seg);
+    const cachedPath = cached ? pluginManifestPath(cached) : null;
+    if (cachedPath && fs.existsSync(cachedPath)) return cached!;
+    let dirs: string[] = [];
+    try {
+        dirs = fs.readdirSync(PLUGINS_ROOT, { withFileTypes: true })
+            .filter((d: any) => d.isDirectory()).map((d: any) => d.name);
+    } catch { return null; }
+    for (const folder of dirs) {
+        if (!/^[a-zA-Z0-9_-]+$/.test(folder)) continue;
+        const mp = pluginManifestPath(folder);
+        if (!mp) continue;
+        try {
+            const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
+            if (m?.frontend?.adminPage?.slug === seg) { adminSlugFolderCache.set(seg, folder); return folder; }
+        } catch { /* unreadable/invalid manifest → skip */ }
+    }
+    return null;
+}
+app.use('/plugins', (req: any, _res: any, next: any) => {
+    const parts = req.url.split('/');           // req.url is post-mount: "/<seg>/rest..." → ['', seg, ...]
+    const seg = parts[1] ? decodeURIComponent(parts[1].split('?')[0]) : '';
+    if (seg) {
+        const folder = resolveAdminSlugFolder(seg);
+        if (folder && folder !== seg) { parts[1] = folder; req.url = parts.join('/'); }
+    }
+    next();
+});
 app.use('/plugins', express.static(path.resolve('./plugins'), { dotfiles: 'deny', maxAge: '1h' }));
 // Serve .well-known (ACME support) - Allow dotfiles. NEVER cache challenge tokens (short-lived, per-order).
 app.use('/.well-known', express.static(path.resolve('./public/.well-known'), { dotfiles: 'allow' }));

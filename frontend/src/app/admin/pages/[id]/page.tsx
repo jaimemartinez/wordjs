@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { useRouter, useParams } from "next/navigation";
 import { postsApi, settingsApi } from "@/lib/api";
 import { pageConfig } from "@/components/puckConfig";
+import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
 import { localizeConfig } from "@/lib/puckI18n";
 import PuckEditor from "@/components/PuckEditor";
 import PuckEditorSkeleton from "@/components/PuckEditorSkeleton";
@@ -241,6 +242,8 @@ export default function PageEditorPage() {
     };
 
     const localizedConfig = useMemo(() => localizeConfig(pageConfig, language), [language]);
+    // Add active marketplace plugins' Puck blocks to the editor palette/canvas at runtime.
+    const runtimeConfig = useRuntimePuckConfig(localizedConfig);
 
     // Never mount the editor for a user without edit rights (redirect to /admin/account is in flight).
     if (!allowedToEdit) {
@@ -260,7 +263,7 @@ export default function PageEditorPage() {
     return (
         <div className="h-full w-full overflow-hidden flex flex-col">
             <PuckEditor
-                config={localizedConfig}
+                config={runtimeConfig}
                 initialData={initialPuckData || { content: [], root: {} }}
                 status={status}
                 onStatusChange={setStatus}
