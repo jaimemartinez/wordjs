@@ -35,7 +35,7 @@ Run from `backend/`.
 The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.10.0`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
 
 ```bash
-npx create-wordjs my-site
+npx create-wordjs@latest my-site
 ```
 
 It (1) looks up the **latest pre-compiled release ZIP** from GitHub (`jaimemartinez/wordjs`, following the release-asset redirect), (2) extracts it into `my-site/` and installs the runtime dependencies (`npm run release:install` in the extracted bundle), then (3) mints a one-time install token and starts the monolith (`npm run start:mono`), printing a clickable `https://localhost:3000/install?token=…` URL — the browser install wizard takes over (pick SQLite / PostgreSQL, create the admin).
@@ -52,14 +52,14 @@ The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 ra
 
 ### Subcommands (beyond the default scaffold)
 
-The default `npx create-wordjs <dir>` above installs a single-machine site. The same bin also has subcommands for **in-place upgrades** and **separate mode** (the three services on **different** machines), so the whole cluster can be stood up without cloning the repo:
+The default `npx create-wordjs@latest <dir>` above installs a single-machine site. The same bin also has subcommands for **in-place upgrades** and **separate mode** (the three services on **different** machines), so the whole cluster can be stood up without cloning the repo:
 
 | Command | Purpose |
 | :--- | :--- |
-| `npx create-wordjs <dir>` | Fresh single-machine install (monolith), as above. |
-| `npx create-wordjs upgrade [dir]` | Replace the app code in an existing install with the latest release **in place**, preserving `wordjs-config.json`, gateway secrets, the database, and user-installed plugins. |
-| `npx create-wordjs gateway [dir] [opts]` | Stand up a **separate-mode gateway**: fetches the release, then runs the bundled `scripts/cluster.js init` to mint the cluster CA + gateway certs and prints ready-to-paste `join` commands (with fresh single-use tokens). Key option: `--host <ip/dns>` (the address other machines dial to reach this gateway). |
-| `npx create-wordjs join <role> [dir] [opts]` | Join **this** machine to a gateway as `backend` or `frontend`: fetches the release, then runs the bundled `scripts/node-join.js` to enroll over the token listener and register over mTLS. Options: `--gateway <ip/dns>`, `--token <join-token>`, `--ca-hash <sha256>` (MITM guard), `--advertise <ip/dns>` (this node's routable address), `--enroll-port <port>` (default 3101). Needs `openssl` on `PATH`. |
+| `npx create-wordjs@latest <dir>` | Fresh single-machine install (monolith), as above. |
+| `npx create-wordjs@latest upgrade [dir]` | Replace the app code in an existing install with the latest release **in place**, preserving `wordjs-config.json`, gateway secrets, the database, and user-installed plugins. |
+| `npx create-wordjs@latest gateway [dir] [opts]` | Stand up a **separate-mode gateway**: fetches the release, then runs the bundled `scripts/cluster.js init` to mint the cluster CA + gateway certs and prints ready-to-paste `join` commands (with fresh single-use tokens). Key option: `--host <ip/dns>` (the address other machines dial to reach this gateway). |
+| `npx create-wordjs@latest join <role> [dir] [opts]` | Join **this** machine to a gateway as `backend` or `frontend`: fetches the release, then runs the bundled `scripts/node-join.js` to enroll over the token listener and register over mTLS. Options: `--gateway <ip/dns>`, `--token <join-token>`, `--ca-hash <sha256>` (MITM guard), `--advertise <ip/dns>` (this node's routable address), `--enroll-port <port>` (default 3101). Needs `openssl` on `PATH`. |
 
 So `create-wordjs gateway` / `join` are the one-command equivalents of the in-repo `scripts/cluster.js` / `scripts/node-join.js` walkthrough in [§ 6a](#6a-cluster-enrollment-separate-mode-) below — see **[separate-mode.md](separate-mode.md)** for the full flow.
 

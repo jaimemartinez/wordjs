@@ -32,9 +32,9 @@ A single artifact via the repo-root entrypoint `monolith.js`. It mounts the **ba
 **Split** can also run with the three services on **different hosts** — a gateway box, a backend box, and a frontend box — joined into one cluster. Because the tiers talk over **mutual TLS**, each node needs a cert signed by a shared cluster CA; WordJS bootstraps that trust with **single-use join tokens** (like `kubeadm join`) instead of hand-copying certs. **One command per machine:**
 
 ```bash
-npx create-wordjs gateway --host <gateway-ip>     # machine 1: cluster CA + prints ready-to-paste join commands
-npx create-wordjs join backend  --gateway <ip> --token <t> --ca-hash <fp> --advertise <backend-ip>
-npx create-wordjs join frontend --gateway <ip> --token <t> --ca-hash <fp> --advertise <frontend-ip>
+npx create-wordjs@latest gateway --host <gateway-ip>     # machine 1: cluster CA + prints ready-to-paste join commands
+npx create-wordjs@latest join backend  --gateway <ip> --token <t> --ca-hash <fp> --advertise <backend-ip>
+npx create-wordjs@latest join frontend --gateway <ip> --token <t> --ca-hash <fp> --advertise <frontend-ip>
 ```
 
 Each command downloads the pre-compiled release, enrolls the machine and starts its service. Under the hood (and the manual path from a source checkout — `scripts/cluster.js init` / `token`, `scripts/node-join.js`): the gateway mints the CA (key kept `0600` on the gateway) and per-role single-use tokens; each node makes one `POST /enroll` call with a CSR, receives a signed `CN=<role>` cert + the cluster CA + bootstrap config, then starts and registers over mTLS.
@@ -100,7 +100,7 @@ The workflow then publishes a **GitHub Release** with the versioned `wordjs-<tag
 
 > **Fastest path — `npx create-wordjs`.** The `create-wordjs` bootstrapper (`packages/create-wordjs`, published to npm by the same release pipeline) downloads and unpacks the latest release ZIP for you:
 > ```bash
-> npx create-wordjs my-site
+> npx create-wordjs@latest my-site
 > ```
 > Then `cd my-site`, `npm run release:install`, and `npm run start:mono` (or `npm start`). The manual download below is the equivalent, step-by-step alternative.
 

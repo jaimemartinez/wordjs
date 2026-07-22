@@ -3,17 +3,23 @@
 Bootstrap a [WordJS](https://github.com/jaimemartinez/wordjs) site with one command:
 
 ```bash
-npx create-wordjs my-site
+npx create-wordjs@latest my-site
 ```
+
+> **Always include `@latest`.** `npx` caches downloaded packages, so a bare `npx create-wordjs`
+> can silently re-run an **old cached copy**. An old copy won't recognize newer subcommands — e.g.
+> `npx create-wordjs upgrade my-site` on a stale cache fails with `✖ Unexpected extra argument:
+> my-site`, because that version predates the `upgrade` command. `@latest` always fetches the
+> current release. (If it still runs an old copy, clear the cache: `rm -rf ~/.npm/_npx`.)
 
 It also **upgrades** an existing site and sets up **separate mode** (gateway + backend + frontend
 on different machines) — see below:
 
 ```bash
-npx create-wordjs upgrade [dir]              # upgrade an existing install in place
-npx create-wordjs gateway --host <ip>        # machine 1: cluster gateway (CA + join tokens)
-npx create-wordjs join backend  --gateway <ip> --token <t> --ca-hash <fp> --advertise <ip>
-npx create-wordjs join frontend --gateway <ip> --token <t> --ca-hash <fp> --advertise <ip>
+npx create-wordjs@latest upgrade [dir]              # upgrade an existing install in place
+npx create-wordjs@latest gateway --host <ip>        # machine 1: cluster gateway (CA + join tokens)
+npx create-wordjs@latest join backend  --gateway <ip> --token <t> --ca-hash <fp> --advertise <ip>
+npx create-wordjs@latest join frontend --gateway <ip> --token <t> --ca-hash <fp> --advertise <ip>
 ```
 
 That single command takes you from nothing to the browser install wizard:
@@ -59,7 +65,7 @@ Separate-mode options:
 ## Upgrade an existing site
 
 ```bash
-cd .. && npx create-wordjs upgrade my-site      # or run it from inside: npx create-wordjs upgrade .
+cd .. && npx create-wordjs@latest upgrade my-site      # or run it from inside: npx create-wordjs@latest upgrade .
 ```
 
 Downloads the newest release and replaces the app code while **preserving your data**: the SQLite
@@ -74,7 +80,7 @@ machine:
 
 ```bash
 # Machine 1 — the gateway (mints the cluster CA and one token per role):
-npx create-wordjs gateway --host 10.0.0.1
+npx create-wordjs@latest gateway --host 10.0.0.1
 ```
 
 It downloads the release, initializes the cluster CA, starts the gateway, and prints the exact
@@ -82,10 +88,10 @@ It downloads the release, initializes the cluster CA, starts the gateway, and pr
 
 ```bash
 # Machine 2 — backend (paste what the gateway printed):
-npx create-wordjs join backend  --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.2
+npx create-wordjs@latest join backend  --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.2
 
 # Machine 3 — frontend:
-npx create-wordjs join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
+npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
 ```
 
 Each `join` downloads the release, enrolls against the gateway (the token authorizes exactly one
@@ -105,7 +111,7 @@ gateway over mTLS. Browse `https://<gateway>:3000` when all three are up. `join`
 - **GitHub rate limit / offline**: the release lookup uses the unauthenticated GitHub API. If it
   is rate-limited or you're offline, download `wordjs-v*.zip` from the
   [releases page](https://github.com/jaimemartinez/wordjs/releases) and run
-  `npx create-wordjs my-site --zip ./wordjs-v1.0.0.zip`.
+  `npx create-wordjs@latest my-site --zip ./wordjs-v1.0.0.zip`.
 - **Existing directories**: the target directory must not exist (or must be empty) — the tool
   refuses to overwrite anything.
 
