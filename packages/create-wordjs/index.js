@@ -4,7 +4,7 @@
 /**
  * create-wordjs — bootstrap a WordJS site with ONE command:
  *
- *     npx create-wordjs my-site
+ *     npx create-wordjs@latest my-site
  *
  * What it does:
  *   1. Downloads the latest pre-compiled WordJS release ZIP from GitHub (no build step needed).
@@ -42,10 +42,10 @@ const HELP = `
 create-wordjs — bootstrap or upgrade a WordJS site with one command
 
 Usage:
-  npx create-wordjs <dir> [options]            Create a new site (monolith — one machine)
-  npx create-wordjs upgrade [dir] [options]    Upgrade an existing site (dir defaults to .)
-  npx create-wordjs gateway [dir] [options]    Set up a SEPARATE-MODE gateway (cluster CA + join tokens)
-  npx create-wordjs join <role> [dir] [opts]   Join this machine to a gateway as backend|frontend
+  npx create-wordjs@latest <dir> [options]            Create a new site (monolith — one machine)
+  npx create-wordjs@latest upgrade [dir] [options]    Upgrade an existing site (dir defaults to .)
+  npx create-wordjs@latest gateway [dir] [options]    Set up a SEPARATE-MODE gateway (cluster CA + join tokens)
+  npx create-wordjs@latest join <role> [dir] [opts]   Join this machine to a gateway as backend|frontend
 
 Options:
   --zip <path-or-url>   Use a local release ZIP (or a direct ZIP URL) instead of asking GitHub.
@@ -64,18 +64,18 @@ Options:
   -h, --help            Show this help.
 
 Examples:
-  npx create-wordjs my-site
-  npx create-wordjs my-site --version v1.0.0
-  npx create-wordjs upgrade                     # from inside your site directory
-  npx create-wordjs upgrade ./my-site --yes
+  npx create-wordjs@latest my-site
+  npx create-wordjs@latest my-site --version v1.0.0
+  npx create-wordjs@latest upgrade                     # from inside your site directory
+  npx create-wordjs@latest upgrade ./my-site --yes
 
 Separate mode (three machines) — run one command per machine:
   # on the gateway machine (prints ready-to-paste join commands with fresh tokens):
-  npx create-wordjs gateway --host 10.0.0.1
+  npx create-wordjs@latest gateway --host 10.0.0.1
   # on the backend machine:
-  npx create-wordjs join backend  --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.2
+  npx create-wordjs@latest join backend  --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.2
   # on the frontend machine:
-  npx create-wordjs join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
+  npx create-wordjs@latest join frontend --gateway 10.0.0.1 --token <t> --ca-hash <fp> --advertise 10.0.0.3
   (join needs 'openssl' on PATH. See documentation/separate-mode.md.)
 
 Upgrading preserves your database (backend/data), uploads (backend/uploads), config
@@ -128,7 +128,7 @@ function parseArgs(argv) {
         if (opts.mode === 'upgrade') opts.dir = '.';                                   // upgrade defaults to cwd
         else if (opts.mode === 'gateway') opts.dir = 'wordjs-gateway';
         else if (opts.mode === 'join') opts.dir = opts.role ? `wordjs-${opts.role}` : 'wordjs-node';
-        else fail('Please specify a directory for your new site.', 'Example: npx create-wordjs my-site');
+        else fail('Please specify a directory for your new site.', 'Example: npx create-wordjs@latest my-site');
     }
     if (opts.version && /^\d/.test(opts.version)) opts.version = 'v' + opts.version;   // accept "1.0.0" for "v1.0.0"
     return opts;
@@ -389,7 +389,7 @@ async function upgrade(opts) {
     // Verify this is a real, configured WordJS install (not an empty dir or the wrong folder).
     if (!fs.existsSync(pkgPath) || !fs.existsSync(cfgPath)) {
         fail(`"${opts.dir}" does not look like a WordJS install.`,
-            'Run this from your site directory (it must contain backend/wordjs-config.json), or pass the path: npx create-wordjs upgrade <dir>.');
+            'Run this from your site directory (it must contain backend/wordjs-config.json), or pass the path: npx create-wordjs@latest upgrade <dir>.');
     }
     let curPkg = {};
     try { curPkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8')); } catch { /* handled below */ }
@@ -556,11 +556,11 @@ async function gateway(opts) {
     console.log('   Run ONE of these on each other machine (they auto-download + enroll + start):');
     console.log('');
     console.log('   # backend machine:');
-    console.log(`   npx create-wordjs join backend --gateway ${host} --token ${beTok} \\`);
+    console.log(`   npx create-wordjs@latest join backend --gateway ${host} --token ${beTok} \\`);
     console.log(`        --ca-hash ${fp} --advertise <this-backend-ip>`);
     console.log('');
     console.log('   # frontend machine:');
-    console.log(`   npx create-wordjs join frontend --gateway ${host} --token ${feTok} \\`);
+    console.log(`   npx create-wordjs@latest join frontend --gateway ${host} --token ${feTok} \\`);
     console.log(`        --ca-hash ${fp} --advertise <this-frontend-ip>`);
     console.log('');
     console.log('   Tokens are single-use and expire in 120 min. Mint more anytime:');
@@ -581,7 +581,7 @@ async function gateway(opts) {
 // single-use token (delegates to scripts/node-join.js), then start + register the service.
 async function join(opts) {
     if (!['backend', 'frontend'].includes(opts.role)) {
-        fail('join needs a role: backend or frontend.', 'Example: npx create-wordjs join backend --gateway <ip> --token <t>');
+        fail('join needs a role: backend or frontend.', 'Example: npx create-wordjs@latest join backend --gateway <ip> --token <t>');
     }
     if (!opts.gateway) fail('--gateway <gateway-ip/dns> is required for join.');
     if (!opts.token) fail('--token <join-token> is required for join.', `Mint one on the gateway: node scripts/cluster.js token ${opts.role}`);

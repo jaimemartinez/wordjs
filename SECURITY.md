@@ -77,5 +77,5 @@ WordJS is pre-production; only the latest `main` and the current `1.12.x` releas
 | Version   | Supported | Notes                                              |
 | :-------- | :-------- | :------------------------------------------------- |
 | `main`    | ✅         | Latest development line (the only one patched)     |
-| `1.12.x`  | ✅         | Current release line (latest tag `v1.12.1`)        |
+| `1.12.x`  | ✅         | Current release line (latest tag `v1.12.2`)        |
 | < `1.12`  | ⚠️        | Best-effort; upgrade to `1.12.x` or latest `main`  |

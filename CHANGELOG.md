@@ -4,6 +4,19 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.2] - 2026-07-22
+
+A documentation patch.
+
+### Docs
+
+- **`create-wordjs` now documents `npx create-wordjs@latest …` everywhere** (README, `--help`, the
+  gateway-printed `join` commands, and `documentation/`). `npx` caches downloaded packages, so a bare
+  `npx create-wordjs` could silently re-run an **old cached copy** — one that predates the `upgrade`
+  subcommand and rejects it with a confusing `✖ Unexpected extra argument`. Pinning `@latest` (the
+  standard convention for `create-*` tools) always fetches the current release. The README also adds a
+  note and the `rm -rf ~/.npm/_npx` cache-clear escape hatch. No runtime code changed.
+
 ## [1.12.1] - 2026-07-22
 
 A security patch tightening the v1.12.0 DNS bridge.
