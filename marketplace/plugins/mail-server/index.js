@@ -33,6 +33,15 @@ const crypto = require('crypto');
 // The single source of truth is Email.UPLOAD_DIR (set in email-store); mirror it here for path joins.
 const UPLOAD_DIR = path.join(__dirname, 'data/attachments');
 
+// Best-effort HTML -> plaintext for the text/plain MIME alternative and list previews. A single-pass
+// tag strip (/<[^>]*>/g) is an INCOMPLETE sanitizer: an unterminated tag such as a stray "<script"
+// with no closing ">" never matches and survives (CodeQL js/incomplete-multi-character-sanitization).
+// Remove complete tags, then drop any residual angle brackets so no "<tag" fragment can remain.
+// Text nodes / whitespace / newlines are preserved (only literal < and > are dropped).
+function stripHtml(s) {
+    return String(s == null ? '' : s).replace(/<[^>]*>/g, '').replace(/[<>]/g, '');
+}
+
 exports.metadata = {
     name: 'Mail Server',
     version: '2.1.0',
@@ -171,7 +180,7 @@ async function maybeVacationAutoReply(user, senderEmail, origSubject) {
         await sendMail({
             to: sender,
             subject,
-            text: html.replace(/<[^>]*>/g, ''),
+            text: stripHtml(html),
             html,
             fromEmail: user.userEmail,
             fromName: user.displayName || user.username || '',
@@ -1830,7 +1839,7 @@ exports.init = async function (bridge) {
                 ccAddress: splitAddresses(cc).join(', '),
                 bccAddress: splitAddresses(bcc).join(', '),
                 subject: subject || '',
-                bodyText: isHtml ? body.replace(/<[^>]*>/g, '') : body,
+                bodyText: isHtml ? stripHtml(body) : body,
                 bodyHtml: isHtml ? body : null,
                 rawContent: body || '',
                 isDraft: 1,
@@ -1936,7 +1945,7 @@ exports.init = async function (bridge) {
                     ccAddress: ccList.join(', '),
                     bccAddress: bccList.join(', '),
                     subject: subject || '',
-                    bodyText: isHtml ? body.replace(/<[^>]*>/g, '') : body,
+                    bodyText: isHtml ? stripHtml(body) : body,
                     bodyHtml: isHtml ? body : null,
                     rawContent: body || '',
                     isDraft: 0,
@@ -1974,7 +1983,7 @@ exports.init = async function (bridge) {
                 cc: ccList,
                 bcc: bccList,
                 subject,
-                text: isHtml ? body.replace(/<[^>]*>/g, '') : body,
+                text: isHtml ? stripHtml(body) : body,
                 html: isHtml ? body : null,
                 fromEmail: req.user.userEmail,
                 fromName: req.user.displayName || req.user.userLogin,
