@@ -8,8 +8,13 @@ const dev = process.env.NODE_ENV !== 'production';
 const app = next({ dev });
 const handle = app.getRequestHandler();
 
-// Configuration for mTLS
-const certDir = path.resolve(process.cwd(), 'certs');
+// Configuration for mTLS. SEPARATE mode: node-join writes the frontend's cert to frontend/certs. LOCAL
+// split (one machine): the install generates all service certs into backend/certs — so fall back there
+// when frontend/certs hasn't been provisioned. Without this the frontend serves plain HTTP while it still
+// registers itself as https:// with the gateway → the gateway's HTTPS proxy fails (EPROTO) → 502.
+const localCertDir = path.resolve(process.cwd(), 'certs');
+const beCertDir = path.resolve(process.cwd(), '..', 'backend', 'certs');
+const certDir = fs.existsSync(path.join(localCertDir, 'frontend.crt')) ? localCertDir : beCertDir;
 const caPath = path.join(certDir, 'cluster-ca.crt');
 const keyPath = path.join(certDir, 'frontend.key');
 const certPath = path.join(certDir, 'frontend.crt');
