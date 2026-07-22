@@ -148,13 +148,16 @@ test('Plugin with node_modules/ is detected as bundled', () => {
     fs.rmSync(nodeModulesDir, { recursive: true });
 });
 
-test('Plugin with dist/*.bundle.js is detected as bundled', () => {
+test('Plugin with only a dist/*.bundle.js is NOT bundled (frontend bundle != packaged npm deps)', () => {
+    // A compiled FRONTEND bundle (admin/block/hooks) must not mark a plugin as having its backend npm
+    // deps packaged — otherwise its declared dependencies are wrongly skipped at activation. Every
+    // marketplace plugin now ships a dist bundle, so this must stay false.
     const distDir = path.join(tmpDir, 'dist');
     fs.mkdirSync(distDir, { recursive: true });
-    fs.writeFileSync(path.join(distDir, 'plugin.bundle.js'), 'test');
+    fs.writeFileSync(path.join(distDir, 'admin.bundle.js'), 'test');
 
     const { isBundledPlugin } = require('../core/plugins');
-    expect(isBundledPlugin(tmpDir, {})).toBeTrue();
+    expect(isBundledPlugin(tmpDir, {})).toBeFalse();
 
     // Cleanup
     fs.rmSync(distDir, { recursive: true });
