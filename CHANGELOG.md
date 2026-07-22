@@ -4,6 +4,22 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.1] - 2026-07-22
+
+A security patch tightening the v1.12.0 DNS bridge.
+
+### Security
+
+- **The plugin DNS bridge now reuses the egress-guard's `isBlockedIp` policy** to strip private-IP
+  answers, instead of a hand-rolled filter that had drifted from it. The old filter classified IPv6 by
+  textual prefix and so leaked private answers in several forms a real system resolver can return:
+  hex-form IPv4-mapped metadata (`::ffff:a9fe:a9fe`), expanded loopback (`0:0:0:0:0:0:0:1`), NAT64
+  (`64:ff9b::/96`) / 6to4 (`2002::/16`) wrapping a private v4, `fec0::/10` site-local, and IPv4/IPv6
+  multicast + reserved. `isBlockedIp` classifies by numeric bytes, so every spelling is caught, and it
+  fails closed on unparseable input. Network-grant-gated and low-severity — the socket connection was
+  always egress-guarded, so this was internal-IP *recon* via `resolve4`/`resolve6`, not direct reach —
+  but now closed. `resolveMx`/`resolveTxt` behavior is unchanged.
+
 ## [1.12.0] - 2026-07-22
 
 A **mail + connectivity** release: a sandbox-safe way for plugins to resolve DNS records, a full webmail
