@@ -609,32 +609,14 @@ function createPluginApi(slug: string) {
         // network grant that opens the socket modules — no separate scope.
         dns: (() => {
             const realDns = require('dns').promises;
-            const netMod = require('net');
-            // Mirror the egress-guard blocked-IP policy (loopback/RFC1918/link-local incl. cloud
-            // metadata/CGNAT/ULA/unspecified + IPv4-mapped IPv6). Fail-closed: an unparseable answer is
-            // treated as blocked and dropped.
-            const isPrivateIp = (raw: string): boolean => {
-                if (!raw || typeof raw !== 'string') return true;
-                let ip = raw.trim();
-                const m = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i); if (m) ip = m[1];
-                if (netMod.isIPv4(ip)) {
-                    const o = ip.split('.').map(Number);
-                    if (o[0] === 0 || o[0] === 10 || o[0] === 127) return true;
-                    if (o[0] === 169 && o[1] === 254) return true;                 // link-local + metadata
-                    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;      // RFC1918
-                    if (o[0] === 192 && o[1] === 168) return true;                  // RFC1918
-                    if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true;     // CGNAT
-                    return false;
-                }
-                if (netMod.isIPv6(ip)) {
-                    const lc = ip.toLowerCase();
-                    if (lc === '::1' || lc === '::') return true;
-                    if (lc.startsWith('fe8') || lc.startsWith('fe9') || lc.startsWith('fea') || lc.startsWith('feb')) return true; // fe80::/10
-                    if (lc.startsWith('fc') || lc.startsWith('fd')) return true;    // fc00::/7 ULA
-                    return false;
-                }
-                return true; // not a parseable IP → fail closed
-            };
+            // Reuse the egress-guard's blocked-IP policy VERBATIM — the single source of truth the
+            // connect/lookup/dgram guards already enforce — instead of a hand-rolled copy that drifted.
+            // isBlockedIp classifies by NUMERIC bytes, so it catches EVERY spelling of loopback/metadata
+            // (the hex-form IPv4-mapped '::ffff:a9fe:a9fe' and expanded '0:0:0:0:0:0:0:1' that a textual
+            // prefix-match misses), plus NAT64 (64:ff9b::/96) and 6to4 (2002::/16) wrapping a private v4,
+            // fec0::/10 site-local, and IPv4/IPv6 multicast+reserved. Fail-closed: an unparseable answer
+            // is treated as blocked and dropped.
+            const { isBlockedIp } = require('./egress-guard');
             const requireNetwork = () => {
                 let granted = false;
                 try { granted = require('./plugin-permissions').isNetworkGranted(slug); } catch { granted = false; }
@@ -644,10 +626,10 @@ function createPluginApi(slug: string) {
             return {
                 async resolveMx(domain: string) { requireNetwork(); return realDns.resolveMx(clean(domain)); },
                 async resolveTxt(name: string) { requireNetwork(); return realDns.resolveTxt(clean(name)); },
-                async resolve4(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isPrivateIp(ip)); },
-                async resolve6(host: string) { requireNetwork(); const a = await realDns.resolve6(clean(host)); return (a || []).filter((ip: string) => !isPrivateIp(ip)); },
+                async resolve4(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
+                async resolve6(host: string) { requireNetwork(); const a = await realDns.resolve6(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
                 // dns.promises.resolve() with no rrtype defaults to A records (string IPs) — mirror that.
-                async resolve(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isPrivateIp(ip)); },
+                async resolve(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isBlockedIp(ip)); },
             };
         })(),
 
