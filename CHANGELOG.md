@@ -4,6 +4,31 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.3] - 2026-07-22
+
+A bug-fix release: marketplace plugins now show their admin UI on a production install.
+
+### Fixed
+
+- **Marketplace-installed plugins render their admin page in production.** A plugin installed at runtime
+  from the marketplace showed **"Plugin Not Found"** — or, once loading, a **blank/unstyled panel** — for
+  its admin page on any production (pre-built) install. Root cause spanned four layers, all now fixed:
+  - **Admin router** resolved plugin pages only from a registry compiled into the frontend at *build*
+    time, so a plugin absent at build time had no page. It now falls back to loading the plugin's
+    pre-compiled `dist/admin.bundle.js` **at runtime** (the loader existed but was never wired up).
+  - **Packaging:** `build-marketplace` now compiles each plugin's frontend bundle into its catalog zip
+    (`dist/` is gitignored, so on a clean CI checkout the bundle didn't exist and never shipped).
+  - **Module resolution:** plugin bundles now resolve `react`/`react-dom` and the host `@/lib/api` /
+    modal context to host-injected `window.WordJS.*` globals. Previously these were left as bare
+    `import` specifiers that a blob-URL module cannot resolve, so every bundle failed to evaluate.
+  - **Static assets:** the `/plugins` handler now maps a plugin's admin URL slug to its on-disk folder
+    (e.g. `youtube` → `youtube-videos`), so `admin.css`/`manifest.json` resolve regardless of install
+    source. Without this the stylesheet 404'd and the admin page rendered unstyled.
+
+  Validated end-to-end on a clean production install (Proxmox LXC): installing `youtube-videos` from the
+  marketplace now renders its full, styled admin page. All 25 catalog plugins with an admin page ship a
+  runtime bundle.
+
 ## [1.12.2] - 2026-07-22
 
 A documentation patch.

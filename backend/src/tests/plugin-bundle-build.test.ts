@@ -1,0 +1,77 @@
+/**
+ * Guards the runtime plugin-bundle build (backend/scripts/build-plugin.js).
+ *
+ * ROOT CAUSE this locks down: marketplace-plugin admin UIs were dead in production because the bundle
+ * was emitted with React and the host `@/lib/api` left as bare `import ... from "react"` specifiers.
+ * The frontend loads the bundle via `import(blobURL)`, and a blob module cannot resolve a bare
+ * specifier → every plugin admin page rendered blank. The fix rewrites those imports onto the
+ * host-injected `window.WordJS.*` globals. If someone reverts to `external`, these tests fail.
+ */
+import { test } from 'node:test';
+import assert from 'node:assert';
+
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { spawnSync } = require('child_process');
+
+const BUILD_PLUGIN = path.resolve(__dirname, '../../scripts/build-plugin.js');
+
+function mkFixture(root: string, slug: string, adminSrc: string): string {
+    const dir = path.join(root, slug);
+    fs.mkdirSync(path.join(dir, 'client', 'admin'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+        id: slug, name: slug, version: '1.0.0', isolated: true,
+        frontend: { adminPage: { entry: './client/admin/page.tsx', slug } },
+    }));
+    fs.writeFileSync(path.join(dir, 'client', 'admin', 'page.tsx'), adminSrc);
+    return dir;
+}
+
+function build(root: string, slug: string): { status: number | null; out: string } {
+    const r = spawnSync(process.execPath, [BUILD_PLUGIN, slug], {
+        env: { ...process.env, WORDJS_PLUGINS_DIR: root }, encoding: 'utf8',
+    });
+    return { status: r.status, out: `${r.stdout || ''}${r.stderr || ''}` };
+}
+
+test('plugin bundle maps react + host modules to WordJS globals (no bare specifiers)', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
+    try {
+        const dir = mkFixture(root, 'fixture-ok', `
+            import { useState, useEffect } from 'react';
+            import { api, apiGet } from '@/lib/api';
+            import { useModal } from '@/contexts/ModalContext';
+            export default function Admin() {
+                const [n] = useState(0);
+                useEffect(() => { apiGet('/x'); }, []);
+                const m = useModal();
+                return <div onClick={() => { api('/y', { method: 'POST' }); void m; }}>{n}</div>;
+            }
+        `);
+        const r = build(root, 'fixture-ok');
+        assert.equal(r.status, 0, `build failed: ${r.out}`);
+        const code = fs.readFileSync(path.join(dir, 'dist', 'admin.bundle.js'), 'utf8');
+        assert.ok(!/from\s*["'](react|react-dom|@\/)/.test(code), 'bundle must not contain bare react/@ import specifiers');
+        assert.ok(code.includes('globalThis.WordJS.React'), 'react mapped to window.WordJS.React');
+        assert.ok(code.includes('globalThis.WordJS.hostApi'), '@/lib/api mapped to window.WordJS.hostApi');
+        assert.ok(code.includes('globalThis.WordJS.modalContext'), '@/contexts/ModalContext mapped to window.WordJS.modalContext');
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('plugin bundle build FAILS loudly on a host import the host does not expose', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
+    try {
+        mkFixture(root, 'fixture-bad', `
+            import { helper } from '@/lib/not-a-real-host-module';
+            export default function Admin() { return <div>{String(helper)}</div>; }
+        `);
+        const r = build(root, 'fixture-bad');
+        assert.notEqual(r.status, 0, 'build must fail (exit non-zero) — a blank panel in prod is worse than a loud build failure');
+        assert.ok(/not-a-real-host-module|not exposed|GLOBAL_MODULES/i.test(r.out), `error should name the unexposed module; got: ${r.out.slice(0, 400)}`);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
