@@ -4,6 +4,21 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.4] - 2026-07-22
+
+### Fixed
+
+- **Marketplace plugins install their declared npm dependencies on activation** (regression from 1.12.3).
+  Since 1.12.3, `build-marketplace` compiles a `dist/*.bundle.js` (the plugin's frontend) into every
+  catalog zip — but `isBundledPlugin` treated the presence of a `dist/*.bundle.js` as "dependencies
+  packaged", so **every** marketplace plugin skipped its dependency install. A plugin that needs backend
+  npm packages at runtime — e.g. the mail server (`smtp-server`, `nodemailer`, `mailparser`) — then failed
+  to activate with `Cannot find module 'smtp-server'`. Now a plugin is only "self-contained" when it ships
+  a non-empty `node_modules/` or declares `"bundled": true`; a compiled frontend bundle no longer counts.
+  The dependency installer also checks whether each declared dependency is already **resolvable** (in any
+  `node_modules/` the plugin's `require()` walks through — its own, the backend's, or the root's) before
+  installing, so present dependencies aren't reinstalled and only genuinely-missing ones are.
+
 ## [1.12.3] - 2026-07-22
 
 Marketplace plugins now work **fully** on a production install — both their admin pages and their
