@@ -34,12 +34,14 @@ const crypto = require('crypto');
 const UPLOAD_DIR = path.join(__dirname, 'data/attachments');
 
 // Best-effort HTML -> plaintext for the text/plain MIME alternative and list previews. A single-pass
-// tag strip (/<[^>]*>/g) is an INCOMPLETE sanitizer: an unterminated tag such as a stray "<script"
-// with no closing ">" never matches and survives (CodeQL js/incomplete-multi-character-sanitization).
-// Remove complete tags, then drop any residual angle brackets so no "<tag" fragment can remain.
-// Text nodes / whitespace / newlines are preserved (only literal < and > are dropped).
+// tag strip (/<[^>]*>/g) is an INCOMPLETE sanitizer: removing a complete tag can splice two fragments
+// into a NEW tag (e.g. "<<script>script>" -> "<script>"), so one pass can leave a live tag behind
+// (CodeQL js/incomplete-multi-character-sanitization). Repeat to a fixpoint, then drop any residual
+// angle brackets left by unterminated tags. Text nodes / whitespace / newlines are preserved.
 function stripHtml(s) {
-    return String(s == null ? '' : s).replace(/<[^>]*>/g, '').replace(/[<>]/g, '');
+    let out = String(s == null ? '' : s);
+    for (let prev = null; prev !== out; ) { prev = out; out = out.replace(/<[^>]*>/g, ''); }
+    return out.replace(/[<>]/g, '');
 }
 
 exports.metadata = {
