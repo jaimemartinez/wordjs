@@ -34,7 +34,7 @@
         "@types/react": "^19.2.8",
         "@types/react-dom": "^19.2.3",
         "axios": "^1.13.2",
-        "better-sqlite3": "^12.6.0",
+        "better-sqlite3": "^13.0.1",
         "cluster": "^0.7.7",
         "compression": "^1.8.1",
         "concurrently": "^10.0.3",
