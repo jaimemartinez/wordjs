@@ -686,6 +686,9 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'assets.enqueueScript', 'assets.enqueueStyle',
     'users.findByEmail', 'users.findByLogin', 'users.findById', 'users.search',
     'site.url', 'site.domain', 'site.adminEmail',
+    // Host-mediated DNS (network-gated + private-IP-filtered host-side; see api.dns in plugin-api.ts).
+    // The raw dns.resolve* surface is denied inside the isolate, so an MTA reaches MX/TXT records here.
+    'dns.resolveMx', 'dns.resolveTxt', 'dns.resolve4', 'dns.resolve6', 'dns.resolve',
 ]);
 // Navigate "options.get" / "mail" on the api object and call it with args.
 function callApi(api: any, method: string, args: any[]) {

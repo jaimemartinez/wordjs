@@ -596,6 +596,61 @@ function createPluginApi(slug: string) {
             async adminEmail() { verifyPermission('settings', 'read'); const { getOption } = require('./options'); return getOption('admin_email', ''); },
         },
 
+        // Host-mediated DNS record lookups (gated on the `network` grant). The RAW c-ares resolver
+        // surface (dns.resolve*/Resolver/setServers) is DENIED inside the isolate by the egress-guard
+        // because it bypasses egress filtering and enables internal DNS recon — but getaddrinfo
+        // (dns.lookup, the only resolver left) can ONLY do A/AAAA, so a real MTA cannot resolve MX (for
+        // direct-to-MX delivery) or TXT (for SPF/DKIM/DMARC verification). The HOST performs those
+        // queries with the system resolver and returns ONLY the records, STRIPPING any A/AAAA answer
+        // that points at a private/internal/special IP — so this can't be used to discover or reach an
+        // internal host (and the actual SMTP connection still goes through the egress-guarded net/tls).
+        // resolve4/resolve6 therefore return PUBLIC addresses only; a domain whose MX resolves solely to
+        // internal IPs comes back empty (delivery is correctly skipped). Consistent with the same
+        // network grant that opens the socket modules — no separate scope.
+        dns: (() => {
+            const realDns = require('dns').promises;
+            const netMod = require('net');
+            // Mirror the egress-guard blocked-IP policy (loopback/RFC1918/link-local incl. cloud
+            // metadata/CGNAT/ULA/unspecified + IPv4-mapped IPv6). Fail-closed: an unparseable answer is
+            // treated as blocked and dropped.
+            const isPrivateIp = (raw: string): boolean => {
+                if (!raw || typeof raw !== 'string') return true;
+                let ip = raw.trim();
+                const m = ip.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/i); if (m) ip = m[1];
+                if (netMod.isIPv4(ip)) {
+                    const o = ip.split('.').map(Number);
+                    if (o[0] === 0 || o[0] === 10 || o[0] === 127) return true;
+                    if (o[0] === 169 && o[1] === 254) return true;                 // link-local + metadata
+                    if (o[0] === 172 && o[1] >= 16 && o[1] <= 31) return true;      // RFC1918
+                    if (o[0] === 192 && o[1] === 168) return true;                  // RFC1918
+                    if (o[0] === 100 && o[1] >= 64 && o[1] <= 127) return true;     // CGNAT
+                    return false;
+                }
+                if (netMod.isIPv6(ip)) {
+                    const lc = ip.toLowerCase();
+                    if (lc === '::1' || lc === '::') return true;
+                    if (lc.startsWith('fe8') || lc.startsWith('fe9') || lc.startsWith('fea') || lc.startsWith('feb')) return true; // fe80::/10
+                    if (lc.startsWith('fc') || lc.startsWith('fd')) return true;    // fc00::/7 ULA
+                    return false;
+                }
+                return true; // not a parseable IP → fail closed
+            };
+            const requireNetwork = () => {
+                let granted = false;
+                try { granted = require('./plugin-permissions').isNetworkGranted(slug); } catch { granted = false; }
+                if (!granted) throw new Error(`🛡️ Security Block: plugin '${slug}' needs the 'network' grant for DNS lookups.`);
+            };
+            const clean = (s: any) => String(s == null ? '' : s).slice(0, 253);
+            return {
+                async resolveMx(domain: string) { requireNetwork(); return realDns.resolveMx(clean(domain)); },
+                async resolveTxt(name: string) { requireNetwork(); return realDns.resolveTxt(clean(name)); },
+                async resolve4(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isPrivateIp(ip)); },
+                async resolve6(host: string) { requireNetwork(); const a = await realDns.resolve6(clean(host)); return (a || []).filter((ip: string) => !isPrivateIp(ip)); },
+                // dns.promises.resolve() with no rrtype defaults to A records (string IPs) — mirror that.
+                async resolve(host: string) { requireNetwork(); const a = await realDns.resolve4(clean(host)); return (a || []).filter((ip: string) => !isPrivateIp(ip)); },
+            };
+        })(),
+
         http: {
             // Register an Express route. Handlers run anchored in the plugin context (appRegistry
             // wraps the Router/app methods). Path is ALWAYS namespaced under the plugin (no absolute bypass).

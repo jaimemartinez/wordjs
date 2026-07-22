@@ -22,7 +22,6 @@
 const nodemailer = require('nodemailer');
 const { SMTPServer } = require('smtp-server');
 const { simpleParser } = require('mailparser');
-const dns = require('dns').promises;
 const net = require('net');
 const SPFValidator = require('spf-validator');
 const path = require('path');
@@ -34,11 +33,35 @@ const crypto = require('crypto');
 // The single source of truth is Email.UPLOAD_DIR (set in email-store); mirror it here for path joins.
 const UPLOAD_DIR = path.join(__dirname, 'data/attachments');
 
+// Best-effort HTML -> plaintext for the text/plain MIME alternative and list previews. A single-pass
+// tag strip (/<[^>]*>/g) is an INCOMPLETE sanitizer: removing a complete tag can splice two fragments
+// into a NEW tag (e.g. "<<script>script>" -> "<script>"), so one pass can leave a live tag behind
+// (CodeQL js/incomplete-multi-character-sanitization). Repeat to a fixpoint, then drop any residual
+// angle brackets left by unterminated tags. Text nodes / whitespace / newlines are preserved.
+function stripHtml(s) {
+    let out = String(s == null ? '' : s);
+    for (let prev = null; prev !== out; ) { prev = out; out = out.replace(/<[^>]*>/g, ''); }
+    return out.replace(/[<>]/g, '');
+}
+
 exports.metadata = {
     name: 'Mail Server',
-    version: '1.4.1',
-    description: 'Internal Multi-User Mailbox integrated with core WordJS database.',
+    version: '2.1.0',
+    description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
+};
+
+// DNS goes through the HOST bridge (wordjs.dns), NOT the raw resolver. The sandbox DENIES the c-ares
+// resolver surface (dns.resolve*) to plugins because it bypasses egress filtering — only getaddrinfo
+// (dns.lookup, A/AAAA only) is left, which can't do MX/TXT. The host resolves MX/TXT/A on our behalf
+// (network-gated) and strips private-IP answers. This lazy shim keeps every existing `dns.resolveMx(…)`
+// call site unchanged while routing it over the bridge; `wordjs` is set in init() before any lookup runs.
+const dns = {
+    resolveMx: (domain) => wordjs.dns.resolveMx(domain),
+    resolveTxt: (name) => wordjs.dns.resolveTxt(name),
+    resolve4: (host) => wordjs.dns.resolve4(host),
+    resolve6: (host) => wordjs.dns.resolve6(host),
+    resolve: (host) => wordjs.dns.resolve(host),
 };
 
 // === Bridge-backed module state (set in init) ===
@@ -55,6 +78,7 @@ let smtpServer = null;
 // a port map / privilege grant instead of failing silently). Reset on every initSMTPServer().
 let inboundStatus = { requestedPort: null, boundPort: null, degraded: false, reason: null, _triedFallback: false, proxyIps: [] };
 let queueInterval = null;  // scheduled/retry queue timer id (cleared on deactivate)
+let _lastSpamPurge = 0;    // last 30-day spam-retention sweep (runs at most every 6h)
 
 // === User lookups via the SAFE host bridge (grant: users:read) ===
 // wordjs.users.* returns a PROJECTION {id,userLogin,username,userEmail,displayName,role} — never
@@ -76,6 +100,143 @@ async function getSiteUrl() {
 }
 async function getSiteDomain() {
     try { return await wordjs.site.domain(); } catch (e) { return 'localhost'; }
+}
+
+// Batch N option reads into ONE parallel wave. Every getOption is an RPC round-trip to the host (and
+// secrets additionally hit the DB + AES decrypt), so the old sequential `await` chains made /settings
+// and every send pay 10-20 serialized round-trips of pure latency.
+async function getOptionsBatch(pairs) {
+    const keys = Object.keys(pairs);
+    const values = await Promise.all(keys.map(k => getOption(k, pairs[k])));
+    const out = {};
+    keys.forEach((k, i) => { out[k] = values[i]; });
+    return out;
+}
+
+// Split a user-typed recipient field ("a@x.com, b@y.com; c@z.com") into clean address tokens.
+// The composer sends To/CC/BCC as raw strings; without this, a comma list was treated as ONE
+// malformed address and multi-recipient sends failed outright.
+function splitAddresses(value) {
+    if (Array.isArray(value)) {
+        return value.flatMap(v => splitAddresses(v));
+    }
+    return String(value || '')
+        .split(/[,;]+/)
+        .map(s => s.trim())
+        .filter(Boolean);
+}
+
+// Resolve (and briefly cache) the site admin user — the owner of catch-all inbound mail. Without an
+// owner those rows were written but matched NOBODY's mailbox, i.e. catch-all silently swallowed mail.
+let _adminUserCache = { user: null, at: 0 };
+async function getAdminUser() {
+    const now = Date.now();
+    if (_adminUserCache.user && now - _adminUserCache.at < 60 * 1000) return _adminUserCache.user;
+    let user = null;
+    try {
+        const adminEmail = await wordjs.site.adminEmail();
+        if (adminEmail) user = await User.findByEmail(adminEmail);
+    } catch (e) { /* no settings:read or no such user — catch-all rows stay unowned */ }
+    _adminUserCache = { user, at: now };
+    return user;
+}
+
+// === Vacation auto-responder ==============================================================
+// Per-user prefs (Email.getPrefs(userId).vacation = {enabled, subject, message, startsAt, endsAt}).
+// Replies at most once per sender per 24h, never to bounce/no-reply addresses, never to
+// auto-generated mail (Auto-Submitted / Precedence bulk), and tags its own replies with
+// Auto-Submitted: auto-replied so two vacationing servers can't ping-pong forever.
+const _vacationSent = new Map(); // `${userId}:${senderLower}` -> last reply ts
+function _vacationKeySweep() {
+    const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+    for (const [k, ts] of _vacationSent) {
+        if (ts < cutoff) _vacationSent.delete(k);
+    }
+    // Hard cap so a sender-address flood can't grow the map unbounded between sweeps.
+    if (_vacationSent.size > 5000) _vacationSent.clear();
+}
+
+async function maybeVacationAutoReply(user, senderEmail, origSubject) {
+    try {
+        if (!user || !user.id || !senderEmail) return;
+        const sender = String(senderEmail).trim().toLowerCase();
+        if (!sender || !sender.includes('@')) return;
+        if (sender === String(user.userEmail || '').toLowerCase()) return; // never reply to yourself
+        if (/^(mailer-daemon|postmaster|no-?reply|noreply|bounce|do-?not-?reply)/i.test(sender)) return;
+
+        const prefs = await Email.getPrefs(user.id);
+        const v = prefs && prefs.vacation;
+        if (!v || !v.enabled || !v.message) return;
+        const now = Date.now();
+        if (v.startsAt && now < Date.parse(v.startsAt)) return;
+        if (v.endsAt && now > Date.parse(v.endsAt)) return;
+
+        const key = `${user.id}:${sender}`;
+        const last = _vacationSent.get(key) || 0;
+        if (now - last < 24 * 60 * 60 * 1000) return;
+        _vacationSent.set(key, now);
+
+        const subject = String(v.subject || 'Automatic reply').slice(0, 180)
+            + (origSubject ? `: ${String(origSubject).slice(0, 120)}` : '');
+        const html = String(v.message).slice(0, 5000);
+        await sendMail({
+            to: sender,
+            subject,
+            text: stripHtml(html),
+            html,
+            fromEmail: user.userEmail,
+            fromName: user.displayName || user.username || '',
+            userId: user.id,
+            isAutoReply: true
+        });
+    } catch (e) {
+        console.warn('[MailServer] Vacation auto-reply failed:', e && e.message);
+    }
+}
+
+// True when a parsed inbound message is auto-generated (bounces, list mail, another auto-responder)
+// — such mail must never trigger a vacation reply (RFC 3834).
+function isAutoGenerated(parsed) {
+    try {
+        const h = parsed && parsed.headers;
+        if (!h || typeof h.get !== 'function') return false;
+        const auto = h.get('auto-submitted');
+        if (auto && String(auto).toLowerCase() !== 'no') return true;
+        const prec = h.get('precedence');
+        if (prec && /bulk|list|junk/i.test(String(prec))) return true;
+        if (h.get('x-autoreply') || h.get('x-autorespond')) return true;
+        if (h.get('list-id') || h.get('list-unsubscribe')) return true;
+    } catch (e) { /* treat as normal mail */ }
+    return false;
+}
+
+// Gmail-style search operators: from:x to:x subject:x label:x in:folder has:attachment is:unread
+// is:starred; everything else is free text. Unknown operators fall through as text.
+function parseSearchQuery(raw) {
+    const q = {};
+    const rest = [];
+    for (const tok of String(raw || '').trim().split(/\s+/)) {
+        if (!tok) continue;
+        const m = tok.match(/^([a-z]+):(.+)$/i);
+        if (m) {
+            const key = m[1].toLowerCase();
+            const val = m[2];
+            if (key === 'from') { q.from = val; continue; }
+            if (key === 'to') { q.to = val; continue; }
+            if (key === 'subject') { q.subject = val; continue; }
+            if (key === 'label') { q.labelName = val; continue; }
+            if (key === 'in') { q.folder = val.toLowerCase(); continue; }
+            if (key === 'has' && val.toLowerCase() === 'attachment') { q.hasAttachment = true; continue; }
+            if (key === 'is') {
+                const v = val.toLowerCase();
+                if (v === 'unread') { q.isUnread = true; continue; }
+                if (v === 'starred') { q.isStarred = true; continue; }
+            }
+        }
+        rest.push(tok);
+    }
+    if (rest.length) q.text = rest.join(' ');
+    return q;
 }
 
 /**
@@ -552,33 +713,50 @@ async function initSMTPServer() {
                             }
                         }
 
+                        // Catch-all mail (no matching mailbox) is OWNED BY THE SITE ADMIN — previously it
+                        // was stored with no owner and matched nobody's address, i.e. it vanished.
+                        let owner = user;
+                        if (!owner && isLocalDomain && catchAllRaw === '1') {
+                            owner = await getAdminUser();
+                        }
+
                         if (user || (isLocalDomain && catchAllRaw === '1')) {
                             await Email.create({
                                 messageId: parsed.messageId,
                                 fromAddress: fromAddr,
                                 fromName: fromName,
                                 toAddress: user ? user.userEmail : addr.address,
-                                subject: (isSpam ? '[SPAM] ' : '') + (parsed.subject || '(no subject)'),
+                                subject: parsed.subject || '(no subject)',
                                 bodyText: parsed.text || '',
                                 bodyHtml: parsed.html || '',
                                 rawContent: parsed.textAsHtml || parsed.text || '',
                                 threadId: inboundThreadId,
                                 attachments: parsed.attachments,
-                                isTrash: isSpam ? 1 : 0 // Auto-trash spam
+                                userId: owner ? owner.id : 0,
+                                // Spam goes to the SPAM FOLDER (reviewable, auto-purged after 30 days by
+                                // the queue sweep) — not silently into Trash with a mangled subject.
+                                isSpam: isSpam ? 1 : 0
                             });
 
                             // Auto-learn (Naive logic: if we accepted it and user didn't mark it, it's ham.
                             // But here we just classify. Learning should happen on user action.)
 
-                            if (user) {
+                            if (user && !isSpam) {
                                 await wordjs.notify({
                                     user_id: user.id,
-                                    type: isSpam ? 'alert' : 'email',
-                                    title: isSpam ? 'Spam Detected' : 'New Inbound Email',
+                                    type: 'email',
+                                    title: 'New Inbound Email',
                                     message: `From ${parsed.from?.text || fromAddr}: "${parsed.subject}"`,
                                     action_url: `/admin/plugin/emails`,
                                     transports: ['db', 'sse']
                                 });
+                            }
+
+                            // Vacation auto-responder — only for real (non-spam, non-auto-generated) mail
+                            // to a real mailbox. Fire-and-forget: a reply failure must never 4xx the
+                            // inbound DATA transaction.
+                            if (user && !isSpam && !isAutoGenerated(parsed)) {
+                                maybeVacationAutoReply(user, fromAddr, parsed.subject).catch(() => { });
                             }
                         }
                     }
@@ -734,26 +912,34 @@ async function sendMail(data) {
 
     console.log(`[MailServer] Total unique recipients: ${distinctRecipients.length}`);
 
-    // Identity resolution
-    const defaultEmail = await getOption('admin_email', 'noreply@wordjs.com');
-    const defaultName = await getOption('blogname', 'WordJS');
-
-    // stripCRLF the resolved fromEmail/fromName too (covers the admin-configured option fallbacks).
-    const fromEmail = stripCRLF(data.fromEmail || await getOption('mail_from_email', defaultEmail));
-    const fromName = stripCRLF(data.fromName || await getOption('mail_from_name', defaultName));
     const parentId = data.parentId || 0;
     const threadId = data.threadId || 0;
     const draftId = data.draftId || 0;
+    // Owner of the Sent copy (the sending user). 0 = system/plugin mail (notification transport etc.).
+    const senderUserId = parseInt(data.userId, 10) || 0;
+
+    // Identity + DKIM resolution in ONE parallel wave — every getOption is a host RPC round-trip
+    // (secrets also hit the DB + AES decrypt), and the old sequential chain serialized ~8 of them
+    // before a single byte was delivered.
+    const [defaultEmail, defaultName, optFromEmail, optFromName, dkimKey, dkimDomain, dkimSelector, siteDomain] = await Promise.all([
+        getOption('admin_email', 'noreply@wordjs.com'),
+        getOption('blogname', 'WordJS'),
+        getOption('mail_from_email', ''),
+        getOption('mail_from_name', ''),
+        getOption('mail_security_dkim_private_key', ''),
+        getOption('mail_security_dkim_domain', ''),
+        getOption('mail_security_dkim_selector', 'default'),
+        getSiteDomain()
+    ]);
+
+    // stripCRLF the resolved fromEmail/fromName too (covers the admin-configured option fallbacks).
+    const fromEmail = stripCRLF(data.fromEmail || optFromEmail || defaultEmail);
+    const fromName = stripCRLF(data.fromName || optFromName || defaultName);
 
     // One stable Message-ID reused for BOTH the stored Sent record AND the on-the-wire Message-ID
     // header. When the remote party replies, their In-Reply-To/References echo this exact value, so the
     // inbound handler can look it up and thread the reply back into this conversation (THREAD-XREF).
     const outboundMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${(fromEmail.split('@')[1] || 'wordjs')}>`;
-
-    // DKIM Config
-    const dkimKey = await getOption('mail_security_dkim_private_key', '');
-    const dkimDomain = await getOption('mail_security_dkim_domain', '');
-    const dkimSelector = await getOption('mail_security_dkim_selector', 'default');
 
     let dkimOptions = undefined;
     if (dkimKey && dkimDomain) {
@@ -806,6 +992,7 @@ async function sendMail(data) {
                 rawContent: data.html || data.text,
                 parentId,
                 threadId,
+                userId: senderUserId,
                 attachments: data.attachments
             });
             sentRecordId = sentRec ? sentRec.id : 0;
@@ -815,9 +1002,7 @@ async function sendMail(data) {
         throw e; // If we can't save the sent record, we probably shouldn't send? Or warn?
     }
 
-    // 2. Deliver to Internal Users (Inbox Copy)
-    const siteDomain = await getSiteDomain();
-
+    // 2. Deliver to Internal Users (Inbox Copy). siteDomain was prefetched in the parallel wave above.
     console.log(`[MailServer] Processing internal delivery for domain: ${siteDomain}`);
 
     // Track which recipients are local so we filter them out of SMTP
@@ -867,7 +1052,9 @@ async function sendMail(data) {
                     continue;
                 }
 
-                // Local delivery: Create a copy in the recipient's inbox
+                // Local delivery: Create a copy in the recipient's inbox, OWNED by that recipient
+                // (user_id is what folder listings key on — the old `user_id:` spelling was silently
+                // dropped by the store and ownership fell back to slow address matching).
                 const inboxEmail = await Email.create({
                     messageId: `<local-${Date.now()}-${Math.random()}@wordjs.com>`,
                     fromAddress: fromEmail.toLowerCase(),
@@ -878,7 +1065,7 @@ async function sendMail(data) {
                     bodyText: data.text,
                     bodyHtml: data.html,
                     isSent: 0, // Received
-                    user_id: localUser.id,
+                    userId: localUser.id,
                     rawContent: data.html || data.text,
                     parentId,
                     threadId,
@@ -899,6 +1086,12 @@ async function sendMail(data) {
                         action_url: `/admin/plugin/emails?id=${inboxEmail.id}`,
                         transports: ['db', 'sse']
                     });
+
+                    // Vacation auto-responder for internal mail too (Gmail replies regardless of
+                    // where the sender is). Never triggered BY an auto-reply (loop guard).
+                    if (!data.isAutoReply) {
+                        maybeVacationAutoReply(localUser, fromEmail, data.subject).catch(() => { });
+                    }
                 }
             } else {
                 console.log(`[MailServer] User ${recipient} not found locally.`);
@@ -915,7 +1108,9 @@ async function sendMail(data) {
 
     if (externalRecipients.length > 0) {
         const attachments = (data.attachments || []).map(a => ({ filename: a.filename, path: a.path }));
-        const mailObj = { fromEmail, fromName, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId };
+        // RFC 3834: an auto-generated reply announces itself so remote auto-responders don't answer it.
+        const extraHeaders = data.isAutoReply ? { 'Auto-Submitted': 'auto-replied' } : undefined;
+        const mailObj = { fromEmail, fromName, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
 
         if (transporter) {
             // Relay/smarthost path (used only if a relay is configured).
@@ -926,7 +1121,8 @@ async function sendMail(data) {
                         envelope: { from: fromEmail, to: extR },
                         from: `"${fromName}" <${fromEmail}>`, to: extR,
                         messageId: outboundMessageId,
-                        subject: data.subject, text: data.text, html: data.html, attachments, dkim: dkimOptions
+                        subject: data.subject, text: data.text, html: data.html, attachments, dkim: dkimOptions,
+                        headers: extraHeaders
                     });
                     delivered.push({ recipient: extR, via: 'relay', response: info.response });
                 } catch (e) {
@@ -1152,7 +1348,8 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 text: mail.text,
                 html: mail.html,
                 attachments: mail.attachments,
-                dkim: dkimOptions
+                dkim: dkimOptions,
+                headers: mail.headers
             });
             return info;
         } finally {
@@ -1312,9 +1509,11 @@ exports.init = async function (bridge) {
                     }));
 
                     await sendMail({
-                        to: email.to_address,
-                        cc: email.cc_address,
-                        bcc: email.bcc_address,
+                        // to/cc/bcc are stored as comma-joined lists — split them back into real
+                        // recipient arrays (a joined string would read as ONE malformed address).
+                        to: splitAddresses(email.to_address),
+                        cc: splitAddresses(email.cc_address),
+                        bcc: splitAddresses(email.bcc_address),
                         subject: email.subject,
                         text: email.body_text,
                         html: email.body_html,
@@ -1322,6 +1521,7 @@ exports.init = async function (bridge) {
                         fromName: email.from_name,
                         parentId: email.parent_id,
                         threadId: email.thread_id,
+                        userId: email.user_id || 0,
                         draftId: email.id, // Re-use existing record to mark as sent
                         attachments: formattedAttachments
                     });
@@ -1364,6 +1564,7 @@ exports.init = async function (bridge) {
                         fromName: email.from_name,
                         parentId: email.parent_id,
                         threadId: email.thread_id,
+                        userId: email.user_id || 0,
                         // Reuse the existing Sent record instead of creating a duplicate copy.
                         isRetry: true,
                         sentRecordId: email.id,
@@ -1386,10 +1587,26 @@ exports.init = async function (bridge) {
                     _outboundUsage.delete(uid);
                 }
             }
+            _vacationKeySweep();
         } catch (e) {
             console.error('[MailServer] Outbound usage sweep error:', e);
         }
-    }, 60 * 1000);
+
+        // Spam retention (Gmail-style): permanently purge spam older than 30 days, at most every 6h.
+        try {
+            const now = Date.now();
+            if (now - _lastSpamPurge > 6 * 60 * 60 * 1000) {
+                _lastSpamPurge = now;
+                const purged = await Email.purgeOldSpam(30);
+                if (purged > 0) console.log(`[MailServer] Purged ${purged} spam message(s) older than 30 days.`);
+            }
+        } catch (e) {
+            console.error('[MailServer] Spam purge error:', e);
+        }
+        // 15s tick (was 60s): the queue drives UNDO SEND (a message sits in the outbox for
+        // ~10s before dispatch), so a 60s tick would stretch "sending…" to over a minute. All the
+        // sweeps above are indexed probes that no-op when there's nothing pending.
+    }, 15 * 1000);
 
     // === API ROUTES — namespaced by the host under /api/v1/plugin/mail-server/* ===
     // No 'absolute' bypass exists anymore: wordjs.http.route prefixes /api/v1/plugin/<slug>, so we pass
@@ -1415,43 +1632,76 @@ exports.init = async function (bridge) {
     const canAccessEmail = (email, user) =>
         Email.canUserAccess(email, user.userEmail) || user.role === 'administrator';
 
-    // GET /api/v1/plugin/mail-server/emails/search
+    // GET /api/v1/plugin/mail-server/emails/search — operator-aware (from:/to:/subject:/label:/in:/
+    // has:attachment/is:unread/is:starred + free text), scoped to the requester's mailbox.
     route('get', '/emails/search', { auth: true }, async (req, res) => {
-        const query = req.query.q || '';
-        if (query.length < 2) return res.json({ emails: [] });
+        const raw = String(req.query.q || '');
+        if (raw.length < 2) return res.json({ emails: [] });
 
         try {
-            const emails = await Email.searchByUser(req.user.userEmail, query);
-            res.json({ emails });
+            const q = parseSearchQuery(raw);
+            if (req.query.folder && !q.folder) q.folder = String(req.query.folder);
+            if (q.labelName) {
+                const label = await Email.findLabelByName(req.user.id, q.labelName);
+                q.labelId = label ? label.id : -1; // -1 matches nothing (unknown label name)
+            }
+            const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 100);
+            const offset = Math.max(parseInt(req.query.offset || '0', 10) || 0, 0);
+            const emails = await Email.search(req.user.id, req.user.userEmail, q, limit, offset);
+            const labels = await Email.getLabelsForEmails(emails.map(e => e.id));
+            res.json({ emails, labels });
         } catch (error) {
             console.error("Search error:", error);
             res.status(500).json({ error: "Search failed" });
         }
     });
 
-    // GET /api/v1/plugin/mail-server/emails
+    // GET /api/v1/plugin/mail-server/emails — folder listing. Also accepts folder=spam and
+    // folder=label:<id>. Returns badge counts + the listed messages' labels in the SAME response so
+    // the client needs ONE request per poll (it used to issue /emails + /stats).
     route('get', '/emails', { auth: true }, async (req, res) => {
-        const folder = req.query.folder || 'inbox'; // 'inbox', 'sent', 'trash', 'archive', 'starred', 'drafts'
-        const limit = parseInt(req.query.limit || '50', 10);
-        const offset = parseInt(req.query.offset || '0', 10);
+        try {
+            const rawFolder = String(req.query.folder || 'inbox');
+            const KNOWN = ['inbox', 'sent', 'drafts', 'archive', 'starred', 'trash', 'spam'];
+            let folder = 'inbox';
+            let labelId = 0;
+            if (KNOWN.includes(rawFolder)) {
+                folder = rawFolder;
+            } else if (/^label:\d+$/.test(rawFolder)) {
+                labelId = parseInt(rawFolder.slice(6), 10) || 0;
+                const label = await Email.findLabel(labelId, req.user.id);
+                if (!label) return res.status(404).json({ error: 'Label not found' });
+                folder = 'label';
+            }
+            const limit = Math.min(parseInt(req.query.limit || '50', 10) || 50, 100);
+            const offset = Math.max(parseInt(req.query.offset || '0', 10) || 0, 0);
 
-        const emails = await Email.findAllByUser(req.user.userEmail, folder, limit, offset);
-        const total = await Email.countByUser(req.user.userEmail, folder);
-
-        res.json({ emails, total });
+            const [emails, total, counts] = await Promise.all([
+                Email.findAllByUser(req.user.id, req.user.userEmail, folder, limit, offset, labelId),
+                Email.countByUser(req.user.id, req.user.userEmail, folder, labelId),
+                Email.getCounts(req.user.id, req.user.userEmail)
+            ]);
+            const labels = await Email.getLabelsForEmails(emails.map(e => e.id));
+            res.json({ emails, total, counts, labels });
+        } catch (error) {
+            console.error('Listing failed:', error);
+            res.status(500).json({ error: 'Failed to load messages' });
+        }
     });
 
-    // GET /api/v1/plugin/mail-server/stats
+    // GET /api/v1/plugin/mail-server/stats — kept for back-compat; same single-pass counters.
     route('get', '/stats', { auth: true }, async (req, res) => {
         try {
-            const unread = await Email.countUnreadInbox(req.user.userEmail);
-            res.json({ unread });
+            const counts = await Email.getCounts(req.user.id, req.user.userEmail);
+            res.json({ unread: counts.inbox_unread, ...counts });
         } catch (error) {
             res.status(500).json({ error: 'Stats failed' });
         }
     });
 
-    // GET /api/v1/plugin/mail-server/emails/:id
+    // GET /api/v1/plugin/mail-server/emails/:id — full message + its whole conversation, with
+    // attachments and labels for EVERY thread message in two batched queries (attachments used to be
+    // dropped entirely whenever the conversation had more than one message).
     route('get', '/emails/:id', { auth: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
@@ -1461,17 +1711,26 @@ exports.init = async function (bridge) {
             return res.status(403).json({ error: 'Access denied to this message' });
         }
 
-        await Email.markAsRead(req.params.id);
-
-        const threadIdToSearch = email.thread_id || email.id;
-        const thread = await Email.findByThreadId(threadIdToSearch, req.user.userEmail);
-
-        if (thread && thread.length > 1) {
-            return res.json({ ...email, thread });
+        // Only write when it changes something (every open used to issue the UPDATE unconditionally).
+        if (!email.is_read) {
+            await Email.markAsRead(req.params.id);
+            email.is_read = 1;
         }
 
-        const attachments = await Email.getAttachments(email.id);
-        res.json({ ...email, attachments });
+        const threadIdToSearch = email.thread_id || email.id;
+        const thread = await Email.findByThreadId(threadIdToSearch, req.user.userEmail, { includeSpam: !!email.is_spam });
+
+        const ids = [email.id, ...(thread || []).map(t => t.id)];
+        const [attMap, labelMap] = await Promise.all([
+            Email.getAttachmentsForEmails(ids),
+            Email.getLabelsForEmails(ids)
+        ]);
+        const withExtras = (msg) => ({ ...msg, attachments: attMap[msg.id] || [], labels: labelMap[msg.id] || [] });
+
+        if (thread && thread.length > 1) {
+            return res.json({ ...withExtras(email), thread: thread.map(withExtras) });
+        }
+        res.json(withExtras(email));
     });
 
     // DELETE /api/v1/plugin/mail-server/emails/:id - Move to Trash (Soft Delete)
@@ -1508,7 +1767,7 @@ exports.init = async function (bridge) {
 
     // DELETE /api/v1/plugin/mail-server/trash/empty - Empty Trash
     route('delete', '/trash/empty', { auth: true }, async (req, res) => {
-        await Email.emptyTrash(req.user.userEmail);
+        await Email.emptyTrash(req.user.id, req.user.userEmail);
         res.json({ success: true, message: 'Trash emptied' });
     });
 
@@ -1553,11 +1812,14 @@ exports.init = async function (bridge) {
             await classifier.learn(text, category);
             await saveBayes();
 
-            // Auto-move
+            // Auto-move: spam goes to the SPAM folder (not trash), ham comes back out of it.
+            // (The old code checked `email.isTrash` — the row property is is_trash — so "ham" never
+            // actually restored anything.)
             if (category === 'spam') {
-                await Email.update(id, { isTrash: 1 });
-            } else if (category === 'ham' && email.isTrash) {
-                await Email.update(id, { isTrash: 0 });
+                await Email.setSpam(id, true);
+            } else if (category === 'ham') {
+                await Email.setSpam(id, false);
+                if (email.is_trash) await Email.restoreFromTrash(id);
             }
 
             res.json({ success: true, message: `Learned as ${category}` });
@@ -1575,17 +1837,18 @@ exports.init = async function (bridge) {
             const data = {
                 fromAddress: req.user.userEmail,
                 fromName: req.user.displayName || req.user.userLogin,
-                toAddress: Array.isArray(to) ? to.join(',') : (to || ''),
-                ccAddress: Array.isArray(cc) ? cc.join(',') : (cc || ''),
-                bccAddress: Array.isArray(bcc) ? bcc.join(',') : (bcc || ''),
+                toAddress: splitAddresses(to).join(', '),
+                ccAddress: splitAddresses(cc).join(', '),
+                bccAddress: splitAddresses(bcc).join(', '),
                 subject: subject || '',
-                bodyText: isHtml ? body.replace(/<[^>]*>/g, '') : body,
+                bodyText: isHtml ? stripHtml(body) : body,
                 bodyHtml: isHtml ? body : null,
                 rawContent: body || '',
                 isDraft: 1,
                 isSent: 0,
                 parentId: 0,
                 threadId: 0,
+                userId: req.user.id,
                 attachments: attachments || []
             };
 
@@ -1621,13 +1884,36 @@ exports.init = async function (bridge) {
             return res.status(400).json({ error: 'Missing required fields' });
         }
 
+        // Normalize the composer's raw "a@x.com, b@y.com" strings into real address lists and
+        // validate EVERY recipient up-front — a queued (undo-window / scheduled) send must fail HERE,
+        // visibly, not minutes later inside the background queue. (This also fixes multi-recipient
+        // sends outright: the comma-joined string used to be treated as ONE malformed address.)
+        const toList = splitAddresses(to);
+        const ccList = splitAddresses(cc);
+        const bccList = splitAddresses(bcc);
+        if (toList.length === 0) return res.status(400).json({ error: 'Missing recipient' });
+        for (const addr of [...toList, ...ccList, ...bccList]) {
+            if (!isValidEmail(addr)) return res.status(400).json({ error: `Invalid recipient email address format: ${addr}` });
+        }
+
         // SECURITY (H8): cap recipients per message and enforce a per-user outbound rate limit.
-        const recipientCount = [].concat(to || [], cc || [], bcc || []).filter(Boolean).length;
+        const recipientCount = toList.length + ccList.length + bccList.length;
         if (recipientCount > MAX_RECIPIENTS_PER_MESSAGE) {
             return res.status(400).json({ error: `Too many recipients (max ${MAX_RECIPIENTS_PER_MESSAGE} per message).` });
         }
         if (!outboundRateLimitOk(req.user.id, recipientCount)) {
             return res.status(429).json({ error: 'Outbound mail rate limit exceeded. Please try again later.' });
+        }
+
+        // SECURITY (IDOR): a supplied draft id must be the CALLER's own row — otherwise any user
+        // could overwrite (and effectively send as) another user's draft by guessing its id.
+        if (id) {
+            const existing = await Email.findById(id);
+            const ownsIt = existing && (
+                existing.user_id === req.user.id ||
+                String(existing.from_address || '').toLowerCase() === String(req.user.userEmail || '').toLowerCase()
+            );
+            if (!ownsIt) return res.status(403).json({ error: 'Access denied' });
         }
 
         let parentId = 0;
@@ -1642,49 +1928,70 @@ exports.init = async function (bridge) {
         }
 
         try {
-            // Check for Scheduled Send
-            if (scheduledAt) {
+            // UNDO SEND (Gmail-style): unless the user explicitly scheduled the message, hold it in
+            // the outbox for a short window (default 10s, option mail_undo_send_seconds, 0 disables)
+            // before the 15s queue dispatches it — the client shows an "Undo" toast meanwhile.
+            let effectiveSchedule = scheduledAt ? new Date(scheduledAt).toISOString() : null;
+            let undoSeconds = 0;
+            if (!effectiveSchedule) {
+                const undoRaw = parseInt(await getOption('mail_undo_send_seconds', '10'), 10);
+                undoSeconds = Number.isFinite(undoRaw) ? Math.min(Math.max(undoRaw, 0), 60) : 10;
+                if (undoSeconds > 0) effectiveSchedule = new Date(Date.now() + undoSeconds * 1000).toISOString();
+            }
+
+            if (effectiveSchedule) {
                 const data = {
                     fromAddress: req.user.userEmail,
                     fromName: req.user.displayName || req.user.userLogin,
-                    toAddress: Array.isArray(to) ? to.join(',') : (to || ''),
-                    ccAddress: Array.isArray(cc) ? cc.join(',') : (cc || ''),
-                    bccAddress: Array.isArray(bcc) ? bcc.join(',') : (bcc || ''),
+                    toAddress: toList.join(', '),
+                    ccAddress: ccList.join(', '),
+                    bccAddress: bccList.join(', '),
                     subject: subject || '',
-                    bodyText: isHtml ? body.replace(/<[^>]*>/g, '') : body,
+                    bodyText: isHtml ? stripHtml(body) : body,
                     bodyHtml: isHtml ? body : null,
                     rawContent: body || '',
                     isDraft: 0,
-                    isSent: 0, // Not sent yet
+                    isSent: 0, // Not sent yet — the queue dispatches it
                     parentId,
                     threadId,
+                    userId: req.user.id,
                     attachments: attachments || [],
-                    scheduledAt: new Date(scheduledAt).toISOString()
+                    scheduledAt: effectiveSchedule
                 };
 
                 // Create or Update (if it was a draft)
                 let email;
                 if (id) {
                     await Email.update(id, data);
+                    // update() doesn't persist attachment rows (create() does) — but the QUEUE delivers
+                    // from the stored rows, so a draft promoted to the outbox must save them now.
+                    for (const att of (attachments || [])) {
+                        try { await Email.saveAttachment(id, att); } catch (e) { /* per-file best effort */ }
+                    }
                     email = { id };
                 } else {
                     email = await Email.create(data);
                 }
 
-                return res.json({ success: true, message: 'Message scheduled', id: email.id });
+                if (scheduledAt) {
+                    return res.json({ success: true, message: 'Message scheduled', id: email.id });
+                }
+                return res.json({ success: true, queued: true, undoSeconds, id: email.id, message: 'Sending…' });
             }
 
+            // Undo window disabled (mail_undo_send_seconds = 0) → immediate synchronous delivery.
             const result = await sendMail({
-                to, // Now supports array
-                cc,
-                bcc,
+                to: toList,
+                cc: ccList,
+                bcc: bccList,
                 subject,
-                text: isHtml ? body.replace(/<[^>]*>/g, '') : body,
+                text: isHtml ? stripHtml(body) : body,
                 html: isHtml ? body : null,
                 fromEmail: req.user.userEmail,
                 fromName: req.user.displayName || req.user.userLogin,
                 parentId,
                 threadId,
+                userId: req.user.id,
                 draftId: id,
                 attachments: attachments || []
             });
@@ -1703,6 +2010,88 @@ exports.init = async function (bridge) {
         }
     });
 
+    // POST /api/v1/plugin/mail-server/emails/:id/unsend — cancel a message still in its undo window
+    // (or a scheduled send) and turn it back into a draft. Guarded on is_sent = 0 in the UPDATE
+    // itself, so racing the queue can never "unsend" something already handed to delivery.
+    route('post', '/emails/:id/unsend', { auth: true }, async (req, res) => {
+        const email = await Email.findById(req.params.id);
+        if (!email) return res.status(404).json({ error: 'Email not found' });
+        const isOwner = email.user_id === req.user.id ||
+            String(email.from_address || '').toLowerCase() === String(req.user.userEmail || '').toLowerCase();
+        if (!isOwner) return res.status(403).json({ error: 'Forbidden' });
+        if (email.is_sent === 1 || !email.scheduled_at) {
+            return res.status(409).json({ error: 'Too late — the message was already handed off for delivery.' });
+        }
+        const after = await Email.cancelScheduled(email.id);
+        if (!after || after.is_sent === 1 || after.is_draft !== 1) {
+            return res.status(409).json({ error: 'Too late — the message was already handed off for delivery.' });
+        }
+        res.json({ success: true, id: after.id, message: 'Send canceled — moved back to drafts' });
+    });
+
+    // POST /api/v1/plugin/mail-server/emails/:id/retry — re-attempt a message whose delivery FAILED
+    // (or is mid-retry), NOW, instead of waiting for the backoff. On a failed/retry row, to_address
+    // holds exactly the still-failed recipients (updateRetryState rewrites it), so we re-send those
+    // through sendMail with isRetry:true — reusing the same Sent record (no duplicate copy). Manual
+    // retry resets the attempt counter so the user gets a fresh delivery cycle.
+    route('post', '/emails/:id/retry', { auth: true }, async (req, res) => {
+        const email = await Email.findById(req.params.id);
+        if (!email) return res.status(404).json({ error: 'Email not found' });
+        const isOwner = email.user_id === req.user.id ||
+            String(email.from_address || '').toLowerCase() === String(req.user.userEmail || '').toLowerCase();
+        if (!isOwner && req.user.role !== 'administrator') return res.status(403).json({ error: 'Forbidden' });
+        if (email.delivery_status !== 'failed' && email.delivery_status !== 'retry') {
+            return res.status(409).json({ error: 'This message is not in a failed state — nothing to retry.' });
+        }
+
+        const recipients = splitAddresses(email.to_address);
+        if (recipients.length === 0) return res.status(400).json({ error: 'No recipients to retry.' });
+
+        // Per-user outbound rate limit still applies to a manual retry.
+        if (!outboundRateLimitOk(req.user.id, recipients.length)) {
+            return res.status(429).json({ error: 'Outbound mail rate limit exceeded. Please try again later.' });
+        }
+
+        try {
+            const attachments = (await Email.getAttachments(email.id)).map(att => ({
+                filename: att.filename,
+                path: path.join(UPLOAD_DIR, att.storage_path)
+            }));
+            const result = await sendMail({
+                to: recipients,
+                subject: email.subject,
+                text: email.body_text,
+                html: email.body_html,
+                fromEmail: email.from_address,
+                fromName: email.from_name,
+                parentId: email.parent_id,
+                threadId: email.thread_id,
+                userId: email.user_id || 0,
+                isRetry: true,
+                sentRecordId: email.id,
+                deliveryAttempts: 0, // manual retry → fresh cycle, not stuck at max attempts
+                attachments
+            });
+            const after = await Email.findById(email.id);
+            if (result.success) {
+                return res.json({ success: true, id: email.id, status: after ? after.delivery_status : 'sent', message: 'Delivered.' });
+            }
+            // Still failing — report the fresh reason (sendMail already persisted last_error + status).
+            return res.status(207).json({
+                success: false,
+                id: email.id,
+                status: after ? after.delivery_status : 'failed',
+                lastError: after ? after.last_error : null,
+                failed: result.failed,
+                message: after && after.delivery_status === 'retry'
+                    ? 'Still undeliverable — re-queued for automatic retry.'
+                    : 'Still undeliverable.'
+            });
+        } catch (error) {
+            res.status(500).json({ error: 'Retry failed: ' + error.message });
+        }
+    });
+
     // GET /api/v1/plugin/mail-server/users/search
     route('get', '/users/search', { auth: true }, async (req, res) => {
         const query = req.query.q || '';
@@ -1718,14 +2107,28 @@ exports.init = async function (bridge) {
         })));
     });
 
-    // GET /api/v1/plugin/mail-server/settings
+    // GET /api/v1/plugin/mail-server/settings — one PARALLEL wave of option reads. The old handler
+    // awaited ~20 of them sequentially (each an RPC round-trip, secrets also DB+decrypt), which made
+    // opening the settings page pay the whole chain in latency.
     route('get', '/settings', { auth: true, admin: true }, async (req, res) => {
+        const o = await getOptionsBatch({
+            mail_from_email: '', mail_from_name: '',
+            smtp_listen_port: '25', smtp_proxy_ips: '', smtp_catch_all: '0',
+            mail_helo_host: '',
+            mail_server: '', mail_port: '587', mail_secure: '0', mail_user: '', mail_pass: '',
+            mail_relay_require_tls: '1',
+            mail_security_dkim_domain: '', mail_security_dkim_selector: 'default',
+            mail_security_dkim_private_key: '',
+            // Defaults reflect the SAFE posture (H12): DNSBL + SPF default ON, SPF reject default ON.
+            mail_security_dnsbl_enabled: '1', mail_security_spf_enabled: '1', mail_security_spf_reject: '1',
+            mail_undo_send_seconds: '10'
+        });
         res.json({
-            mail_from_email: await getOption('mail_from_email', ''),
-            mail_from_name: await getOption('mail_from_name', ''),
-            smtp_listen_port: await getOption('smtp_listen_port', '25'),
+            mail_from_email: o.mail_from_email,
+            mail_from_name: o.mail_from_name,
+            smtp_listen_port: o.smtp_listen_port,
             // PROXY protocol trusted-proxy IPs (comma-separated) + whether it's actually active now.
-            smtp_proxy_ips: await getOption('smtp_proxy_ips', ''),
+            smtp_proxy_ips: o.smtp_proxy_ips,
             smtp_proxy_active: (inboundStatus.proxyIps && inboundStatus.proxyIps.length) ? true : false,
             // Live inbound listener status so the UI can surface a real state instead of a silent
             // no-inbound: the port we ACTUALLY bound, whether we had to fall back off the standard 25,
@@ -1734,24 +2137,25 @@ exports.init = async function (bridge) {
             inbound_degraded: inboundStatus.degraded,
             inbound_reason: inboundStatus.reason,
             inbound_ok: inboundStatus.boundPort === 25,
-            smtp_catch_all: await getOption('smtp_catch_all', '0'),
-            mail_helo_host: await getOption('mail_helo_host', ''),
+            smtp_catch_all: o.smtp_catch_all,
+            mail_helo_host: o.mail_helo_host,
             // Relay / smarthost (optional). Without these exposed the relay path was unreachable and
             // delivery was stuck on direct-MX port 25 (blocked by most cloud/residential hosts). The relay
             // PASSWORD is a secret and is never returned — only whether one is stored (mail_pass_set).
-            mail_server: await getOption('mail_server', ''),
-            mail_port: await getOption('mail_port', '587'),
-            mail_secure: await getOption('mail_secure', '0'),
-            mail_user: await getOption('mail_user', ''),
-            mail_pass_set: (await getOption('mail_pass', '')) ? true : false,
-            mail_relay_require_tls: await getOption('mail_relay_require_tls', '1'),
-            mail_security_dkim_domain: await getOption('mail_security_dkim_domain', ''),
-            mail_security_dkim_selector: await getOption('mail_security_dkim_selector', 'default'),
-            mail_security_dkim_enabled: (await getOption('mail_security_dkim_private_key', '')) ? '1' : '0',
-            // Defaults reflect the SAFE posture (H12): DNSBL + SPF default ON, SPF reject default ON.
-            mail_security_dnsbl_enabled: await getOption('mail_security_dnsbl_enabled', '1'),
-            mail_security_spf_enabled: await getOption('mail_security_spf_enabled', '1'),
-            mail_security_spf_reject: await getOption('mail_security_spf_reject', '1')
+            mail_server: o.mail_server,
+            mail_port: o.mail_port,
+            mail_secure: o.mail_secure,
+            mail_user: o.mail_user,
+            mail_pass_set: o.mail_pass ? true : false,
+            mail_relay_require_tls: o.mail_relay_require_tls,
+            mail_security_dkim_domain: o.mail_security_dkim_domain,
+            mail_security_dkim_selector: o.mail_security_dkim_selector,
+            mail_security_dkim_enabled: o.mail_security_dkim_private_key ? '1' : '0',
+            mail_security_dnsbl_enabled: o.mail_security_dnsbl_enabled,
+            mail_security_spf_enabled: o.mail_security_spf_enabled,
+            mail_security_spf_reject: o.mail_security_spf_reject,
+            // Undo-send window in seconds (0 disables and restores synchronous delivery).
+            mail_undo_send_seconds: o.mail_undo_send_seconds
             // NOTE: the DKIM private key is never returned (secret).
         });
     });
@@ -1776,7 +2180,8 @@ exports.init = async function (bridge) {
             // Relay / smarthost (mail_user/mail_pass route to the encrypted secrets table via isSecretOption).
             'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
             'mail_security_dkim_domain', 'mail_security_dkim_selector',
-            'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject'
+            'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject',
+            'mail_undo_send_seconds'
         ];
 
         for (const f of fields) {
@@ -1806,7 +2211,8 @@ exports.init = async function (bridge) {
                 to,
                 subject: 'WordJS Mail Server — delivery test',
                 text: 'If you received this, outbound delivery is working.',
-                html: '<p>If you received this, <strong>outbound delivery</strong> is working.</p>'
+                html: '<p>If you received this, <strong>outbound delivery</strong> is working.</p>',
+                userId: req.user.id
             });
             const externalAttempted = (result.delivered && result.delivered.length) || (result.failed && result.failed.length);
             const localOnly = !!localUser && !externalAttempted;
@@ -2004,6 +2410,227 @@ exports.init = async function (bridge) {
                 size: req.file.size
             }
         });
+    });
+
+    // PUT /api/v1/plugin/mail-server/emails/:id/read — explicit read/unread toggle (Gmail parity).
+    route('put', '/emails/:id/read', { auth: true }, async (req, res) => {
+        const email = await Email.findById(req.params.id);
+        if (!email) return res.status(404).json({ error: 'Email not found' });
+        if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
+
+        await Email.setRead(req.params.id, !!req.body.read);
+        res.json({ success: true });
+    });
+
+    // PUT /api/v1/plugin/mail-server/emails/:id/spam — mark/unmark spam AND teach the Bayes filter.
+    route('put', '/emails/:id/spam', { auth: true }, async (req, res) => {
+        const email = await Email.findById(req.params.id);
+        if (!email) return res.status(404).json({ error: 'Email not found' });
+        if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
+
+        const state = !!req.body.spam;
+        await Email.setSpam(req.params.id, state);
+        try {
+            await classifier.learn((email.subject || '') + ' ' + (email.body_text || ''), state ? 'spam' : 'ham');
+            await saveBayes();
+        } catch (e) { /* training is best-effort */ }
+        res.json({ success: true });
+    });
+
+    // POST /api/v1/plugin/mail-server/emails/bulk — one round-trip for multi-select actions.
+    // Ownership is enforced per-row: ids the caller can't access are silently dropped, never touched.
+    route('post', '/emails/bulk', { auth: true }, async (req, res) => {
+        try {
+            const action = String((req.body && req.body.action) || '');
+            const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 200) : [];
+            const ACTIONS = ['read', 'unread', 'star', 'unstar', 'archive', 'unarchive', 'trash', 'restore', 'spam', 'notspam', 'label', 'unlabel', 'delete'];
+            if (!ACTIONS.includes(action)) return res.status(400).json({ error: 'Invalid action' });
+            if (ids.length === 0) return res.status(400).json({ error: 'No messages selected' });
+
+            const rows = await Email.findByIds(ids);
+            const mine = rows.filter(r => r.user_id === req.user.id || canAccessEmail(r, req.user));
+            const okIds = mine.map(r => r.id);
+            if (okIds.length === 0) return res.status(403).json({ error: 'No accessible messages in selection' });
+
+            if (action === 'label' || action === 'unlabel') {
+                const label = await Email.findLabel(parseInt(req.body.labelId, 10) || 0, req.user.id);
+                if (!label) return res.status(404).json({ error: 'Label not found' });
+                if (action === 'label') await Email.addLabelToEmails(okIds, label.id);
+                else await Email.removeLabelFromEmails(okIds, label.id);
+            } else if (action === 'delete') {
+                // Permanent delete only for rows already in trash (mirrors the single-message rule).
+                await Email.deleteManyPermanently(mine.filter(r => r.is_trash === 1).map(r => r.id));
+            } else if (action === 'spam' || action === 'notspam') {
+                await Email.bulkSetFlags(okIds, { isSpam: action === 'spam' ? 1 : 0, isArchived: 0 });
+                // Teach the Bayes filter from a bounded sample (rows already carry full bodies here).
+                let trained = 0;
+                for (const r of mine) {
+                    if (trained >= 25) break;
+                    try {
+                        await classifier.learn((r.subject || '') + ' ' + (r.body_text || ''), action === 'spam' ? 'spam' : 'ham');
+                        trained++;
+                    } catch (e) { /* keep going */ }
+                }
+                if (trained > 0) await saveBayes();
+            } else {
+                const map = {
+                    read: { isRead: 1 }, unread: { isRead: 0 },
+                    star: { isStarred: 1 }, unstar: { isStarred: 0 },
+                    archive: { isArchived: 1 }, unarchive: { isArchived: 0 },
+                    trash: { isTrash: 1 }, restore: { isTrash: 0 }
+                };
+                await Email.bulkSetFlags(okIds, map[action]);
+            }
+            res.json({ success: true, updated: okIds.length });
+        } catch (error) {
+            console.error('Bulk action failed:', error);
+            res.status(500).json({ error: 'Bulk action failed' });
+        }
+    });
+
+    // === Labels (Gmail-style, per user) =====================================================
+    route('get', '/labels', { auth: true }, async (req, res) => {
+        try {
+            res.json({ labels: await Email.listLabels(req.user.id) });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to list labels' });
+        }
+    });
+
+    const LABEL_COLOR_RE = /^#[0-9a-f]{6}$/i;
+    route('post', '/labels', { auth: true }, async (req, res) => {
+        try {
+            const name = String((req.body && req.body.name) || '').trim();
+            if (!name) return res.status(400).json({ error: 'Label name is required' });
+            if (name.length > 40) return res.status(400).json({ error: 'Label name too long (max 40 characters)' });
+            const color = String((req.body && req.body.color) || '#7c3aed');
+            if (!LABEL_COLOR_RE.test(color)) return res.status(400).json({ error: 'Invalid color (use #rrggbb)' });
+            const existing = await Email.listLabels(req.user.id);
+            if (existing.length >= 50) return res.status(400).json({ error: 'Too many labels (max 50)' });
+            const label = await Email.createLabel(req.user.id, name, color);
+            res.json({ success: true, label });
+        } catch (e) {
+            res.status(500).json({ error: e.message || 'Failed to create label' });
+        }
+    });
+
+    route('put', '/labels/:id', { auth: true }, async (req, res) => {
+        try {
+            const patch = {};
+            if (req.body.name !== undefined) {
+                const name = String(req.body.name).trim();
+                if (!name || name.length > 40) return res.status(400).json({ error: 'Invalid label name' });
+                patch.name = name;
+            }
+            if (req.body.color !== undefined) {
+                if (!LABEL_COLOR_RE.test(String(req.body.color))) return res.status(400).json({ error: 'Invalid color (use #rrggbb)' });
+                patch.color = String(req.body.color);
+            }
+            const label = await Email.updateLabel(req.params.id, req.user.id, patch);
+            if (!label) return res.status(404).json({ error: 'Label not found' });
+            res.json({ success: true, label });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to update label' });
+        }
+    });
+
+    route('delete', '/labels/:id', { auth: true }, async (req, res) => {
+        const ok = await Email.deleteLabel(req.params.id, req.user.id);
+        if (!ok) return res.status(404).json({ error: 'Label not found' });
+        res.json({ success: true });
+    });
+
+    // PUT /api/v1/plugin/mail-server/emails/:id/labels — apply/remove labels on one message.
+    route('put', '/emails/:id/labels', { auth: true }, async (req, res) => {
+        const email = await Email.findById(req.params.id);
+        if (!email) return res.status(404).json({ error: 'Email not found' });
+        if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
+
+        const add = Array.isArray(req.body && req.body.add) ? req.body.add : [];
+        const remove = Array.isArray(req.body && req.body.remove) ? req.body.remove : [];
+        for (const lid of add.slice(0, 20)) {
+            const label = await Email.findLabel(lid, req.user.id); // only YOUR labels apply
+            if (label) await Email.addLabelToEmails([email.id], label.id);
+        }
+        for (const lid of remove.slice(0, 20)) {
+            const label = await Email.findLabel(lid, req.user.id);
+            if (label) await Email.removeLabelFromEmails([email.id], label.id);
+        }
+        const labels = await Email.getLabelsForEmails([email.id]);
+        res.json({ success: true, labels: labels[email.id] || [] });
+    });
+
+    // === Per-user preferences: signature + vacation auto-responder ==========================
+    route('get', '/prefs', { auth: true }, async (req, res) => {
+        try {
+            const prefs = await Email.getPrefs(req.user.id);
+            const v = (prefs.vacation && typeof prefs.vacation === 'object') ? prefs.vacation : {};
+            res.json({
+                signature: typeof prefs.signature === 'string' ? prefs.signature : '',
+                vacation: {
+                    enabled: !!v.enabled,
+                    subject: v.subject || '',
+                    message: v.message || '',
+                    startsAt: v.startsAt || '',
+                    endsAt: v.endsAt || ''
+                }
+            });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to load preferences' });
+        }
+    });
+
+    route('put', '/prefs', { auth: true }, async (req, res) => {
+        try {
+            const cur = await Email.getPrefs(req.user.id);
+            const next = { ...cur };
+            if (req.body.signature !== undefined) next.signature = String(req.body.signature).slice(0, 5000);
+            if (req.body.vacation !== undefined) {
+                const v = req.body.vacation || {};
+                const isoOrEmpty = (x) => {
+                    if (!x) return '';
+                    const t = Date.parse(x);
+                    return Number.isFinite(t) ? new Date(t).toISOString() : '';
+                };
+                next.vacation = {
+                    enabled: !!v.enabled,
+                    subject: String(v.subject || '').slice(0, 180),
+                    message: String(v.message || '').slice(0, 5000),
+                    startsAt: isoOrEmpty(v.startsAt),
+                    endsAt: isoOrEmpty(v.endsAt)
+                };
+            }
+            await Email.setPrefs(req.user.id, next);
+            res.json({ success: true });
+        } catch (e) {
+            res.status(500).json({ error: 'Failed to save preferences' });
+        }
+    });
+
+    // GET /api/v1/plugin/mail-server/contacts/suggest — recipient autocomplete that merges the site
+    // user directory with the user's OWN correspondence history (people they actually mail).
+    route('get', '/contacts/suggest', { auth: true }, async (req, res) => {
+        const query = String(req.query.q || '').trim();
+        if (query.length < 2) return res.json([]);
+        try {
+            const siteDomain = await getSiteDomain();
+            const [users, history] = await Promise.all([
+                User.findAll({ search: query, limit: 5 }).catch(() => []),
+                Email.suggestContacts(req.user.id, query, 8).catch(() => [])
+            ]);
+            const out = new Map();
+            for (const u of (users || [])) {
+                if (!u || !u.userLogin) continue;
+                const addr = `${String(u.userLogin).toLowerCase()}@${siteDomain}`;
+                if (!out.has(addr)) out.set(addr, { email: addr, name: u.displayName || u.userLogin, source: 'user' });
+            }
+            for (const c of history) {
+                if (!out.has(c.email)) out.set(c.email, { email: c.email, name: c.name || '', source: 'history' });
+            }
+            res.json([...out.values()].slice(0, 8));
+        } catch (e) {
+            res.json([]);
+        }
     });
 
     // Register Admin Menu
