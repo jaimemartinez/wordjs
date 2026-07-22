@@ -14,11 +14,38 @@ import * as ReactDOMClient from 'react-dom/client';
 import * as JSXRuntime from 'react/jsx-runtime';
 import dynamic from 'next/dynamic';
 import { ComponentType } from 'react';
-// Host modules exposed to plugin bundles. Plugins import these as `@/lib/api` / `@/contexts/ModalContext`;
-// build-plugin.js rewrites those specifiers to window.WordJS.* so the plugin uses the host's OWN
-// instances (shared session/cookies for api(); the host's ModalProvider for useModal()).
-import * as HostApi from '@/lib/api';
-import * as HostModalContext from '@/contexts/ModalContext';
+// Host modules exposed to plugin bundles. Plugins import these (as `@/…` or via a relative path into
+// frontend/src); build-plugin.js rewrites those specifiers to `window.WordJS.host['<key>']` so the
+// plugin uses the host's OWN module instance — shared session for api(), the host's providers for
+// useI18n()/useModal()/useToast(), one React tree. KEEP THIS SET IN SYNC with HOST_MODULES in
+// backend/scripts/build-plugin.js (a plugin importing a module not injected here fails the bundle build).
+import * as h_api from '@/lib/api';
+import * as h_i18n from '@/lib/i18n';
+import * as h_pluginHooks from '@/lib/plugin-hooks';
+import * as h_modalContext from '@/contexts/ModalContext';
+import * as h_i18nContext from '@/contexts/I18nContext';
+import * as h_toastContext from '@/contexts/ToastContext';
+import * as h_authContext from '@/contexts/AuthContext';
+import * as h_mediaPickerModal from '@/components/MediaPickerModal';
+import * as h_statCard from '@/components/ui/StatCard';
+import * as h_pageHeader from '@/components/ui/PageHeader';
+import * as h_card from '@/components/ui/Card';
+import * as h_actionCard from '@/components/ui/ActionCard';
+
+const HOST_MODULES: Record<string, unknown> = {
+    'lib/api': h_api,
+    'lib/i18n': h_i18n,
+    'lib/plugin-hooks': h_pluginHooks,
+    'contexts/ModalContext': h_modalContext,
+    'contexts/I18nContext': h_i18nContext,
+    'contexts/ToastContext': h_toastContext,
+    'contexts/AuthContext': h_authContext,
+    'components/MediaPickerModal': h_mediaPickerModal,
+    'components/ui/StatCard': h_statCard,
+    'components/ui/PageHeader': h_pageHeader,
+    'components/ui/Card': h_card,
+    'components/ui/ActionCard': h_actionCard,
+};
 
 // ============================================
 // React Singleton Injection
@@ -35,8 +62,7 @@ if (typeof window !== 'undefined') {
         ReactDOM: ReactDOM,
         ReactDOMClient: ReactDOMClient,
         JSXRuntime: JSXRuntime,
-        hostApi: HostApi,
-        modalContext: HostModalContext,
+        host: HOST_MODULES,
     };
 
     // Also expose directly for UMD-style bundles
