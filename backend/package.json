@@ -1,6 +1,6 @@
 {
   "name": "wordjs",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "description": "WordPress-like CMS built with Node.js and SQLite",
   "main": "src/index.ts",
   "scripts": {
@@ -56,7 +56,7 @@
     "sanitize-html": "^2.17.0",
     "selfsigned": "^5.5.0",
     "semver": "^7.7.3",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.3",
     "slugify": "^1.6.6",
     "smtp-server": "^3.18.0",
     "spf-validator": "^0.2.0",
