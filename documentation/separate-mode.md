@@ -50,7 +50,7 @@ no repo checkout, no build step.
 **Machine 1 — gateway:**
 
 ```bash
-npx create-wordjs gateway --host <gateway-ip>
+npx create-wordjs@latest gateway --host <gateway-ip>
 ```
 
 This scaffolds `wordjs-gateway/`, initializes the cluster CA, starts the gateway, mints one
@@ -60,14 +60,14 @@ other machines — gateway address, enroll port, token and CA fingerprint includ
 **Machine 2 — backend** (paste what the gateway printed; it looks like this):
 
 ```bash
-npx create-wordjs join backend --gateway <gateway-ip> --token <token> \
+npx create-wordjs@latest join backend --gateway <gateway-ip> --token <token> \
      --ca-hash <fingerprint> --advertise <backend-ip>
 ```
 
 **Machine 3 — frontend:**
 
 ```bash
-npx create-wordjs join frontend --gateway <gateway-ip> --token <token> \
+npx create-wordjs@latest join frontend --gateway <gateway-ip> --token <token> \
      --ca-hash <fingerprint> --advertise <frontend-ip>
 ```
 
@@ -182,5 +182,5 @@ In an npx-scaffolded gateway these live in `wordjs-gateway/scripts/`.
 ## Rotating / re-issuing
 
 The cluster CA private key lives only on the gateway. To add or replace a node later, mint a fresh token
-and run `npx create-wordjs join <role> …` (or `node-join` from a checkout) on that machine — no need to
+and run `npx create-wordjs@latest join <role> …` (or `node-join` from a checkout) on that machine — no need to
 touch the other nodes.

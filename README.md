@@ -33,7 +33,7 @@ server, no build step on the server.
 ### Try it in one command
 
 ```bash
-npx create-wordjs my-site
+npx create-wordjs@latest my-site
 ```
 
 No PHP, no MySQL, no build step — it downloads the pre-compiled release, starts a single Node
@@ -272,9 +272,9 @@ between them. Monolith and split are mutually exclusive (both bind the public po
   behind a single reverse proxy or a small VM/container).
 - **Separate — the three services on different machines:** the same split, spread across a gateway
   box, a backend box, and a frontend box, joined into one cluster over **mutual TLS**. One command
-  per machine: `npx create-wordjs gateway --host <ip>` makes the first box the cluster CA and prints
+  per machine: `npx create-wordjs@latest gateway --host <ip>` makes the first box the cluster CA and prints
   ready-to-paste join commands with **single-use, role-bound join tokens**; then
-  `npx create-wordjs join backend|frontend …` on each other box downloads the release, enrolls
+  `npx create-wordjs@latest join backend|frontend …` on each other box downloads the release, enrolls
   (the gateway signs the node an mTLS identity — no cert is ever hand-copied) and starts the
   service. See the [**Separate-mode guide**](documentation/separate-mode.md) for the walkthrough
   and the manual (source-checkout) procedure.
@@ -329,7 +329,7 @@ Guides live in [`documentation/`](documentation/):
 ### Fastest — one command
 
 ```bash
-npx create-wordjs my-site
+npx create-wordjs@latest my-site
 ```
 
 Downloads the latest pre-compiled release, installs runtime dependencies, starts the
