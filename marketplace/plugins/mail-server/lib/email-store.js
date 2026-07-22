@@ -7,8 +7,20 @@
  * the query. The legacy unprefixed tables (received_emails / email_attachments) are migrated to the
  * prefixed names by a one-time, idempotent step in initSchema().
  *
+ * OWNERSHIP MODEL (v2.1 — the performance fix): every mailbox row is owned by exactly ONE user via
+ * the `user_id` column (the sender for sent/draft copies, the recipient for inbox copies), so folder
+ * listings are a single indexed `user_id = ?` probe instead of the old `LIKE '%email%'` full-table
+ * scans over to/cc/bcc. Rows written BEFORE the column existed keep user_id = 0 and stay visible
+ * through the legacy address-match arm (`user_id = 0 AND <address LIKE>`), so no backfill/migration
+ * of historic data is needed and nothing disappears on upgrade. The legacy set never grows, so its
+ * scan cost is bounded; all new mail takes the indexed arm.
+ *
  * Attachment file operations use node builtins (fs/path/crypto) directly — confined to the plugin's
  * OWN dir (no shared-uploads access without trust). Attachments live under the plugin dir.
+ *
+ * GUARD NOTE: every SQL string here must survive the host's assertSqlAllowed text guard — single
+ * statement, no '$' / backslash / '[' / ']' / '/*!' anywhere, no RETURNING, and every table token
+ * under the wjp_mail_server_ prefix. Keep it that way when editing.
  *
  * Usage: const Email = require('./lib/email-store')(wordjs.db);
  */
@@ -130,6 +142,21 @@ function decryptSecret(stored) {
 const T_EMAILS = 'wjp_mail_server_received_emails';
 const T_ATTACH = 'wjp_mail_server_email_attachments';
 const T_SECRETS = 'wjp_mail_server_secrets';
+const T_LABELS = 'wjp_mail_server_labels';
+const T_EMAIL_LABELS = 'wjp_mail_server_email_labels';
+const T_PREFS = 'wjp_mail_server_user_prefs';
+
+// The light column set every LIST endpoint returns (parameterized by table alias). The old
+// `SELECT *` shipped body_text + body_html + raw_content for every row — megabytes of JSON per
+// mailbox page serialized across the isolate RPC bridge and then over HTTP, for a UI that renders a
+// 2-line preview. Full bodies are only fetched by findById/findByThreadId (the reading pane).
+const listCols = (a) =>
+    `${a}.id, ${a}.message_id, ${a}.from_address, ${a}.from_name, ${a}.to_address, ${a}.cc_address, ${a}.bcc_address, ` +
+    `${a}.subject, SUBSTR(COALESCE(${a}.body_text, ''), 1, 180) AS snippet, ` +
+    `${a}.date_received, ${a}.is_read, ${a}.is_sent, ${a}.is_draft, ${a}.is_archived, ${a}.is_starred, ${a}.is_trash, ` +
+    `${a}.is_spam, ${a}.user_id, ${a}.parent_id, ${a}.thread_id, ${a}.scheduled_at, ` +
+    `${a}.delivery_status, ${a}.delivery_attempts, ${a}.last_error`;
+const LIST_COLS = listCols('e');
 
 module.exports = function createEmailStore(db) {
     // The host expects the plugin to confine itself to this prefix; surface it for assertions/logging.
@@ -169,7 +196,7 @@ module.exports = function createEmailStore(db) {
         },
 
         async initSchema() {
-            // 1. Create the plugin-owned tables (idempotent).
+            // 1. Create the plugin-owned tables (idempotent). New installs get the full column set here.
             await db.createTable(T_EMAILS, [
                 'id INT_PK',
                 'message_id TEXT',
@@ -188,6 +215,10 @@ module.exports = function createEmailStore(db) {
                 'is_archived INT DEFAULT 0',
                 'is_starred INT DEFAULT 0',
                 'is_trash INT DEFAULT 0',
+                'is_spam INT DEFAULT 0',
+                // Owner of this mailbox copy (sender for sent/drafts, recipient for inbox copies).
+                // 0 = legacy row from before the ownership model (matched by address instead).
+                'user_id INT DEFAULT 0',
                 'raw_content TEXT',
                 'parent_id INT DEFAULT 0',
                 'thread_id INT DEFAULT 0',
@@ -218,24 +249,77 @@ module.exports = function createEmailStore(db) {
                 'value TEXT',
                 'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP'
             ]);
-            await this._createIndex('idx_wjp_mail_server_secrets_name', T_SECRETS, 'name');
+            await this._createIndex('wjp_mail_server_idx_secrets_name', T_SECRETS, 'name');
 
-            // 2. One-time, idempotent migration from the legacy UNPREFIXED tables, if they still exist.
+            // Gmail-style user labels (per-user) + the email↔label junction.
+            await db.createTable(T_LABELS, [
+                'id INT_PK',
+                'user_id INT DEFAULT 0',
+                'name TEXT',
+                'color TEXT',
+                'created_at DATETIME DEFAULT CURRENT_TIMESTAMP'
+            ]);
+            await db.createTable(T_EMAIL_LABELS, [
+                'id INT_PK',
+                'email_id INT',
+                'label_id INT'
+            ]);
+
+            // Per-user preferences (signature, vacation auto-responder) as a JSON blob.
+            await db.createTable(T_PREFS, [
+                'id INT_PK',
+                'user_id INT DEFAULT 0',
+                'prefs TEXT',
+                'updated_at DATETIME DEFAULT CURRENT_TIMESTAMP'
+            ]);
+
+            // 2. Upgrade path for tables created before v2.1: add the ownership + spam columns.
+            // ALTER ... ADD COLUMN fails with a "duplicate column" error when it already exists — on
+            // every engine — so a swallowed error IS the idempotency check (same pattern as _createIndex).
+            await this._ensureColumn(T_EMAILS, 'user_id', 'INT DEFAULT 0');
+            await this._ensureColumn(T_EMAILS, 'is_spam', 'INT DEFAULT 0');
+
+            // 3. One-time, idempotent migration from the legacy UNPREFIXED tables, if they still exist.
             // (Only relevant for sites upgraded from the trusted era where the bridge let us write
             // received_emails / email_attachments directly.)
             await this._migrateLegacyTables();
 
-            // 3. Indexes for the retry/scheduled queue sweeps and thread lookups.
-            await this._createIndex('idx_wjp_mail_server_delivery', T_EMAILS, 'delivery_status, next_attempt_at');
-            await this._createIndex('idx_wjp_mail_server_scheduled', T_EMAILS, 'scheduled_at');
-            await this._createIndex('idx_wjp_mail_server_thread', T_EMAILS, 'thread_id');
+            // 4. Indexes. idx_..._owner is the one that makes every mailbox listing an index probe;
+            // idx_..._msgid makes inbound In-Reply-To threading O(log n) instead of a full scan.
+            await this._createIndex('wjp_mail_server_idx_owner', T_EMAILS, 'user_id');
+            await this._createIndex('wjp_mail_server_idx_msgid', T_EMAILS, 'message_id');
+            await this._createIndex('wjp_mail_server_idx_date', T_EMAILS, 'date_received');
+            await this._createIndex('wjp_mail_server_idx_delivery', T_EMAILS, 'delivery_status, next_attempt_at');
+            await this._createIndex('wjp_mail_server_idx_scheduled', T_EMAILS, 'scheduled_at');
+            await this._createIndex('wjp_mail_server_idx_thread', T_EMAILS, 'thread_id');
+            await this._createIndex('wjp_mail_server_idx_att_email', T_ATTACH, 'email_id');
+            await this._createIndex('wjp_mail_server_idx_lbl_user', T_LABELS, 'user_id');
+            await this._createIndex('wjp_mail_server_idx_el_email', T_EMAIL_LABELS, 'email_id');
+            await this._createIndex('wjp_mail_server_idx_el_label', T_EMAIL_LABELS, 'label_id');
+            await this._createIndex('wjp_mail_server_idx_prefs_user', T_PREFS, 'user_id');
         },
 
         async _createIndex(name, table, cols) {
+            // The host guard (plugin-api.ts assertSqlAllowed) requires the INDEX NAME itself to start
+            // with the plugin's table prefix — not just the target table. So names are wjp_mail_server_idx_*,
+            // NOT idx_wjp_mail_server_* (which the guard rejected, silently costing us EVERY index —
+            // and with them the ownership-model fast path — until it was caught on a live DB).
+            if (!String(name).startsWith(PREFIX)) {
+                console.error(`[MailServer] Refusing to create index '${name}': name must start with '${PREFIX}'.`);
+                return;
+            }
             try {
                 await db.run(`CREATE INDEX IF NOT EXISTS ${name} ON ${table} (${cols})`);
             } catch (e) {
                 // Ignore if index already exists / race condition.
+            }
+        },
+
+        async _ensureColumn(table, name, ddl) {
+            try {
+                await db.run(`ALTER TABLE ${table} ADD COLUMN ${name} ${ddl}`);
+            } catch (e) {
+                // Duplicate-column error = column already there (fresh install or already upgraded).
             }
         },
 
@@ -303,9 +387,13 @@ module.exports = function createEmailStore(db) {
         async create(data) {
             const {
                 messageId, fromAddress, fromName, toAddress, ccAddress = '', bccAddress = '', subject, bodyText, bodyHtml, rawContent,
-                isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0,
+                isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0, isSpam = 0,
                 parentId = 0, threadId = 0, scheduledAt = null
             } = data;
+
+            // Owner of this copy. Accept either `userId` or the legacy `user_id` spelling callers used
+            // (which the old destructuring silently DROPPED — ownership is the point of v2.1).
+            const ownerId = parseInt(data.userId !== undefined ? data.userId : data.user_id, 10) || 0;
 
             // better-sqlite3 (and the pg driver) only bind numbers/strings/bigints/buffers/null — never
             // undefined, boolean, Date or object. mailparser yields `false` for a missing text/html part
@@ -317,12 +405,12 @@ module.exports = function createEmailStore(db) {
             const result = await db.run(`
                 INSERT INTO ${T_EMAILS} (
                     message_id, from_address, from_name, to_address, cc_address, bcc_address, subject, body_text, body_html, raw_content,
-                    is_sent, is_draft, is_archived, is_starred, is_trash, parent_id, thread_id, scheduled_at
+                    is_sent, is_draft, is_archived, is_starred, is_trash, is_spam, user_id, parent_id, thread_id, scheduled_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
                 str(messageId), str(fromAddress), str(fromName), str(toAddress), str(ccAddress), str(bccAddress), str(subject), str(bodyText), str(bodyHtml), str(rawContent),
-                isSent, isDraft, isArchived, isStarred, isTrash, parentId, threadId, scheduledAt
+                isSent, isDraft, isArchived, isStarred, isTrash, isSpam ? 1 : 0, ownerId, parentId, threadId, scheduledAt
             ]);
 
             const emailId = result.lastID;
@@ -380,7 +468,7 @@ module.exports = function createEmailStore(db) {
         async update(id, data) {
             const {
                 messageId, toAddress, ccAddress, bccAddress, subject, bodyText, bodyHtml, rawContent,
-                isSent, isDraft, isTrash, scheduledAt
+                isSent, isDraft, isTrash, isSpam, isArchived, scheduledAt
             } = data;
 
             // Build dynamic query
@@ -402,6 +490,8 @@ module.exports = function createEmailStore(db) {
             if (isSent !== undefined) { fields.push("is_sent = ?"); params.push(isSent); }
             if (isDraft !== undefined) { fields.push("is_draft = ?"); params.push(isDraft); }
             if (isTrash !== undefined) { fields.push("is_trash = ?"); params.push(isTrash); }
+            if (isSpam !== undefined) { fields.push("is_spam = ?"); params.push(isSpam ? 1 : 0); }
+            if (isArchived !== undefined) { fields.push("is_archived = ?"); params.push(isArchived ? 1 : 0); }
             if (scheduledAt !== undefined) { fields.push("scheduled_at = ?"); params.push(scheduledAt); }
 
             if (contentChanged) {
@@ -428,8 +518,20 @@ module.exports = function createEmailStore(db) {
             return await db.get(`SELECT * FROM ${T_EMAILS} WHERE id = ?`, [id]);
         },
 
-        async findByThreadId(threadId, userEmail = null) {
-            const sql = `SELECT * FROM ${T_EMAILS} WHERE (thread_id = ? OR id = ?) AND is_trash = 0 ORDER BY date_received ASC`;
+        // Fetch a batch of full rows by id (bulk-action authorization). Bounded by the caller.
+        async findByIds(ids) {
+            const list = (ids || []).map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0);
+            if (list.length === 0) return [];
+            const ph = list.map(() => '?').join(', ');
+            return await db.all(`SELECT * FROM ${T_EMAILS} WHERE id IN (${ph})`, list);
+        },
+
+        async findByThreadId(threadId, userEmail = null, opts = {}) {
+            // Spam messages are hidden from a normal conversation view (Gmail behavior); when the
+            // REQUESTED message itself is spam the caller passes includeSpam so the spam-folder reading
+            // pane still shows it.
+            const spamFilter = opts.includeSpam ? '' : ' AND is_spam = 0';
+            const sql = `SELECT * FROM ${T_EMAILS} WHERE (thread_id = ? OR id = ?) AND is_trash = 0${spamFilter} ORDER BY date_received ASC`;
             const rows = await db.all(sql, [threadId, threadId]);
 
             // SECURITY (over-disclosure): an unanchored `LIKE %email%` membership test matched thread
@@ -453,45 +555,64 @@ module.exports = function createEmailStore(db) {
             );
         },
 
-        async findAllByUser(email, folder = 'inbox', limit = 50, offset = 0) {
-            let whereClause = "";
-            let params = [];
-            const likeEmail = `%${email}%`;
+        /**
+         * Per-folder WHERE clause under the ownership model.
+         *
+         * Two arms OR'd together:
+         *  - `user_id = ?`      — rows explicitly owned by this user (all mail written since v2.1);
+         *                         an indexed probe, and immune to the multi-recipient duplicate bug
+         *                         (another recipient's copy of the same message has THEIR user_id).
+         *  - `user_id = 0 AND <address match>` — legacy rows from before the column existed, matched
+         *                         exactly as the old code did so nothing disappears on upgrade.
+         * Columns are qualified with the `m` alias — every caller aliases ${T_EMAILS} AS m.
+         */
+        _folderClause(userId, email, folder = 'inbox', labelId = 0) {
+            const uid = parseInt(userId, 10) || 0;
+            const like = `%${email}%`;
+            const rcvd = '(m.to_address LIKE ? OR m.cc_address LIKE ? OR m.bcc_address LIKE ?)';
+            const rcvdOrFrom = '(m.to_address LIKE ? OR m.cc_address LIKE ? OR m.bcc_address LIKE ? OR m.from_address = ?)';
 
-            if (folder === 'sent') {
-                whereClause = "from_address = ? AND is_sent = 1 AND is_draft = 0 AND is_trash = 0";
-                params = [email];
-            } else if (folder === 'drafts') {
-                whereClause = "from_address = ? AND (is_draft = 1 OR (scheduled_at IS NOT NULL AND is_sent = 0)) AND is_trash = 0";
-                params = [email];
-            } else if (folder === 'archive') {
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_archived = 1 AND is_trash = 0";
-                params = [likeEmail, likeEmail, likeEmail, email];
-            } else if (folder === 'starred') {
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_starred = 1 AND is_trash = 0";
-                params = [likeEmail, likeEmail, likeEmail, email];
-            } else if (folder === 'trash') {
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_trash = 1";
-                params = [likeEmail, likeEmail, likeEmail, email];
-            } else {
-                // Default Inbox: Received (To/CC/BCC), Not Sent (unless self), Not Draft, Not Archived, Not Trash
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ?) AND is_sent = 0 AND is_draft = 0 AND is_archived = 0 AND is_trash = 0 AND scheduled_at IS NULL";
-                params = [likeEmail, likeEmail, likeEmail];
+            if (String(folder).startsWith('label')) {
+                const own = `(m.user_id = ? OR (m.user_id = 0 AND ${rcvdOrFrom}))`;
+                const clause = `(${own} AND m.is_trash = 0 AND m.is_spam = 0 AND m.is_draft = 0 ` +
+                    `AND EXISTS (SELECT 1 FROM ${T_EMAIL_LABELS} el WHERE el.email_id = m.id AND el.label_id = ?))`;
+                return { clause, params: [uid, like, like, like, email, parseInt(labelId, 10) || 0] };
             }
+
+            const F = {
+                inbox: { flags: 'm.is_sent = 0 AND m.is_draft = 0 AND m.is_archived = 0 AND m.is_trash = 0 AND m.is_spam = 0 AND m.scheduled_at IS NULL', legacy: rcvd, legacyParams: [like, like, like] },
+                sent: { flags: 'm.is_sent = 1 AND m.is_draft = 0 AND m.is_trash = 0', legacy: 'm.from_address = ?', legacyParams: [email] },
+                drafts: { flags: '(m.is_draft = 1 OR (m.scheduled_at IS NOT NULL AND m.is_sent = 0)) AND m.is_trash = 0', legacy: 'm.from_address = ?', legacyParams: [email] },
+                archive: { flags: 'm.is_archived = 1 AND m.is_trash = 0 AND m.is_spam = 0', legacy: rcvdOrFrom, legacyParams: [like, like, like, email] },
+                starred: { flags: 'm.is_starred = 1 AND m.is_trash = 0 AND m.is_spam = 0', legacy: rcvdOrFrom, legacyParams: [like, like, like, email] },
+                spam: { flags: 'm.is_spam = 1 AND m.is_trash = 0', legacy: rcvdOrFrom, legacyParams: [like, like, like, email] },
+                trash: { flags: 'm.is_trash = 1', legacy: rcvdOrFrom, legacyParams: [like, like, like, email] },
+            };
+            const f = F[folder] || F.inbox;
+            return {
+                clause: `((m.user_id = ? AND ${f.flags}) OR (m.user_id = 0 AND ${f.legacy} AND ${f.flags}))`,
+                params: [uid, ...f.legacyParams]
+            };
+        },
+
+        async findAllByUser(userId, email, folder = 'inbox', limit = 50, offset = 0, labelId = 0) {
+            const { clause, params } = this._folderClause(userId, email, folder, labelId);
 
             // Thread-collapse: pick ONE representative row per thread. A bare-column GROUP BY (SELECT *
             // … GROUP BY thread_key) returns an arbitrary/stale row on SQLite and is ILLEGAL on Postgres
             // (500s the whole listing). Instead aggregate first (thread_key → newest row id + count),
             // then JOIN back to fetch that row's real columns. The representative is the highest id in the
             // thread (newest-inserted), deterministic on both drivers.
-            const threadKey = "CASE WHEN thread_id > 0 THEN thread_id ELSE id END";
+            const threadKey = 'CASE WHEN m.thread_id > 0 THEN m.thread_id ELSE m.id END';
             return await db.all(`
-                SELECT e.*, t.thread_count
+                SELECT ${LIST_COLS},
+                       t.thread_count,
+                       CASE WHEN EXISTS (SELECT 1 FROM ${T_ATTACH} a WHERE a.email_id = e.id) THEN 1 ELSE 0 END AS has_attachment
                 FROM ${T_EMAILS} e
                 JOIN (
-                    SELECT ${threadKey} AS tkey, MAX(id) AS rep_id, COUNT(*) AS thread_count
-                    FROM ${T_EMAILS}
-                    WHERE ${whereClause}
+                    SELECT ${threadKey} AS tkey, MAX(m.id) AS rep_id, COUNT(*) AS thread_count
+                    FROM ${T_EMAILS} m
+                    WHERE ${clause}
                     GROUP BY ${threadKey}
                 ) t ON e.id = t.rep_id
                 ORDER BY e.date_received DESC, e.id DESC
@@ -499,56 +620,54 @@ module.exports = function createEmailStore(db) {
             `, [...params, limit, offset]);
         },
 
-        async countByUser(email, folder = 'inbox') {
-            let whereClause = "";
-            let params = [];
-            const likeEmail = `%${email}%`;
-
-            if (folder === 'sent') {
-                whereClause = "from_address = ? AND is_sent = 1 AND is_draft = 0 AND is_trash = 0";
-                params = [email];
-            } else if (folder === 'drafts') {
-                whereClause = "from_address = ? AND (is_draft = 1 OR (scheduled_at IS NOT NULL AND is_sent = 0)) AND is_trash = 0";
-                params = [email];
-            } else if (folder === 'archive') {
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_archived = 1 AND is_trash = 0";
-                params = [likeEmail, likeEmail, likeEmail, email];
-            } else if (folder === 'starred') {
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_starred = 1 AND is_trash = 0";
-                params = [likeEmail, likeEmail, likeEmail, email];
-            } else if (folder === 'trash') {
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_trash = 1";
-                params = [likeEmail, likeEmail, likeEmail, email];
-            } else {
-                whereClause = "(to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ?) AND is_sent = 0 AND is_draft = 0 AND is_archived = 0 AND is_trash = 0 AND scheduled_at IS NULL";
-                params = [likeEmail, likeEmail, likeEmail];
-            }
-
+        async countByUser(userId, email, folder = 'inbox', labelId = 0) {
+            const { clause, params } = this._folderClause(userId, email, folder, labelId);
             // Count the SAME collapsed unit findAllByUser lists (one per thread), not raw rows — otherwise
             // the total exceeds the visible items and pagination renders empty trailing pages.
-            const threadKey = "CASE WHEN thread_id > 0 THEN thread_id ELSE id END";
+            const threadKey = 'CASE WHEN m.thread_id > 0 THEN m.thread_id ELSE m.id END';
             const row = await db.get(`
                 SELECT COUNT(*) as count FROM (
-                    SELECT 1 FROM ${T_EMAILS}
-                    WHERE ${whereClause}
+                    SELECT 1 FROM ${T_EMAILS} m
+                    WHERE ${clause}
                     GROUP BY ${threadKey}
                 ) sub
             `, params);
             return row ? row.count : 0;
         },
 
-        async countUnreadInbox(email) {
-            const likeEmail = `%${email}%`;
+        /**
+         * All sidebar badge counters in ONE indexed pass over the user's rows (the old UI issued a
+         * separate /stats scan per poll on top of the listing).
+         */
+        async getCounts(userId, email) {
+            const uid = parseInt(userId, 10) || 0;
+            const like = `%${email}%`;
             const row = await db.get(`
-                SELECT COUNT(*) as count FROM ${T_EMAILS}
-                WHERE (to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ?)
-                AND is_sent = 0 AND is_draft = 0 AND is_trash = 0 AND is_archived = 0 AND scheduled_at IS NULL AND is_read = 0
-            `, [likeEmail, likeEmail, likeEmail]);
-            return row ? row.count : 0;
+                SELECT
+                    COALESCE(SUM(CASE WHEN m.is_sent = 0 AND m.is_draft = 0 AND m.is_archived = 0 AND m.is_trash = 0 AND m.is_spam = 0 AND m.scheduled_at IS NULL AND m.is_read = 0 THEN 1 ELSE 0 END), 0) AS inbox_unread,
+                    COALESCE(SUM(CASE WHEN m.is_spam = 1 AND m.is_trash = 0 AND m.is_read = 0 THEN 1 ELSE 0 END), 0) AS spam_unread,
+                    COALESCE(SUM(CASE WHEN (m.is_draft = 1 OR (m.scheduled_at IS NOT NULL AND m.is_sent = 0)) AND m.is_trash = 0 THEN 1 ELSE 0 END), 0) AS drafts
+                FROM ${T_EMAILS} m
+                WHERE (m.user_id = ? OR (m.user_id = 0 AND (m.to_address LIKE ? OR m.cc_address LIKE ? OR m.bcc_address LIKE ? OR m.from_address = ?)))
+            `, [uid, like, like, like, email]);
+            return {
+                inbox_unread: row ? Number(row.inbox_unread) || 0 : 0,
+                spam_unread: row ? Number(row.spam_unread) || 0 : 0,
+                drafts: row ? Number(row.drafts) || 0 : 0
+            };
+        },
+
+        async countUnreadInbox(userId, email) {
+            const c = await this.getCounts(userId, email);
+            return c.inbox_unread;
         },
 
         async markAsRead(id) {
             return await db.run(`UPDATE ${T_EMAILS} SET is_read = 1 WHERE id = ?`, [id]);
+        },
+
+        async setRead(id, state) {
+            return await db.run(`UPDATE ${T_EMAILS} SET is_read = ? WHERE id = ?`, [state ? 1 : 0, id]);
         },
 
         async setStarred(id, state) {
@@ -559,6 +678,12 @@ module.exports = function createEmailStore(db) {
             return await db.run(`UPDATE ${T_EMAILS} SET is_archived = ? WHERE id = ?`, [state ? 1 : 0, id]);
         },
 
+        async setSpam(id, state) {
+            // Marking spam also un-archives so "Not spam" later returns the mail to the inbox, and
+            // marks it read is NOT done (Gmail keeps unread state).
+            return await db.run(`UPDATE ${T_EMAILS} SET is_spam = ?, is_archived = 0 WHERE id = ?`, [state ? 1 : 0, id]);
+        },
+
         async moveToTrash(id) {
             return await db.run(`UPDATE ${T_EMAILS} SET is_trash = 1 WHERE id = ?`, [id]);
         },
@@ -567,47 +692,318 @@ module.exports = function createEmailStore(db) {
             return await db.run(`UPDATE ${T_EMAILS} SET is_trash = 0 WHERE id = ?`, [id]);
         },
 
+        /**
+         * Bulk flag update over an ALREADY-AUTHORIZED id list (the route filters ownership first).
+         * `set` accepts: isRead, isStarred, isArchived, isTrash, isSpam (0/1 each).
+         */
+        async bulkSetFlags(ids, set) {
+            const list = (ids || []).map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0);
+            if (list.length === 0) return 0;
+            const fields = [];
+            const params = [];
+            const map = { isRead: 'is_read', isStarred: 'is_starred', isArchived: 'is_archived', isTrash: 'is_trash', isSpam: 'is_spam' };
+            for (const [k, col] of Object.entries(map)) {
+                if (set[k] !== undefined) { fields.push(`${col} = ?`); params.push(set[k] ? 1 : 0); }
+            }
+            if (fields.length === 0) return 0;
+            const ph = list.map(() => '?').join(', ');
+            await db.run(`UPDATE ${T_EMAILS} SET ${fields.join(', ')} WHERE id IN (${ph})`, [...params, ...list]);
+            return list.length;
+        },
+
+        // Cancel an undo-window/scheduled send: back to a draft, atomically guarded on is_sent = 0 so
+        // it can never "unsend" a message the queue already dispatched (the dispatch flips is_sent=1).
+        async cancelScheduled(id) {
+            await db.run(`
+                UPDATE ${T_EMAILS}
+                SET is_draft = 1, scheduled_at = NULL, delivery_status = NULL
+                WHERE id = ? AND is_sent = 0 AND is_trash = 0
+            `, [id]);
+            return await this.findById(id);
+        },
+
         async deletePermanently(id) {
-            // Also delete attachments files
-            const attachments = await this.getAttachments(id);
-            for (const att of attachments) {
-                const fullPath = path.join(UPLOAD_DIR, att.storage_path);
+            return await this.deleteManyPermanently([id]);
+        },
+
+        /**
+         * Permanent delete in BATCHES (attachment files + attachment rows + label links + email rows).
+         * The old per-email loop issued 3 queries per message — emptying a large trash took hundreds of
+         * sequential bridge round-trips.
+         */
+        async deleteManyPermanently(ids) {
+            const list = (ids || []).map(n => parseInt(n, 10)).filter(n => Number.isFinite(n) && n > 0);
+            let deleted = 0;
+            for (let i = 0; i < list.length; i += 100) {
+                const chunk = list.slice(i, i + 100);
+                const ph = chunk.map(() => '?').join(', ');
+                // Unlink attachment blobs first (rows are the only pointer to the files).
                 try {
-                    await fs.unlink(fullPath);
+                    const atts = await db.all(`SELECT storage_path FROM ${T_ATTACH} WHERE email_id IN (${ph})`, chunk);
+                    for (const att of atts) {
+                        if (!att || !att.storage_path) continue;
+                        const fullPath = path.join(UPLOAD_DIR, att.storage_path);
+                        try { await fs.unlink(fullPath); } catch (e) {
+                            if (e.code !== 'ENOENT') console.error(`[Email] Failed to delete attachment at ${fullPath}:`, e.message);
+                        }
+                    }
                 } catch (e) {
-                    if (e.code !== 'ENOENT') {
-                        console.error(`[Email] Failed to delete attachment at ${fullPath}:`, e.message);
+                    console.error('[Email] Attachment cleanup failed:', e.message);
+                }
+                await db.run(`DELETE FROM ${T_ATTACH} WHERE email_id IN (${ph})`, chunk);
+                await db.run(`DELETE FROM ${T_EMAIL_LABELS} WHERE email_id IN (${ph})`, chunk);
+                await db.run(`DELETE FROM ${T_EMAILS} WHERE id IN (${ph})`, chunk);
+                deleted += chunk.length;
+            }
+            return deleted;
+        },
+
+        async emptyTrash(userId, userEmail) {
+            const { clause, params } = this._folderClause(userId, userEmail, 'trash');
+            const emails = await db.all(`SELECT m.id FROM ${T_EMAILS} m WHERE ${clause}`, params);
+            return await this.deleteManyPermanently(emails.map(e => e.id));
+        },
+
+        // Spam retention: permanently drop spam older than `days` (Gmail does 30). Returns count.
+        async purgeOldSpam(days = 30) {
+            const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000)
+                .toISOString().slice(0, 19).replace('T', ' ');
+            const rows = await db.all(
+                `SELECT id FROM ${T_EMAILS} WHERE is_spam = 1 AND date_received < ?`, [cutoff]
+            );
+            if (rows.length === 0) return 0;
+            return await this.deleteManyPermanently(rows.map(r => r.id));
+        },
+
+        /**
+         * Operator-aware search, scoped to the requesting user's mail via the ownership clause.
+         * `q` = { text, from, to, subject, hasAttachment, isUnread, isStarred, labelId, folder }.
+         */
+        async search(userId, email, q = {}, limit = 50, offset = 0) {
+            const uid = parseInt(userId, 10) || 0;
+            const like = `%${email}%`;
+            const where = ['(m.user_id = ? OR (m.user_id = 0 AND (m.to_address LIKE ? OR m.cc_address LIKE ? OR m.bcc_address LIKE ? OR m.from_address = ?)))'];
+            const params = [uid, like, like, like, email];
+
+            const folder = q.folder || 'anywhere';
+            if (folder === 'trash') {
+                where.push('m.is_trash = 1');
+            } else if (folder === 'spam') {
+                where.push('m.is_spam = 1 AND m.is_trash = 0');
+            } else {
+                where.push('m.is_trash = 0 AND m.is_spam = 0');
+                if (folder === 'inbox') where.push('m.is_sent = 0 AND m.is_draft = 0 AND m.is_archived = 0 AND m.scheduled_at IS NULL');
+                else if (folder === 'sent') where.push('m.is_sent = 1 AND m.is_draft = 0');
+                else if (folder === 'drafts') where.push('(m.is_draft = 1 OR (m.scheduled_at IS NOT NULL AND m.is_sent = 0))');
+                else if (folder === 'archive') where.push('m.is_archived = 1');
+                else if (folder === 'starred') where.push('m.is_starred = 1');
+            }
+
+            if (q.text) {
+                const t = `%${q.text}%`;
+                where.push('(m.subject LIKE ? OR m.body_text LIKE ? OR m.from_name LIKE ? OR m.from_address LIKE ? OR m.to_address LIKE ?)');
+                params.push(t, t, t, t, t);
+            }
+            if (q.from) { const t = `%${q.from}%`; where.push('(m.from_address LIKE ? OR m.from_name LIKE ?)'); params.push(t, t); }
+            if (q.to) { const t = `%${q.to}%`; where.push('(m.to_address LIKE ? OR m.cc_address LIKE ? OR m.bcc_address LIKE ?)'); params.push(t, t, t); }
+            if (q.subject) { where.push('m.subject LIKE ?'); params.push(`%${q.subject}%`); }
+            if (q.hasAttachment) where.push(`EXISTS (SELECT 1 FROM ${T_ATTACH} a WHERE a.email_id = m.id)`);
+            if (q.isUnread) where.push('m.is_read = 0');
+            if (q.isStarred) where.push('m.is_starred = 1');
+            if (q.labelId) {
+                where.push(`EXISTS (SELECT 1 FROM ${T_EMAIL_LABELS} el WHERE el.email_id = m.id AND el.label_id = ?)`);
+                params.push(parseInt(q.labelId, 10) || 0);
+            }
+
+            return await db.all(`
+                SELECT ${listCols('m')},
+                       CASE WHEN EXISTS (SELECT 1 FROM ${T_ATTACH} a WHERE a.email_id = m.id) THEN 1 ELSE 0 END AS has_attachment
+                FROM ${T_EMAILS} m
+                WHERE ${where.join(' AND ')}
+                ORDER BY m.date_received DESC, m.id DESC
+                LIMIT ? OFFSET ?
+            `, [...params, limit, offset]);
+        },
+
+        // Back-compat shim for the pre-operator search signature.
+        async searchByUser(userId, email, query, limit = 50) {
+            return await this.search(userId, email, { text: query }, limit, 0);
+        },
+
+        /**
+         * Recipient autocomplete: distinct correspondents from the user's OWN mail (senders they've
+         * received from + recipients they've written to), most recent first. Merged with the site
+         * user directory in the route.
+         */
+        async suggestContacts(userId, term, limit = 8) {
+            const uid = parseInt(userId, 10) || 0;
+            const t = `%${term}%`;
+            const out = new Map(); // email(lower) -> { email, name }
+
+            // Senders of mail this user received.
+            const senders = await db.all(`
+                SELECT m.from_address AS addr, MAX(m.from_name) AS name, MAX(m.id) AS latest
+                FROM ${T_EMAILS} m
+                WHERE m.user_id = ? AND m.is_sent = 0 AND m.from_address LIKE ?
+                GROUP BY m.from_address
+                ORDER BY latest DESC
+                LIMIT ?
+            `, [uid, t, limit]);
+            for (const s of senders) {
+                const a = String(s.addr || '').trim().toLowerCase();
+                if (a && a.includes('@') && !out.has(a)) out.set(a, { email: a, name: s.name || '' });
+            }
+
+            // Recipients this user has written to (comma-joined lists → split in JS).
+            const sent = await db.all(`
+                SELECT m.to_address, m.cc_address FROM ${T_EMAILS} m
+                WHERE m.user_id = ? AND m.is_sent = 1
+                ORDER BY m.id DESC
+                LIMIT 100
+            `, [uid]);
+            const needle = String(term || '').toLowerCase();
+            for (const row of sent) {
+                for (const field of [row.to_address, row.cc_address]) {
+                    if (!field) continue;
+                    for (const part of String(field).split(',')) {
+                        const a = part.trim().toLowerCase();
+                        if (!a || !a.includes('@')) continue;
+                        if (needle && !a.includes(needle)) continue;
+                        if (!out.has(a)) out.set(a, { email: a, name: '' });
                     }
                 }
+                if (out.size >= limit * 2) break;
             }
-            await db.run(`DELETE FROM ${T_ATTACH} WHERE email_id = ?`, [id]);
-            return await db.run(`DELETE FROM ${T_EMAILS} WHERE id = ?`, [id]);
+            return [...out.values()].slice(0, limit);
         },
 
-        async emptyTrash(userEmail) {
-            // Must match the trash-folder predicate in findAllByUser/countByUser (to/cc/bcc/from), else
-            // cc/bcc-only messages show in Trash but survive Empty Trash as unclearable residue.
-            const likeEmail = `%${userEmail}%`;
-            const emails = await db.all(`
-                SELECT id FROM ${T_EMAILS}
-                WHERE (to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?) AND is_trash = 1
-            `, [likeEmail, likeEmail, likeEmail, userEmail]);
+        // --- Labels (Gmail-style, per user) ------------------------------------
 
-            for (const e of emails) {
-                await this.deletePermanently(e.id);
-            }
-        },
-
-        async searchByUser(email, query, limit = 50) {
-            const term = `%${query}%`;
-            const likeEmail = `%${email}%`;
+        async listLabels(userId) {
+            const uid = parseInt(userId, 10) || 0;
             return await db.all(`
-                SELECT * FROM ${T_EMAILS}
-                WHERE (to_address LIKE ? OR cc_address LIKE ? OR bcc_address LIKE ? OR from_address = ?)
-                AND (subject LIKE ? OR body_text LIKE ? OR from_name LIKE ?) AND is_trash = 0
-                ORDER BY date_received DESC
-                LIMIT ?
-            `, [likeEmail, likeEmail, likeEmail, email, term, term, term, limit]);
+                SELECT l.id, l.user_id, l.name, l.color,
+                       (SELECT COUNT(*) FROM ${T_EMAIL_LABELS} el
+                        JOIN ${T_EMAILS} e ON e.id = el.email_id
+                        WHERE el.label_id = l.id AND e.is_trash = 0 AND e.is_spam = 0) AS email_count
+                FROM ${T_LABELS} l
+                WHERE l.user_id = ?
+                ORDER BY l.name ASC
+            `, [uid]);
+        },
+
+        async findLabel(id, userId) {
+            return await db.get(`SELECT * FROM ${T_LABELS} WHERE id = ? AND user_id = ?`, [parseInt(id, 10) || 0, parseInt(userId, 10) || 0]);
+        },
+
+        async createLabel(userId, name, color) {
+            const uid = parseInt(userId, 10) || 0;
+            const clean = String(name || '').trim().slice(0, 40);
+            if (!clean) throw new Error('Label name is required');
+            const existing = await db.get(
+                `SELECT * FROM ${T_LABELS} WHERE user_id = ? AND LOWER(name) = LOWER(?)`, [uid, clean]
+            );
+            if (existing) return existing;
+            const res = await db.run(
+                `INSERT INTO ${T_LABELS} (user_id, name, color) VALUES (?, ?, ?)`,
+                [uid, clean, String(color || '#7c3aed').slice(0, 16)]
+            );
+            return await db.get(`SELECT * FROM ${T_LABELS} WHERE id = ?`, [res.lastID]);
+        },
+
+        async updateLabel(id, userId, { name, color }) {
+            const label = await this.findLabel(id, userId);
+            if (!label) return null;
+            const fields = [];
+            const params = [];
+            if (name !== undefined) { fields.push('name = ?'); params.push(String(name).trim().slice(0, 40)); }
+            if (color !== undefined) { fields.push('color = ?'); params.push(String(color).slice(0, 16)); }
+            if (fields.length === 0) return label;
+            params.push(label.id);
+            await db.run(`UPDATE ${T_LABELS} SET ${fields.join(', ')} WHERE id = ?`, params);
+            return await db.get(`SELECT * FROM ${T_LABELS} WHERE id = ?`, [label.id]);
+        },
+
+        async deleteLabel(id, userId) {
+            const label = await this.findLabel(id, userId);
+            if (!label) return false;
+            await db.run(`DELETE FROM ${T_EMAIL_LABELS} WHERE label_id = ?`, [label.id]);
+            await db.run(`DELETE FROM ${T_LABELS} WHERE id = ?`, [label.id]);
+            return true;
+        },
+
+        async findLabelByName(userId, name) {
+            return await db.get(
+                `SELECT * FROM ${T_LABELS} WHERE user_id = ? AND LOWER(name) = LOWER(?)`,
+                [parseInt(userId, 10) || 0, String(name || '').trim()]
+            );
+        },
+
+        async addLabelToEmails(emailIds, labelId) {
+            const lid = parseInt(labelId, 10) || 0;
+            for (const raw of emailIds || []) {
+                const eid = parseInt(raw, 10) || 0;
+                if (!eid || !lid) continue;
+                const existing = await db.get(
+                    `SELECT id FROM ${T_EMAIL_LABELS} WHERE email_id = ? AND label_id = ?`, [eid, lid]
+                );
+                if (!existing) {
+                    await db.run(`INSERT INTO ${T_EMAIL_LABELS} (email_id, label_id) VALUES (?, ?)`, [eid, lid]);
+                }
+            }
+        },
+
+        async removeLabelFromEmails(emailIds, labelId) {
+            const list = (emailIds || []).map(n => parseInt(n, 10)).filter(n => n > 0);
+            const lid = parseInt(labelId, 10) || 0;
+            if (list.length === 0 || !lid) return;
+            const ph = list.map(() => '?').join(', ');
+            await db.run(`DELETE FROM ${T_EMAIL_LABELS} WHERE label_id = ? AND email_id IN (${ph})`, [lid, ...list]);
+        },
+
+        // { emailId: [ {id, name, color} ] } for a page of listed messages — ONE query, not N.
+        async getLabelsForEmails(emailIds) {
+            const list = (emailIds || []).map(n => parseInt(n, 10)).filter(n => n > 0);
+            if (list.length === 0) return {};
+            const ph = list.map(() => '?').join(', ');
+            const rows = await db.all(`
+                SELECT el.email_id, l.id, l.name, l.color
+                FROM ${T_EMAIL_LABELS} el
+                JOIN ${T_LABELS} l ON l.id = el.label_id
+                WHERE el.email_id IN (${ph})
+            `, list);
+            const map = {};
+            for (const r of rows) {
+                if (!map[r.email_id]) map[r.email_id] = [];
+                map[r.email_id].push({ id: r.id, name: r.name, color: r.color });
+            }
+            return map;
+        },
+
+        // --- Per-user preferences (signature, vacation auto-reply) --------------
+
+        async getPrefs(userId) {
+            const uid = parseInt(userId, 10) || 0;
+            try {
+                const row = await db.get(`SELECT prefs FROM ${T_PREFS} WHERE user_id = ?`, [uid]);
+                if (!row || !row.prefs) return {};
+                const parsed = JSON.parse(row.prefs);
+                return (parsed && typeof parsed === 'object') ? parsed : {};
+            } catch (e) {
+                return {};
+            }
+        },
+
+        async setPrefs(userId, prefsObj) {
+            const uid = parseInt(userId, 10) || 0;
+            const json = JSON.stringify(prefsObj || {});
+            const existing = await db.get(`SELECT id FROM ${T_PREFS} WHERE user_id = ?`, [uid]);
+            if (existing) {
+                await db.run(`UPDATE ${T_PREFS} SET prefs = ?, updated_at = CURRENT_TIMESTAMP WHERE user_id = ?`, [json, uid]);
+            } else {
+                await db.run(`INSERT INTO ${T_PREFS} (user_id, prefs) VALUES (?, ?)`, [uid, json]);
+            }
+            return await this.getPrefs(uid);
         },
 
         async getPendingScheduled() {
@@ -655,6 +1051,21 @@ module.exports = function createEmailStore(db) {
 
         async getAttachments(emailId) {
             return await db.all(`SELECT * FROM ${T_ATTACH} WHERE email_id = ?`, [emailId]);
+        },
+
+        // { emailId: [attachment rows] } for a whole thread in ONE query (the reading pane previously
+        // only ever saw the representative message's attachments).
+        async getAttachmentsForEmails(emailIds) {
+            const list = (emailIds || []).map(n => parseInt(n, 10)).filter(n => n > 0);
+            if (list.length === 0) return {};
+            const ph = list.map(() => '?').join(', ');
+            const rows = await db.all(`SELECT * FROM ${T_ATTACH} WHERE email_id IN (${ph})`, list);
+            const map = {};
+            for (const r of rows) {
+                if (!map[r.email_id]) map[r.email_id] = [];
+                map[r.email_id].push(r);
+            }
+            return map;
         },
 
         // Look up a single attachment by id (replaces the raw email_attachments query in index.js).

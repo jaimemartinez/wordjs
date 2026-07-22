@@ -4,6 +4,36 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.0] - 2026-07-22
+
+A **mail + connectivity** release: a sandbox-safe way for plugins to resolve DNS records, a full webmail
+upgrade for the mail server, and a fix that makes local split-mode deployments work out of the box.
+
+### Added
+
+- **Host-mediated DNS bridge** (`wordjs.dns.{resolveMx,resolveTxt,resolve4,resolve6,resolve}`, gated on the
+  `network` grant). The raw c-ares resolver surface stays denied inside the sandbox (it bypasses egress
+  filtering and enables internal DNS recon), but a real mail server needs MX (direct-to-MX delivery) and
+  TXT (SPF/DKIM/DMARC) records that `dns.lookup` can't provide. The **host** performs those queries and
+  **strips any answer pointing at a private/internal/metadata IP**, so the capability can't be used for
+  SSRF or internal recon — and the actual SMTP connection still goes through the egress guard.
+- **Mail server v2.1** (first-party plugin) — a full webmail: a spam folder, custom labels, undo-send,
+  vacation auto-replies, search operators (`from:` / `has:attachment` / `is:unread`), and contact
+  suggestions, on a per-user ownership model with indexed (not full-table-scan) listings.
+
+### Fixed
+
+- **Local split mode works out of the box.** A fresh install running `npm start` (gateway + backend +
+  frontend on one machine) now serves correctly through the gateway. The gateway and frontend fall back to
+  `backend/certs` for their mTLS certs (the install generates them there; only the *separate*-mode flow
+  populated `gateway/certs` / `frontend/certs`), and the backend binds `127.0.0.1` instead of `localhost`
+  → `::1`, matching the IPv4 address it advertises to the gateway. Separate mode and monolith are unaffected.
+
+### Security
+
+- Dependency bumps clearing fresh advisories: **sharp → 0.35.x** (bundled-libvips CVEs), plus
+  `body-parser`, `fast-uri`, and a `postcss` frontend override.
+
 ## [1.11.0] - 2026-07-21
 
 A **sandbox-isolation + internationalization** release. Plugin isolation gains three new layers that move

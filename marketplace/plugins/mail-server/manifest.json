@@ -1,8 +1,8 @@
 {
     "id": "mail-server",
     "name": "Mail Server",
-    "version": "2.0.0",
-    "description": "Manage SMTP settings and send automated emails",
+    "version": "2.1.0",
+    "description": "Full webmail (spam folder, labels, undo send, vacation replies, search operators) on a real MTA with DKIM/SPF/DNS tooling",
     "author": "WordJS",
     "isolated": true,
     "claimPorts": [25],
