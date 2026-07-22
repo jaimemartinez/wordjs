@@ -14,6 +14,11 @@ import * as ReactDOMClient from 'react-dom/client';
 import * as JSXRuntime from 'react/jsx-runtime';
 import dynamic from 'next/dynamic';
 import { ComponentType } from 'react';
+// Host modules exposed to plugin bundles. Plugins import these as `@/lib/api` / `@/contexts/ModalContext`;
+// build-plugin.js rewrites those specifiers to window.WordJS.* so the plugin uses the host's OWN
+// instances (shared session/cookies for api(); the host's ModalProvider for useModal()).
+import * as HostApi from '@/lib/api';
+import * as HostModalContext from '@/contexts/ModalContext';
 
 // ============================================
 // React Singleton Injection
@@ -30,6 +35,8 @@ if (typeof window !== 'undefined') {
         ReactDOM: ReactDOM,
         ReactDOMClient: ReactDOMClient,
         JSXRuntime: JSXRuntime,
+        hostApi: HostApi,
+        modalContext: HostModalContext,
     };
 
     // Also expose directly for UMD-style bundles
