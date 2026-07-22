@@ -13,6 +13,7 @@ import Link from "next/link";
 import { Render, Config } from "@wordjs/puck";
 import "@wordjs/puck/puck.css";
 import { postConfig, pageConfig } from "@/components/puckConfig";
+import { useRuntimePuckConfig } from "@/lib/useRuntimePuckConfig";
 import CommentsSection from "@/components/CommentsSection";
 import { sanitizeHTML } from "@/lib/sanitize";
 import type { Post } from "@/lib/api";
@@ -82,7 +83,8 @@ export default function PostContent({ post, settings, category, showComments }: 
         if (post.date) setDateStr(new Date(post.date).toLocaleDateString());
     }, [post.date]);
 
-    const config: Config = post.type === 'page' ? pageConfig : postConfig;
+    // Merge active marketplace plugins' Puck blocks in at runtime (they aren't compiled into the config).
+    const config: Config = useRuntimePuckConfig(post.type === 'page' ? pageConfig : postConfig);
 
     // Feed the post's stored meta (title/author/date) into Puck's root props.
     const dataWithMeta = post.meta?._puck_data ? {
