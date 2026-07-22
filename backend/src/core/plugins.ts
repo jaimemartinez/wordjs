@@ -21,11 +21,17 @@ const PLUGINS_DIR = path.resolve('./plugins');
 const ROOT_DIR = path.resolve('.');
 
 /**
- * Check if a plugin is bundled (has its own dependencies packaged)
- * A plugin is considered bundled if:
- * 1. manifest.json has "bundled": true
- * 2. Plugin has its own node_modules/ directory
- * 3. Plugin has a dist/*.bundle.js file
+ * True when a plugin's npm RUNTIME DEPENDENCIES are already packaged, so the host must NOT auto-install
+ * them at activation. That is the case when either:
+ *   1. manifest.json declares "bundled": true (operator says it's self-contained), OR
+ *   2. the plugin ships a non-empty node_modules/ (the deps are physically present).
+ *
+ * A `dist/*.bundle.js` does NOT count. That file is the plugin's compiled FRONTEND (admin page / Puck
+ * block / hooks, built by esbuild with externals) — it has nothing to do with the backend npm packages
+ * its index.js `require()`s. Every marketplace plugin now ships a dist bundle (build-marketplace compiles
+ * one), so treating a dist bundle as "bundled" made EVERY marketplace plugin skip its declared-dependency
+ * install → activation failed with e.g. "Cannot find module 'smtp-server'". Frontend-bundle detection
+ * belongs to the loader, not to dependency management.
  */
 function isBundledPlugin(pluginPath: string, manifest: any = {}) {
     // 1. Explicit flag in manifest
@@ -33,26 +39,11 @@ function isBundledPlugin(pluginPath: string, manifest: any = {}) {
         return true;
     }
 
-    // 2. Has own node_modules
+    // 2. Ships its own non-empty node_modules
     const nodeModulesPath = path.join(pluginPath, 'node_modules');
     if (fs.existsSync(nodeModulesPath) && fs.statSync(nodeModulesPath).isDirectory()) {
-        // Check it's not empty
         try {
-            const contents = fs.readdirSync(nodeModulesPath);
-            if (contents.length > 0) {
-                return true;
-            }
-        } catch { }
-    }
-
-    // 3. Has bundle file in dist/
-    const distPath = path.join(pluginPath, 'dist');
-    if (fs.existsSync(distPath) && fs.statSync(distPath).isDirectory()) {
-        try {
-            const files = fs.readdirSync(distPath);
-            if (files.some((f: string) => f.endsWith('.bundle.js'))) {
-                return true;
-            }
+            if (fs.readdirSync(nodeModulesPath).length > 0) return true;
         } catch { }
     }
 
@@ -243,12 +234,25 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
     } catch (e) {
         console.error('⚠️ Could not read root package.json', e.message);
     }
+    const declared = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
 
-    const installed = { ...rootPkg.dependencies, ...rootPkg.devDependencies };
+    // A dependency is "already present" if root/package.json declares it OR it is physically installed in
+    // any node_modules the plugin's require() walks through (its own → backend's → root's). Checking only
+    // root/package.json missed deps that ship in backend/node_modules (e.g. the mail server's smtp-server),
+    // which made activation redundantly `npm install` deps that were already resolvable.
+    const NM_DIRS = [
+        pluginPath ? path.join(pluginPath, 'node_modules') : null,
+        path.join(ROOT_DIR, 'backend', 'node_modules'),
+        path.join(ROOT_DIR, 'node_modules'),
+    ].filter(Boolean) as string[];
+    const isPresent = (dep: string) =>
+        !!declared[dep] || NM_DIRS.some((d) => {
+            try { return fs.existsSync(path.join(d, dep, 'package.json')); } catch { return false; }
+        });
+
     const toInstall: string[] = [];
-
     for (const [dep, version] of Object.entries(manifest.dependencies)) {
-        if (!installed[dep]) {
+        if (!isPresent(dep)) {
             toInstall.push(`${dep}@${version}`);
         }
     }
