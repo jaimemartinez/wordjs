@@ -130,52 +130,93 @@ async function buildPlugin(slug) {
         fs.mkdirSync(distDir, { recursive: true });
     }
 
-    // Resolve React & friends to the globals the host injects (window.WordJS.*) instead of leaving
-    // them as `external`. RATIONALE: marking them external emits a bare `import ... from "react"`,
-    // and the loader evaluates the bundle via `import(blobURL)` — inside a blob module a bare
-    // specifier CANNOT be resolved ("Failed to resolve module specifier react"), so every plugin
-    // bundle failed to evaluate and the admin panel rendered blank. pluginBundleLoader already puts
-    // React on window.WordJS.*; this maps the imports onto it while still avoiding a second React
-    // copy (the whole point of the original `external`). Named exports are listed explicitly because
-    // an ES module cannot re-export * from a runtime value; esbuild tree-shakes the unused ones.
-    // Bare import specifiers that must resolve to a global the HOST injects (window.WordJS.*) rather
-    // than be bundled or left external. React is a singleton (two copies → "Invalid Hook Call"); the
-    // host API/modal modules must be the host's OWN instances so a plugin's api() shares the host's
-    // session/cookies and useModal() reads the host's ModalProvider. Named exports are listed because
-    // an ES module cannot re-export * from a runtime value; esbuild tree-shakes the unused ones.
-    const GLOBAL_MODULES = {
+    // ---- Host runtime surface exposed to plugin bundles ------------------------------------------
+    // A plugin bundle must NOT contain its own React or host modules: React must be a singleton (two
+    // copies → "Invalid Hook Call") and host modules must be the host's OWN instances (so a plugin's
+    // api() shares the host session and useI18n()/useModal() read the host's providers). We rewrite
+    // those imports to `globalThis.WordJS.*`, which pluginBundleLoader.ts populates. Leaving them as
+    // esbuild `external` instead emits a bare `import ... from "react"`, which a blob-URL module (how
+    // the loader evaluates the bundle) CANNOT resolve — that is why runtime plugin loading was dead.
+    //
+    // Plugins reach host modules TWO ways: the `@/…` path alias AND relative paths into the host tree
+    // (e.g. "../../../../../frontend/src/contexts/I18nContext" — older plugins predate the alias). Both
+    // are intercepted. Export NAMES are read from the real host source so the virtual module re-exports
+    // exactly what the module does (pluginBundleLoader injects each as a namespace, so every name is
+    // present at runtime). Keep HOST_MODULES in sync with the imports in pluginBundleLoader.ts — the
+    // loud-fail turns any drift into a build error instead of a blank panel in production.
+    const HOST_SRC = path.resolve(__dirname, '../../frontend/src');
+    const HOST_MODULES = [
+        'lib/api', 'lib/i18n', 'lib/plugin-hooks',
+        'contexts/ModalContext', 'contexts/I18nContext', 'contexts/ToastContext', 'contexts/AuthContext',
+        'components/MediaPickerModal',
+        'components/ui/StatCard', 'components/ui/PageHeader', 'components/ui/Card', 'components/ui/ActionCard',
+    ];
+    const REACT_GLOBALS = {
         'react': ['WordJS.React', ['useState', 'useEffect', 'useMemo', 'useCallback', 'useRef', 'useContext', 'useReducer', 'useLayoutEffect', 'useImperativeHandle', 'useTransition', 'useDeferredValue', 'useId', 'useSyncExternalStore', 'createContext', 'createElement', 'cloneElement', 'isValidElement', 'Children', 'Fragment', 'StrictMode', 'Suspense', 'memo', 'forwardRef', 'lazy', 'startTransition', 'Component', 'PureComponent']],
         'react-dom': ['WordJS.ReactDOM', ['createPortal', 'flushSync', 'render', 'unmountComponentAtNode', 'findDOMNode']],
         'react-dom/client': ['WordJS.ReactDOMClient', ['createRoot', 'hydrateRoot']],
         'react/jsx-runtime': ['WordJS.JSXRuntime', ['jsx', 'jsxs', 'Fragment']],
         'react/jsx-dev-runtime': ['WordJS.JSXRuntime', ['jsx', 'jsxs', 'jsxDEV', 'Fragment']],
-        // Host API surface exposed to plugin admin UIs (see frontend/src/lib/pluginBundleLoader.ts).
-        '@/lib/api': ['WordJS.hostApi', ['api', 'apiGet', 'apiPost', 'apiPut', 'apiDelete', 'apiGetPaged', 'postsApi', 'categoriesApi', 'usersApi', 'authApi', 'commentsApi', 'revisionsApi', 'pluginsApi', 'marketplaceApi', 'themesMarketplaceApi', 'themesApi', 'settingsApi', 'rolesApi', 'mediaApi', 'menusApi', 'widgetsApi', 'backupsApi', 'systemApi', 'importApi', 'tokensApi', 'webhooksApi', 'mfaApi']],
-        '@/contexts/ModalContext': ['WordJS.modalContext', ['useModal', 'ModalProvider']],
     };
+    // Extract runtime export names from a host source file (values only — types are erased).
+    function hostExportNames(key) {
+        const base = path.join(HOST_SRC, key);
+        const file = ['.ts', '.tsx', '.js', '.jsx'].map((e) => base + e).find((f) => fs.existsSync(f));
+        if (!file) return [];
+        const src = fs.readFileSync(file, 'utf8');
+        const names = new Set();
+        let m;
+        const re1 = /export\s+(?:async\s+)?(?:const|let|var|function|class)\s+([A-Za-z0-9_$]+)/g;
+        while ((m = re1.exec(src))) names.add(m[1]);
+        const re2 = /export\s*\{([^}]+)\}(?!\s*from)/g;   // `export { a, b as c }` (not re-exports)
+        while ((m = re2.exec(src))) {
+            for (const part of m[1].split(',')) {
+                const name = part.trim().split(/\s+as\s+/).pop().trim();
+                if (name && name !== 'default') names.add(name);
+            }
+        }
+        names.delete('default');
+        return [...names];
+    }
+    function shim(runtimeExpr, names) {
+        return [
+            `const __m = ${runtimeExpr};`,
+            `if (!__m) throw new Error(${JSON.stringify(`WordJS host did not provide ${runtimeExpr} — plugin bundle cannot run`)});`,
+            `export default (__m && __m.default !== undefined) ? __m.default : __m;`,
+            ...names.map((n) => `export const ${n} = __m[${JSON.stringify(n)}];`),
+        ].join('\n');
+    }
+    // Map an import path (alias or relative) to a host-module key, or null if it is not host source.
+    function hostKeyFor(importPath, resolveDir) {
+        if (importPath.startsWith('@/')) return importPath.slice(2);
+        if (/frontend[\\/]src[\\/]/.test(importPath)) {
+            const abs = path.resolve(resolveDir, importPath);
+            const root = path.resolve(HOST_SRC);
+            if (abs === root || abs.startsWith(root + path.sep)) {
+                return path.relative(root, abs).split(path.sep).join('/').replace(/\.(tsx?|jsx?)$/, '');
+            }
+        }
+        return null;
+    }
     const wordjsGlobals = {
         name: 'wordjs-globals',
         setup(build) {
-            // Intercept react/react-dom AND every host `@/...` import (overrides the `external` array).
-            const filter = /^(react($|\/)|react-dom($|\/)|@\/)/;
-            build.onResolve({ filter }, (args) => {
-                if (GLOBAL_MODULES[args.path]) return { path: args.path, namespace: 'wordjs-global' };
-                if (args.path.startsWith('@/')) {
-                    // A host module a plugin imports but the host doesn't expose → the bundle would be
-                    // dead at runtime. Fail the catalog build loudly instead of shipping a blank panel.
-                    return { errors: [{ text: `Plugin imports host module "${args.path}" which is not exposed to plugin bundles. Add it to GLOBAL_MODULES in build-plugin.js and inject it in pluginBundleLoader.ts, or remove the import.` }] };
-                }
-                return null; // react/react-dom subpaths not in the map fall through (rare); handled elsewhere
+            build.onResolve({ filter: /^(react($|\/)|react-dom($|\/))/ }, (args) => (
+                REACT_GLOBALS[args.path] ? { path: args.path, namespace: 'wjs-react' } : null
+            ));
+            build.onResolve({ filter: /(^@\/)|(frontend[\\/]src[\\/])/ }, (args) => {
+                const key = hostKeyFor(args.path, args.resolveDir);
+                if (key == null) return null;                         // a plugin-local relative path
+                if (HOST_MODULES.includes(key)) return { path: key, namespace: 'wjs-host' };
+                return { errors: [{ text: `Plugin imports host module "${args.path}" (${key}) which is not exposed to plugin bundles. Add it to HOST_MODULES in build-plugin.js and inject it in pluginBundleLoader.ts, or drop the import.` }] };
             });
-            build.onLoad({ filter: /.*/, namespace: 'wordjs-global' }, (args) => {
-                const [globalPath, names] = GLOBAL_MODULES[args.path];
-                const lines = [
-                    `const __m = globalThis.${globalPath};`,
-                    `if (!__m) throw new Error("WordJS host did not inject ${globalPath} — plugin bundle cannot run");`,
-                    `export default (__m && __m.default) ? __m.default : __m;`,
-                    ...names.map((n) => `export const ${n} = __m.${n};`),
-                ];
-                return { contents: lines.join('\n'), loader: 'js' };
+            build.onLoad({ filter: /.*/, namespace: 'wjs-react' }, (args) => {
+                const [globalPath, names] = REACT_GLOBALS[args.path];
+                return { contents: shim(`globalThis.${globalPath}`, names), loader: 'js' };
+            });
+            build.onLoad({ filter: /.*/, namespace: 'wjs-host' }, (args) => {
+                const expr = `globalThis.WordJS.host && globalThis.WordJS.host[${JSON.stringify(args.path)}]`;
+                return { contents: shim(expr, hostExportNames(args.path)), loader: 'js' };
             });
         },
     };

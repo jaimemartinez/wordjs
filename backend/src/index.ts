@@ -282,11 +282,20 @@ app.use('/themes', express.static(path.resolve('./themes'), { dotfiles: 'deny', 
 // plugin was installed (cached; no-op when the segment is already a real folder).
 const PLUGINS_ROOT = path.resolve('./plugins');
 const adminSlugFolderCache = new Map<string, string>();
+// Resolve <folder>/manifest.json under PLUGINS_ROOT, confirming it stays inside the root (path-injection
+// barrier). Returns the absolute manifest path, or null if the segment escapes.
+function pluginManifestPath(folder: string): string | null {
+    const root = path.resolve(PLUGINS_ROOT);
+    const p = path.resolve(root, folder, 'manifest.json');
+    return p.startsWith(root + path.sep) ? p : null;
+}
 function resolveAdminSlugFolder(seg: string): string | null {
     if (!/^[a-zA-Z0-9_-]+$/.test(seg)) return null;                        // reject traversal / odd names
-    if (fs.existsSync(path.join(PLUGINS_ROOT, seg, 'manifest.json'))) return seg; // already a folder
+    const direct = pluginManifestPath(seg);
+    if (direct && fs.existsSync(direct)) return seg;                       // already a folder
     const cached = adminSlugFolderCache.get(seg);
-    if (cached && fs.existsSync(path.join(PLUGINS_ROOT, cached, 'manifest.json'))) return cached;
+    const cachedPath = cached ? pluginManifestPath(cached) : null;
+    if (cachedPath && fs.existsSync(cachedPath)) return cached!;
     let dirs: string[] = [];
     try {
         dirs = fs.readdirSync(PLUGINS_ROOT, { withFileTypes: true })
@@ -294,8 +303,10 @@ function resolveAdminSlugFolder(seg: string): string | null {
     } catch { return null; }
     for (const folder of dirs) {
         if (!/^[a-zA-Z0-9_-]+$/.test(folder)) continue;
+        const mp = pluginManifestPath(folder);
+        if (!mp) continue;
         try {
-            const m = JSON.parse(fs.readFileSync(path.join(PLUGINS_ROOT, folder, 'manifest.json'), 'utf8'));
+            const m = JSON.parse(fs.readFileSync(mp, 'utf8'));
             if (m?.frontend?.adminPage?.slug === seg) { adminSlugFolderCache.set(seg, folder); return folder; }
         } catch { /* unreadable/invalid manifest → skip */ }
     }

@@ -54,8 +54,8 @@ test('plugin bundle maps react + host modules to WordJS globals (no bare specifi
         const code = fs.readFileSync(path.join(dir, 'dist', 'admin.bundle.js'), 'utf8');
         assert.ok(!/from\s*["'](react|react-dom|@\/)/.test(code), 'bundle must not contain bare react/@ import specifiers');
         assert.ok(code.includes('globalThis.WordJS.React'), 'react mapped to window.WordJS.React');
-        assert.ok(code.includes('globalThis.WordJS.hostApi'), '@/lib/api mapped to window.WordJS.hostApi');
-        assert.ok(code.includes('globalThis.WordJS.modalContext'), '@/contexts/ModalContext mapped to window.WordJS.modalContext');
+        assert.ok(code.includes('globalThis.WordJS.host') && code.includes('"lib/api"'), '@/lib/api mapped to window.WordJS.host["lib/api"]');
+        assert.ok(code.includes('"contexts/ModalContext"'), '@/contexts/ModalContext mapped to window.WordJS.host["contexts/ModalContext"]');
     } finally {
         fs.rmSync(root, { recursive: true, force: true });
     }
