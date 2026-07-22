@@ -303,6 +303,16 @@ const wordjs = {
         domain: () => callHost('site.domain', []),
         adminEmail: () => callHost('site.adminEmail', [])
     },
+    // Host-mediated DNS (gated host-side on the `network` grant). The isolate denies the raw c-ares
+    // resolver surface (dns.resolve*) because it bypasses egress filtering; a mail server reaches MX/TXT
+    // records through here. The host strips private-IP A/AAAA answers. Async (RPC): `await wordjs.dns.…`.
+    dns: {
+        resolveMx: (domain) => callHost('dns.resolveMx', [domain]),
+        resolveTxt: (name) => callHost('dns.resolveTxt', [name]),
+        resolve4: (host) => callHost('dns.resolve4', [host]),
+        resolve6: (host) => callHost('dns.resolve6', [host]),
+        resolve: (host) => callHost('dns.resolve', [host])
+    },
 
     // Register a JSON route. `opts` (optional): { auth, admin } -> host applies the real auth
     // middleware before forwarding. The handler runs HERE with a mock (req,res) over RPC: it gets

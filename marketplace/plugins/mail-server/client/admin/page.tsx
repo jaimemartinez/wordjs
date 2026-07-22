@@ -17,6 +17,7 @@ type Email = {
     is_read: number;
     body_text: string;
     body_html: string;
+    snippet?: string;
     to_address: string;
     cc_address?: string;
     bcc_address?: string;
@@ -29,8 +30,18 @@ type Email = {
     is_archived?: number;
     is_draft?: number;
     is_trash?: number;
+    is_spam?: number;
+    has_attachment?: number;
+    labels?: { id: number; name: string; color: string }[];
+    attachments?: any[];
+    delivery_status?: string;
+    last_error?: string;
+    scheduled_at?: string;
     raw_content?: string;
 };
+
+type MailLabel = { id: number; name: string; color: string; email_count?: number };
+type MailCounts = { inbox_unread: number; spam_unread: number; drafts: number };
 
 type DnsRecord = { host?: string; type: string; value?: string; priority?: number; note?: string };
 type DnsInfo = {
@@ -77,13 +88,8 @@ const sanitizeEmailHtml = (html: string): string => {
     }
 };
 
-// Helper function to generate email signature
-const getSignature = (user: any) => {
-    if (!user) return '';
-    const name = user.displayName || user.username || '';
-    const email = user.userEmail || user.email || '';
-    return `\n\n--\n${name}\n${email}`;
-};
+// Rotating palette for newly-created labels.
+const LABEL_COLORS = ['#7c3aed', '#2563eb', '#059669', '#d97706', '#dc2626', '#db2777', '#0891b2', '#65a30d'];
 
 // Human-readable file size for attachment chips.
 const formatBytes = (bytes: any) => {
@@ -95,10 +101,24 @@ const formatBytes = (bytes: any) => {
 };
 
 export default function MailServerAdmin() {
-    // Data State
-    const [folder, setFolder] = useState<'inbox' | 'sent' | 'settings' | 'starred' | 'archive' | 'drafts' | 'trash'>('inbox');
+    // Data State — folder is a plain string because it also takes 'spam' and 'label:<id>'.
+    const [folder, setFolder] = useState<string>('inbox');
     const [emails, setEmails] = useState<Email[]>([]);
     const [selectedEmail, setSelectedEmail] = useState<Email | null>(null);
+    const [counts, setCounts] = useState<MailCounts>({ inbox_unread: 0, spam_unread: 0, drafts: 0 });
+    const [labels, setLabels] = useState<MailLabel[]>([]);
+    const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+    const [labelMenuOpen, setLabelMenuOpen] = useState(false);
+    const [bulkLabelOpen, setBulkLabelOpen] = useState(false);
+    const [newLabelName, setNewLabelName] = useState("");
+    const [creatingLabel, setCreatingLabel] = useState(false);
+    const [prefs, setPrefs] = useState<any>(null);
+    const [prefsOpen, setPrefsOpen] = useState(false);
+    const [savingPrefs, setSavingPrefs] = useState(false);
+    const [undoInfo, setUndoInfo] = useState<{ id: number; expiresAt: number } | null>(null);
+    const [undoLeft, setUndoLeft] = useState(0);
+    const [undoing, setUndoing] = useState(false);
+    const [suggestTarget, setSuggestTarget] = useState<'to' | 'cc' | 'bcc'>('to');
     const [settings, setSettings] = useState<Record<string, string>>({
         mail_from_email: "",
         mail_from_name: "",
@@ -132,7 +152,6 @@ export default function MailServerAdmin() {
     const [draftId, setDraftId] = useState<number | null>(null);
     const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | null>(null);
     const [suggestions, setSuggestions] = useState<{ email: string, name: string }[]>([]);
-    const [inboxCount, setInboxCount] = useState(0);
     // Functional State
     const [searchQuery, setSearchQuery] = useState("");
     const [searching, setSearching] = useState(false); // For autocomplete
@@ -149,10 +168,25 @@ export default function MailServerAdmin() {
 
     // --- Effects & Logic ---
 
+    // Badge counters ride along on every /emails response; this standalone fetch is only for
+    // post-action refreshes (it's ONE aggregated indexed query server-side now).
     const loadStats = async () => {
         try {
             const data = await api('/plugin/mail-server/stats') as any;
-            if (data && typeof data.unread === 'number') setInboxCount(data.unread);
+            if (data && typeof data === 'object') {
+                setCounts({
+                    inbox_unread: Number(data.inbox_unread ?? data.unread) || 0,
+                    spam_unread: Number(data.spam_unread) || 0,
+                    drafts: Number(data.drafts) || 0
+                });
+            }
+        } catch (e) { }
+    };
+
+    const loadLabels = async () => {
+        try {
+            const data = await api('/plugin/mail-server/labels') as any;
+            setLabels(Array.isArray(data?.labels) ? data.labels : []);
         } catch (e) { }
     };
 
@@ -162,7 +196,6 @@ export default function MailServerAdmin() {
     const loadData = useCallback(async (query = "", silent = false) => {
         activeQueryRef.current = query;
         if (!silent) setLoading(true); // silent refresh (poll / focus / post-send) skips the spinner flicker
-        loadStats();
         try {
             if (folder === 'settings') {
                 const data = await api('/plugin/mail-server/settings');
@@ -170,12 +203,24 @@ export default function MailServerAdmin() {
                 loadDnsRecords();
             } else {
                 setLoadError(false);
+                // Search spans ALL mail (excluding spam/trash) like Gmail; scope with in:sent /
+                // in:spam / label:name operators instead of the current folder.
                 const endpoint = query
                     ? `/plugin/mail-server/emails/search?q=${encodeURIComponent(query)}`
-                    : `/plugin/mail-server/emails?folder=${folder}`;
+                    : `/plugin/mail-server/emails?folder=${encodeURIComponent(folder)}`;
 
                 const res = await api(endpoint) as any;
-                setEmails(res.emails || []);
+                const labelMap = res.labels || {};
+                const list: Email[] = (res.emails || []).map((e: any) => ({ ...e, labels: labelMap[e.id] || [] }));
+                setEmails(list);
+                if (res.counts) setCounts(res.counts); // one round-trip: listing + badges together
+                // Keep only still-visible rows selected (prevents acting on ghosts after a refresh).
+                setSelectedIds(prev => {
+                    if (prev.size === 0) return prev;
+                    const next = new Set<number>();
+                    for (const e of list) if (prev.has(e.id)) next.add(e.id);
+                    return next;
+                });
             }
         } catch (error) {
             console.error("Failed to load data:", error);
@@ -193,12 +238,17 @@ export default function MailServerAdmin() {
         }
     }, [newMail.body]);
 
+    // Recipient autocomplete for To/CC/BCC. Multi-recipient aware: suggestions are driven by the
+    // LAST comma-separated token of whichever field has focus, and merge site users with the user's
+    // own correspondence history (/contacts/suggest).
     useEffect(() => {
+        const raw = (newMail as any)[suggestTarget] || '';
+        const lastToken = raw.split(/[,;]/).pop()?.trim() || '';
         const timer = setTimeout(async () => {
-            if (newMail.to.length >= 2 && !newMail.to.includes('@')) {
+            if (lastToken.length >= 2 && !lastToken.includes('@')) {
                 setSearching(true);
                 try {
-                    const data = await api(`/plugin/mail-server/users/search?q=${encodeURIComponent(newMail.to)}`) as any;
+                    const data = await api(`/plugin/mail-server/contacts/suggest?q=${encodeURIComponent(lastToken)}`) as any;
                     setSuggestions(Array.isArray(data) ? data : []);
                 } catch (error) {
                     console.error("Search failed:", error);
@@ -210,11 +260,44 @@ export default function MailServerAdmin() {
             }
         }, 300);
         return () => clearTimeout(timer);
-    }, [newMail.to]);
+    }, [newMail.to, newMail.cc, newMail.bcc, suggestTarget]);
+
+    // Replace the last (in-progress) token of the focused field with the picked address.
+    const applySuggestion = (s: { email: string }) => {
+        setNewMail(prev => {
+            const raw = (prev as any)[suggestTarget] || '';
+            const parts = raw.split(/[,;]/);
+            parts.pop();
+            const kept = parts.map((p: string) => p.trim()).filter(Boolean);
+            return { ...prev, [suggestTarget]: [...kept, s.email].join(', ') };
+        });
+        setSuggestions([]);
+    };
 
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    // Labels + per-user prefs load once (labels also refresh after label CRUD).
+    useEffect(() => {
+        loadLabels();
+        (async () => {
+            try { setPrefs(await api('/plugin/mail-server/prefs') as any); } catch (e) { }
+        })();
+    }, []);
+
+    // Undo-send countdown; the toast disappears when the window closes (queue takes over).
+    useEffect(() => {
+        if (!undoInfo) return;
+        const tick = () => {
+            const left = Math.max(0, Math.ceil((undoInfo.expiresAt - Date.now()) / 1000));
+            setUndoLeft(left);
+            if (left <= 0) setUndoInfo(null);
+        };
+        tick();
+        const t = setInterval(tick, 500);
+        return () => clearInterval(t);
+    }, [undoInfo]);
 
     useEffect(() => {
         const handleNotification = (e: any) => {
@@ -260,9 +343,12 @@ export default function MailServerAdmin() {
         }
     }, [message]);
 
-    // Clear stale feedback when switching folders/views.
+    // Clear stale feedback + multi-select when switching folders/views.
     useEffect(() => {
         setMessage(null);
+        setSelectedIds(new Set());
+        setBulkLabelOpen(false);
+        setLabelMenuOpen(false);
     }, [folder]);
 
     // Auto-save Draft
@@ -321,24 +407,43 @@ export default function MailServerAdmin() {
         setReplyToId(null);
     };
 
+    // Signature: the user's stored preference wins; falls back to a minimal name/email block.
+    // Escaped + <br/>-joined so a plain-text signature renders correctly inside the HTML body.
+    const signatureHtml = () => {
+        const stored = (prefs && typeof prefs.signature === 'string') ? prefs.signature.trim() : '';
+        if (stored) {
+            const esc = stored.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br/>');
+            return `<br/><br/>-- <br/>${esc}`;
+        }
+        if (!user) return '';
+        const name = (user as any).displayName || (user as any).username || '';
+        const email = (user as any).userEmail || (user as any).email || '';
+        return `<br/><br/>-- <br/>${name}<br/>${email}`;
+    };
+
     const handleSend = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!newMail.to.trim()) { setMessage({ type: 'error', text: 'Please add at least one recipient.' }); return; }
         setSending(true);
         setMessage(null);
         try {
-            await api('/plugin/mail-server/send', {
+            const res = await api('/plugin/mail-server/send', {
                 method: 'POST',
                 body: {
                     ...newMail,
                     isHtml: true,
                     replyToId,
                     id: draftId,
-                    body: newMail.useSignature ? newMail.body + getSignature(user) : newMail.body,
+                    body: newMail.useSignature ? newMail.body + signatureHtml() : newMail.body,
                     scheduledAt: scheduledDate || undefined
                 }
-            });
-            setMessage({ type: 'success', text: scheduledDate ? 'Message scheduled!' : 'Message sent successfully!' });
+            }) as any;
+            if (res && res.queued) {
+                // Undo window: show the countdown toast instead of a plain success message.
+                setUndoInfo({ id: res.id, expiresAt: Date.now() + (Number(res.undoSeconds) || 10) * 1000 });
+            } else {
+                setMessage({ type: 'success', text: scheduledDate ? 'Message scheduled!' : 'Message sent successfully!' });
+            }
             setComposing(false);
             setNewMail({ to: "", cc: "", bcc: "", subject: "", body: "", attachments: [], useSignature: true });
             setShowCc(false);
@@ -534,23 +639,29 @@ export default function MailServerAdmin() {
     };
 
     const viewEmail = async (email: Email) => {
-        // If draft, open in composer
+        // If draft, open in composer. Listings only carry a snippet now, so fetch the FULL row
+        // (raw_content) first — the old code silently opened an empty body for long drafts.
         if (email.is_draft) {
-            setNewMail({
-                to: email.to_address || "",
-                cc: email.cc_address || "",
-                bcc: email.bcc_address || "",
-                subject: email.subject || "",
-                body: email.raw_content || email.body_text || "",
-                attachments: (email as any).attachments || [],
-                useSignature: true
-            });
-            setShowCc(!!email.cc_address);
-            setShowBcc(!!email.bcc_address);
-            setReplyToId(email.thread_id || null);
-            setDraftId(email.id);
-            setComposing(true);
-            setIsMinimized(false);
+            try {
+                const full = await api(`/plugin/mail-server/emails/${email.id}`) as any;
+                setNewMail({
+                    to: full.to_address || "",
+                    cc: full.cc_address || "",
+                    bcc: full.bcc_address || "",
+                    subject: full.subject || "",
+                    body: full.raw_content || full.body_html || full.body_text || "",
+                    attachments: [],
+                    useSignature: true
+                });
+                setShowCc(!!full.cc_address);
+                setShowBcc(!!full.bcc_address);
+                setReplyToId(full.thread_id || null);
+                setDraftId(full.id);
+                setComposing(true);
+                setIsMinimized(false);
+            } catch (error) {
+                setMessage({ type: 'error', text: 'Failed to open draft' });
+            }
             return;
         }
 
@@ -572,6 +683,171 @@ export default function MailServerAdmin() {
         }
     };
 
+    // Cancel a send still inside its undo window and reopen it as a draft in the composer.
+    const handleUndoSend = async () => {
+        if (!undoInfo || undoing) return;
+        setUndoing(true);
+        const id = undoInfo.id;
+        try {
+            await api(`/plugin/mail-server/emails/${id}/unsend`, { method: 'POST' });
+            const draft = await api(`/plugin/mail-server/emails/${id}`) as any;
+            setNewMail({
+                to: draft.to_address || "",
+                cc: draft.cc_address || "",
+                bcc: draft.bcc_address || "",
+                subject: draft.subject || "",
+                body: draft.raw_content || draft.body_html || draft.body_text || "",
+                attachments: [],
+                // The signature (if any) was already appended at send time and is part of the body now.
+                useSignature: false
+            });
+            setShowCc(!!draft.cc_address);
+            setShowBcc(!!draft.bcc_address);
+            setDraftId(draft.id);
+            setReplyToId(null);
+            setComposing(true);
+            setIsMinimized(false);
+            setMessage({ type: 'success', text: 'Send canceled — back to draft' });
+            loadData(activeQueryRef.current, true);
+        } catch (error: any) {
+            setMessage({ type: 'error', text: error.message || 'Too late — the message already left' });
+        } finally {
+            setUndoing(false);
+            setUndoInfo(null);
+        }
+    };
+
+    const toggleSelect = (id: number) => {
+        setSelectedIds(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    };
+
+    const bulkAction = async (action: string, confirmFirst = false, labelId?: number) => {
+        const ids = [...selectedIds];
+        if (ids.length === 0) return;
+        if (confirmFirst && !await confirm(`Permanently delete ${ids.length} message(s)? This cannot be undone.`, 'Delete Forever', true)) return;
+        try {
+            await api('/plugin/mail-server/emails/bulk', { method: 'POST', body: { ids, action, labelId } });
+            setSelectedIds(new Set());
+            if (selectedEmail && ids.includes(selectedEmail.id)) setSelectedEmail(null);
+            setMessage({ type: 'success', text: `${ids.length} conversation(s) updated` });
+            loadData(activeQueryRef.current, true);
+            if (action === 'label' || action === 'unlabel') loadLabels();
+        } catch (error: any) {
+            setMessage({ type: 'error', text: error.message || 'Bulk action failed' });
+        }
+    };
+
+    const handleCreateLabel = async (e?: React.FormEvent) => {
+        if (e) e.preventDefault();
+        const name = newLabelName.trim();
+        if (!name) return;
+        try {
+            const color = LABEL_COLORS[labels.length % LABEL_COLORS.length];
+            await api('/plugin/mail-server/labels', { method: 'POST', body: { name, color } });
+            setNewLabelName("");
+            setCreatingLabel(false);
+            loadLabels();
+        } catch (error: any) {
+            setMessage({ type: 'error', text: error.message || 'Failed to create label' });
+        }
+    };
+
+    const handleDeleteLabel = async (label: MailLabel) => {
+        if (!await confirm(`Delete label "${label.name}"? Messages are NOT deleted — they just lose this label.`, 'Delete Label', true)) return;
+        try {
+            await api(`/plugin/mail-server/labels/${label.id}`, { method: 'DELETE' });
+            if (folder === `label:${label.id}`) setFolder('inbox');
+            loadLabels();
+            loadData(activeQueryRef.current, true);
+        } catch (error: any) {
+            setMessage({ type: 'error', text: error.message || 'Failed to delete label' });
+        }
+    };
+
+    const handleToggleLabel = async (email: Email, label: MailLabel) => {
+        const has = (email.labels || []).some(l => l.id === label.id);
+        try {
+            const res = await api(`/plugin/mail-server/emails/${email.id}/labels`, {
+                method: 'PUT',
+                body: has ? { remove: [label.id] } : { add: [label.id] }
+            }) as any;
+            const updated = res.labels || [];
+            setSelectedEmail(prev => (prev && prev.id === email.id) ? { ...prev, labels: updated } : prev);
+            setEmails(prev => prev.map(e => e.id === email.id ? { ...e, labels: updated } : e));
+            loadLabels();
+        } catch (error: any) {
+            setMessage({ type: 'error', text: 'Failed to update labels' });
+        }
+    };
+
+    // Mark/unmark spam — also trains the Bayes filter server-side.
+    const handleSpam = async (email: Email, state: boolean, e?: React.MouseEvent) => {
+        if (e) e.stopPropagation();
+        try {
+            await api(`/plugin/mail-server/emails/${email.id}/spam`, { method: 'PUT', body: { spam: state } });
+            setEmails(prev => prev.filter(x => x.id !== email.id));
+            if (selectedEmail?.id === email.id) setSelectedEmail(null);
+            setMessage({ type: 'success', text: state ? 'Marked as spam' : 'Moved back to inbox' });
+            loadStats();
+        } catch (error: any) {
+            setMessage({ type: 'error', text: error.message || 'Failed' });
+        }
+    };
+
+    // Re-attempt delivery of a failed message NOW (from the reading-pane banner).
+    const [retrying, setRetrying] = useState(false);
+    const handleRetryDelivery = async (email: Email) => {
+        if (retrying) return;
+        setRetrying(true);
+        try {
+            const res = await api(`/plugin/mail-server/emails/${email.id}/retry`, { method: 'POST' }) as any;
+            if (res && res.success) {
+                setMessage({ type: 'success', text: 'Entregado.' });
+                // Reflect the cleared failure state in the open message + list.
+                setSelectedEmail(prev => (prev && prev.id === email.id) ? { ...prev, delivery_status: 'sent', last_error: undefined } : prev);
+            } else {
+                setMessage({ type: 'error', text: (res && res.message) || 'Sigue sin poder entregarse.' });
+                setSelectedEmail(prev => (prev && prev.id === email.id) ? { ...prev, delivery_status: res?.status || 'failed', last_error: res?.lastError || prev.last_error } : prev);
+            }
+            loadData(activeQueryRef.current, true);
+        } catch (error: any) {
+            // 207 (still failing) is thrown by api() as an error with the payload — surface its reason.
+            const detail = error?.details || error;
+            setMessage({ type: 'error', text: detail?.message || error.message || 'El reintento falló' });
+            loadData(activeQueryRef.current, true);
+        } finally {
+            setRetrying(false);
+        }
+    };
+
+    const handleMarkUnread = async (email: Email) => {
+        try {
+            await api(`/plugin/mail-server/emails/${email.id}/read`, { method: 'PUT', body: { read: false } });
+            setEmails(prev => prev.map(x => x.id === email.id ? { ...x, is_read: 0 } : x));
+            setSelectedEmail(null);
+            loadStats();
+        } catch (error: any) {
+            setMessage({ type: 'error', text: 'Failed to mark as unread' });
+        }
+    };
+
+    const handleSavePrefs = async () => {
+        setSavingPrefs(true);
+        try {
+            await api('/plugin/mail-server/prefs', { method: 'PUT', body: prefs || {} });
+            setMessage({ type: 'success', text: 'Preferences saved' });
+            setPrefsOpen(false);
+        } catch (error: any) {
+            setMessage({ type: 'error', text: error.message || 'Failed to save preferences' });
+        } finally {
+            setSavingPrefs(false);
+        }
+    };
+
     // --- RENDER ---
     return (
         <div className="flex w-full h-full bg-[#f8fafc] text-slate-800 font-sans overflow-hidden shadow-2xl relative">
@@ -585,6 +861,30 @@ export default function MailServerAdmin() {
                         type="button"
                         onClick={() => setMessage(null)}
                         className={`shrink-0 -mr-1 -mt-0.5 w-6 h-6 rounded-lg flex items-center justify-center transition-colors ${message.type === 'success' ? 'hover:bg-emerald-100 text-emerald-500' : 'hover:bg-red-100 text-red-500'}`}
+                        title="Dismiss"
+                    >
+                        <i className="fa-solid fa-xmark text-xs"></i>
+                    </button>
+                </div>
+            )}
+
+            {/* UNDO SEND TOAST — the message sits in the outbox until the countdown ends */}
+            {undoInfo && (
+                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[7000] flex items-center gap-4 px-5 py-3.5 rounded-2xl bg-slate-900 text-white shadow-2xl shadow-slate-900/40 ring-1 ring-white/10 animate-in fade-in slide-in-from-bottom-2">
+                    <i className="fa-solid fa-paper-plane text-violet-300"></i>
+                    <span className="text-sm font-bold tabular-nums">Sending… {undoLeft}s</span>
+                    <button
+                        type="button"
+                        onClick={handleUndoSend}
+                        disabled={undoing}
+                        className="text-sm font-black text-violet-300 hover:text-white uppercase tracking-wider transition-colors disabled:opacity-50"
+                    >
+                        {undoing ? <i className="fa-solid fa-circle-notch fa-spin"></i> : 'Undo'}
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => setUndoInfo(null)}
+                        className="w-6 h-6 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-white/10"
                         title="Dismiss"
                     >
                         <i className="fa-solid fa-xmark text-xs"></i>
@@ -631,7 +931,7 @@ export default function MailServerAdmin() {
                     <SidebarLink
                         icon="fa-inbox"
                         label="Inbox"
-                        count={inboxCount}
+                        count={counts.inbox_unread}
                         active={folder === 'inbox'}
                         onClick={() => { setFolder('inbox'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                     />
@@ -644,6 +944,7 @@ export default function MailServerAdmin() {
                     <SidebarLink
                         icon="fa-file-lines" // Changed to file-lines
                         label="Drafts"
+                        count={counts.drafts}
                         active={folder === 'drafts'}
                         onClick={() => { setFolder('drafts'); setSelectedEmail(null); setMobileMenuOpen(false); }}
                     />
@@ -652,6 +953,14 @@ export default function MailServerAdmin() {
                         label="Archive"
                         active={folder === 'archive'}
                         onClick={() => { setFolder('archive'); setSelectedEmail(null); setMobileMenuOpen(false); }}
+                    />
+                    <SidebarLink
+                        icon="fa-ban"
+                        label="Spam"
+                        count={counts.spam_unread}
+                        active={folder === 'spam'}
+                        onClick={() => { setFolder('spam'); setSelectedEmail(null); setMobileMenuOpen(false); }}
+                        iconColor="text-orange-400"
                     />
                     <SidebarLink
                         icon="fa-trash"
@@ -679,6 +988,56 @@ export default function MailServerAdmin() {
                         iconColor="text-amber-400"
                     />
 
+                    {/* LABELS (Gmail-style) */}
+                    <div className="pt-8 pb-3 px-4 flex items-center justify-between">
+                        <p className="text-[10px] font-black uppercase text-slate-500 tracking-widest">Labels</p>
+                        <button
+                            type="button"
+                            onClick={() => { setCreatingLabel(v => !v); setNewLabelName(""); }}
+                            title="New label"
+                            className="w-5 h-5 rounded-md flex items-center justify-center text-slate-500 hover:text-white hover:bg-white/10 transition-colors"
+                        >
+                            <i className={`fa-solid ${creatingLabel ? 'fa-minus' : 'fa-plus'} text-[10px]`}></i>
+                        </button>
+                    </div>
+                    {creatingLabel && (
+                        <form onSubmit={handleCreateLabel} className="px-4 pb-2 flex gap-1.5">
+                            <input
+                                value={newLabelName}
+                                onChange={(e) => setNewLabelName(e.target.value)}
+                                placeholder="Label name"
+                                maxLength={40}
+                                autoFocus
+                                className="flex-1 min-w-0 bg-slate-800 border border-slate-700 rounded-lg px-2.5 py-1.5 text-xs text-white placeholder:text-slate-500 outline-none focus:border-violet-500"
+                            />
+                            <button type="submit" className="px-2.5 rounded-lg bg-violet-600 hover:bg-violet-500 text-white text-xs font-bold">OK</button>
+                        </form>
+                    )}
+                    {labels.map((l) => (
+                        <div key={l.id} className="group/label relative">
+                            <button
+                                onClick={() => { setFolder(`label:${l.id}`); setSelectedEmail(null); setMobileMenuOpen(false); }}
+                                className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl transition-all mb-0.5 ${folder === `label:${l.id}` ? 'bg-indigo-600 text-white font-bold ring-1 ring-white/20' : 'text-slate-400 hover:bg-white/10 hover:text-white font-medium'}`}
+                            >
+                                <div className="flex items-center gap-3 min-w-0">
+                                    <span className="w-2.5 h-2.5 rounded-full flex-shrink-0 ring-1 ring-white/20" style={{ backgroundColor: l.color || '#7c3aed' }}></span>
+                                    <span className="text-sm truncate">{l.name}</span>
+                                </div>
+                                {(l.email_count || 0) > 0 && (
+                                    <span className="text-[10px] text-slate-500 tabular-nums group-hover/label:opacity-0 transition-opacity">{l.email_count}</span>
+                                )}
+                            </button>
+                            <button
+                                type="button"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteLabel(l); }}
+                                title={`Delete label "${l.name}"`}
+                                className="absolute right-2 top-1/2 -translate-y-1/2 w-6 h-6 rounded-md items-center justify-center text-slate-500 hover:text-red-400 hover:bg-white/10 hidden group-hover/label:flex"
+                            >
+                                <i className="fa-solid fa-trash text-[10px]"></i>
+                            </button>
+                        </div>
+                    ))}
+
                     {user?.role === 'administrator' && (
                         <div className="pt-8 mt-auto">
                             <SidebarLink
@@ -691,7 +1050,7 @@ export default function MailServerAdmin() {
                     )}
                 </nav>
 
-                {/* User Profile Mini (informational — not an interactive menu) */}
+                {/* User Profile Mini + mail preferences (signature / vacation responder) */}
                 <div className="mt-auto px-6 pt-6 border-t border-slate-800/50 flex items-center gap-3 mx-3 rounded-xl pb-2">
                     <div className="w-9 h-9 rounded-lg bg-slate-800 overflow-hidden ring-1 ring-white/10">
                         {/* Placeholder Avatar */}
@@ -703,6 +1062,14 @@ export default function MailServerAdmin() {
                         <div className="text-sm font-bold text-slate-200 truncate">{user?.displayName || user?.username}</div>
                         <div className="text-[10px] text-slate-500 truncate">{(user as any)?.userEmail}</div>
                     </div>
+                    <button
+                        type="button"
+                        onClick={() => setPrefsOpen(true)}
+                        title="Mail preferences (signature, vacation responder)"
+                        className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-500 hover:text-white hover:bg-white/10 transition-colors flex-shrink-0"
+                    >
+                        <i className="fa-solid fa-gear text-sm"></i>
+                    </button>
                 </div>
             </aside>
 
@@ -769,8 +1136,69 @@ export default function MailServerAdmin() {
                             </div>
                         </div>
 
+                        {/* BULK ACTION BAR — appears when messages are selected */}
+                        {selectedIds.size > 0 && (
+                            <div className="px-3 py-2 border-b border-violet-100 bg-violet-50/70 flex items-center gap-1 flex-wrap relative z-30">
+                                <button
+                                    type="button"
+                                    onClick={() => setSelectedIds(new Set())}
+                                    className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-500 hover:text-slate-800 hover:bg-white transition-colors"
+                                    title="Clear selection"
+                                >
+                                    <i className="fa-solid fa-xmark text-xs"></i>
+                                </button>
+                                <span className="text-xs font-black text-slate-700 tabular-nums mr-1">{selectedIds.size}</span>
+                                <BulkBtn icon="fa-envelope-open" tip="Mark as read" onClick={() => bulkAction('read')} />
+                                <BulkBtn icon="fa-envelope" tip="Mark as unread" onClick={() => bulkAction('unread')} />
+                                {folder !== 'trash' && folder !== 'spam' && (
+                                    <BulkBtn icon="fa-box-archive" tip="Archive" onClick={() => bulkAction('archive')} />
+                                )}
+                                {folder === 'spam' ? (
+                                    <BulkBtn icon="fa-circle-check" tip="Not spam" onClick={() => bulkAction('notspam')} />
+                                ) : folder !== 'trash' && (
+                                    <BulkBtn icon="fa-ban" tip="Mark as spam" onClick={() => bulkAction('spam')} />
+                                )}
+                                {folder === 'trash' ? (
+                                    <>
+                                        <BulkBtn icon="fa-rotate-left" tip="Restore" onClick={() => bulkAction('restore')} />
+                                        <BulkBtn icon="fa-trash" tip="Delete forever" red onClick={() => bulkAction('delete', true)} />
+                                    </>
+                                ) : (
+                                    <BulkBtn icon="fa-trash" tip="Move to trash" onClick={() => bulkAction('trash')} />
+                                )}
+                                <div className="relative">
+                                    <BulkBtn icon="fa-tag" tip="Label…" onClick={() => setBulkLabelOpen(v => !v)} />
+                                    {bulkLabelOpen && (
+                                        <div className="absolute top-9 left-0 z-50 bg-white border border-slate-200 rounded-xl shadow-xl py-1 w-48 max-h-56 overflow-y-auto">
+                                            {labels.length === 0 && (
+                                                <div className="px-3 py-2 text-xs text-slate-400">No labels yet — create one in the sidebar.</div>
+                                            )}
+                                            {labels.map((l) => (
+                                                <button
+                                                    key={l.id}
+                                                    type="button"
+                                                    onClick={() => { bulkAction('label', false, l.id); setBulkLabelOpen(false); }}
+                                                    className="w-full text-left px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-violet-50 flex items-center gap-2"
+                                                >
+                                                    <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: l.color }}></span>
+                                                    <span className="truncate">{l.name}</span>
+                                                </button>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        )}
+
                         {/* List */}
                         <div className="flex-1 overflow-y-auto custom-scrollbar bg-slate-50/50">
+                            {/* Spam retention notice */}
+                            {folder === 'spam' && emails.length > 0 && (
+                                <div className="mx-2 mt-2 px-4 py-2.5 rounded-xl bg-amber-50 border border-amber-200 text-[11px] text-amber-700 font-medium">
+                                    <i className="fa-solid fa-circle-info mr-1.5"></i>
+                                    Messages that have been in Spam for more than 30 days are deleted automatically.
+                                </div>
+                            )}
                             {loading && emails.length === 0 ? (
                                 <div className="flex flex-col items-center justify-center h-64 text-slate-400">
                                     <i className="fa-solid fa-circle-notch fa-spin text-3xl mb-4 text-violet-400"></i>
@@ -799,6 +1227,8 @@ export default function MailServerAdmin() {
                                     else if (folder === 'sent') { icon = 'fa-paper-plane'; text = 'No sent messages'; }
                                     else if (folder === 'archive') { icon = 'fa-box-archive'; text = 'Archive is empty'; }
                                     else if (folder === 'starred') { icon = 'fa-star'; text = 'No starred messages'; }
+                                    else if (folder === 'spam') { icon = 'fa-ban'; text = 'No spam. Nice and clean!'; }
+                                    else if (folder.startsWith('label:')) { icon = 'fa-tag'; text = 'No messages with this label yet'; }
                                     return (
                                         <div className="flex flex-col items-center justify-center h-64 text-slate-400 opacity-60 px-6 text-center">
                                             <i className={`fa-solid ${icon} text-4xl mb-4`}></i>
@@ -813,36 +1243,72 @@ export default function MailServerAdmin() {
                                             key={email.id}
                                             onClick={() => viewEmail(email)}
                                             className={`
-                                                group relative px-4 py-4 rounded-xl cursor-pointer transition-all duration-200 border
+                                                group relative px-3 py-4 rounded-xl cursor-pointer transition-all duration-200 border
                                                 ${selectedEmail?.id === email.id
                                                     ? 'bg-white border-violet-200 shadow-lg shadow-violet-100/50 ring-1 ring-violet-500/20 z-10'
                                                     : 'bg-white border-transparent hover:border-slate-200 hover:shadow-sm'
                                                 }
                                                 ${!email.is_read && selectedEmail?.id !== email.id ? 'bg-slate-50 border-slate-100' : ''}
+                                                ${selectedIds.has(email.id) ? 'ring-1 ring-violet-400 border-violet-200' : ''}
                                             `}
                                         >
-                                            <div className="flex justify-between items-start mb-1.5">
-                                                <span className={`text-sm truncate max-w-[75%] ${!email.is_read ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
-                                                    {email.is_sent ? `To: ${email.to_address}` : (email.from_name || email.from_address)}
-                                                </span>
-                                                <span className={`text-[10px] tabular-nums ${!email.is_read ? 'text-violet-600 font-bold' : 'text-slate-400'}`}>
-                                                    {new Date(email.date_received).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
-                                                </span>
-                                            </div>
-                                            <div className="flex items-center gap-2 mb-1.5">
-                                                {email.is_starred === 1 && <i className="fa-solid fa-star text-[10px] text-amber-400"></i>}
-                                                <div className={`text-xs truncate flex-1 ${!email.is_read ? 'text-slate-900 font-bold' : 'text-slate-600'}`}>
-                                                    {email.subject}
+                                            <div className="flex items-start gap-2">
+                                                {/* Multi-select checkbox */}
+                                                <button
+                                                    type="button"
+                                                    onClick={(e) => { e.stopPropagation(); toggleSelect(email.id); }}
+                                                    title="Select"
+                                                    className={`mt-0.5 w-5 h-5 flex-shrink-0 flex items-center justify-center transition-opacity ${selectedIds.size > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+                                                >
+                                                    <i className={`${selectedIds.has(email.id) ? 'fa-solid fa-square-check text-violet-600' : 'fa-regular fa-square text-slate-300 hover:text-slate-500'} text-sm`}></i>
+                                                </button>
+
+                                                <div className="flex-1 min-w-0">
+                                                    <div className="flex justify-between items-start mb-1.5 gap-2">
+                                                        <span className={`text-sm truncate ${!email.is_read ? 'font-bold text-slate-900' : 'font-medium text-slate-700'}`}>
+                                                            {email.is_sent ? `To: ${email.to_address}` : (email.from_name || email.from_address)}
+                                                        </span>
+                                                        <span className={`flex items-center gap-1.5 flex-shrink-0 text-[10px] tabular-nums ${!email.is_read ? 'text-violet-600 font-bold' : 'text-slate-400'}`}>
+                                                            {!!email.has_attachment && <i className="fa-solid fa-paperclip text-slate-400"></i>}
+                                                            {new Date(email.date_received).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}
+                                                        </span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2 mb-1.5">
+                                                        {email.is_starred === 1 && <i className="fa-solid fa-star text-[10px] text-amber-400"></i>}
+                                                        <div className={`text-xs truncate flex-1 ${!email.is_read ? 'text-slate-900 font-bold' : 'text-slate-600'}`}>
+                                                            {email.subject}
+                                                        </div>
+                                                        {(email.labels || []).slice(0, 2).map((l) => (
+                                                            <span
+                                                                key={l.id}
+                                                                className="flex-shrink-0 text-[9px] font-bold px-1.5 py-0.5 rounded-full border max-w-[80px] truncate"
+                                                                style={{ color: l.color, borderColor: l.color }}
+                                                                title={l.name}
+                                                            >
+                                                                {l.name}
+                                                            </span>
+                                                        ))}
+                                                        {(email.labels || []).length > 2 && (
+                                                            <span className="flex-shrink-0 text-[9px] font-bold text-slate-400">+{(email.labels || []).length - 2}</span>
+                                                        )}
+                                                        {email.thread_count > 1 && (
+                                                            <span className="flex-shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 tabular-nums" title={`${email.thread_count} messages in this conversation`}>
+                                                                <i className="fa-solid fa-layer-group text-[8px] mr-0.5"></i>{email.thread_count}
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <div className="text-[11px] text-slate-400 leading-relaxed line-clamp-2 font-medium">
+                                                        {email.is_archived === 1 && <span className="inline-block px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 text-[9px] mr-1.5 font-bold uppercase tracking-wider">Archived</span>}
+                                                        {email.delivery_status === 'failed' && <span className="inline-block px-1.5 py-0.5 rounded-md bg-red-50 text-red-600 text-[9px] mr-1.5 font-bold uppercase tracking-wider border border-red-200">Failed</span>}
+                                                        {email.delivery_status === 'retry' && <span className="inline-block px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-600 text-[9px] mr-1.5 font-bold uppercase tracking-wider border border-amber-200">Retrying</span>}
+                                                        {!email.is_sent && !email.is_draft && email.scheduled_at && (
+                                                            <span className="inline-block px-1.5 py-0.5 rounded-md bg-violet-50 text-violet-600 text-[9px] mr-1.5 font-bold uppercase tracking-wider border border-violet-200">
+                                                                {new Date(email.scheduled_at).getTime() - Date.now() < 60000 ? 'Sending…' : 'Scheduled'}
+                                                            </span>
+                                                        )}
+                                                        {email.snippet ?? email.body_text?.substring(0, 120)}
+                                                    </div>
                                                 </div>
-                                                {email.thread_count > 1 && (
-                                                    <span className="flex-shrink-0 text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500 tabular-nums" title={`${email.thread_count} messages in this conversation`}>
-                                                        <i className="fa-solid fa-layer-group text-[8px] mr-0.5"></i>{email.thread_count}
-                                                    </span>
-                                                )}
-                                            </div>
-                                            <div className="text-[11px] text-slate-400 leading-relaxed line-clamp-2 font-medium">
-                                                {email.is_archived === 1 && <span className="inline-block px-1.5 py-0.5 rounded-md bg-slate-100 text-slate-500 text-[9px] mr-1.5 font-bold uppercase tracking-wider">Archived</span>}
-                                                {email.body_text?.substring(0, 120)}
                                             </div>
                                         </div>
                                     ))}
@@ -883,6 +1349,20 @@ export default function MailServerAdmin() {
                                             tooltip={folder === 'trash' ? "Delete Forever" : "Move to Trash"}
                                             className={folder === 'trash' ? "text-red-500 hover:bg-red-50 hover:text-red-600" : ""}
                                         />
+                                        {(selectedEmail.is_spam === 1 || folder === 'spam') ? (
+                                            <ActionButton
+                                                icon="fa-solid fa-circle-check"
+                                                onClick={() => handleSpam(selectedEmail, false)}
+                                                tooltip="Not spam — move back to Inbox"
+                                                className="text-emerald-600 hover:bg-emerald-50"
+                                            />
+                                        ) : (
+                                            <ActionButton
+                                                icon="fa-solid fa-ban"
+                                                onClick={() => handleSpam(selectedEmail, true)}
+                                                tooltip="Mark as spam"
+                                            />
+                                        )}
                                         <div className="w-px h-6 bg-slate-200 mx-1 md:mx-2 self-center flex-shrink-0"></div>
                                         <ActionButton
                                             icon={`fa-star ${selectedEmail.is_starred ? 'fa-solid text-amber-400' : 'fa-regular'}`}
@@ -890,9 +1370,45 @@ export default function MailServerAdmin() {
                                             tooltip="Star conversation"
                                             active={selectedEmail.is_starred === 1}
                                         />
+                                        <ActionButton
+                                            icon="fa-solid fa-envelope"
+                                            onClick={() => handleMarkUnread(selectedEmail)}
+                                            tooltip="Mark as unread"
+                                        />
                                     </div>
-                                    <div className="flex items-center gap-3 hidden md:flex">
-                                        <span className="px-2 py-1 rounded-md bg-slate-100 text-slate-500 text-[10px] font-bold uppercase tracking-wider font-mono">
+                                    <div className="flex items-center gap-2 md:gap-3 relative">
+                                        {/* Label picker */}
+                                        <div className="relative">
+                                            <ActionButton
+                                                icon="fa-solid fa-tag"
+                                                onClick={() => setLabelMenuOpen(v => !v)}
+                                                tooltip="Labels"
+                                                active={labelMenuOpen}
+                                            />
+                                            {labelMenuOpen && (
+                                                <div className="absolute right-0 top-11 z-50 bg-white border border-slate-200 rounded-xl shadow-xl py-1 w-52 max-h-64 overflow-y-auto">
+                                                    {labels.length === 0 && (
+                                                        <div className="px-3 py-2 text-xs text-slate-400">No labels yet — create one in the sidebar.</div>
+                                                    )}
+                                                    {labels.map((l) => {
+                                                        const has = (selectedEmail.labels || []).some((x: any) => x.id === l.id);
+                                                        return (
+                                                            <button
+                                                                key={l.id}
+                                                                type="button"
+                                                                onClick={() => handleToggleLabel(selectedEmail, l)}
+                                                                className="w-full text-left px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-violet-50 flex items-center gap-2"
+                                                            >
+                                                                <i className={`${has ? 'fa-solid fa-square-check text-violet-600' : 'fa-regular fa-square text-slate-300'} text-sm`}></i>
+                                                                <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: l.color }}></span>
+                                                                <span className="truncate">{l.name}</span>
+                                                            </button>
+                                                        );
+                                                    })}
+                                                </div>
+                                            )}
+                                        </div>
+                                        <span className="px-2 py-1 rounded-md bg-slate-100 text-slate-500 text-[10px] font-bold uppercase tracking-wider font-mono hidden md:inline-block">
                                             ID: {selectedEmail.id}
                                         </span>
                                     </div>
@@ -900,9 +1416,64 @@ export default function MailServerAdmin() {
 
                                 {/* Content */}
                                 <div className="flex-1 overflow-y-auto p-6 lg:p-8 custom-scrollbar">
-                                    <h1 className="text-3xl font-bold text-slate-900 mb-8 leading-tight select-text tracking-tight">
+                                    <h1 className="text-3xl font-bold text-slate-900 mb-3 leading-tight select-text tracking-tight">
                                         {selectedEmail.subject}
                                     </h1>
+
+                                    {/* Labels on this conversation */}
+                                    <div className="flex flex-wrap items-center gap-1.5 mb-8">
+                                        {selectedEmail.is_spam === 1 && (
+                                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-orange-50 text-orange-600 border border-orange-200 uppercase tracking-wide">
+                                                <i className="fa-solid fa-ban mr-1"></i>Spam
+                                            </span>
+                                        )}
+                                        {(selectedEmail.labels || []).map((l: any) => (
+                                            <span
+                                                key={l.id}
+                                                className="group/chip text-[10px] font-bold px-2 py-0.5 rounded-full border inline-flex items-center gap-1"
+                                                style={{ color: l.color, borderColor: l.color }}
+                                            >
+                                                {l.name}
+                                                <button
+                                                    type="button"
+                                                    onClick={() => handleToggleLabel(selectedEmail, l)}
+                                                    title="Remove label"
+                                                    className="opacity-40 hover:opacity-100"
+                                                >
+                                                    <i className="fa-solid fa-xmark text-[9px]"></i>
+                                                </button>
+                                            </span>
+                                        ))}
+                                    </div>
+
+                                    {/* Delivery-failure banner — surfaces the real reason (last_error
+                                        already carries "recipient: reason") + a manual Retry. */}
+                                    {(selectedEmail.delivery_status === 'failed' || selectedEmail.delivery_status === 'retry') && (
+                                        <div className={`mb-8 rounded-2xl border p-4 flex items-start gap-3 ${selectedEmail.delivery_status === 'failed' ? 'bg-red-50 border-red-200' : 'bg-amber-50 border-amber-200'}`}>
+                                            <i className={`fa-solid ${selectedEmail.delivery_status === 'failed' ? 'fa-circle-exclamation text-red-500' : 'fa-arrows-rotate text-amber-500'} text-lg mt-0.5`}></i>
+                                            <div className="flex-1 min-w-0">
+                                                <div className={`text-sm font-bold ${selectedEmail.delivery_status === 'failed' ? 'text-red-700' : 'text-amber-700'}`}>
+                                                    {selectedEmail.delivery_status === 'failed'
+                                                        ? 'No se pudo entregar el mensaje'
+                                                        : 'Entrega pendiente — reintentando automáticamente'}
+                                                </div>
+                                                <div className={`text-xs mt-1 break-words font-mono ${selectedEmail.delivery_status === 'failed' ? 'text-red-600/90' : 'text-amber-700/90'}`}>
+                                                    {selectedEmail.last_error
+                                                        ? selectedEmail.last_error
+                                                        : `No se pudo entregar a: ${selectedEmail.to_address}`}
+                                                </div>
+                                            </div>
+                                            <button
+                                                type="button"
+                                                onClick={() => handleRetryDelivery(selectedEmail)}
+                                                disabled={retrying}
+                                                className={`shrink-0 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-white text-xs font-bold transition-colors disabled:opacity-50 ${selectedEmail.delivery_status === 'failed' ? 'bg-red-600 hover:bg-red-700' : 'bg-amber-600 hover:bg-amber-700'}`}
+                                            >
+                                                {retrying ? <i className="fa-solid fa-circle-notch fa-spin"></i> : <i className="fa-solid fa-paper-plane"></i>}
+                                                Reintentar
+                                            </button>
+                                        </div>
+                                    )}
 
                                     {/* Thread Loop */}
                                     <div className="space-y-10 relative">
@@ -937,10 +1508,10 @@ export default function MailServerAdmin() {
                                                             )}
                                                         </div>
 
-                                                        {/* Attachments (only surfaced on the fetched single-message view) */}
-                                                        {msg.id === selectedEmail.id && selectedEmail.attachments?.length > 0 && (
+                                                        {/* Attachments — every thread message now carries its own list */}
+                                                        {(msg.attachments || []).length > 0 && (
                                                             <div className="mt-4 flex flex-wrap gap-2">
-                                                                {selectedEmail.attachments.map((att: any) => (
+                                                                {(msg.attachments || []).map((att: any) => (
                                                                     <a
                                                                         key={att.id}
                                                                         href={`/api/v1/plugin/mail-server/attachments/${att.id}`}
@@ -1043,20 +1614,21 @@ export default function MailServerAdmin() {
                                         autoFocus
                                         required
                                         value={newMail.to}
+                                        onFocus={() => setSuggestTarget('to')}
                                         onChange={(e) => setNewMail({ ...newMail, to: e.target.value })}
                                         className="w-full py-2 pr-16 bg-transparent outline-none text-sm font-bold text-slate-900 placeholder:text-slate-300 group-focus-within:placeholder:text-slate-400"
-                                        placeholder="Recipient"
+                                        placeholder="Recipients (comma-separated)"
                                     />
                                     <div className="absolute right-0 top-1/2 -translate-y-1/2 flex gap-2 text-[10px] font-bold text-slate-400">
                                         {!showCc && <button type="button" onClick={() => setShowCc(true)} className="hover:text-violet-600">CC</button>}
                                         {!showBcc && <button type="button" onClick={() => setShowBcc(true)} className="hover:text-violet-600">BCC</button>}
                                     </div>
-                                    {/* Auto-complete */}
-                                    {suggestions.length > 0 && (
+                                    {/* Auto-complete (site users + your correspondence history) */}
+                                    {suggestTarget === 'to' && suggestions.length > 0 && (
                                         <div className="absolute top-10 left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl shadow-slate-200/50 z-50 py-1 overflow-hidden">
                                             {suggestions.map((s, i) => (
-                                                <div key={i} onClick={() => { setNewMail({ ...newMail, to: s.email }); setSuggestions([]) }} className="px-4 py-2 hover:bg-violet-50 cursor-pointer transition-colors flex flex-col border-l-2 border-transparent hover:border-violet-500">
-                                                    <span className="font-bold text-slate-800 text-xs">{s.name}</span>
+                                                <div key={i} onClick={() => applySuggestion(s)} className="px-4 py-2 hover:bg-violet-50 cursor-pointer transition-colors flex flex-col border-l-2 border-transparent hover:border-violet-500">
+                                                    <span className="font-bold text-slate-800 text-xs">{s.name || s.email}</span>
                                                     <span className="text-[10px] text-slate-500">{s.email}</span>
                                                 </div>
                                             ))}
@@ -1069,12 +1641,25 @@ export default function MailServerAdmin() {
                             {showCc && (
                                 <div className="px-6 py-2 border-b border-slate-50 flex items-center gap-3 group focus-within:bg-slate-50 transition-colors">
                                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest w-8 group-focus-within:text-violet-600">CC</span>
-                                    <input
-                                        value={newMail.cc}
-                                        onChange={(e) => setNewMail({ ...newMail, cc: e.target.value })}
-                                        className="w-full py-1 bg-transparent outline-none text-sm font-medium text-slate-700 placeholder:text-slate-300"
-                                        placeholder="Cc Recipients"
-                                    />
+                                    <div className="flex-1 relative">
+                                        <input
+                                            value={newMail.cc}
+                                            onFocus={() => setSuggestTarget('cc')}
+                                            onChange={(e) => setNewMail({ ...newMail, cc: e.target.value })}
+                                            className="w-full py-1 bg-transparent outline-none text-sm font-medium text-slate-700 placeholder:text-slate-300"
+                                            placeholder="Cc Recipients"
+                                        />
+                                        {suggestTarget === 'cc' && suggestions.length > 0 && (
+                                            <div className="absolute top-8 left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl shadow-slate-200/50 z-50 py-1 overflow-hidden">
+                                                {suggestions.map((s, i) => (
+                                                    <div key={i} onClick={() => applySuggestion(s)} className="px-4 py-2 hover:bg-violet-50 cursor-pointer transition-colors flex flex-col border-l-2 border-transparent hover:border-violet-500">
+                                                        <span className="font-bold text-slate-800 text-xs">{s.name || s.email}</span>
+                                                        <span className="text-[10px] text-slate-500">{s.email}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
 
@@ -1082,12 +1667,25 @@ export default function MailServerAdmin() {
                             {showBcc && (
                                 <div className="px-6 py-2 border-b border-slate-50 flex items-center gap-3 group focus-within:bg-slate-50 transition-colors">
                                     <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest w-8 group-focus-within:text-violet-600">BCC</span>
-                                    <input
-                                        value={newMail.bcc}
-                                        onChange={(e) => setNewMail({ ...newMail, bcc: e.target.value })}
-                                        className="w-full py-1 bg-transparent outline-none text-sm font-medium text-slate-700 placeholder:text-slate-300"
-                                        placeholder="Bcc Recipients"
-                                    />
+                                    <div className="flex-1 relative">
+                                        <input
+                                            value={newMail.bcc}
+                                            onFocus={() => setSuggestTarget('bcc')}
+                                            onChange={(e) => setNewMail({ ...newMail, bcc: e.target.value })}
+                                            className="w-full py-1 bg-transparent outline-none text-sm font-medium text-slate-700 placeholder:text-slate-300"
+                                            placeholder="Bcc Recipients"
+                                        />
+                                        {suggestTarget === 'bcc' && suggestions.length > 0 && (
+                                            <div className="absolute top-8 left-0 right-0 bg-white border border-slate-100 rounded-xl shadow-xl shadow-slate-200/50 z-50 py-1 overflow-hidden">
+                                                {suggestions.map((s, i) => (
+                                                    <div key={i} onClick={() => applySuggestion(s)} className="px-4 py-2 hover:bg-violet-50 cursor-pointer transition-colors flex flex-col border-l-2 border-transparent hover:border-violet-500">
+                                                        <span className="font-bold text-slate-800 text-xs">{s.name || s.email}</span>
+                                                        <span className="text-[10px] text-slate-500">{s.email}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
                                 </div>
                             )}
 
@@ -1234,11 +1832,115 @@ export default function MailServerAdmin() {
                     )}
                 </div>
             )}
+
+            {/* MAIL PREFERENCES MODAL — signature + vacation auto-responder */}
+            {prefsOpen && (
+                <div className="fixed inset-0 z-[6500] flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPrefsOpen(false)}></div>
+                    <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-6 md:p-8">
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
+                                <i className="fa-solid fa-gear text-violet-500"></i>
+                                Mail preferences
+                            </h3>
+                            <button onClick={() => setPrefsOpen(false)} className="w-8 h-8 rounded-lg flex items-center justify-center text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition-colors">
+                                <i className="fa-solid fa-xmark"></i>
+                            </button>
+                        </div>
+
+                        <label className="block text-sm font-bold text-slate-700 mb-2">Signature</label>
+                        <textarea
+                            value={prefs?.signature || ''}
+                            onChange={(e) => setPrefs((p: any) => ({ ...(p || {}), signature: e.target.value }))}
+                            rows={3}
+                            maxLength={5000}
+                            placeholder={"Jane Doe\njane@example.com"}
+                            className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm outline-none focus:ring-2 focus:ring-violet-500/20 focus:border-violet-500 transition-all resize-none"
+                        />
+                        <p className="text-[11px] text-slate-400 mt-1 mb-6">Appended to outgoing mail when “Signature” is checked in the composer.</p>
+
+                        <div className="border-t border-slate-100 pt-5">
+                            <div className="flex items-center justify-between mb-3 gap-4">
+                                <div>
+                                    <h4 className="text-sm font-bold text-slate-900">Vacation responder</h4>
+                                    <p className="text-[11px] text-slate-400">Replies automatically to incoming mail — at most once per sender every 24 hours.</p>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setPrefs((p: any) => ({ ...(p || {}), vacation: { ...((p || {}).vacation || {}), enabled: !((p || {}).vacation || {}).enabled } }))}
+                                    className={`w-12 h-6 rounded-full relative transition-all flex-shrink-0 ${prefs?.vacation?.enabled ? 'bg-violet-600 shadow-inner' : 'bg-slate-200'}`}
+                                >
+                                    <div className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full shadow-sm transition-all ${prefs?.vacation?.enabled ? 'translate-x-6' : ''}`}></div>
+                                </button>
+                            </div>
+                            {prefs?.vacation?.enabled && (
+                                <>
+                                    <input
+                                        value={prefs?.vacation?.subject || ''}
+                                        onChange={(e) => setPrefs((p: any) => ({ ...(p || {}), vacation: { ...((p || {}).vacation || {}), subject: e.target.value } }))}
+                                        maxLength={180}
+                                        placeholder="Automatic reply"
+                                        className="w-full px-4 py-2.5 border border-slate-200 rounded-xl text-sm outline-none focus:border-violet-500 transition-all mb-3"
+                                    />
+                                    <textarea
+                                        value={prefs?.vacation?.message || ''}
+                                        onChange={(e) => setPrefs((p: any) => ({ ...(p || {}), vacation: { ...((p || {}).vacation || {}), message: e.target.value } }))}
+                                        rows={4}
+                                        maxLength={5000}
+                                        placeholder="I'm out of the office until… For urgent matters contact…"
+                                        className="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm outline-none focus:border-violet-500 transition-all resize-none mb-3"
+                                    />
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1">First day</label>
+                                            <input
+                                                type="date"
+                                                value={(prefs?.vacation?.startsAt || '').slice(0, 10)}
+                                                onChange={(e) => setPrefs((p: any) => ({ ...(p || {}), vacation: { ...((p || {}).vacation || {}), startsAt: e.target.value } }))}
+                                                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm outline-none focus:border-violet-500"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-[11px] font-bold text-slate-500 mb-1">Last day (optional)</label>
+                                            <input
+                                                type="date"
+                                                value={(prefs?.vacation?.endsAt || '').slice(0, 10)}
+                                                onChange={(e) => setPrefs((p: any) => ({ ...(p || {}), vacation: { ...((p || {}).vacation || {}), endsAt: e.target.value } }))}
+                                                className="w-full px-3 py-2 border border-slate-200 rounded-xl text-sm outline-none focus:border-violet-500"
+                                            />
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+                        </div>
+
+                        <div className="flex justify-end gap-3 mt-7">
+                            <button onClick={() => setPrefsOpen(false)} className="px-5 py-2.5 rounded-xl text-sm font-bold text-slate-500 hover:bg-slate-100 transition-colors">Cancel</button>
+                            <button onClick={handleSavePrefs} disabled={savingPrefs} className="px-6 py-2.5 rounded-xl bg-slate-900 text-white text-sm font-bold hover:bg-black transition-colors disabled:opacity-50">
+                                {savingPrefs ? <><i className="fa-solid fa-circle-notch fa-spin mr-2"></i>Saving…</> : 'Save'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }
 
 // --- Component Helpers ---
+
+function BulkBtn({ icon, tip, onClick, red }: any) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            title={tip}
+            className={`w-7 h-7 rounded-lg flex items-center justify-center transition-colors ${red ? 'text-red-500 hover:bg-red-50' : 'text-slate-500 hover:text-violet-700 hover:bg-white'}`}
+        >
+            <i className={`fa-solid ${icon} text-xs`}></i>
+        </button>
+    );
+}
 
 function SidebarLink({ icon, label, count, active, onClick, iconColor }: any) {
     return (
@@ -1594,7 +2296,20 @@ function SettingsView({ settings, setSettings, onSave, saving, message, dnsInfo,
                         <SettingInput label="From Name (Default)" value={settings.mail_from_name} onChange={(v: string) => setSettings({ ...settings, mail_from_name: v })} placeholder="My Site" />
                     </div>
                     <SettingInput label="HELO / EHLO Host" value={settings.mail_helo_host} onChange={(v: string) => setSettings({ ...settings, mail_helo_host: v })} placeholder="mail.example.com" />
-                    <SettingInput label="Catch-All Mode" value={settings.smtp_catch_all} onChange={(v: string) => setSettings({ ...settings, smtp_catch_all: v })} type="select" options={[{ label: 'Disabled (Strict)', value: '0' }, { label: 'Enabled (Catch All)', value: '1' }]} />
+                    <SettingInput label="Catch-All Mode" value={settings.smtp_catch_all} onChange={(v: string) => setSettings({ ...settings, smtp_catch_all: v })} type="select" options={[{ label: 'Disabled (Strict)', value: '0' }, { label: 'Enabled (Catch All → admin mailbox)', value: '1' }]} />
+                    <SettingInput
+                        label="Undo Send window"
+                        value={settings.mail_undo_send_seconds || '10'}
+                        onChange={(v: string) => setSettings({ ...settings, mail_undo_send_seconds: v })}
+                        type="select"
+                        options={[
+                            { label: 'Disabled — deliver immediately', value: '0' },
+                            { label: '5 seconds', value: '5' },
+                            { label: '10 seconds (recommended)', value: '10' },
+                            { label: '20 seconds', value: '20' },
+                            { label: '30 seconds', value: '30' }
+                        ]}
+                    />
 
                     {/* Advanced */}
                     <div className="border-t border-slate-100 pt-6">
