@@ -88,6 +88,17 @@ export interface AppConfig {
         http01Port?: number;
     };
 
+    // Login brute-force throttling. Always well-formed so routes/core read it unconditionally.
+    auth: {
+        // Per-(IP + account) escalating lockout: after `loginMaxFails` consecutive failures the
+        // account+IP is blocked for loginBlockLadderMs[level]; the last entry repeats for further
+        // blocks. A successful login wipes the ladder for that IP+account.
+        loginMaxFails: number;
+        loginBlockLadderMs: number[];
+        loginStateTtlMs: number;      // idle time after which per-key state is forgotten (ladder resets)
+        loginIpFailPerHour: number;   // per-IP FAILED-login backstop (bounds spraying across many accounts)
+    };
+
     // Prometheus metrics. /metrics is disabled unless `token` is set (avoids public metrics leak).
     metrics: {
         token: string;
@@ -280,6 +291,19 @@ const config: AppConfig = {
         challengeType: fileConfig.acme?.challengeType === 'dns-01' ? 'dns-01' : 'http-01',
         ...(fileConfig.acme?.http01Port ? { http01Port: Number(fileConfig.acme.http01Port) } : {})
     },
+    // Login throttling (normalized; set any field under "auth" in wordjs-config.json).
+    auth: (() => {
+        const a = fileConfig.auth || {};
+        const ladderMin = (Array.isArray(a.loginBlockLadderMinutes) ? a.loginBlockLadderMinutes : [])
+            .map((n: any) => Number(n)).filter((n: number) => Number.isFinite(n) && n > 0);
+        const ladder = (ladderMin.length ? ladderMin : [5, 10, 30, 60]).map((m: number) => m * 60 * 1000);
+        return {
+            loginMaxFails: Number(a.loginMaxFails) > 0 ? Number(a.loginMaxFails) : 5,
+            loginBlockLadderMs: ladder,
+            loginStateTtlMs: (Number(a.loginStateTtlMinutes) > 0 ? Number(a.loginStateTtlMinutes) : 120) * 60 * 1000,
+            loginIpFailPerHour: Number(a.loginIpFailPerHour) > 0 ? Number(a.loginIpFailPerHour) : 50,
+        };
+    })(),
     // Prometheus metrics scrape token (empty = /metrics disabled / returns 404).
     metrics: {
         token: fileConfig.metrics?.token || process.env.METRICS_TOKEN || ''

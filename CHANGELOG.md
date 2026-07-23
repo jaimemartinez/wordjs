@@ -4,6 +4,32 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.8] - 2026-07-23
+
+### Fixed — login lockouts
+- **One user's failed logins no longer lock out everyone sharing their IP.** Brute-force protection
+  keyed on the client IP alone, with a 10/hour budget that counted successful requests too — so every
+  account behind one public address (office NAT, VPN, household) shared it, and one person mistyping a
+  password answered *"Too many login attempts"* to all of them. A user who merely enabled and then
+  disabled their own 2FA burned the same budget and locked themselves out of login.
+  The primary control is now an escalating per-**(IP + account)** lockout: 5 consecutive failures block
+  that pair for 5 → 10 → 30 → 60 minutes (the last rung repeating), and a successful login wipes the
+  ladder. Attempts made during a block do not extend it. Tunable under `auth` in `wordjs-config.json`.
+- The account-wide lockout is unchanged and still runs alongside it — keyed on the account alone, it is
+  the backstop against a distributed attack on one account from many IPs, which per-IP keying cannot
+  see. The per-IP limiter remains as a third layer but now counts **only failed** attempts, so
+  successful logins never consume the budget.
+
+### Fixed — TLS certificates (Let's Encrypt / ACME)
+- **DNS-01 could fail with "No such challenge" after a correct TXT record was published.** The ACME
+  directory was process-global sticky state (`if (useStaging)` with no else, on a singleton), so an
+  auto-renewal configured for staging pinned the whole process to staging and later "production" orders
+  went there silently; a restart then reset it to production. An order's challenge URL exists at exactly
+  one endpoint, so a two-step flow that crossed that boundary was rejected — while the operator's DNS
+  record was correct all along. The finish step is now paired with the directory that minted the
+  challenge, which holds even across a restart mid-flow, and the CA's raw message is mapped to an
+  actionable one.
+
 ## [1.12.7] - 2026-07-23
 
 ### Fixed — TLS certificates (Let's Encrypt / ACME)
