@@ -149,9 +149,26 @@ async function getActiveTheme() {
 }
 
 /**
- * Switch to a different theme
+ * Switch to a different theme.
+ *
+ * DELIBERATELY NOT JOINED PER SLUG. An earlier version kept a Map<slug, inflight> so a double-clicked
+ * "Activate" joined the running switch instead of re-running it. That is unsound here: the join key is the
+ * SLUG, but the resource is GLOBAL — there is exactly one active theme. Joining "the same slug" is only
+ * correct when no OTHER slug was requested in between, and A -> B -> A inside one window breaks it: the
+ * third call joined the first, never ran, and the `template` option was left on B while the API answered
+ * `{ success: true, message: "Switched to theme A" }`. The admin's last click was silently lost and
+ * `doAction('switch_theme')` fired once, carrying the FIRST call's previousTheme.
+ *
+ * Losing a write to save a re-fork is a bad trade, and the re-fork was never what made this safe: overlapping
+ * activations cannot orphan a child because theme-engine.init() serializes them AND loadIsolatedPlugin
+ * retires any live child it would displace (core/plugin-isolate.ts). Correctness does not depend on this
+ * function being idempotent, so it does not pretend to be — every call runs, and the last writer wins.
  */
 async function switchTheme(slug: string) {
+  return doSwitchTheme(slug);
+}
+
+async function doSwitchTheme(slug: string) {
   const themes = scanThemes();
   const theme = themes.find(t => t.slug === slug);
 
