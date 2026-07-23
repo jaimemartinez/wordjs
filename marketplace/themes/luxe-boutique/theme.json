@@ -1,0 +1,14 @@
+{
+  "name": "Luxe Boutique",
+  "version": "1.0.0",
+  "description": "Premium fashion boutique e-commerce theme with gold accents, sticky quick-view bar, and size guide drawer.",
+  "author": "WordJS Premium Studio",
+  "category": "Commerce",
+  "archetype": "obsidian",
+  "tags": [
+    "premium",
+    "commerce",
+    "obsidian",
+    "responsive"
+  ]
+}

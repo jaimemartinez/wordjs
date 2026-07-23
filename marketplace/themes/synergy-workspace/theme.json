@@ -1,0 +1,14 @@
+{
+  "name": "Synergy Workspace",
+  "version": "1.0.0",
+  "description": "Clean, minimalist B2B SaaS theme with subtle border gradients and tabbed feature showcases.",
+  "author": "WordJS Premium Studio",
+  "category": "Corporate",
+  "archetype": "glassmorphism",
+  "tags": [
+    "premium",
+    "corporate",
+    "glassmorphism",
+    "responsive"
+  ]
+}

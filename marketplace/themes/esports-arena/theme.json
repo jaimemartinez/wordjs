@@ -1,0 +1,14 @@
+{
+  "name": "Esports Arena",
+  "version": "1.0.0",
+  "description": "Gaming news & tournament portal with dark neon theme, team roster cards, and live stream embed containers.",
+  "author": "WordJS Premium Studio",
+  "category": "Media",
+  "archetype": "cyber",
+  "tags": [
+    "premium",
+    "media",
+    "cyber",
+    "responsive"
+  ]
+}
