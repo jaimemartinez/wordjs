@@ -100,15 +100,24 @@ function mailboxFlagValue(on: any): string {
  * statement of which domain the server signs and sends as, so it is the domain whose local parts are
  * reserved corporate mailboxes. Deriving this from `siteurl` alone would reserve the wrong name.
  *
- * `mail_security_dkim_domain` is a plain site option (not a secret) and stays meaningful on an
- * install with no mail plugin at all, where it is simply unset and the site hostname is used.
+ * WE CANNOT READ THE PLUGIN'S OWN KEY. An earlier version read `mail_security_dkim_domain` straight from
+ * the options table and called it "a plain site option (not a secret)". That was wrong: the key matches
+ * both this host's PROTECTED_OPTION_RE and the plugin's SECRET_OPTION_RE (both on /dkim/), so every writer
+ * routes it into the plugin's own wjp_mail_server_secrets table and the core options table NEVER holds it.
+ * The read therefore always returned '' in production, and on exactly the `www.` install the override
+ * exists for, the reservation below silently protected the wrong name — a subscriber could still claim
+ * <someone>@acme.com while the server signed and sent as acme.com.
+ *
+ * So the PLUGIN publishes its resolved answer to us as the non-secret `mail_domain` option (see
+ * mirrorMailDomain in the mail-server plugin), and we read that. The fallback stays meaningful on an
+ * install with no mail plugin at all: nothing publishes `mail_domain`, and the site hostname is used.
  */
 async function getMailDomain(): Promise<string> {
     const { getOption } = require('./options');
     try {
-        const explicit = String((await getOption('mail_security_dkim_domain', '')) || '')
+        const published = String((await getOption('mail_domain', '')) || '')
             .trim().toLowerCase().replace(/\.$/, '');
-        if (explicit) return explicit;
+        if (published) return published;
     } catch { /* option store unavailable — fall through to the site URL */ }
     try {
         const url = await getOption('siteurl', await getOption('home', 'http://localhost'));

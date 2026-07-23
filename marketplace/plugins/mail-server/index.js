@@ -126,6 +126,35 @@ function resolveMailDomain(dkimDomain, siteDomain) {
     if (explicit) return explicit;
     return String(siteDomain == null ? '' : siteDomain).trim().toLowerCase();
 }
+/**
+ * The last value mirrored to the host, so the steady state costs no writes. Module-scoped: a fresh worker
+ * starts as null and re-mirrors once, which is exactly the backfill an existing install needs.
+ */
+let lastMirroredMailDomain = null;
+
+/**
+ * PUBLISH the resolved domain to the host as the plain `mail_domain` option.
+ *
+ * The host has to know this domain too — it reserves those local parts so an unprivileged account cannot
+ * claim <someone>@<mailDomain> (core/mailbox.ts). It CANNOT read our source of truth: the host tried
+ * `getOption('mail_security_dkim_domain')` against the core options table, where that key never appears in
+ * production. `mail_security_dkim_domain` matches this plugin's SECRET_OPTION_RE and the host's
+ * PROTECTED_OPTION_RE (both on /dkim/), so every writer routes it into wjp_mail_server_secrets instead —
+ * the host read silently returned '' and, on a `www.` install, the reservation protected the wrong name.
+ *
+ * So the plugin mirrors the RESOLVED answer into a non-secret key the host can actually read. Fire and
+ * forget: a failed mirror must never break sending, and the next call re-attempts it.
+ */
+function mirrorMailDomain(domain) {
+    const d = String(domain || '').trim().toLowerCase();
+    if (!d || d === lastMirroredMailDomain) return;
+    lastMirroredMailDomain = d;
+    Promise.resolve(updateOption('mail_domain', d)).catch((e) => {
+        lastMirroredMailDomain = null; // let the next resolve retry
+        console.warn(`[MailServer] could not publish mail_domain to the host: ${e && e.message}`);
+    });
+}
+
 async function getMailDomain() {
     // Split from resolveMailDomain so sendMail — which already fetches both inputs in its one parallel
     // RPC wave — can apply the SAME expression without paying two more round-trips per message.
@@ -133,7 +162,11 @@ async function getMailDomain() {
         getOption('mail_security_dkim_domain', ''),
         getSiteDomain()
     ]);
-    return resolveMailDomain(dkimDomain, siteDomain);
+    const resolved = resolveMailDomain(dkimDomain, siteDomain);
+    // Every path that can CHANGE the answer (boot, settings save, DKIM generate) comes back through here,
+    // so one hook keeps the host's copy current without a write per call.
+    mirrorMailDomain(resolved);
+    return resolved;
 }
 
 /**

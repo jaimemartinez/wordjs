@@ -763,4 +763,7 @@ function createPluginApi(slug: string) {
     };
 }
 
-module.exports = { createPluginApi, isProtectedOption };
+// projectUser is exported for TESTS only: it is one of the two wires carrying the corporate-mailbox grant
+// to a plugin, and deleting that field left the whole suite green because the gate suite hand-builds the
+// projection. Asserting the real function is what makes that wire load-bearing.
+module.exports = { createPluginApi, isProtectedOption, projectUser };

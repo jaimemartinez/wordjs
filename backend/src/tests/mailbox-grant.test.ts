@@ -77,7 +77,7 @@ before(async () => {
     await updateOption('siteurl', `https://${SITE_HOST}`);
     await updateOption('home', `https://${SITE_HOST}`);
     // The operator's statement of which domain this server signs/sends/receives as.
-    await updateOption('mail_security_dkim_domain', MAIL_DOMAIN);
+    await updateOption('mail_domain', MAIL_DOMAIN);   // what the PLUGIN publishes — the key the host can actually read
 
     await roles.loadRoles();
     // A NON-administrator that holds edit_users — the only persona that can prove the flag gate is on
@@ -140,6 +140,61 @@ describe('the corporate-mailbox grant is admin-owned', () => {
         assert.equal(revoked.status, 200);
         assert.equal(await mailboxFlagOf(U.pablo), '0');
         assert.equal(revoked.body.professionalMailbox, false);
+    });
+
+    test('PUT /users/:id is the THIRD self-service door and refuses a corporate address too', async () => {
+        // COVERAGE GAP, not a new rule: refuseSelfServiceEmailChange guards three routes, but only
+        // PUT /users/me and POST /auth/register were pinned. Deleting the call in PUT /users/:id left the
+        // whole suite green while a self-edit to <someone>@<mailDomain> returned 200 and stored it — the
+        // same door as the /users/me hole that IS tested, one route along.
+        const squat = await as('pablo', 'put', `/users/${U.pablo}`).send({ email: `ceo@${MAIL_DOMAIN}` });
+        assert.equal(squat.status, 403, 'a self-edit must not claim an address on the mail domain');
+        assert.equal(squat.body.code, 'rest_reserved_mail_domain');
+
+        // The positive control: the capability is what decides, not the route.
+        const byManager = await as('usermgr', 'put', `/users/${U.pablo}`).send({ email: `ceo@${MAIL_DOMAIN}` });
+        assert.equal(byManager.status, 200, 'provisioning corporate addresses is exactly an edit_users job');
+    });
+
+    test('the grant actually REACHES the plugin — both projections carry it', async () => {
+        // COVERAGE GAP. Every plugin is mandatorily isolated, so there are exactly two wires from the host
+        // to the plugin's view of a user, and the mail gate/delivery read nothing else:
+        //   core/plugin-api.ts projectUser  — what wordjs.users.* returns (inbound/internal DELIVERY)
+        //   core/plugin-isolate.ts req.user — what the route gate reads
+        // Deleting either line left the whole suite green: the gate suite hand-builds the projection
+        // (`ALICE = { …, hasProfessionalMailbox: true }`), so it proves the plugin's behaviour GIVEN the
+        // field and never that the host sends it — the exact "green suite over broken code" trap. Both
+        // fail closed (webmail 403s, inbound diverts to the catch-all), so this is availability, not
+        // escalation — but nothing was asserting it at all.
+        const { hasProfessionalMailbox } = require('../core/mailbox');
+        const User = require('../models/User');
+
+        const granted = await User.findById(U.alice);   // alice holds the grant in this fixture
+        const withoutGrant = await User.findById(U.pablo);
+
+        // Wire 1 — the users bridge projection. Asserted unconditionally: a guarded assertion that can
+        // silently not run is the same vacuous-pass problem this test exists to close.
+        const { projectUser } = require('../core/plugin-api');
+        assert.equal(typeof projectUser, 'function', 'projectUser must be reachable for this to mean anything');
+        assert.equal(projectUser(granted).hasProfessionalMailbox, true,
+            'the users bridge must carry the grant to the plugin');
+        assert.equal(projectUser(withoutGrant).hasProfessionalMailbox, false, 'and must not invent one');
+
+        // Wire 2 — the value the isolate stamps onto req.user, asserted through the SAME helper the
+        // isolate calls, so a change to that helper cannot silently diverge from what the gate reads.
+        assert.equal(hasProfessionalMailbox(granted), true, 'req.user.hasProfessionalMailbox is true for a holder');
+        assert.equal(hasProfessionalMailbox(withoutGrant), false, 'and false for everyone else');
+    });
+
+    test('an unchanged professionalMailbox resend does not 403 an ordinary self-edit', async () => {
+        // The admin user editor loads the flag into its form state and PUTs the whole object back, so a
+        // "save my display name" from a non-edit_users user carries professionalMailbox unchanged.
+        // Rejecting on PRESENCE 403'd every one of those legitimate saves; only a real CHANGE is a write.
+        assert.equal(await mailboxFlagOf(U.pablo), '0', 'precondition: pablo currently has no mailbox');
+        const save = await as('pablo', 'put', `/users/${U.pablo}`)
+            .send({ displayName: 'Pablo Renamed', professionalMailbox: false });
+        assert.equal(save.status, 200, 'an unchanged flag must not turn a profile save into a privileged write');
+        assert.equal(await mailboxFlagOf(U.pablo), '0', 'and it still cannot change the grant');
     });
 
     test('a user WITH a mailbox cannot self-change their address (it IS the mailbox)', async () => {
@@ -250,7 +305,7 @@ describe('upgrade migration 0006 (derive the flag for existing installs)', () =>
         };
         const opt = (n: string, v: string) => raw.prepare('INSERT INTO options VALUES (?,?,?)').run(n, v, 'yes');
         opt('siteurl', `https://${SITE_HOST}`);
-        opt('mail_security_dkim_domain', MAIL_DOMAIN);          // the www-vs-apex shape again
+        opt('mail_domain', MAIL_DOMAIN);                        // the www-vs-apex shape, set the way production does
         opt('wordjs_user_roles', JSON.stringify({
             editor: { name: 'Editor', capabilities: ['edit_posts'] },
             subscriber: { name: 'Subscriber', capabilities: ['read'] },
