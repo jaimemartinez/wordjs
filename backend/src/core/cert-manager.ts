@@ -1,4 +1,8 @@
 const acme = require('acme-client');
+// Bound every outbound ACME HTTP attempt (directory/order/finalize AND the http-01 local pre-verify
+// fetch). Without this, an unreachable port 80 left each verify attempt hanging on the OS TCP
+// timeout and the admin request froze for minutes.
+acme.axios.defaults.timeout = 10000;
 const fs = require('fs');
 const path = require('path');
 const dns = require('dns').promises;
@@ -51,7 +55,14 @@ class CertManager {
         // 2. Initialize Client
         this.client = new acme.Client({
             directoryUrl: this.directoryUrl,
-            accountKey: accountKey
+            accountKey: accountKey,
+            // acme-client's default backoff (10 attempts, 5s→30s) lets verifyChallenge /
+            // waitForValidStatus spin ~4 minutes INSIDE an admin HTTP request — the UI just hangs on
+            // "Processing...". 5 attempts at 3s→10s caps each phase under ~40s of backoff while still
+            // riding out normal CA validation latency.
+            backoffAttempts: 5,
+            backoffMin: 3000,
+            backoffMax: 10000
         });
 
         // 3. Register Account (Idempotent usually)
@@ -84,28 +95,17 @@ class CertManager {
 
         const keyAuthorization = await this.client.getChallengeKeyAuthorization(challenge);
 
-        // State to return to UI
+        // State to return to UI.
+        // NOTE: getChallengeKeyAuthorization() is challenge-type-aware — for http-01 it returns the
+        // file content (`token.thumbprint`), for dns-01 it returns the FINAL TXT value, ALREADY
+        // digested per RFC 8555 §8.4 (base64url(sha256(`token.thumbprint`))). Never hash it again.
         return {
             orderUrl: order.url,
             challenge,
             authzUrl: authz.url,
-            keyAuthorization, // For HTTP-01 file content
-            dnsRecord: `_acme-challenge.${domain}`, // For DNS-01
-            dnsValue: keyAuthorization // Actually, for DNS-01 it's a digest of this
+            keyAuthorization,
+            dnsRecord: `_acme-challenge.${domain}` // For DNS-01
         };
-    }
-
-    async getDNSDigest(keyAuthorization: any) {
-        // dns-01 requires SHA256 digest of keyAuth
-        // acme-client might have a helper or we do it manually, but client usually handles it ONLY if we use its built-in challenge completion.
-        // But since we are Manual, we need to show the User the simplified string.
-        // Wait, acme-client documentation says `getChallengeKeyAuthorization` returns the string for the file.
-        // For DNS, the TXT record value is base64url(sha256(keyAuth)).
-
-        // Using internal helper if available or manual:
-        const crypto = require('crypto');
-        const hash = crypto.createHash('sha256').update(keyAuthorization).digest('base64');
-        return hash.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
     }
 
     /**
@@ -128,12 +128,18 @@ class CertManager {
             await this.writeChallengeFile(orderData.challenge.token, orderData.keyAuthorization);
             console.log('[CertManager] Challenge file written.');
 
-            // 3. Verify & Complete
-            // Note: Verify locally trigger the check? No, verifyChallenge tells ACME to check.
-            await this.client.verifyChallenge(
-                { url: orderData.authzUrl, identifier: { type: 'dns', value: domain } },
-                orderData.challenge
-            );
+            // 3. Best-effort LOCAL pre-flight: it fetches http://<domain>/.well-known/... from THIS
+            // machine. Behind NAT without hairpin the server often cannot reach its own public
+            // hostname even though the CA can, so a miss here must not abort the order —
+            // completeChallenge + waitForValidStatus below get the CA's authoritative verdict.
+            try {
+                await this.client.verifyChallenge(
+                    { url: orderData.authzUrl, identifier: { type: 'dns', value: domain } },
+                    orderData.challenge
+                );
+            } catch (preErr: any) {
+                console.warn('[CertManager] Local http-01 pre-verify inconclusive (continuing — the CA decides):', preErr && preErr.message);
+            }
             await this.client.completeChallenge(orderData.challenge);
             console.log('[CertManager] Challenge completed. Waiting for validation...');
 
@@ -181,8 +187,11 @@ class CertManager {
             // Create order with DNS-01 challenge type
             const orderData = await this.createOrder(domain, 'dns-01');
 
-            // Get the DNS digest value (base64url of sha256)
-            const txtValue = await this.getDNSDigest(orderData.keyAuthorization);
+            // getChallengeKeyAuthorization() ALREADY returned the RFC 8555 §8.4 TXT value for dns-01
+            // (base64url(sha256(`token.thumbprint`))) — acme-client digests it internally. The old
+            // getDNSDigest() hashed it a SECOND time, so the UI displayed a value no CA could ever
+            // match and DNS-01 issuance was permanently broken.
+            const txtValue = orderData.keyAuthorization;
 
             // Return data for UI
             return {
@@ -209,11 +218,18 @@ class CertManager {
             // Re-init client if needed (in case of server restart)
             await this.initClient(email, useStaging);
 
-            // Verify the challenge
-            await this.client.verifyChallenge(
-                { url: step1Data.authzUrl, identifier: { type: 'dns', value: step1Data.domain } },
-                step1Data.challenge
-            );
+            // Best-effort LOCAL pre-flight only — the CA performs the authoritative validation from
+            // the outside after completeChallenge. Failing hard here strands setups whose local
+            // resolver can't see what the CA can (split-horizon homelab DNS, negative-cached
+            // lookups), so a pre-verify miss logs and continues instead of aborting the order.
+            try {
+                await this.client.verifyChallenge(
+                    { url: step1Data.authzUrl, identifier: { type: 'dns', value: step1Data.domain } },
+                    step1Data.challenge
+                );
+            } catch (preErr: any) {
+                console.warn('[CertManager] Local dns-01 pre-verify inconclusive (continuing — the CA decides):', preErr && preErr.message);
+            }
 
             // Complete and wait
             await this.client.completeChallenge(step1Data.challenge);
@@ -240,8 +256,9 @@ class CertManager {
             writePrivateKey(path.join(domainDir, 'privkey.pem'), key);
             fs.writeFileSync(path.join(domainDir, 'fullchain.pem'), cert);
 
-            // Update config to use new cert
-            this.updateSSLConfig(
+            // Update config to use new cert. AWAIT it: un-awaited, a failed gateway push still
+            // reported success to the admin and the rejection went unhandled.
+            await this.updateSSLConfig(
                 path.join(domainDir, 'privkey.pem'),
                 path.join(domainDir, 'fullchain.pem')
             );
@@ -390,15 +407,45 @@ class CertManager {
     }
 
     /**
-     * Verify DNS Propagation
+     * Resolve the TXT values at a name, following CNAME chains like ACME validators do (delegating
+     * _acme-challenge to another zone via CNAME is a common DNS-provider pattern). TXT values longer
+     * than 255 bytes arrive split into chunks — join them per record; flat() would compare chunks.
+     */
+    async resolveTxtValues(resolver: any, name: string, depth = 0): Promise<string[]> {
+        if (depth < 5) {
+            try {
+                const cnames = await resolver.resolveCname(name);
+                if (cnames && cnames.length) return this.resolveTxtValues(resolver, cnames[0], depth + 1);
+            } catch { /* no CNAME at this name → resolve TXT directly */ }
+        }
+        const records = await resolver.resolveTxt(name);
+        return records.map((chunks: string[]) => chunks.join(''));
+    }
+
+    /**
+     * Verify DNS Propagation.
+     * Queries PUBLIC resolvers, not the OS one: the machine's stub resolver negative-caches an
+     * NXDOMAIN from a check clicked before the record existed (for the zone's negative TTL), and a
+     * split-horizon homelab resolver may never see public records at all — both made this report
+     * "record not found" forever while `dig @1.1.1.1` showed the record fine. The CA resolves from
+     * the outside, so public resolvers are the closest local approximation. Falls back to the OS
+     * resolver only if the public ones are unreachable (e.g. outbound :53 filtered).
      */
     async checkDNSPropagation(domain: string, expectedValue: string) {
+        const name = `_acme-challenge.${domain}`;
+        const expected = String(expectedValue || '').trim();
+        if (!expected) return false;
         try {
-            const records = await dns.resolveTxt(`_acme-challenge.${domain}`);
-            // specific record
-            const flat = records.flat();
-            return flat.includes(expectedValue);
-        } catch (e) {
+            const { Resolver } = require('dns').promises;
+            const pub = new Resolver({ timeout: 5000, tries: 2 });
+            pub.setServers(['1.1.1.1', '8.8.8.8']);
+            const values = await this.resolveTxtValues(pub, name);
+            if (values.includes(expected)) return true;
+        } catch { /* public resolvers unreachable → try the OS resolver below */ }
+        try {
+            const values = await this.resolveTxtValues(dns, name);
+            return values.includes(expected);
+        } catch {
             return false;
         }
     }
@@ -444,8 +491,9 @@ class CertManager {
             writePrivateKey(keyPath, keyContent);
             fs.writeFileSync(certPath, certContent);
 
-            // Update Config
-            this.updateSSLConfig(keyPath, certPath);
+            // Update Config. AWAIT it: un-awaited, a failed gateway push still returned success and
+            // the rejection went unhandled.
+            await this.updateSSLConfig(keyPath, certPath);
 
             return { success: true, path: customDir };
         } catch (e) {
