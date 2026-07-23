@@ -13,10 +13,13 @@
  *      drain from ever converging),
  *   2. give the in-flight ones a bounded chance to FINISH — they then release their own lease, which
  *      leaves the successor unblocked AND the directory consistent, the best available outcome,
- *   3. release everything else, skipping whatever is still executing at the deadline; that lease
- *      expires on its TTL exactly as an abrupt kill's would, and the boot stash sweep reclaims it.
+ *   3. hand back the plugin-op leases of the operations that finished, and NOTHING ELSE. Whatever is
+ *      still executing keeps its lease and expires on its TTL exactly as an abrupt kill's would (the
+ *      boot stash sweep reclaims it), and the leases this handler never drained — 'wordjs:cron' under a
+ *      running backup, 'wordjs:active-plugins' under an activate/deactivate — are not its to give away.
  *
- * Step 3's skip is tested in dist-lock-lease.test.ts (releaseAllHeld({ skip })). Steps 1 and 2 are here.
+ * Step 3's allow-list semantics are tested in dist-lock-lease.test.ts (releaseAllHeld({ only })). Steps
+ * 1 and 2, and the fact that index.ts passes an allow-list rather than an exclusion, are here.
  *
  * This file gets its own process on purpose: `beginPluginOpShutdown` latches a module-level flag that
  * is never meant to be cleared, so exercising it anywhere else would silently refuse every later
@@ -123,7 +126,19 @@ describe('graceful shutdown — plugin operations are drained before the leases 
         assert.ok(iDrain > iBegin, '…then drains the in-flight ones — draining first could never converge');
         assert.ok(iRelease > iDrain, '…and only then hands the leases back');
         assert.ok(iExit > iRelease, '…before exiting');
-        assert.match(body, /releaseAllHeld\(\{\s*skip\s*\}\)/, 'and it passes the skip predicate, so a still-running operation keeps its lease');
+
+        // The shape of the release is the whole safety argument, so it is asserted rather than assumed:
+        // an ALLOW-LIST built from the drained operations. Written as an exclusion ({ skip }), the same
+        // call would also free 'wordjs:cron' out from under a running backup and 'wordjs:active-plugins'
+        // out from under an activate — neither of which the drain can see, because neither takes a
+        // plugin-op lock. Those must expire on their TTL instead.
+        assert.match(body, /releaseAllHeld\(\{\s*only\s*\}\)/, 'it passes an allow-list predicate…');
+        assert.doesNotMatch(body, /\bskip\b/, '…and no exclusion list survives anywhere in the handler');
+        assert.match(body, /pluginOpLeaseName\(/, '…built from the plugin-operation lease names');
+        const iFinished = body.indexOf('.filter((k) => !stillRunning.includes(k))');
+        assert.ok(iFinished > iDrain && iFinished < iRelease,
+            'and the allow-list is the operations that STARTED minus the ones still running at the deadline — '
+            + 'i.e. exactly the ones whose critical section is confirmed over');
 
         // SIGINT must go through the same handler; a second path would skip the drain entirely.
         const handlers = src.slice(end, end + 400);

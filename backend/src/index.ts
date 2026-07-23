@@ -962,11 +962,18 @@ process.on('unhandledRejection', (reason, promise) => {
 // 'wordjs:plugin-op:<slug>' and begin extracting into the directory this process is mid-swap on, which
 // is the corruption the lease exists to prevent. So: refuse NEW plugin operations, give the in-flight
 // ones a bounded chance to FINISH (they then release their own lease, leaving the successor unblocked
-// AND the directory consistent — the best outcome), and only skip the release for whatever is still
-// executing at the deadline. Skipping is not a regression of the stranded-lease fix: the ordinary
-// restart has no plugin operation in flight, so it holds no plugin-op lease to begin with and still
-// hands back everything (cron, boot) immediately. A lease we do skip expires on its TTL exactly as an
-// abrupt kill's would, and recoverInterruptedPluginUpdates reclaims the stash at the next boot.
+// AND the directory consistent — the best outcome), and hand back ONLY the plugin-op leases of the
+// operations that are confirmed finished.
+//
+// "ONLY" IS LOAD-BEARING — a blanket sweep with the busy ones excluded is NOT the same thing, because
+// the map holds far more than plugin-op leases and every one of them is, by the same invariant, in the
+// middle of its critical section: 'wordjs:active-plugins' is held while activatePlugin/deactivatePlugin
+// read-modify-write the option (neither takes a plugin-op lock, so the drain cannot see them), and
+// 'wordjs:cron' is held by runAsLeader for as long as this node's backup or ACME renewal runs. Freeing
+// those lets a peer interleave with work still executing here — a fresh failure mode, since before the
+// shutdown released anything at all nothing could be handed over early. Everything not named below
+// keeps its lease and expires on its TTL, exactly as an abrupt kill already leaves it, and
+// recoverInterruptedPluginUpdates reclaims any stash at the next boot.
 const SHUTDOWN_PLUGIN_DRAIN_MS = 3000;
 const SHUTDOWN_LEASE_RELEASE_MS = 2000;
 let shuttingDown = false;
@@ -977,12 +984,14 @@ async function gracefulShutdown(signal: string): Promise<void> {
     console.log(`${signal} received. Shutting down gracefully...`);
 
     // 1. Stop accepting new plugin work, then wait out what is already running.
+    let startedOps: string[] = [];
     let stillRunning: string[] = [];
     try {
         const pluginRoutes = require('./routes/plugins');
         const starting = pluginRoutes.beginPluginOpShutdown();
-        if (Array.isArray(starting) && starting.length) {
-            console.log(`[shutdown] waiting up to ${SHUTDOWN_PLUGIN_DRAIN_MS}ms for ${starting.length} plugin operation(s) to finish: ${starting.join(', ')}`);
+        startedOps = Array.isArray(starting) ? starting : [];
+        if (startedOps.length) {
+            console.log(`[shutdown] waiting up to ${SHUTDOWN_PLUGIN_DRAIN_MS}ms for ${startedOps.length} plugin operation(s) to finish: ${startedOps.join(', ')}`);
         }
         stillRunning = await pluginRoutes.drainPluginOps(SHUTDOWN_PLUGIN_DRAIN_MS);
         if (stillRunning.length) {
@@ -995,24 +1004,26 @@ async function gracefulShutdown(signal: string): Promise<void> {
     // 2. Persist before letting go of anything.
     try { saveDatabase(); } catch (e: any) { console.warn('[shutdown] saveDatabase:', e && e.message); }
 
-    // 3. Hand back every lease whose critical section is genuinely over.
-    let deadline: NodeJS.Timeout | null = null;
-    try {
-        const { releaseAllHeld } = require('./core/dist-lock');
-        let skip: ((name: string) => boolean) | undefined;
-        if (stillRunning.length) {
-            const busy = new Set(stillRunning.map((k: string) => require('./routes/plugins').pluginOpLeaseName(k)));
-            skip = (name: string) => busy.has(name);
+    // 3. Hand back the plugin-op leases whose operation is CONFIRMED finished — and nothing else.
+    //    The allow-list is built from names, not from a prefix or an exclusion, so no lease this
+    //    handler was never meant to touch can end up in it (see the header comment).
+    const finishedOps = startedOps.filter((k) => !stillRunning.includes(k));
+    if (finishedOps.length) {
+        let deadline: NodeJS.Timeout | null = null;
+        try {
+            const { releaseAllHeld } = require('./core/dist-lock');
+            const releasable = new Set(finishedOps.map((k: string) => require('./routes/plugins').pluginOpLeaseName(k)));
+            const only = (name: string) => releasable.has(name);
+            // clearTimeout the loser: an orphaned timer keeps the event loop alive and, under
+            // --test-force-exit, gets the process killed mid-IPC (see the CI flake this pattern caused).
+            const bounded = new Promise<void>((resolve) => { deadline = setTimeout(resolve, SHUTDOWN_LEASE_RELEASE_MS); });
+            const freed = await Promise.race([releaseAllHeld({ only }), bounded]);
+            if (Array.isArray(freed) && freed.length) console.log(`[shutdown] released ${freed.length} plugin-operation lease(s): ${freed.join(', ')}`);
+        } catch (e: any) {
+            console.warn('[shutdown] could not release the plugin-operation leases (they will expire on their TTL):', e && e.message);
+        } finally {
+            if (deadline) clearTimeout(deadline);
         }
-        // clearTimeout the loser: an orphaned timer keeps the event loop alive and, under
-        // --test-force-exit, gets the process killed mid-IPC (see the CI flake this pattern caused).
-        const bounded = new Promise<void>((resolve) => { deadline = setTimeout(resolve, SHUTDOWN_LEASE_RELEASE_MS); });
-        const freed = await Promise.race([releaseAllHeld({ skip }), bounded]);
-        if (Array.isArray(freed) && freed.length) console.log(`[shutdown] released ${freed.length} distributed lease(s): ${freed.join(', ')}`);
-    } catch (e: any) {
-        console.warn('[shutdown] could not release the distributed leases (they will expire on their TTL):', e && e.message);
-    } finally {
-        if (deadline) clearTimeout(deadline);
     }
 
     process.exit(0);

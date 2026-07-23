@@ -10,6 +10,13 @@
  * that no longer exists. The admin cannot pre-empt it either: `deactivatePlugin` early-returns
  * 'Plugin not active' for precisely this state, so "deactivate it first" is not an available step.
  *
+ * AND THE ISOLATE REGISTRY IS NOT THE WHOLE ANSWER EITHER. Gating the teardown on "is a child
+ * registered?" still misses the other thing the slug can own: a PENDING SUPERVISED RESTART. A crashed
+ * child is removed from the registry before the backoff restart is scheduled, so for up to a minute the
+ * registry says nothing is running while a live timer is waiting to spawn from the very directory this
+ * handler is about to delete — and that timer is cancelled ONLY by unloadIsolatedPlugin. So the teardown
+ * is unconditional, and the registry is consulted afterwards, to VERIFY.
+ *
  * Driven through the REAL router over supertest (real JWT, real admin gate, real password check, real
  * per-slug operation lock) because the guard lives in the handler and its whole job is which HTTP
  * answer the admin gets. core/plugin-isolate is faked — no child is spawned here, and the point is the
@@ -43,17 +50,30 @@ const ADMIN = 'delete-admin';
 const PASSWORD = 'Str0ng-Pa55word!';
 
 // --- the isolate REGISTRY, faked ---------------------------------------------------------------
+//
+// Modelled on core/plugin-isolate's ACTUAL bookkeeping, because the second half of this file turns on a
+// distinction the real module makes and a naive fake would erase:
+//   - `isolates` (here: liveIsolates) is what isIsolated() answers from;
+//   - `restartTimers` (here: pendingRestarts) holds a scheduled backoff restart after a crash. The exit
+//     handler DELETES the crashed child from `isolates` (plugin-isolate.ts:1413) and only then calls
+//     superviseRestart, so throughout that window — up to 60s of backoff, 5 attempts — isIsolated() is
+//     FALSE while the slug is still owned by a live timer;
+//   - unloadIsolatedPlugin (plugin-isolate.ts:1442-1452) is the ONLY thing that cancels that timer, and
+//     it does so BEFORE it touches the handle — hence unconditionally with respect to `unloadIsNoop`.
 
-/** Slugs a child process is registered for. */
+/** Slugs a child process is registered for (`isolates`). */
 const liveIsolates = new Set<string>();
+/** Slugs with a pending supervised restart (`restartTimers`) — deliberately NOT in liveIsolates. */
+const pendingRestarts = new Set<string>();
 /** When set, unloadIsolatedPlugin does NOT clear the slug — a child that refuses to die. */
 let unloadIsNoop = false;
 let unloadCalls: string[] = [];
 
 const fakeIsolate: any = {
-    loadIsolatedPlugin: async (slug: string) => { liveIsolates.add(slug); return { ok: true }; },
+    loadIsolatedPlugin: async (slug: string) => { liveIsolates.add(slug); pendingRestarts.delete(slug); return { ok: true }; },
     unloadIsolatedPlugin: (slug: string) => {
         unloadCalls.push(slug);
+        pendingRestarts.delete(slug);            // clearTimeout(restartTimers.get(slug)) — always runs
         if (!unloadIsNoop) liveIsolates.delete(slug);
     },
     isIsolated: (slug: string) => liveIsolates.has(slug),
@@ -118,6 +138,7 @@ describe('DELETE /plugins/:slug — never deletes the directory of a running plu
 
     beforeEach(async () => {
         liveIsolates.clear();
+        pendingRestarts.clear();
         unloadCalls = [];
         unloadIsNoop = false;
         await setActive([]);
@@ -134,7 +155,29 @@ describe('DELETE /plugins/:slug — never deletes the directory of a running plu
         assert.strictEqual(r.status, 200, JSON.stringify(r.body));
         assert.strictEqual(r.body.success, true);
         assert.ok(!fs.existsSync(path.join(dir, 'manifest.json')), 'the code is gone');
-        assert.deepStrictEqual(unloadCalls, [], 'nothing had to be stopped');
+        assert.deepStrictEqual(unloadCalls, [SLUG],
+            'the teardown runs even with nothing registered — it is idempotent, and it is also the only '
+            + 'thing that cancels a pending supervised restart, which isIsolated() cannot see (next test)');
+    });
+
+    it('cancels a PENDING supervised restart, which no "is it running?" check can see', async () => {
+        // The state: the child crashed, so plugin-isolate's exit handler removed it from `isolates` and
+        // scheduled a backoff restart (up to 60s, 5 attempts). isPluginRunning() is FALSE for that whole
+        // window, so a teardown gated on it never runs — and clearing `restartTimers` is something ONLY
+        // unloadIsolatedPlugin does. Skip it and the timer fires on a deleted entry file, burns its five
+        // attempts and posts a "keeps crashing and was stopped" notice for a plugin the admin deleted;
+        // and if the slug is REINSTALLED inside the window, the timer registers an isolate outside
+        // activatePlugin — manufacturing the very orphan the previous test cleans up.
+        const dir = seedPluginDir(SLUG);
+        pendingRestarts.add(SLUG);
+        assert.strictEqual(fakeIsolate.isIsolated(SLUG), false, 'precondition: nothing is registered, so no running check fires');
+
+        const r = await del(SLUG);
+
+        assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+        assert.deepStrictEqual(unloadCalls, [SLUG], 'THE FIX: the teardown is unconditional…');
+        assert.strictEqual(pendingRestarts.has(SLUG), false, '…so the scheduled restart is cancelled with the plugin');
+        assert.ok(!fs.existsSync(path.join(dir, 'manifest.json')), 'and the code is gone');
     });
 
     it('refuses a plugin the option flags as ACTIVE (unchanged behaviour)', async () => {

@@ -953,6 +953,17 @@ async function runPluginUpdate(
     // a plain install is already the right thing — it adopts the preserved data/. It also starts from
     // ZERO grants (uninstall purged them), so there is no provenance decision to make here; we just
     // record where the code came from, exactly like a first-time marketplace install.
+    //
+    // KNOWN LIMIT, deliberately not closed here. This returns BEFORE the provenance gate below, so after
+    // an uninstall WITHOUT dropData — which keeps plugins/<slug>/data/ but clears the grants and the
+    // recorded origin — a DIFFERENT catalog source that lists the same id can install over the preserved
+    // data dir (for mail-server: the AES root key and the DKIM private keys). What stops that from being
+    // a live takeover is that the gate below is not the only control: the grants restart at default-deny,
+    // so the new code gets no `network`, no egress allowlist and no host capability until an admin
+    // approves each one — it cannot exfiltrate what it inherits. Closing it properly means binding the
+    // preserved data/ to the origin that wrote it, which uninstall deliberately forgets today (so a
+    // manual upload cannot inherit a catalog provenance); that trade-off is a change of its own, not a
+    // line in this one. Operators who do not want the adoption at all: uninstall with `dropData: true`.
     if (!fs.existsSync(path.join(installedDir, 'manifest.json'))) {
         return installPluginFromZip(zipPath, originalName, { expectedSlug: slug, holdsPluginLock: true, origin: opts.origin });
     }
@@ -1357,61 +1368,78 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     if (!validateSlug(req.params.slug as string)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const slug = req.params.slug;
+    const slug = req.params.slug as string;
 
-    // Default-deny grants: when an admin activates a plugin (having seen its requested permissions in the
-    // activation dialog), grant exactly what its manifest DECLARES — but ONLY if it has no grant record
-    // yet, so a later REVOKE via the per-permission switches survives a re-activation. The admin can
-    // refine grants anytime in /admin/plugins.
+    // Serialize against install/update/delete of the SAME slug — the identical lock those take, so the
+    // four mutating operations are now mutually exclusive rather than three-of-four.
     //
-    // Resolve the declared set BEFORE activation (so we can spawn with the grants), but only PERSIST it
-    // AFTER activation SUCCEEDS — a plugin that fails its AST scan / test gate must not leave behind a
-    // persisted grant record. To make init see the grants, seed them in-memory first, then either
-    // persist-on-success or roll back the in-memory seed on failure.
-    const { getGrants, setGrants, _setGrantsInMemory } = require('../core/plugin-permissions');
-    let seededDeclared: string[] | null = null;
-    const hadNoGrants = getGrants(slug).length === 0;
-    if (hadNoGrants) {
-        try {
-            const all = await getAllPlugins();
-            const p = all.find((x: any) => x.slug === slug);
-            const declared = Array.from(new Set(((p && p.permissions) || [])
-                .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
-                .filter(Boolean))) as string[];
-            if (declared.length) { _setGrantsInMemory(slug, declared); seededDeclared = declared; }
-        } catch (e: any) { console.warn(`[Permissions] grant-on-activate (seed) for '${slug}' failed:`, e && e.message); }
+    // Unserialized, activation and DELETE interleave destructively: loadIsolatedPlugin is an await, and a
+    // DELETE that lands while it is in flight passes its "is it active?" check (the flag is not written
+    // until afterwards), stops the freshly-registered child as an orphan and rmSyncs the directory —
+    // while this handler carries on and completes its `active_plugins` write, leaving the flag naming a
+    // slug with no code on disk. The same window lets an update stash the code out from under an
+    // activation that is about to spawn from it.
+    const lock = await acquirePluginOpLock(slug);
+    if (!lock.ok) {
+        return res.status(409).json({ message: pluginBusyError(slug), busy: true });
     }
-
-    let result;
     try {
-        result = await activatePlugin(req.params.slug);
-    } catch (e: any) {
-        // Activation failed (scan/test/init) — undo the in-memory grant seed so nothing is persisted and
-        // a failed-activation plugin holds no grants.
-        if (seededDeclared) { try { _setGrantsInMemory(slug, []); } catch { /* */ } }
-        // A STRUCTURED validation failure (AST scan) carries a fixable-vs-blocked split. Surface it as a
-        // 400 with `details` so the admin UI can show a rejection panel instead of one mangled string.
-        if (e && e.code === 'PLUGIN_VALIDATION_FAILED') {
-            return res.status(400).json({
-                message: e.message,
-                details: {
-                    missingPermissions: e.missingPermissions || [],
-                    dangerousCalls: e.dangerousCalls || [],
-                },
-            });
+        // Default-deny grants: when an admin activates a plugin (having seen its requested permissions in
+        // the activation dialog), grant exactly what its manifest DECLARES — but ONLY if it has no grant
+        // record yet, so a later REVOKE via the per-permission switches survives a re-activation. The admin
+        // can refine grants anytime in /admin/plugins.
+        //
+        // Resolve the declared set BEFORE activation (so we can spawn with the grants), but only PERSIST it
+        // AFTER activation SUCCEEDS — a plugin that fails its AST scan / test gate must not leave behind a
+        // persisted grant record. To make init see the grants, seed them in-memory first, then either
+        // persist-on-success or roll back the in-memory seed on failure.
+        const { getGrants, setGrants, _setGrantsInMemory } = require('../core/plugin-permissions');
+        let seededDeclared: string[] | null = null;
+        const hadNoGrants = getGrants(slug).length === 0;
+        if (hadNoGrants) {
+            try {
+                const all = await getAllPlugins();
+                const p = all.find((x: any) => x.slug === slug);
+                const declared = Array.from(new Set(((p && p.permissions) || [])
+                    .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
+                    .filter(Boolean))) as string[];
+                if (declared.length) { _setGrantsInMemory(slug, declared); seededDeclared = declared; }
+            } catch (e: any) { console.warn(`[Permissions] grant-on-activate (seed) for '${slug}' failed:`, e && e.message); }
         }
-        throw e;
+
+        let result;
+        try {
+            result = await activatePlugin(slug);
+        } catch (e: any) {
+            // Activation failed (scan/test/init) — undo the in-memory grant seed so nothing is persisted and
+            // a failed-activation plugin holds no grants.
+            if (seededDeclared) { try { _setGrantsInMemory(slug, []); } catch { /* */ } }
+            // A STRUCTURED validation failure (AST scan) carries a fixable-vs-blocked split. Surface it as a
+            // 400 with `details` so the admin UI can show a rejection panel instead of one mangled string.
+            if (e && e.code === 'PLUGIN_VALIDATION_FAILED') {
+                return res.status(400).json({
+                    message: e.message,
+                    details: {
+                        missingPermissions: e.missingPermissions || [],
+                        dangerousCalls: e.dangerousCalls || [],
+                    },
+                });
+            }
+            throw e;
+        }
+
+        // Activation succeeded — NOW persist the grants we seeded (idempotent; only when it had none before).
+        if (seededDeclared && hadNoGrants && getGrants(slug).length > 0) {
+            try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn(`[Permissions] grant-on-activate (persist) for '${slug}' failed:`, e && e.message); }
+        }
+
+        // Trigger frontend registry regeneration
+        regenerateRegistry();
+
+        res.json(result);
+    } finally {
+        await lock.release();
     }
-
-    // Activation succeeded — NOW persist the grants we seeded (idempotent; only when it had none before).
-    if (seededDeclared && hadNoGrants && getGrants(slug).length > 0) {
-        try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn(`[Permissions] grant-on-activate (persist) for '${slug}' failed:`, e && e.message); }
-    }
-
-    // Trigger frontend registry regeneration
-    regenerateRegistry();
-
-    res.json(result);
 }));
 
 /**
@@ -1739,12 +1767,26 @@ router.post('/:slug/deactivate', authenticate, isAdmin, asyncHandler(async (req:
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
 
-    const result = await deactivatePlugin(req.params.slug);
+    const slug = req.params.slug as string;
 
-    // Trigger frontend registry regeneration
-    regenerateRegistry();
+    // Same per-slug lock as activate/install/update/delete — see the activate route. A deactivation that
+    // runs alongside an update is the mirror image of the race described there: it unloads the isolate
+    // and rewrites `active_plugins` while the update is deciding, from those very facts, whether the
+    // plugin has to be brought back up.
+    const lock = await acquirePluginOpLock(slug);
+    if (!lock.ok) {
+        return res.status(409).json({ message: pluginBusyError(slug), busy: true });
+    }
+    try {
+        const result = await deactivatePlugin(slug);
 
-    res.json(result);
+        // Trigger frontend registry regeneration
+        regenerateRegistry();
+
+        res.json(result);
+    } finally {
+        await lock.release();
+    }
 }));
 
 /**
@@ -1824,27 +1866,43 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
             return res.status(400).json({ message: 'Cannot delete an active plugin. Deactivate it first.' });
         }
 
-        // 1b. …and check whether a child is actually RUNNING, which is a different fact.
+        // 1b. …then UNCONDITIONALLY stop whatever this slug still owns in the isolate layer.
         //
-        // `active_plugins` is a stored intention; the isolate registry is the running truth, and an
-        // activation that threw after registering its child leaves them disagreeing (see the guard in
-        // core/plugins.activatePlugin). In that state the check above passes — the flag does not list the
-        // plugin — and this handler would rmSync the directory of a live process that is still holding
-        // this plugin's hooks, routes and any claimed provider, leaving them wired to code that no longer
-        // exists on disk. "Deactivate it first" is not an option the admin has either: deactivatePlugin
-        // early-returns 'Plugin not active' for precisely this state, so the orphan can only be cleared
-        // here. Tear it down, then VERIFY — deleting the directory is irreversible, so if the child is
-        // somehow still registered we refuse rather than pull the files out from under it.
+        // Two distinct leftovers have to go, and only one of them is visible to isPluginRunning():
+        //
+        //   - a REGISTERED child. `active_plugins` is a stored intention; the isolate registry is the
+        //     running truth, and an activation that threw after registering its child leaves them
+        //     disagreeing (see core/plugins.activatePlugin). In that state the check above passes — the
+        //     flag does not list the plugin — and this handler would rmSync the directory of a live
+        //     process still holding this plugin's hooks, routes and any claimed provider, leaving them
+        //     wired to code that no longer exists on disk. "Deactivate it first" is not an option the
+        //     admin has either: deactivatePlugin early-returns 'Plugin not active' for precisely this
+        //     state, so the orphan can only be cleared here.
+        //
+        //   - a PENDING SUPERVISED RESTART. When a child crashes, its 'exit' handler removes it from the
+        //     isolate registry and schedules a backoff restart (superviseRestart, up to 60s). Throughout
+        //     that window isPluginRunning() is FALSE while a live timer is still holding the slug — and
+        //     that timer is cancelled ONLY inside unloadIsolatedPlugin. Making the call conditional on
+        //     isPluginRunning() therefore deleted the directory and left the timer armed: it fires on a
+        //     deleted entry file, retries up to 5 times and ends in a "keeps crashing and was stopped"
+        //     admin notice for a plugin that no longer exists. Worse, if the slug is REINSTALLED inside
+        //     that window the stale timer registers an isolate OUTSIDE activatePlugin — manufacturing
+        //     exactly the orphan the bullet above exists to clean up.
+        //
+        // unloadIsolatedPlugin does both (cancel the timer, tear the child down) and is idempotent, so
+        // it is called unconditionally — the same thing the update cycle's tearDownIsolate does. Then
+        // VERIFY: deleting the directory is irreversible, so if a child is somehow still registered
+        // afterwards we refuse rather than pull the files out from under it.
         if (isPluginRunning(slug)) {
             console.warn(`[plugin ${slug}] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.`);
-            try { require('../core/plugin-isolate').unloadIsolatedPlugin(slug); }
-            catch (e: any) { console.error(`[plugin ${slug}] delete: could not stop the orphaned isolate:`, e && e.message); }
-            if (isPluginRunning(slug)) {
-                return res.status(409).json({
-                    message: `'${slug}' still has a running process that could not be stopped. Restart the server, then delete it.`,
-                    stillRunning: true,
-                });
-            }
+        }
+        try { require('../core/plugin-isolate').unloadIsolatedPlugin(slug); }
+        catch (e: any) { console.error(`[plugin ${slug}] delete: could not stop the isolate / cancel its pending restart:`, e && e.message); }
+        if (isPluginRunning(slug)) {
+            return res.status(409).json({
+                message: `'${slug}' still has a running process that could not be stopped. Restart the server, then delete it.`,
+                stillRunning: true,
+            });
         }
 
         // 2. Locate directory (resolveSafePluginDir guarantees a proper child of PLUGINS_DIR)

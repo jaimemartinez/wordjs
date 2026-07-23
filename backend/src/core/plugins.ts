@@ -995,40 +995,63 @@ async function activatePlugin(slug: string) {
         // isolation below the SQL text-guard. No-op off Postgres; graceful if the pool user lacks CREATEROLE.
         try { await require('./plugin-db-isolation').provision(slug); } catch { /* best-effort — text-guard remains */ }
 
-        // NEVER spawn on top of a child that is already registered for this slug.
+        // BACKSTOP: never spawn on top of a child that is already registered for this slug.
         //
-        // This function loads the isolate FIRST and only then writes `active_plugins` and fires
-        // 'activated_plugin' — and both of those can throw (the option write takes a lease that throws by
-        // design when it cannot be won within 15s; a hook is arbitrary code). A throw there leaves the
-        // child REGISTERED while the flag says the plugin is not active: deactivatePlugin() then
-        // early-returns 'Plugin not active' and never touches it, so the orphan survives. The next
-        // activation would overwrite isolates[slug]; the orphan's 'exit' handler sees wasCurrent === false
-        // and SKIPS teardown, leaving its hooks, routes and any claimed provider (the system mail sender!)
-        // wired to a process nobody supervises.
-        //
-        // Guarding HERE rather than at each caller is deliberate: activatePlugin has four callers (the
-        // activate route, the update cycle's rollback and stash-preparation paths, and the boot/cross-node
-        // loaders), and only the one choke point they all funnel through can cover a caller added later.
-        // Mirrors loadOnePlugin below and theme-engine's theme-switch teardown.
+        // The orphan this defends against is created BELOW (see the commit block), so this is not what
+        // prevents it — it is what keeps an orphan produced OUTSIDE this function from being stacked on:
+        // a supervised auto-restart that fired after a crash (core/plugin-isolate.superviseRestart), or a
+        // cross-node loadOnePlugin. Without it the next activation overwrites isolates[slug] and the
+        // stranded child's 'exit' handler sees wasCurrent === false and SKIPS teardown, leaving its hooks,
+        // routes and any claimed provider (the system mail sender!) wired to a process nobody supervises.
         //
         // Cost on the normal path: nothing. unloadIsolatedPlugin is idempotent (no handle ⇒ no-op), and a
         // HEALTHY isolate cannot reach this line at all — the `isPluginActive` early-return above fires
-        // first whenever the flag is set, so the only state that gets here with a live child is the orphan.
+        // first whenever the flag is set, so the only state that gets here with a live child is an orphan.
         try { unloadIsolatedPlugin(slug); } catch (e) { /* nothing registered — the ordinary case */ }
 
         await loadIsolatedPlugin(slug, mainFile);
 
-        // Reorder middleware to ensure plugin routes work
-        fixMiddlewareOrder();
+        // ---- FROM HERE THE CHILD IS LIVE: commit, or take it back down ------------------------------
+        //
+        // loadIsolatedPlugin registered the isolate, so from this line on a throw that simply propagates
+        // leaves a child RUNNING while `active_plugins` does not list the plugin — and every remaining
+        // step can throw as an ORDINARY outcome, not just exceptionally:
+        //   - withActivePluginsLock throws BY DESIGN when the 'wordjs:active-plugins' lease cannot be won
+        //     within 15s (a peer node mid-activation is enough);
+        //   - doAction('activated_plugin') runs arbitrary third-party callbacks.
+        // That state is a dead end for the admin: deactivatePlugin() early-returns 'Plugin not active'
+        // (the flag is clear) and never touches the child, so nothing short of DELETE — which is itself
+        // gated on stopping it — can clear it. So the tail of the activation is transactional: any throw
+        // stops the child we just started, and undoes the flag if this call is the one that wrote it,
+        // before the error propagates. Either the plugin is activated, or nothing of it is left behind.
+        let flagWritten = false;
+        try {
+            // Reorder middleware to ensure plugin routes work
+            fixMiddlewareOrder();
 
-        // Add to active plugins (atomic read-modify-write under the dist-lock — see helper).
-        await withActivePluginsLock((active) => {
-            if (active.includes(slug)) return undefined; // already present, no write needed
-            return [...active, slug];
-        });
+            // Add to active plugins (atomic read-modify-write under the dist-lock — see helper).
+            await withActivePluginsLock((active) => {
+                if (active.includes(slug)) return undefined; // already present, no write needed
+                flagWritten = true;
+                return [...active, slug];
+            });
 
-        await doAction('activated_plugin', slug);
-        publishPluginChange(slug, 'activate'); // propagate to other nodes (no-op on single-node)
+            await doAction('activated_plugin', slug);
+        } catch (error) {
+            try { unloadIsolatedPlugin(slug); }
+            catch (e: any) { console.error(`[plugins] '${slug}': could not stop the child after a failed activation:`, e && e.message); }
+            if (flagWritten) {
+                // Only the flag WE added — if the slug was already listed, another writer owns it.
+                try {
+                    await withActivePluginsLock((active) => (active.includes(slug) ? active.filter(s => s !== slug) : undefined));
+                } catch (e: any) {
+                    console.error(`[plugins] '${slug}': activation failed AND the active_plugins flag could not be rolled back — the plugin is listed active but is not running:`, e && e.message);
+                }
+            }
+            throw error;
+        }
+
+        publishPluginChange(slug, 'activate'); // propagate to other nodes (no-op on single-node; never throws)
 
         return { success: true, message: `Plugin ${slug} activated` };
     } catch (error) {
