@@ -296,28 +296,35 @@ function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?
         const STYLE_ID = "wjs-editor-doc-contract";
         const css =
             ":root{height:100%!important;overflow-x:hidden!important;overflow-y:auto!important;transform:none!important;filter:none!important;perspective:none!important}" +
-            ":root>body{height:auto!important;min-height:100%!important;max-height:none!important;overflow:visible!important;transform:none!important;filter:none!important;perspective:none!important;margin:0!important}";
-        let done = false;
+            ":root>body{height:auto!important;min-height:100%!important;max-height:none!important;overflow:visible!important;transform:none!important;filter:none!important;perspective:none!important;margin:0!important}" +
+            // The AutoFrame mount (#frame-root / [data-puck-entry]) must GROW with content so the iframe's
+            // <html> stays the SINGLE scroll container. Puck ships `#frame-root{height:1px;min-height:100vh}`
+            // for exactly this, but the app's global `html,body{height:100%}` (mirrored into the canvas by
+            // AutoFrame's CopyHostStyles) collapses the mount to the viewport height — so a page taller than
+            // the canvas can't scroll and everything below the fold is clipped. Re-assert the grow model.
+            "#frame-root,[data-puck-entry]{height:auto!important;min-height:100vh!important;max-height:none!important}";
         const tick = () => {
             const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
             const doc = iframe?.contentDocument;
             if (!doc?.head) return;
-            if (!doc.getElementById(STYLE_ID)) {
-                const s = doc.createElement("style");
+            let s = doc.getElementById(STYLE_ID) as HTMLStyleElement | null;
+            if (!s) {
+                s = doc.createElement("style");
                 s.id = STYLE_ID;
                 s.textContent = css;
                 doc.head.appendChild(s);
+            } else if (s.textContent !== css) {
+                s.textContent = css;
             }
-            done = true;
         };
         tick();
-        // Poll so it re-asserts if the iframe reloads or AutoFrame re-clones the parent styles.
-        const t = setInterval(() => (done ? clearInterval(t) : tick()), 400);
-        const stop = setTimeout(() => clearInterval(t), 10000);
-        return () => {
-            clearInterval(t);
-            clearTimeout(stop);
-        };
+        // Re-assert for the WHOLE editor lifetime — NOT once. AutoFrame reloads the iframe (new srcDoc →
+        // new document) and CopyHostStyles re-clones the parent stylesheets on mutation; either drops the
+        // contract. The check is idempotent and dirt-cheap (one querySelector + id lookup), so keep it
+        // running until unmount instead of stopping after the first success (the old bug that let the
+        // contract silently vanish and took the canvas's scroll + overlay math with it).
+        const t = setInterval(tick, 700);
+        return () => clearInterval(t);
     }, []);
     // WYSIWYG: load the shared WordJS UI framework + the ACTIVE theme stylesheet into the preview iframe
     // so the canvas content (typography, tables, buttons, components, utilities) renders like the public
