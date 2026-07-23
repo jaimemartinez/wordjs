@@ -4,6 +4,18 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.9] - 2026-07-23
+
+### Fixed — TLS certificates (Let's Encrypt / ACME)
+- **No certificate could ever be issued — by either validation method.** The final step handed
+  acme-client a hand-made `{ url }` stub instead of the order the CA issued. acme-client requires
+  `order.finalize` (the URL the CA returns when the order is created) and refuses without it, so every
+  request ended in *"Unable to finalize order, URL not found"*. `createOrder` had the CA's full order
+  object and kept only its `url`, discarding `finalize` before it could be used. HTTP-01 failed
+  identically; it simply went unreported because the flow rarely got that far. Both paths now re-read
+  the order from its URL and finalize that, which also picks up the order's current state — relevant to
+  the two-step DNS flow, where minutes or hours pass between starting and finishing.
+
 ## [1.12.8] - 2026-07-23
 
 ### Fixed — login lockouts
