@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.3',
+    version: '2.1.4',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -377,6 +377,36 @@ const SPF_MAX_MX_RECORDS = 10;
 const SPF_MAX_DEPTH = 10;
 
 /**
+ * Split an RFC 7208 §5.3/§5.4 `dual-cidr-length` suffix off an `a` / `mx` term.
+ *
+ *   dual-cidr-length = [ "/" ip4-cidr-length ] [ "//" ip6-cidr-length ]
+ *
+ * so all of `a`, `a/24`, `a//64`, `a/24//64`, `a:host/24`, `mx:host//64` are legal. The term splitter
+ * only cut on ':' and '=', so the prefix stayed GLUED to whatever it followed and both spellings were
+ * wrong in a way that could reject legitimate mail:
+ *   - "a/24"      → name became the literal "a/24", matched no known mechanism, was silently IGNORED,
+ *                   and evaluation fell through to the record's `-all` → 'fail' → 550.
+ *   - "a:host/24" → we asked the resolver for the literal host "host/24", which answers EBADNAME. That
+ *                   is not ENODATA/ENOTFOUND/NXDOMAIN, so it counted as a TEMPORARY failure → 451.
+ * Same bug, two different wrong answers, and neither of them is "does this /24 contain the sender".
+ *
+ * Strips from the RIGHT (the "//" form must be consumed before the "/" form) and returns the leftover
+ * text plus the two prefix lengths (null = absent → treat the address as an exact match).
+ * NOTE: only ever applied to `a`/`mx`. For ip4:/ip6: the "/len" is part of the VALUE (an actual CIDR
+ * that ipInCidr consumes) and must stay attached.
+ */
+function splitDualCidr(text) {
+    let rest = String(text == null ? '' : text);
+    let v4 = null;
+    let v6 = null;
+    let m = /\/\/(\d{1,3})$/.exec(rest);
+    if (m) { v6 = parseInt(m[1], 10); rest = rest.slice(0, m.index); }
+    m = /\/(\d{1,3})$/.exec(rest);
+    if (m) { v4 = parseInt(m[1], 10); rest = rest.slice(0, m.index); }
+    return { rest, v4, v6 };
+}
+
+/**
  * Real inbound SPF evaluation.
  *
  * We fetch the domain's TXT records ourselves (through the HOST DNS bridge) and evaluate the v=spf1
@@ -436,8 +466,31 @@ async function evaluateSPF(domain, ip, depth = 0, budget = { lookups: 0 }) {
         const mechanism = '+-~?'.includes(term[0]) ? term.slice(1) : term;
         // Split on the first ':' or '=' into mechanism name and its value (a:host, ip4:cidr, include:dom).
         const sepMatch = mechanism.match(/[:=]/);
-        const name = sepMatch ? mechanism.slice(0, sepMatch.index) : mechanism;
-        const value = sepMatch ? mechanism.slice(sepMatch.index + 1) : null;
+        let name = sepMatch ? mechanism.slice(0, sepMatch.index) : mechanism;
+        let value = sepMatch ? mechanism.slice(sepMatch.index + 1) : null;
+
+        // RFC 7208 §5.3/§5.4: `a` and `mx` may carry a dual-cidr-length, which the ':' / '=' split above
+        // leaves glued either to the NAME (bare "a/24", no ':' at all) or to the VALUE ("a:host/24").
+        // Peel it off both places; see splitDualCidr for what each spelling used to do wrong.
+        let cidr4 = null;
+        let cidr6 = null;
+        const bare = splitDualCidr(name);
+        if (bare.rest === 'a' || bare.rest === 'mx') { name = bare.rest; cidr4 = bare.v4; cidr6 = bare.v6; }
+        if ((name === 'a' || name === 'mx') && value !== null) {
+            const spec = splitDualCidr(value);
+            value = spec.rest || null;
+            if (spec.v4 !== null) cidr4 = spec.v4;
+            if (spec.v6 !== null) cidr6 = spec.v6;
+        }
+        // A prefix wider than the address family is a SYNTAX error in the sender's record (RFC 7208
+        // §5.3) → permerror. Silently clamping it would manufacture a non-match that a trailing -all
+        // then turns into a 550 for mail the policy never meant to reject.
+        if ((cidr4 !== null && cidr4 > 32) || (cidr6 !== null && cidr6 > 128)) return 'permerror';
+
+        // Address test for a / mx: honour the prefix of the family we are actually evaluating (the
+        // resolver only ever returns that family — see spfResolveAddrs). No prefix = exact address.
+        const cidrLen = net.isIPv6(ip) ? cidr6 : cidr4;
+        const addrMatches = (a) => ipInCidr(ip, cidrLen === null ? a : `${a}/${cidrLen}`);
 
         // MODIFIERS (name=value) are not mechanisms: they never match and are applied only AFTER the
         // whole mechanism list has been scanned (RFC 7208 §6). Just record them here.
@@ -454,9 +507,10 @@ async function evaluateSPF(domain, ip, depth = 0, budget = { lookups: 0 }) {
             if (overBudget()) return 'permerror';
             const r = await spfResolveAddrs(value || domain, ip);
             temp = r.temp;
-            // Compare NUMERICALLY via ipInCidr (a bare address = /32 or /128): a textual `includes()`
-            // misses the many equivalent spellings of one IPv6 address (2001:db8::1 vs 2001:0db8:0:0:0:0:0:1).
-            matched = !temp && r.addrs.some(a => ipInCidr(ip, a));
+            // Compare NUMERICALLY via ipInCidr (a bare address = /32 or /128, or the term's own
+            // dual-cidr prefix): a textual `includes()` misses the many equivalent spellings of one
+            // IPv6 address (2001:db8::1 vs 2001:0db8:0:0:0:0:0:1).
+            matched = !temp && r.addrs.some(addrMatches);
         } else if (name === 'mx') {
             if (overBudget()) return 'permerror';
             const host = value || domain;
@@ -473,7 +527,7 @@ async function evaluateSPF(domain, ip, depth = 0, budget = { lookups: 0 }) {
             for (const rec of mx) {
                 const r = await spfResolveAddrs(rec.exchange, ip);
                 if (r.temp) { temp = true; continue; }
-                if (r.addrs.some(a => ipInCidr(ip, a))) { matched = true; temp = false; break; }
+                if (r.addrs.some(addrMatches)) { matched = true; temp = false; break; }
             }
         } else if (name === 'include' && value) {
             if (overBudget()) return 'permerror';
@@ -529,6 +583,99 @@ function qualifierToResult(q) {
     if (q === '-') return 'fail';
     if (q === '~') return 'softfail';
     return 'neutral'; // '?'
+}
+
+/**
+ * Map an SPF verdict + the operator's preference to an SMTP action. PURE — no I/O — so the policy is
+ * one readable table instead of a chain of early returns whose ORDER silently decided things.
+ *
+ * `mail_security_spf_reject = '0'` is the operator saying "do not turn SPF into a refusal, tag and let
+ * me filter". It used to gate ONLY the fail/softfail 550, because the temperror branch ran BEFORE the
+ * option was ever read — so a tag-only site still had inbound mail DEFERRED with 451 whenever a
+ * resolver hiccup anywhere inside an a/mx/include made a domain unevaluable. A 451 is not a rejection,
+ * but it is still SPF refusing the message: the sender queues it, retries for days and eventually
+ * bounces it. That is precisely the outcome the operator opted out of, so the override now gates EVERY
+ * SPF-driven refusal — temperror included.
+ *
+ * The verdicts and why each lands where it does:
+ *   pass / neutral / none  — nothing to refuse (`none` = the domain publishes no policy at all).
+ *   permerror              — the sender's published policy is UNEVALUABLE (malformed, ambiguous, or over
+ *                            the RFC 7208 §4.6.4 lookup budget). §8.6 leaves it to local policy and it
+ *                            is NOT a statement that the IP is unauthorized, so we accept in BOTH modes
+ *                            rather than turn someone else's admin error into a 550. It is not silently
+ *                            discarded: the verdict is recorded in the Received-SPF header stored with
+ *                            the message (see buildReceivedSpf).
+ *   temperror              — we could not evaluate RIGHT NOW → 451 so the sender retries; never 550.
+ *   fail / softfail        — the domain owner says this IP is not authorized → 550.
+ *
+ * @returns {{code: 0|451|550, tagged: boolean}} code 0 = accept.
+ */
+function spfAction(result, rejectEnabled) {
+    if (result === 'pass' || result === 'neutral' || result === 'none') return { code: 0, tagged: false };
+    if (result === 'permerror') return { code: 0, tagged: true };
+    // temperror / fail / softfail are refusals — unless the operator asked for tag-only.
+    if (!rejectEnabled) return { code: 0, tagged: true };
+    if (result === 'temperror') return { code: 451, tagged: true };
+    return { code: 550, tagged: true };
+}
+
+/**
+ * Build the RFC 7208 §9.1 Received-SPF header for a checked message.
+ *
+ * WHY THIS EXISTS: onMailFrom used to stash `session.spfheader` and `session.spfResult` and NOTHING
+ * ever read them — no header was attached, nothing was persisted, and the verdict was discarded the
+ * moment the transaction ended. That made "we accept permerror" indefensible: an over-budget record
+ * (say 12 includes) went from a 550 to an accept with no trace anywhere. onData now stores this string
+ * on the message row, so an accepted-but-not-clean verdict is visible in the mailbox and to anything
+ * that reads the row.
+ *
+ *   header-field = "Received-SPF:" [CFWS] result FWS [comment FWS] [ key-value-list ] CRLF
+ *
+ * Every interpolated value except `result` is remote-controlled (envelope sender, HELO), so fold each
+ * one through a strict scrub first: no CR/LF (this string is a header — it must never be able to
+ * introduce a second one), no other control characters, and a hard length cap.
+ */
+function sanitizeHeaderValue(v, max = 255) {
+    return String(v == null ? '' : v)
+        // CR/LF and every other C0/DEL control char -> a single space. This is the header-injection
+        // boundary: without it an envelope sender carrying a bare CRLF could forge a second header.
+        // eslint-disable-next-line no-control-regex
+        .replace(/[\x00-\x1f\x7f]+/g, ' ')
+        // Structural characters of the header grammar itself (comment parens, the key-value
+        // separator, the angle brackets we wrap envelope-from in).
+        .replace(/[()<>;]/g, '')
+        // A header is ASCII (RFC 5322); anything else would need RFC 2047 encoding, and a raw non-ASCII
+        // byte from a remote envelope has no business in a field we generate.
+        .replace(/[^\x20-\x7e]/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, max);
+}
+
+function buildReceivedSpf(result, { domain, mailFrom, ip, helo, receiver } = {}) {
+    const res = ['pass', 'fail', 'softfail', 'neutral', 'none', 'temperror', 'permerror'].includes(result)
+        ? result
+        : 'none';
+    const rcv = sanitizeHeaderValue(receiver || 'wordjs', 128) || 'wordjs';
+    const dom = sanitizeHeaderValue(domain, 253);
+    const from = sanitizeHeaderValue(mailFrom, 320);
+    const cip = sanitizeHeaderValue(ip, 45);
+    const hel = sanitizeHeaderValue(helo, 253);
+
+    const EXPLAIN = {
+        pass: `domain of ${from || 'sender'} designates ${cip || 'the client'} as permitted sender`,
+        fail: `domain of ${from || 'sender'} does not designate ${cip || 'the client'} as permitted sender`,
+        softfail: `domain of transitioning ${from || 'sender'} does not designate ${cip || 'the client'} as permitted sender`,
+        neutral: `${dom || 'sender domain'} is neither permitted nor denied by domain of ${from || 'sender'}`,
+        none: `${dom || 'sender domain'} does not designate permitted sender hosts`,
+        temperror: `error in processing during lookup of ${dom || 'sender domain'}: try again later`,
+        permerror: `permanent error in processing domain of ${dom || 'sender domain'}: unevaluable SPF record`
+    };
+
+    const kv = [`client-ip=${cip}`, `envelope-from=<${from}>`];
+    if (hel) kv.push(`helo=${hel}`);
+    kv.push(`receiver=${rcv}`, 'identity=mailfrom');
+    return `Received-SPF: ${res} (${rcv}: ${EXPLAIN[res]}) ${kv.join('; ')};`;
 }
 
 /**
@@ -755,61 +902,68 @@ async function initSMTPServer() {
         },
 
         // 2. SPF Protection — real check against the connecting IP and MAIL FROM domain.
-        // Default ON, FAIL CLOSED for external senders: reject on explicit SPF fail/softfail or on a
+        // Default ON, FAIL CLOSED for external senders: reject on explicit SPF fail/softfail, defer on a
         // lookup error. 'pass'/'neutral'/'none' (no SPF record) are accepted to avoid false rejects.
+        // WHAT each verdict costs the sender lives in ONE place — spfAction() — deliberately, because
+        // the previous chain of early returns let the temperror 451 fire BEFORE the operator's
+        // reject-override was even read (see spfAction).
         onMailFrom(address, session, callback) {
             // Loopback / authenticated senders are our own relay path — never SPF-gate them.
             if (isTrustedSmtpSession(session)) return callback();
 
-            // Default ON: only an explicit operator override ('0') disables the check.
-            getOption('mail_security_spf_enabled', '1').then(async (enabled) => {
-                if (enabled === '0') return callback();
+            // Default ON: only an explicit operator override ('0') disables the check. Both options are
+            // read in ONE parallel wave: the reject preference must be known BEFORE we decide anything,
+            // and batching keeps that off the per-message latency path.
+            getOptionsBatch({ mail_security_spf_enabled: '1', mail_security_spf_reject: '1' }).then(async (opts) => {
+                if (opts.mail_security_spf_enabled === '0') return callback();
+                const rejectEnabled = opts.mail_security_spf_reject !== '0';
 
                 const ip = bareIp(session.remoteAddress); // '::ffff:1.2.3.4' → '1.2.3.4' so SPF matches
                 const mailFrom = (address && address.address) || '';
                 const domain = mailFrom.split('@')[1] || '';
 
-                // FAIL CLOSED: a DNS/validator error during evaluation must reject, not silently admit.
                 let result = 'none';
-                let evalError = false;
                 try {
                     if (domain) result = await evaluateSPF(domain, ip);
                 } catch (e) {
-                    console.warn(`[Security][SPF] evaluation error for ${domain} (${ip}): ${e.message} — rejecting (fail closed)`);
-                    evalError = true;
+                    // An UNEXPECTED throw (never mind a DNS answer) is exactly "we could not evaluate
+                    // right now" — i.e. temperror. Mapping it here instead of carrying a separate
+                    // evalError flag keeps ONE verdict driving both the action and the recorded header
+                    // (the old code left result='none', so the header claimed 'none' while we 451'd).
+                    console.warn(`[Security][SPF] evaluation error for ${domain} (${ip}): ${e.message} — treating as temperror`);
+                    result = 'temperror';
                 }
 
-                // Set the Received-SPF header for downstream storage (RFC 7208 §9.1 shape).
-                session.spfheader = `Received-SPF: ${result} (wordjs: ${domain || 'unknown'} via ${ip})`;
+                // Record the verdict on the session so onData can PERSIST it with the message. This is
+                // what makes accepting 'permerror' defensible: the verdict survives the transaction.
                 session.spfResult = result;
+                session.spfHeader = buildReceivedSpf(result, {
+                    domain, mailFrom, ip,
+                    helo: session.clientHostname,
+                    // `receiver` is US. Use the siteDomain this listener was started with (already in
+                    // closure scope) rather than getHeloName(), which would cost up to two extra option
+                    // RPCs on the per-message inbound path for a purely cosmetic field.
+                    receiver: siteDomain
+                });
 
-                // TEMPORARY inability to evaluate (DNS timeout/SERVFAIL anywhere in the record, incl.
-                // inside an include:/a/mx) → 451, NEVER 550. Rejecting permanently would make the
-                // sending MTA give up for good over a transient resolver hiccup.
-                if (evalError || result === 'temperror') {
+                const action = spfAction(result, rejectEnabled);
+                if (action.code === 451) {
+                    console.warn(`[Security][SPF] ${result} for ${mailFrom || 'sender'} from ${ip} — deferring (451)`);
                     return callback(smtpError(451, 'Temporary failure: unable to verify SPF for ' + (domain || 'sender') + ', try again later'));
                 }
-
-                // Reject explicit SPF failures by default. Operator can downgrade to tag-only with
-                // mail_security_spf_reject='0' (override) if they prefer to accept and rely on tagging.
-                if (result === 'fail' || result === 'softfail') {
-                    const rejectRaw = await getOption('mail_security_spf_reject', '1');
-                    if (rejectRaw !== '0') {
-                        console.warn(`[Security][SPF] Rejecting ${mailFrom} from ${ip} (SPF ${result})`);
-                        return callback(smtpError(550, 'SPF check failed: sending IP not authorized for ' + domain));
-                    }
-                    console.warn(`[Security][SPF] SPF ${result} for ${mailFrom} from ${ip} — tagged only (reject overridden off)`);
+                if (action.code === 550) {
+                    console.warn(`[Security][SPF] Rejecting ${mailFrom} from ${ip} (SPF ${result})`);
+                    return callback(smtpError(550, 'SPF check failed: sending IP not authorized for ' + domain));
                 }
-                // 'pass' / 'neutral' / 'none' (domains without an SPF record) and 'permerror' are
-                // accepted; the result is recorded in Received-SPF either way. 'permerror' means the
-                // published policy is unevaluable — malformed, self-referential, or over the RFC 7208
-                // §4.6.4 DNS-lookup budget — which is NOT the same as "this IP is unauthorized", so
-                // §8.6 leaves it to local policy and we do not turn the sender's admin error into a 550.
-                // The budget has already done its real job by then: it BOUNDED the lookups we made.
+                if (action.tagged) {
+                    console.warn(`[Security][SPF] ${result} for ${mailFrom || 'sender'} from ${ip} — accepted and tagged` +
+                        (rejectEnabled ? '' : ' (reject overridden off)'));
+                }
                 callback();
             }).catch((e) => {
-                // The option lookup itself failed — fail closed for the external sender.
-                console.warn(`[Security][SPF] option lookup error: ${e.message} — rejecting (fail closed)`);
+                // The option lookup itself failed — we do not know the operator's preference, so we
+                // cannot honour tag-only. Fail closed with a 4xx (retryable), never a 5xx.
+                console.warn(`[Security][SPF] option lookup error: ${e.message} — deferring (fail closed)`);
                 callback(smtpError(451, 'Temporary failure, try again later'));
             });
         },
@@ -905,6 +1059,12 @@ async function initSMTPServer() {
                                 bodyText: parsed.text || '',
                                 bodyHtml: parsed.html || '',
                                 rawContent: parsed.textAsHtml || parsed.text || '',
+                                // The SPF verdict for THIS transaction, as the RFC 7208 §9.1 header
+                                // (built in onMailFrom). Empty when SPF was skipped — trusted/loopback
+                                // session or the check disabled. Persisting it is what keeps an
+                                // ACCEPTED-but-not-clean verdict (permerror, or fail/softfail on a
+                                // tag-only site) visible instead of silently discarded.
+                                receivedSpf: session?.spfHeader || '',
                                 threadId: inboundThreadId,
                                 attachments: parsed.attachments,
                                 userId: owner ? owner.id : 0,
@@ -1312,6 +1472,22 @@ async function sendMail(data) {
         //     literal or 'localhost' (see isPublicSendingDomain), so the "aligned" address we would
         //     synthesize — postmaster@192.168.1.50 — is undeliverable and unverifiable. Keeping the
         //     original From is strictly better.
+        //
+        // DELIBERATE (reviewed): sendingDomain is the DKIM domain if one is set, else the RAW site
+        // hostname — INCLUDING a 'www.' prefix. So a site at https://www.acme.com with no DKIM key
+        // rewrites From: admin@acme.com to postmaster@www.acme.com, even though acme.com's own SPF may
+        // already cover us. We keep it, because the alternative is worse than the cosmetic cost:
+        //   - This is EXACTLY the domain the DNS-records page tells the operator to publish SPF, DKIM,
+        //     DMARC and MX on (it derives its `domain` the same way — dkimDomain || getSiteDomain()).
+        //     An operator who followed that page has records on www.acme.com and NOT necessarily on
+        //     acme.com, so postmaster@www.acme.com is the address we can actually authenticate for.
+        //   - Gating the rewrite on "a DKIM key is configured" would silently stop aligning for every
+        //     SPF-only install (SPF is published by hand from that same page; DKIM needs a key
+        //     generated in the UI), sending unauthenticated cross-domain From straight at DMARC
+        //     enforcers — the exact failure this rewrite exists to prevent.
+        //   - The escape hatch already exists and is one setting: mail_security_dkim_domain wins over
+        //     siteDomain here AND on the DNS-records page, so an operator who wants the bare apex sets
+        //     it to acme.com and both the rewrite target and the records to publish move together.
         const sendingDomain = String(dkimDomain || siteDomain || '').toLowerCase();
         const fromDomain = String(fromEmail.split('@')[1] || '').toLowerCase();
         let wireFrom = fromEmail;

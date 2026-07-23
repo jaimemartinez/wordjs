@@ -38,6 +38,25 @@ type Email = {
     last_error?: string;
     scheduled_at?: string;
     raw_content?: string;
+    // RFC 7208 §9.1 Received-SPF header recorded at MAIL FROM time (inbound only; '' when SPF was
+    // skipped or disabled). Surfaced so an ACCEPTED-but-not-clean verdict is visible to the user
+    // instead of being silently discarded.
+    received_spf?: string;
+};
+
+// Pull the bare verdict out of a stored "Received-SPF: <result> (...) k=v; ..." line.
+const spfVerdict = (header?: string): string => {
+    const m = /^Received-SPF:\s*([a-z]+)/i.exec(String(header || '').trim());
+    return m ? m[1].toLowerCase() : '';
+};
+// 'pass' is the silent happy path; 'none' just means the sender publishes no policy, which is far too
+// common to badge. Everything else is worth showing.
+const SPF_BADGE: Record<string, { label: string; cls: string; title: string }> = {
+    fail: { label: 'SPF fail', cls: 'bg-red-50 text-red-600 border-red-200', title: 'The sender domain says this server was NOT authorized to send this message.' },
+    softfail: { label: 'SPF softfail', cls: 'bg-orange-50 text-orange-600 border-orange-200', title: 'The sender domain does not authorize this server, but asked receivers not to reject yet.' },
+    neutral: { label: 'SPF neutral', cls: 'bg-slate-100 text-slate-500 border-slate-200', title: 'The sender domain explicitly takes no position on this server.' },
+    permerror: { label: 'SPF unevaluable', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: 'The sender published an SPF record we could not evaluate (malformed, ambiguous, or over the RFC 7208 DNS-lookup budget). The message was accepted, but its sender was NOT verified.' },
+    temperror: { label: 'SPF unverified', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: 'SPF could not be checked at delivery time (temporary DNS failure).' },
 };
 
 type MailLabel = { id: number; name: string; color: string; email_count?: number };
@@ -1427,6 +1446,22 @@ export default function MailServerAdmin() {
                                                 <i className="fa-solid fa-ban mr-1"></i>Spam
                                             </span>
                                         )}
+                                        {/* SPF verdict recorded at MAIL FROM time. Only shown when it is
+                                            something the reader should know — a 'pass' (or a domain with no
+                                            policy at all) stays silent. The full RFC 7208 header is the
+                                            tooltip so the raw evidence is one hover away. */}
+                                        {(() => {
+                                            const badge = SPF_BADGE[spfVerdict(selectedEmail.received_spf)];
+                                            if (!badge) return null;
+                                            return (
+                                                <span
+                                                    className={`text-[10px] font-bold px-2 py-0.5 rounded-full border uppercase tracking-wide ${badge.cls}`}
+                                                    title={`${badge.title}\n\n${selectedEmail.received_spf}`}
+                                                >
+                                                    <i className="fa-solid fa-shield-halved mr-1"></i>{badge.label}
+                                                </span>
+                                            );
+                                        })()}
                                         {(selectedEmail.labels || []).map((l: any) => (
                                             <span
                                                 key={l.id}
