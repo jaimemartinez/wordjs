@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.6',
+    version: '2.1.7',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -785,8 +785,22 @@ function cidrMatch(ip, cidr, family = null) {
         if (!asV6) {
             return addr.split('.').reduce((acc, o) => (acc << 8n) + BigInt(parseInt(o, 10)), 0n);
         }
+        // RFC 4291 §2.2(3): the low 32 bits of an IPv6 literal may be written as a dotted quad, so
+        // "::ffff:203.0.113.9", "64:ff9b::192.0.2.1" and "2001:db8::192.0.2.1" are all legal addresses
+        // a domain may publish in an ip6: term. That tail is TWO hextets, and the reducer below reads
+        // each group with parseInt(p, 16), which STOPS at the '.' — "192.0.2.1" comes back as 0x192,
+        // and the fill count is short by one besides. There is no syntax error to catch (the term IS a
+        // well-formed ip6-network), so the record silently evaluates against a DIFFERENT network than
+        // the one it publishes: the sender it names gets -all'd, and whichever address the truncation
+        // lands on gets that authorisation instead. Rewrite the tail to hex before expanding.
+        // Both callers already passed net.isIPv6, so the octets are known to be in range.
+        const quad = /^(.*:)(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(addr);
+        const text = quad
+            ? quad[1] + (((+quad[2] << 8) | +quad[3]).toString(16)) + ':' + (((+quad[4] << 8) | +quad[5]).toString(16))
+            : addr;
+
         // Expand IPv6 to 8 hextets.
-        let [head, tail] = addr.split('::');
+        let [head, tail] = text.split('::');
         const h = head ? head.split(':') : [];
         const t = tail !== undefined ? (tail ? tail.split(':') : []) : null;
         let parts2;

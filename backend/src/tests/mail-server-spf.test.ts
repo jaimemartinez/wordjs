@@ -432,6 +432,14 @@ test('a malformed or out-of-range ip4: CIDR is permerror, never a silent non-mat
         'v=spf1 ip4:203.0.113.0/999 -all',
         'v=spf1 ip4:203.0.113.0/abc -all',     // parseInt would have said NaN -> false
         'v=spf1 ip4:203.0.113.0/ -all',        // bare trailing slash
+        // The prefix gate has to validate the TEXT, not just parse it: every case below is one that
+        // parseInt(x, 10) turns into a PLAUSIBLE number instead of NaN, so an isNaN+range check waves it
+        // through and silently evaluates a network the record never wrote. See the forged-pass test below.
+        'v=spf1 ip4:203.0.113.0/0x1f -all',    // alternate radix -> parseInt stops at 'x' -> 0 -> /0
+        'v=spf1 ip4:203.0.113.0/1e2 -all',     // exponent notation -> 1 -> /1
+        'v=spf1 ip4:203.0.113.0/24abc -all',   // trailing garbage -> 24
+        'v=spf1 ip4:203.0.113.0/+24 -all',     // a sign is not in the §12 ABNF -> 24
+        'v=spf1 ip4:203.0.113.0/24.9 -all',    // a fraction is not either -> 24
         'v=spf1 ip4:203.0.113.0//24 -all',     // the dual-cidr spelling is not legal on ip4:
         // …and the extra slash must be judged on its own, not left to the digit check below: this one
         // has a perfectly well-formed "/24" in second position, so dropping the slash-count guard
@@ -451,6 +459,13 @@ test('a malformed or out-of-range ip6: CIDR is permerror, never a silent non-mat
         'v=spf1 ip6:2001:db8::/129 -all',
         'v=spf1 ip6:2001:db8::/abc -all',
         'v=spf1 ip6:2001:db8::/ -all',
+        // The ip4 twins of these are in the test above, and they matter more here: the v6 family is 128
+        // bits wide, so parseInt's leftovers ("0x40" -> 0) widen the term by a great deal more.
+        'v=spf1 ip6:2001:db8::/0x40 -all',
+        'v=spf1 ip6:2001:db8::/1e2 -all',
+        'v=spf1 ip6:2001:db8::/64abc -all',
+        'v=spf1 ip6:2001:db8::/+64 -all',
+        'v=spf1 ip6:2001:db8::/64.9 -all',
         'v=spf1 ip6:2001:db8:://64 -all',
         'v=spf1 ip6:2001:db8::/64/64 -all',    // see the ip4 twin above: a second, VALID-looking prefix
         'v=spf1 ip6:not-an-address -all',
@@ -463,6 +478,102 @@ test('a malformed or out-of-range ip6: CIDR is permerror, never a silent non-mat
     // never have matched anyway — the record is unevaluable, so the verdict cannot be 'fail'.
     assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::/129 -all', '203.0.113.9'), 'permerror', 'v4 sender, broken ip6: term');
     assert.strictEqual(await evaluate('v=spf1 ip4:203.0.113.0/33 -all', '2001:db8::9'), 'permerror', 'v6 sender, broken ip4: term');
+});
+
+test('a non-decimal prefix cannot be re-parsed into a WIDER network (a forged pass)', async () => {
+    // WHY THE PREFIX GATE VALIDATES THE TEXT RATHER THAN JUST PARSING IT. parseInt(x, 10) does not
+    // reject what it cannot use — it stops there and returns what it already has. So "0x1f" is not NaN,
+    // it is 0; "1e2" is 1; "24abc" is 24. An `isNaN(bits) || bits > totalBits` gate sees a perfectly
+    // legal prefix in every one of those and cidrMatch then builds the mask for a network the record
+    // never wrote — /0 for "0x1f", i.e. EVERY address on the internet.
+    //
+    // The harm is not a refusal (both verdicts below are accepted at SMTP time). It is that
+    // "v=spf1 ip4:203.0.113.0/0x1f -all" would hand a 'pass' — the verdict DMARC alignment and every
+    // downstream filter read as proof the domain authorised this sender — to an ARBITRARY unauthorised
+    // one, off a record whose author authorised a single /24 and mistyped the length. §5.6 says an
+    // unevaluable term is a permerror, and permerror is the only answer here that is not a forgery.
+    //
+    // The /abc, bare-/ and /999 cases in the tests above do NOT cover this: those are the shapes an
+    // isNaN+range check also happens to catch, so on their own they leave the weaker gate green.
+    const forgeries: Array<[string, string]> = [
+        ['v=spf1 ip4:203.0.113.0/0x1f -all', '198.51.100.7'],  // -> 0  -> /0  -> matches everything
+        ['v=spf1 ip4:203.0.113.0/1e2 -all', '198.51.100.7'],   // -> 1  -> /1  -> half of IPv4 space
+        ['v=spf1 ip4:203.0.113.0/24abc -all', '203.0.113.9'],  // -> 24 -> the term evaluates as written
+        ['v=spf1 ip4:203.0.113.0/+24 -all', '203.0.113.9'],
+        ['v=spf1 ip6:2001:db8::/0x40 -all', '2606:4700::1111'],
+        ['v=spf1 ip6:2001:db8::/1e2 -all', '2606:4700::1111'],
+        ['v=spf1 ip6:2001:db8::/64abc -all', '2001:db8::9']
+    ];
+    for (const [record, sender] of forgeries) {
+        const verdict = await evaluate(record, sender);
+        assert.notStrictEqual(verdict, 'pass', `${record} must never authorise ${sender}`);
+        assert.strictEqual(verdict, 'permerror', record);
+    }
+
+    // Through the REAL handler, since 'pass' vs 'permerror' is the entire difference: the record we
+    // stamp on the message has to say the policy was unevaluable, not that we checked and it held.
+    const forged = await deliver({ record: 'v=spf1 ip4:203.0.113.0/0x1f -all', ip: '198.51.100.7' });
+    assert.strictEqual(verdictOf(forged.session), 'permerror', 'an unevaluable record must not be recorded as a pass');
+    assert.strictEqual(forged.code, 0, 'and it still must not cost the sender their mail');
+});
+
+test('an ip6: network written with a dotted-quad tail is parsed as the address it IS', async () => {
+    // RFC 4291 §2.2(3): the low 32 bits of an IPv6 literal may be written as a dotted quad, and all of
+    // "::ffff:203.0.113.9", "64:ff9b::192.0.2.1" and "2001:db8::192.0.2.1" are legal addresses a domain
+    // is free to publish in an ip6: term. The hextet expander reads each group with parseInt(p, 16),
+    // which STOPS at the '.': "192.0.2.1" comes back as 0x192. Nothing raises a syntax error — the term
+    // is a well-formed ip6-network, so there is no permerror to notice — the record simply evaluates
+    // against a DIFFERENT network than the one it publishes, in whichever direction the digits fall.
+    //
+    // Both directions are covered below because both are real harm: the authorised sender that the
+    // record names is silently 550-ed, and some unrelated address the record never mentioned is handed
+    // a 'pass'.
+    assert.strictEqual(
+        SPF.cidrMatch('2001:db8::c000:201', '2001:db8::192.0.2.1', 6), true,
+        'the dotted and hex spellings of ONE address must compare equal'
+    );
+    assert.strictEqual(
+        SPF.cidrMatch('2001:db8::192', '2001:db8::192.0.2.1', 6), false,
+        'and must not collapse onto the address parseInt happens to stop at'
+    );
+    // The quad can also sit directly behind the "::" (RFC 4291 §2.5.5.1), which is the other shape the
+    // rewrite has to leave expandable — getting the zero-fill count wrong here shifts the whole address.
+    assert.strictEqual(
+        SPF.cidrMatch('::c000:201', '::192.0.2.1', 6), true,
+        'a quad directly behind the "::" expands to the same address'
+    );
+
+    // Under-enforcement: the sender the record explicitly authorises.
+    assert.strictEqual(
+        await evaluate('v=spf1 ip6:2001:db8::192.0.2.1 -all', '2001:db8::c000:201'), 'pass',
+        'the authorised sender is the one written in the record'
+    );
+    assert.strictEqual(
+        await evaluate('v=spf1 ip6:64:ff9b::203.0.113.9/128 -all', '64:ff9b::cb00:7109'), 'pass',
+        'with an explicit prefix too'
+    );
+    // The record and the sender must be compared as ADDRESSES, not as strings: this is the same address
+    // in its two legal spellings. (Writing the sender in dotted form here too would prove nothing — both
+    // sides would be mis-parsed identically and the errors would cancel.)
+    assert.strictEqual(
+        await evaluate('v=spf1 ip6:::ffff:203.0.113.9 -all', '::ffff:cb00:7109'), 'pass',
+        'the IPv4-mapped spelling equals its hex spelling'
+    );
+
+    // Over-enforcement, the forged-pass half: 0x192 is where parseInt stops on "192.0.2.1", so a sender
+    // at 2001:db8::192 used to inherit an authorisation written for 2001:db8::c000:201.
+    assert.strictEqual(
+        await evaluate('v=spf1 ip6:2001:db8::192.0.2.1 -all', '2001:db8::192'), 'fail',
+        'an address the record never named must not inherit its authorisation'
+    );
+    assert.strictEqual(
+        await evaluate('v=spf1 ip6:64:ff9b::203.0.113.9/120 -all', '64:ff9b::203'), 'fail',
+        'and the same with a prefix'
+    );
+
+    // The negative control: a hex-only literal, which was never affected, still behaves exactly as before.
+    assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::/32 -all', '2001:db8:dead::1'), 'pass', 'hex-only network');
+    assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::/32 -all', '2001:db9::1'), 'fail', 'hex-only non-match');
 });
 
 test('a WELL-FORMED ip4:/ip6: term of the other family is an ordinary non-match', async () => {
