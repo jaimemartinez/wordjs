@@ -30,6 +30,17 @@ const crypto = require('crypto');
 // Unique identity for THIS process across the cluster (host:pid alone collides under containers).
 const HOLDER = `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString('hex')}`;
 
+// A lock NAME can carry request-derived data ('wordjs:plugin-op:<slug>'), so strip line breaks before
+// it reaches a log line — otherwise a crafted slug forges or splits entries in the operator's log.
+//
+// TWO single-constant replacements, each replacing with the empty string, is deliberate and must stay
+// that way: the log-injection analysis recognises a sanitizer SYNTACTICALLY, and the equivalent
+// `/\n|\r/g` is not matched (an alternation has no constant value), so every call site would still be
+// reported as an unsanitized log entry. Match the documented remediation shape, not an equivalent.
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
 function isPg(): boolean {
     try { return require('../config/database').getDbType().isPostgres === true; }
     catch { return false; }
@@ -139,7 +150,7 @@ async function acquireBlocking(
         }
         await sleep(pollMs);
     }
-    console.warn(`[dist-lock] '${name}' acquire timed out after ${timeoutMs}ms.`);
+    console.warn(`[dist-lock] '${logSafe(name)}' acquire timed out after ${logSafe(timeoutMs)}ms.`);
     return { held: false, release: async () => { } };
 }
 
