@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { pluginsApi, themesApi, Plugin, PluginPortConflict } from "@/lib/api";
 import { permMeta, PermissionRisk } from "@/lib/permissionMeta";
+import { reloadActivePlugins } from "@/lib/plugins";
 import { useMenu } from "@/contexts/MenuContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
@@ -198,6 +199,10 @@ export default function PluginsPage() {
                 await pluginsApi.deactivate(plugin.slug);
                 loadPlugins();
                 refreshMenus();
+                // The set of ACTIVE plugins just changed, and nothing here reloads the page — tell the
+                // runtime plugin loader, whose active-list memo would otherwise stay stale for the rest
+                // of the session (see lib/plugins.ts reloadActivePlugins).
+                reloadActivePlugins();
                 addToast(t('plugins.deactivated'), "success");
             } else {
                 // ALWAYS show modal for any activation now
@@ -221,6 +226,11 @@ export default function PluginsPage() {
             setPluginToActivate(null);
             loadPlugins();
             refreshMenus();
+            // Load the just-activated plugin's frontend hooks NOW: this page never reloads the document,
+            // so without it the loader replays an active-plugin list captured before the activation and
+            // the plugin's UI extensions (e.g. mail-server's mailbox toggle in the user form) stay
+            // invisible until the admin reloads the tab by hand.
+            reloadActivePlugins();
             addToast(t('plugins.activated'), "success");
             // Zero-config assist: if this plugin claims a system port (manifest claimPorts, e.g. mail
             // on 25) and a known distro MTA is squatting it, offer a one-click consensual fix instead

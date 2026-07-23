@@ -179,10 +179,39 @@ export function createRemotePluginComponent(
 // Active-plugin list (shared by every runtime loader below)
 // ============================================
 
-// Cached for the whole session: the block loader, the hooks loader and every editor mount ask for the
-// same list, and it only changes when an admin activates/deactivates a plugin (which reloads the page).
+// Memoized: the block loader, the hooks loader and every editor mount ask for the SAME list, so the hot
+// path costs one request, not one per caller. The list is not immutable for the session, though — an
+// admin activating or deactivating a plugin changes it, and does NOT reload the page while doing so
+// (admin/plugins/page.tsx's togglePlugin / confirmActivate only re-fetch into React state). That is what
+// invalidateActivePluginIds() below is for: the memo is dropped on that EVENT, never re-validated by
+// polling.
 // ONLY a SUCCESSFUL response is memoized — a failed attempt clears this back to null (see below).
 let activePromise: Promise<string[]> | null = null;
+
+/**
+ * Forget the memoized active-plugin list, so the NEXT fetchActivePluginIds() asks the backend again.
+ *
+ * Called from lib/plugins.ts' reloadActivePlugins(), which the admin plugins page runs right after a
+ * successful activate/deactivate (and which then re-runs the hook pass, so a newly activated plugin's UI
+ * extensions appear without a manual reload).
+ *
+ * Without it the memo taken BEFORE the activation was replayed for the rest of the session: the new
+ * plugin was missing from every later `ids` list, so neither its hooks nor its Puck blocks ever loaded —
+ * precisely the invisible-marketplace-plugin bug this runtime loader exists to eliminate, just moved from
+ * "the build never saw it" to "the cache never saw it".
+ *
+ * Cheap, and safe to call redundantly: it drops a cached VALUE, it does not cancel work. An attempt still
+ * in flight keeps running for whoever already awaited it and merely loses its claim on the cache slot —
+ * the identity guard in fetchActivePluginIds sees `activePromise !== attempt` and leaves the fresh state
+ * alone.
+ *
+ * What it deliberately does NOT do: un-register anything. pluginHooks has no removal API, so a
+ * DEACTIVATED plugin's already-registered UI extensions survive until the page is reloaded; invalidating
+ * here is what stops the stale list from ALSO hiding the next activation.
+ */
+export function invalidateActivePluginIds(): void {
+    activePromise = null;
+}
 
 /**
  * The slugs of the currently ACTIVE plugins.
@@ -199,8 +228,10 @@ let activePromise: Promise<string[]> | null = null;
  * cached `[]` and registered nothing — permanently.
  *
  * An empty list from a HEALTHY backend (HTTP 200 `[]`) is a real answer, not a failure: it resolves `[]`
- * and stays cached. A 200 whose body is not an array is NOT an answer (e.g. a proxy's HTML error page) —
- * caching it as "no plugins" would reproduce exactly the silent-death bug above, so it rejects too.
+ * and stays cached until invalidateActivePluginIds() drops it (activating the FIRST plugin of a fresh
+ * install is exactly that transition, so it must be an invalidation and not a special case). A 200 whose
+ * body is not an array is NOT an answer (e.g. a proxy's HTML error page) — caching it as "no plugins"
+ * would reproduce exactly the silent-death bug above, so it rejects too.
  *
  * Every caller must handle the rejection: loadRuntimePluginHooks() lets it propagate (initPlugins
  * un-latches and the next admin-layout mount retries); useRuntimePuckConfig() catches it, because block
@@ -340,6 +371,11 @@ export async function loadActivePluginBlocks(pluginIds: string[]): Promise<Recor
 // loaders under ONE run-once latch and un-latches it on the FIRST of the two to reject — while the other
 // is still in flight — so the next admin-layout mount starts a second runtime pass on top of the first.
 // A measured probe (two simultaneous loadRuntimePluginHooks() calls) registered mail-server TWICE.
+//
+// Since reloadActivePlugins() there is now also allowed to start a pass on demand (every activate /
+// deactivate the admin performs, in a session where the previous pass may still be running), this memo is
+// what keeps a REPEATED pass free: the plugins registered by an earlier pass are joined, not re-fetched
+// and not re-registered, so only the genuinely new plugin does any work.
 //
 // Registering twice is invisible only for a plugin that passes pluginHooks KEYS, which make a repeat
 // registration replace rather than append. mail-server does; a third-party plugin registering keyless
@@ -591,10 +627,12 @@ async function fetchAndRegisterPluginHooks(pluginId: string): Promise<boolean> {
 /**
  * Register the frontend hooks of every ACTIVE marketplace plugin, at runtime.
  *
- * Marketplace plugins are installed AFTER the frontend is built, so they can never appear in the
- * build-time registry (generate-plugin-registry.js reads backend/plugins at build time, and a release
- * ships zero plugins) — without this their hooks never register and their UI extensions are invisible,
- * e.g. mail-server's "Professional Mail Account" toggle in the user form.
+ * Marketplace plugins are installed AFTER the frontend is built, so they cannot be in the build-time
+ * registry: generate-plugin-registry.js reads backend/plugins at build time, a release ships zero plugins,
+ * and in production nothing regenerates that file afterwards. Without this pass their hooks never register
+ * and their UI extensions are invisible, e.g. mail-server's "Professional Mail Account" toggle in the user
+ * form. Re-runnable on purpose — reloadActivePlugins() calls it after an activate/deactivate — and cheap
+ * when re-run, because every plugin already handled is memoized in hooksRegistration.
  *
  * Rejects if the ACTIVE-PLUGIN LIST itself could not be fetched, or if any active plugin's hooks bundle
  * failed to LOAD (a plugin's own register() throwing is logged and swallowed) — so initPlugins can
@@ -604,22 +642,32 @@ async function fetchAndRegisterPluginHooks(pluginId: string): Promise<boolean> {
  */
 export async function loadRuntimePluginHooks(): Promise<void> {
     if (typeof window === 'undefined') return;
-    // In development the generated registry statically imports each active plugin's hooks SOURCE, which
-    // keeps hot-reload working. Loading the pre-compiled bundle too would register a second module
-    // instance from a possibly stale dist/, racing the live one — so skip the runtime path there (the
-    // same IS_DEV split pluginRegistry.ts uses for admin pages).
+    // A DEV/PROD split — read it for exactly that, NOT as "only plugins the build never saw".
     //
-    // Read this for exactly what it is: a DEV/PROD split, NOT "only plugins the build never saw". It
-    // fully separates the two sources only for a RELEASE build, which ships zero plugins, so its
-    // generated registry is empty and nothing can overlap. A SELF-BUILT production image is different: a
-    // plugin already present in backend/plugins at `next build` time is baked into the registry — whose
-    // loadPluginHooks() runs its hooks in every NODE_ENV — and is ALSO an active plugin here, so its
-    // register* exports run TWICE, once per module instance. Today that is harmless only because both
-    // registrations are identical and pluginHooks KEYS make a repeat registration replace rather than
-    // append (mail-server passes keys); a plugin registering keyless callbacks would stack duplicate UI.
-    // Skipping the ones already baked in needs the generated registry to publish which plugins' HOOKS it
-    // statically imported, which it does not: getRegisteredPlugins() lists plugins with an ADMIN PAGE
-    // (PRODUCTION_PLUGINS is filtered on componentPath), a different and overlapping-but-not-equal set.
+    // The generated registry (pluginRegistry.ts) statically imports the hooks SOURCE of every plugin that
+    // was active when it was last generated, and its loadPluginHooks() runs them in EVERY NODE_ENV. What
+    // the environment decides is who keeps that file CURRENT: regenerateRegistry() in
+    // backend/src/routes/plugins.ts re-runs the generators after each activate/deactivate but returns
+    // early when NODE_ENV=production, so only a dev server ever rewrites it — and Next's HMR then picks
+    // the change up. In dev the static import is therefore both live and authoritative, and loading the
+    // pre-compiled bundle on top would register a SECOND module instance out of a possibly stale dist/,
+    // racing it. Hence: no runtime path in dev, and (the flip side, which is this whole file's reason to
+    // exist) no static path in production, where regenerateRegistry() is a no-op and a marketplace plugin
+    // installed after the build can never reach the baked-in registry.
+    //
+    // KNOWN AND ACCEPTED, in the other direction: a SELF-BUILT production image bakes whatever plugins
+    // were active at `next build` time into that registry, and this pass loads the same plugins again
+    // from their bundles — so their register* exports run TWICE, once per module instance. A RELEASE
+    // build cannot hit it (it ships zero plugins, so the generated registry is empty), and on a self-built
+    // one it is harmless TODAY: both registrations are identical and pluginHooks KEYS make a repeat
+    // registration REPLACE rather than append — mail-server, the single catalog plugin declaring hooks,
+    // passes keys. It is not guarded because the guard needs the generated registry to publish which
+    // plugins' HOOKS it statically imported, and it publishes no such list: getRegisteredPlugins() returns
+    // PRODUCTION_PLUGINS, which is filtered on componentPath, i.e. the plugins with an ADMIN PAGE — an
+    // overlapping but different set. So a third-party plugin registering KEYLESS callbacks WOULD stack
+    // duplicate UI on a self-built image; closing that means teaching generate-plugin-registry.js to emit
+    // the hooks list too, and is deliberately left as a follow-up rather than guessed at from the wrong
+    // list here.
     if (process.env.NODE_ENV === 'development') return;
 
     const ids = await fetchActivePluginIds();

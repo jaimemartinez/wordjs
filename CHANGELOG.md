@@ -17,6 +17,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   even though the plugin was active and its `dist/hooks.bundle.js` was installed and served. The admin shell
   now also loads every **active** plugin's pre-compiled hooks bundle at runtime and invokes its `register*`
   exports, which register into the host's own `pluginHooks` singleton.
+- **A plugin activated from the admin UI takes effect without a manual page reload.** The runtime loader
+  memoized the list of active plugins for the whole session, on the assumption that activating one reloads
+  the page — it does not; the plugins screen only re-fetches into React state. So the plugin just activated
+  was missing from every later lookup and its hooks and Puck blocks stayed dead until the admin reloaded
+  the tab by hand. Activating or deactivating now invalidates that list and re-runs hook registration
+  immediately; plugins already registered are skipped, so nothing is loaded or registered twice.
 - **Block-only marketplace plugins ship their compiled block again.** The catalog builder re-derived which
   frontend entries a plugin declares instead of asking the bundler, and its copy had drifted from the real
   manifest shape (it read `frontend.component.entry` — the key is `puckComponents.entry` — and treated
