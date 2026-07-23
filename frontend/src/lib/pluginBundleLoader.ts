@@ -343,9 +343,10 @@ const hooksRegistered = new Set<string>();
 const hooksAbsentWarned = new Set<string>();
 
 // The public plugin registry (GET /plugins/registry → each ACTIVE plugin's full manifest). Fetched
-// LAZILY — only to classify a hooks-bundle 404 — so a healthy install pays nothing on the happy path,
-// and at most ONE extra request per session when any 404 needs classifying. Same discipline as
-// activePromise: only a SUCCESSFUL fetch is memoized.
+// LAZILY — only to classify a hooks-bundle 404 — so a healthy install pays nothing on the happy path.
+// Same discipline as activePromise: only a SUCCESSFUL fetch is memoized, so a session makes at most ONE
+// SUCCESSFUL registry request no matter how many 404s need classifying; a FAILED one is deliberately not
+// cached, so a later mount retries it (that retry is the only way a request count can exceed one).
 let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 
 // `frontend: null` is not "no frontend": routes/plugins.ts emits exactly that when it cannot READ the
@@ -353,14 +354,28 @@ let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 // the property absent instead — which is how the two 404 causes are told apart below.
 type PluginRegistryEntry = { id?: string; path?: string; frontend?: { hooks?: string } | null };
 
+/**
+ * The ACTUAL response shape of GET /plugins/registry is an OBJECT: backend/src/routes/plugins.ts ends
+ * with `res.json({ plugins: registry })`, NOT a bare array — as frontend/src/lib/plugins-registry.ts has
+ * always read it (`data.plugins || []`). Guarding with a plain `Array.isArray(body)` therefore rejected
+ * EVERY well-formed response, so classification silently never ran in production and every hooks-bundle
+ * 404 stayed unclassified. A bare array is still accepted, purely as tolerance for a hand-rolled proxy
+ * that unwraps the envelope; the object form is the contract and the one the tests pin.
+ */
+function extractRegistryList(raw: unknown): PluginRegistryEntry[] {
+    const list = Array.isArray(raw) ? raw : (raw as { plugins?: unknown } | null | undefined)?.plugins;
+    if (!Array.isArray(list)) {
+        throw new Error('GET /api/v1/plugins/registry returned no plugins array');
+    }
+    return list as PluginRegistryEntry[];
+}
+
 function fetchPluginRegistry(): Promise<PluginRegistryEntry[]> {
     if (registryPromise) return registryPromise;
     const attempt: Promise<PluginRegistryEntry[]> = (async () => {
         const res = await fetch('/api/v1/plugins/registry');
         if (!res.ok) throw new Error(`GET /api/v1/plugins/registry failed: HTTP ${res.status}`);
-        const body: unknown = await res.json();
-        if (!Array.isArray(body)) throw new Error('GET /api/v1/plugins/registry returned a non-array body');
-        return body as PluginRegistryEntry[];
+        return extractRegistryList(await res.json());
     })();
     registryPromise = attempt;
     attempt.catch(() => { if (registryPromise === attempt) registryPromise = null; });
@@ -389,6 +404,27 @@ async function classifyMissingHooksBundle(pluginId: string): Promise<HooksAbsenc
         : 'none';
 }
 
+// Upper bound on how long CLASSIFYING a 404 may hold up the hook-loading pass. Diagnosing why a plugin
+// shipped no hooks bundle is strictly a console-warning nicety; a registry request left hanging by a
+// half-dead gateway (connected, never answering — no HTTP status, so no `!res.ok` rejection to lean on)
+// must never be able to hold loadRuntimePluginHooks open indefinitely behind it.
+const REGISTRY_CLASSIFY_TIMEOUT_MS = 2000;
+
+/**
+ * Reject after `ms` if `p` has not settled. The timer is ALWAYS cleared, including when `p` wins the
+ * race: a `Promise.race` whose losing setTimeout is left armed keeps the event loop alive, which is
+ * precisely the leak that made this repo's test runner flake under `--test-force-exit`.
+ * `Promise.race` subscribes to `p`, so a late rejection from the loser is already handled and can never
+ * surface as an unhandled rejection.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    const expiry = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    return Promise.race([p, expiry]).finally(() => clearTimeout(timer));
+}
+
 /**
  * Warn — once per plugin per session — only when a hooks-bundle 404 is a REAL problem. Never throws:
  * a plugin without hooks is not an error, and neither is failing to classify one.
@@ -397,12 +433,16 @@ async function warnIfHooksBundleShouldExist(pluginId: string): Promise<void> {
     if (hooksAbsentWarned.has(pluginId)) return;
     let cause: HooksAbsence;
     try {
-        cause = await classifyMissingHooksBundle(pluginId);
+        cause = await withTimeout(
+            classifyMissingHooksBundle(pluginId),
+            REGISTRY_CLASSIFY_TIMEOUT_MS,
+            'plugin registry classification',
+        );
     } catch {
-        // The registry itself is unreachable — a transient condition that says nothing about this plugin,
-        // and one the caller is already dealing with elsewhere. Stay silent rather than emit an alarming
-        // line per active plugin; fetchPluginRegistry did not memoize the failure, so a later mount
-        // classifies for real.
+        // The registry is unreachable, malformed, or too slow to wait for — all transient conditions that
+        // say nothing about this plugin, and ones the caller is already dealing with elsewhere. Stay
+        // silent rather than emit an alarming line per active plugin; fetchPluginRegistry did not memoize
+        // the failure, so a later mount classifies for real.
         return;
     }
     if (cause === 'none') return;
