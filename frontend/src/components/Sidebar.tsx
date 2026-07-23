@@ -41,9 +41,10 @@ const coreMenuItems: SidebarMenuItem[] = [
     { href: "/admin/db-migration", label: "nav.dbMigration", icon: "fa-database", cap: "manage_options" },
     // Outgoing webhooks — admin only (they can exfiltrate content changes), mirrors the backend isAdmin gate.
     { href: "/admin/webhooks", label: "nav.webhooks", icon: "fa-bolt", cap: "manage_options" },
-    // Self-service API tokens + account. cap 'read' → every logged-in user (tokens act with the user's own
-    // permissions), including non-admins who reach the panel.
-    { href: "/admin/tokens", label: "nav.apiTokens", icon: "fa-key", cap: "read" },
+    // API tokens are gated on `manage_api_tokens` (admins hold it via '*'), NOT shown to every user —
+    // minting a token is a privileged action even though the token inherits the owner's own permissions.
+    // Account self-service stays at 'read' (every logged-in user manages their own profile/password).
+    { href: "/admin/tokens", label: "nav.apiTokens", icon: "fa-key", cap: "manage_api_tokens" },
     { href: "/admin/account", label: "nav.account", icon: "fa-user-gear", cap: "read" },
 ];
 
