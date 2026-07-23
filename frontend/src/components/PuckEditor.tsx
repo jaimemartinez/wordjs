@@ -281,6 +281,44 @@ function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?
             clearTimeout(stop);
         };
     }, []);
+    // ── EDITOR DOCUMENT CONTRACT ────────────────────────────────────────────────────────────────────
+    // The canvas iframe deliberately loads the ACTIVE THEME's CSS (below) so the content renders like the
+    // live site. But a theme's document-level rules (`html,body{…}`) must NEVER hijack the mechanics the
+    // editor depends on: Puck computes its action-overlay position and the outline's scroll from a SINGLE
+    // scroll container (the iframe's <html>) and an UNTRANSFORMED root. A theme that set, say,
+    // `html,body{overflow-x:hidden}` turned <body> into a SECOND, nested scroll container (paired with the
+    // app's `body{height:100%}`) — a double scroll that pushed the action buttons off-position and made the
+    // outline scroll the wrong element. A theme transform on the root would likewise break the fixed-position
+    // overlay. So the editor pins an inviolable scroll/stacking model here, winning by SPECIFICITY (`:root`
+    // and `:root>body` outrank any theme's `html`/`body` element selector) — so it holds no matter what the
+    // page brings, and regardless of stylesheet order. The visualizer is immutable against the page it edits.
+    React.useEffect(() => {
+        const STYLE_ID = "wjs-editor-doc-contract";
+        const css =
+            ":root{height:100%!important;overflow-x:hidden!important;overflow-y:auto!important;transform:none!important;filter:none!important;perspective:none!important}" +
+            ":root>body{height:auto!important;min-height:100%!important;max-height:none!important;overflow:visible!important;transform:none!important;filter:none!important;perspective:none!important;margin:0!important}";
+        let done = false;
+        const tick = () => {
+            const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
+            const doc = iframe?.contentDocument;
+            if (!doc?.head) return;
+            if (!doc.getElementById(STYLE_ID)) {
+                const s = doc.createElement("style");
+                s.id = STYLE_ID;
+                s.textContent = css;
+                doc.head.appendChild(s);
+            }
+            done = true;
+        };
+        tick();
+        // Poll so it re-asserts if the iframe reloads or AutoFrame re-clones the parent styles.
+        const t = setInterval(() => (done ? clearInterval(t) : tick()), 400);
+        const stop = setTimeout(() => clearInterval(t), 10000);
+        return () => {
+            clearInterval(t);
+            clearTimeout(stop);
+        };
+    }, []);
     // WYSIWYG: load the shared WordJS UI framework + the ACTIVE theme stylesheet into the preview iframe
     // so the canvas content (typography, tables, buttons, components, utilities) renders like the public
     // site. Only the iframe canvas is themed — Puck's editing chrome lives outside it. Idempotent + id-
