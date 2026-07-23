@@ -242,18 +242,45 @@ export const DraggableComponent = ({
   const [portalEl, setPortalEl] = useState<HTMLElement>();
 
   useEffect(() => {
-    setPortalEl(
-      iframe.enabled
-        ? ref.current?.ownerDocument.body
-        : ref.current?.closest<HTMLElement>("[data-puck-preview]") ??
-            document.body
-    );
+    if (iframe.enabled) {
+      // WORDJS (Gutenberg-style): portal the overlay into the PARENT-document layer that overlays the
+      // canvas iframe, NOT into the iframe's own <body>. Outside the iframe, the edited page's CSS and
+      // stacking context (a theme's fixed header, z-index, transforms) can never cover or shift the
+      // editor chrome. `frameElement` bridges from the in-iframe component back up to its host <iframe>,
+      // whose [data-puck-preview] ancestor holds the [data-puck-overlay-layer] added by Preview. If the
+      // layer isn't found, fall back to the iframe body — old behavior, so nothing breaks.
+      const frameEl = ref.current?.ownerDocument?.defaultView
+        ?.frameElement as HTMLElement | null | undefined;
+      const layer = frameEl
+        ?.closest<HTMLElement>("[data-puck-preview]")
+        ?.querySelector<HTMLElement>(":scope > [data-puck-overlay-layer]");
+      setPortalEl(layer ?? ref.current?.ownerDocument.body);
+    } else {
+      setPortalEl(
+        ref.current?.closest<HTMLElement>("[data-puck-preview]") ??
+          document.body
+      );
+    }
   }, [iframe.enabled, ref.current]);
 
   const getStyle = useCallback(() => {
     if (!ref.current) return;
 
     const rect = ref.current!.getBoundingClientRect();
+
+    // WORDJS (Gutenberg-style): when the overlay lives in the PARENT layer that exactly overlays the
+    // canvas iframe, the block's iframe-viewport rect maps 1:1 into the layer (shared top-left origin).
+    // getBoundingClientRect already folds in the canvas's internal scroll, and the device-scale
+    // transform wraps BOTH the iframe and the layer, so no scroll term and no scale division are needed.
+    if (iframe.enabled && portalEl?.hasAttribute?.("data-puck-overlay-layer")) {
+      return {
+        left: `${rect.left}px`,
+        top: `${rect.top}px`,
+        width: `${ref.current.offsetWidth}px`,
+        height: `${ref.current.offsetHeight}px`,
+      } as CSSProperties;
+    }
+
     const deepScrollPosition = getDeepScrollPosition(ref.current);
 
     const portalContainerEl = iframe.enabled
@@ -289,7 +316,7 @@ export const DraggableComponent = ({
     };
 
     return style;
-  }, [ref.current]);
+  }, [ref.current, iframe.enabled, portalEl]);
 
   const [style, setStyle] = useState<CSSProperties>();
 
@@ -486,6 +513,26 @@ export const DraggableComponent = ({
       }
     });
   }, [hover, indicativeHover, isSelected, iframe]);
+
+  // WORDJS (Gutenberg-style): a parent-layer overlay no longer scrolls with the canvas content the way
+  // an in-iframe overlay did, so re-sync its position on every canvas scroll (and on resize). The
+  // capture-phase listener on the iframe document catches scroll from whatever element inside is the
+  // scroll container. Only wired while this overlay is visible (hovered/selected) — at most a couple at
+  // once — so it stays cheap.
+  useEffect(() => {
+    if (!iframe.enabled || !isVisible || !ref.current) return;
+    const doc = ref.current.ownerDocument;
+    const win = doc.defaultView;
+    const onChange = () => sync();
+    doc.addEventListener("scroll", onChange, { capture: true, passive: true });
+    win?.addEventListener("resize", onChange, { passive: true });
+    return () => {
+      doc.removeEventListener("scroll", onChange, {
+        capture: true,
+      } as EventListenerOptions);
+      win?.removeEventListener("resize", onChange);
+    };
+  }, [iframe.enabled, isVisible, sync]);
 
   const [thisWasDragging, setThisWasDragging] = useState(false);
 

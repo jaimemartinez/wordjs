@@ -146,28 +146,49 @@ export const Preview = ({ id = "puck-preview" }: { id?: string }) => {
       }}
     >
       {iframe.enabled ? (
-        <AutoFrame
-          id="preview-frame"
-          className={getClassName("frame")}
-          data-rfd-iframe
-          onReady={() => {
-            setStatus("READY");
-          }}
-          onNotReady={() => {
-            setStatus("MOUNTED");
-          }}
-          frameRef={ref}
-        >
-          <autoFrameContext.Consumer>
-            {({ document }) => {
-              if (Frame) {
-                return <Frame document={document}>{inner}</Frame>;
-              }
-
-              return inner;
+        <>
+          <AutoFrame
+            id="preview-frame"
+            className={getClassName("frame")}
+            data-rfd-iframe
+            onReady={() => {
+              setStatus("READY");
             }}
-          </autoFrameContext.Consumer>
-        </AutoFrame>
+            onNotReady={() => {
+              setStatus("MOUNTED");
+            }}
+            frameRef={ref}
+          >
+            <autoFrameContext.Consumer>
+              {({ document }) => {
+                if (Frame) {
+                  return <Frame document={document}>{inner}</Frame>;
+                }
+
+                return inner;
+              }}
+            </autoFrameContext.Consumer>
+          </AutoFrame>
+          {/* Gutenberg-style editor-chrome layer. Each block's overlay (selection outline + ActionBar)
+              portals HERE — in the PARENT document, on top of the canvas iframe — instead of into the
+              iframe's own <body>. Living outside the iframe, the chrome is immune to the edited page's
+              CSS and stacking context: a theme's position:fixed header, z-index, or transform can never
+              cover, clip, or shift it. The layer exactly overlays the iframe (same box via inset:0),
+              clips to it (overflow:hidden), and is click-through (pointer-events:none) so canvas
+              hover/drag still work — only the action buttons re-enable pointer events. stopPropagation
+              keeps a button click (Duplicate/Delete) from bubbling to the preview's deselect handler. */}
+          <div
+            data-puck-overlay-layer
+            style={{
+              position: "absolute",
+              inset: 0,
+              overflow: "hidden",
+              pointerEvents: "none",
+              zIndex: 2,
+            }}
+            onClick={(e) => e.stopPropagation()}
+          />
+        </>
       ) : (
         <div
           id="preview-frame"
