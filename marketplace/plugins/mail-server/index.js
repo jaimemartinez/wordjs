@@ -23,7 +23,8 @@ const nodemailer = require('nodemailer');
 const { SMTPServer } = require('smtp-server');
 const { simpleParser } = require('mailparser');
 const net = require('net');
-const SPFValidator = require('spf-validator');
+// NOTE: `spf-validator` is deliberately NOT required — it resolves DNS with the raw c-ares API, which
+// the sandbox denies, so it threw on every inbound message. evaluateSPF() parses the record itself.
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -46,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.0',
+    version: '2.1.1',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -297,31 +298,45 @@ async function resolveMX(domain) {
 /**
  * Real inbound SPF evaluation.
  *
- * The installed `spf-validator` package (new SPFValidator(domain).hasRecords(cb)) only reports
- * whether a domain *has* an SPF record — it does NOT evaluate a policy against an IP. So we use it
- * to short-circuit the 'none' case, then parse the v=spf1 record ourselves and match the connecting
- * IP against the a / mx / ip4 / ip6 / include mechanisms and the trailing `all` qualifier.
+ * We fetch the domain's TXT records ourselves (through the HOST DNS bridge) and evaluate the v=spf1
+ * policy against the connecting IP: the a / mx / ip4 / ip6 / include mechanisms and the trailing
+ * `all` qualifier.
+ *
+ * NOTE: this used to start with a `new SPFValidator(domain).hasRecords()` presence check. That package
+ * does its OWN RAW DNS resolution internally, which the sandbox DENIES (dns.resolve* bypasses egress
+ * filtering) — so it threw on EVERY inbound message, tripping the fail-closed branch in onMailFrom and
+ * REJECTING ALL INBOUND MAIL with "unable to verify SPF". The TXT fetch below subsumes it: it yields
+ * 'none' both when the domain publishes no TXT record at all and when none of them is a v=spf1 policy.
  *
  * Returns one of: 'pass' | 'fail' | 'softfail' | 'neutral' | 'none'.
- * Fails OPEN (throws → caller tags 'none') on any DNS error/timeout.
+ * Throws only on a REAL DNS error/timeout (the caller fails closed with a temporary 4xx).
  */
 async function evaluateSPF(domain, ip, depth = 0) {
     if (!ip || depth > 5) return 'none'; // guard against include loops / missing IP
 
-    // 1. Presence check via the spf-validator library.
-    const validator = new SPFValidator(domain);
-    const hasRecords = await new Promise((resolve, reject) => {
-        validator.hasRecords((err, has) => (err ? reject(err) : resolve(has)));
-    });
-    if (!hasRecords) return 'none';
-
-    // 2. Fetch and locate the v=spf1 record.
-    const txt = await dns.resolveTxt(domain);
-    const records = txt.map(chunks => chunks.join(''));
+    // Fetch and locate the v=spf1 record.
+    //
+    // "No TXT records" is NOT a DNS failure: RFC 7208 §4.6 says a domain with no policy evaluates to
+    // 'none' (which we accept). But the resolver signals that by REJECTING with ENODATA/ENOTFOUND
+    // instead of returning [], so it MUST be mapped to 'none' here — otherwise the caller's fail-closed
+    // branch would 451 every legitimate sender that simply doesn't publish SPF, which is barely better
+    // than the blanket rejection this whole change exists to fix.
+    // The error reaches us as a plain Error carrying only a MESSAGE (the sandbox RPC marshals errors as
+    // `String(e.message)`, so `err.code` does not survive the isolate boundary) — hence the text match
+    // on node's "queryTxt ENODATA <domain>" shape. Every OTHER failure (SERVFAIL, timeout, a missing
+    // 'network' grant) still throws and is treated as unverifiable.
+    let txt;
+    try {
+        txt = await dns.resolveTxt(domain);
+    } catch (e) {
+        if (/ENODATA|ENOTFOUND|NXDOMAIN/i.test(String((e && e.message) || e))) return 'none';
+        throw e;
+    }
+    const records = (txt || []).map(chunks => Array.isArray(chunks) ? chunks.join('') : String(chunks));
     const spf = records.find(r => /^v=spf1\b/i.test(r.trim()));
     if (!spf) return 'none';
 
-    // 3. Evaluate mechanisms left-to-right; first match wins.
+    // Evaluate mechanisms left-to-right; first match wins.
     const terms = spf.trim().split(/\s+/).slice(1); // drop "v=spf1"
     let defaultQualifier = '?'; // neutral if no all/match
     for (const term of terms) {
@@ -522,6 +537,16 @@ function parseTrustedProxyIps(raw) {
     return [...out];
 }
 
+// Build an SMTP rejection carrying a REAL status code. smtp-server reads `err.responseCode`; without it
+// it answers 550 and prefixes our text verbatim, which produced the malformed "550 451 Temporary
+// failure…" — i.e. a PERMANENT reject for what we meant as a temporary one, so the sending MTA gave up
+// for good instead of retrying. 4xx = try again later, 5xx = permanent.
+function smtpError(code, message) {
+    const err = new Error(message);
+    err.responseCode = code;
+    return err;
+}
+
 /**
  * Initialize the Inbound SMTP Server
  */
@@ -570,7 +595,7 @@ async function initSMTPServer() {
                 dnsbl.lookup(ip, 'zen.spamhaus.org').then(listed => {
                     if (listed) {
                         console.warn(`[Security][DNSBL] IP ${ip} blocked by DNSBL — rejecting`);
-                        return callback(new Error('554 Connection rejected: your IP is listed on a DNS blocklist'));
+                        return callback(smtpError(554, 'Connection rejected: your IP is listed on a DNS blocklist'));
                     }
                     callback();
                 }).catch((e) => {
@@ -617,7 +642,7 @@ async function initSMTPServer() {
                 session.spfResult = result;
 
                 if (evalError) {
-                    return callback(new Error('451 Temporary failure: unable to verify SPF for ' + (domain || 'sender') + ', try again later'));
+                    return callback(smtpError(451, 'Temporary failure: unable to verify SPF for ' + (domain || 'sender') + ', try again later'));
                 }
 
                 // Reject explicit SPF failures by default. Operator can downgrade to tag-only with
@@ -626,7 +651,7 @@ async function initSMTPServer() {
                     const rejectRaw = await getOption('mail_security_spf_reject', '1');
                     if (rejectRaw !== '0') {
                         console.warn(`[Security][SPF] Rejecting ${mailFrom} from ${ip} (SPF ${result})`);
-                        return callback(new Error('550 SPF check failed: sending IP not authorized for ' + domain));
+                        return callback(smtpError(550, 'SPF check failed: sending IP not authorized for ' + domain));
                     }
                     console.warn(`[Security][SPF] SPF ${result} for ${mailFrom} from ${ip} — tagged only (reject overridden off)`);
                 }
@@ -635,7 +660,7 @@ async function initSMTPServer() {
             }).catch((e) => {
                 // The option lookup itself failed — fail closed for the external sender.
                 console.warn(`[Security][SPF] option lookup error: ${e.message} — rejecting (fail closed)`);
-                callback(new Error('451 Temporary failure, try again later'));
+                callback(smtpError(451, 'Temporary failure, try again later'));
             });
         },
 
@@ -1107,10 +1132,31 @@ async function sendMail(data) {
     const failed = [];
 
     if (externalRecipients.length > 0) {
+        // DMARC/SPF ALIGNMENT: we may only send as a domain we can actually AUTHENTICATE for (the one
+        // our DKIM key signs and our SPF/PTR cover). A user whose account email is on an EXTERNAL
+        // provider (e.g. someone@gmail.com) would otherwise make us emit `From: someone@gmail.com`
+        // from our IP — which every DMARC-enforcing receiver rejects outright:
+        //   "550-5.7.26 Unauthenticated email from gmail.com is not accepted due to domain's DMARC policy"
+        // So for EXTERNAL delivery we rewrite the wire identity to our own domain and put the user's
+        // real address in Reply-To, so replies still reach the human. LOCAL/internal delivery and the
+        // stored Sent copy keep the original address (no DMARC involved there).
+        const sendingDomain = String(dkimDomain || siteDomain || '').toLowerCase();
+        const fromDomain = String(fromEmail.split('@')[1] || '').toLowerCase();
+        let wireFrom = fromEmail;
+        let wireReplyTo = data.replyTo || undefined;
+        if (sendingDomain && fromDomain && fromDomain !== sendingDomain) {
+            const configured = String(optFromEmail || '');
+            wireFrom = (configured && String(configured.split('@')[1] || '').toLowerCase() === sendingDomain)
+                ? configured
+                : `postmaster@${sendingDomain}`;
+            if (!wireReplyTo) wireReplyTo = fromEmail;
+            console.warn(`[MailServer] From '${fromEmail}' is not on the sending domain '${sendingDomain}' — sending as '${wireFrom}' with Reply-To '${wireReplyTo}' so DMARC/SPF align (remote servers reject unauthenticated cross-domain From).`);
+        }
+
         const attachments = (data.attachments || []).map(a => ({ filename: a.filename, path: a.path }));
         // RFC 3834: an auto-generated reply announces itself so remote auto-responders don't answer it.
         const extraHeaders = data.isAutoReply ? { 'Auto-Submitted': 'auto-replied' } : undefined;
-        const mailObj = { fromEmail, fromName, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
+        const mailObj = { fromEmail: wireFrom, fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
 
         if (transporter) {
             // Relay/smarthost path (used only if a relay is configured).
@@ -1118,8 +1164,9 @@ async function sendMail(data) {
             for (const extR of externalRecipients) {
                 try {
                     const info = await transporter.sendMail({
-                        envelope: { from: fromEmail, to: extR },
-                        from: `"${fromName}" <${fromEmail}>`, to: extR,
+                        envelope: { from: wireFrom, to: extR },
+                        from: `"${fromName}" <${wireFrom}>`, to: extR,
+                        replyTo: wireReplyTo,
                         messageId: outboundMessageId,
                         subject: data.subject, text: data.text, html: data.html, attachments, dkim: dkimOptions,
                         headers: extraHeaders
@@ -1343,6 +1390,7 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 envelope: { from: mail.fromEmail, to: recipient },
                 from: `"${mail.fromName}" <${mail.fromEmail}>`,
                 to: recipient,
+                replyTo: mail.replyTo,
                 messageId: mail.messageId,
                 subject: mail.subject,
                 text: mail.text,
