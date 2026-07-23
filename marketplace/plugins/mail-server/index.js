@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.2',
+    version: '2.1.3',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -356,6 +356,26 @@ async function spfResolveAddrs(host, ip) {
     }
 }
 
+// RFC 7208 §4.6.4 processing limits. These are DoS bounds, not style: an inbound message hands us a
+// MAIL FROM domain of the SENDER's choosing, and every term we honour is a DNS query WE make.
+//
+//  - SPF_MAX_DNS_LOOKUPS caps the DNS-consuming terms (a / mx / ptr / exists / include / redirect)
+//    over the WHOLE evaluation, shared across every nesting level. A per-level recursion guard alone
+//    does NOT bound this: it only limits DEPTH, so a record can still fan out BREADTH-wise. Measured
+//    on the previous code, a hostile 10-wide × 5-deep include tree turned ONE inbound message into
+//    111,111 DNS lookups — an amplifier pointed at our resolver (and at whatever the record names).
+//  - SPF_MAX_MX_RECORDS caps the address lookups a SINGLE `mx` term may trigger. This is a separate
+//    budget in the RFC because one `mx` term is one term but N published MX records: 500 MX records
+//    previously cost 500 address lookups, and nesting that behind 10 includes cost 5,000.
+//  - SPF_MAX_DEPTH is only a structural backstop; the lookup budget already bounds nesting, since
+//    every level costs at least one `include`/`redirect`.
+//
+// Exceeding any of them is 'permerror' per the RFC — the sender's published policy is unevaluable,
+// which is NOT the same as "unauthorized", so we must not turn it into a 550.
+const SPF_MAX_DNS_LOOKUPS = 10;
+const SPF_MAX_MX_RECORDS = 10;
+const SPF_MAX_DEPTH = 10;
+
 /**
  * Real inbound SPF evaluation.
  *
@@ -369,11 +389,19 @@ async function spfResolveAddrs(host, ip) {
  * REJECTING ALL INBOUND MAIL with "unable to verify SPF". The TXT fetch below subsumes it: it yields
  * 'none' both when the domain publishes no TXT record at all and when none of them is a v=spf1 policy.
  *
+ * `budget` is threaded through the recursion so the DNS-lookup limit is GLOBAL to one evaluation. It
+ * defaults per top-level call, so it is per-MESSAGE state — never module state.
+ *
  * Returns one of: 'pass' | 'fail' | 'softfail' | 'neutral' | 'none' | 'temperror' | 'permerror'.
  * 'temperror' is returned (never thrown) so the caller can answer 451 "retry" instead of 550.
  */
-async function evaluateSPF(domain, ip, depth = 0) {
-    if (!ip || depth > 5) return 'none'; // guard against include/redirect loops / missing IP
+async function evaluateSPF(domain, ip, depth = 0, budget = { lookups: 0 }) {
+    if (!ip) return 'none';                        // nothing to evaluate against
+    if (depth > SPF_MAX_DEPTH) return 'permerror'; // backstop; the lookup budget normally trips first
+
+    // Charge one DNS-consuming term to the GLOBAL budget. Returns true when the budget is blown, at
+    // which point the caller must abandon the evaluation with 'permerror' (RFC 7208 §4.6.4).
+    const overBudget = () => ++budget.lookups > SPF_MAX_DNS_LOOKUPS;
 
     // Fetch and locate the v=spf1 record.
     //
@@ -391,7 +419,13 @@ async function evaluateSPF(domain, ip, depth = 0) {
         return 'temperror';
     }
     const records = (txt || []).map(chunks => Array.isArray(chunks) ? chunks.join('') : String(chunks));
-    const spf = records.find(r => /^v=spf1\b/i.test(r.trim()));
+    // RFC 7208 §4.5: the version token is "v=spf1" followed by a space or end-of-record (`\b` would
+    // also accept "v=spf1-all"), and a domain publishing MORE THAN ONE such record has an ambiguous
+    // policy → permerror. Silently taking the first could evaluate the wrong half of a migration and
+    // manufacture a 'fail' (→ 550) for a legitimate sender.
+    const spfRecords = records.filter(r => /^v=spf1(\s|$)/i.test(r.trim()));
+    if (spfRecords.length > 1) return 'permerror';
+    const spf = spfRecords[0];
     if (!spf) return 'none';
 
     // Evaluate mechanisms left-to-right; first match wins.
@@ -417,12 +451,14 @@ async function evaluateSPF(domain, ip, depth = 0) {
         } else if (name === 'ip4' || name === 'ip6') {
             matched = ipInCidr(ip, value);
         } else if (name === 'a') {
+            if (overBudget()) return 'permerror';
             const r = await spfResolveAddrs(value || domain, ip);
             temp = r.temp;
             // Compare NUMERICALLY via ipInCidr (a bare address = /32 or /128): a textual `includes()`
             // misses the many equivalent spellings of one IPv6 address (2001:db8::1 vs 2001:0db8:0:0:0:0:0:1).
             matched = !temp && r.addrs.some(a => ipInCidr(ip, a));
         } else if (name === 'mx') {
+            if (overBudget()) return 'permerror';
             const host = value || domain;
             let mx = [];
             try {
@@ -430,19 +466,35 @@ async function evaluateSPF(domain, ip, depth = 0) {
             } catch (e) {
                 if (!isDnsNoRecord(e)) temp = true;
             }
+            // RFC 7208 §4.6.4: ONE `mx` term costs one term but may name arbitrarily many exchanges,
+            // each needing its own address lookup. Publishing 500 MX records is a legal way to make us
+            // do 500 lookups per message, so the RFC caps this at 10 and mandates permerror past it.
+            if (mx.length > SPF_MAX_MX_RECORDS) return 'permerror';
             for (const rec of mx) {
                 const r = await spfResolveAddrs(rec.exchange, ip);
                 if (r.temp) { temp = true; continue; }
                 if (r.addrs.some(a => ipInCidr(ip, a))) { matched = true; temp = false; break; }
             }
         } else if (name === 'include' && value) {
-            // Recurse into the included policy; a 'pass' there counts as a match here. A 'temperror'
-            // inside the include propagates (RFC 7208 §5.2) — it is NOT a non-match.
-            const sub = await evaluateSPF(value, ip, depth + 1);
+            if (overBudget()) return 'permerror';
+            // Recurse into the included policy, sharing the GLOBAL lookup budget; a 'pass' there counts
+            // as a match here. RFC 7208 §5.2 maps the recursive result: pass→match,
+            // fail/softfail/neutral→no match, temperror→temperror, none/permerror→permerror. The last
+            // one matters: without it, an unevaluable include silently degrades to "no match" and a
+            // trailing -all turns an UNKNOWN answer into a 550 — and the budget above could never be
+            // observed at the top level.
+            const sub = await evaluateSPF(value, ip, depth + 1, budget);
             if (sub === 'temperror') temp = true;
+            else if (sub === 'permerror' || sub === 'none') return 'permerror';
             else matched = sub === 'pass';
+        } else if (name === 'ptr' || name === 'exists') {
+            // Still not EVALUATED (both need macro expansion, which we don't implement, so they stay a
+            // conservative non-match). But they are DNS-consuming terms and RFC 7208 §4.6.4 counts them,
+            // so charge the budget anyway — otherwise a record could hide its fan-out behind the terms
+            // we happen to skip and re-open the amplifier from the other side.
+            if (overBudget()) return 'permerror';
         }
-        // Unknown mechanisms (ptr, exists, …) are ignored — conservative.
+        // Any other unknown mechanism is ignored — conservative.
 
         // A TEMPORARY DNS failure inside a mechanism must NOT be swallowed into "no match". The old code
         // caught it and set matched=false, so evaluation fell through to a trailing `-all` → 'fail' →
@@ -459,10 +511,11 @@ async function evaluateSPF(domain, ip, depth = 0) {
     // result wholesale (there is no `all` left to fall back on — see above). Without this, gmail.com's
     // "v=spf1 redirect=_spf.google.com" evaluated to 'neutral' for EVERY IP, i.e. SPF was a complete
     // NO-OP for the largest sender on the internet and a spoofed @gmail.com envelope sailed through.
-    // The recursion reuses the same `depth` budget, so a redirect chain counts against the DNS-lookup
-    // limit exactly like include: does.
+    // The recursion shares the same GLOBAL DNS-lookup budget, so a redirect chain is bounded exactly
+    // like include: is — and a redirect LOOP burns the budget and terminates in permerror.
     if (redirectTo) {
-        const sub = await evaluateSPF(redirectTo, ip, depth + 1);
+        if (overBudget()) return 'permerror';
+        const sub = await evaluateSPF(redirectTo, ip, depth + 1, budget);
         // "no SPF record at the redirect target" is a broken policy, not an absent one → permerror.
         return sub === 'none' ? 'permerror' : sub;
     }
@@ -747,9 +800,12 @@ async function initSMTPServer() {
                     }
                     console.warn(`[Security][SPF] SPF ${result} for ${mailFrom} from ${ip} — tagged only (reject overridden off)`);
                 }
-                // 'pass' / 'neutral' / 'none' (domains without an SPF record) and 'permerror' (a broken
-                // published policy — RFC 7208 §8.6 leaves it to local policy; rejecting would punish the
-                // sender's admin error) are accepted; the result is recorded in Received-SPF either way.
+                // 'pass' / 'neutral' / 'none' (domains without an SPF record) and 'permerror' are
+                // accepted; the result is recorded in Received-SPF either way. 'permerror' means the
+                // published policy is unevaluable — malformed, self-referential, or over the RFC 7208
+                // §4.6.4 DNS-lookup budget — which is NOT the same as "this IP is unauthorized", so
+                // §8.6 leaves it to local policy and we do not turn the sender's admin error into a 550.
+                // The budget has already done its real job by then: it BOUNDED the lookups we made.
                 callback();
             }).catch((e) => {
                 // The option lookup itself failed — fail closed for the external sender.
