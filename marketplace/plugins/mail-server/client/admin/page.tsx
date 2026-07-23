@@ -938,7 +938,7 @@ export default function MailServerAdmin() {
 
             {/* GLOBAL FEEDBACK TOAST — renders in every view (above the composer's z-[6000]) */}
             {message && (
-                <div className={`fixed top-4 right-4 z-[7000] max-w-[calc(100vw-2rem)] sm:max-w-sm flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm font-bold animate-in fade-in slide-in-from-top-2 ${message.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+                <div style={{ zIndex: 7000 }} className={`fixed top-4 right-4 max-w-[calc(100vw-2rem)] sm:max-w-sm flex items-start gap-3 px-4 py-3 rounded-xl border shadow-lg text-sm font-bold animate-in fade-in slide-in-from-top-2 ${message.type === 'success' ? 'bg-emerald-50 border-emerald-200 text-emerald-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
                     <i className={`fa-solid ${message.type === 'success' ? 'fa-circle-check' : 'fa-circle-exclamation'} mt-0.5`}></i>
                     <span className="flex-1 leading-snug">{message.text}</span>
                     <button
@@ -954,7 +954,7 @@ export default function MailServerAdmin() {
 
             {/* UNDO SEND TOAST — the message sits in the outbox until the countdown ends */}
             {undoInfo && (
-                <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-[7000] flex items-center gap-4 px-5 py-3.5 rounded-2xl bg-slate-900 text-white shadow-2xl shadow-slate-900/40 ring-1 ring-white/10 animate-in fade-in slide-in-from-bottom-2">
+                <div style={{ zIndex: 7000 }} className="fixed bottom-6 left-1/2 -translate-x-1/2 flex items-center gap-4 px-5 py-3.5 rounded-2xl bg-slate-900 text-white shadow-2xl shadow-slate-900/40 ring-1 ring-white/10 animate-in fade-in slide-in-from-bottom-2">
                     <i className="fa-solid fa-paper-plane text-violet-300"></i>
                     <span className="text-sm font-bold tabular-nums">Sending… {undoLeft}s</span>
                     <button
@@ -979,7 +979,7 @@ export default function MailServerAdmin() {
             {/* COLUMN 1: DARK BRAND SIDEBAR (Responsive Drawer) */}
             {/* Mobile Overlay */}
             {mobileMenuOpen && (
-                <div onClick={() => setMobileMenuOpen(false)} className="fixed inset-0 bg-black/50 z-30 md:hidden backdrop-blur-sm"></div>
+                <div onClick={() => setMobileMenuOpen(false)} style={{ zIndex: 30 }} className="fixed inset-0 bg-slate-900/50 md:hidden"></div>
             )}
 
             <aside className={`
@@ -1666,7 +1666,8 @@ export default function MailServerAdmin() {
             {/* COMPOSE DOCKED WINDOW (Gmail/Chat Style - Fullscreen on Mobile/Tablet) */}
             {composing && (
                 <div
-                    className={`z-[6000] bg-white shadow-2xl border-x border-t border-slate-200 transition-all duration-300 ease-in-out flex flex-col
+                    style={{ zIndex: 6000 }}
+                    className={`bg-white shadow-2xl border-x border-t border-slate-200 transition-all duration-300 ease-in-out flex flex-col
                     ${isMinimized
                             ? 'fixed bottom-0 right-4 md:right-20 w-[240px] md:w-[300px] h-12 rounded-t-xl'
                             : 'absolute inset-0 md:fixed md:bottom-0 md:right-20 md:w-[500px] md:h-[600px] md:rounded-t-2xl md:inset-auto'
@@ -1935,8 +1936,8 @@ export default function MailServerAdmin() {
 
             {/* MAIL PREFERENCES MODAL — signature + vacation auto-responder */}
             {prefsOpen && (
-                <div className="fixed inset-0 z-[6500] flex items-center justify-center p-4">
-                    <div className="absolute inset-0 bg-black/50 backdrop-blur-sm" onClick={() => setPrefsOpen(false)}></div>
+                <div style={{ zIndex: 6500 }} className="fixed inset-0 flex items-center justify-center p-4">
+                    <div className="absolute inset-0 bg-slate-900/60" onClick={() => setPrefsOpen(false)}></div>
                     <div className="relative bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[85vh] overflow-y-auto p-6 md:p-8">
                         <div className="flex items-center justify-between mb-6">
                             <h3 className="text-xl font-bold text-slate-900 flex items-center gap-2">
