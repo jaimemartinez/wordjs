@@ -17,7 +17,7 @@
  * here immediately; there is no parallel copy to drift.
  *
  * Only three things are injected, and only because they are the plugin's I/O boundary: the `dns`
- * bridge, `getOption`, and `siteDomain`. The DNS stub models failures the way the sandbox actually
+ * bridge, `getOption`, and `mailDomain`. The DNS stub models failures the way the sandbox actually
  * marshals them — backend/src/core/plugin-isolate.ts rebuilds a rejection as `new Error(String(msg))`,
  * so the resolver code survives ONLY inside the message text, which is what isDnsNoRecord sniffs.
  * A stub that set `err.code` instead would be a fixture that does not match the real producer.
@@ -123,7 +123,11 @@ function buildHarnessSource(): string {
         ' resolveMx: async () => { throw new Error("no dns stub installed"); } };'
     );
     out.push('let getOption = async (k, d) => d;');
-    out.push('let siteDomain = "mx.site.test";');
+    // The listener's closure variable that onMailFrom reads for the Received-SPF `receiver` field. It
+    // is the MAIL domain (mail_security_dkim_domain || site host — see resolveMailDomain in the plugin),
+    // not the raw site hostname, and the NAME matters: this harness runs the SHIPPED onMailFrom body, so
+    // a mismatch here is a ReferenceError that the handler's fail-closed catch turns into a blanket 451.
+    out.push('let mailDomain = "mx.site.test";');
     // The handler logs every non-clean verdict. Keep CI output readable; SPF_TEST_VERBOSE=1 restores it.
     out.push('const console = process.env.SPF_TEST_VERBOSE ? globalThis.console : new Proxy({}, { get: () => () => {} });');
     out.push(consts[0]);
@@ -134,7 +138,7 @@ function buildHarnessSource(): string {
         'module.exports = { evaluateSPF, splitDualCidr, spfAction, buildReceivedSpf, sanitizeHeaderValue,' +
         ' cidrMatch, CIDR_MALFORMED, ipInCidr, isBlockedIp, isDnsNoRecord, onMailFrom,' +
         ' SPF_MAX_DNS_LOOKUPS, SPF_MAX_MX_RECORDS, SPF_MAX_DEPTH,' +
-        ' __setDns: (d) => { dns = d; }, __setGetOption: (g) => { getOption = g; }, __setSiteDomain: (s) => { siteDomain = s; } };'
+        ' __setDns: (d) => { dns = d; }, __setGetOption: (g) => { getOption = g; }, __setSiteDomain: (s) => { mailDomain = s; } };'
     );
     return out.join('\n\n');
 }

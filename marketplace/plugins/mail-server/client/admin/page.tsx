@@ -59,6 +59,17 @@ const SPF_BADGE: Record<string, { label: string; cls: string; title: string }> =
     temperror: { label: 'SPF unverified', cls: 'bg-amber-50 text-amber-700 border-amber-200', title: 'SPF could not be checked at delivery time (temporary DNS failure).' },
 };
 
+// Answer of GET /plugin/mail-server/mailbox — "may this account use the mail surface at all?".
+// The backend gates every mail route on an ACTIVE CORPORATE MAILBOX (index.js: hasCorporateMailbox);
+// this is the one mail route deliberately left ungated so the UI can ask instead of being 403'd.
+type MailAccess = {
+    hasMailbox: boolean;   // the account's own email is on the site domain
+    canUseMail: boolean;   // hasMailbox, or an administrator (owns the catch-all inbox)
+    isAdmin: boolean;
+    address: string | null;
+    siteDomain: string;
+};
+
 type MailLabel = { id: number; name: string; color: string; email_count?: number };
 type MailCounts = { inbox_unread: number; spam_unread: number; drafts: number };
 
@@ -137,6 +148,9 @@ export default function MailServerAdmin() {
     const [undoInfo, setUndoInfo] = useState<{ id: number; expiresAt: number } | null>(null);
     const [undoLeft, setUndoLeft] = useState(0);
     const [undoing, setUndoing] = useState(false);
+    // null = not asked yet. Nothing is loaded until this resolves: without a corporate mailbox every
+    // mail route 403s, so fetching first would only paint a screen of failures.
+    const [mailAccess, setMailAccess] = useState<MailAccess | null>(null);
     const [suggestTarget, setSuggestTarget] = useState<'to' | 'cc' | 'bcc'>('to');
     const [settings, setSettings] = useState<Record<string, string>>({
         mail_from_email: "",
@@ -293,17 +307,37 @@ export default function MailServerAdmin() {
         setSuggestions([]);
     };
 
+    // Ask FIRST whether this account may use the mail surface. Nothing else is fetched until it
+    // answers, so a user without a corporate mailbox never fires a burst of doomed requests.
     useEffect(() => {
+        let alive = true;
+        (async () => {
+            try {
+                const info = await api('/plugin/mail-server/mailbox') as MailAccess;
+                if (alive) setMailAccess(info);
+            } catch (e) {
+                // Undeterminable (offline, or a backend older than this UI): fail OPEN in the UI only.
+                // The server is the security boundary and still 403s — hiding the whole mail app on a
+                // transient blip would be a worse failure than showing it and getting an error toast.
+                if (alive) setMailAccess({ hasMailbox: true, canUseMail: true, isAdmin: false, address: null, siteDomain: '' });
+            }
+        })();
+        return () => { alive = false; };
+    }, []);
+
+    useEffect(() => {
+        if (!mailAccess || !mailAccess.canUseMail) return;
         loadData();
-    }, [loadData]);
+    }, [loadData, mailAccess]);
 
     // Labels + per-user prefs load once (labels also refresh after label CRUD).
     useEffect(() => {
+        if (!mailAccess || !mailAccess.canUseMail) return;
         loadLabels();
         (async () => {
             try { setPrefs(await api('/plugin/mail-server/prefs') as any); } catch (e) { }
         })();
-    }, []);
+    }, [mailAccess]);
 
     // Undo-send countdown; the toast disappears when the window closes (queue takes over).
     useEffect(() => {
@@ -332,13 +366,14 @@ export default function MailServerAdmin() {
         return () => window.removeEventListener('wordjs:notification' as any, handleNotification);
     }, [folder, loadData]);
 
-    // Auto-refresh the mailbox so newly RECEIVED or SENT mail appears WITHOUT a manual page refresh.
+    // Auto-refresh the mail list so newly RECEIVED or SENT mail appears WITHOUT a manual page refresh.
     // The SSE notification path above only fires for inbound mail while in the inbox (and only if the
     // event is actually delivered), so this is the reliable fallback: a light SILENT poll of the current
     // view every 15s plus an immediate refresh the moment the tab regains focus. Paused while composing,
     // on the settings view, or when the tab is hidden — no wasted requests in the background.
     useEffect(() => {
         if (folder === 'settings') return;
+        if (!mailAccess || !mailAccess.canUseMail) return;
         const tick = () => {
             if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
             if (composing) return;
@@ -352,7 +387,7 @@ export default function MailServerAdmin() {
             window.removeEventListener('focus', tick);
             document.removeEventListener('visibilitychange', tick);
         };
-    }, [folder, composing, loadData]);
+    }, [folder, composing, loadData, mailAccess]);
 
     // Auto-dismiss the global feedback toast.
     useEffect(() => {
@@ -868,6 +903,36 @@ export default function MailServerAdmin() {
     };
 
     // --- RENDER ---
+
+    // NO CORPORATE MAILBOX → no mail app. The server is the security boundary (every mail route 403s
+    // for this account); this exists so the user gets the one actionable sentence instead of a dead
+    // screen of failing panels. The sidebar entry is already hidden for them by core — the admin-menu
+    // filter honours `requiresProfessionalMailbox` (backend/src/routes/plugins.ts) — so reaching this
+    // is a direct URL visit or a stale tab whose mailbox was just switched off.
+    if (mailAccess && !mailAccess.canUseMail) {
+        return (
+            <div className="flex w-full h-full items-center justify-center bg-[#f8fafc] p-6 font-sans">
+                <div className="max-w-md w-full text-center bg-white rounded-2xl border border-slate-200 shadow-sm p-8">
+                    <div className="w-14 h-14 mx-auto rounded-2xl bg-violet-50 text-violet-600 flex items-center justify-center mb-5">
+                        <i className="fa-solid fa-envelope-circle-check text-xl"></i>
+                    </div>
+                    <h2 className="text-lg font-black text-slate-800 tracking-tight">No corporate mailbox</h2>
+                    <p className="mt-3 text-sm text-slate-500 leading-relaxed">
+                        Mail on this site is only available to accounts an administrator has given a
+                        professional
+                        {mailAccess.siteDomain ? <> <strong className="text-slate-700">@{mailAccess.siteDomain}</strong> </> : ' '}
+                        mailbox. Yours does not have one, so it has no inbox here and cannot send through
+                        this server.
+                    </p>
+                    <p className="mt-3 text-sm text-slate-500 leading-relaxed">
+                        Ask an administrator to turn on <strong className="text-slate-700">Professional Mail Account</strong> for
+                        your user, then reload this page.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
     return (
         <div className="flex w-full h-full bg-[#f8fafc] text-slate-800 font-sans overflow-hidden shadow-2xl relative">
 

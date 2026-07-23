@@ -55,10 +55,12 @@ function registerAdminMenu(pluginSlug: string, item: any) {
             order: item.order || 100,
             cap: item.cap || item.capability || null,
             section: item.section || 'core',
-            // Generic visibility flag: mark an item that is only meaningful to a user who owns a
-            // PROFESSIONAL mailbox on the site domain (e.g. a per-user webmail inbox). Core's
-            // GET /plugins/menus hides it from everyone else. Slug-agnostic — ANY plugin can set it,
-            // so it is not tied to the bundled mail-server.
+            // Generic visibility flag: mark an item that is only meaningful to a user for whom an
+            // ADMINISTRATOR has enabled a professional mailbox (e.g. a per-user webmail inbox). Core's
+            // GET /plugins/menus hides it from everyone else, reading the same admin-owned grant the
+            // plugin's own route gate reads (user_meta.professional_mailbox — see core/mailbox.ts; it
+            // is deliberately NOT derived from the account's email domain, which the account itself can
+            // write). Slug-agnostic — ANY plugin can set it, so it is not tied to the bundled mail-server.
             requiresProfessionalMailbox: !!item.requiresProfessionalMailbox
         });
     }
