@@ -4,6 +4,35 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.7] - 2026-07-23
+
+### Fixed — TLS certificates (Let's Encrypt / ACME)
+- **DNS-01 issuance could never succeed.** The TXT value shown in the admin UI was hashed twice, so it
+  could never match what the CA looked up. `getChallengeKeyAuthorization()` is challenge-type aware: for
+  `http-01` it returns the file content, but for `dns-01` acme-client **already** applies RFC 8555 §8.4
+  (`base64url(sha256(token.thumbprint))`). The old `getDNSDigest()` helper digested that result a second
+  time. The value acme-client returns is now published verbatim and the helper is gone.
+- **The propagation check reported "record not found" indefinitely** even when `dig` showed the record.
+  It used the OS stub resolver, which negative-caches the NXDOMAIN from a check clicked before the record
+  existed (for the zone's negative TTL), and on split-horizon DNS may never see public records at all.
+  It now queries public resolvers (1.1.1.1, 8.8.8.8) with an OS-resolver fallback, follows CNAME chains
+  (delegating `_acme-challenge` to another zone is a common DNS-provider pattern) and joins multi-chunk
+  TXT records per record instead of comparing individual 255-byte chunks.
+- **A local pre-verify miss no longer aborts a valid order.** `verifyChallenge()` fetches the challenge
+  from *this* machine; behind NAT without hairpin, the server often cannot reach its own public hostname
+  even though the CA can. The local check is now advisory — the authoritative verdict comes from the CA
+  via `completeChallenge` + `waitForValidStatus`.
+- **The admin request no longer hangs for minutes.** Outbound ACME HTTP is bounded (10s) and the retry
+  backoff is capped (5 attempts, 3s–10s); the defaults let validation spin roughly four minutes inside a
+  single admin request, and an unreachable port 80 hung on the OS TCP timeout.
+- **A failed gateway push no longer reports success.** `updateSSLConfig()` is async and was not awaited,
+  so the rejection went unhandled and the admin was told the certificate had been installed.
+
+### Changed
+- `react` and `react-dom` to 19.2.8, in both trees that install them. The root package is the gateway's
+  and the copy that reaches a browser is pinned by `frontend/package-lock.json`; bumping only the root
+  would have moved a version nobody executes.
+
 ## [1.12.6] - 2026-07-23
 
 ### Fixed — inbound mail
