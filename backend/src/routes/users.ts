@@ -13,7 +13,7 @@ const { can, isAdmin, ownerOrCan } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
 // ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
-const { refuseSelfServiceEmailChange, EMAIL_FORMAT_RE } = require('../core/mailbox');
+const { refuseSelfServiceEmailChange, EMAIL_FORMAT_RE, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
 
 /**
  * @swagger
@@ -389,7 +389,15 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     //    PUT /me — one helper, so the two self-service doors cannot drift apart. An `edit_users`
     //    delegate is unaffected: assigning corporate addresses is precisely their job.
     const canEditUsers = typeof req.user.can === 'function' && req.user.can('edit_users');
-    if (req.body.professionalMailbox !== undefined) {
+    // NO-OP RESEND IS NOT A WRITE. The admin user editor loads `professionalMailbox` into its form state
+    // and PUTs the whole object back, so a plain "save my display name" from a non-`edit_users` user
+    // carries the field unchanged — rejecting on PRESENCE 403'd every one of those legitimate saves. The
+    // `role` field a few lines below is stripped for exactly this reason, and refuseSelfServiceEmailChange
+    // does the same for `email`; this one was missed. Compare the VALUE and only treat a real change as a
+    // privileged write. (Fail-closed either way, so this was availability, not a hole.)
+    const mailboxRequested = req.body.professionalMailbox !== undefined
+        && mailboxFlagValue(req.body.professionalMailbox) !== mailboxFlagValue(hasProfessionalMailbox(user));
+    if (mailboxRequested) {
         if (!canEditUsers) {
             return res.status(403).json({
                 code: 'rest_forbidden',

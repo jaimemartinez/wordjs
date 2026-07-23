@@ -236,7 +236,7 @@ const MIGRATIONS: Migration[] = [
                     const row = await ctx.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
                     return row ? String(row.option_value ?? '') : '';
                 };
-                let mailDomain = String(await optionOf('mail_security_dkim_domain')).trim().toLowerCase().replace(/\.$/, '');
+                let mailDomain = String(await optionOf('mail_domain')).trim().toLowerCase().replace(/\.$/, '');
                 if (!mailDomain) {
                     const siteUrl = (await optionOf('siteurl')) || (await optionOf('home'));
                     try { mailDomain = new URL(siteUrl).hostname.toLowerCase(); } catch { mailDomain = ''; }
