@@ -53,14 +53,18 @@ function toPascalCase(slug) {
 
 /**
  * Compile a plugin's frontend entries (adminPage/component/hooks) into <plugin>/dist/*.bundle.js by
- * running build-plugin.js against the MARKETPLACE source tree. No-op for plugins that declare no
- * frontend entries. Failing to build is fatal: shipping a zip whose admin page can never load is
- * worse than failing the catalog build loudly.
+ * running build-plugin.js against the MARKETPLACE source tree. No-op for backend-only plugins. Failing
+ * to build is fatal: shipping a zip whose admin page can never load is worse than failing loudly.
+ *
+ * WHICH entries exist is decided by build-plugin.js alone — do NOT re-derive it here. A local copy of
+ * that logic drifted from the real manifest shape and silently shipped bundle-less zips: it looked for
+ * `frontend.component.entry` (the key is `puckComponents.entry`/`components[0].entry`) and
+ * `frontend.hooks.entry` (`hooks` is a plain STRING), so any plugin without an adminPage — the
+ * block-only ones, breadcrumbs / related-posts / table-of-contents — built nothing at all, and their
+ * Puck blocks could never load at runtime.
  */
 function buildFrontendBundles(slug, manifest) {
-    const fe = manifest.frontend || {};
-    const hasEntries = Boolean(fe.adminPage?.entry || fe.component?.entry || fe.hooks?.entry);
-    if (!hasEntries) return;
+    if (!manifest.frontend) return;
     const script = path.join(__dirname, 'build-plugin.js');
     const r = spawnSync(process.execPath, [script, slug], {
         env: { ...process.env, WORDJS_PLUGINS_DIR: SRC },

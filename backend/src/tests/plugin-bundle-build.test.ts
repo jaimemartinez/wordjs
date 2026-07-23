@@ -90,6 +90,60 @@ test('plugin builds a Puck block (component) bundle from frontend.puckComponents
     }
 });
 
+test('plugin builds a hooks bundle from frontend.hooks (a STRING entry) exporting register*', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
+    try {
+        const slug = 'fixture-hooks';
+        const dir = path.join(root, slug);
+        fs.mkdirSync(path.join(dir, 'client'), { recursive: true });
+        fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+            id: slug, name: slug, version: '1.0.0', isolated: true,
+            // frontend.hooks is a plain STRING, not { entry } — the shape every real plugin uses.
+            frontend: { hooks: './client/Ext.tsx' },
+        }));
+        fs.writeFileSync(path.join(dir, 'client', 'Ext.tsx'), `
+            import { useState } from 'react';
+            import { pluginHooks } from '@/lib/plugin-hooks';
+            const Ext = () => { const [n] = useState(0); return <div>{n}</div>; };
+            export const registerExt = () => {
+                pluginHooks.addAction('user_form_before_email', () => <Ext />, 10, 'fixture:ext');
+            };
+        `);
+        const r = build(root, slug);
+        assert.equal(r.status, 0, `build failed: ${r.out}`);
+        const out = path.join(dir, 'dist', 'hooks.bundle.js');
+        assert.ok(fs.existsSync(out), 'hooks.bundle.js must be produced from the frontend.hooks string entry');
+        const code = fs.readFileSync(out, 'utf8');
+        // The runtime loader (pluginBundleLoader.loadRuntimePluginHooks) invokes every export whose name
+        // starts with 'register' — the name must survive minification as an export alias.
+        assert.ok(/\bregisterExt\b/.test(code), 'hooks bundle must export the register* entry point');
+        assert.ok(code.includes('"lib/plugin-hooks"'), 'pluginHooks resolves to the HOST singleton, not a bundled copy');
+        assert.ok(!/from\s*["'](react|react-dom|@\/)/.test(code), 'hooks bundle has no bare react/@ specifiers');
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
+test('plugin bundle build FAILS when the manifest declares a frontend entry that does not exist', () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
+    try {
+        const slug = 'fixture-ghost-entry';
+        const dir = path.join(root, slug);
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({
+            id: slug, name: slug, version: '1.0.0', isolated: true,
+            frontend: { hooks: './client/Missing.tsx' },
+        }));
+        // Silently skipping a declared-but-missing entry is how a plugin ships with its UI extension
+        // simply absent at runtime — indistinguishable from "the plugin has no frontend".
+        const r = build(root, slug);
+        assert.notEqual(r.status, 0, 'build must fail (exit non-zero) on a declared entry that is not on disk');
+        assert.ok(/Missing\.tsx|do not exist/i.test(r.out), `error should name the missing entry; got: ${r.out.slice(0, 400)}`);
+    } finally {
+        fs.rmSync(root, { recursive: true, force: true });
+    }
+});
+
 test('plugin bundle build FAILS loudly on a host import the host does not expose', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-bundle-'));
     try {
