@@ -32,7 +32,15 @@ const HOLDER = `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString
 
 // A lock NAME can carry request-derived data ('wordjs:plugin-op:<slug>'), so strip line breaks before
 // it reaches a log line — otherwise a crafted slug forges or splits entries in the operator's log.
-function logSafe(v: any): string { return String(v == null ? '' : v).replace(/\n|\r/g, ' '); }
+//
+// TWO single-constant replacements, each replacing with the empty string, is deliberate and must stay
+// that way: the log-injection analysis recognises a sanitizer SYNTACTICALLY, and the equivalent
+// `/\n|\r/g` this first carried was not matched (an alternation has no constant value), so every call
+// site still reported an unsanitized log entry. Match the documented remediation shape, not an
+// equivalent of it.
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
 
 function isPg(): boolean {
     try { return require('../config/database').getDbType().isPostgres === true; }

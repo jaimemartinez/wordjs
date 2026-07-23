@@ -245,9 +245,14 @@ function pluginOpKey(slug: any): string {
 /**
  * Strip line breaks from a request-derived value before it goes into a log line, so a crafted slug or
  * an error message echoing one cannot forge or split an entry in the operator's log.
+ *
+ * TWO single-constant replacements, each replacing with the empty string, is deliberate: the
+ * log-injection analysis recognises a sanitizer SYNTACTICALLY, and an alternation (`/\n|\r/g`) has no
+ * constant value, so it is not matched and every call site still reports an unsanitized log entry.
+ * Match the documented remediation shape rather than an equivalent of it.
  */
 function logSafe(v: any): string {
-    return String(v == null ? '' : v).replace(/\n|\r/g, ' ');
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
 /**
