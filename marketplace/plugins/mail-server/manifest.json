@@ -1,7 +1,7 @@
 {
     "id": "mail-server",
     "name": "Mail Server",
-    "version": "2.1.0",
+    "version": "2.1.1",
     "description": "Full webmail (spam folder, labels, undo send, vacation replies, search operators) on a real MTA with DKIM/SPF/DNS tooling",
     "author": "WordJS",
     "isolated": true,
@@ -87,7 +87,6 @@
         "nodemailer": "^7.0.12",
         "smtp-server": "^3.18.0",
         "mailparser": "^3.9.1",
-        "spf-validator": "^1.0.0",
         "dnsbl": "^3.0.0",
         "bayes": "^1.0.0"
     }
