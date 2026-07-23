@@ -292,7 +292,16 @@ const hooksRegistered = new Set<string>();
 async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
     if (hooksRegistered.has(pluginId)) return true;
     const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=hooks`);
-    if (!response.ok) return false;                 // plugin declares no frontend.hooks — normal
+    // ONLY 404 means "this plugin ships no hooks bundle": routes/plugin-bundles.ts returns 404 solely for
+    // a missing dist/hooks.bundle.js, 400 for a bad slug/type, and a restarting gateway yields 502/503.
+    // Treating every non-ok status as "no bundle" made those transient failures resolve `false`, so
+    // loadRuntimePluginHooks saw no rejection, initPlugins never un-latched its run-once guard, and the
+    // plugin's hooks were silently dead for the rest of the session. Throw instead — the plugin is not in
+    // hooksRegistered yet, so the next admin-layout mount retries it.
+    if (response.status === 404) return false;      // plugin declares no frontend.hooks — normal
+    if (!response.ok) {
+        throw new Error(`hooks bundle fetch for '${pluginId}' failed: HTTP ${response.status}`);
+    }
     const code = await response.text();
     const blob = new Blob([code], { type: 'application/javascript' });
     const url = URL.createObjectURL(blob);
