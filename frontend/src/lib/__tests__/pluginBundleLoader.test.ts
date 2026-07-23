@@ -333,6 +333,50 @@ describe("registry classification is bounded — a hanging /plugins/registry can
         }
     });
 
+    // The memoized promise must be the BOUNDED one. When the timeout was applied at the CALL SITE the
+    // un-bounded fetch stayed in registryPromise: a hang never rejects, so the identity-guarded `.catch`
+    // that un-memoizes a failure never fired, and every later mount replayed the same dead promise —
+    // classification was permanently dead even after the gateway came back, with nothing logged.
+    it("re-fetches a registry request that HUNG, and classifies for real on the next pass", async () => {
+        vi.useFakeTimers();
+        try {
+            let registryHangs = true;
+            fetchMock.mockImplementation(async (url: string) => {
+                if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+                if (url === REGISTRY_URL) {
+                    return registryHangs
+                        ? new Promise<Response>(() => { })   // connected, never answers
+                        : registryResponse([registryEntry('mail-server', { hooks: 'client/Ext.tsx' })]);
+                }
+                return jsonResponse({}, 404);
+            });
+            const { loadRuntimePluginHooks } = await freshLoader();
+
+            // Pass 1: the classification times out (2s bound) and stays silent, as it should.
+            const first = loadRuntimePluginHooks();
+            await vi.advanceTimersByTimeAsync(2500);
+            await expect(first).resolves.toBeUndefined();
+            expect(console.warn).not.toHaveBeenCalled();
+            expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(1);
+
+            // Backend recovers, admin layout remounts. The hung attempt must NOT still be memoized.
+            // The second advance is what keeps the PRE-FIX failure loud rather than a runner timeout:
+            // pre-fix, pass 2 replays the dead promise and needs the call-site bound to expire before it
+            // resolves — it then fails on the re-fetch assertion below instead of hanging the suite.
+            registryHangs = false;
+            const second = loadRuntimePluginHooks();
+            await vi.advanceTimersByTimeAsync(2500);
+            await expect(second).resolves.toBeUndefined();
+            expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(2);
+            expect(console.warn).toHaveBeenCalledWith(
+                expect.stringContaining("plugin 'mail-server' declares frontend.hooks"));
+            // And the recovered pass must not leave the bound's timer armed either.
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
     it("clears the timer when the registry answers promptly (no leaked setTimeout)", async () => {
         vi.useFakeTimers();
         try {
@@ -353,6 +397,48 @@ describe("registry classification is bounded — a hanging /plugins/registry can
         } finally {
             vi.useRealTimers();
         }
+    });
+});
+
+/**
+ * The one piece of the SUCCESS path this suite can honestly reach.
+ *
+ * loadPluginHooksBundle's happy path ends in `import()` of a `blob:` URL, which the runner's node
+ * environment cannot perform — so no test here executes a 200 hooks bundle end-to-end, and none pretends
+ * to. What IS testable is the convention that makes a hooks bundle do anything at all: invoke every
+ * export named `register*`. Factored out for exactly that reason and exercised against a plain module
+ * object below, which is the same shape `Object.keys` sees on a real module namespace.
+ */
+describe("invokeHookRegistrars — the register* convention a hooks bundle relies on", () => {
+    it("invokes every export whose name starts with `register`, once each", async () => {
+        const { invokeHookRegistrars } = await freshLoader();
+        const registerUserForm = vi.fn();
+        const registerDashboardCard = vi.fn();
+        invokeHookRegistrars('mail-server', { registerUserForm, registerDashboardCard });
+        expect(registerUserForm).toHaveBeenCalledTimes(1);
+        expect(registerDashboardCard).toHaveBeenCalledTimes(1);
+    });
+
+    it("ignores exports that are not register* functions (default component, config objects, constants)", async () => {
+        const { invokeHookRegistrars } = await freshLoader();
+        const notARegistrar = vi.fn();
+        const deregisterAll = vi.fn();
+        // `registerPath` is a STRING: a name match must never be enough to call something.
+        invokeHookRegistrars('mail-server', {
+            default: notARegistrar, deregisterAll, registerPath: '/admin/mail', setup: notARegistrar,
+        });
+        expect(notARegistrar).not.toHaveBeenCalled();
+        expect(deregisterAll).not.toHaveBeenCalled();
+    });
+
+    it("logs a THROWING registrar and still runs the rest (one broken extension must not blank the others)", async () => {
+        const { invokeHookRegistrars } = await freshLoader();
+        const registerBroken = vi.fn(() => { throw new Error('boom'); });
+        const registerHealthy = vi.fn();
+        expect(() => invokeHookRegistrars('mail-server', { registerBroken, registerHealthy })).not.toThrow();
+        expect(registerHealthy).toHaveBeenCalledTimes(1);
+        expect(console.error).toHaveBeenCalledWith(
+            expect.stringContaining('Error in hook mail-server'), expect.any(Error));
     });
 });
 

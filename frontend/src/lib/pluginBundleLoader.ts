@@ -345,8 +345,9 @@ const hooksAbsentWarned = new Set<string>();
 // The public plugin registry (GET /plugins/registry → each ACTIVE plugin's full manifest). Fetched
 // LAZILY — only to classify a hooks-bundle 404 — so a healthy install pays nothing on the happy path.
 // Same discipline as activePromise: only a SUCCESSFUL fetch is memoized, so a session makes at most ONE
-// SUCCESSFUL registry request no matter how many 404s need classifying; a FAILED one is deliberately not
-// cached, so a later mount retries it (that retry is the only way a request count can exceed one).
+// SUCCESSFUL registry request no matter how many 404s need classifying; a FAILED one — including one that
+// never ANSWERS, see REGISTRY_CLASSIFY_TIMEOUT_MS — is deliberately not cached, so a later mount retries
+// it (that retry is the only way a request count can exceed one).
 let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
 
 // `frontend: null` is not "no frontend": routes/plugins.ts emits exactly that when it cannot READ the
@@ -370,13 +371,43 @@ function extractRegistryList(raw: unknown): PluginRegistryEntry[] {
     return list as PluginRegistryEntry[];
 }
 
+// Upper bound on how long CLASSIFYING a 404 may hold up the hook-loading pass. Diagnosing why a plugin
+// shipped no hooks bundle is strictly a console-warning nicety; a registry request left hanging by a
+// half-dead gateway (connected, never answering — no HTTP status, so no `!res.ok` rejection to lean on)
+// must never be able to hold loadRuntimePluginHooks open indefinitely behind it.
+const REGISTRY_CLASSIFY_TIMEOUT_MS = 2000;
+
+/**
+ * Reject after `ms` if `p` has not settled. The timer is ALWAYS cleared, including when `p` wins the
+ * race: a `Promise.race` whose losing setTimeout is left armed keeps the event loop alive, which is
+ * precisely the leak that made this repo's test runner flake under `--test-force-exit`.
+ * `Promise.race` subscribes to `p`, so a late rejection from the loser is already handled and can never
+ * surface as an unhandled rejection.
+ */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+    let timer: ReturnType<typeof setTimeout>;
+    const expiry = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    });
+    return Promise.race([p, expiry]).finally(() => clearTimeout(timer));
+}
+
+/**
+ * The MEMOIZED promise is the BOUNDED one, deliberately. Bounding the request at the call site instead
+ * (which is where the timeout used to live) left the un-bounded fetch memoized: a gateway that accepts
+ * the connection and never answers produced a `registryPromise` that never settles, so the `.catch`
+ * un-memo below never ran, every later mount replayed the same dead promise and waited out the 2s timeout
+ * again, and classification stayed dead for the rest of the session — even after the backend recovered —
+ * until the socket finally errored. Racing INSIDE the memo turns "never answered" into a real rejection,
+ * which is the only thing that can evict it.
+ */
 function fetchPluginRegistry(): Promise<PluginRegistryEntry[]> {
     if (registryPromise) return registryPromise;
-    const attempt: Promise<PluginRegistryEntry[]> = (async () => {
+    const attempt: Promise<PluginRegistryEntry[]> = withTimeout((async () => {
         const res = await fetch('/api/v1/plugins/registry');
         if (!res.ok) throw new Error(`GET /api/v1/plugins/registry failed: HTTP ${res.status}`);
         return extractRegistryList(await res.json());
-    })();
+    })(), REGISTRY_CLASSIFY_TIMEOUT_MS, 'plugin registry classification');
     registryPromise = attempt;
     attempt.catch(() => { if (registryPromise === attempt) registryPromise = null; });
     return attempt;
@@ -404,27 +435,6 @@ async function classifyMissingHooksBundle(pluginId: string): Promise<HooksAbsenc
         : 'none';
 }
 
-// Upper bound on how long CLASSIFYING a 404 may hold up the hook-loading pass. Diagnosing why a plugin
-// shipped no hooks bundle is strictly a console-warning nicety; a registry request left hanging by a
-// half-dead gateway (connected, never answering — no HTTP status, so no `!res.ok` rejection to lean on)
-// must never be able to hold loadRuntimePluginHooks open indefinitely behind it.
-const REGISTRY_CLASSIFY_TIMEOUT_MS = 2000;
-
-/**
- * Reject after `ms` if `p` has not settled. The timer is ALWAYS cleared, including when `p` wins the
- * race: a `Promise.race` whose losing setTimeout is left armed keeps the event loop alive, which is
- * precisely the leak that made this repo's test runner flake under `--test-force-exit`.
- * `Promise.race` subscribes to `p`, so a late rejection from the loser is already handled and can never
- * surface as an unhandled rejection.
- */
-function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
-    let timer: ReturnType<typeof setTimeout>;
-    const expiry = new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
-    });
-    return Promise.race([p, expiry]).finally(() => clearTimeout(timer));
-}
-
 /**
  * Warn — once per plugin per session — only when a hooks-bundle 404 is a REAL problem. Never throws:
  * a plugin without hooks is not an error, and neither is failing to classify one.
@@ -433,16 +443,13 @@ async function warnIfHooksBundleShouldExist(pluginId: string): Promise<void> {
     if (hooksAbsentWarned.has(pluginId)) return;
     let cause: HooksAbsence;
     try {
-        cause = await withTimeout(
-            classifyMissingHooksBundle(pluginId),
-            REGISTRY_CLASSIFY_TIMEOUT_MS,
-            'plugin registry classification',
-        );
+        cause = await classifyMissingHooksBundle(pluginId);
     } catch {
-        // The registry is unreachable, malformed, or too slow to wait for — all transient conditions that
-        // say nothing about this plugin, and ones the caller is already dealing with elsewhere. Stay
-        // silent rather than emit an alarming line per active plugin; fetchPluginRegistry did not memoize
-        // the failure, so a later mount classifies for real.
+        // The registry is unreachable, malformed, or too slow to wait for (fetchPluginRegistry bounds
+        // itself at REGISTRY_CLASSIFY_TIMEOUT_MS) — all transient conditions that say nothing about this
+        // plugin, and ones the caller is already dealing with elsewhere. Stay silent rather than emit an
+        // alarming line per active plugin; fetchPluginRegistry memoized none of those failures, the
+        // timeout included, so a later mount re-fetches and classifies for real.
         return;
     }
     if (cause === 'none') return;
@@ -458,6 +465,25 @@ async function warnIfHooksBundleShouldExist(pluginId: string): Promise<void> {
               `is missing, or the manifest is invalid JSON), so no hooks bundle could be served. The ` +
               `install is broken — reinstall the plugin.`
     );
+}
+
+/**
+ * Invoke every export of an evaluated hooks bundle whose name starts with `register`.
+ *
+ * Exported so it can be unit-tested against a PLAIN module object: the only other way in is
+ * loadPluginHooksBundle's `import()` of a `blob:` URL, which the test runner's node environment cannot
+ * perform — leaving this convention (the whole point of a hooks bundle) with no coverage at all.
+ * Deliberately tolerant, because the input is third-party code: a non-function export named `registerX`
+ * is skipped, and a register() that THROWS is logged and does not stop the remaining ones (a plugin's
+ * second extension must still register when its first one is broken).
+ */
+export function invokeHookRegistrars(pluginId: string, mod: Record<string, unknown>): void {
+    for (const key of Object.keys(mod)) {
+        const fn = mod[key];
+        if (key.startsWith('register') && typeof fn === 'function') {
+            try { (fn as () => void)(); } catch (e) { console.error(`[PluginLoader] Error in hook ${pluginId}:`, e); }
+        }
+    }
 }
 
 /**
@@ -508,12 +534,7 @@ async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
         // Mark BEFORE invoking: a register() that throws must not be retried on the next mount (it would
         // throw again), and pluginHooks keys already make a partial registration idempotent.
         hooksRegistered.add(pluginId);
-        for (const key of Object.keys(mod)) {
-            const fn = mod[key];
-            if (key.startsWith('register') && typeof fn === 'function') {
-                try { fn(); } catch (e) { console.error(`[PluginLoader] Error in hook ${pluginId}:`, e); }
-            }
-        }
+        invokeHookRegistrars(pluginId, mod);
         return true;
     } finally {
         URL.revokeObjectURL(url);
