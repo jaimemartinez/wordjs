@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.4',
+    version: '2.1.5',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -390,20 +390,34 @@ const SPF_MAX_DEPTH = 10;
  *                   is not ENODATA/ENOTFOUND/NXDOMAIN, so it counted as a TEMPORARY failure → 451.
  * Same bug, two different wrong answers, and neither of them is "does this /24 contain the sender".
  *
- * Strips from the RIGHT (the "//" form must be consumed before the "/" form) and returns the leftover
- * text plus the two prefix lengths (null = absent → treat the address as an exact match).
- * NOTE: only ever applied to `a`/`mx`. For ip4:/ip6: the "/len" is part of the VALUE (an actual CIDR
- * that ipInCidr consumes) and must stay attached.
+ * Returns the leftover text, the two prefix lengths (null = absent → treat the address as an exact
+ * match) and a `malformed` flag. NOTE: only ever applied to `a`/`mx`. For ip4:/ip6: the "/len" is part
+ * of the VALUE (an actual CIDR that ipInCidr consumes) and must stay attached.
+ *
+ * MALFORMED is a real answer, not an absent prefix. The first version anchored the length at 1-3 digits
+ * and stripped from the right, so "a/1234", "a//1234", "a/abc" and a bare "a/" matched neither pattern,
+ * stayed glued to the name, matched NO mechanism, and were silently skipped — falling through to the
+ * record's `-all` → 'fail' → 550. That is the same harm class as the bug this function was written to
+ * fix, just reached through a different spelling. RFC 7208 §4.6/§5.3 says a syntax error in the record
+ * is 'permerror', which the caller accepts (and tags) rather than rejects, so the sender's mail gets
+ * through and the operator's admin error is what shows up in the header.
  */
 function splitDualCidr(text) {
-    let rest = String(text == null ? '' : text);
-    let v4 = null;
-    let v6 = null;
-    let m = /\/\/(\d{1,3})$/.exec(rest);
-    if (m) { v6 = parseInt(m[1], 10); rest = rest.slice(0, m.index); }
-    m = /\/(\d{1,3})$/.exec(rest);
-    if (m) { v4 = parseInt(m[1], 10); rest = rest.slice(0, m.index); }
-    return { rest, v4, v6 };
+    const raw = String(text == null ? '' : text);
+    const slash = raw.indexOf('/');
+    if (slash < 0) return { rest: raw, v4: null, v6: null, malformed: false };
+    // ABNF §12: ip4-cidr-length is at most 2 digits, ip6-cidr-length at most 3, and the "//" form must
+    // follow the "/" form. Match the WHOLE suffix in one shot so anything else is unambiguously a
+    // syntax error instead of a prefix we quietly decline to parse.
+    const m = /^(?:\/(\d{1,2}))?(?:\/\/(\d{1,3}))?$/.exec(raw.slice(slash));
+    const rest = raw.slice(0, slash);
+    if (!m || (m[1] === undefined && m[2] === undefined)) return { rest, v4: null, v6: null, malformed: true };
+    return {
+        rest,
+        v4: m[1] === undefined ? null : parseInt(m[1], 10),
+        v6: m[2] === undefined ? null : parseInt(m[2], 10),
+        malformed: false
+    };
 }
 
 /**
@@ -465,8 +479,20 @@ async function evaluateSPF(domain, ip, depth = 0, budget = { lookups: 0 }) {
         const qualifier = '+-~?'.includes(term[0]) ? term[0] : '+';
         const mechanism = '+-~?'.includes(term[0]) ? term.slice(1) : term;
         // Split on the first ':' or '=' into mechanism name and its value (a:host, ip4:cidr, include:dom).
+        //
+        // The NAME is case-INSENSITIVE (RFC 7208 §4.6.1 ABNF spells every mechanism and modifier out of
+        // literal strings, which are case-insensitive in ABNF), so fold it before every comparison
+        // below. Matching it case-sensitively was NOT a cosmetic omission: the record detector above is
+        // already /i, so a record published as "v=spf1 A/24 -all" or "v=spf1 IP4:203.0.113.5 -all" was
+        // FOUND and then evaluated as if every one of its mechanisms were unknown — each silently
+        // skipped, falling through to the trailing -all → 'fail' → 550 for a sender the policy
+        // explicitly authorizes. "-ALL" failed the other way, degrading to 'neutral' (accept).
+        //
+        // Fold the NAME ONLY. The VALUE must survive verbatim: a domain-spec is case-insensitive for
+        // DNS, but macros (%{s}, %{S}) and the exp= explanation string are NOT, and lower-casing the
+        // envelope-derived text we may one day expand there would silently corrupt it.
         const sepMatch = mechanism.match(/[:=]/);
-        let name = sepMatch ? mechanism.slice(0, sepMatch.index) : mechanism;
+        let name = (sepMatch ? mechanism.slice(0, sepMatch.index) : mechanism).toLowerCase();
         let value = sepMatch ? mechanism.slice(sepMatch.index + 1) : null;
 
         // RFC 7208 §5.3/§5.4: `a` and `mx` may carry a dual-cidr-length, which the ':' / '=' split above
@@ -474,10 +500,16 @@ async function evaluateSPF(domain, ip, depth = 0, budget = { lookups: 0 }) {
         // Peel it off both places; see splitDualCidr for what each spelling used to do wrong.
         let cidr4 = null;
         let cidr6 = null;
+        // A malformed prefix is only ever judged on a mechanism we actually KNOW: an unknown term with a
+        // slash in it stays ignored (conservative), exactly as before.
         const bare = splitDualCidr(name);
-        if (bare.rest === 'a' || bare.rest === 'mx') { name = bare.rest; cidr4 = bare.v4; cidr6 = bare.v6; }
+        if (bare.rest === 'a' || bare.rest === 'mx') {
+            if (bare.malformed) return 'permerror';
+            name = bare.rest; cidr4 = bare.v4; cidr6 = bare.v6;
+        }
         if ((name === 'a' || name === 'mx') && value !== null) {
             const spec = splitDualCidr(value);
+            if (spec.malformed) return 'permerror';
             value = spec.rest || null;
             if (spec.v4 !== null) cidr4 = spec.v4;
             if (spec.v6 !== null) cidr6 = spec.v6;
@@ -934,9 +966,14 @@ async function initSMTPServer() {
                     result = 'temperror';
                 }
 
-                // Record the verdict on the session so onData can PERSIST it with the message. This is
-                // what makes accepting 'permerror' defensible: the verdict survives the transaction.
-                session.spfResult = result;
+                // Record the verdict on the session so onData can PERSIST it with the message (it writes
+                // this string to the message row's received_spf column). This is what makes accepting
+                // 'permerror' defensible: the verdict survives the transaction.
+                //
+                // ONE field, because one thing reads it. A parallel `session.spfResult = result` was
+                // written here too and had zero readers repo-wide — the very defect (a verdict stashed
+                // on the session that nothing consumes) that this change set exists to remove, so
+                // re-introducing it in the fix would have been the bug wearing the patch's clothes.
                 session.spfHeader = buildReceivedSpf(result, {
                     domain, mailFrom, ip,
                     helo: session.clientHostname,
