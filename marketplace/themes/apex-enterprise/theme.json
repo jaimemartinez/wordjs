@@ -1,0 +1,14 @@
+{
+  "name": "Apex Enterprise",
+  "version": "1.0.0",
+  "description": "Corporate SaaS template with glassmorphism cards, glowing metrics, and dark mode hero banners.",
+  "author": "WordJS Premium Studio",
+  "category": "Corporate",
+  "archetype": "glassmorphism",
+  "tags": [
+    "premium",
+    "corporate",
+    "glassmorphism",
+    "responsive"
+  ]
+}

@@ -1,0 +1,86 @@
+/* Theme: Velocity Agency (Brutalist Archetype) */
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Public+Sans:wght@400;700&display=swap');
+
+:root {
+    --brutal-primary: #f43f5e;
+    --brutal-secondary: #e11d48;
+    --brutal-bg: #18181b;
+    --brutal-text: #fff1f2;
+}
+
+body {
+    background-color: var(--brutal-bg);
+    color: var(--brutal-text);
+    font-family: 'Public Sans', sans-serif;
+    margin: 0;
+    padding: 0;
+}
+
+h1, h2, h3 {
+    font-family: 'Space Grotesk', sans-serif;
+    font-size: 3rem;
+    text-transform: uppercase;
+    letter-spacing: -1px;
+    margin: 0 0 1rem 0;
+}
+
+.theme-container {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 3rem 1.5rem;
+}
+
+.theme-hero {
+    background: var(--brutal-primary);
+    color: #000;
+    border: 4px solid #000;
+    box-shadow: 8px 8px 0px #000;
+    padding: 4rem 2rem;
+    margin-bottom: 4rem;
+}
+
+.theme-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 2.5rem;
+}
+
+.theme-card {
+    background: #ffffff;
+    color: #000;
+    border: 4px solid #000;
+    box-shadow: 6px 6px 0px #000;
+    padding: 2rem;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.theme-card:hover {
+    transform: translate(-4px, -4px);
+    box-shadow: 10px 10px 0px #000;
+}
+
+.theme-badge {
+    background: var(--brutal-secondary);
+    color: #fff;
+    border: 2px solid #000;
+    padding: 6px 12px;
+    font-weight: 800;
+    text-transform: uppercase;
+    font-size: 0.8rem;
+}
+
+button.theme-btn {
+    background: #000;
+    color: #fff;
+    border: 3px solid #000;
+    box-shadow: 4px 4px 0px var(--brutal-primary);
+    padding: 14px 28px;
+    font-weight: 800;
+    font-size: 1rem;
+    cursor: pointer;
+}
+
+button.theme-btn:hover {
+    background: var(--brutal-primary);
+    color: #000;
+}

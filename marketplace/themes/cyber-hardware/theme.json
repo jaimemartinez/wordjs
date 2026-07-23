@@ -1,0 +1,14 @@
+{
+  "name": "Cyber Hardware",
+  "version": "1.0.0",
+  "description": "Gaming hardware & peripheral shop theme with RGB neon glow effects and spec comparison tables.",
+  "author": "WordJS Premium Studio",
+  "category": "Commerce",
+  "archetype": "cyber",
+  "tags": [
+    "premium",
+    "commerce",
+    "cyber",
+    "responsive"
+  ]
+}
