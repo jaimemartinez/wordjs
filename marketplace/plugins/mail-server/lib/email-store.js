@@ -220,6 +220,11 @@ module.exports = function createEmailStore(db) {
                 // 0 = legacy row from before the ownership model (matched by address instead).
                 'user_id INT DEFAULT 0',
                 'raw_content TEXT',
+                // RFC 7208 §9.1 Received-SPF header for the inbound transaction that delivered this
+                // message ('' for outbound/local copies, or when SPF was skipped/disabled). Without a
+                // column the SPF verdict had nowhere to live: onMailFrom computed it and threw it away,
+                // so accepting a 'permerror' left no trace anywhere that it had been unevaluable.
+                'received_spf TEXT',
                 'parent_id INT DEFAULT 0',
                 'thread_id INT DEFAULT 0',
                 'scheduled_at DATETIME',
@@ -278,6 +283,10 @@ module.exports = function createEmailStore(db) {
             // every engine — so a swallowed error IS the idempotency check (same pattern as _createIndex).
             await this._ensureColumn(T_EMAILS, 'user_id', 'INT DEFAULT 0');
             await this._ensureColumn(T_EMAILS, 'is_spam', 'INT DEFAULT 0');
+            // v2.1.4: persisted SPF verdict. Added as VARCHAR(1024) rather than TEXT because MySQL
+            // rejects an ALTER that widens a row past its limit with many TEXT columns, and this one is
+            // a single bounded header line (same reasoning as the online-store v1→v2 ADD COLUMN).
+            await this._ensureColumn(T_EMAILS, 'received_spf', 'VARCHAR(1024)');
 
             // 3. One-time, idempotent migration from the legacy UNPREFIXED tables, if they still exist.
             // (Only relevant for sites upgraded from the trusted era where the bridge let us write
@@ -387,6 +396,7 @@ module.exports = function createEmailStore(db) {
         async create(data) {
             const {
                 messageId, fromAddress, fromName, toAddress, ccAddress = '', bccAddress = '', subject, bodyText, bodyHtml, rawContent,
+                receivedSpf = '',
                 isSent = 0, isDraft = 0, isArchived = 0, isStarred = 0, isTrash = 0, isSpam = 0,
                 parentId = 0, threadId = 0, scheduledAt = null
             } = data;
@@ -405,11 +415,13 @@ module.exports = function createEmailStore(db) {
             const result = await db.run(`
                 INSERT INTO ${T_EMAILS} (
                     message_id, from_address, from_name, to_address, cc_address, bcc_address, subject, body_text, body_html, raw_content,
+                    received_spf,
                     is_sent, is_draft, is_archived, is_starred, is_trash, is_spam, user_id, parent_id, thread_id, scheduled_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             `, [
                 str(messageId), str(fromAddress), str(fromName), str(toAddress), str(ccAddress), str(bccAddress), str(subject), str(bodyText), str(bodyHtml), str(rawContent),
+                str(receivedSpf).slice(0, 1024),
                 isSent, isDraft, isArchived, isStarred, isTrash, isSpam ? 1 : 0, ownerId, parentId, threadId, scheduledAt
             ]);
 
