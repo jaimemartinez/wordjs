@@ -80,16 +80,31 @@ jobs:
           WORDJS_CI_DB: '1'
         run: npm run test:integration
 
-      - name: Marketplace catalog freshness
-        # marketplace/dist/ is the LIVE committed catalog served to every install via
-        # raw.githubusercontent.com. The build is deterministic (fixed zip timestamps, no
-        # generated-at field), so a plugin change without a rebuilt catalog shows up as a diff.
+      - name: Marketplace catalog integrity
+        # REPLACES a `git diff --exit-code -- marketplace/dist` gate that could never fail. Both of the
+        # premises it was written on were false: marketplace/dist/ is NOT committed (it is gitignored by
+        # `**/dist/` and has zero tracked files, so git had nothing to diff — the step reported green
+        # while verifying nothing), and the build was NOT deterministic (build-plugin.js stamped
+        # `new Date()` into every bundle banner, so every zip's sha256 changed on every build). The
+        # catalog is produced here and by release.yml, which attaches it to the GitHub Release —
+        # routes/marketplace.ts documents that a raw.githubusercontent.com/main URL 404s for exactly
+        # this reason. "Is the committed catalog fresh?" was never a question that could be asked.
+        #
+        # verify-marketplace.js asks the question that actually protects installs — does every published
+        # zip match the catalog entry advertising it? It re-hashes the bytes ON DISK against the entry's
+        # sha256/size (the same check routes/marketplace.ts runs before installing, so a drift bricks
+        # every install), compares the manifest INSIDE each zip against the entry, requires every
+        # frontend entry a manifest declares to have its compiled dist/*.bundle.js in the package
+        # (build-plugin.js skips a declared-but-missing entry silently — that is how a plugin whose admin
+        # page can never load shipped twice), rejects packages carrying a plugin's runtime data/ (live
+        # secrets, e.g. mail-server's AES root key) or exceeding the installer's 10MB cap, and rejects
+        # unreferenced leftovers in dist/ that release.yml would still upload as release assets.
+        # --rebuild additionally requires a second build of unchanged sources to be byte-identical, so
+        # a published package stays re-derivable from the tagged sources.
+        # backend/src/tests/marketplace-catalog.test.ts proves each of these assertions goes red.
         run: |
           node backend/scripts/build-marketplace.js
-          git diff --exit-code -- marketplace/dist || {
-            echo "::error::marketplace/dist is stale — run 'npm run build:marketplace' and commit the result."
-            exit 1
-          }
+          node backend/scripts/verify-marketplace.js --rebuild
 
   gateway:
     name: Gateway (test)

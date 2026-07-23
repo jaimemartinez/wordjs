@@ -256,9 +256,12 @@ async function buildPlugin(slug) {
                 // Handle JSX
                 jsx: 'automatic',
 
-                // Inject banner with metadata
+                // Inject banner with metadata. NO build timestamp: this banner is the first line of a
+                // bundle that ships inside the marketplace catalog zip, so a `new Date()` here changed
+                // every plugin's published sha256 on every build — reproducibility was impossible and
+                // each release republished untouched plugins as "changed". Keep it source-derived only.
                 banner: {
-                    js: `/* WordJS Plugin Bundle: ${slug}/${entry.name} - Built ${new Date().toISOString()} */`
+                    js: `/* WordJS Plugin Bundle: ${slug}/${entry.name} */`
                 },
 
                 // Define replacements for imports
@@ -294,10 +297,14 @@ async function buildPlugin(slug) {
         }
     }
 
-    // Update manifest with build info
+    // Update manifest with build info.
+    // DELIBERATELY has no build timestamp: this file ships inside every marketplace catalog zip, so a
+    // `builtAt: new Date()` made each zip's bytes — and therefore its published sha256 — differ on every
+    // build. That silently broke reproducibility (nobody could re-derive a published package from the
+    // tagged sources) and republished every plugin as "changed" on each release. Keep this object a pure
+    // function of the plugin's sources; verify-marketplace.js --rebuild enforces it.
     const buildManifest = {
         slug: slug,
-        builtAt: new Date().toISOString(),
         bundles: entryPoints.map(e => `${e.name}.bundle.js`),
         externals: Object.keys(GLOBAL_EXTERNALS_MAP),
         version: manifest.version || '1.0.0'
