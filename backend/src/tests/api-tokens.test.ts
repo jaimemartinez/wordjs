@@ -72,6 +72,14 @@ before(async () => {
     await seedUser('admin', 'administrator');
     await seedUser('subscriber', 'subscriber');
     await seedUser('mallory', 'administrator'); // a second admin, to prove per-user token isolation
+    await seedUser('contrib', 'contributor');   // holds edit_posts but NOT manage_api_tokens → 403 on mint
+
+    // Token minting now requires `manage_api_tokens` (admins hold it via '*'). To keep the "a token
+    // cannot exceed the issuing user's role" invariant testable with a NON-admin, grant the capability
+    // to the subscriber role — exactly what an operator does in Users → Roles. The subscriber still has
+    // no edit_posts, so its token still cannot create a post.
+    await roles.updateRoleCapabilities('subscriber', ['read', 'access_admin_panel', 'manage_api_tokens']);
+    await roles.loadRoles();
 });
 
 after(async () => {
@@ -142,7 +150,17 @@ test('a WRITE token (admin) passes both the scope gate and CSRF with no Origin h
     assert.notStrictEqual(res.body.code, 'rest_csrf_invalid');
 });
 
+test('minting a token requires manage_api_tokens — a user without it is refused (403)', async () => {
+    // `contrib` (contributor) can edit posts but was NOT granted manage_api_tokens, so it cannot mint.
+    const res = await mintToken('contrib', { name: 'nope', scopes: 'read' });
+    assert.strictEqual(res.status, 403, `expected 403, got ${res.status} ${JSON.stringify(res.body)}`);
+    // The mint is refused by the capability gate, BEFORE any token is created.
+    const count = await dbAsync.get('SELECT COUNT(*) AS n FROM api_tokens WHERE user_id = ?', [U.contrib]);
+    assert.strictEqual(count.n, 0, 'no token row may be created for an unauthorized mint');
+});
+
 test('a WRITE token cannot exceed the issuing user role (subscriber ∩ write = still no edit_posts)', async () => {
+    // subscriber was granted manage_api_tokens above, so it CAN mint — but still holds no edit_posts.
     const { body } = await mintToken('subscriber', { name: 'sub-rw', scopes: 'write' });
     const res = await request(app).post('/api/v1/posts').set('Authorization', `Bearer ${body.token}`)
         .send({ title: 'nope', content: 'x', status: 'draft' });

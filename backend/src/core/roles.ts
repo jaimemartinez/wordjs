@@ -226,7 +226,11 @@ function getAllAvailableCapabilities() {
         'manage_categories', 'moderate_comments', 'upload_files',
         'list_users', 'edit_users', 'promote_users', 'delete_users',
         'activate_plugins', 'switch_themes', 'manage_options',
-        'edit_theme_options'
+        'edit_theme_options',
+        // API tokens are no longer self-service for every logged-in user: creating/listing/revoking a
+        // personal API token now requires this capability. Administrators hold it via the '*' wildcard;
+        // grant it to another role in Users → Roles to let those users mint their own scoped tokens.
+        'manage_api_tokens'
     ];
     coreCaps.forEach(cap => caps.add(cap));
 
