@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.6',
+    version: '2.1.7',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -648,14 +648,23 @@ function qualifierToResult(q) {
  *                            discarded: the verdict is recorded in the Received-SPF header stored with
  *                            the message (see buildReceivedSpf).
  *   temperror              — we could not evaluate RIGHT NOW → 451 so the sender retries; never 550.
- *   fail / softfail        — the domain owner says this IP is not authorized → 550.
+ *   softfail               — "probably not authorized" (`~all`). RFC 7208 §8.5 is explicit that a softfail
+ *                            is WEAK evidence and SHOULD NOT be used on its own to reject. It is also what
+ *                            the large providers publish — gmail, google and microsoft all end in `~all` —
+ *                            so a 550 here permanently bounces legitimate forwarded and mailing-list mail,
+ *                            which is the SAME user-visible symptom as the sandbox-DNS bug this file
+ *                            already fixed, reached by a different code path. Accept in BOTH modes and let
+ *                            Received-SPF carry the verdict, exactly like permerror.
+ *   fail                   — the domain owner states this IP is NOT authorized (`-all`) → 550.
  *
  * @returns {{code: 0|451|550, tagged: boolean}} code 0 = accept.
  */
 function spfAction(result, rejectEnabled) {
     if (result === 'pass' || result === 'neutral' || result === 'none') return { code: 0, tagged: false };
-    if (result === 'permerror') return { code: 0, tagged: true };
-    // temperror / fail / softfail are refusals — unless the operator asked for tag-only.
+    // Accepted-but-not-clean in BOTH modes. Neither verdict asserts the IP is unauthorized: permerror is
+    // the sender's own broken policy, softfail is their explicit "probably not, but don't reject on this".
+    if (result === 'permerror' || result === 'softfail') return { code: 0, tagged: true };
+    // temperror / fail are refusals — unless the operator asked for tag-only.
     if (!rejectEnabled) return { code: 0, tagged: true };
     if (result === 'temperror') return { code: 451, tagged: true };
     return { code: 550, tagged: true };
@@ -1002,8 +1011,9 @@ async function initSMTPServer() {
         },
 
         // 2. SPF Protection — real check against the connecting IP and MAIL FROM domain.
-        // Default ON, FAIL CLOSED for external senders: reject on explicit SPF fail/softfail, defer on a
-        // lookup error. 'pass'/'neutral'/'none' (no SPF record) are accepted to avoid false rejects.
+        // Default ON, FAIL CLOSED for external senders: reject on an explicit SPF fail (`-all`), defer on a
+        // lookup error. 'pass'/'neutral'/'none' (no SPF record) are accepted to avoid false rejects, and so
+        // are 'softfail' (§8.5 — weak evidence, and what gmail/google/microsoft publish) and 'permerror'.
         // WHAT each verdict costs the sender lives in ONE place — spfAction() — deliberately, because
         // the previous chain of early returns let the temperror 451 fire BEFORE the operator's
         // reject-override was even read (see spfAction).

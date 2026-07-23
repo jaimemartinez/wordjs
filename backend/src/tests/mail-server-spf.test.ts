@@ -639,9 +639,12 @@ test('spfAction maps every verdict to one SMTP outcome', () => {
         // An unevaluable policy is NOT a statement that the IP is unauthorized (§8.6) — never a refusal.
         ['permerror', true, { code: 0, tagged: true }],
         ['permerror', false, { code: 0, tagged: true }],
+        // §8.5: a softfail is WEAK evidence and SHOULD NOT be used on its own to reject. gmail, google and
+        // microsoft all publish `~all`, so a 550 here permanently bounces legitimate forwarded and
+        // mailing-list mail. Accepted-and-tagged in BOTH modes, like permerror.
+        ['softfail', true, { code: 0, tagged: true }],
         ['temperror', true, { code: 451, tagged: true }],
         ['fail', true, { code: 550, tagged: true }],
-        ['softfail', true, { code: 550, tagged: true }],
         // mail_security_spf_reject='0' — "do not turn SPF into a refusal, tag and let me filter".
         ['temperror', false, { code: 0, tagged: true }],
         ['fail', false, { code: 0, tagged: true }],
@@ -667,6 +670,22 @@ test('tag-only gates EVERY SPF-driven refusal, the 451 included', async () => {
 
     const soft = await deliver({ record: 'v=spf1 ~all', options: tagOnly });
     assert.strictEqual(soft.code, 0, 'tag-only + softfail is accepted');
+});
+
+test('a softfail is accepted-and-tagged even with rejection ENABLED (RFC 7208 §8.5)', async () => {
+    // REGRESSION GUARD. spfAction() used to let softfail fall through to the catch-all 550 alongside a
+    // hard fail, so `~all` was answered with a PERMANENT rejection. §8.5 says a softfail is weak evidence
+    // and SHOULD NOT be used on its own to reject — and `~all` is exactly what gmail, google and microsoft
+    // publish, so that 550 permanently bounced legitimate forwarded and mailing-list mail. This was proven
+    // on a live MTA in the SPF lab: the row answered 550 both before AND after the sandbox-DNS fix, i.e. it
+    // was the one row whose OUTCOME never changed while its cause did.
+    const soft = await deliver({ record: 'v=spf1 ip4:10.0.0.0/8 ~all' }); // default: rejection enabled
+    assert.strictEqual(soft.code, 0, 'softfail must be ACCEPTED, not 550');
+    assert.strictEqual(verdictOf(soft.session), 'softfail', 'and the verdict is still computed as softfail');
+
+    // A hard fail on the same shape must STILL reject — otherwise this fix would have neutered SPF.
+    const hard = await deliver({ record: 'v=spf1 ip4:10.0.0.0/8 -all' });
+    assert.strictEqual(hard.code, 550, '-all must still reject, so the control is not simply switched off');
 });
 
 test('the DEFAULT (reject enabled) still defers and rejects', async () => {
