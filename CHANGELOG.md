@@ -4,6 +4,30 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.5] - 2026-07-22
+
+### Fixed
+
+- **Marketplace plugins' frontend hooks now register in production.** A plugin can extend core admin UI
+  through the hook system (`manifest.frontend.hooks`), but those hooks were resolved *only* from the
+  registry compiled into the frontend at build time — the same build-time-baking root cause already fixed
+  for admin pages and Puck blocks in 1.12.3. On a production install that registry is frozen (and a release
+  ships zero plugins), so a marketplace-installed plugin's hooks never registered and its UI extension was
+  simply absent: the mail server's **"Professional Mail Account"** toggle never appeared in the user form,
+  even though the plugin was active and its `dist/hooks.bundle.js` was installed and served. The admin shell
+  now also loads every **active** plugin's pre-compiled hooks bundle at runtime and invokes its `register*`
+  exports, which register into the host's own `pluginHooks` singleton.
+- **Block-only marketplace plugins ship their compiled block again.** The catalog builder re-derived which
+  frontend entries a plugin declares instead of asking the bundler, and its copy had drifted from the real
+  manifest shape (it read `frontend.component.entry` — the key is `puckComponents.entry` — and treated
+  `frontend.hooks` as an object when it is a string). Any plugin without an admin page therefore compiled
+  **nothing**: `breadcrumbs`, `related-posts` and `table-of-contents` shipped without the
+  `dist/component.bundle.js` their Puck block needs to load at runtime. Entry resolution now lives solely in
+  `build-plugin.js`.
+- **A declared-but-missing frontend entry fails the plugin build.** `build-plugin.js` silently skipped an
+  entry whose file did not exist and still reported success, so a typo in `manifest.frontend` produced a
+  plugin that installs cleanly and whose UI is merely invisible at runtime. It is now a build error.
+
 ## [1.12.4] - 2026-07-22
 
 ### Fixed

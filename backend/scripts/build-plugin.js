@@ -104,27 +104,24 @@ async function buildPlugin(slug) {
     }
     const hooksEntry = manifest.frontend?.hooks;
 
+    // A DECLARED entry whose file is missing is a build error, not something to skip past. Silently
+    // dropping it produced a plugin that installs fine and whose UI is simply absent at runtime — the
+    // exact shape of the bug this pipeline keeps hitting (admin pages, then Puck blocks, then hooks).
+    // The conventional client/puck/<Pascal>Puck.tsx fallback above is DISCOVERY, not a declaration, so
+    // it only reaches here when the file exists.
     const entryPoints = [];
+    const missing = [];
 
-    if (adminEntry) {
-        const fullPath = path.join(pluginDir, adminEntry.replace('./', ''));
-        if (fs.existsSync(fullPath)) {
-            entryPoints.push({ name: 'admin', path: fullPath });
-        }
+    for (const [name, declared] of [['admin', adminEntry], ['component', componentEntry], ['hooks', hooksEntry]]) {
+        if (!declared) continue;
+        const fullPath = path.join(pluginDir, String(declared).replace('./', ''));
+        if (fs.existsSync(fullPath)) entryPoints.push({ name, path: fullPath });
+        else missing.push(`${name}: ${declared}`);
     }
 
-    if (componentEntry) {
-        const fullPath = path.join(pluginDir, componentEntry.replace('./', ''));
-        if (fs.existsSync(fullPath)) {
-            entryPoints.push({ name: 'component', path: fullPath });
-        }
-    }
-
-    if (hooksEntry) {
-        const fullPath = path.join(pluginDir, hooksEntry.replace('./', ''));
-        if (fs.existsSync(fullPath)) {
-            entryPoints.push({ name: 'hooks', path: fullPath });
-        }
+    if (missing.length) {
+        console.error(`   ❌ ${slug}: manifest declares frontend entr${missing.length > 1 ? 'ies' : 'y'} that do not exist — ${missing.join(', ')}`);
+        return false;
     }
 
     if (entryPoints.length === 0) {
