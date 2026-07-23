@@ -62,6 +62,13 @@ const PROTECTED_OPTION_NAMES = new Set([
     // its OWN egress (or tamper with other plugins' entries), routing around the setEgressAllowlist
     // no-self-grant guard — same self-escalation class as plugin_grants. Off-limits to untrusted plugins.
     'plugin_egress_hosts',
+    // 'plugin_origins' records WHICH marketplace source each installed plugin came from, and is the
+    // only thing that authorizes a catalog entry to replace an installed plugin's code — an update
+    // replays the admin's grants (network + egress included) onto the new code and hands it the
+    // preserved data/ dir. A settings:write plugin could otherwise rewrite its OWN origin to a source
+    // it controls and then push itself an "update" with any payload: a self-service supply-chain
+    // escape. Off-limits (read AND write) to untrusted plugins.
+    'plugin_origins',
     // 'cron' is the scheduled-events blob. Writing it raw injects hook callbacks (spoofed/omitted
     // pluginSlug runs core & cross-plugin handlers) and bypasses the capacity caps that only sit on the
     // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to

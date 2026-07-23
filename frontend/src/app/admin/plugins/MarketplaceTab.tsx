@@ -145,6 +145,45 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
         }
     };
 
+    /**
+     * One-click update of an INSTALLED plugin. The backend does it in place: los datos
+     * (plugins/<slug>/data/ y las tablas wjp_<slug>_*), los permisos ya otorgados y el estado
+     * activo se conservan; si el paquete falla, vuelve a la versión anterior sola.
+     */
+    const doUpdate = async (entry: MarketplaceEntry) => {
+        setConfirmEntry(null);
+        setInstalling((m) => ({ ...m, [entry.id]: true }));
+        try {
+            const r = await marketplaceApi.update(entry.id);
+            // Dos hechos DISTINTOS, y confundirlos engaña justo a quien tiene que decidir si la
+            // actualización amplía el acceso: `newPermissions` son los que esta versión declara y la
+            // anterior no pedía; `ungrantedPermissions` son todos los que declara y aún no puede usar
+            // (incluidos los que ya habías rechazado, que siguen rechazados). Nada se otorga solo.
+            const added = r.newPermissions || [];
+            const ungranted = r.ungrantedPermissions || [];
+            const permsNote = added.length
+                ? ` Declara ${added.length} permiso(s) que la versión anterior no pedía: revísalos y otórgalos en Instalados.`
+                : ungranted.length
+                    ? ` No pide ningún permiso nuevo; sigue con ${ungranted.length} permiso(s) declarado(s) sin otorgar.`
+                    : "";
+            addToast(
+                `"${entry.name}" actualizado${r.fromVersion ? ` de v${r.fromVersion}` : ""} a v${r.version || entry.version}`
+                + `${r.reactivated ? " y reactivado" : ""} — datos conservados.`
+                + permsNote,
+                "success",
+            );
+            setEntries((list) => list.map((e) => (e.id === entry.id
+                ? { ...e, installed: true, installedVersion: r.version || e.version, active: r.reactivated ?? e.active, updateAvailable: false }
+                : e)));
+            onInstalled();
+        } catch (e: any) {
+            // A rolled-back update keeps the site on the previous version — the backend says so in the message.
+            addToast(e?.message || "No se pudo actualizar el plugin.", "error");
+        } finally {
+            setInstalling((m) => ({ ...m, [entry.id]: false }));
+        }
+    };
+
     if (loading) {
         return (
             <div className="text-center py-20">
@@ -281,7 +320,11 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                                         </div>
                                         <div className="min-w-0">
                                             <h3 className="font-extrabold text-slate-900 group-hover:text-blue-600 transition-colors duration-300 truncate">{e.name}</h3>
-                                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">v{e.version} · {fmtKB(e.size)}</div>
+                                            <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                                {e.updateAvailable && e.installedVersion
+                                                    ? <><span className="line-through">v{e.installedVersion}</span> → <span className="text-blue-600 font-bold">v{e.version}</span></>
+                                                    : <>v{e.version}</>} · {fmtKB(e.size)}
+                                            </div>
                                         </div>
                                     </div>
                                     <span className="text-[8px] font-extrabold uppercase tracking-widest px-2.5 py-1 rounded-full bg-slate-50 border border-slate-200/40 text-slate-500 shrink-0 shadow-sm">{e.category}</span>
@@ -310,6 +353,19 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                                     <div className="flex items-center gap-2 text-emerald-600 text-xs font-black uppercase tracking-wider bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 justify-center w-full shadow-sm">
                                         <FaCheck className="text-[10px]" /> Instalado {e.active ? "(activo)" : "(inactivo)"}
                                     </div>
+                                ) : e.installed && e.updatable === false ? (
+                                    /* Hay versión nueva, pero este plugin NO se instaló desde esta fuente (o se
+                                       subió a mano / es anterior al registro de origen). El backend rechazaría
+                                       la actualización: una actualización hereda los permisos ya otorgados y los
+                                       datos guardados, así que compartir el nombre no basta. No ofrecemos un
+                                       botón que va a fallar; explicamos la salida. */
+                                    <div
+                                        title={`Instalado desde ${e.installedFrom || "una subida manual"}. Para actualizar desde este catálogo, desinstálalo (se conservan sus datos y tablas) e instálalo desde aquí.`}
+                                        className="text-[10px] font-bold text-amber-700 bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 text-center w-full leading-relaxed shadow-sm"
+                                    >
+                                        v{e.version} disponible — no actualizable desde esta fuente.
+                                        <span className="block font-medium text-amber-600/90 mt-1">Desinstálalo (conserva datos) e instálalo desde este catálogo.</span>
+                                    </div>
                                 ) : (
                                     <Button onClick={() => setConfirmEntry(e)} disabled={busy} className="w-full justify-center shadow-lg shadow-gray-200/50">
                                         {busy ? (
@@ -328,15 +384,25 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                 </div>
             )}
 
-            {/* Install confirm modal — surfaces the permissions the plugin will REQUEST (grants stay
-                default-deny; the admin approves each one after activation, same as uploads). */}
+            {/* Install / update confirm modal — surfaces the permissions the plugin will REQUEST (grants
+                stay default-deny; the admin approves each one after activation, same as uploads). On an
+                UPDATE the modal states exactly what survives: datos, permisos otorgados y estado activo. */}
             {confirmEntry && (
                 <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setConfirmEntry(null)}>
                     <div className="bg-white/95 backdrop-blur-lg rounded-[32px] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 w-full max-w-md p-8 animate-in fade-in zoom-in-95 duration-200" onClick={(ev) => ev.stopPropagation()}>
-                        <h3 className="font-extrabold text-lg text-slate-900 mb-1">Instalar {confirmEntry.name}</h3>
+                        <h3 className="font-extrabold text-lg text-slate-900 mb-1">
+                            {confirmEntry.installed ? "Actualizar" : "Instalar"} {confirmEntry.name}
+                        </h3>
                         <p className="text-xs font-medium text-slate-500 mb-5 leading-relaxed">
-                            v{confirmEntry.version} · {fmtKB(confirmEntry.size)} · el paquete se verifica con sha256 y pasa el mismo escaneo de seguridad que una subida manual.
+                            {confirmEntry.installed && confirmEntry.installedVersion
+                                ? <>v{confirmEntry.installedVersion} → <span className="font-bold text-slate-700">v{confirmEntry.version}</span></>
+                                : <>v{confirmEntry.version}</>} · {fmtKB(confirmEntry.size)} · el paquete se verifica con sha256 y pasa el mismo escaneo de seguridad que una subida manual.
                         </p>
+                        {confirmEntry.installed && (
+                            <p className="text-[10px] text-slate-500 mb-5 bg-emerald-50/60 border border-emerald-100 rounded-xl p-3 leading-relaxed">
+                                <span className="font-black uppercase tracking-wider text-emerald-600">Actualización en sitio</span> — se conservan los datos del plugin (archivos de <span className="font-mono">data/</span> y sus tablas), los permisos ya otorgados y el estado {confirmEntry.active ? "activo (se reactiva solo)" : "inactivo"}. Si el paquete falla, vuelve automáticamente a v{confirmEntry.installedVersion}.
+                            </p>
+                        )}
                         {(confirmEntry.permissions || []).length > 0 && (
                             <>
                                 <div className="text-[9px] font-black uppercase tracking-widest text-slate-400 mb-3">Permisos que solicitará</div>
@@ -353,12 +419,18 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                                         );
                                     })}
                                 </div>
-                                <p className="text-[10px] text-slate-400 mb-5 italic bg-blue-50/50 border border-blue-100/50 rounded-xl p-3 leading-relaxed">Nada se otorga automáticamente: tras activar el plugin, apruebas cada permiso en su panel.</p>
+                                <p className="text-[10px] text-slate-400 mb-5 italic bg-blue-50/50 border border-blue-100/50 rounded-xl p-3 leading-relaxed">
+                                    {confirmEntry.installed
+                                        ? "Los permisos que ya otorgaste se mantienen, y los que rechazaste siguen rechazados. Si esta versión declara alguno que la anterior no pedía, se te avisa al terminar: tampoco se otorga solo, lo apruebas en su panel."
+                                        : "Nada se otorga automáticamente: tras activar el plugin, apruebas cada permiso en su panel."}
+                                </p>
                             </>
                         )}
                         <div className="flex justify-end gap-2.5 pt-2 border-t border-slate-100">
                             <button onClick={() => setConfirmEntry(null)} className="px-5 py-2.5 text-xs font-extrabold uppercase tracking-widest text-slate-500 hover:text-slate-950 hover:bg-slate-100/80 rounded-xl transition-all">Cancelar</button>
-                            <Button onClick={() => doInstall(confirmEntry)}><FaDownload className="mr-2 text-xs" /> Instalar</Button>
+                            {confirmEntry.installed
+                                ? <Button onClick={() => doUpdate(confirmEntry)}><FaDownload className="mr-2 text-xs" /> Actualizar a v{confirmEntry.version}</Button>
+                                : <Button onClick={() => doInstall(confirmEntry)}><FaDownload className="mr-2 text-xs" /> Instalar</Button>}
                         </div>
                     </div>
                 </div>

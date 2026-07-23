@@ -641,6 +641,16 @@ async function initialize() {
         // process exits, its heartbeat timer dies with it, and the lease expires within ~ttl.
         await bootLock.release();
 
+        // Reclaim any plugin-update stash left behind by a process kill mid-swap, BEFORE the plugins
+        // load: an interrupted update leaves plugins/<slug>/ holding only data/ while its code sits in
+        // os-tmp/plugin-update-<slug>-<hex>/ — a directory nothing else ever reads and that backups
+        // exclude. Restores the old version in that case, drops the stash when the update completed.
+        try {
+            await require('./routes/plugins').recoverInterruptedPluginUpdates();
+        } catch (e: any) {
+            console.warn('[plugin-update] stash recovery skipped:', e && e.message);
+        }
+
         // Load active plugins
         console.log('🔌 Loading plugins...');
         const { loadActivePlugins } = require('./core/plugins');

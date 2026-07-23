@@ -450,6 +450,15 @@ export interface MarketplaceEntry {
     active: boolean;
     installedVersion: string | null;
     updateAvailable: boolean;
+    /**
+     * Whether this catalog entry is allowed to UPDATE the installed plugin: true only when the plugin
+     * was installed from THIS source. An update replays the permissions the admin granted onto the new
+     * code and hands it the plugin's stored data, so a slug match is not enough — a manually uploaded
+     * plugin (no recorded origin) or one installed from another catalog is never updatable from here.
+     */
+    updatable?: boolean;
+    /** The source the installed plugin actually came from (null = unknown/manual upload). */
+    installedFrom?: string | null;
 }
 
 export interface MarketplaceSourceStatus {
@@ -463,10 +472,37 @@ export interface MarketplaceSourceStatus {
 
 export type MarketplaceSources = { configured: string[]; default: string; usingDefault: boolean };
 
+/** POST /marketplace/update — the in-place plugin update (see marketplaceApi.update). */
+export interface MarketplaceUpdateResult {
+    success: boolean;
+    updated?: boolean;      // false/absent when the plugin was not installed yet (plain install)
+    slug: string;
+    fromVersion?: string | null;
+    version?: string | null;
+    wasActive?: boolean;
+    reactivated?: boolean;
+    /**
+     * Permissions this version DECLARES that the previous one did not — i.e. what the update actually
+     * ADDS to what the plugin asks for. Diffed against the old manifest, not against the grants, so a
+     * permission the admin deliberately refused is not reported as "new" on every update.
+     */
+    newPermissions?: string[];
+    /**
+     * Everything the new version declares and still cannot use: the newly declared ones plus anything
+     * previously refused. Nothing here is ever auto-granted — this is the "approve in Instalados" list.
+     */
+    ungrantedPermissions?: string[];
+    message?: string;
+}
+
 export const marketplaceApi = {
     catalog: (refresh = false) =>
         apiGet<{ source: string; isLocal: boolean; sources: MarketplaceSourceStatus[]; count: number; plugins: MarketplaceEntry[] }>(`/marketplace/catalog${refresh ? '?refresh=1' : ''}`),
     install: (id: string) => apiPost<{ success: boolean; message: string; slug: string }>(`/marketplace/install`, { id }),
+    // One-click IN-PLACE update of an installed plugin: its data (plugins/<slug>/data/ + the
+    // wjp_<slug>_* tables), its granted permissions and its active state all survive; a failed
+    // package rolls back to the previous version.
+    update: (id: string) => apiPost<MarketplaceUpdateResult>(`/marketplace/update`, { id }),
     // Configurable catalog sources (managed from the Marketplace UI — no hard-coded URL).
     // Saving an EMPTY list disables the remote marketplace; resetSources returns to the official default.
     getSources: () => apiGet<MarketplaceSources>(`/marketplace/sources`),

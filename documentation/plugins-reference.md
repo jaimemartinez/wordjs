@@ -242,7 +242,47 @@ Test Schema are bundled with core):
     entry**, then handed to `installPluginFromZip()` — the **same pipeline as manual uploads**
     (zip-bomb budget, Zip Slip, slug validation, manifest + AST scan). The marketplace adds no new
     install surface beyond the catalog fetch; only `https://` sources are accepted (plus
-    `http://localhost` in dev), and catalog filenames are strictly shape-validated.
+    `http://localhost` in dev), and catalog filenames are strictly shape-validated. The catalog id is
+    passed as `expectedSlug`, so a package whose root folder is a different plugin is refused before
+    anything is extracted.
+*   **Update path (one click, data-safe):** `POST /api/v1/marketplace/update` — and
+    `POST /api/v1/marketplace/install` when the plugin is already installed — runs
+    `updatePluginFromZip()` (`routes/plugins.ts`) instead of failing with the
+    "already exists / currently active" 409. It remembers the active state, the **permission grants**
+    and the **egress allowlist**, deactivates (**without pruning npm dependencies** — the plugin is
+    coming right back), stashes the old code aside **keeping `plugins/<slug>/data/`**, runs
+    `uninstallPluginData(slug, { dropTables: false })` so the plugin's `wjp_<slug>_*` tables **survive**,
+    installs the new version (which adopts the preserved `data/`), restores the grants, and reactivates.
+    Any failure — bad package, failed validation, or a new version that installs but cannot activate —
+    **rolls back** to the previous version, restores the grants and reactivates it (stopping **and
+    unloading** the failed version first, so a package that dies after its sandbox child is already live
+    cannot leave an orphaned process holding hooks/routes/providers); the response carries
+    `rolledBack: true` with the real error. **Nothing is ever auto-granted**, and the response separates
+    the two facts an admin needs: `newPermissions` are the tokens this version declares that the
+    **previous manifest did not** (diffed against the old manifest, snapshotted before its code is
+    stashed — so a permission the admin deliberately *refused* is not reported as "new" on every
+    update), while `ungrantedPermissions` is everything the new version declares and still cannot use
+    (the newly declared ones **plus** anything previously refused) — the "approve these" list.
+*   **Provenance gate — an update is bound to its SOURCE, not to its slug.** The catalog is merged
+    across every configured source, so two sources can both list `mail-server`; since an update replays
+    the admin's grants (**`network` + the egress allowlist included** — the host reads those from the
+    grant map alone, *not* re-gated by the new manifest) onto the replacement code and hands it the
+    preserved `data/` dir, "same id" must never imply "same plugin". Every catalog install records its
+    **origin** (source URL + catalog id) in the server-side `plugin_origins` option — bridge-protected
+    exactly like `plugin_grants`, and stored in the DB rather than in `plugins/<slug>/` so a package
+    cannot ship its own provenance — and `updatePluginFromZip()` refuses (`409`, `originMismatch: true`)
+    unless the recorded origin matches. **No recorded origin = refused**: that is the case for manually
+    uploaded plugins (deliberately: nothing to bind to) and for anything installed before 1.12.6. Adopt
+    an origin by uninstalling (data + tables are kept) and installing from the catalog — which resets
+    the grants to **default-deny**. Uninstall clears the recorded origin, like it clears the grants.
+*   **Mutual exclusion + crash recovery:** the whole install/update/uninstall cycle is serialized per
+    slug (in-process guard + a `wordjs:plugin-op:<slug>` dist-lock lease for multi-node); a second
+    request gets `409 busy`. This closes the window in which an update has stashed the old code aside
+    and `plugins/<slug>/` holds only `data/` — the exact shape the installer adopts as "residual data",
+    so a concurrent install would extract into the same dir and a rollback would delete the other's
+    files. The stash lives in `os-tmp/plugin-update-<slug>-<hex>/` (excluded from backups), and boot
+    (`recoverInterruptedPluginUpdates()`, called from `index.ts` before `loadActivePlugins()`) restores
+    it when the plugin dir has no manifest, or discards it when it has one.
 *   **Admin UI:** the **Marketplace** tab in `/admin/plugins`
     (`frontend/src/app/admin/plugins/MarketplaceTab.tsx`) — browse, one-click install, update detection.
 *   **Sandbox:** marketplace plugins are ordinary plugins — `"isolated": true`, bridge-only,

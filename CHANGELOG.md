@@ -4,6 +4,83 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.6] - 2026-07-22
+
+### Added
+
+- **One-click plugin update from the Marketplace — in place, without losing data.** The
+  "Actualizar a vX" button called the same `POST /api/v1/marketplace/install` as "Instalar", which
+  hands off to the install pipeline — and that pipeline refuses to touch an existing plugin
+  (`409 "is currently active"` / `409 "already exists"`, both deliberate: a botched extract must never
+  corrupt a working install). Updating was therefore impossible without uninstalling first, i.e.
+  without risking the plugin's data. The button now performs a real in-place update
+  (`POST /api/v1/marketplace/update`; `/marketplace/install` does the same when the plugin is already
+  installed, so any client works):
+  - remembers the **active state**, the **permission grants** and the **egress allowlist**;
+  - deactivates the plugin (nothing is running while the files move);
+  - stashes the old code aside, **keeping `plugins/<slug>/data/`** — mail encryption keys (`.mailenc`),
+    DKIM keys, attachments;
+  - runs `uninstallPluginData(slug, { dropTables: false })`, so every `wjp_<slug>_*` **table survives**
+    (mailboxes, labels, orders…) while the stale grants/strikes/enqueued assets are cleared;
+  - installs the new version, which **adopts** the preserved `data/`;
+  - restores the grants and the egress allowlist **before** reactivating (both are pushed into the
+    isolate at spawn time), then reactivates if it was active.
+  **Nothing is auto-granted**, so a catalog update cannot silently widen its own access — and the
+  response separates the two facts that decision rests on: `newPermissions` are the permissions this
+  version declares that the **previous version did not** (a real diff against the old manifest, so the
+  ones you deliberately *refused* are not re-reported as "new" on every update), and
+  `ungrantedPermissions` is everything it declares and still cannot use. The catalog id is
+  passed as `expectedSlug`, so a package whose root folder is a different plugin is refused before
+  anything is extracted. The Marketplace card shows `v2.1.0 → v2.2.0` and the confirm dialog states
+  exactly what is preserved.
+- **Fail-safe rollback.** The previous version stays on disk until the new one is installed *and*
+  (if it was running) reactivated. A package that fails validation, or a new version that installs but
+  cannot start, restores the old files, restores the grants and reactivates it — the response carries
+  `rolledBack: true`, `restoredVersion` and the real error. The failed version is stopped **and
+  unloaded** before the old one is brought back, so a package that dies after its sandbox child is
+  already live can't leave an orphaned process holding hooks, routes or a claimed mail provider.
+
+### Security
+
+- **An update is bound to the source the plugin was installed from, not to its slug.** The catalog is
+  merged across every configured source, so two sources can both list `mail-server` — and an update
+  replays the permissions the admin granted (**including `network` and the egress allowlist**, which
+  the host reads from the grant map alone, *not* re-gated by the new manifest) onto the replacement
+  code, and hands it the preserved `plugins/<slug>/data/` dir (for `mail-server`: the AES root key and
+  the DKIM private keys). Treating "same id" as "same plugin" would therefore have let any source an
+  admin adds take over an installed plugin, with its approved permissions and its secrets. Every
+  catalog install now records its **origin** (source URL + catalog id) in the new server-side
+  `plugin_origins` option — off-limits to plugins and themes, like `plugin_grants` — and an update is
+  **refused with `409 originMismatch`** unless the recorded origin matches the entry's source.
+  - **Operators, note the behaviour change: plugins with no recorded origin cannot be updated from a
+    catalog.** That covers plugins installed by **uploading a zip** (which never records an origin — by
+    design: a manual upload has no publisher to bind to) and **every plugin installed before 1.12.6**,
+    including ones the Marketplace previously offered a new version for. To adopt an origin, uninstall
+    the plugin — its `data/` and its `wjp_<slug>_*` tables are kept — and install it from the catalog;
+    its permissions then start from **default-deny**, so nothing an admin approved for the old code is
+    inherited by code from somewhere else. Uninstalling also **forgets** the recorded origin.
+    `GET /marketplace/catalog` reports the verdict per entry (`updatable`, `installedFrom`), and the
+    Marketplace card shows that explanation in place of an "Actualizar" button that would only 409.
+- **Install / update / uninstall of one plugin are now mutually exclusive.** They are serialized per
+  slug (an in-process guard plus a `wordjs:plugin-op:<slug>` distributed lease for multi-node), and a
+  second request is refused with `409 busy` instead of interleaving. Without this, the window in which
+  an update has stashed the old code aside leaves `plugins/<slug>/` holding only `data/` — exactly the
+  shape the installer treats as "residual data, safe to install over" — so a concurrent install
+  extracted into the same directory and whichever operation rolled back deleted the other's files.
+- **An update interrupted by a process kill is recovered at boot.** The stash lives in
+  `os-tmp/plugin-update-<slug>-<hex>/`, which nothing reclaimed and which backups exclude — so a kill
+  in that window left the plugin's only copy of its code in a directory no code ever read again. Boot
+  now restores it when `plugins/<slug>/` has no manifest, and discards the stash when it has one.
+
+### Fixed
+
+- **Deactivating for an update no longer prunes the plugin's npm dependencies.** `deactivatePlugin`
+  auto-prunes (`npm uninstall`) dependencies no other active plugin uses. Inside an update — where the
+  plugin is reactivated seconds later — that round trip is not just churn: if any declared range no
+  longer resolves, the reinstall fails and the plugin can no longer be activated **at all**, not even by
+  rolling back. `deactivatePlugin(slug, { prune: false })` (used only by the update path) keeps the
+  dependency tree in place; uninstall and manual deactivation still prune.
+
 ## [1.12.4] - 2026-07-22
 
 ### Fixed

@@ -19,7 +19,10 @@ function assertThemeOptionWritable(name: string): void {
         const n = String(name).toLowerCase();
         // marketplace_(sources|theme_sources) included: letting a theme rewrite the CATALOG source
         // lists would be a supply-chain primitive (point installs at a hostile origin).
-        const PROTECTED_NAME = /^(wordjs_user_roles|user_roles|roles|active_plugins|default_role|users_can_register|plugin_grants|cron|plugin_strikes|plugin_health|trusted_plugins?|trustedsystemplugins|template|stylesheet|active_theme_layout|active_theme_mods|theme_mods|siteurl|site_url|home|admin_email|marketplace_(sources?|theme_sources|url|catalog_url))$/;
+        // plugin_origins is the install-provenance store: it decides which catalog source may replace an
+        // installed plugin's code (and replay its grants), so a theme rewriting it is the same
+        // supply-chain primitive as rewriting the source lists themselves.
+        const PROTECTED_NAME = /^(wordjs_user_roles|user_roles|roles|active_plugins|default_role|users_can_register|plugin_grants|plugin_origins|cron|plugin_strikes|plugin_health|trusted_plugins?|trustedsystemplugins|template|stylesheet|active_theme_layout|active_theme_mods|theme_mods|siteurl|site_url|home|admin_email|marketplace_(sources?|theme_sources|url|catalog_url))$/;
         if (PROTECTED_NAME.test(n) || /secret|passw|priv[_-]?key|privatekey|\bkey\b|[_-]key\b|token|jwt|credential|encryption|dkim|\bsalt\b|api[_-]?key|signing|certificate/.test(n)) {
             throw new Error(`🛡️ Option '${name}' is not writable from theme context.`);
         }

@@ -1018,15 +1018,23 @@ async function activatePlugin(slug: string) {
 // ...
 
 /**
- * Deactivate a plugin
+ * Deactivate a plugin.
+ *
+ * `prune: false` keeps the plugin's npm dependencies installed. The UPDATE path uses it: an update
+ * deactivates only to swap the files and reactivates seconds later, so pruning would `npm uninstall`
+ * a working dependency tree and then reinstall it — pure churn in the best case, and UNRECOVERABLE in
+ * the worst: if any declared range no longer resolves (yanked package, a range that was never
+ * publishable), the reinstall fails and the plugin can no longer be activated AT ALL — not even by
+ * rolling back to the version that was running a moment ago. (Observed live: mail-server once declared
+ * spf-validator ^1.0.0, which npm could not satisfy.) Uninstall/manual deactivation still prune.
  */
-async function deactivatePlugin(slug: string) {
+async function deactivatePlugin(slug: string, { prune = true }: { prune?: boolean } = {}) {
     if (!await isPluginActive(slug)) {
         return { success: true, message: 'Plugin not active' };
     }
 
     // 1. Auto-Prune Dependencies
-    const plugins = scanPlugins();
+    const plugins = prune ? scanPlugins() : [];
     const plugin = plugins.find(p => p.slug === slug);
     if (plugin) {
         const manifestPath = path.join(plugin.path, 'manifest.json');
@@ -1273,6 +1281,84 @@ exports.deactivate = function() {
     fs.writeFileSync(path.join(sampleDir, 'index.js'), sampleCode);
 }
 
+// --- Install PROVENANCE (where a plugin's code came from) -----------------------------------------
+//
+// A plugin's ORIGIN is the marketplace source (+ catalog id) its code was installed from. It exists
+// because a SLUG IS NOT AN IDENTITY: the catalog is merged across every configured source, so an id is
+// only as trustworthy as the origin that served it. Without a recorded origin, ANY source listing id
+// 'mail-server' could be treated as an UPDATE of the installed mail-server — and an update replays the
+// admin's grants (including `network` + the egress allowlist, which isNetworkGranted reads from the
+// grant map alone, NOT re-gated by the new manifest) onto the replacement code, and hands it the
+// preserved plugins/<slug>/data/ dir (for mail-server: the AES root key and the DKIM private keys).
+// Recording the origin turns "an update" into "same plugin, same publisher" instead of "same name".
+//
+// Stored SERVER-SIDE in the `plugin_origins` option, NEVER inside plugins/<slug>/ — that directory is
+// exactly the attacker-supplied zip payload, so a package shipping its own origin file could forge its
+// way into being an update of any plugin. The option is on the plugin/theme bridge denylist for the
+// same reason as plugin_grants (see plugin-api PROTECTED_OPTION_NAMES / options assertThemeOptionWritable).
+//
+// ABSENT means "provenance unknown" (a manual zip upload, or an install predating this feature) and is
+// NOT a wildcard: the update path REFUSES it. Adopting a catalog origin means uninstalling (data is
+// kept) and installing from the catalog, which also resets the grants to default-deny — so nothing an
+// admin approved for the old code is ever silently inherited by code from somewhere else.
+const PLUGIN_ORIGINS_OPTION = 'plugin_origins';
+
+/** Compare-safe form of a source URL/dir — the same trim + trailing-slash strip resolveSources applies. */
+function normalizeOriginSource(source: any): string {
+    return String(source || '').trim().replace(/\/+$/, '');
+}
+
+type PluginOrigin = { source: string; catalogId: string; version: string | null; installedAt: number | null };
+
+/** Normalize one stored record; null when blank/malformed ("unknown provenance", never a match). */
+function readOriginRecord(slug: string, rec: any): PluginOrigin | null {
+    if (!rec || typeof rec !== 'object') return null;
+    const source = normalizeOriginSource(rec.source);
+    if (!source) return null;
+    return {
+        source,
+        catalogId: String(rec.catalogId || slug),
+        version: rec.version ? String(rec.version) : null,
+        installedAt: Number(rec.installedAt) || null,
+    };
+}
+
+/** Every recorded origin, keyed by slug. One option read — for annotating a whole catalog listing. */
+async function getPluginOrigins(): Promise<Record<string, PluginOrigin>> {
+    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
+    const out: Record<string, PluginOrigin> = {};
+    for (const [slug, rec] of Object.entries(stored)) {
+        const parsed = readOriginRecord(slug, rec);
+        if (parsed) out[slug] = parsed;
+    }
+    return out;
+}
+
+/** The recorded origin of an installed plugin, or null when none/blank/malformed ("unknown", never a match). */
+async function getPluginOrigin(slug: string): Promise<PluginOrigin | null> {
+    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
+    return readOriginRecord(slug, stored[slug]);
+}
+
+/** Record where a plugin's code came from. Called ONLY by the catalog install/update paths (host context). */
+async function setPluginOrigin(slug: string, { source, catalogId, version = null }: { source: string; catalogId?: string; version?: string | null }): Promise<boolean> {
+    const clean = normalizeOriginSource(source);
+    if (!clean) return false; // a blank source would record "unknown" as if it were a real provenance
+    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
+    stored[slug] = { source: clean, catalogId: String(catalogId || slug), version: version ? String(version) : null, installedAt: Date.now() };
+    await updateOption(PLUGIN_ORIGINS_OPTION, stored);
+    return true;
+}
+
+/** Forget a plugin's origin (uninstall). Mirrors removeGrants: a re-uploaded slug must inherit NOTHING. */
+async function clearPluginOrigin(slug: string): Promise<void> {
+    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
+    if (Object.prototype.hasOwnProperty.call(stored, slug)) {
+        delete stored[slug];
+        await updateOption(PLUGIN_ORIGINS_OPTION, stored);
+    }
+}
+
 /**
  * Purge a plugin's persisted footprint on uninstall. ALWAYS clears grants (security: otherwise a
  * re-uploaded slug silently inherits the old, possibly-revoked grants) + crash strikes. When
@@ -1283,9 +1369,14 @@ exports.deactivate = function() {
  * clean path for that). Best-effort: each step is guarded so one failure doesn't abort the rest.
  */
 async function uninstallPluginData(slug: string, { dropTables = false }: { dropTables?: boolean } = {}) {
-    const result: { grantsRemoved: boolean; strikesCleared: boolean; tablesDropped: string[] } = { grantsRemoved: false, strikesCleared: false, tablesDropped: [] };
+    const result: { grantsRemoved: boolean; originCleared: boolean; strikesCleared: boolean; tablesDropped: string[] } = { grantsRemoved: false, originCleared: false, strikesCleared: false, tablesDropped: [] };
     try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
     catch (e: any) { console.warn(`[uninstall ${slug}] removeGrants failed:`, e && e.message); }
+    // Same rule as the grants: the recorded install ORIGIN belongs to the code that is being removed.
+    // Leaving it behind would let a later MANUAL upload of the same slug inherit a catalog provenance
+    // it never had, and become silently updatable (grants and all) from that catalog.
+    try { await clearPluginOrigin(slug); result.originCleared = true; }
+    catch (e: any) { console.warn(`[uninstall ${slug}] clearPluginOrigin failed:`, e && e.message); }
     try { const { clearStrikes } = require('./crash-guard'); clearStrikes(slug); result.strikesCleared = true; }
     catch (e: any) { console.warn(`[uninstall ${slug}] clearStrikes failed:`, e && e.message); }
     try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { console.warn(`[uninstall ${slug}] clearAssets failed:`, e && e.message); }
@@ -1311,7 +1402,7 @@ async function uninstallPluginData(slug: string, { dropTables = false }: { dropT
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
     catch (e: any) { console.warn(`[uninstall ${slug}] db role drop failed:`, e && e.message); }
-    console.log(`[uninstall ${slug}] grants=${result.grantsRemoved} strikes=${result.strikesCleared} tablesDropped=${result.tablesDropped.length}`);
+    console.log(`[uninstall ${slug}] grants=${result.grantsRemoved} origin=${result.originCleared} strikes=${result.strikesCleared} tablesDropped=${result.tablesDropped.length}`);
     return result;
 }
 
@@ -1320,6 +1411,13 @@ module.exports = {
     getActivePlugins,
     isPluginActive,
     uninstallPluginData,
+    // Install provenance — the ONLY thing that authorizes replacing an installed plugin's code (and
+    // replaying its grants) from a catalog entry that merely shares its slug.
+    getPluginOrigin,
+    getPluginOrigins,
+    setPluginOrigin,
+    clearPluginOrigin,
+    normalizeOriginSource,
     activatePlugin,
     deactivatePlugin,
     loadActivePlugins,

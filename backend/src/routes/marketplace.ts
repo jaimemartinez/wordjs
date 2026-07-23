@@ -30,8 +30,8 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption, updateOption, deleteOption } = require('../core/options');
-const { getAllPlugins } = require('../core/plugins');
-const { installPluginFromZip } = require('./plugins');
+const { getAllPlugins, PLUGINS_DIR, getPluginOrigins, normalizeOriginSource } = require('../core/plugins');
+const { installPluginFromZip, updatePluginFromZip } = require('./plugins');
 
 const INDEX_FILE = 'marketplace-index.json';
 // The THEME catalog rides the SAME sources (an origin hosts both index files side by side).
@@ -173,14 +173,24 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
         const { merged, sources } = await getCatalog(refresh);
         const installed = await getAllPlugins();
         const bySlug = new Map<string, any>(installed.map((p: any) => [String(p.slug || p.id), p]));
+        // One read for the whole listing: which source each installed plugin was installed from.
+        const origins = await getPluginOrigins();
         const annotated = merged.map((e: any) => {
             const local = bySlug.get(String(e.id));
+            const origin = local ? origins[String(e.id)] : null;
+            // `updatable` is the PROVENANCE verdict, independent of whether a newer version exists: an
+            // update is only accepted from the source the plugin was installed from (see installOrUpdate
+            // / updatePluginFromZip). Surfacing it lets the UI avoid offering a button that would 409 —
+            // a manually uploaded plugin, or one installed before origins were recorded, has none.
+            const updatable = !!(local && origin && origin.source === normalizeOriginSource(e.source));
             return {
                 ...e,
                 installed: !!local,
                 active: !!(local && local.active),
                 installedVersion: local ? local.version || null : null,
                 updateAvailable: !!(local && local.version && e.version && String(local.version) !== String(e.version)),
+                updatable,
+                installedFrom: origin ? origin.source : null,
             };
         });
         // `source`/`isLocal` are kept for back-compat (the primary source); `sources` carries per-source status.
@@ -191,33 +201,32 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
     }
 }));
 
-/**
- * @swagger
- * /marketplace/install:
- *   post:
- *     summary: Download a catalog plugin and install it through the standard upload pipeline
- *     tags: [Plugins]
- */
-router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const id = String((req.body || {}).id || '').trim();
-    if (!id) return res.status(400).json({ error: 'Falta el id del plugin.' });
-
+/** Find a catalog id in the MERGED catalog. The entry carries the `source` it was listed under. */
+async function resolveCatalogEntry(id: string): Promise<{ ok: true; entry: any } | { ok: false; status: number; error: string }> {
     let entry: any;
     try {
         const { merged } = await getCatalog(false);
         entry = merged.find((e: any) => String(e.id) === id);
     } catch (e: any) {
-        return res.status(502).json({ error: e.message });
+        return { ok: false, status: 502, error: e.message };
     }
-    if (!entry) return res.status(404).json({ error: `El plugin "${id}" no está en el catálogo.` });
+    if (!entry) return { ok: false, status: 404, error: `El plugin "${id}" no está en el catálogo.` };
+    return { ok: true, entry };
+}
 
-    // Install from the SAME source the entry was listed under (each merged entry carries its source).
+/**
+ * Fetch a catalog entry's VERIFIED zip bytes (downloaded remotely or read from the local dist dir).
+ * Shared by install and update — both need the same filename validation, size cap and sha256 check.
+ * Expected failures come back as { ok:false, status, error }.
+ */
+async function downloadCatalogPlugin(entry: any): Promise<{ ok: true; buf: Buffer } | { ok: false; status: number; error: string }> {
+    // Download from the SAME source the entry was listed under (each merged entry carries its source).
     const source = String(entry.source || '');
     const isLocal = !/^https?:\/\//i.test(source);
 
     const file = String(entry.file || '');
     if (!SAFE_FILE_RE.test(file)) {
-        return res.status(400).json({ error: 'El catálogo contiene un nombre de archivo inválido.' });
+        return { ok: false, status: 400, error: 'El catálogo contiene un nombre de archivo inválido.' };
     }
 
     // Fetch the zip bytes (remote) or read them from the dist dir (local), then sha256-verify.
@@ -227,31 +236,111 @@ router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request,
             const base = path.resolve(source);
             const zipAbs = path.resolve(base, file);
             if (!(zipAbs === base || zipAbs.startsWith(base + path.sep))) {
-                return res.status(400).json({ error: 'Ruta de archivo fuera del directorio del marketplace.' });
+                return { ok: false, status: 400, error: 'Ruta de archivo fuera del directorio del marketplace.' };
             }
-            if (!fs.existsSync(zipAbs)) return res.status(404).json({ error: `No existe ${file} en el marketplace local.` });
+            if (!fs.existsSync(zipAbs)) return { ok: false, status: 404, error: `No existe ${file} en el marketplace local.` };
             const size = fs.statSync(zipAbs).size;
-            if (size > MAX_ZIP_BYTES) return res.status(400).json({ error: 'El paquete excede el tamaño máximo permitido.' });
+            if (size > MAX_ZIP_BYTES) return { ok: false, status: 400, error: 'El paquete excede el tamaño máximo permitido.' };
             buf = fs.readFileSync(zipAbs);
         } else {
             buf = await fetchRemote(`${source}/${file}`, MAX_ZIP_BYTES);
         }
     } catch (e: any) {
-        return res.status(502).json({ error: `No se pudo descargar el plugin: ${e.message}` });
+        return { ok: false, status: 502, error: `No se pudo descargar el plugin: ${e.message}` };
     }
 
     if (entry.sha256) {
         const digest = crypto.createHash('sha256').update(buf).digest('hex');
         if (digest !== String(entry.sha256).toLowerCase()) {
-            return res.status(400).json({ error: 'La verificación de integridad (sha256) del paquete falló — instalación abortada.' });
+            return { ok: false, status: 400, error: 'La verificación de integridad (sha256) del paquete falló — instalación abortada.' };
         }
     }
+    return { ok: true, buf };
+}
 
-    // Hand off to the shared upload pipeline via a temp file (it owns cleanup of that file).
+/** Is `slug` a real installed plugin (a directory with a manifest), as opposed to residual data/? */
+function isPluginInstalled(slug: string): boolean {
+    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/.test(slug)) return false;
+    const dir = path.resolve(PLUGINS_DIR, slug);
+    const base = path.resolve(PLUGINS_DIR);
+    if (dir === base || !dir.startsWith(base + path.sep)) return false;
+    return fs.existsSync(path.join(dir, 'manifest.json'));
+}
+
+/**
+ * Download a catalog entry and hand it to the install or the UPDATE pipeline. A catalog id IS the
+ * plugin's folder slug (build-marketplace enforces manifest.id === folder), so it is passed as
+ * expectedSlug: the package can only ever land on the plugin the admin actually asked for.
+ *
+ * PROVENANCE. An id alone does NOT identify a plugin: the catalog is merged across every configured
+ * source, so two sources can both list 'mail-server'. Because an update replays the admin's grants
+ * onto the replacement code and hands it the plugin's preserved data/ dir, every install records the
+ * SOURCE it came from and updatePluginFromZip refuses to update a plugin whose recorded origin is
+ * missing or different (it enforces that itself, under the per-slug lock — this only passes the
+ * origin the package is claiming). A manually uploaded plugin records nothing, so it can never be
+ * taken over by a catalog entry that merely shares its slug.
+ */
+async function installOrUpdate(id: string, res: Response) {
+    const found = await resolveCatalogEntry(id);
+    if (!found.ok) return res.status(found.status).json({ error: found.error });
+    const entry = found.entry;
+    const origin = { source: String(entry.source || ''), catalogId: id };
+
+    const dl = await downloadCatalogPlugin(entry);
+    if (!dl.ok) return res.status(dl.status).json({ error: dl.error });
+
+    // Hand off to the shared pipeline via a temp file (it owns cleanup of that file).
     const tmpPath = path.join(os.tmpdir(), `wjs-mkt-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`);
-    fs.writeFileSync(tmpPath, buf);
-    const result = await installPluginFromZip(tmpPath, file);
+    fs.writeFileSync(tmpPath, dl.buf);
+
+    // `origin` is what BINDS the installed code to this catalog source: the install pipeline records it
+    // (under the plugin's lock) and the update pipeline refuses to replace code whose recorded origin
+    // does not match. A manual upload passes none and is therefore never catalog-updatable.
+    const result = isPluginInstalled(id)
+        ? await updatePluginFromZip(tmpPath, entry.file, id, { origin })       // in-place, data + active state preserved
+        : await installPluginFromZip(tmpPath, entry.file, { expectedSlug: id, origin });
+    // (The catalog cache holds only the REMOTE entries; installed/active/updateAvailable are
+    // recomputed against the live install on every /catalog request, so it needs no invalidation.)
     res.status(result.status).json(result.body);
+}
+
+/**
+ * @swagger
+ * /marketplace/install:
+ *   post:
+ *     summary: Download a catalog plugin and install it through the standard upload pipeline
+ *     description: >
+ *       When the plugin is ALREADY installed this performs a data-safe in-place update instead of
+ *       failing with the "already exists / currently active" 409 — the same thing POST
+ *       /marketplace/update does, so the one-click "Actualizar a vX" button works either way. The
+ *       update is refused (409) unless the plugin was installed from THIS catalog source.
+ *     tags: [Plugins]
+ */
+router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const id = String((req.body || {}).id || '').trim();
+    if (!id) return res.status(400).json({ error: 'Falta el id del plugin.' });
+    await installOrUpdate(id, res);
+}));
+
+/**
+ * @swagger
+ * /marketplace/update:
+ *   post:
+ *     summary: Update an installed plugin to the catalog version, in place and without losing data
+ *     description: >
+ *       Deactivates the plugin if it was running, replaces its code (keeping plugins/<slug>/data/ and
+ *       every wjp_<slug>_* table), restores the permission grants the admin had approved and
+ *       reactivates it. Any failure rolls back to the previous version. Installing a plugin that is
+ *       not present yet is accepted and behaves exactly like /marketplace/install.
+ *       Refused with 409 (originMismatch) when the installed plugin was NOT installed from this
+ *       catalog source — including plugins uploaded manually, which have no recorded origin: a
+ *       catalog entry may only update the plugin it installed itself.
+ *     tags: [Plugins]
+ */
+router.post('/update', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    const id = String((req.body || {}).id || '').trim();
+    if (!id) return res.status(400).json({ error: 'Falta el id del plugin.' });
+    await installOrUpdate(id, res);
 }));
 
 /**

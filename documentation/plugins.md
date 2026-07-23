@@ -229,7 +229,29 @@ published as **GitHub release assets** — `marketplace/dist/` is a build output
 committed), **verifies its sha256** against the catalog entry, and hands it to the **same upload
 pipeline** described below (zip-bomb budget, manifest check, AST scan) — a marketplace install is
 not privileged in any way. Backend API: `GET /api/v1/marketplace/catalog` /
-`POST /api/v1/marketplace/install` (admin-only). The catalog **sources are admin-configurable**
+`POST /api/v1/marketplace/install` (admin-only).
+
+When a newer version is in the catalog the card shows **"Actualizar a vX"**. That is a real **in-place
+update** (`POST /api/v1/marketplace/update`): the plugin's data survives — the files under
+`plugins/<slug>/data/` (encryption keys, attachments) **and** its `wjp_<slug>_*` database tables — as do
+the permissions you already granted, its egress allowlist and its active state (it is deactivated and
+reactivated for you). If the new package fails to install or fails to start, WordJS **rolls back** to the
+version you were running and restores its permissions. Nothing is ever granted automatically: WordJS
+tells you which permissions **this version asks for that the previous one did not** — that is the
+number to look at when deciding whether an update widens the plugin's access — and, separately, how
+many it declares that are still not granted (including the ones you had already turned down, which
+stay turned down). You approve any of them in the plugin's panel.
+
+**A plugin can only be updated by the source it was installed from.** WordJS records the catalog source
+of every plugin it installs, and refuses an update coming from anywhere else — an update inherits the
+permissions you already granted (network access and the egress allowlist included) and the plugin's
+stored keys, so "another catalog happens to use the same name" is not good enough. Two consequences:
+a plugin you installed **by uploading a zip** is never updatable from a catalog, and a plugin installed
+**before WordJS 1.12.6** has no recorded source, so its first update is refused. In both cases, uninstall
+it (your data and its database tables are kept) and install it from the catalog — after that the update
+button works, and its permissions start from scratch so nothing is inherited silently.
+
+The catalog **sources are admin-configurable**
 from the Marketplace UI (`GET`/`PUT /api/v1/marketplace/sources`, persisted in the
 `marketplace_sources` option as a list of https catalogs, merged with per-source error isolation);
 with none configured the default is the GitHub release assets
