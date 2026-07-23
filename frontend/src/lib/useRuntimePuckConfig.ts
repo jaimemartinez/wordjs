@@ -1,19 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { loadActivePluginBlocks } from "./pluginBundleLoader";
-
-// Cache the active-plugins fetch across every editor/render mount in the session.
-let activePromise: Promise<string[]> | null = null;
-function fetchActivePluginIds(): Promise<string[]> {
-    if (!activePromise) {
-        activePromise = fetch("/api/v1/plugins/active")
-            .then((r) => (r.ok ? r.json() : []))
-            .then((a) => (Array.isArray(a) ? a : []))
-            .catch(() => []);
-    }
-    return activePromise;
-}
+import { fetchActivePluginIds, loadActivePluginBlocks } from "./pluginBundleLoader";
 
 /**
  * Merge marketplace plugins' Puck blocks into a base Puck config AT RUNTIME.

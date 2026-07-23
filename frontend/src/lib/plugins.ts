@@ -1,6 +1,7 @@
 "use client";
 
 import { loadPluginHooks } from "./pluginRegistry";
+import { loadRuntimePluginHooks } from "./pluginBundleLoader";
 
 /**
  * WordJS Plugin Frontend Loader
@@ -20,20 +21,31 @@ export function initPlugins() {
 
     console.log("🔌 Initializing WordJS Frontend Plugins...");
 
-    // Load hooks systematically from the generated registry. Hook chunks load ASYNCHRONOUSLY — a
-    // network/chunk failure surfaces as a promise rejection, not a synchronous throw — so un-latch the
-    // run-once guard in BOTH paths, letting the next admin-layout mount retry. Retrying is safe:
-    // registration is idempotent (keyed hooks replace, never stack).
-    try {
-        const result: unknown = loadPluginHooks();
-        if (result && typeof (result as Promise<void>).catch === 'function') {
-            (result as Promise<void>).catch((e) => {
-                pluginsInitialized = false;
-                console.error("Failed to load plugin hooks:", e);
-            });
+    // TWO sources of frontend hooks, because a plugin can arrive two ways:
+    //  1. loadPluginHooks()        — the generated registry: plugins present on disk when the frontend was
+    //                                BUILT, statically imported (hot-reload works in dev).
+    //  2. loadRuntimePluginHooks() — plugins installed from the MARKETPLACE after the build, loaded from
+    //                                their pre-compiled hooks bundle. A production install ships a frozen
+    //                                .next, so this is the ONLY path that can ever see them.
+    // Hook chunks/bundles load ASYNCHRONOUSLY — a network/chunk failure surfaces as a promise rejection,
+    // not a synchronous throw — so un-latch the run-once guard in BOTH paths, letting the next
+    // admin-layout mount retry. Retrying is safe: registration is idempotent (keyed hooks replace, never
+    // stack), and the runtime loader additionally skips plugins it already registered.
+    const run = (label: string, load: () => unknown) => {
+        try {
+            const result: unknown = load();
+            if (result && typeof (result as Promise<void>).catch === 'function') {
+                (result as Promise<void>).catch((e) => {
+                    pluginsInitialized = false;
+                    console.error(`Failed to load ${label}:`, e);
+                });
+            }
+        } catch (e) {
+            pluginsInitialized = false;
+            console.error(`Failed to load ${label}:`, e);
         }
-    } catch (e) {
-        pluginsInitialized = false;
-        console.error("Failed to load plugin hooks:", e);
-    }
+    };
+
+    run("plugin hooks", loadPluginHooks);
+    run("marketplace plugin hooks", loadRuntimePluginHooks);
 }
