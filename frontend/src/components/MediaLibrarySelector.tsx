@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { mediaApi, MediaItem } from "@/lib/api";
+import { useI18n } from "@/contexts/I18nContext";
 
 interface MediaLibrarySelectorProps {
     onSelect: (item: MediaItem) => void;
@@ -9,6 +10,7 @@ interface MediaLibrarySelectorProps {
 }
 
 export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibrarySelectorProps) {
+    const { t } = useI18n();
     const [media, setMedia] = useState<MediaItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [search, setSearch] = useState("");
@@ -38,7 +40,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
             <div className="p-4 border-b flex justify-between items-center bg-gray-50 rounded-t-lg">
                 <input
                     type="text"
-                    placeholder="Search media..."
+                    placeholder={t('media.search')}
                     className="px-3 py-2 border rounded-md text-sm w-full max-w-xs"
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
@@ -46,7 +48,8 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                 <button
                     onClick={loadMedia}
                     className="text-gray-500 hover:text-blue-600"
-                    title="Refresh"
+                    title={t('common.refresh')}
+                    aria-label={t('common.refresh')}
                 >
                     <i className="fa-solid fa-sync"></i>
                 </button>
@@ -61,7 +64,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                 ) : filteredMedia.length === 0 ? (
                     <div className="text-center text-gray-400 py-10">
                         <i className="fa-solid fa-images text-4xl mb-2"></i>
-                        <p>No media found.</p>
+                        <p>{t('media.no.media')}</p>
                     </div>
                 ) : (
                     <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4">
@@ -95,7 +98,7 @@ export default function MediaLibrarySelector({ onSelect, selectedId }: MediaLibr
                                 )}
 
                                 <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                                    <span className="text-white font-medium text-sm px-2 py-1 bg-black/50 rounded">Select</span>
+                                    <span className="text-white font-medium text-sm px-2 py-1 bg-black/50 rounded">{t('media.select')}</span>
                                 </div>
 
                                 {selectedId === item.id && (
