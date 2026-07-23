@@ -32,6 +32,20 @@ function registryEntry(id: string, frontend: unknown): unknown {
     return { id, name: id, version: '1.0.0', active: true, path: `/plugins/${id}`, frontend };
 }
 
+/**
+ * The REAL body of GET /plugins/registry. backend/src/routes/plugins.ts ends with
+ * `res.json({ plugins: registry })` — an OBJECT wrapping the array, which is exactly how
+ * frontend/src/lib/plugins-registry.ts has always read it (`data.plugins || []`).
+ *
+ * This helper exists because the earlier version of this suite mocked a BARE ARRAY here. That mock did
+ * not match the producer, so the suite passed while the loader's `Array.isArray(body)` guard rejected
+ * every real response and classification never ran in production — a test that lies is worse than no
+ * test. Route the mocks through this helper so the shape can only be changed in one place, deliberately.
+ */
+function registryResponse(entries: unknown[], status = 200): Response {
+    return jsonResponse({ plugins: entries }, status);
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
 // The loader only needs `window` to EXIST. Install a stub when the environment has none, and REMOVE it
 // afterwards — leaving a fake `window` on globalThis leaks into any other suite in the same process
@@ -135,7 +149,7 @@ describe("loadRuntimePluginHooks — must surface, not swallow, a broken active-
     it("REJECTS when an active plugin's hooks bundle 5xxs, and stays silent about the hook-less one", async () => {
         fetchMock.mockImplementation(async (url: string) => {
             if (url === ACTIVE_URL) return jsonResponse(['no-hooks-plugin', 'broken-plugin']);
-            if (url === REGISTRY_URL) return jsonResponse([
+            if (url === REGISTRY_URL) return registryResponse([
                 registryEntry('no-hooks-plugin', { adminPage: { entry: 'client/admin/page.tsx' } }),
                 registryEntry('broken-plugin', { hooks: 'client/Ext.tsx' }),
             ]);
@@ -166,7 +180,7 @@ describe("hooks-bundle 404 — warn only when the bundle SHOULD have been there"
     const hooksBundle404 = (registry: unknown[], active: string[]) =>
         fetchMock.mockImplementation(async (url: string) => {
             if (url === ACTIVE_URL) return jsonResponse(active);
-            if (url === REGISTRY_URL) return jsonResponse(registry);
+            if (url === REGISTRY_URL) return registryResponse(registry);
             return jsonResponse({}, 404);
         });
 
@@ -233,6 +247,112 @@ describe("hooks-bundle 404 — warn only when the bundle SHOULD have been there"
         // The failed registry fetch must not be memoized: the next pass tries again and can classify.
         await loadRuntimePluginHooks();
         expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(2);
+    });
+});
+
+/**
+ * The shape of GET /plugins/registry, pinned against its PRODUCER.
+ *
+ * This is the regression that a lying mock hid: backend/src/routes/plugins.ts answers
+ * `res.json({ plugins: [...] })`, but the loader guarded the raw body with `Array.isArray(body)` and
+ * threw on every well-formed response. Classification was therefore dead code in production — every
+ * hooks-bundle 404 silently skipped the warning — while a suite that mocked a bare array stayed green.
+ * The object form is the contract; the bare array is accepted only as proxy tolerance. Both get a test,
+ * so neither can be dropped by accident.
+ */
+describe("GET /plugins/registry response shape", () => {
+    const withRegistryBody = (body: unknown) =>
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+            if (url === REGISTRY_URL) return jsonResponse(body);
+            return jsonResponse({}, 404);
+        });
+
+    // THE REAL CONTRACT. Pre-fix, the loader's Array.isArray guard rejected exactly this body, so the
+    // warning below never appeared on a real install no matter how broken the plugin was.
+    it("classifies from the OBJECT body the backend actually sends: { plugins: [...] }", async () => {
+        withRegistryBody({ plugins: [registryEntry('mail-server', { hooks: 'client/Ext.tsx' })] });
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).toHaveBeenCalledWith(
+            expect.stringContaining("plugin 'mail-server' declares frontend.hooks"));
+    });
+
+    it("also accepts a BARE ARRAY body (tolerance for a proxy that unwraps the envelope)", async () => {
+        withRegistryBody([registryEntry('mail-server', { hooks: 'client/Ext.tsx' })]);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).toHaveBeenCalledWith(
+            expect.stringContaining("plugin 'mail-server' declares frontend.hooks"));
+    });
+
+    it("stays silent on a body that is neither shape (a proxy error page), and does not cache it", async () => {
+        withRegistryBody({ error: 'gateway exploded' });
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).not.toHaveBeenCalled();
+        await loadRuntimePluginHooks();
+        expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(2);
+    });
+
+    // `{ plugins: [] }` is a real answer (no active plugin has a readable manifest), not a malformed
+    // body: it must be cached like any success, and it classifies as 'none' → silent.
+    it("treats { plugins: [] } as a valid, cacheable answer", async () => {
+        withRegistryBody({ plugins: [] });
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        await loadRuntimePluginHooks();
+        expect(console.warn).not.toHaveBeenCalled();
+        expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(1);
+    });
+});
+
+/**
+ * Classification is a console-warning nicety. A gateway that accepts the connection and then never
+ * answers gives no HTTP status to reject on, so without an explicit bound the `await` in the 404 branch
+ * would hold loadRuntimePluginHooks open for as long as the socket stayed up — diagnostics blocking the
+ * thing they are meant to diagnose.
+ */
+describe("registry classification is bounded — a hanging /plugins/registry cannot stall hook loading", () => {
+    it("gives up on the classification and resolves instead of hanging forever", async () => {
+        vi.useFakeTimers();
+        try {
+            fetchMock.mockImplementation(async (url: string) => {
+                if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+                if (url === REGISTRY_URL) return new Promise<Response>(() => { }); // never settles
+                return jsonResponse({}, 404);
+            });
+            const { loadRuntimePluginHooks } = await freshLoader();
+            const pending = loadRuntimePluginHooks();
+            // Pre-bound this never settled; the assertion below would time out rather than fail loudly.
+            await vi.advanceTimersByTimeAsync(5000);
+            await expect(pending).resolves.toBeUndefined();
+            expect(console.warn).not.toHaveBeenCalled();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it("clears the timer when the registry answers promptly (no leaked setTimeout)", async () => {
+        vi.useFakeTimers();
+        try {
+            fetchMock.mockImplementation(async (url: string) => {
+                if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+                if (url === REGISTRY_URL) {
+                    return registryResponse([registryEntry('mail-server', { hooks: 'client/Ext.tsx' })]);
+                }
+                return jsonResponse({}, 404);
+            });
+            const { loadRuntimePluginHooks } = await freshLoader();
+            await loadRuntimePluginHooks();
+            expect(console.warn).toHaveBeenCalledWith(
+                expect.stringContaining("plugin 'mail-server' declares frontend.hooks"));
+            // The race's losing timer must be cleared: a still-armed setTimeout holds the event loop
+            // open, which is exactly how this repo's runner has flaked before.
+            expect(vi.getTimerCount()).toBe(0);
+        } finally {
+            vi.useRealTimers();
+        }
     });
 });
 
