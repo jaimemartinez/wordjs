@@ -245,3 +245,64 @@ test('the finalize step is given the CA order object, not a URL-only stub', asyn
 // NOTE: the HTTP-01 path (provisionAutoHTTP) finalizes through the SAME finalizeOrderByUrl helper
 // asserted above — it is deliberately not re-tested end-to-end here because that flow also pushes to
 // the gateway, and stubbing a live socket to prove a shared helper twice buys nothing.
+
+/**
+ * A CA reuses an authorization it has already validated (Let's Encrypt: ~30 days) and returns it
+ * WITHOUT the challenge menu a pending one carries. Insisting on finding a challenge threw
+ * "Challenge type http-01 not found for this domain" and left a domain that had ALREADY passed
+ * validation permanently unable to obtain a certificate by EITHER method — which is precisely the
+ * state a successful validation followed by a failed finalize leaves behind. Reported live.
+ */
+test('an already-valid authorization is not treated as a missing challenge', async () => {
+    const origInit = certManager.initClient;
+    const origClient = certManager.client;
+    try {
+        certManager.initClient = async () => { /* no network */ };
+        certManager.client = {
+            createOrder: async () => ({ url: 'https://ca.example/order/valid' }),
+            // Validated authorization: status 'valid', and NO challenge list to choose from.
+            getAuthorizations: async () => ([{ url: 'https://ca.example/authz/valid', status: 'valid', challenges: [] }]),
+            getChallengeKeyAuthorization: async () => { throw new Error('must not be called for a valid authz'); },
+        };
+        const out = await certManager.startDNSChallenge('already-valid.example', 'a@b.c');
+        assert.strictEqual(out.alreadyValid, true, 'the caller must be told there is nothing left to prove');
+        assert.strictEqual(out.txtValue, null, 'there is no TXT record to publish for a validated authorization');
+        assert.strictEqual(out.orderUrl, 'https://ca.example/order/valid', 'the order must still be finalizable');
+    } finally {
+        certManager.initClient = origInit;
+        certManager.client = origClient;
+    }
+});
+
+test('finishDNSChallenge finalizes directly when the authorization is already valid', async () => {
+    const domain = 'unit-test-alreadyvalid.invalid';
+    const calls: string[] = [];
+    const origInit = certManager.initClient;
+    const origClient = certManager.client;
+    const origUpdate = certManager.updateSSLConfig;
+    try {
+        certManager.initClient = async () => { /* no network */ };
+        certManager.updateSSLConfig = async () => { calls.push('updateSSLConfig'); };
+        certManager.client = {
+            completeChallenge: async () => { calls.push('completeChallenge'); },
+            waitForValidStatus: async () => { calls.push('waitForValidStatus'); },
+            getOrder: async ({ url }: any) => { calls.push('getOrder'); return { url, finalize: `${url}/finalize` }; },
+            finalizeOrder: async (o: any) => { calls.push('finalizeOrder'); return { url: o.url }; },
+            getCertificate: async () => { calls.push('getCertificate'); return '-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n'; },
+        };
+        const res = await certManager.finishDNSChallenge({
+            domain, alreadyValid: true, challenge: null,
+            orderUrl: 'https://ca.example/order/valid',
+            authzUrl: 'https://ca.example/authz/valid',
+        }, 'a@b.c');
+        assert.strictEqual(res.success, true);
+        assert.ok(!calls.includes('completeChallenge'), 'there is no challenge to complete');
+        assert.ok(!calls.includes('waitForValidStatus'), 'the CA already validated it');
+        assert.deepStrictEqual(calls, ['getOrder', 'finalizeOrder', 'getCertificate', 'updateSSLConfig']);
+    } finally {
+        certManager.initClient = origInit;
+        certManager.client = origClient;
+        certManager.updateSSLConfig = origUpdate;
+        fs.rmSync(path.resolve(__dirname, '../../ssl/live', domain), { recursive: true, force: true });
+    }
+});

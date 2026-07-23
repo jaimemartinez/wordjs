@@ -113,6 +113,24 @@ class CertManager {
         const order = await this.client.createOrder({ identifiers: [{ type: 'dns', value: domain }] });
         const authorizations = await this.client.getAuthorizations(order);
         const authz = authorizations[0];
+
+        // ALREADY PROVEN. A CA reuses an authorization it has validated (Let's Encrypt: ~30 days), and
+        // returns it WITHOUT the challenge menu a pending one offers — there is nothing left to prove.
+        // Demanding a challenge here threw "Challenge type <type> not found for this domain" and left a
+        // domain that had ALREADY passed validation permanently unable to obtain a certificate by
+        // EITHER method: the order is `ready` and needs nothing but finalization. Exactly what a
+        // successful validation followed by a failed finalize leaves behind.
+        if (authz.status === 'valid') {
+            return {
+                orderUrl: order.url,
+                authzUrl: authz.url,
+                alreadyValid: true,
+                challenge: null,
+                keyAuthorization: null,
+                dnsRecord: `_acme-challenge.${domain}`
+            };
+        }
+
         const challenge = authz.challenges.find((c: any) => c.type === type);
 
         if (!challenge) throw new Error(`Challenge type ${type} not found for this domain.`);
@@ -146,29 +164,38 @@ class CertManager {
 
             // 1. Create Order
             const orderData = await this.createOrder(domain, 'http-01');
-            console.log('[CertManager] Order created. Challenge token:', orderData.challenge.token);
 
-            // 2. Write Challenge File
-            await this.writeChallengeFile(orderData.challenge.token, orderData.keyAuthorization);
-            console.log('[CertManager] Challenge file written.');
+            // The CA may already hold a VALID authorization for this domain (it reuses them for about
+            // a month). Then there is no challenge to serve and port 80 is not needed at all — the
+            // order only has to be finalized. This is the state a successful validation followed by a
+            // failed finalize leaves behind, so skipping straight to step 4 is what recovers it.
+            if (orderData.alreadyValid) {
+                console.log('[CertManager] Authorization already valid at the CA — no challenge needed, finalizing.');
+            } else {
+                console.log('[CertManager] Order created. Challenge token:', orderData.challenge.token);
 
-            // 3. Best-effort LOCAL pre-flight: it fetches http://<domain>/.well-known/... from THIS
-            // machine. Behind NAT without hairpin the server often cannot reach its own public
-            // hostname even though the CA can, so a miss here must not abort the order —
-            // completeChallenge + waitForValidStatus below get the CA's authoritative verdict.
-            try {
-                await this.client.verifyChallenge(
-                    { url: orderData.authzUrl, identifier: { type: 'dns', value: domain } },
-                    orderData.challenge
-                );
-            } catch (preErr: any) {
-                console.warn('[CertManager] Local http-01 pre-verify inconclusive (continuing — the CA decides):', preErr && preErr.message);
+                // 2. Write Challenge File
+                await this.writeChallengeFile(orderData.challenge.token, orderData.keyAuthorization);
+                console.log('[CertManager] Challenge file written.');
+
+                // 3. Best-effort LOCAL pre-flight: it fetches http://<domain>/.well-known/... from THIS
+                // machine. Behind NAT without hairpin the server often cannot reach its own public
+                // hostname even though the CA can, so a miss here must not abort the order —
+                // completeChallenge + waitForValidStatus below get the CA's authoritative verdict.
+                try {
+                    await this.client.verifyChallenge(
+                        { url: orderData.authzUrl, identifier: { type: 'dns', value: domain } },
+                        orderData.challenge
+                    );
+                } catch (preErr: any) {
+                    console.warn('[CertManager] Local http-01 pre-verify inconclusive (continuing — the CA decides):', preErr && preErr.message);
+                }
+                await this.client.completeChallenge(orderData.challenge);
+                console.log('[CertManager] Challenge completed. Waiting for validation...');
+
+                await this.client.waitForValidStatus(orderData.challenge);
+                console.log('[CertManager] Challenge validated.');
             }
-            await this.client.completeChallenge(orderData.challenge);
-            console.log('[CertManager] Challenge completed. Waiting for validation...');
-
-            await this.client.waitForValidStatus(orderData.challenge);
-            console.log('[CertManager] Challenge validated.');
 
             // 4. Finalize
             const [key, csr] = await acme.forge.createCsr({
@@ -207,6 +234,22 @@ class CertManager {
 
             // Create order with DNS-01 challenge type
             const orderData = await this.createOrder(domain, 'dns-01');
+
+            // Nothing left to prove — the CA still holds a valid authorization for this domain. There
+            // is no TXT record to publish; the caller can finish immediately.
+            if (orderData.alreadyValid) {
+                return {
+                    domain,
+                    alreadyValid: true,
+                    txtRecord: `_acme-challenge.${domain}`,
+                    txtValue: null,
+                    orderUrl: orderData.orderUrl,
+                    challenge: null,
+                    authzUrl: orderData.authzUrl,
+                    keyAuthorization: null,
+                    directoryUrl: this.directoryUrl
+                };
+            }
 
             // getChallengeKeyAuthorization() ALREADY returned the RFC 8555 §8.4 TXT value for dns-01
             // (base64url(sha256(`token.thumbprint`))) — acme-client digests it internally. The old
@@ -253,7 +296,9 @@ class CertManager {
             // the outside after completeChallenge. Failing hard here strands setups whose local
             // resolver can't see what the CA can (split-horizon homelab DNS, negative-cached
             // lookups), so a pre-verify miss logs and continues instead of aborting the order.
+            // Skipped entirely when the authorization is already valid — there is no challenge to check.
             try {
+                if (!step1Data.challenge) throw new Error('authorization already valid — nothing to pre-verify');
                 await this.client.verifyChallenge(
                     { url: step1Data.authzUrl, identifier: { type: 'dns', value: step1Data.domain } },
                     step1Data.challenge
@@ -262,9 +307,12 @@ class CertManager {
                 console.warn('[CertManager] Local dns-01 pre-verify inconclusive (continuing — the CA decides):', preErr && preErr.message);
             }
 
-            // Complete and wait
-            await this.client.completeChallenge(step1Data.challenge);
-            await this.client.waitForValidStatus(step1Data.challenge);
+            // Complete and wait — unless the CA already holds a valid authorization, in which case
+            // there is no challenge object and nothing to complete; go straight to finalization.
+            if (step1Data.challenge) {
+                await this.client.completeChallenge(step1Data.challenge);
+                await this.client.waitForValidStatus(step1Data.challenge);
+            }
 
             // Create CSR and finalize
             const [key, csr] = await acme.forge.createCsr({

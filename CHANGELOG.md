@@ -15,6 +15,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   identically; it simply went unreported because the flow rarely got that far. Both paths now re-read
   the order from its URL and finalize that, which also picks up the order's current state — relevant to
   the two-step DNS flow, where minutes or hours pass between starting and finishing.
+- **A domain that had already passed validation could no longer get a certificate at all**, failing with
+  *"Challenge type http-01 not found for this domain"*. A CA reuses an authorization it has validated
+  (Let's Encrypt keeps them for about a month) and returns it without the challenge menu a pending one
+  carries — there is nothing left to prove. Insisting on finding a challenge turned that into a hard
+  error by **both** methods, which is exactly the dead end left behind by a successful validation
+  followed by the failed finalize above. Such an order now skips straight to finalization; no challenge
+  is served and, for HTTP-01, port 80 is not needed at all.
 
 ## [1.12.8] - 2026-07-23
 
