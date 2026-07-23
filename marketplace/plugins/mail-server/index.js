@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.5',
+    version: '2.1.6',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -534,7 +534,17 @@ async function evaluateSPF(domain, ip, depth = 0, budget = { lookups: 0 }) {
         if (name === 'all') {
             matched = true;
         } else if (name === 'ip4' || name === 'ip6') {
-            matched = ipInCidr(ip, value);
+            // RFC 7208 §5.6: the network literal and its optional prefix are part of the MECHANISM'S
+            // SYNTAX, so a malformed or out-of-range one is a permerror for the whole record — the
+            // same call the a/mx dual-cidr check above already makes. This arm used to be a bare
+            // `ipInCidr(ip, value)`, which answers a plain `false` for anything it cannot parse: the
+            // broken term was silently skipped, evaluation fell through to the trailing -all, and an
+            // AUTHORIZED sender got a permanent SMTP 550 ("v=spf1 ip4:203.0.113.0/33 -all" rejected
+            // 203.0.113.9). Telling the two apart needs the family the mechanism NAME declares, so a
+            // legal ip6: term against a v4 sender stays an ordinary non-match.
+            const hit = cidrMatch(ip, value, name === 'ip4' ? 4 : 6);
+            if (hit === CIDR_MALFORMED) return 'permerror';
+            matched = hit;
         } else if (name === 'a') {
             if (overBudget()) return 'permerror';
             const r = await spfResolveAddrs(value || domain, ip);
@@ -711,38 +721,96 @@ function buildReceivedSpf(result, { domain, mailFrom, ip, helo, receiver } = {})
 }
 
 /**
- * Match an IP against a CIDR or bare address (IPv4/IPv6). No external deps.
+ * Returned by cidrMatch() for a term that is SYNTACTICALLY BROKEN, as opposed to one that is
+ * well-formed and simply does not contain the IP. RFC 7208 §5.6 makes the first a permerror for the
+ * whole record; collapsing it into the second is what turns the sender's typo into OUR 550.
  */
-function ipInCidr(ip, cidr) {
-    if (!cidr) return false;
-    const [range, bitsRaw] = cidr.split('/');
-    const v4 = net.isIPv4(ip) && net.isIPv4(range);
-    const v6 = net.isIPv6(ip) && net.isIPv6(range);
-    if (!v4 && !v6) return false;
+const CIDR_MALFORMED = Symbol('cidr-malformed');
 
-    const toBig = (addr, isV6) => {
-        if (!isV6) {
+/**
+ * Match an IP against a CIDR or bare address (IPv4/IPv6). No external deps.
+ *
+ * `family` is the address family the CALLER'S SYNTAX declares — 4 for an `ip4:` mechanism, 6 for an
+ * `ip6:` one — or null where the family is only implied and a mismatch is unremarkable (the addresses
+ * we resolved ourselves for a/mx, and isBlockedIp's block-lists). Only a declared family lets us tell
+ * a BROKEN term from a non-matching one: "ip4:2001:db8::1" is a syntax error, while a perfectly legal
+ * "ip6:2001:db8::/32" merely has nothing to say about an IPv4 sender. With a family, anything that is
+ * not a well-formed network of that family — bogus literal, missing value, extra slash, non-numeric or
+ * out-of-range prefix — is CIDR_MALFORMED. Without one, every such case stays `false`, as before.
+ *
+ * Returns true | false | CIDR_MALFORMED.
+ */
+function cidrMatch(ip, cidr, family = null) {
+    // Fold every "cannot parse this" exit through one helper: for an implied family the historical
+    // answer (a plain non-match) is the only safe one, since isBlockedIp treats truthy as "blocked".
+    const broken = () => (family === null ? false : CIDR_MALFORMED);
+
+    // §5.6 ABNF: ip4:/ip6: REQUIRE a network. A bare "ip4" or an empty "ip4:" is a broken term, not a
+    // mechanism that quietly matches nothing.
+    if (cidr === null || cidr === undefined || cidr === '') return broken();
+
+    // Split on EVERY '/': an IPv6 literal never contains one, so a second slash ("192.0.2.0//24" —
+    // the dual-cidr spelling, which is legal only on a/mx) is a syntax error, not something to parse
+    // around. The old two-element destructure silently dropped it.
+    const parts = String(cidr).split('/');
+    if (parts.length > 2) return broken();
+    const range = parts[0];
+    const bitsRaw = parts.length > 1 ? parts[1] : undefined;
+
+    const rangeIsV4 = net.isIPv4(range);
+    const rangeIsV6 = net.isIPv6(range);
+    if (family === 4 && !rangeIsV4) return CIDR_MALFORMED;
+    if (family === 6 && !rangeIsV6) return CIDR_MALFORMED;
+    if (!rangeIsV4 && !rangeIsV6) return broken();
+
+    // §5.6: ip4-cidr-length is 0-32 and ip6-cidr-length is 0-128, digits only — no sign, no spaces, no
+    // empty "/". parseInt is far too forgiving to be the gate on its own ("24abc" -> 24, "" -> NaN,
+    // " 24" -> 24), and NaN silently lost to `isNaN(bits) -> return false` is exactly the swallow this
+    // whole change removes. Validate the TEXT first, then the range.
+    const totalBits = rangeIsV6 ? 128 : 32;
+    let bits = totalBits;
+    if (bitsRaw !== undefined) {
+        if (!/^\d{1,3}$/.test(bitsRaw)) return broken();
+        bits = parseInt(bitsRaw, 10);
+        if (bits > totalBits) return broken();
+    }
+
+    // Only now, with the term established as well-formed, does the SENDER's family matter: a legal
+    // network of the other family is an ordinary non-match, and must stay one — every dual-stack
+    // record on the internet publishes both, and permerror-ing those would disable enforcement.
+    const isV6 = net.isIPv6(ip) && rangeIsV6;
+    if (!isV6 && !(net.isIPv4(ip) && rangeIsV4)) return false;
+
+    const toBig = (addr, asV6) => {
+        if (!asV6) {
             return addr.split('.').reduce((acc, o) => (acc << 8n) + BigInt(parseInt(o, 10)), 0n);
         }
         // Expand IPv6 to 8 hextets.
         let [head, tail] = addr.split('::');
         const h = head ? head.split(':') : [];
         const t = tail !== undefined ? (tail ? tail.split(':') : []) : null;
-        let parts;
-        if (t === null) { parts = h; }
-        else { parts = [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]; }
-        return parts.reduce((acc, p) => (acc << 16n) + BigInt(parseInt(p || '0', 16)), 0n);
+        let parts2;
+        if (t === null) { parts2 = h; }
+        else { parts2 = [...h, ...Array(8 - h.length - t.length).fill('0'), ...t]; }
+        return parts2.reduce((acc, p) => (acc << 16n) + BigInt(parseInt(p || '0', 16)), 0n);
     };
-
-    const isV6 = v6;
-    const totalBits = isV6 ? 128 : 32;
-    const bits = bitsRaw === undefined ? totalBits : parseInt(bitsRaw, 10);
-    if (isNaN(bits) || bits < 0 || bits > totalBits) return false;
 
     const ipBig = toBig(ip, isV6);
     const rangeBig = toBig(range, isV6);
     const mask = bits === 0 ? 0n : (~0n << BigInt(totalBits - bits)) & ((1n << BigInt(totalBits)) - 1n);
     return (ipBig & mask) === (rangeBig & mask);
+}
+
+/**
+ * Boolean view of cidrMatch for the callers with no declared family: the a/mx address test (whose
+ * addresses came from our own resolver) and isBlockedIp, the outbound-delivery SSRF guard.
+ *
+ * The sentinel must NEVER reach isBlockedIp — it is truthy, so `V4_BLOCKED.some(c => ipInCidr(a, c))`
+ * would report every public MX as a private address and silently stop ALL outbound mail. Passing no
+ * family guarantees cidrMatch cannot produce it; the `=== true` is the belt to that braces.
+ */
+function ipInCidr(ip, cidr) {
+    return cidrMatch(ip, cidr) === true;
 }
 
 /**
