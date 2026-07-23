@@ -113,6 +113,31 @@ const restartTimers = new Map<string, NodeJS.Timeout>();
 const stopping = new Set<string>(); // slugs whose exit is an INTENTIONAL unload (skip supervision)
 
 /**
+ * Loads currently IN FLIGHT, per slug — registered synchronously by loadIsolatedPlugin BEFORE it awaits
+ * anything, and removed when the load settles.
+ *
+ * It buys two things the other registries cannot:
+ *
+ *  1. SAME-SLUG SAFETY. `isolates` holds ONE handle per slug, so a second concurrent load of the same slug
+ *     used to overwrite the first — and the overwritten child was then absent from `isolates`, from
+ *     `restartTimers` and from every enumeration built on them, while still running, still holding the
+ *     hooks/filters/shortcodes it had registered, and unreachable by unloadIsolatedPlugin or any sweep.
+ *     An admin double-clicking "activate", or two admins acting at once, was enough. A second load for a
+ *     slug whose load is already running now JOINS it instead of forking a rival child.
+ *
+ *  2. IN-FLIGHT VISIBILITY. `isolates.set` runs at the END of the load executor, so between the call and
+ *     that line a slug is in NEITHER registry. superviseRestart walks straight through that window (it
+ *     deletes its restartTimers entry and calls right in here), so an enumeration taken there missed the
+ *     slug entirely and a sweep based on it skipped a child that was about to exist. listIsolates() unions
+ *     this map for exactly that reason, and awaitIsolateSettled lets a sweeper wait the load out instead
+ *     of racing it.
+ *
+ * Keyed by slug, valued with the entry file so a load for a DIFFERENT entry file never silently joins the
+ * wrong child (it waits for the in-flight one to settle and then starts its own).
+ */
+const loading = new Map<string, { promise: Promise<any>; entryFile: string }>();
+
+/**
  * Strip line breaks from a value before it goes into a log line. Nearly every message in this module
  * carries the plugin SLUG, plus a plugin-supplied hook name, route method or error text — all
  * request-derived, so an unescaped one can forge or split entries in the operator's log. Passing such a
@@ -246,6 +271,75 @@ function getAllIsolateStatuses() {
     const out: Record<string, any> = {};
     for (const slug of isolateHealth.keys()) out[slug] = getIsolateStatus(slug);
     return out;
+}
+
+/**
+ * Snapshot of every slug this module is currently MANAGING — the supported way to ask "what is loaded?".
+ *
+ * THREE sources, because each alone under-reports:
+ *  - `isolates` — slugs with a live, registered child.
+ *  - `restartTimers` — slugs whose child CRASHED and already has a supervised restart armed. Those are
+ *    absent from `isolates` (the exit handler deleted the entry), yet the timer will re-fork the SAME
+ *    entry file, so a caller that swept only the registry would watch an isolate it just retired come
+ *    back to life a second later. unloadIsolatedPlugin cancels the timer, so including them is the fix.
+ *  - `loading` — slugs whose load is IN FLIGHT. `isolates.set` is the last line of the load executor, and
+ *    superviseRestart deletes its restartTimers entry BEFORE calling loadIsolatedPlugin, so a crashed
+ *    slug being restarted is in neither of the two maps above for the whole span of its restart. An
+ *    enumeration taken in that window under-reported, and a theme sweep driven by it skipped the very
+ *    child it exists to retire — reintroducing the leak listIsolates() was added to close.
+ *
+ * A slug reported from `loading` alone is NOT yet unloadable: unloadIsolatedPlugin only knows how to stop
+ * a REGISTERED child. Callers that intend to retire what they enumerate must awaitIsolateSettled(slug)
+ * first (see the theme sweep in core/theme-engine.ts) — waiting the load out and then unloading is both
+ * leak-free and free of the mid-registration kill that yanking a half-loaded child would cause.
+ *
+ * `getAllIsolateStatuses()` is NOT a substitute: it is keyed on `isolateHealth`, which keeps an entry for
+ * every slug ever loaded (including long-'stopped' ones) — that is a status history, not the live set.
+ *
+ * This exists because these registries are module-private on purpose: theme-engine must retire every stale
+ * `theme:` isolate before loading the incoming theme's child, and it must not reach into our internals.
+ */
+function listIsolates(): string[] {
+    const slugs = new Set<string>(isolates.keys());
+    for (const slug of restartTimers.keys()) slugs.add(slug);
+    for (const slug of loading.keys()) slugs.add(slug);
+    return Array.from(slugs);
+}
+
+/**
+ * Wait (bounded) until NO load for this slug is in flight — the companion to listIsolates() for anyone
+ * who intends to RETIRE what it enumerates.
+ *
+ * A slug can be reported purely because a load is running (see `loading`), and such a slug cannot be
+ * unloaded: unloadIsolatedPlugin stops a registered child, and this one is not registered yet. Two wrong
+ * answers were available and both reintroduce the bug — skip it (the child registers a moment later and
+ * survives the sweep, which is the leak) or kill it mid-load (the child is SIGKILLed while its
+ * registrations are still arriving over IPC, and anything that lands after the teardown stays wired to a
+ * dead process forever, because the exit handler skips teardown once the registry entry is gone).
+ *
+ * So: wait for the load to settle, THEN unload it normally. The loop re-checks rather than awaiting once,
+ * because a load that settles may be immediately followed by another for the same slug. Returns false on
+ * timeout so the caller can act (and say so) instead of blocking a theme switch forever.
+ *
+ * Both racers are always cleaned up: the timer is cleared on every iteration whether it won or lost — an
+ * uncleared Promise.race timer is precisely what once kept a test subprocess alive past its IPC teardown.
+ */
+async function awaitIsolateSettled(slug: string, timeoutMs = 30000): Promise<boolean> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    for (;;) {
+        const rec = loading.get(slug);
+        if (!rec) return true;
+        const left = deadline - Date.now();
+        if (left <= 0) return false;
+        let timer: any = null;
+        const expiry = new Promise<'timeout'>((r) => {
+            timer = setTimeout(() => r('timeout'), Math.min(left, 250));
+            if (timer.unref) timer.unref();
+        });
+        // A rejected load is still a SETTLED load — its failure belongs to whoever asked for it.
+        await Promise.race([rec.promise.then(() => 'settled', () => 'settled'), expiry]);
+        if (timer) clearTimeout(timer);
+    }
 }
 
 // (The former host-side memory watchdog is gone: with child_process each untrusted plugin runs in its
@@ -782,7 +876,47 @@ function callApi(api: any, method: string, args: any[]) {
     return fn.apply(ctx, args);
 }
 
-async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?: boolean; readyTimeoutMs?: number } = {}): Promise<any> {
+/**
+ * Load a plugin/theme into its own isolate — the ONLY entry point; startIsolate below does the work.
+ *
+ * SAME-SLUG SAFETY LIVES HERE. `isolates` maps a slug to exactly ONE handle, so two overlapping loads of
+ * the same slug used to fork two children and the first was simply overwritten: gone from `isolates`,
+ * never in `restartTimers`, invisible to listIsolates(), unreachable by unloadIsolatedPlugin and by the
+ * theme sweep — yet alive, and still applying every filter and shortcode it had registered. That is
+ * ordinary admin behaviour away, not a theoretical race: POST /themes/:slug/activate and
+ * POST /plugins/:slug/activate both reach here, and a double-click or two admins overlap two loads.
+ *
+ * JOIN, don't fork: a second load for a slug already loading returns the FIRST load's promise, so both
+ * callers get the same child and there is no second process to strand. (The alternative — fork and tear
+ * the previous child down — spawns a process only to kill it, and leaves the loser's caller holding a
+ * rejected activation. It survives here only as the backstop at `isolates.set`, for the paths that do not
+ * come through an overlapping call at all.) `loading` is written SYNCHRONOUSLY, before the first await, so
+ * there is no window in which a concurrent caller can miss the entry.
+ *
+ * A load naming a DIFFERENT entry file must not join: it waits for the in-flight one to settle and then
+ * runs its own, so "load X from this file" never silently returns a child running a different file.
+ */
+function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?: boolean; readyTimeoutMs?: number } = {}): Promise<any> {
+    const pending = loading.get(slug);
+    if (pending && pending.entryFile === entryFile) return pending.promise;
+    const rec: { promise: Promise<any>; entryFile: string } = {
+        entryFile,
+        promise: (async () => {
+            // Different entry file for a slug already loading: let that load finish (its failure is its
+            // own caller's business) so the two children can never overlap, then start ours.
+            if (pending) { try { await pending.promise; } catch { /* not our load, not our error */ } }
+            return startIsolate(slug, entryFile, opts);
+        })(),
+    };
+    loading.set(slug, rec);
+    // Clear only OUR OWN entry: a later load may already have replaced it (the different-entry-file path
+    // above overwrites while the earlier one is still settling).
+    const clear = () => { if (loading.get(slug) === rec) loading.delete(slug); };
+    rec.promise.then(clear, clear);
+    return rec.promise;
+}
+
+async function startIsolate(slug: string, entryFile: string, opts: { supervised?: boolean; readyTimeoutMs?: number } = {}): Promise<any> {
     // Resolve the memory-cap capabilities ONCE (cached) before building the child, so the spawn path is
     // chosen synchronously inside the executor below. cgroup (preventive) is preferred over rlimit (loose).
     const cgroupOk = await probeCgroupCap();
@@ -1596,6 +1730,27 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         });
 
         // Register the live handle + refresh per-child health telemetry.
+        //
+        // INVARIANT: THE MAP NEVER LOSES ITS REFERENCE TO A LIVE CHILD. One slug, one handle — so if a
+        // handle is already here it is about to be overwritten, and an overwritten child is an ORPHAN:
+        // absent from `isolates` and from `restartTimers`, invisible to listIsolates(), unreachable by
+        // unloadIsolatedPlugin and by the theme sweep, yet running and still applying the hooks, filters
+        // and shortcodes it registered. Retire it here, at the single line that can lose it, so the
+        // invariant holds for every caller — including sequential loads (an activate for a slug that is
+        // already loaded), which the join in loadIsolatedPlugin cannot see because they never overlap.
+        //
+        // Teardown-then-terminate, the same order unloadIsolatedPlugin uses, and NOT via `stopping`: that
+        // mark is keyed by slug and consumed by whichever child exits first, so marking here could silence
+        // the supervisor for the NEW child's first crash. The displaced child needs no mark — its exit
+        // handler already sees a registry entry that is not its own and returns without supervising.
+        // Safe against the incoming child's registrations: this executor is synchronous, so at this line
+        // the new child has not sent a single message and `teardown()` can only remove the old one's.
+        const displaced = isolates.get(slug);
+        if (displaced && displaced.worker !== worker) {
+            console.warn(`[Isolate ${logSafe(slug)}] a second load replaced a live child for this slug — retiring the displaced one so it cannot be orphaned.`);
+            try { if (displaced.teardown) displaced.teardown(); } catch (e: any) { console.error(`[Isolate ${logSafe(slug)}] teardown of the displaced child: ${logSafe(e && e.message)}`); }
+            try { displaced.worker.terminate(); } catch { /* already gone */ }
+        }
         isolates.set(slug, { worker, teardown, entryFile });
         const h = getHealth(slug);
         h.state = 'running'; h.pid = (child && child.pid) || null; h.startedAt = Date.now();
@@ -1605,7 +1760,32 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
     });
 }
 
-function unloadIsolatedPlugin(slug: string) {
+// Returns void on the ordinary synchronous path, and a Promise only when it has to wait out an in-flight
+// load (see below). The annotation is required: the function references itself in a return expression.
+function unloadIsolatedPlugin(slug: string): void | Promise<void> {
+    // A load for this slug is IN FLIGHT — its `isolates.set` has not landed yet. The synchronous body below
+    // would therefore find no handle, do nothing, and leave a live child behind the moment that load
+    // completes: the unload silently lost. awaitIsolateSettled is the documented primitive for "I intend to
+    // retire what I enumerate", but only the theme sweep and reloadIsolatedPlugin were calling it — plain
+    // deactivate (core/plugins.ts), cross-node deactivate and DELETE all unloaded same-tick. Enforcing it
+    // HERE makes the contract hold for every caller instead of asking each one to remember it.
+    // Deliberately NOT made async: five call sites invoke this synchronously inside try/catch, and turning
+    // it into a promise there would let a rejection escape the catch that is meant to contain it. A promise
+    // is returned only on this path, so `await`ing callers get the deferred work and the rest still end up
+    // with the child retired.
+    // NOT simply `loading.has(slug)`: `isolates.set` runs at the END of the executor while the load stays
+    // unsettled until the child reports ready, so there is a window where the slug is REGISTERED and the
+    // load is still pending. In THAT window the synchronous body is correct and load-bearing — it marks the
+    // stop, kills the child, and the exit handler consumes the mark (see the 'unload that lands MID-LOAD'
+    // test). Deferring there would be a regression. Only the no-handle-yet case is the silent no-op.
+    if (!isolates.has(slug) && loading.has(slug)) {
+        return awaitIsolateSettled(slug).then(() => {
+            // Settled ⇒ recursing hits the sync path. If it never settled we would spin, so stop instead:
+            // a load stuck past the timeout has bigger problems than a missed unload.
+            if (loading.has(slug)) return;
+            return unloadIsolatedPlugin(slug);
+        });
+    }
     // Cancel any pending backoff restart from an earlier crash. Unconditional: the whole point of the
     // no-handle case is that a crashed plugin has NO registered isolate while its restart timer is armed.
     const pending = restartTimers.get(slug);
@@ -1630,6 +1810,11 @@ function unloadIsolatedPlugin(slug: string) {
 // plugin's permission grants change so it re-registers its routes and re-evaluates host-capability
 // gates (mail/notify providers, network) without a full server restart. No-op if not loaded.
 async function reloadIsolatedPlugin(slug: string): Promise<any> {
+    // A reload landing WHILE a load for the same slug is in flight would either join that load (and hand
+    // back a child started under the OLD grants — the exact thing a grants-change reload exists to
+    // replace) or read `isolates` before the load registers and no-op. Let the load settle first, then
+    // reload what it produced.
+    await awaitIsolateSettled(slug);
     const h = isolates.get(slug);
     if (!h || !h.entryFile) return null;
     const entryFile = h.entryFile;
@@ -1646,7 +1831,8 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
 module.exports = {
     loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin,
     isIsolated: (slug: string) => isolates.has(slug),
-    getLivePids, awaitIsolateStopped,
+    listIsolates,
+    getLivePids, awaitIsolateStopped, awaitIsolateSettled,
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
     __bwrapProfile: bwrapProfile,
