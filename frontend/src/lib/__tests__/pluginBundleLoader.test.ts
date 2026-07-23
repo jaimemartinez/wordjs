@@ -16,8 +16,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 const ACTIVE_URL = '/api/v1/plugins/active';
 const REGISTRY_URL = '/api/v1/plugins/registry';
 
-// Import fresh per test: activePromise/hooksRegistered are module-level session caches, and the caching
-// behaviour is exactly what is under test.
+// Import fresh per test: activePromise/hooksRegistration/blockConfigCache are module-level session
+// caches, and the caching behaviour is exactly what is under test.
 async function freshLoader() {
     vi.resetModules();
     return import("../pluginBundleLoader");
@@ -25,6 +25,11 @@ async function freshLoader() {
 
 function jsonResponse(body: unknown, status = 200): Response {
     return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
+}
+
+/** A 200 serving bundle SOURCE — what GET /plugins/:id/bundle?type=hooks answers with. */
+function textResponse(code: string): Response {
+    return { ok: true, status: 200, text: async () => code } as Response;
 }
 
 /** A registry entry as GET /plugins/registry emits it: the plugin's manifest, spread. */
@@ -401,13 +406,14 @@ describe("registry classification is bounded — a hanging /plugins/registry can
 });
 
 /**
- * The one piece of the SUCCESS path this suite can honestly reach.
+ * The piece of the SUCCESS path that needs no substitution at all.
  *
- * loadPluginHooksBundle's happy path ends in `import()` of a `blob:` URL, which the runner's node
- * environment cannot perform — so no test here executes a 200 hooks bundle end-to-end, and none pretends
- * to. What IS testable is the convention that makes a hooks bundle do anything at all: invoke every
- * export named `register*`. Factored out for exactly that reason and exercised against a plain module
- * object below, which is the same shape `Object.keys` sees on a real module namespace.
+ * The happy path ends in `import()` of a `blob:` URL, which the runner's node environment cannot perform.
+ * The concurrency suite further down reaches the 200 path anyway, by swapping that ONE step for an
+ * equivalent node can run; this describe needs no such swap, because the convention that makes a hooks
+ * bundle do anything — invoke every export named `register*` — was factored out for exactly that reason.
+ * It is exercised against a plain module object below, the same shape `Object.keys` sees on a real module
+ * namespace.
  */
 describe("invokeHookRegistrars — the register* convention a hooks bundle relies on", () => {
     it("invokes every export whose name starts with `register`, once each", async () => {
@@ -439,6 +445,137 @@ describe("invokeHookRegistrars — the register* convention a hooks bundle relie
         expect(registerHealthy).toHaveBeenCalledTimes(1);
         expect(console.error).toHaveBeenCalledWith(
             expect.stringContaining('Error in hook mail-server'), expect.any(Error));
+    });
+});
+
+/**
+ * ONE registration per plugin — including when two passes OVERLAP.
+ *
+ * Reachable, not theoretical: plugins.ts runs the build-time loader and this runtime loader under a
+ * SINGLE run-once latch and un-latches it as soon as EITHER rejects — while the other may still be in
+ * flight — so the next admin-layout mount starts a second runtime pass on top of the first. The guard
+ * used to be a Set written only AFTER a bundle had been fetched and evaluated; two passes overlapping
+ * anywhere in that window both read it empty, both fetched, and both invoked the plugin's `register*`
+ * exports. The first test below MEASURES 2 against that shape — it is this fix's negative control.
+ *
+ * Not cosmetic: pluginHooks replaces a prior entry only when the plugin passes a `key`. mail-server does,
+ * so its toggle merely overwrites itself; a third-party extension registered keyless stacks, and renders
+ * twice — the duplicate-UI bug initPlugins' latch exists to prevent.
+ *
+ * These are the only tests here that reach the 200 path, and they get there by substituting the single
+ * step node cannot run: `URL.createObjectURL` hands back an equivalent `data:` URL instead of a `blob:`
+ * one. Everything else is the loader's own code — fetch, status handling, module evaluation,
+ * invokeHookRegistrars, and the memo bookkeeping actually under test — and the bundle source is the
+ * `register*` convention the real esbuild output must satisfy. A genuine browser `blob:` import remains
+ * out of reach in this runner; it is covered only by the LXC end-to-end pass.
+ */
+describe("hooks registration is deduped per plugin, across SEQUENTIAL and CONCURRENT passes", () => {
+    // Swap ONLY blob:→data:, and do it with real subclasses so nothing else about either global changes
+    // (`new URL(...)` and `new Blob(...)` keep working for everything else in the module graph).
+    // vi.stubGlobal + the shared afterEach's unstubAllGlobals put both back.
+    function installImportableBundleShim(): void {
+        const RealBlob = globalThis.Blob;
+        class ShimBlob extends RealBlob {
+            readonly source: string;
+            constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+                super(parts, options);
+                this.source = parts.join('');
+            }
+        }
+        class ShimURL extends globalThis.URL { }
+        (ShimURL as unknown as { createObjectURL(b: ShimBlob): string }).createObjectURL = (b) =>
+            'data:text/javascript;base64,' + Buffer.from(b.source, 'utf8').toString('base64');
+        (ShimURL as unknown as { revokeObjectURL(u: string): void }).revokeObjectURL = () => { };
+        vi.stubGlobal('Blob', ShimBlob);
+        vi.stubGlobal('URL', ShimURL);
+    }
+
+    // A hooks bundle in the shape build-plugin.js emits: an ESM module whose `register*` export installs
+    // the plugin's UI extension. It runs as its own module, so a global is its only way back to the test.
+    // `marker` also keeps each test's data: URL unique — identical ones are cached by the module loader,
+    // and a shared URL would let one test's evaluation stand in for another's.
+    function hooksBundle(marker: string): string {
+        const key = JSON.stringify(marker);
+        return `export const registerUserFormExtension = () => {\n` +
+            `  const log = globalThis.__wjsHookRegistrations;\n` +
+            `  log[${key}] = (log[${key}] || 0) + 1;\n` +
+            `};\n`;
+    }
+    const registrations = (marker: string): number =>
+        ((globalThis as any).__wjsHookRegistrations as Record<string, number>)[marker] ?? 0;
+    const hooksFetches = (): number =>
+        fetchMock.mock.calls.filter(([u]) => String(u).includes('type=hooks')).length;
+
+    beforeEach(() => { (globalThis as any).__wjsHookRegistrations = {}; });
+    afterEach(() => { delete (globalThis as any).__wjsHookRegistrations; });
+
+    it("registers ONCE when two passes run simultaneously (the Set-guard shape registered twice)", async () => {
+        installImportableBundleShim();
+        const code = hooksBundle('concurrent');
+        fetchMock.mockImplementation(async (url: string) =>
+            url === ACTIVE_URL ? jsonResponse(['mail-server']) : textResponse(code));
+        const { loadRuntimePluginHooks } = await freshLoader();
+
+        // Both passes are in flight together: the second starts while the first is still awaiting its
+        // very first fetch, which is exactly the window a post-hoc "already done" Set cannot cover.
+        await Promise.all([loadRuntimePluginHooks(), loadRuntimePluginHooks()]);
+
+        expect(registrations('concurrent')).toBe(1);
+        // The mechanism, not just the outcome: the second caller JOINED the first attempt.
+        expect(hooksFetches()).toBe(1);
+    });
+
+    it("registers ONCE across two sequential passes (the session guarantee the Set did provide)", async () => {
+        installImportableBundleShim();
+        const code = hooksBundle('sequential');
+        fetchMock.mockImplementation(async (url: string) =>
+            url === ACTIVE_URL ? jsonResponse(['mail-server']) : textResponse(code));
+        const { loadRuntimePluginHooks } = await freshLoader();
+
+        await loadRuntimePluginHooks();
+        await loadRuntimePluginHooks();   // the admin layout remounts on every navigation
+
+        expect(registrations('sequential')).toBe(1);
+        expect(hooksFetches()).toBe(1);
+    });
+
+    // Guards against "fixing" the race by memoizing every outcome forever. A 404 registered NOTHING, so
+    // it must not latch: the admin may run build-plugin.js and remount, and that pass has to find it.
+    it("does NOT memoize a 404 — a plugin built between two passes still registers", async () => {
+        installImportableBundleShim();
+        const code = hooksBundle('rebuilt');
+        let built = false;
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+            if (url === REGISTRY_URL) return registryResponse([]);       // nothing to classify → silent
+            return built ? textResponse(code) : jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks } = await freshLoader();
+
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(registrations('rebuilt')).toBe(0);
+
+        built = true;
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(registrations('rebuilt')).toBe(1);
+    });
+
+    it("does NOT memoize a FAILED attempt — the retry after a 5xx registers for real", async () => {
+        installImportableBundleShim();
+        const code = hooksBundle('retry');
+        let failing = true;
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['mail-server']);
+            return failing ? jsonResponse({}, 503) : textResponse(code);
+        });
+        const { loadRuntimePluginHooks } = await freshLoader();
+
+        await expect(loadRuntimePluginHooks()).rejects.toThrow(/failed to load/);
+        expect(registrations('retry')).toBe(0);
+
+        failing = false;   // gateway back up, initPlugins un-latched, next mount retries
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(registrations('retry')).toBe(1);
     });
 });
 

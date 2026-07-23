@@ -29,8 +29,17 @@ export function initPlugins() {
     //                                .next, so this is the ONLY path that can ever see them.
     // Hook chunks/bundles load ASYNCHRONOUSLY — a network/chunk failure surfaces as a promise rejection,
     // not a synchronous throw — so un-latch the run-once guard in BOTH paths, letting the next
-    // admin-layout mount retry. Retrying is safe: registration is idempotent (keyed hooks replace, never
-    // stack), and the runtime loader additionally skips plugins it already registered.
+    // admin-layout mount retry.
+    //
+    // Note what un-latching means with TWO loaders under ONE latch: whichever rejects first re-opens the
+    // guard while the other is very likely STILL IN FLIGHT, so the next mount runs a pass that OVERLAPS
+    // the previous one — passes are concurrent, not merely sequential. The runtime loader is safe under
+    // that because it dedupes on the in-flight registration promise per plugin (pluginBundleLoader's
+    // hooksRegistration), so an overlapping caller joins the existing attempt rather than registering a
+    // second time. loadPluginHooks() — the generated build-time registry — has no such dedupe and leans
+    // purely on registration being idempotent, which holds only for plugins that pass pluginHooks KEYS
+    // (a keyless addAction/addFilter appends, so it would stack duplicate UI). First-party plugins pass
+    // keys; a third-party one need not.
     const run = (label: string, load: () => unknown) => {
         try {
             const result: unknown = load();
