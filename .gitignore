@@ -37,9 +37,17 @@ backend/os-tmp/
 *.db
 *.sqlite
 *.sqlite3
-*-wal
-*-shm
-*-journal
+# SQLite sidecar files — scoped to real DB names so the bare -wal/-shm/-journal
+# patterns don't swallow unrelated paths (e.g. a theme slug ending in "-journal").
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.sqlite3-wal
+*.sqlite3-shm
+*.sqlite3-journal
 
 # Logs & Debug
 logs/

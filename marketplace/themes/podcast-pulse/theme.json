@@ -1,0 +1,14 @@
+{
+  "name": "Podcast Pulse",
+  "version": "1.0.0",
+  "description": "Media & podcasting platform theme with embedded audio wave players, episode playlists, and transcripts.",
+  "author": "WordJS Premium Studio",
+  "category": "Media",
+  "archetype": "glassmorphism",
+  "tags": [
+    "premium",
+    "media",
+    "glassmorphism",
+    "responsive"
+  ]
+}

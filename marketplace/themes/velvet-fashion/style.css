@@ -1,0 +1,84 @@
+/* Theme: Velvet Fashion (Editorial Luxury Archetype) */
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
+
+:root {
+    --edit-primary: #f472b6;
+    --edit-secondary: #e11d48;
+    --edit-bg: #12050a;
+    --edit-text: #fff1f2;
+}
+
+body {
+    background-color: var(--edit-bg);
+    color: var(--edit-text);
+    font-family: 'Lora', serif;
+    font-size: 1.1rem;
+    line-height: 1.8;
+    margin: 0;
+}
+
+h1, h2, h3 {
+    font-family: 'Playfair Display', serif;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    color: var(--edit-primary);
+}
+
+.theme-container {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 4rem 2rem;
+}
+
+.theme-hero {
+    border-top: 3px double var(--edit-primary);
+    border-bottom: 1px solid var(--edit-secondary);
+    padding: 5rem 1rem;
+    text-align: center;
+    margin-bottom: 4rem;
+}
+
+.theme-hero h1 {
+    font-size: 4rem;
+    font-style: italic;
+}
+
+.theme-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 3rem;
+}
+
+.theme-card {
+    border-left: 2px solid var(--edit-primary);
+    padding-left: 1.5rem;
+    transition: border-color 0.3s ease;
+}
+
+.theme-card:hover {
+    border-left-color: var(--edit-secondary);
+}
+
+.theme-badge {
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    color: var(--edit-secondary);
+    font-size: 0.9rem;
+    border-bottom: 1px solid var(--edit-secondary);
+}
+
+button.theme-btn {
+    background: transparent;
+    color: var(--edit-primary);
+    border: 1px solid var(--edit-primary);
+    padding: 10px 24px;
+    font-family: 'Playfair Display', serif;
+    font-style: italic;
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+button.theme-btn:hover {
+    background: var(--edit-primary);
+    color: var(--edit-bg);
+}

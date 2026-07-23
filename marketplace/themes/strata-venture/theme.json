@@ -1,0 +1,14 @@
+{
+  "name": "Strata Venture",
+  "version": "1.0.0",
+  "description": "Venture capital & startup accelerator theme with sleek timeline views and dealflow portfolio grids.",
+  "author": "WordJS Premium Studio",
+  "category": "Finance",
+  "archetype": "glassmorphism",
+  "tags": [
+    "premium",
+    "finance",
+    "glassmorphism",
+    "responsive"
+  ]
+}

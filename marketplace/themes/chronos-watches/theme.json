@@ -1,0 +1,14 @@
+{
+  "name": "Chronos Watches",
+  "version": "1.0.0",
+  "description": "Ultra-luxury timepiece storefront featuring dark brushed metal aesthetics and 360 showcase cards.",
+  "author": "WordJS Premium Studio",
+  "category": "Commerce",
+  "archetype": "obsidian",
+  "tags": [
+    "premium",
+    "commerce",
+    "obsidian",
+    "responsive"
+  ]
+}
