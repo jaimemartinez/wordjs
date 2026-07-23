@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { mediaApi, MediaItem } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import ConfirmationModal from "@/components/ConfirmationModal";
@@ -102,6 +102,10 @@ export default function MediaPage() {
     const [searchQuery, setSearchQuery] = useState("");
     const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
     const [previewItem, setPreviewItem] = useState<MediaItem | null>(null);
+    // A real <button> nested in a <label> swallows the click and never forwards it to the file input
+    // (HTML: an interactive descendant cancels the label's activation behaviour), so the picker never
+    // opened. Trigger the hidden input explicitly instead.
+    const fileInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
         loadMedia();
@@ -278,13 +282,17 @@ export default function MediaPage() {
                             </button>
                         </div>
 
-                        {/* Upload Button */}
-                        <label className={`cursor-pointer ${uploading ? 'opacity-70 pointer-events-none' : ''}`}>
-                            <Button icon={uploading ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'} loading={uploading}>
-                                {uploading ? t('media.uploading') : t('media.upload')}
-                            </Button>
-                            <input type="file" onChange={handleInputChange} className="hidden" multiple accept="image/*,video/*,application/pdf" />
-                        </label>
+                        {/* Upload Button — the hidden input is triggered from the Button's own onClick
+                            (a <button> inside a <label> does not forward the click to the input). */}
+                        <Button
+                            icon={uploading ? 'fa-spinner fa-spin' : 'fa-cloud-arrow-up'}
+                            loading={uploading}
+                            disabled={uploading}
+                            onClick={() => fileInputRef.current?.click()}
+                        >
+                            {uploading ? t('media.uploading') : t('media.upload')}
+                        </Button>
+                        <input ref={fileInputRef} type="file" onChange={handleInputChange} className="hidden" multiple accept="image/*,video/*,application/pdf" />
                     </div>
                 }
             />
