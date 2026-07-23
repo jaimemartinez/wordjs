@@ -1163,7 +1163,7 @@ async function runPluginUpdate(
         }
         if (isPluginRunning(slug)) return true;
         console.error(
-            `[update ${slug}] activatePlugin reported success for ${what} but no isolate is registered — `
+            `[update ${logSafe(slug)}] activatePlugin reported success for ${logSafe(what)} but no isolate is registered — `
             + `the plugin is NOT running (it is most likely still listed in active_plugins after a deactivation that failed).`,
         );
         return false;

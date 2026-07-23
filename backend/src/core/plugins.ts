@@ -191,18 +191,23 @@ function semverRangesIntersect(range1: any, range2: any) {
 /**
  * Format dependency conflict error message
  */
-function formatDependencyConflictError(slug: string, conflicts: any[]) {
+function formatDependencyConflictError(rawSlug: string, conflicts: any[]) {
+    // Sanitized HERE rather than around the console.error at the call site: this report is deliberately
+    // multi-line (a boxed table), so stripping line breaks from the finished string would destroy it.
+    // Cutting the untrusted values at the point they enter the message keeps the layout and still means
+    // no crafted slug or plugin name can forge an entry in the operator's log.
+    const slug = logSafe(rawSlug);
     const conflictDetails = conflicts.map((c: any) => {
         return `  ┌─────────────────────────────────────────────────────────────────┐
-  │  Dependencia: ${c.dep.padEnd(49)}│
-  │  ${slug} requiere: ${c.newRange.padEnd(44)}│
-  │  ${c.conflictPlugin} (activo) usa: ${c.existingRange.padEnd(36)}│
+  │  Dependencia: ${logSafe(c.dep).padEnd(49)}│
+  │  ${slug} requiere: ${logSafe(c.newRange).padEnd(44)}│
+  │  ${logSafe(c.conflictPlugin)} (activo) usa: ${logSafe(c.existingRange).padEnd(36)}│
   │  Versiones incompatibles: No hay versión que satisfaga ambos    │
   └─────────────────────────────────────────────────────────────────┘`;
     }).join('\n\n');
 
     const pluginNames = [...new Set(conflicts.map((c: any) => c.conflictPlugin))];
-    const solutions = pluginNames.map((p, i) => `  ${i + 1}. Desactivar "${p}" antes de activar "${slug}"`).join('\n');
+    const solutions = pluginNames.map((p, i) => `  ${i + 1}. Desactivar "${logSafe(p)}" antes de activar "${slug}"`).join('\n');
 
     return `❌ No se puede activar "${slug}"
 
