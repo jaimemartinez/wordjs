@@ -14,6 +14,10 @@ const { getOption } = require('../core/options');
 const config = require('../config/app');
 const crypto = require('crypto');
 const mfa = require('../core/mfa');
+// Escalating per-(IP + account) login lockout — so one user's failures never lock out others behind
+// the same public IP. Runs ALONGSIDE the account-wide lockout below (which is the AUTH-A3 backstop
+// against distributed attacks on a single account); a login is refused if either trips.
+const loginThrottle = require('../core/login-throttle');
 // The ONE self-service email-write rule (shared with routes/users.ts) — see core/mailbox.ts.
 const { refuseSelfServiceEmailChange } = require('../core/mailbox');
 
@@ -288,6 +292,22 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
     }
 
     const lockId = await resolveLockIdentifier(username);
+    const ip = req.ip;
+
+    // Per-(IP + account) escalating gate (5→10→30→60→60 min by default). Refuses THIS IP for THIS
+    // account only, so other users on a shared IP are unaffected.
+    const gate = await loginThrottle.check(ip, lockId);
+    if (gate.blocked) {
+        const mins = Math.ceil(gate.retryAfterMs / 60000);
+        res.set('Retry-After', String(Math.ceil(gate.retryAfterMs / 1000)));
+        return res.status(429).json({
+            code: 'rest_login_throttled',
+            message: `Too many failed attempts for this account from your location. Try again in ${mins} minute${mins === 1 ? '' : 's'}.`,
+            data: { status: 429, retryAfterMs: gate.retryAfterMs }
+        });
+    }
+
+    // Account-wide backstop (AUTH-A3: distributed attack on one account from many IPs).
     if (await isLoginLocked(lockId)) {
         return res.status(429).json({
             code: 'rest_account_locked',
@@ -299,6 +319,8 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
     try {
         const user = await User.authenticate(username, password);
         await clearLoginFails(lockId);
+        // Successful password → reset the escalation ladder for this IP+account.
+        await loginThrottle.succeed(ip, lockId);
 
         // Second factor: if the account has MFA enabled, do NOT issue the session yet. Return a short-lived
         // challenge token; the client must call POST /auth/mfa with a valid TOTP or backup code to finish.
@@ -311,6 +333,9 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
         res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
     } catch (error) {
         await recordLoginFail(lockId);
+        // Advance the per-(IP+account) escalation ladder; this attempt still answers 401 (a later
+        // attempt gets the 429), matching the account-lockout flow above.
+        await loginThrottle.fail(ip, lockId);
         return res.status(401).json({
             code: 'rest_invalid_credentials',
             message: 'Invalid username or password.',

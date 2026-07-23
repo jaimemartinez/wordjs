@@ -158,12 +158,28 @@ const apiLimiter = rateLimit({
 
 const authLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 10, // Limit each IP to 10 login attempts per hour
+    max: 10, // Limit each IP to 10 attempts per hour on the abuse-prone unauthenticated endpoints
     standardHeaders: true,
     legacyHeaders: false,
     store: limiterStore('rl:auth:'),
     passOnStoreError: true,
-    message: { error: 'Too many login attempts, please try again later.' }
+    message: { error: 'Too many attempts, please try again later.' }
+});
+
+// Login/MFA per-IP backstop. Unlike authLimiter this counts ONLY FAILED attempts
+// (skipSuccessfulRequests) and at a much higher cap, so several users behind one public IP who log in
+// fine are NEVER throttled — fixing the "shared IP locks everyone out" complaint — while a single IP
+// spraying passwords across many accounts is still bounded. The fine-grained escalating lockout is
+// per-(IP+account) inside routes/auth.ts; this is only the coarse anti-spray net.
+const loginIpLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000, // 1 hour
+    max: config.auth.loginIpFailPerHour,
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: limiterStore('rl:loginip:'),
+    passOnStoreError: true,
+    skipSuccessfulRequests: true, // only failed logins count toward the cap
+    message: { error: 'Too many failed login attempts from your network, please try again later.' }
 });
 
 const uploadLimiter = rateLimit({
@@ -189,8 +205,10 @@ const setupLimiter = rateLimit({
 // Apply global API limiter
 app.use(config.api.prefix, apiLimiter);
 
-// Parse JSON bodies (apply authLimiter specifically to login routes if not applied globally below, but strict route matching is preferred)
-app.use(`${config.api.prefix}/auth/login`, authLimiter);
+// Login + MFA verify use the FAILED-only per-IP backstop (loginIpLimiter) so shared-IP users who
+// authenticate successfully never consume the budget; the escalating per-(IP+account) lockout in
+// routes/auth.ts is the primary brute-force control.
+app.use(`${config.api.prefix}/auth/login`, loginIpLimiter);
 // Scope the brute-force limiter to EXACTLY the second-factor verify (POST /auth/mfa), which is part of the
 // unauthenticated login and must be throttled per-IP like /auth/login. Using app.use() here was a PREFIX
 // mount that also swallowed the authenticated self-service management routes (/auth/mfa/status polled on
@@ -198,7 +216,7 @@ app.use(`${config.api.prefix}/auth/login`, authLimiter);
 // enabling then disabling their own 2FA burned the shared 10/hr/IP budget and locked THEMSELVES out of
 // login. app.post matches the full path exactly, so the sub-routes no longer count. Code-guess brute force
 // on those routes is still covered by the per-account 'mfa:' lockout inside routes/auth.ts.
-app.post(`${config.api.prefix}/auth/mfa`, authLimiter);
+app.post(`${config.api.prefix}/auth/mfa`, loginIpLimiter);
 app.use(`${config.api.prefix}/auth/register`, authLimiter);
 app.use(`${config.api.prefix}/auth/forgot-password`, authLimiter); // public, unauthenticated — throttle abuse
 app.use(`${config.api.prefix}/auth/reset-password`, authLimiter);
