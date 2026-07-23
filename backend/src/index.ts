@@ -955,6 +955,19 @@ process.on('unhandledRejection', (reason, promise) => {
 // that plugin — for up to two minutes, with a "running elsewhere" message that was simply false.
 // Bounded so a wedged DB can never turn a graceful stop into a hang: past the deadline we exit anyway
 // and the TTL takes over, which is exactly what an abrupt kill already did.
+//
+// ORDER MATTERS, and it is the point of the drain below. A lease sits in dist-lock's `heldLocks` map
+// EXACTLY WHILE ITS CRITICAL SECTION IS RUNNING (the handle removes it on release), so releasing them
+// all the instant a signal arrives frees precisely the ones still in use: a peer node could take
+// 'wordjs:plugin-op:<slug>' and begin extracting into the directory this process is mid-swap on, which
+// is the corruption the lease exists to prevent. So: refuse NEW plugin operations, give the in-flight
+// ones a bounded chance to FINISH (they then release their own lease, leaving the successor unblocked
+// AND the directory consistent — the best outcome), and only skip the release for whatever is still
+// executing at the deadline. Skipping is not a regression of the stranded-lease fix: the ordinary
+// restart has no plugin operation in flight, so it holds no plugin-op lease to begin with and still
+// hands back everything (cron, boot) immediately. A lease we do skip expires on its TTL exactly as an
+// abrupt kill's would, and recoverInterruptedPluginUpdates reclaims the stash at the next boot.
+const SHUTDOWN_PLUGIN_DRAIN_MS = 3000;
 const SHUTDOWN_LEASE_RELEASE_MS = 2000;
 let shuttingDown = false;
 
@@ -962,15 +975,39 @@ async function gracefulShutdown(signal: string): Promise<void> {
     if (shuttingDown) return; // a second signal must not re-enter (or delay) the exit
     shuttingDown = true;
     console.log(`${signal} received. Shutting down gracefully...`);
+
+    // 1. Stop accepting new plugin work, then wait out what is already running.
+    let stillRunning: string[] = [];
+    try {
+        const pluginRoutes = require('./routes/plugins');
+        const starting = pluginRoutes.beginPluginOpShutdown();
+        if (Array.isArray(starting) && starting.length) {
+            console.log(`[shutdown] waiting up to ${SHUTDOWN_PLUGIN_DRAIN_MS}ms for ${starting.length} plugin operation(s) to finish: ${starting.join(', ')}`);
+        }
+        stillRunning = await pluginRoutes.drainPluginOps(SHUTDOWN_PLUGIN_DRAIN_MS);
+        if (stillRunning.length) {
+            console.warn(`[shutdown] plugin operation(s) still running at the deadline: ${stillRunning.join(', ')} — keeping their lease so no other node starts on the same plugin; it expires on its TTL.`);
+        }
+    } catch (e: any) {
+        console.warn('[shutdown] could not drain the plugin operations:', e && e.message);
+    }
+
+    // 2. Persist before letting go of anything.
     try { saveDatabase(); } catch (e: any) { console.warn('[shutdown] saveDatabase:', e && e.message); }
 
+    // 3. Hand back every lease whose critical section is genuinely over.
     let deadline: NodeJS.Timeout | null = null;
     try {
         const { releaseAllHeld } = require('./core/dist-lock');
+        let skip: ((name: string) => boolean) | undefined;
+        if (stillRunning.length) {
+            const busy = new Set(stillRunning.map((k: string) => require('./routes/plugins').pluginOpLeaseName(k)));
+            skip = (name: string) => busy.has(name);
+        }
         // clearTimeout the loser: an orphaned timer keeps the event loop alive and, under
         // --test-force-exit, gets the process killed mid-IPC (see the CI flake this pattern caused).
         const bounded = new Promise<void>((resolve) => { deadline = setTimeout(resolve, SHUTDOWN_LEASE_RELEASE_MS); });
-        const freed = await Promise.race([releaseAllHeld(), bounded]);
+        const freed = await Promise.race([releaseAllHeld({ skip }), bounded]);
         if (Array.isArray(freed) && freed.length) console.log(`[shutdown] released ${freed.length} distributed lease(s): ${freed.join(', ')}`);
     } catch (e: any) {
         console.warn('[shutdown] could not release the distributed leases (they will expire on their TTL):', e && e.message);

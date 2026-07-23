@@ -184,12 +184,16 @@ describe('in-place plugin update', () => {
      *                                        up (vs. the default, which fails before anything is live).
      *   `activateThrowsOnCall` (1-based)   — which activation fails. Default 1 = the NEW version only,
      *                                        so the rollback's reactivation of the OLD one still works.
+     *   `activateRegistersNothingOnCall`   — activatePlugin returns { success: true } without a child
+     *                                        ever appearing: the silent failure mode, where "it did not
+     *                                        throw" and "it is running" come apart with no error at all.
      */
     const stubLifecycle = async ({
         active = false,
         activateThrows = '',
         activateThrowsOnCall = 1,
         activateThrowsAfterRegistering = false,
+        activateRegistersNothingOnCall = 0,
         deactivateIsNoop = false,
         deactivateThrowsOnCall = 0,
         deactivateThrowsAfterClearing = false,
@@ -222,6 +226,12 @@ describe('in-place plugin update', () => {
             // core/plugins.activatePlugin EARLY-RETURNS here — it spawns NOTHING and reports success.
             // This is precisely the state a deactivation that failed leaves behind.
             if ((await readActivePlugins()).includes(s)) return { success: true, message: 'Plugin already active' };
+            // Reports success, spawns nothing — the flag is still written, so only the isolate registry
+            // can tell this apart from a real activation.
+            if (activateRegistersNothingOnCall === activateCalls) {
+                await setActivePlugins(Array.from(new Set([...(await readActivePlugins()), s])));
+                return { success: true };
+            }
             // loadIsolatedPlugin registers the child FIRST; the flag write and the hook come after.
             liveIsolates.add(s);
             await setActivePlugins(Array.from(new Set([...(await readActivePlugins()), s])));
@@ -476,6 +486,33 @@ describe('in-place plugin update', () => {
         assert.strictEqual(stashDirs().length, 0);
     });
 
+    it('does not report a SUCCESSFUL update whose reactivation spawned nothing — it rolls back', async () => {
+        // The success path's own reactivation. It is the one place that used to set `reactivated = true`
+        // from "activatePlugin did not throw", on the argument that the 'Plugin already active'
+        // early-return cannot be reached here (installPluginFromZip 409s while the slug is still listed
+        // active, so getting this far proves the deactivation took). That argument is about ONE way to
+        // come back without a process; it is not a guarantee that a process exists. Read the answer off
+        // the isolate registry like every other path in the file, and a silent no-spawn becomes what it
+        // actually is — an update that installed code nothing is running — so the version that WAS
+        // working is put back instead of the admin being told v2 is live.
+        const dir = seedInstalled(SLUG, '1.0.0');
+        await stubLifecycle({
+            active: true,
+            activateRegistersNothingOnCall: 1,   // the NEW version "activates" but no child appears
+        });
+
+        const r = await updatePluginFromZip(makeZip(SLUG, '16.0.0'), `${SLUG}-16.0.0.zip`, SLUG, { origin: ORIGIN });
+
+        assert.strictEqual(r.ok, false, 'an update nothing is running must not be reported as a success');
+        assert.strictEqual(r.status, 502);
+        assert.strictEqual(r.body.rolledBack, true);
+        assert.match(r.body.activationError, /no isolate is registered/, 'and the reason is named precisely');
+        assert.strictEqual(fs.readFileSync(path.join(dir, 'VERSION.txt'), 'utf8'), '1.0.0', 'the version that worked is back');
+        assert.strictEqual(r.body.reactivated, true, 'and the rollback DID bring it up (call 2 spawns normally)');
+        assert.deepStrictEqual([...liveIsolates], [SLUG], 'exactly one child: the restored old version');
+        assert.strictEqual(stashDirs().length, 0);
+    });
+
     it('refuses a package that would install a DIFFERENT plugin', async () => {
         const dir = seedInstalled(SLUG, '1.0.0');
         await stubLifecycle({ active: false });
@@ -726,5 +763,139 @@ describe('in-place plugin update', () => {
 
         await waitFor(() => fs.existsSync(path.join(dir, 'manifest.json')));
         assert.ok(!fs.existsSync(stash), 'the scheduled retry consumed the stash');
+    });
+
+    // ---- CRASH RECOVERY: restoring the CODE is not the same as recovering the PLUGIN --------------
+    //
+    // index.ts runs the boot sweep immediately BEFORE loadActivePlugins(), so on that pass the loader is
+    // what starts whatever was put back. A DEFERRED retry fires ~PLUGIN_OP_TTL_MS later — the loader has
+    // already been through and found no code for this slug — so a retry that only restores files leaves
+    // `active_plugins` naming a plugin with no process behind it, which the code reported with an
+    // optimistic "recovered" line. Every attempt after the first restarts what it restores, and answers
+    // from the isolate registry.
+
+    /** A gutted plugin dir + the stash holding its only copy of the code. */
+    const seedGutted = (slug: string) => {
+        const dir = path.join(PLUGINS_DIR, slug);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
+        const stash = path.join(OS_TMP, `plugin-update-${slug}-a1b2c3d4e5f6`);
+        fs.rmSync(stash, { recursive: true, force: true });
+        fs.mkdirSync(stash, { recursive: true });
+        fs.writeFileSync(path.join(stash, 'manifest.json'), JSON.stringify({ id: slug, name: slug, version: '1.0.0', isolated: true }));
+        fs.writeFileSync(path.join(stash, 'index.js'), 'exports.init = () => 1;\n');
+        return { dir, stash };
+    };
+
+    it('a post-boot retry RESTARTS the plugin it restores, and says so only when a child exists', async () => {
+        const slug = 'gutted-active';
+        const { dir, stash } = seedGutted(slug);
+        // The state a kill mid-update leaves once boot has been through: flagged active, no code, and —
+        // because loadActivePlugins had nothing to load — no process either.
+        await stubLifecycle({ active: true, slug });
+        liveIsolates.delete(slug);
+        assert.deepStrictEqual(await readActivePlugins(), [slug], 'the flag claims it is active…');
+        assert.strictEqual(liveIsolates.has(slug), false, '…and nothing is running');
+
+        const out = await recoverInterruptedPluginUpdates({ attempt: 2 });
+
+        assert.deepStrictEqual(out.restored, [slug]);
+        assert.ok(fs.existsSync(path.join(dir, 'manifest.json')), 'the code came back');
+        assert.ok(!fs.existsSync(stash));
+        assert.deepStrictEqual(out.reactivated, [slug], 'THE FIX: the plugin was actually started again');
+        assert.deepStrictEqual(out.needsAttention, []);
+        assert.strictEqual(liveIsolates.has(slug), true, 'and a child really is registered for it');
+        // Bare activatePlugin would have EARLY-RETURNED 'Plugin already active' (the flag never stopped
+        // claiming it) and spawned nothing — so the restart has to clear the flag first.
+        assert.deepStrictEqual(calls, [`deactivate:${slug}:prune=false`, `activate:${slug}`]);
+        assert.deepStrictEqual(await readActivePlugins(), [slug], 'and the flag is consistent again');
+    });
+
+    it('reports a restore it could NOT restart as needing attention — never as "recovered"', async () => {
+        const slug = 'gutted-broken';
+        const { dir } = seedGutted(slug);
+        await stubLifecycle({ active: true, slug, activateThrows: 'Cannot find module smtp-server' });
+        liveIsolates.delete(slug);
+
+        const out = await recoverInterruptedPluginUpdates({ attempt: 2 });
+
+        assert.deepStrictEqual(out.restored, [slug], 'the code is back — that part did work');
+        assert.ok(fs.existsSync(path.join(dir, 'manifest.json')));
+        assert.deepStrictEqual(out.reactivated, [], 'but nothing is running, so nothing is claimed');
+        assert.deepStrictEqual(out.needsAttention, [slug], 'and the admin is pointed at it');
+        assert.strictEqual(liveIsolates.has(slug), false);
+    });
+
+    it('does not claim recovery when the restart SUCCEEDS but spawns nothing', async () => {
+        // The other half of "report honestly", and the one an exception-based check cannot see:
+        // activatePlugin returns { success: true } and no child appears (it early-returns 'Plugin
+        // already active' whenever the flag outlives a failed deactivation, and that flag is exactly
+        // what is wrong here). Nothing throws, so only the isolate registry can tell that the plugin
+        // the admin is about to be told was recovered has no process at all.
+        const slug = 'gutted-silent';
+        const { dir } = seedGutted(slug);
+        await stubLifecycle({ active: true, slug, activateRegistersNothingOnCall: 1 });
+        liveIsolates.delete(slug);
+
+        const out = await recoverInterruptedPluginUpdates({ attempt: 2 });
+
+        assert.deepStrictEqual(out.restored, [slug], 'the code is back');
+        assert.ok(fs.existsSync(path.join(dir, 'manifest.json')));
+        assert.deepStrictEqual(out.reactivated, [], 'no exception was thrown — and it is STILL not running');
+        assert.deepStrictEqual(out.needsAttention, [slug], 'so it is reported as needing attention');
+        assert.strictEqual(liveIsolates.has(slug), false, 'the registry is the fact being reported');
+        assert.deepStrictEqual(calls, [`deactivate:${slug}:prune=false`, `activate:${slug}`], 'the restart really was attempted');
+    });
+
+    it('the BOOT sweep restores without restarting — loadActivePlugins runs right after it', async () => {
+        // The complement, and the reason this is not simply "always restart": index.ts calls the sweep
+        // and then loadActivePlugins(). Restarting here would spawn the plugin twice on every boot.
+        const slug = 'gutted-boot';
+        const { dir } = seedGutted(slug);
+        await stubLifecycle({ active: true, slug });
+        liveIsolates.delete(slug);
+
+        const out = await recoverInterruptedPluginUpdates();     // attempt defaults to 1 = the boot sweep
+
+        assert.deepStrictEqual(out.restored, [slug]);
+        assert.ok(fs.existsSync(path.join(dir, 'manifest.json')), 'the code is back for the loader to find');
+        assert.deepStrictEqual(out.reactivated, [], 'the sweep did not start it…');
+        assert.deepStrictEqual(out.needsAttention, [], '…and does not report that as a problem — the loader is next');
+        assert.deepStrictEqual(calls, [], 'the lifecycle was not touched at all');
+    });
+
+    it('restores a plugin that is NOT active without starting it, and without an error', async () => {
+        const slug = 'gutted-inactive';
+        const { dir } = seedGutted(slug);
+        await stubLifecycle({ active: false, slug });
+
+        const out = await recoverInterruptedPluginUpdates({ attempt: 2 });
+
+        assert.deepStrictEqual(out.restored, [slug]);
+        assert.ok(fs.existsSync(path.join(dir, 'manifest.json')));
+        assert.deepStrictEqual(out.reactivated, [], 'a deactivated plugin is not supposed to be running');
+        assert.deepStrictEqual(out.needsAttention, [], 'so that is not something to flag');
+        assert.deepStrictEqual(calls, [], 'and it was not started behind the admin\'s back');
+    });
+
+    it('the DEFERRED retry that the sweep schedules itself restarts what it restores', async () => {
+        // End-to-end through the real timer: this is the production path (scheduleRecoveryRetry passes
+        // attempt+1, which is what makes the retry a restarting one). The previous test proves the
+        // behaviour; this proves the boot sweep actually reaches it.
+        const slug = 'gutted-deferred';
+        const { dir } = seedGutted(slug);
+        await stubLifecycle({ active: true, slug });
+        liveIsolates.delete(slug);
+
+        const holder = await acquirePluginOpLock(slug);          // stand in for the stranded lease
+        assert.strictEqual(holder.ok, true);
+        const first = await recoverInterruptedPluginUpdates({ retryMs: 40 });
+        assert.deepStrictEqual(first.deferred, [slug]);
+        assert.deepStrictEqual(first.reactivated, [], 'nothing was touched while another holder had the slug');
+        await holder.release();
+
+        await waitFor(() => liveIsolates.has(slug));
+        assert.ok(fs.existsSync(path.join(dir, 'manifest.json')), 'the code was restored');
+        assert.strictEqual(liveIsolates.has(slug), true, 'AND the plugin is running again — not merely on disk');
     });
 });

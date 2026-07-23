@@ -995,6 +995,27 @@ async function activatePlugin(slug: string) {
         // isolation below the SQL text-guard. No-op off Postgres; graceful if the pool user lacks CREATEROLE.
         try { await require('./plugin-db-isolation').provision(slug); } catch { /* best-effort — text-guard remains */ }
 
+        // NEVER spawn on top of a child that is already registered for this slug.
+        //
+        // This function loads the isolate FIRST and only then writes `active_plugins` and fires
+        // 'activated_plugin' — and both of those can throw (the option write takes a lease that throws by
+        // design when it cannot be won within 15s; a hook is arbitrary code). A throw there leaves the
+        // child REGISTERED while the flag says the plugin is not active: deactivatePlugin() then
+        // early-returns 'Plugin not active' and never touches it, so the orphan survives. The next
+        // activation would overwrite isolates[slug]; the orphan's 'exit' handler sees wasCurrent === false
+        // and SKIPS teardown, leaving its hooks, routes and any claimed provider (the system mail sender!)
+        // wired to a process nobody supervises.
+        //
+        // Guarding HERE rather than at each caller is deliberate: activatePlugin has four callers (the
+        // activate route, the update cycle's rollback and stash-preparation paths, and the boot/cross-node
+        // loaders), and only the one choke point they all funnel through can cover a caller added later.
+        // Mirrors loadOnePlugin below and theme-engine's theme-switch teardown.
+        //
+        // Cost on the normal path: nothing. unloadIsolatedPlugin is idempotent (no handle ⇒ no-op), and a
+        // HEALTHY isolate cannot reach this line at all — the `isPluginActive` early-return above fires
+        // first whenever the flag is set, so the only state that gets here with a live child is the orphan.
+        try { unloadIsolatedPlugin(slug); } catch (e) { /* nothing registered — the ordinary case */ }
+
         await loadIsolatedPlugin(slug, mainFile);
 
         // Reorder middleware to ensure plugin routes work

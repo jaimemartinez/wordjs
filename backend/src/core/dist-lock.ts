@@ -186,11 +186,25 @@ async function runAsLeader<T>(
  * Best-effort and bounded by design: it is running while the process is on its way out, so a failure
  * to reach the DB just falls back to the TTL, exactly as an abrupt kill would. Returns the names it
  * tried to free (used by the tests and to log what was given back).
+ *
+ * `skip` exists because a lease is in this map EXACTLY WHILE ITS CRITICAL SECTION IS RUNNING — the
+ * handle deletes it on release, runAsLeader in its `finally` — so an unconditional sweep hands back the
+ * ones still in use. The shutdown handler first stops accepting new plugin operations and drains the
+ * in-flight ones; whatever has still not finished by the deadline is skipped here and left to expire on
+ * its TTL, because giving a peer the slug this process is mid-swap on is worse than the wait. Skipped
+ * leases stay registered and keep their heartbeat (moot in practice: the caller exits immediately).
  */
-async function releaseAllHeld(): Promise<string[]> {
-    const names = Array.from(heldLocks.keys());
-    for (const timer of heldLocks.values()) clearInterval(timer);
-    heldLocks.clear();
+async function releaseAllHeld(opts: { skip?: (name: string) => boolean } = {}): Promise<string[]> {
+    const skip = opts.skip;
+    const names = Array.from(heldLocks.keys()).filter((n) => {
+        if (!skip) return true;
+        try { return !skip(n); } catch { return true; } // a broken predicate must not strand a lease
+    });
+    for (const n of names) {
+        const timer = heldLocks.get(n);
+        if (timer) clearInterval(timer);
+        heldLocks.delete(n);
+    }
     if (names.length === 0) return names;
     await Promise.all(names.map((n) => release(n)));
     return names;

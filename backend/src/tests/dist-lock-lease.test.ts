@@ -172,8 +172,13 @@ describe('dist-lock lease semantics', () => {
     });
 
     it('releaseAllHeld() hands back every lease, so a restarted process can claim immediately', async () => {
-        // THE FIX. Delete the releaseAllHeld() call from the shutdown handler (or the bookkeeping that
-        // feeds it) and this goes red: the successor stays locked out for the full TTL.
+        // THE FIX, on the dist-lock side: break acquireBlocking's heldLocks bookkeeping or releaseAllHeld
+        // itself and this goes red — the successor stays locked out for the full TTL.
+        //
+        // SCOPE, precisely. This test calls releaseAllHeld() directly, so it says NOTHING about index.ts
+        // actually calling it on SIGTERM/SIGINT; that wiring (and the drain that has to precede it) is
+        // covered by plugin-op-shutdown.test.ts. runAsLeader's half of the bookkeeping is covered by its
+        // own test below — acquireBlocking is the only path this one exercises.
         const A = 'wordjs:plugin-op:mail-server';
         const B = 'wordjs:cron';
         const a = await lock.acquireBlocking(A, { ttlMs: 120000, timeoutMs: 100, pollMs: 10 });
@@ -203,6 +208,72 @@ describe('dist-lock lease semantics', () => {
         await lock.releaseAllHeld();
         assert.strictEqual(rows.get(NAME)!.holder, SUCCESSOR);
         assert.strictEqual(rows.get(NAME)!.locked_until, clockMs + 60000, 'the new holder\'s lease is untouched');
+    });
+
+    it('runAsLeader registers its lease while it runs, and deregisters it when it returns', async () => {
+        // The OTHER writer into heldLocks. acquireBlocking's handle is the obvious one; runAsLeader takes
+        // the lease itself and only frees it in a `finally`, so a shutdown that lands DURING the leader's
+        // work (the cron runner is the live case: a backup or an ACME renewal holds 'wordjs:cron' for
+        // minutes) sees it here — and if it were never registered, releaseAllHeld would silently leave it
+        // stranded for its whole TTL, with no test noticing.
+        const NAME = 'wordjs:cron';
+        let insideNames: string[] = [];
+
+        const out = await lock.runAsLeader(NAME, { ttlMs: 90000 }, async () => {
+            insideNames = lock.heldLockNames();
+            assert.strictEqual(await successorTryAcquire(NAME), false, 'and the peer cannot run the same job meanwhile');
+            return 'done';
+        });
+
+        assert.strictEqual(out, 'done');
+        assert.deepStrictEqual(insideNames, [NAME], 'registered as held for the whole run — so a shutdown mid-run can free it');
+        assert.deepStrictEqual(lock.heldLockNames(), [], 'and deregistered on the way out');
+        assert.strictEqual(rows.get(NAME)!.locked_until, 0, 'the lease itself was freed too');
+    });
+
+    it('runAsLeader deregisters even when the job THROWS (no lease stranded by a failing cron)', async () => {
+        const NAME = 'wordjs:cron';
+        await assert.rejects(
+            () => lock.runAsLeader(NAME, { ttlMs: 90000 }, async () => { throw new Error('backup failed'); }),
+            /backup failed/,
+        );
+        assert.deepStrictEqual(lock.heldLockNames(), [], 'the finally released it');
+        assert.strictEqual(await successorTryAcquire(NAME), true, 'so the next round can run somewhere');
+    });
+
+    it('releaseAllHeld({ skip }) keeps the named lease, so a live critical section is not handed to a peer', async () => {
+        // Every lease in heldLocks is one whose critical section has NOT finished, so the shutdown sweep
+        // is by construction releasing leases that are still in use. index.ts drains the plugin
+        // operations first and skips whatever is still running at the deadline — that slug's lease has to
+        // expire on its TTL instead, because handing a peer the plugin this process is mid-swap on is the
+        // corruption the lease exists to prevent.
+        const BUSY = 'wordjs:plugin-op:mail-server';
+        const IDLE = 'wordjs:cron';
+        const busy = await lock.acquireBlocking(BUSY, { ttlMs: 120000, timeoutMs: 100, pollMs: 10 });
+        const idle = await lock.acquireBlocking(IDLE, { ttlMs: 90000, timeoutMs: 100, pollMs: 10 });
+        assert.ok(busy.held && idle.held);
+
+        const freed = await lock.releaseAllHeld({ skip: (n: string) => n === BUSY });
+
+        assert.deepStrictEqual(freed, [IDLE], 'only the finished one was handed back');
+        assert.deepStrictEqual(lock.heldLockNames(), [BUSY], 'the busy lease is still registered as ours');
+        assert.strictEqual(await successorTryAcquire(BUSY), false, 'and no peer can start on that plugin');
+        assert.strictEqual(await successorTryAcquire(IDLE), true, 'while everything else is immediately reclaimable');
+
+        clockMs += 120001; // …until the TTL lapses, exactly as after an abrupt kill
+        assert.strictEqual(await successorTryAcquire(BUSY), true, 'the skipped lease expires rather than deadlocking');
+        await busy.release();
+    });
+
+    it('a throwing skip predicate never strands a lease', async () => {
+        const NAME = 'wordjs:boot';
+        const h = await lock.acquireBlocking(NAME, { ttlMs: 60000, timeoutMs: 100, pollMs: 10 });
+        assert.ok(h.held);
+
+        const freed = await lock.releaseAllHeld({ skip: () => { throw new Error('predicate blew up'); } });
+
+        assert.deepStrictEqual(freed, [NAME], 'fail OPEN: a broken caller must not cost the successor a TTL');
+        assert.strictEqual(await successorTryAcquire(NAME), true);
     });
 
     it('is a no-op on SQLite — which is why no unit suite ever executed any of the above', async () => {
