@@ -95,6 +95,9 @@ test('finishDNSChallenge treats local pre-verify as advisory and AWAITS the gate
             verifyChallenge: async () => { calls.push('verifyChallenge'); throw new Error('local resolver cannot see the record'); },
             completeChallenge: async () => { calls.push('completeChallenge'); },
             waitForValidStatus: async () => { calls.push('waitForValidStatus'); },
+            // The order is RE-FETCHED from its URL before finalizing — acme-client needs the CA's
+            // `finalize` URL, which the order URL alone does not carry.
+            getOrder: async ({ url }: any) => { calls.push('getOrder'); return { url, finalize: `${url}/finalize` }; },
             finalizeOrder: async () => { calls.push('finalizeOrder'); return { url: 'https://ca.example/order/1' }; },
             getCertificate: async () => { calls.push('getCertificate'); return '-----BEGIN CERTIFICATE-----\nMA==\n-----END CERTIFICATE-----\n'; },
         };
@@ -106,7 +109,7 @@ test('finishDNSChallenge treats local pre-verify as advisory and AWAITS the gate
         }, 'a@b.c');
         assert.strictEqual(res.success, true);
         assert.deepStrictEqual(calls, [
-            'verifyChallenge', 'completeChallenge', 'waitForValidStatus', 'finalizeOrder', 'getCertificate', 'updateSSLConfig',
+            'verifyChallenge', 'completeChallenge', 'waitForValidStatus', 'getOrder', 'finalizeOrder', 'getCertificate', 'updateSSLConfig',
         ]);
     } finally {
         certManager.initClient = origInit;
@@ -212,3 +215,33 @@ test('finishDNSChallenge re-inits against the minting CA, not the callers stagin
         certManager.client = origClient;
     }
 });
+
+/**
+ * THE bug that stopped issuance dead once validation started passing: both finalize call sites handed
+ * acme-client a hand-made `{ url: orderUrl }` stub. acme-client requires `order.finalize` — the URL the
+ * CA returns when the order is created — and throws "Unable to finalize order, URL not found" without
+ * it, so NO certificate could be issued by EITHER method. Reported from a live install, on the very
+ * next attempt after the double-hash fix let DNS-01 reach this step for the first time.
+ */
+test('the finalize step is given the CA order object, not a URL-only stub', async () => {
+    const origClient = certManager.client;
+    let finalizedWith: any = null;
+    try {
+        certManager.client = {
+            getOrder: async ({ url }: any) => ({ url, status: 'ready', finalize: `${url}/finalize` }),
+            finalizeOrder: async (order: any) => { finalizedWith = order; return { url: order.url }; },
+        };
+        await certManager.finalizeOrderByUrl('https://ca.example/order/42', Buffer.from('csr'));
+
+        assert.ok(finalizedWith, 'finalizeOrder must have been called');
+        assert.strictEqual(finalizedWith.finalize, 'https://ca.example/order/42/finalize',
+            'the object handed to finalizeOrder must carry the CA finalize URL — a {url} stub makes ' +
+            'acme-client throw "Unable to finalize order, URL not found" and no certificate is ever issued');
+    } finally {
+        certManager.client = origClient;
+    }
+});
+
+// NOTE: the HTTP-01 path (provisionAutoHTTP) finalizes through the SAME finalizeOrderByUrl helper
+// asserted above — it is deliberately not re-tested end-to-end here because that flow also pushes to
+// the gateway, and stubbing a live socket to prove a shared helper twice buys nothing.

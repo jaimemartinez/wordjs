@@ -91,6 +91,22 @@ class CertManager {
      * @param {string} domain 
      * @param {string} type 'http-01' | 'dns-01'
      */
+    /**
+     * Finalize an order we hold only the URL of, and return the finalized order.
+     *
+     * WHY THIS EXISTS: acme-client's finalizeOrder(order, csr) requires `order.finalize` — the URL the
+     * CA hands back when the order is created. Both call sites used to pass a hand-made `{ url }` stub,
+     * which has no `finalize`, so the library threw "Unable to finalize order, URL not found" and NO
+     * certificate could ever be issued — by HTTP-01 or DNS-01. Re-READING the order from its URL is
+     * also the correct move independently of that bug: it returns the order's CURRENT state, which
+     * matters for the two-step DNS flow where minutes or hours pass between start and finish.
+     */
+    async finalizeOrderByUrl(orderUrl: string, csr: any) {
+        if (!orderUrl) throw new Error('Cannot finalize the certificate order: its URL is missing. Start the request again.');
+        const order = await this.client.getOrder({ url: orderUrl });
+        return this.client.finalizeOrder(order, csr);
+    }
+
     async createOrder(domain: string, type = 'http-01') {
         if (!this.client) throw new Error('Client not initialized. Call initClient first.');
 
@@ -159,10 +175,7 @@ class CertManager {
                 commonName: domain,
             });
 
-            const finalized = await this.client.finalizeOrder(
-                { url: orderData.orderUrl },
-                csr
-            );
+            const finalized = await this.finalizeOrderByUrl(orderData.orderUrl, csr);
 
             const cert = await this.client.getCertificate(finalized);
             console.log('[CertManager] Certificate downloaded.');
@@ -259,10 +272,7 @@ class CertManager {
             });
 
             // Finalize the order
-            const finalized = await this.client.finalizeOrder(
-                { url: step1Data.orderUrl },
-                csr
-            );
+            const finalized = await this.finalizeOrderByUrl(step1Data.orderUrl, csr);
 
             // Get certificate
             const cert = await this.client.getCertificate(finalized);
