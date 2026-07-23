@@ -138,22 +138,55 @@ test('a source version bump without a catalog rebuild fails the gate (the stale-
     });
 });
 
-test('a package that ships without the frontend bundle its manifest declares fails the gate', () => {
+test('the BUILDER refuses a manifest entry whose source file is missing', () => {
     withRoot((root) => {
-        // build-plugin.js silently skips a declared entry whose file is missing, so the catalog build
-        // stays GREEN while publishing a plugin whose admin page can never load once installed.
+        // This used to be the gate's problem: build-plugin.js silently SKIPPED a declared entry whose
+        // source was gone, so the build stayed green while publishing a plugin whose admin page could
+        // never load once installed — which is exactly how breadcrumbs, related-posts and
+        // table-of-contents shipped with no component bundle. The builder now hard-fails instead, so
+        // that failure mode is caught one step earlier, at the source. Pinned here because the gate's
+        // own negative control below can no longer observe it.
         fs.rmSync(path.join(root, 'marketplace', 'plugins', 'fixture-alpha', 'client', 'admin', 'page.tsx'));
 
         const built = run(BUILD, root);
-        assert.equal(built.status, 0, 'the builder does not notice — that is the point of this gate');
+        assert.notEqual(built.status, 0, 'a declared-but-missing entry must fail the build, not be skipped');
+        assert.match(built.out, /fixture-alpha/, built.out);
+    });
+});
 
-        const zipped = new AdmZip(fs.readFileSync(distFile(root, 'fixture-alpha-1.0.0.zip')))
-            .getEntries().map((e: { entryName: string }) => e.entryName);
-        assert.ok(!zipped.includes('fixture-alpha/dist/admin.bundle.js'), 'precondition: the bundle really is absent');
+test('a package that ships without the frontend bundle its manifest declares fails the gate', () => {
+    withRoot((root) => {
+        // The gate's own guarantee, independent of the builder: whatever produced the artefact, a package
+        // whose manifest declares a frontend entry must actually CONTAIN the built bundle. Since the
+        // builder now refuses to produce that state (see above), construct it the way the sibling data/
+        // test does — build cleanly, then mutate the artefact — so this stays a real negative control
+        // rather than a test that can only pass because the builder happens to be broken.
+        assert.equal(run(BUILD, root).status, 0);
+
+        const zip = distFile(root, 'fixture-alpha-1.0.0.zip');
+        const pkg = new AdmZip(fs.readFileSync(zip));
+        const BUNDLE = 'fixture-alpha/dist/admin.bundle.js';
+        assert.ok(
+            pkg.getEntries().some((e: { entryName: string }) => e.entryName === BUNDLE),
+            'precondition: a clean build DOES ship the declared bundle',
+        );
+
+        // Simulate a packer regression that drops the built bundle from the artefact.
+        pkg.deleteFile(BUNDLE);
+        const buf = pkg.toBuffer();
+        fs.writeFileSync(zip, buf);
+        // Re-point the catalog at the new bytes so the sha256 check passes and the MISSING BUNDLE is
+        // what fails — otherwise this would pass for the wrong reason.
+        const indexPath = distFile(root, 'marketplace-index.json');
+        const index = JSON.parse(fs.readFileSync(indexPath, 'utf8'));
+        const entry = index.plugins.find((p: { id: string }) => p.id === 'fixture-alpha');
+        entry.sha256 = crypto.createHash('sha256').update(buf).digest('hex');
+        entry.size = buf.length;
+        fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
         const r = run(VERIFY, root);
         assert.equal(r.status, 1, 'a package missing its declared bundle must fail');
-        assert.match(r.out, /declares a frontend entry whose source file is missing/, r.out);
+        assert.match(r.out, /is missing fixture-alpha\/dist\/admin\.bundle\.js/, r.out);
     });
 });
 
