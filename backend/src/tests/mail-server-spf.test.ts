@@ -99,7 +99,7 @@ function sliceMethodBody(text: string, signature: string): string {
 
 const SLICED_FUNCTIONS = [
     'isDnsNoRecord', 'spfResolveAddrs', 'splitDualCidr', 'evaluateSPF', 'qualifierToResult',
-    'spfAction', 'sanitizeHeaderValue', 'buildReceivedSpf', 'ipInCidr',
+    'spfAction', 'sanitizeHeaderValue', 'buildReceivedSpf', 'cidrMatch', 'ipInCidr', 'isBlockedIp',
     'getOptionsBatch', 'isTrustedSmtpSession', 'bareIp', 'smtpError'
 ];
 
@@ -107,6 +107,11 @@ function buildHarnessSource(): string {
     const text = fs.readFileSync(PLUGIN_SRC, 'utf8');
     const consts = /^const SPF_MAX_DNS_LOOKUPS = \d+;\s*\nconst SPF_MAX_MX_RECORDS = \d+;\s*\nconst SPF_MAX_DEPTH = \d+;/m.exec(text);
     assert.ok(consts, `mail-server SPF suite: the SPF_MAX_* processing limits were not found in ${PLUGIN_SRC}`);
+    // cidrMatch's "this term is broken" sentinel. Taken from the source rather than redeclared here:
+    // a local `Symbol()` would be a DIFFERENT symbol, so evaluateSPF's `hit === CIDR_MALFORMED` would
+    // never be true and the suite would silently stop testing the permerror path it exists to pin.
+    const sentinel = /^const CIDR_MALFORMED = Symbol\('cidr-malformed'\);$/m.exec(text);
+    assert.ok(sentinel, `mail-server SPF suite: the CIDR_MALFORMED sentinel was not found in ${PLUGIN_SRC}`);
 
     const out: string[] = ["'use strict';", "const net = require('net');"];
     // The ONLY things not taken verbatim from the shipped source: the plugin's I/O seams.
@@ -122,11 +127,13 @@ function buildHarnessSource(): string {
     // The handler logs every non-clean verdict. Keep CI output readable; SPF_TEST_VERBOSE=1 restores it.
     out.push('const console = process.env.SPF_TEST_VERBOSE ? globalThis.console : new Proxy({}, { get: () => () => {} });');
     out.push(consts[0]);
+    out.push(sentinel[0]);
     for (const fn of SLICED_FUNCTIONS) out.push(sliceFn(text, fn));
     out.push('const onMailFrom = function (address, session, callback) ' + sliceMethodBody(text, 'onMailFrom(address, session, callback)') + ';');
     out.push(
         'module.exports = { evaluateSPF, splitDualCidr, spfAction, buildReceivedSpf, sanitizeHeaderValue,' +
-        ' ipInCidr, isDnsNoRecord, onMailFrom, SPF_MAX_DNS_LOOKUPS, SPF_MAX_MX_RECORDS, SPF_MAX_DEPTH,' +
+        ' cidrMatch, CIDR_MALFORMED, ipInCidr, isBlockedIp, isDnsNoRecord, onMailFrom,' +
+        ' SPF_MAX_DNS_LOOKUPS, SPF_MAX_MX_RECORDS, SPF_MAX_DEPTH,' +
         ' __setDns: (d) => { dns = d; }, __setGetOption: (g) => { getOption = g; }, __setSiteDomain: (s) => { siteDomain = s; } };'
     );
     return out.join('\n\n');
@@ -138,6 +145,10 @@ interface SpfModule {
     spfAction(result: string, rejectEnabled: boolean): { code: number; tagged: boolean };
     buildReceivedSpf(result: string, opts: Record<string, unknown>): string;
     sanitizeHeaderValue(v: unknown, max?: number): string;
+    cidrMatch(ip: string, cidr: string | null, family?: 4 | 6 | null): boolean | symbol;
+    CIDR_MALFORMED: symbol;
+    ipInCidr(ip: string, cidr: string): boolean;
+    isBlockedIp(ip: string): boolean;
     onMailFrom(address: { address: string }, session: any, callback: (err?: any) => void): void;
     SPF_MAX_DNS_LOOKUPS: number;
     SPF_MAX_MX_RECORDS: number;
@@ -295,6 +306,36 @@ test('an uppercase record does not get a legitimate sender 550-ed (end to end)',
     assert.strictEqual(spoofer.code, 550, 'an unauthorized sender under an uppercase record must still be rejected');
 });
 
+test('the v=spf1 VERSION token is matched case-insensitively (RFC 7208 §4.5/§12)', async () => {
+    // The record DETECTOR is a separate /i from the mechanism-name fold above, and nothing pinned it:
+    // deleting that flag left this whole suite green. It is not cosmetic — an SPF record whose version
+    // token is published uppercase is a real record (§12 spells `version = "v=spf1"` as an ABNF literal
+    // string, which is case-insensitive), and missing it means the domain looks like it publishes NO
+    // policy at all: evaluation returns 'none', which is accepted.
+    assert.strictEqual(
+        await evaluate('V=SPF1 ip4:203.0.113.0/24 -ALL', '203.0.113.9'), 'pass',
+        'an uppercase record must be FOUND and evaluated, not read as "no policy"'
+    );
+    assert.strictEqual(await evaluate('V=spf1 ip4:198.51.100.1 ~all', '203.0.113.9'), 'softfail', 'mixed-case version token');
+    // The under-enforcement half: undetected, "-ALL" stops rejecting anybody.
+    assert.strictEqual(await evaluate('V=SPF1 -ALL', '203.0.113.9'), 'fail', 'an uppercase record still ENFORCES');
+    // The duplicate-record check runs off the SAME detector, so it has to see both spellings: two
+    // records that differ only in the case of their version token are still an ambiguous policy.
+    SPF.__setDns(mkDns({ 'ex.test': { txt: ['v=spf1 ip4:1.1.1.1 -all', 'V=SPF1 -all'] } }));
+    assert.strictEqual(
+        await SPF.evaluateSPF('ex.test', '192.0.2.1'), 'permerror',
+        'a case-variant second record is still a second record'
+    );
+});
+
+test('an uppercase-version record still rejects a spoofer (end to end)', async () => {
+    // Measured through the REAL handler: with the detector case-sensitive the verdict is 'none', which
+    // spfAction accepts — the spoofer walks in past a record that says "-ALL".
+    const spoofer = await deliver({ record: 'V=SPF1 ip4:203.0.113.0/24 -ALL', ip: '198.51.100.7' });
+    assert.strictEqual(spoofer.code, 550, 'an unauthorized sender under an uppercase-version record must be rejected');
+    assert.strictEqual(verdictOf(spoofer.session), 'fail');
+});
+
 test('mechanism VALUES are not case-folded', async () => {
     // DNS is case-insensitive, so an uppercase host must still resolve — but the value has to reach the
     // resolver as written, because macros (%{s}) and exp= strings are case-SENSITIVE.
@@ -376,6 +417,113 @@ test('ip4:/ip6: CIDRs are left alone by the dual-cidr peeler', async () => {
     assert.strictEqual(await evaluate('v=spf1 ip4:192.0.2.0/24 -all', '192.0.2.55'), 'pass');
     assert.strictEqual(await evaluate('v=spf1 ip4:192.0.2.0/24 -all', '192.0.3.55'), 'fail');
     assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::/32 -all', '2001:db8:dead::1'), 'pass');
+});
+
+// --- 2b. RFC 7208 §5.6 — a BROKEN ip4:/ip6: term is permerror, not a non-match --------------------
+
+test('a malformed or out-of-range ip4: CIDR is permerror, never a silent non-match', async () => {
+    // Exactly the a/mx defect above, left half-done on the other two mechanisms: the ip4/ip6 arm read
+    // `matched = ipInCidr(ip, value)`, and ipInCidr answers a plain `false` for a network it cannot
+    // parse. "Broken term" and "this IP is not in that network" therefore became the same answer, so
+    // evaluation walked on to the trailing -all and returned 'fail' -> SMTP 550 for a sender the
+    // record explicitly authorizes. §5.6 makes a malformed or out-of-range prefix a permerror.
+    for (const record of [
+        'v=spf1 ip4:203.0.113.0/33 -all',      // prefix past the v4 family width
+        'v=spf1 ip4:203.0.113.0/999 -all',
+        'v=spf1 ip4:203.0.113.0/abc -all',     // parseInt would have said NaN -> false
+        'v=spf1 ip4:203.0.113.0/ -all',        // bare trailing slash
+        'v=spf1 ip4:203.0.113.0//24 -all',     // the dual-cidr spelling is not legal on ip4:
+        // …and the extra slash must be judged on its own, not left to the digit check below: this one
+        // has a perfectly well-formed "/24" in second position, so dropping the slash-count guard
+        // would silently evaluate it as 203.0.113.0/24 — a MATCH — for a record that is not valid.
+        'v=spf1 ip4:203.0.113.0/24/24 -all',
+        'v=spf1 ip4:203.0.113 -all',           // not an ip4-network at all
+        'v=spf1 ip4:2001:db8::1 -all',         // right mechanism, wrong family
+        'v=spf1 ip4: -all',                    // ip4-network is REQUIRED
+        'v=spf1 ip4 -all'
+    ]) {
+        assert.strictEqual(await evaluate(record, '203.0.113.9'), 'permerror', record);
+    }
+});
+
+test('a malformed or out-of-range ip6: CIDR is permerror, never a silent non-match', async () => {
+    for (const record of [
+        'v=spf1 ip6:2001:db8::/129 -all',
+        'v=spf1 ip6:2001:db8::/abc -all',
+        'v=spf1 ip6:2001:db8::/ -all',
+        'v=spf1 ip6:2001:db8:://64 -all',
+        'v=spf1 ip6:2001:db8::/64/64 -all',    // see the ip4 twin above: a second, VALID-looking prefix
+        'v=spf1 ip6:not-an-address -all',
+        'v=spf1 ip6:203.0.113.1 -all',         // right mechanism, wrong family
+        'v=spf1 ip6 -all'
+    ]) {
+        assert.strictEqual(await evaluate(record, '2001:db8::9'), 'permerror', record);
+    }
+    // A broken term is broken for EVERY sender, including one of the other family that the term could
+    // never have matched anyway — the record is unevaluable, so the verdict cannot be 'fail'.
+    assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::/129 -all', '203.0.113.9'), 'permerror', 'v4 sender, broken ip6: term');
+    assert.strictEqual(await evaluate('v=spf1 ip4:203.0.113.0/33 -all', '2001:db8::9'), 'permerror', 'v6 sender, broken ip4: term');
+});
+
+test('a WELL-FORMED ip4:/ip6: term of the other family is an ordinary non-match', async () => {
+    // The negative control for the two tests above: the fix must distinguish "broken" from "does not
+    // apply". Publishing both families in one record is completely routine, and an ip6: mechanism has
+    // simply nothing to say about an IPv4 connection — turning that into permerror would disable
+    // enforcement on every dual-stack record on the internet.
+    assert.strictEqual(
+        await evaluate('v=spf1 ip6:2001:db8::/32 ip4:203.0.113.0/24 -all', '203.0.113.9'), 'pass',
+        'the ip6: term is skipped, the ip4: term still matches'
+    );
+    assert.strictEqual(
+        await evaluate('v=spf1 ip4:203.0.113.0/24 ip6:2001:db8::/32 -all', '2001:db8::9'), 'pass',
+        'and the other way round'
+    );
+    assert.strictEqual(
+        await evaluate('v=spf1 ip6:2001:db8::/32 -all', '203.0.113.9'), 'fail',
+        'a non-matching family still falls through to -all, exactly as before'
+    );
+});
+
+test('legal ip4:/ip6: prefixes still match at the family boundaries', async () => {
+    // The other negative control: /32 and /128 are the LARGEST legal prefixes, /0 the smallest, and a
+    // bare address carries no prefix at all. An over-eager range check would 'permerror' these.
+    assert.strictEqual(await evaluate('v=spf1 ip4:203.0.113.9/32 -all', '203.0.113.9'), 'pass', 'ip4 /32');
+    assert.strictEqual(await evaluate('v=spf1 ip4:0.0.0.0/0 -all', '203.0.113.9'), 'pass', 'ip4 /0');
+    assert.strictEqual(await evaluate('v=spf1 ip4:203.0.113.9 -all', '203.0.113.9'), 'pass', 'ip4 bare address');
+    assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::9/128 -all', '2001:db8::9'), 'pass', 'ip6 /128');
+    assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::/0 -all', '2001:db8::9'), 'pass', 'ip6 /0');
+    assert.strictEqual(await evaluate('v=spf1 ip6:2001:db8::9 -all', '2001:db8::9'), 'pass', 'ip6 bare address');
+});
+
+test('a broken ip4: CIDR costs the sender a header, not their mail (end to end)', async () => {
+    // The harm, and the fix, measured through the REAL onMailFrom: 550 before, accepted-and-tagged now.
+    const r = await deliver({ record: 'v=spf1 ip4:203.0.113.0/33 -all', ip: '203.0.113.9' });
+    assert.strictEqual(r.code, 0, 'an unevaluable record must not become an SMTP refusal');
+    assert.strictEqual(verdictOf(r.session), 'permerror', 'and the verdict is recorded, not discarded');
+    // The fix must not become a blanket accept: a WELL-FORMED record that says no still says no.
+    const spoofer = await deliver({ record: 'v=spf1 ip4:203.0.113.0/24 -all', ip: '198.51.100.7' });
+    assert.strictEqual(spoofer.code, 550, 'a well-formed record still rejects an unauthorized sender');
+});
+
+test('ipInCidr stays a strict BOOLEAN for its non-SPF callers', () => {
+    // isBlockedIp — the outbound-delivery SSRF guard — asks `V4_BLOCKED.some(c => ipInCidr(addr, c))`.
+    // The "this term is malformed" signal must NEVER leak out of ipInCidr into that expression: any
+    // non-boolean sentinel is truthy there, so every public MX would look like a private address and
+    // the mail server would silently stop delivering ALL outbound mail.
+    const probes: Array<[string, string | null]> = [
+        ['203.0.113.9', '10.0.0.0/8'], ['10.1.2.3', '10.0.0.0/8'], ['203.0.113.9', '203.0.113.0/33'],
+        ['203.0.113.9', '203.0.113.0/abc'], ['203.0.113.9', '203.0.113.0/'], ['203.0.113.9', 'garbage'],
+        ['203.0.113.9', null], ['2001:db8::1', 'fc00::/7'], ['2001:db8::1', '10.0.0.0/8']
+    ];
+    for (const [ip, cidr] of probes) {
+        assert.strictEqual(typeof SPF.ipInCidr(ip, cidr as string), 'boolean', `ipInCidr(${ip}, ${cidr})`);
+    }
+    // Driven through the REAL consumer, not just the type: the guard must still classify correctly.
+    assert.strictEqual(SPF.isBlockedIp('203.0.113.9'), false, 'a public address is deliverable');
+    assert.strictEqual(SPF.isBlockedIp('10.1.2.3'), true, 'RFC1918 is blocked');
+    assert.strictEqual(SPF.isBlockedIp('169.254.169.254'), true, 'cloud metadata is blocked');
+    assert.strictEqual(SPF.isBlockedIp('::ffff:10.1.2.3'), true, 'IPv4-mapped RFC1918 is blocked');
+    assert.strictEqual(SPF.isBlockedIp('2606:4700::1111'), false, 'a public IPv6 address is deliverable');
 });
 
 // --- 3. redirect= (RFC 7208 §6.1) -----------------------------------------------------------------
