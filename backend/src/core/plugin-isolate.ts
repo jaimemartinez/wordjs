@@ -248,6 +248,28 @@ function getAllIsolateStatuses() {
     return out;
 }
 
+/**
+ * Snapshot of every slug this module is currently MANAGING — the supported way to ask "what is loaded?".
+ *
+ * Two sources, because either alone under-reports:
+ *  - `isolates` — slugs with a live, registered child.
+ *  - `restartTimers` — slugs whose child CRASHED and already has a supervised restart armed. Those are
+ *    absent from `isolates` (the exit handler deleted the entry), yet the timer will re-fork the SAME
+ *    entry file, so a caller that swept only the registry would watch an isolate it just retired come
+ *    back to life a second later. unloadIsolatedPlugin cancels the timer, so including them is the fix.
+ *
+ * `getAllIsolateStatuses()` is NOT a substitute: it is keyed on `isolateHealth`, which keeps an entry for
+ * every slug ever loaded (including long-'stopped' ones) — that is a status history, not the live set.
+ *
+ * This exists because both registries are module-private on purpose: theme-engine must retire every stale
+ * `theme:` isolate before loading the incoming theme's child, and it must not reach into our internals.
+ */
+function listIsolates(): string[] {
+    const slugs = new Set<string>(isolates.keys());
+    for (const slug of restartTimers.keys()) slugs.add(slug);
+    return Array.from(slugs);
+}
+
 // (The former host-side memory watchdog is gone: with child_process each untrusted plugin runs in its
 // OWN OS process, so off-heap growth is the CHILD's rss — bounded per-child in loadIsolatedPlugin —
 // not the host's. A worker_thread shared the host rss and could OOM-crash it; a child cannot.)
@@ -1646,6 +1668,7 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
 module.exports = {
     loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin,
     isIsolated: (slug: string) => isolates.has(slug),
+    listIsolates,
     getLivePids, awaitIsolateStopped,
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
