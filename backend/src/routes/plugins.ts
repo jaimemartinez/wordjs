@@ -133,6 +133,22 @@ function isValidSlug(slug: any): boolean {
     return typeof slug === 'string' && SLUG_RE.test(slug);
 }
 
+/**
+ * Strip line breaks from a request-derived value before it goes into a log line, so a crafted slug or
+ * driver error cannot forge or split entries in the operator's log.
+ *
+ * TWO single-constant replacements, each replacing with the empty string, is deliberate: the
+ * log-injection analysis recognises a sanitizer SYNTACTICALLY, and an alternation (`/\n|\r/g`) has no
+ * constant value, so it is not matched. Match the documented remediation shape, not an equivalent.
+ */
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
+// How long DELETE waits for the slug's child process to actually be gone before it refuses to remove
+// the directory. Generous enough for a SIGKILL to be reaped, short enough to answer the request.
+const DELETE_STOP_TIMEOUT_MS = 3000;
+
 // The SINGLE choke point every slug-derived fs op must go through (download / delete / extract-install).
 // Resolves an untrusted slug to its plugin dir or THROWS (400), guaranteeing the result is a proper CHILD
 // of PLUGINS_DIR — never PLUGINS_DIR itself (which would let a failure-path rmSync wipe every plugin) or
@@ -1021,6 +1037,50 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
     // 1. Check if active (Async)
     if (await isPluginActive(slug)) {
         return res.status(400).json({ message: 'Cannot delete an active plugin. Deactivate it first.' });
+    }
+
+    // 1b. …then UNCONDITIONALLY stop whatever this slug still owns in the isolate layer.
+    //
+    // Two distinct leftovers have to go, and the check above sees NEITHER of them:
+    //
+    //   - a REGISTERED child. `active_plugins` is a stored intention; the isolate registry is the
+    //     running truth, and they can disagree — a load that failed after registering its child, or a
+    //     cross-node/dev-watcher load of a plugin this node never had listed. In that state the check
+    //     above passes and this handler would rmSync the directory of a LIVE process still holding this
+    //     plugin's hooks, routes and any claimed provider, leaving them wired to code that no longer
+    //     exists on disk. "Deactivate it first" is not an option the admin has either: deactivatePlugin
+    //     early-returns 'Plugin not active' for precisely this state, so it can only be cleared here.
+    //
+    //   - a PENDING SUPERVISED RESTART. When a child crashes, its 'exit' handler removes it from the
+    //     isolate registry and schedules a backoff restart (superviseRestart, up to 60s). Throughout
+    //     that window nothing is registered while a live timer still holds the slug — and that timer is
+    //     cancelled ONLY inside unloadIsolatedPlugin. Skipping the call therefore deleted the directory
+    //     and left the timer armed: it fires on a deleted entry file, retries up to 5 times and ends in
+    //     a "keeps crashing and was stopped" admin notice for a plugin that no longer exists. Worse, if
+    //     the slug is REINSTALLED inside that window the stale timer registers an isolate for the NEW
+    //     code that no activation asked for.
+    //
+    // unloadIsolatedPlugin does both (cancel the timer, tear the child down) and is idempotent, so it
+    // is called unconditionally.
+    //
+    // Then VERIFY, and verify the thing that is actually at stake. Deleting the directory is
+    // irreversible, so the precondition has to be "no process of ours is running for this slug" — and
+    // the registry cannot answer that: unloadIsolatedPlugin removes the entry SYNCHRONOUSLY while
+    // `kill(SIGKILL)` is asynchronous, so an `isIsolated()` re-check goes false the instant we ask it to
+    // stop, whether or not the signal has landed. awaitIsolateStopped waits (bounded) for BOTH
+    // conditions — nothing registered AND every pid we spawned for this slug observed to exit — so the
+    // 409 below means a process really is still alive, not that a Map entry lingered.
+    const isolate = require('../core/plugin-isolate');
+    if (isolate.isIsolated(slug)) {
+        console.warn(`[plugin ${logSafe(slug)}] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.`);
+    }
+    try { isolate.unloadIsolatedPlugin(slug); }
+    catch (e: any) { console.error(`[plugin ${logSafe(slug)}] delete: could not stop the isolate / cancel its pending restart: ${logSafe(e && e.message)}`); }
+    if (!(await isolate.awaitIsolateStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
+        return res.status(409).json({
+            message: `'${slug}' still has a running process that could not be stopped. Restart the server, then delete it.`,
+            stillRunning: true,
+        });
     }
 
     // 2. Locate directory (resolveSafePluginDir guarantees a proper child of PLUGINS_DIR)
