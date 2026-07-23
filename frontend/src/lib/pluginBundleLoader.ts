@@ -205,8 +205,14 @@ let activePromise: Promise<string[]> | null = null;
  * Every caller must handle the rejection: loadRuntimePluginHooks() lets it propagate (initPlugins
  * un-latches and the next admin-layout mount retries); useRuntimePuckConfig() catches it, because block
  * loading is best-effort and must never break a page render.
+ *
+ * Resolves `[]` on the SERVER without fetching: the URL is relative, so Node's fetch cannot parse it and
+ * would reject. Both current callers are client-only, but this is exported — an SSR caller must keep
+ * getting the old "nothing to load" answer rather than a rejection that now propagates. Deliberately not
+ * memoized, so it cannot poison the cache for anything running in the same process.
  */
 export function fetchActivePluginIds(): Promise<string[]> {
+    if (typeof window === 'undefined') return Promise.resolve([]);
     if (activePromise) return activePromise;
     const attempt: Promise<string[]> = (async () => {
         const res = await fetch('/api/v1/plugins/active');
@@ -257,45 +263,67 @@ function injectBlockCss(pluginId: string): void {
  * Returns a map keyed by BLOCK NAME (the `type` stored in Puck data), matching the build-time registry:
  *   - single block: `{ [PascalName(pluginId)]: { ...puckComponentDef, render: default } }`
  *   - multi block:  the plugin's own `puckComponents` map, spread as-is
- * Empty object when the plugin ships no block bundle (404) or fails to evaluate — never throws.
+ * Empty object — memoized for the session — when the plugin genuinely ships no block bundle (404) or
+ * ships one that cannot be evaluated (a deterministic, no-point-retrying failure).
+ *
+ * REJECTS, and does NOT memoize, on any OTHER failure (network error, 5xx from a restarting gateway,
+ * 400): those are transient and the previous "collapse everything to {} and cache it" behaviour was the
+ * same silent-death bug fetchActivePluginIds had — one 502 during the first editor mount permanently
+ * removed every marketplace plugin's Puck blocks for the rest of the session, because the poisoned {}
+ * was replayed from blockConfigCache on every later render. Callers keep block loading BEST-EFFORT
+ * (loadActivePluginBlocks catches per plugin), so a rejection never breaks a page render — it just lets
+ * the next render try again.
  */
 export async function loadPluginBlockConfigs(pluginId: string): Promise<Record<string, any>> {
     const cached = blockConfigCache.get(pluginId);
     if (cached) return cached;
     const p = (async () => {
+        const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=component`);
+        // 404 is the only status that means "this plugin ships no Puck blocks" — a real answer, cacheable.
+        if (response.status === 404) return {};
+        if (!response.ok) {
+            throw new Error(`block bundle fetch for '${pluginId}' failed: HTTP ${response.status}`);
+        }
+        const code = await response.text();
+        const blob = new Blob([code], { type: 'application/javascript' });
+        const url = URL.createObjectURL(blob);
         try {
-            const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=component`);
-            if (!response.ok) return {};
-            const code = await response.text();
-            const blob = new Blob([code], { type: 'application/javascript' });
-            const url = URL.createObjectURL(blob);
-            try {
-                const mod: any = await import(/* webpackIgnore: true */ url);
-                URL.revokeObjectURL(url);
-                injectBlockCss(pluginId);
-                if (mod.puckComponents && typeof mod.puckComponents === 'object') {
-                    return mod.puckComponents as Record<string, any>;
-                }
-                if (mod.puckComponentDef) {
-                    return { [toPascalCase(pluginId)]: { ...mod.puckComponentDef, render: mod.default } };
-                }
-                return {};
-            } catch (e) {
-                URL.revokeObjectURL(url);
-                console.warn(`[PluginLoader] Failed to evaluate block bundle for ${pluginId}:`, e);
-                return {};
+            const mod: any = await import(/* webpackIgnore: true */ url);
+            URL.revokeObjectURL(url);
+            injectBlockCss(pluginId);
+            if (mod.puckComponents && typeof mod.puckComponents === 'object') {
+                return mod.puckComponents as Record<string, any>;
             }
-        } catch {
+            if (mod.puckComponentDef) {
+                return { [toPascalCase(pluginId)]: { ...mod.puckComponentDef, render: mod.default } };
+            }
+            return {};
+        } catch (e) {
+            // The bytes arrived but are not loadable JS: retrying re-downloads the same broken bundle, so
+            // this one IS cached. It is loud, because it always means the plugin needs a rebuild.
+            URL.revokeObjectURL(url);
+            console.warn(`[PluginLoader] Failed to evaluate block bundle for ${pluginId}:`, e);
             return {};
         }
     })();
     blockConfigCache.set(pluginId, p);
+    // Un-memoize a FAILED attempt so a later render re-fetches (same identity guard as activePromise: a
+    // newer in-flight attempt must never be evicted by an older failure). Attached to a DERIVED promise,
+    // so `p` still rejects for the caller and this handler is not itself an unhandled rejection.
+    p.catch(() => { if (blockConfigCache.get(pluginId) === p) blockConfigCache.delete(pluginId); });
     return p;
 }
 
-/** Load + merge the Puck block configs of every given plugin (typically the ACTIVE plugins). */
+/**
+ * Load + merge the Puck block configs of every given plugin (typically the ACTIVE plugins).
+ * Best-effort by design: one plugin's failure is logged and skipped, never propagated — this runs on
+ * PUBLIC page renders, where a plugin block going missing must not take the page down with it.
+ */
 export async function loadActivePluginBlocks(pluginIds: string[]): Promise<Record<string, any>> {
-    const maps = await Promise.all(pluginIds.map((id) => loadPluginBlockConfigs(id).catch(() => ({}))));
+    const maps = await Promise.all(pluginIds.map((id) => loadPluginBlockConfigs(id).catch((e) => {
+        console.warn(`[PluginLoader] Puck blocks unavailable for '${id}':`, e);
+        return {};
+    })));
     return Object.assign({}, ...maps);
 }
 
@@ -308,10 +336,89 @@ export async function loadActivePluginBlocks(pluginIds: string[]): Promise<Recor
 // plugin would be re-evaluated (a second module instance of its extension) on each pass.
 const hooksRegistered = new Set<string>();
 
-// One 404 warning per plugin per session. loadRuntimePluginHooks() is retried on later mounts (whenever
-// ANY plugin failed), and a 404 plugin is never added to hooksRegistered, so without this every retry
-// would re-log the same line for every hook-less plugin.
+// One warning per BROKEN plugin per session. loadRuntimePluginHooks() is retried on later mounts
+// (whenever ANY plugin failed), and a 404 plugin is never added to hooksRegistered, so without this every
+// retry would re-log the same line. Plugins that simply declare no hooks never land here — they are not
+// warned about at all.
 const hooksAbsentWarned = new Set<string>();
+
+// The public plugin registry (GET /plugins/registry → each ACTIVE plugin's full manifest). Fetched
+// LAZILY — only to classify a hooks-bundle 404 — so a healthy install pays nothing on the happy path,
+// and at most ONE extra request per session when any 404 needs classifying. Same discipline as
+// activePromise: only a SUCCESSFUL fetch is memoized.
+let registryPromise: Promise<PluginRegistryEntry[]> | null = null;
+
+// `frontend: null` is not "no frontend": routes/plugins.ts emits exactly that when it cannot READ the
+// plugin's manifest.json (folder missing, or invalid JSON). A manifest without a `frontend` key leaves
+// the property absent instead — which is how the two 404 causes are told apart below.
+type PluginRegistryEntry = { id?: string; path?: string; frontend?: { hooks?: string } | null };
+
+function fetchPluginRegistry(): Promise<PluginRegistryEntry[]> {
+    if (registryPromise) return registryPromise;
+    const attempt: Promise<PluginRegistryEntry[]> = (async () => {
+        const res = await fetch('/api/v1/plugins/registry');
+        if (!res.ok) throw new Error(`GET /api/v1/plugins/registry failed: HTTP ${res.status}`);
+        const body: unknown = await res.json();
+        if (!Array.isArray(body)) throw new Error('GET /api/v1/plugins/registry returned a non-array body');
+        return body as PluginRegistryEntry[];
+    })();
+    registryPromise = attempt;
+    attempt.catch(() => { if (registryPromise === attempt) registryPromise = null; });
+    return attempt;
+}
+
+/**
+ * Why an ACTIVE plugin's `?type=hooks` request came back 404.
+ *  - 'none'       → it declares no `frontend.hooks`. The overwhelmingly common case (1 of the 31
+ *                   catalog plugins declares hooks); it is NORMAL and must stay silent.
+ *  - 'not-built'  → it DOES declare `frontend.hooks`, so dist/hooks.bundle.js should exist: the install
+ *                   was never built, or its dist/ was lost. Actionable.
+ *  - 'unreadable' → the backend could not read its manifest.json at all. Broken install. Actionable.
+ */
+type HooksAbsence = 'none' | 'not-built' | 'unreadable';
+
+async function classifyMissingHooksBundle(pluginId: string): Promise<HooksAbsence> {
+    const registry = await fetchPluginRegistry();
+    const entry = registry.find((e) => e && (e.id === pluginId || e.path === `/plugins/${pluginId}`));
+    // Not in the registry at all: it is no longer active (deactivated between the two fetches). Nothing
+    // to report — the hooks of an inactive plugin are supposed to be absent.
+    if (!entry) return 'none';
+    if (entry.frontend === null) return 'unreadable';
+    return typeof entry.frontend?.hooks === 'string' && entry.frontend.hooks.length > 0
+        ? 'not-built'
+        : 'none';
+}
+
+/**
+ * Warn — once per plugin per session — only when a hooks-bundle 404 is a REAL problem. Never throws:
+ * a plugin without hooks is not an error, and neither is failing to classify one.
+ */
+async function warnIfHooksBundleShouldExist(pluginId: string): Promise<void> {
+    if (hooksAbsentWarned.has(pluginId)) return;
+    let cause: HooksAbsence;
+    try {
+        cause = await classifyMissingHooksBundle(pluginId);
+    } catch {
+        // The registry itself is unreachable — a transient condition that says nothing about this plugin,
+        // and one the caller is already dealing with elsewhere. Stay silent rather than emit an alarming
+        // line per active plugin; fetchPluginRegistry did not memoize the failure, so a later mount
+        // classifies for real.
+        return;
+    }
+    if (cause === 'none') return;
+    // Re-check after the await: concurrent 404s for the same plugin must still log only once.
+    if (hooksAbsentWarned.has(pluginId)) return;
+    hooksAbsentWarned.add(pluginId);
+    console.warn(
+        cause === 'not-built'
+            ? `[PluginLoader] ACTIVE plugin '${pluginId}' declares frontend.hooks but its hooks bundle is ` +
+              `missing (HTTP 404), so its UI extensions will not appear. It was never built, or its dist/ ` +
+              `was lost: node scripts/build-plugin.js ${pluginId}`
+            : `[PluginLoader] ACTIVE plugin '${pluginId}' has no readable manifest.json (its plugin folder ` +
+              `is missing, or the manifest is invalid JSON), so no hooks bundle could be served. The ` +
+              `install is broken — reinstall the plugin.`
+    );
+}
 
 /**
  * Register ONE plugin's frontend hooks from its pre-compiled `hooks` bundle.
@@ -322,10 +429,10 @@ const hooksAbsentWarned = new Set<string>();
  * resolves `@/lib/plugin-hooks` to WordJS.host['lib/plugin-hooks'], so it registers into the HOST's
  * pluginHooks singleton — the same one <PluginHook> and applyFilters() read.
  *
- * Resolves false on 404 — usually "this plugin declares no `frontend.hooks`", but a BROKEN INSTALL 404s
- * identically (see the note in the body), which is why that path also warns. REJECTS if the bundle exists
- * but could not be fetched or evaluated, so the caller can retry; an individual register() that throws is
- * logged and does not fail the load.
+ * Resolves false on 404 — normally "this plugin declares no `frontend.hooks`", which is silent; a broken
+ * or unbuilt install 404s identically, and is told apart from it (and warned about) via the plugin's
+ * manifest. REJECTS if the bundle exists but could not be fetched or evaluated, so the caller can retry;
+ * an individual register() that throws is logged and does not fail the load.
  */
 async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
     if (hooksRegistered.has(pluginId)) return true;
@@ -339,20 +446,15 @@ async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
     // But 404 is NOT proof the plugin merely ships no hooks: routes/plugin-bundles.ts resolves the slug to
     // a folder FIRST and returns 404 whenever that resolution fails — unknown slug, missing plugin
     // directory, or a manifest.json that is unreadable/invalid (its JSON.parse error is swallowed) — as
-    // well as for a genuinely absent dist/hooks.bundle.js. A broken install is therefore indistinguishable
-    // from the normal case and would stay silent forever. We only reach here for a plugin the backend
-    // reports as ACTIVE, so warn once per session: that is the admin's only breadcrumb when a plugin's UI
-    // extension never appears. (Fixing the ambiguity properly means new backend status codes — out of
-    // scope here; the warning names both causes.)
+    // well as for a genuinely absent dist/hooks.bundle.js. Resolving that ambiguity needs no new backend
+    // status codes: GET /plugins/registry already exposes every ACTIVE plugin's manifest, and its
+    // `frontend.hooks` field says whether the plugin ever asked for a hooks bundle. So classify the 404
+    // and warn ONLY when something is actually wrong. Warning on every 404 instead — as this did — put
+    // one scary "the install is broken" line per hook-less plugin in the console of a perfectly healthy
+    // site (30 of the 31 catalog plugins declare no hooks), which teaches admins to ignore the one
+    // breadcrumb that matters.
     if (response.status === 404) {
-        if (!hooksAbsentWarned.has(pluginId)) {
-            hooksAbsentWarned.add(pluginId);
-            console.warn(
-                `[PluginLoader] No hooks bundle for ACTIVE plugin '${pluginId}' (HTTP 404). Expected if it ` +
-                `declares no frontend.hooks. Otherwise the install is broken (plugin folder missing or ` +
-                `manifest.json invalid) or it was never built: node scripts/build-plugin.js ${pluginId}`
-            );
-        }
+        await warnIfHooksBundleShouldExist(pluginId);
         return false;
     }
     if (!response.ok) {

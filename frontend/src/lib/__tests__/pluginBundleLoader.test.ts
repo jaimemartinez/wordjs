@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
  */
 
 const ACTIVE_URL = '/api/v1/plugins/active';
+const REGISTRY_URL = '/api/v1/plugins/registry';
 
 // Import fresh per test: activePromise/hooksRegistered are module-level session caches, and the caching
 // behaviour is exactly what is under test.
@@ -26,10 +27,22 @@ function jsonResponse(body: unknown, status = 200): Response {
     return { ok: status >= 200 && status < 300, status, json: async () => body } as Response;
 }
 
+/** A registry entry as GET /plugins/registry emits it: the plugin's manifest, spread. */
+function registryEntry(id: string, frontend: unknown): unknown {
+    return { id, name: id, version: '1.0.0', active: true, path: `/plugins/${id}`, frontend };
+}
+
 let fetchMock: ReturnType<typeof vi.fn>;
+// The loader only needs `window` to EXIST. Install a stub when the environment has none, and REMOVE it
+// afterwards — leaving a fake `window` on globalThis leaks into any other suite in the same process
+// (sanitize.ts, for one, branches on `typeof window` to pick its SSR vs browser sanitizer).
+let installedWindowStub = false;
 
 beforeEach(() => {
-    (globalThis as any).window = (globalThis as any).window ?? {};
+    if (!(globalThis as any).window) {
+        (globalThis as any).window = {};
+        installedWindowStub = true;
+    }
     fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
     vi.spyOn(console, 'warn').mockImplementation(() => { });
@@ -37,6 +50,10 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    if (installedWindowStub) {
+        delete (globalThis as any).window;
+        installedWindowStub = false;
+    }
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
 });
@@ -87,6 +104,18 @@ describe("fetchActivePluginIds — a failed fetch must not masquerade as 'no act
         const { fetchActivePluginIds } = await freshLoader();
         await expect(fetchActivePluginIds()).rejects.toThrow(/non-array/);
     });
+
+    it("resolves [] WITHOUT fetching on the SERVER (the URL is relative — Node's fetch cannot parse it)", async () => {
+        const saved = (globalThis as any).window;
+        delete (globalThis as any).window;
+        try {
+            const { fetchActivePluginIds } = await freshLoader();
+            await expect(fetchActivePluginIds()).resolves.toEqual([]);
+            expect(fetchMock).not.toHaveBeenCalled();
+        } finally {
+            (globalThis as any).window = saved;
+        }
+    });
 });
 
 describe("loadRuntimePluginHooks — must surface, not swallow, a broken active-list fetch", () => {
@@ -103,17 +132,19 @@ describe("loadRuntimePluginHooks — must surface, not swallow, a broken active-
         await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
     });
 
-    it("REJECTS when an active plugin's hooks bundle 5xxs, but only warns on a 404", async () => {
+    it("REJECTS when an active plugin's hooks bundle 5xxs, and stays silent about the hook-less one", async () => {
         fetchMock.mockImplementation(async (url: string) => {
             if (url === ACTIVE_URL) return jsonResponse(['no-hooks-plugin', 'broken-plugin']);
+            if (url === REGISTRY_URL) return jsonResponse([
+                registryEntry('no-hooks-plugin', { adminPage: { entry: 'client/admin/page.tsx' } }),
+                registryEntry('broken-plugin', { hooks: 'client/Ext.tsx' }),
+            ]);
             if (url.includes('no-hooks-plugin')) return jsonResponse({}, 404);  // declares no hooks — normal
             return jsonResponse({}, 503);                                       // transient — must surface
         });
         const { loadRuntimePluginHooks } = await freshLoader();
         await expect(loadRuntimePluginHooks()).rejects.toThrow(/1 plugin hooks bundle\(s\) failed/);
-        // A 404 for a plugin the backend says is ACTIVE is ambiguous (no hooks vs broken install), so it
-        // must at least be visible.
-        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('no-hooks-plugin'));
+        expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('no-hooks-plugin'));
     });
 
     it("RESOLVES when every active plugin simply ships no hooks bundle (404)", async () => {
@@ -121,5 +152,137 @@ describe("loadRuntimePluginHooks — must surface, not swallow, a broken active-
             url === ACTIVE_URL ? jsonResponse(['a-plugin']) : jsonResponse({}, 404));
         const { loadRuntimePluginHooks } = await freshLoader();
         await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+    });
+});
+
+/**
+ * A 404 on ?type=hooks has two very different causes, and the loader must not cry wolf about the boring
+ * one: exactly ONE of the 31 catalog plugins declares `frontend.hooks`, so warning on every 404 filled a
+ * healthy install's console with ~N "the install is broken" lines — ~97% false positives, which is how a
+ * breadcrumb becomes noise admins scroll past. GET /plugins/registry already carries each ACTIVE plugin's
+ * manifest, so the cause is decidable client-side, lazily, without touching the backend.
+ */
+describe("hooks-bundle 404 — warn only when the bundle SHOULD have been there", () => {
+    const hooksBundle404 = (registry: unknown[], active: string[]) =>
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(active);
+            if (url === REGISTRY_URL) return jsonResponse(registry);
+            return jsonResponse({}, 404);
+        });
+
+    it("is SILENT for a plugin that declares no frontend.hooks (the normal case)", async () => {
+        hooksBundle404([registryEntry('faq', { puckComponents: { entry: 'client/puck/Faq.tsx' } })], ['faq']);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).not.toHaveBeenCalled();
+    });
+
+    it("is SILENT for a plugin whose manifest has no `frontend` section at all", async () => {
+        hooksBundle404([registryEntry('backend-only', undefined)], ['backend-only']);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).not.toHaveBeenCalled();
+    });
+
+    it("WARNS when the plugin declares frontend.hooks — it was never built / its dist was lost", async () => {
+        hooksBundle404([registryEntry('mail-server', { hooks: 'client/UserFormExtension.tsx' })], ['mail-server']);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).toHaveBeenCalledWith(
+            expect.stringContaining("plugin 'mail-server' declares frontend.hooks"));
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('build-plugin.js mail-server'));
+    });
+
+    // routes/plugins.ts emits `frontend: null` EXPLICITLY when it cannot read the plugin's manifest.json
+    // (folder missing, or invalid JSON) — a broken install, and the other cause worth reporting.
+    it("WARNS when the backend could not read the plugin's manifest (frontend: null)", async () => {
+        hooksBundle404([registryEntry('ghost-plugin', null)], ['ghost-plugin']);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('no readable manifest.json'));
+    });
+
+    it("warns at most ONCE per plugin, and fetches the registry ONCE for many 404s", async () => {
+        hooksBundle404(
+            [registryEntry('a', {}), registryEntry('b', {}), registryEntry('c', { hooks: 'client/C.tsx' })],
+            ['a', 'b', 'c']);
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await loadRuntimePluginHooks();
+        await loadRuntimePluginHooks();   // a later admin-layout mount retries the 404 plugins
+        expect(console.warn).toHaveBeenCalledTimes(1);
+        expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(1);
+    });
+
+    it("does NOT fetch the registry when nothing 404s (no cost on the happy path)", async () => {
+        fetchMock.mockImplementation(async (url: string) =>
+            url === ACTIVE_URL ? jsonResponse(['a-plugin']) : jsonResponse({}, 503));
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).rejects.toThrow(/failed to load/);
+        expect(fetchMock.mock.calls.some(([u]) => u === REGISTRY_URL)).toBe(false);
+    });
+
+    it("stays silent (and does not cache) when the registry itself is unreachable", async () => {
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse(['a-plugin']);
+            if (url === REGISTRY_URL) return jsonResponse({}, 502);
+            return jsonResponse({}, 404);
+        });
+        const { loadRuntimePluginHooks } = await freshLoader();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(console.warn).not.toHaveBeenCalled();
+        // The failed registry fetch must not be memoized: the next pass tries again and can classify.
+        await loadRuntimePluginHooks();
+        expect(fetchMock.mock.calls.filter(([u]) => u === REGISTRY_URL)).toHaveLength(2);
+    });
+});
+
+/**
+ * Same defect class as fetchActivePluginIds, in the block loader: ANY non-ok response collapsed to `{}`
+ * AND that `{}` was memoized in blockConfigCache for the whole session. One 502 from a restarting gateway
+ * on the first editor mount therefore deleted every marketplace plugin's Puck blocks until the tab was
+ * reloaded — no retry could recover, because the poisoned entry was replayed without fetching.
+ */
+describe("loadPluginBlockConfigs — only a 404 may be cached as 'ships no blocks'", () => {
+    it("CACHES a 404 (the plugin genuinely ships no blocks): one fetch per session", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({}, 404));
+        const { loadPluginBlockConfigs } = await freshLoader();
+        await expect(loadPluginBlockConfigs('faq')).resolves.toEqual({});
+        await expect(loadPluginBlockConfigs('faq')).resolves.toEqual({});
+        expect(fetchMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("REJECTS on a 5xx instead of resolving {}", async () => {
+        fetchMock.mockResolvedValue(jsonResponse({}, 502));
+        const { loadPluginBlockConfigs } = await freshLoader();
+        await expect(loadPluginBlockConfigs('faq')).rejects.toThrow(/502/);
+    });
+
+    it("does NOT cache a 5xx — the next render re-fetches (was permanently empty)", async () => {
+        fetchMock.mockResolvedValueOnce(jsonResponse({}, 502));
+        const { loadPluginBlockConfigs } = await freshLoader();
+        await expect(loadPluginBlockConfigs('faq')).rejects.toThrow(/502/);
+
+        fetchMock.mockResolvedValueOnce(jsonResponse({}, 404));   // backend recovered
+        await expect(loadPluginBlockConfigs('faq')).resolves.toEqual({});
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("does NOT cache a network failure either", async () => {
+        fetchMock.mockRejectedValueOnce(new Error('Failed to fetch'));
+        const { loadPluginBlockConfigs } = await freshLoader();
+        await expect(loadPluginBlockConfigs('faq')).rejects.toThrow(/Failed to fetch/);
+
+        fetchMock.mockResolvedValueOnce(jsonResponse({}, 404));
+        await expect(loadPluginBlockConfigs('faq')).resolves.toEqual({});
+        expect(fetchMock).toHaveBeenCalledTimes(2);
+    });
+
+    it("loadActivePluginBlocks stays BEST-EFFORT: a failing plugin is skipped, never thrown", async () => {
+        fetchMock.mockImplementation(async (url: string) =>
+            url.includes('broken') ? jsonResponse({}, 503) : jsonResponse({}, 404));
+        const { loadActivePluginBlocks } = await freshLoader();
+        await expect(loadActivePluginBlocks(['broken', 'faq'])).resolves.toEqual({});
+        expect(console.warn).toHaveBeenCalledWith(
+            expect.stringContaining("Puck blocks unavailable for 'broken'"), expect.anything());
     });
 });
