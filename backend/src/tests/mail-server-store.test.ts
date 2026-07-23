@@ -153,6 +153,73 @@ test('create() binds userId/isSpam and coerces mailparser false/undefined to str
     assert.equal(rec.subject, '');
 });
 
+test('received_spf: the SPF verdict is persisted on a fresh install and survives findById', async () => {
+    const { db, Email } = await makeStore();
+    const HEADER = 'Received-SPF: permerror (mx.site.com: permanent error in processing domain of evil.test: '
+        + 'unevaluable SPF record) client-ip=203.0.113.9; envelope-from=<spoof@evil.test>; '
+        + 'helo=relay.evil.test; receiver=mx.site.com; identity=mailfrom;';
+
+    const rec = await Email.create({
+        messageId: '<spf1@t>', fromAddress: 'spoof@evil.test', toAddress: 'a@site.com',
+        subject: 'unevaluable', bodyText: 'x', userId: 1, receivedSpf: HEADER
+    });
+    assert.equal(rec.received_spf, HEADER, 'create() returns the row with the header stored');
+    const again = await Email.findById(rec.id);
+    assert.equal(again.received_spf, HEADER, 'findById (the reading pane) carries the verdict');
+
+    // A message we never SPF-checked (outbound copy, loopback/trusted session, check disabled) must
+    // store an EMPTY string. better-sqlite3 refuses to bind `undefined`, so an unset field would throw
+    // at end-of-DATA and drop the whole inbound message (the INBOUND-BIND class of bug).
+    const plain = await Email.create({
+        messageId: '<spf2@t>', fromAddress: 'a@site.com', toAddress: 'b@site.com',
+        subject: 'sent copy', bodyText: 'x', isSent: 1, userId: 1
+    });
+    assert.equal(plain.received_spf, '', 'omitted receivedSpf stores "" (bindable), not NULL/undefined');
+
+    // The listing projection must NOT ship it — listings are deliberately body-free and this is one
+    // more per-row string across the isolate RPC bridge for a UI that shows a 2-line preview.
+    const list = await Email.findAllByUser(1, 'a@site.com', 'inbox');
+    assert.ok(list.length >= 1, 'inbox listing returned the message');
+    assert.ok(!('received_spf' in list[0]), 'list projection stays lean (verdict is a reading-pane field)');
+
+    // The column really is a column (not silently swallowed by a driver quirk).
+    const cols = (db._raw.prepare(`PRAGMA table_info(${PREFIX}received_emails)`).all() as any[]).map(c => c.name);
+    assert.ok(cols.includes('received_spf'), 'received_spf exists on a freshly created table');
+});
+
+test('received_spf: an EXISTING pre-v2.1.4 table is upgraded and still accepts inserts', async () => {
+    const db = makeDb();
+    // An install created before the column existed — exactly the shape initSchema() must repair.
+    db._raw.exec(`CREATE TABLE ${PREFIX}received_emails (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, message_id TEXT, from_address TEXT, from_name TEXT,
+        to_address TEXT, cc_address TEXT, bcc_address TEXT, subject TEXT, body_text TEXT, body_html TEXT,
+        date_received DATETIME DEFAULT CURRENT_TIMESTAMP, is_read INT DEFAULT 0, is_sent INT DEFAULT 0,
+        is_draft INT DEFAULT 0, is_archived INT DEFAULT 0, is_starred INT DEFAULT 0, is_trash INT DEFAULT 0,
+        is_spam INT DEFAULT 0, user_id INT DEFAULT 0,
+        raw_content TEXT, parent_id INT DEFAULT 0, thread_id INT DEFAULT 0, scheduled_at DATETIME,
+        delivery_status TEXT, delivery_attempts INT DEFAULT 0, next_attempt_at TEXT, last_error TEXT
+    )`);
+    db._raw.exec(`INSERT INTO ${PREFIX}received_emails (from_address, to_address, subject, body_text, user_id) VALUES ('a@x.com','b@x.com','pre-upgrade','old row', 4)`);
+
+    const Email = createEmailStore(db);
+    await Email.initSchema();
+    await Email.initSchema(); // the duplicate-column ALTER must stay swallowed
+
+    const cols = (db._raw.prepare(`PRAGMA table_info(${PREFIX}received_emails)`).all() as any[]).map(c => c.name);
+    assert.ok(cols.includes('received_spf'), 'ALTER added received_spf to the existing table');
+
+    // THE regression this guards: the INSERT names a column that only exists after the ALTER. If the
+    // upgrade path were missing, every inbound message on an upgraded install would fail here.
+    const rec = await Email.create({
+        messageId: '<up1@t>', fromAddress: 'c@x.com', toAddress: 'b@x.com', subject: 'post-upgrade',
+        bodyText: 'x', userId: 4, receivedSpf: 'Received-SPF: fail (mx: nope) client-ip=1.2.3.4;'
+    });
+    assert.equal(rec.received_spf, 'Received-SPF: fail (mx: nope) client-ip=1.2.3.4;');
+
+    const legacy = await db.get(`SELECT received_spf FROM ${PREFIX}received_emails WHERE subject = ?`, ['pre-upgrade']);
+    assert.equal(legacy.received_spf, null, 'rows written before the column keep NULL (no backfill needed)');
+});
+
 test('ownership: each recipient sees exactly their copy — no multi-recipient duplicates', async () => {
     const { Email } = await makeStore();
     const A = { id: 1, email: 'a@site.com' };
