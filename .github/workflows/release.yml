@@ -80,6 +80,14 @@ jobs:
       - name: Build marketplace catalog + plugin zips
         run: npm run build:marketplace
 
+      # The assets uploaded below are what every install downloads, and the installer refuses any
+      # package whose sha256 does not match its catalog entry — so a catalog/zip drift here is not a
+      # cosmetic problem, it makes the plugin uninstallable for everyone. Verify before publishing:
+      # nothing else stands between build:marketplace and a public release asset. (Same gate CI runs
+      # per PR; see the "Marketplace catalog integrity" step in ci.yml.)
+      - name: Verify the catalog matches the artifacts it publishes
+        run: npm run verify:marketplace
+
       - name: Name the asset after the tag (tag pushes only)
         if: startsWith(github.ref, 'refs/tags/')
         run: cp release/wordjs-compiled-release.zip "release/wordjs-${GITHUB_REF_NAME}.zip"
