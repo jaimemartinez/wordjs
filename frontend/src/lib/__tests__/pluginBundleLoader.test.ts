@@ -51,6 +51,51 @@ function registryResponse(entries: unknown[], status = 200): Response {
     return jsonResponse({ plugins: entries }, status);
 }
 
+// ---------------------------------------------------------------------------
+// Reaching the SUCCESS path (a hooks bundle that actually registers something)
+// ---------------------------------------------------------------------------
+// The happy path ends in `import()` of a `blob:` URL, which the runner's node environment cannot perform.
+// Substitute ONLY that step — `URL.createObjectURL` hands back an equivalent `data:` URL — using real
+// subclasses, so nothing else about either global changes (`new URL(...)` / `new Blob(...)` keep working
+// for the rest of the module graph). vi.stubGlobal + the shared afterEach's unstubAllGlobals put both back.
+// Everything else stays the loader's own code: fetch, status handling, module evaluation,
+// invokeHookRegistrars and the memo bookkeeping under test. A genuine browser `blob:` import remains out
+// of reach in this runner; it is covered only by the LXC end-to-end pass.
+function installImportableBundleShim(): void {
+    const RealBlob = globalThis.Blob;
+    class ShimBlob extends RealBlob {
+        readonly source: string;
+        constructor(parts: BlobPart[], options?: BlobPropertyBag) {
+            super(parts, options);
+            this.source = parts.join('');
+        }
+    }
+    class ShimURL extends globalThis.URL { }
+    (ShimURL as unknown as { createObjectURL(b: ShimBlob): string }).createObjectURL = (b) =>
+        'data:text/javascript;base64,' + Buffer.from(b.source, 'utf8').toString('base64');
+    (ShimURL as unknown as { revokeObjectURL(u: string): void }).revokeObjectURL = () => { };
+    vi.stubGlobal('Blob', ShimBlob);
+    vi.stubGlobal('URL', ShimURL);
+}
+
+// A hooks bundle in the shape build-plugin.js emits: an ESM module whose `register*` export installs the
+// plugin's UI extension. It runs as its own module, so a global is its only way back to the test.
+// `marker` also keeps each test's data: URL unique — identical ones are cached by the module loader, and
+// a shared URL would let one test's evaluation stand in for another's.
+function hooksBundle(marker: string): string {
+    const key = JSON.stringify(marker);
+    return `export const registerUserFormExtension = () => {\n` +
+        `  const log = globalThis.__wjsHookRegistrations;\n` +
+        `  log[${key}] = (log[${key}] || 0) + 1;\n` +
+        `};\n`;
+}
+const registrations = (marker: string): number =>
+    ((globalThis as any).__wjsHookRegistrations as Record<string, number>)[marker] ?? 0;
+const hooksFetches = (): number =>
+    fetchMock.mock.calls.filter(([u]) => String(u).includes('type=hooks')).length;
+const activeFetches = (): number =>
+    fetchMock.mock.calls.filter(([u]) => u === ACTIVE_URL).length;
+
 let fetchMock: ReturnType<typeof vi.fn>;
 // The loader only needs `window` to EXIST. Install a stub when the environment has none, and REMOVE it
 // afterwards — leaving a fake `window` on globalThis leaks into any other suite in the same process
@@ -66,6 +111,8 @@ beforeEach(() => {
     vi.stubGlobal('fetch', fetchMock);
     vi.spyOn(console, 'warn').mockImplementation(() => { });
     vi.spyOn(console, 'error').mockImplementation(() => { });
+    // Where an evaluated hooks bundle records that its register* export ran (see hooksBundle).
+    (globalThis as any).__wjsHookRegistrations = {};
 });
 
 afterEach(() => {
@@ -73,6 +120,7 @@ afterEach(() => {
         delete (globalThis as any).window;
         installedWindowStub = false;
     }
+    delete (globalThis as any).__wjsHookRegistrations;
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
 });
@@ -462,53 +510,10 @@ describe("invokeHookRegistrars — the register* convention a hooks bundle relie
  * so its toggle merely overwrites itself; a third-party extension registered keyless stacks, and renders
  * twice — the duplicate-UI bug initPlugins' latch exists to prevent.
  *
- * These are the only tests here that reach the 200 path, and they get there by substituting the single
- * step node cannot run: `URL.createObjectURL` hands back an equivalent `data:` URL instead of a `blob:`
- * one. Everything else is the loader's own code — fetch, status handling, module evaluation,
- * invokeHookRegistrars, and the memo bookkeeping actually under test — and the bundle source is the
- * `register*` convention the real esbuild output must satisfy. A genuine browser `blob:` import remains
- * out of reach in this runner; it is covered only by the LXC end-to-end pass.
+ * These tests reach the 200 path via installImportableBundleShim (see above), which substitutes the one
+ * step node cannot run — `blob:` → an equivalent `data:` URL — and nothing else.
  */
 describe("hooks registration is deduped per plugin, across SEQUENTIAL and CONCURRENT passes", () => {
-    // Swap ONLY blob:→data:, and do it with real subclasses so nothing else about either global changes
-    // (`new URL(...)` and `new Blob(...)` keep working for everything else in the module graph).
-    // vi.stubGlobal + the shared afterEach's unstubAllGlobals put both back.
-    function installImportableBundleShim(): void {
-        const RealBlob = globalThis.Blob;
-        class ShimBlob extends RealBlob {
-            readonly source: string;
-            constructor(parts: BlobPart[], options?: BlobPropertyBag) {
-                super(parts, options);
-                this.source = parts.join('');
-            }
-        }
-        class ShimURL extends globalThis.URL { }
-        (ShimURL as unknown as { createObjectURL(b: ShimBlob): string }).createObjectURL = (b) =>
-            'data:text/javascript;base64,' + Buffer.from(b.source, 'utf8').toString('base64');
-        (ShimURL as unknown as { revokeObjectURL(u: string): void }).revokeObjectURL = () => { };
-        vi.stubGlobal('Blob', ShimBlob);
-        vi.stubGlobal('URL', ShimURL);
-    }
-
-    // A hooks bundle in the shape build-plugin.js emits: an ESM module whose `register*` export installs
-    // the plugin's UI extension. It runs as its own module, so a global is its only way back to the test.
-    // `marker` also keeps each test's data: URL unique — identical ones are cached by the module loader,
-    // and a shared URL would let one test's evaluation stand in for another's.
-    function hooksBundle(marker: string): string {
-        const key = JSON.stringify(marker);
-        return `export const registerUserFormExtension = () => {\n` +
-            `  const log = globalThis.__wjsHookRegistrations;\n` +
-            `  log[${key}] = (log[${key}] || 0) + 1;\n` +
-            `};\n`;
-    }
-    const registrations = (marker: string): number =>
-        ((globalThis as any).__wjsHookRegistrations as Record<string, number>)[marker] ?? 0;
-    const hooksFetches = (): number =>
-        fetchMock.mock.calls.filter(([u]) => String(u).includes('type=hooks')).length;
-
-    beforeEach(() => { (globalThis as any).__wjsHookRegistrations = {}; });
-    afterEach(() => { delete (globalThis as any).__wjsHookRegistrations; });
-
     it("registers ONCE when two passes run simultaneously (the Set-guard shape registered twice)", async () => {
         installImportableBundleShim();
         const code = hooksBundle('concurrent');
@@ -576,6 +581,94 @@ describe("hooks registration is deduped per plugin, across SEQUENTIAL and CONCUR
         failing = false;   // gateway back up, initPlugins un-latched, next mount retries
         await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
         expect(registrations('retry')).toBe(1);
+    });
+});
+
+/**
+ * ACTIVATING A PLUGIN MID-SESSION — the memo must be invalidated, because nothing else will.
+ *
+ * The active-plugin list was memoized for the whole session on the claim that it "only changes when an
+ * admin activates/deactivates a plugin (which reloads the page)". The parenthetical is false:
+ * admin/plugins/page.tsx's togglePlugin and confirmActivate `await pluginsApi.activate/deactivate(...)`
+ * and then only call loadPlugins() + refreshMenus(), which re-fetch into React state — there is no
+ * location.reload / router.refresh anywhere in that flow. In production nothing regenerates the
+ * build-time registry either (regenerateRegistry() returns early when NODE_ENV=production), so the
+ * runtime loader is the ONLY path to a just-activated plugin — and it was replaying a list captured
+ * before the activation. Net effect: the admin activates mail-server, and its hooks and Puck blocks stay
+ * dead until the tab is manually reloaded. That is the exact bug this loader exists to eliminate.
+ *
+ * The list is served here from a MUTABLE array, the way the backend behaves: /plugins/active answers
+ * differently from the moment the activation succeeds.
+ */
+describe("activate mid-session — the memoized active list must be invalidated, not replayed", () => {
+    it("keeps serving the memo until invalidateActivePluginIds(), then re-reads /plugins/active", async () => {
+        const active: string[] = [];
+        fetchMock.mockImplementation(async (url: string) =>
+            url === ACTIVE_URL ? jsonResponse([...active]) : jsonResponse({}, 404));
+        const { fetchActivePluginIds, invalidateActivePluginIds } = await freshLoader();
+
+        await expect(fetchActivePluginIds()).resolves.toEqual([]);
+        expect(activeFetches()).toBe(1);
+
+        // The admin activates mail-server. Nothing has told the loader yet, so the memo still stands —
+        // that part is deliberate: the hot path must not re-fetch per caller, and must not poll.
+        active.push('mail-server');
+        await expect(fetchActivePluginIds()).resolves.toEqual([]);
+        expect(activeFetches()).toBe(1);
+
+        invalidateActivePluginIds();
+        await expect(fetchActivePluginIds()).resolves.toEqual(['mail-server']);
+        expect(activeFetches()).toBe(2);
+        // …and the fresh answer is memoized in turn: still one fetch per session, not one per caller.
+        await expect(fetchActivePluginIds()).resolves.toEqual(['mail-server']);
+        expect(activeFetches()).toBe(2);
+    });
+
+    it("registers the newly activated plugin's hooks on the next pass, with no page reload", async () => {
+        installImportableBundleShim();
+        const code = hooksBundle('activated-midsession');
+        const active: string[] = [];
+        fetchMock.mockImplementation(async (url: string) =>
+            url === ACTIVE_URL ? jsonResponse([...active]) : textResponse(code));
+        const { loadRuntimePluginHooks, invalidateActivePluginIds } = await freshLoader();
+
+        // Admin layout mounts on a fresh install: nothing is active, so nothing registers.
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+        expect(registrations('activated-midsession')).toBe(0);
+
+        // POST /plugins/mail-server/activate returned 200 → what reloadActivePlugins() does next.
+        active.push('mail-server');
+        invalidateActivePluginIds();
+        await expect(loadRuntimePluginHooks()).resolves.toBeUndefined();
+
+        expect(registrations('activated-midsession')).toBe(1);
+    });
+
+    it("re-running the pass does NOT re-register a plugin an earlier pass already handled", async () => {
+        installImportableBundleShim();
+        const active = ['mail-server'];
+        // A DISTINCT bundle per plugin: identical sources share one data: URL, which the module loader
+        // caches — the two plugins would then evaluate the same module and the counters could not be
+        // told apart.
+        fetchMock.mockImplementation(async (url: string) => {
+            if (url === ACTIVE_URL) return jsonResponse([...active]);
+            return textResponse(hooksBundle(
+                String(url).includes('online-store') ? 'activated-second' : 'already-registered'));
+        });
+        const { loadRuntimePluginHooks, invalidateActivePluginIds } = await freshLoader();
+
+        await loadRuntimePluginHooks();
+        expect(registrations('already-registered')).toBe(1);
+
+        // The admin now activates a SECOND plugin; the pass re-runs over both. mail-server's registration
+        // is memoized on its in-flight promise, so it is joined — not re-fetched, not re-invoked.
+        active.push('online-store');
+        invalidateActivePluginIds();
+        await loadRuntimePluginHooks();
+
+        expect(registrations('already-registered')).toBe(1);
+        expect(registrations('activated-second')).toBe(1);
+        expect(hooksFetches()).toBe(2);   // one per plugin, never twice for the same one
     });
 });
 
