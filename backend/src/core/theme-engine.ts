@@ -17,6 +17,62 @@ const { doAction, applyFilters } = require('./hooks');
 
 const THEMES_DIR = path.resolve('./themes');
 
+// A theme's functions.js runs as an isolated child registered under this namespace (see loadThemeLogic).
+const THEME_ISOLATE_PREFIX = 'theme:';
+
+/**
+ * Retire EVERY theme isolate before the incoming theme's own child is (re)loaded.
+ *
+ * THE LEAK THIS CLOSES. A theme's functions.js runs in a child process registered as `theme:<slug>`, and
+ * everything it registers — hooks, filters, shortcodes, routes, mail/notify transports — lives on in the
+ * HOST until that isolate is unloaded. init() assigns `this.activeTheme` to the INCOMING theme BEFORE it
+ * calls loadThemeLogic(), so the old `if (isIsolated(theme:<incoming>)) unload` check could only ever
+ * match a stale worker for the theme being loaded: switching A -> B computed `theme:B` and nobody ever
+ * unloaded `theme:A`. Observable symptom: after the admin switched away from a theme, that theme's
+ * orphaned process was still alive and its hooks/shortcodes still fired on every page the site rendered.
+ *
+ * WHY SWEEP THE NAMESPACE INSTEAD OF REMEMBERING THE PREVIOUS SLUG. "Unload the outgoing one" repairs
+ * only the single expected transition: it still leaks if an earlier switch already leaked, or if several
+ * theme children accumulated (boot + switch + a lazy re-init from render() racing). Sweeping the whole
+ * `theme:` namespace is self-healing — it converges to exactly one theme isolate even from an
+ * already-leaked state, which is the state every already-running install is in.
+ *
+ * The incoming slug is deliberately INCLUDED in the sweep: loadThemeLogic (re)loads it immediately
+ * afterwards, so this preserves the stale-worker restart the old check performed for a same-theme
+ * re-init, without needing a special case.
+ *
+ * Only `theme:`-prefixed slugs are touched — plugin isolates share this registry and must survive a
+ * theme switch completely untouched.
+ */
+async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
+    let iso: any;
+    try {
+        iso = require('./plugin-isolate');
+    } catch (e: any) {
+        console.error('[Theme] cannot reach the isolate layer to retire theme isolates:', e && e.message);
+        return;
+    }
+    let slugs: string[];
+    try {
+        slugs = iso.listIsolates();
+    } catch (e: any) {
+        console.error('[Theme] failed to enumerate loaded isolates — a previous theme child may survive this switch:', e && e.message);
+        return;
+    }
+    for (const slug of Array.isArray(slugs) ? slugs : []) {
+        if (typeof slug !== 'string' || !slug.startsWith(THEME_ISOLATE_PREFIX)) continue; // never a plugin isolate
+        try {
+            await iso.unloadIsolatedPlugin(slug);
+            if (slug !== incomingIsoSlug) console.log(`🎨 Theme switch: retired the outgoing theme isolate '${slug}'.`);
+        } catch (e: any) {
+            // BEST-EFFORT, BUT LOUD. A teardown that fails must not stop the incoming theme from loading
+            // (the site would be left with no theme logic at all), yet it means a theme child may still be
+            // alive and serving stale hooks — a silent catch here is precisely how this bug stayed hidden.
+            console.error(`[Theme] failed to retire theme isolate '${slug}' — it may still be running and serving stale hooks/shortcodes:`, e && e.message);
+        }
+    }
+}
+
 class ThemeEngine {
     activeTheme: any;
     partialsLoaded: boolean;
@@ -115,10 +171,24 @@ class ThemeEngine {
     }
 
     async loadThemeLogic() {
+        const themeSlug = this.activeTheme.slug;
+        const isoSlug = `${THEME_ISOLATE_PREFIX}${themeSlug}`;
+
+        // TEAR DOWN FIRST — before the functions.js existence check and before the AST pre-scan below.
+        // Reaching this method means init() already validated the incoming theme and committed
+        // this.activeTheme to it, so the switch HAS happened and the previous theme's child must go
+        // regardless of how the incoming one fares: a theme with no functions.js legitimately owns no
+        // isolate, and a theme the pre-scan blocks must own none — but in BOTH cases leaving the outgoing
+        // child alive would keep the old theme's hooks/shortcodes firing under the new theme, which is
+        // strictly worse than the site running with no theme logic at all.
+        //
+        // Conversely, init()'s early returns (unsafe slug, path escape, missing directory) happen BEFORE
+        // the this.activeTheme assignment and never reach here, so a rejected theme switch cannot tear
+        // down the working theme it failed to replace.
+        await unloadThemeIsolates(isoSlug);
+
         const logicPath = path.join(this.activeTheme.path, 'functions.js');
         if (!fs.existsSync(logicPath)) return;
-        const themeSlug = this.activeTheme.slug;
-        const isoSlug = `theme:${themeSlug}`;
         try {
             // Static AST pre-scan (defense in depth). The REAL containment is the OS isolation below.
             const { validatePluginPermissions } = require('./plugins');
@@ -144,8 +214,9 @@ class ThemeEngine {
             // through the SAME RPC bridge isolated plugins use (the isolate layer already namespaces theme:
             // slugs). Bundled themes' functions.js only console.log, so nothing host-side breaks; Handlebars
             // helpers remain built-in and host-side (they are not registered from functions.js).
-            const { loadIsolatedPlugin, unloadIsolatedPlugin, isIsolated } = require('./plugin-isolate');
-            if (isIsolated(isoSlug)) { try { await unloadIsolatedPlugin(isoSlug); } catch { /* stale worker */ } } // theme switch: tear down the old worker first
+            // Every theme isolate (this slug's own stale worker included) was already retired by the
+            // unloadThemeIsolates sweep at the top of this method, so this is always a clean start.
+            const { loadIsolatedPlugin } = require('./plugin-isolate');
             await loadIsolatedPlugin(isoSlug, logicPath);
         } catch (e) {
             console.error(`❌ Error loading theme functions.js (isolated):`, (e as any) && (e as any).message);
@@ -153,7 +224,11 @@ class ThemeEngine {
     }
 
     async render(templateName: string, data: any = {}) {
-        // Detect theme change and re-init if necessary
+        // Detect theme change and re-init if necessary. This is the SECOND entry point into the isolate
+        // lifecycle: the theme can change without an explicit admin action reaching this process (another
+        // node wrote the option, a plugin wrote it, an admin action on a sibling node), and then the switch
+        // happens LAZILY on the next render. It goes through init() -> loadThemeLogic(), so the
+        // outgoing-isolate teardown covers it too — there is no second place to fix.
         const currentOption = await getOption('template', 'default');
         if (!this.activeTheme || this.activeTheme.slug !== currentOption) {
             console.log(`🎨 Theme engine reloading: ${this.activeTheme?.slug} -> ${currentOption}`);
