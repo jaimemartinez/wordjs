@@ -149,9 +149,35 @@ async function getActiveTheme() {
 }
 
 /**
+ * Activations for the SAME theme that are already running, so a duplicate JOINS instead of re-running.
+ *
+ * POST /themes/:slug/activate had no idempotency at all: an admin double-click (or two admins acting at
+ * once) ran switchTheme twice for the same slug, and the two theme-engine inits then overlapped — each
+ * sweeping before the other loaded, so both children registered and one of them was overwritten in the
+ * isolate registry and orphaned. theme-engine.init() is serialized now, which removes the overlap; this
+ * removes the duplicate WORK on top, so a double-click is one switch, one child, one answer, instead of a
+ * switch immediately followed by a redundant re-init that kills and re-forks the theme's process.
+ *
+ * Per SLUG, because that is what "the same request twice" means; different slugs are still ordered (and
+ * made safe) by the init() chain. Matches the in-flight-join discipline already used for duplicate work
+ * elsewhere (middleware/image-negotiation.ts, core/plugin-dev-watch.ts).
+ */
+const switchInFlight = new Map<string, Promise<any>>();
+
+/**
  * Switch to a different theme
  */
 async function switchTheme(slug: string) {
+  const joined = switchInFlight.get(slug);
+  if (joined) return joined;
+  const run = doSwitchTheme(slug);
+  switchInFlight.set(slug, run);
+  const clear = () => { if (switchInFlight.get(slug) === run) switchInFlight.delete(slug); };
+  run.then(clear, clear);
+  return run;
+}
+
+async function doSwitchTheme(slug: string) {
   const themes = scanThemes();
   const theme = themes.find(t => t.slug === slug);
 

@@ -183,6 +183,11 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
+    // CONCURRENCY: this handler is deliberately thin, and the serialization lives in core, not here — a
+    // double-click (or two admins) must not overlap two theme switches, and neither must the OTHER callers
+    // of switchTheme (POST /plugins/:slug/install-theme) or of theme-engine.init() (boot, render()'s lazy
+    // re-init). core/themes.switchTheme joins a duplicate activation of the SAME slug, and
+    // theme-engine.init() is serialized process-wide; guarding the route alone would leave both open.
     const result = await switchTheme(req.params.slug);
     res.json(result);
 }));
