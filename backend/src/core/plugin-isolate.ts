@@ -112,6 +112,87 @@ const isolateHealth = new Map<string, IsolateHealth>();
 const restartTimers = new Map<string, NodeJS.Timeout>();
 const stopping = new Set<string>(); // slugs whose exit is an INTENTIONAL unload (skip supervision)
 
+/**
+ * Strip line breaks from a value before it goes into a log line. Nearly every message in this module
+ * carries the plugin SLUG, plus a plugin-supplied hook name, route method or error text — all
+ * request-derived, so an unescaped one can forge or split entries in the operator's log. Passing such a
+ * template literal FOLLOWED by more arguments additionally makes it a console format string, so `%s`
+ * in a crafted value consumes what comes after it: every console call here builds ONE sanitized string.
+ *
+ * TWO single-constant replacements with an empty replacement is deliberate — the log-injection analysis
+ * recognises a sanitizer SYNTACTICALLY, and an alternation (`/\n|\r/g`) has no constant value, so it is
+ * not matched. Match the documented remediation shape, not an equivalent of it.
+ */
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
+/**
+ * Child pids this process spawned for a slug and has NOT yet seen exit, per slug.
+ *
+ * The isolate REGISTRY is not proof of liveness in either direction, and both directions matter:
+ * unloadIsolatedPlugin drops the registry entry synchronously but `kill(SIGKILL)` is asynchronous, so
+ * a slug can be absent from `isolates` while its process is still running — which is all the DELETE
+ * route could check before it rmSync'd the plugin directory. A pid is added at spawn and removed in
+ * the child's own 'exit' handler, so membership means "we spawned it and have not observed its death";
+ * that is exact and immune to pid reuse (a recycled pid belongs to a process we never added).
+ * A reload can transiently have two (the outgoing child and the new one), hence a Set per slug.
+ */
+const livePids = new Map<string, Set<number>>();
+function addLivePid(slug: string, pid: number) {
+    let s = livePids.get(slug);
+    if (!s) { s = new Set<number>(); livePids.set(slug, s); }
+    s.add(pid);
+}
+function dropLivePid(slug: string, pid: number | undefined) {
+    const s = livePids.get(slug);
+    if (!s || !pid) return;
+    s.delete(pid);
+    if (s.size === 0) livePids.delete(slug);
+}
+/** Pids we spawned for this slug and have not observed exiting. Empty ⇒ nothing of ours is running. */
+function getLivePids(slug: string): number[] { return Array.from(livePids.get(slug) || []); }
+
+/**
+ * Wait (bounded) until this slug has NO registered isolate AND no child we spawned is still alive.
+ *
+ * The only honest precondition for deleting a plugin's files: `isIsolated(slug) === false` alone says
+ * the registry is clean, not that the process is gone. Returns false on timeout so the caller can
+ * refuse rather than pull the directory out from under a process that is still dying.
+ */
+async function awaitIsolateStopped(slug: string, timeoutMs = 3000): Promise<boolean> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    for (;;) {
+        if (!isolates.has(slug) && getLivePids(slug).length === 0) return true;
+        if (Date.now() >= deadline) return false;
+        await new Promise((r) => setTimeout(r, 25));
+    }
+}
+
+/**
+ * How long a child gets to report 'ready' before the LOAD is failed. 0 restores the old unbounded wait.
+ *
+ * Without it loadIsolatedPlugin has no upper bound at all: the Promise settles only on 'ready',
+ * 'init-error', 'fatal', a spawn 'error' or an early 'exit', and plugin-worker.js sends none of those
+ * for an init() that simply never returns — `while (true) {}`, an await on a promise nobody resolves, a
+ * blocking connect to an unreachable host. Such a plugin left the load UNSETTLED FOREVER: the activate
+ * request never answered, and at boot loadActivePlugins (which awaits each plugin in turn) never got
+ * past it, so no later plugin loaded and "🔌 Loading plugins..." was the last line the operator saw.
+ *
+ * Routed through failLoad, so a hung init is an ORDINARY failed load — the child is killed, everything
+ * it registered before hanging comes back out, and the slug is immediately reusable. Deliberately
+ * generous: a legitimate init() may run schema migrations against a cold database. This is a DEADLINE
+ * on startup, not a budget for the plugin's life — it is armed at spawn and cleared the moment the
+ * child says anything that settles the load, so a slow-but-honest plugin pays nothing afterwards.
+ *
+ * `opts.readyTimeoutMs` overrides it for ONE load — how the test asserts the deadline without either
+ * waiting a minute or shortening the deadline every healthy fixture in the file also depends on.
+ */
+const READY_TIMEOUT_MS = (() => {
+    const raw = Number(process.env.WORDJS_PLUGIN_READY_TIMEOUT_MS);
+    return Number.isFinite(raw) && raw >= 0 ? raw : 60000;
+})();
+
 const SUPERVISOR = { backoff: [1000, 5000, 15000, 60000], maxRestarts: 5, windowMs: 5 * 60 * 1000 };
 
 function getHealth(slug: string): IsolateHealth {
@@ -128,7 +209,7 @@ function superviseRestart(slug: string, entryFile: string) {
     h.crashWindow = h.crashWindow.filter((t) => now - t < SUPERVISOR.windowMs);
     if (h.crashWindow.length >= SUPERVISOR.maxRestarts) {
         h.state = 'crash-looping';
-        console.error(`[Isolate ${slug}] crash-looping: ${h.crashWindow.length} restarts within ${SUPERVISOR.windowMs / 1000}s — giving up. Fix the plugin and reload it manually.`);
+        console.error(`[Isolate ${logSafe(slug)}] crash-looping: ${logSafe(h.crashWindow.length)} restarts within ${logSafe(SUPERVISOR.windowMs / 1000)}s — giving up. Fix the plugin and reload it manually.`);
         try {
             const { addAdminNotice } = require('./plugins');
             if (typeof addAdminNotice === 'function') addAdminNotice(`Plugin "${slug}" keeps crashing and was stopped. Last error: ${h.lastError || 'unknown'}.`, 'error');
@@ -137,7 +218,7 @@ function superviseRestart(slug: string, entryFile: string) {
     }
     const delay = SUPERVISOR.backoff[Math.min(h.crashWindow.length, SUPERVISOR.backoff.length - 1)];
     h.state = 'restarting';
-    console.warn(`[Isolate ${slug}] scheduling auto-restart in ${delay}ms (attempt ${h.crashWindow.length + 1}/${SUPERVISOR.maxRestarts}).`);
+    console.warn(`[Isolate ${logSafe(slug)}] scheduling auto-restart in ${logSafe(delay)}ms (attempt ${logSafe(h.crashWindow.length + 1)}/${logSafe(SUPERVISOR.maxRestarts)}).`);
     const t = setTimeout(async () => {
         restartTimers.delete(slug);
         if (isolates.has(slug)) return; // already back up (e.g. a manual reload beat us to it)
@@ -226,7 +307,7 @@ function probeOsMemoryCap(): Promise<number | null> {
                 c.on('error', () => finish(false));
                 c.on('exit', (code: number) => finish(got && code === 0));
             });
-            if (ok) { console.log(`[Sandbox] kernel memory cap active: RLIMIT_AS ${mb} MB per isolated child.`); return kb; }
+            if (ok) { console.log(`[Sandbox] kernel memory cap active: RLIMIT_AS ${logSafe(mb)} MB per isolated child.`); return kb; }
         }
         console.log('[Sandbox] kernel rlimit cap unavailable here; relying on /proc RSS poll + process separation.');
         return null;
@@ -312,7 +393,7 @@ function probeCgroupCap(): Promise<boolean> {
             proc.on('error', () => { clearTimeout(overall); finish(false); });
             proc.on('exit', () => { clearTimeout(overall); finish(gotOk); }); // exit AFTER ok ⇒ kill worked
         });
-        if (ok) console.log(`[Sandbox] preventive cgroup caps ACTIVE (systemd-run --user --scope ${props.join(' ')} per isolated child).`);
+        if (ok) console.log(`[Sandbox] preventive cgroup caps ACTIVE (systemd-run --user --scope ${logSafe(props.join(' '))} per isolated child).`);
         else console.warn('[Sandbox] cgroup caps requested (useCgroupMemoryCap/cpuQuotaPercent) but the probe failed (no usable --user scope, or cpu/memory not delegated to the user cgroup) — falling back to RLIMIT_AS + the RSS poll.');
         return ok;
     })();
@@ -701,7 +782,7 @@ function callApi(api: any, method: string, args: any[]) {
     return fn.apply(ctx, args);
 }
 
-async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?: boolean } = {}): Promise<any> {
+async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { supervised?: boolean; readyTimeoutMs?: number } = {}): Promise<any> {
     // Resolve the memory-cap capabilities ONCE (cached) before building the child, so the spawn path is
     // chosen synchronously inside the executor below. cgroup (preventive) is preferred over rlimit (loose).
     const cgroupOk = await probeCgroupCap();
@@ -839,6 +920,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             });
         }
         if (bpfFd >= 0) { try { require('fs').closeSync(bpfFd); } catch { /* parent's dup; the child kept its own */ } }
+        // Record the pid as OURS-and-alive from the moment it exists (see livePids): the registry entry
+        // below is not evidence of a running process, and every teardown path needs an answer that is.
+        const spawnedPid: number | undefined = child.pid;
+        if (spawnedPid) addLivePid(slug, spawnedPid);
         // WINDOWS preventive memory cap: assign the just-forked child to a Job Object whose per-process
         // commit limit (JOB_OBJECT_LIMIT_PROCESS_MEMORY = RSS_BUDGET_BYTES) makes the KERNEL fail any
         // allocation past the budget — the host stays safe even on a fast off-heap balloon, instead of
@@ -864,7 +949,8 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             on: child.on.bind(child),
             _child: child,
         };
-        let settled = false; // load Promise settled (ready / init-error / early exit)
+        let settled = false; // load Promise settled (ready / init-error / early exit / ready timeout)
+        let readyTimer: any = null; // startup deadline — see READY_TIMEOUT_MS; cleared by 'ready' and failLoad
         // Reactive per-child RSS poll — the FALLBACK resident cap when the preventive cgroup cap isn't
         // available (Windows, macOS, non-systemd). Runs on the HOST loop reading the child's OWN rss, so
         // it's immune to the child blocking its own loop; covers Linux /proc, Windows tasklist, macOS ps.
@@ -874,7 +960,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         const killOverBudget = (rssBytes: number) => {
             getHealth(slug).rssBytes = rssBytes; // single choke point for RSS across all platforms → health surface
             if (rssBytes > RSS_BUDGET_BYTES) {
-                console.error(`[Isolate ${slug}] killed: child rss over budget (${rssBytes} bytes).`);
+                console.error(`[Isolate ${logSafe(slug)}] killed: child rss over budget (${logSafe(rssBytes)} bytes).`);
                 try { child.kill('SIGKILL'); } catch { /* gone */ }
             }
         };
@@ -942,7 +1028,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             }, process.platform === 'darwin' ? 400 : 1000);
             if (rssPoll.unref) rssPoll.unref();
         }
-        child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); });
+        child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); dropLivePid(slug, spawnedPid); });
         const api = createPluginApi(slug);
         let invokeId = 0;
         // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't
@@ -976,14 +1062,14 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
         const registrationRejected = (arr: any[], max: number, kind: string): boolean => {
             registrationAttempts++;
             if (registrationAttempts > 10000) {
-                console.error(`[Isolate ${slug}] terminated: registration flood (${registrationAttempts} attempts).`);
+                console.error(`[Isolate ${logSafe(slug)}] terminated: registration flood (${logSafe(registrationAttempts)} attempts).`);
                 try { worker.terminate(); } catch { /* already gone */ }
                 return true;
             }
             if (arr.length >= max) {
                 if (!registrationCapWarned) {
                     registrationCapWarned = true;
-                    console.warn(`[Isolate ${slug}] registration cap reached (${kind} >= ${max}); ignoring further registrations (possible DoS).`);
+                    console.warn(`[Isolate ${logSafe(slug)}] registration cap reached (${logSafe(kind)} >= ${logSafe(max)}); ignoring further registrations (possible DoS).`);
                 }
                 return true;
             }
@@ -1001,7 +1087,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                     rej(new Error(`Isolated plugin '${slug}' RPC timed out`));
                     // A handler that blew the timeout is wedged (hang / synchronous spin) — recycle the
                     // worker so it can't keep leaking pending requests or pinning host timers/sockets.
-                    console.error(`[Isolate ${slug}] terminated: RPC timeout (wedged handler).`);
+                    console.error(`[Isolate ${logSafe(slug)}] terminated: RPC timeout (wedged handler).`);
                     try { worker.terminate(); } catch { /* already gone */ }
                 }
             }, RPC_TIMEOUT_MS);
@@ -1040,7 +1126,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             clearTimeout(p.timer);
             if (!msg.ok) { p.rej(new Error(msg.error)); return; }
             if (replySize(value) > MAX_REPLY_BYTES) {
-                console.error(`[Isolate ${slug}] terminated: oversized RPC reply.`);
+                console.error(`[Isolate ${logSafe(slug)}] terminated: oversized RPC reply.`);
                 try { worker.terminate(); } catch { /* already gone */ }
                 p.rej(new Error(`Isolated plugin '${slug}' returned an oversized reply`));
                 return;
@@ -1079,12 +1165,13 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             const _now = Date.now();
             if (_now - msgWindowStart > MSG_WINDOW_MS) { msgWindowStart = _now; msgWindowCount = 0; }
             if (++msgWindowCount > MAX_MSGS_PER_WINDOW) {
-                console.error(`[Isolate ${slug}] terminated: IPC message-rate flood (${msgWindowCount} in ${MSG_WINDOW_MS}ms).`);
+                console.error(`[Isolate ${logSafe(slug)}] terminated: IPC message-rate flood (${logSafe(msgWindowCount)} in ${logSafe(MSG_WINDOW_MS)}ms).`);
                 try { worker.terminate(); } catch { /* already gone */ }
                 return;
             }
             if (msg.kind === 'ready') {
                 settled = true;
+                if (readyTimer) { clearTimeout(readyTimer); readyTimer = null; } // the startup deadline is met
                 resolve({ worker, slug });
             } else if (msg.kind === 'fatal') {
                 // The child hit an unrecoverable condition (guard-install failed, ESM guard unavailable,
@@ -1092,11 +1179,14 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                 // death showed only as a bare 'code 1'. Capture the precise reason for the health surface.
                 const reason: string = String(msg.error || 'fatal error in sandbox');
                 getHealth(slug).lastError = reason;
-                console.error(`[Isolate ${slug}] fatal: ${reason}`);
-                if (!settled) { settled = true; reject(new Error(reason)); }
+                console.error(`[Isolate ${logSafe(slug)}] fatal: ${logSafe(reason)}`);
+                // failLoad, not a bare reject: the child is registered and hook-wired by now (see it).
+                failLoad(new Error(reason));
             } else if (msg.kind === 'init-error') {
-                settled = true;
-                reject(new Error(msg.error));
+                // The plugin's init() threw. plugin-worker.js does NOT exit after sending this, so the
+                // child stays alive with everything it registered before the throw still applying to
+                // host content — failLoad is what makes the rejection mean "nothing of it is left".
+                failLoad(new Error(msg.error));
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
                 if (inflightCalls >= MAX_INFLIGHT_CALLS) {
@@ -1104,7 +1194,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                     // host can drain (thousands of calls while pinned at the limit) is hammering the
                     // event loop — terminate it as abusive (DoS containment, like registrationRejected).
                     if (++callBackpressureRejections > 50000) {
-                        console.error(`[Isolate ${slug}] terminated: bridge-call flood (${callBackpressureRejections} over-limit calls).`);
+                        console.error(`[Isolate ${logSafe(slug)}] terminated: bridge-call flood (${logSafe(callBackpressureRejections)} over-limit calls).`);
                         try { worker.terminate(); } catch { /* already gone */ }
                         return;
                     }
@@ -1118,7 +1208,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                 callBucketTs = _cnow;
                 if (callTokens < 1) {
                     if (++callBackpressureRejections > 50000) {
-                        console.error(`[Isolate ${slug}] terminated: bridge-call flood (sustained rate).`);
+                        console.error(`[Isolate ${logSafe(slug)}] terminated: bridge-call flood (sustained rate).`);
                         try { worker.terminate(); } catch { /* already gone */ }
                         return;
                     }
@@ -1148,7 +1238,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                 // (#3) No plugin may shim raw-HTML output hooks (stored-XSS into every SSR page, incl.
                 // admin). Denied for ALL plugins — no trust tier exists to exempt anyone.
                 if (RAW_HTML_HOOKS.has(msg.hook)) {
-                    console.warn(`[Isolate ${slug}] denied: plugin may not shim raw-HTML hook '${msg.hook}' (XSS risk).`);
+                    console.warn(`[Isolate ${logSafe(slug)}] denied: plugin may not shim raw-HTML hook '${logSafe(msg.hook)}' (XSS risk).`);
                     return;
                 }
                 // Cap callbacks PER hook NAME too: many shims on one core hook (e.g. the_content)
@@ -1156,7 +1246,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                 const hookCnt = (hookNameCounts.get(msg.hook) || 0) + 1;
                 hookNameCounts.set(msg.hook, hookCnt);
                 if (hookCnt > MAX_PER_HOOK) {
-                    console.warn(`[Isolate ${slug}] too many callbacks on hook '${msg.hook}' (cap ${MAX_PER_HOOK}) — ignoring further.`);
+                    console.warn(`[Isolate ${logSafe(slug)}] too many callbacks on hook '${logSafe(msg.hook)}' (cap ${logSafe(MAX_PER_HOOK)}) — ignoring further.`);
                     return;
                 }
                 // Install a shim in the real hook system that calls back into the isolate. Cap the
@@ -1190,7 +1280,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                 // listen/…) or throw a TypeError on a non-method (which would crash the host handler).
                 const routeMethod = String(msg.method).toLowerCase();
                 if (!['get', 'post', 'put', 'patch', 'delete', 'options', 'head', 'all'].includes(routeMethod)) {
-                    console.warn(`[Isolate ${slug}] rejected route registration with invalid method '${routeMethod}'.`);
+                    console.warn(`[Isolate ${logSafe(slug)}] rejected route registration with invalid method '${logSafe(routeMethod)}'.`);
                     return;
                 }
                 // Mount an Express route owned by the host; run the real auth middleware, then forward
@@ -1214,7 +1304,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                         const up = multer({ dest: path.join(os.tmpdir(), 'wordjs-uploads'), limits: { fileSize: maxFileSize, files: 1 } });
                         mw.push(up.single(String(msg.opts.multipart)));
                         startUploadReaper(); // sweep crash-orphaned temp uploads (the per-request unlink handles the happy path)
-                    } catch (e: any) { console.warn(`[Isolate ${slug}] multipart unavailable:`, e && e.message); }
+                    } catch (e: any) { console.warn(`[Isolate ${logSafe(slug)}] multipart unavailable: ${logSafe(e && e.message)}`); }
                 }
                 const cookieNs = `wjp_${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()}_`;
                 const finalHandler = async (req: any, res: any) => {
@@ -1293,7 +1383,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                                 // overwrite a host cookie (wordjs_token/session), never widen scope via
                                 // `domain`, and never escape their route path; clamp lifetime. Applied to ALL
                                 // plugins (no trust exemption).
-                                if (HOST_AUTH_COOKIE_RE.test(name)) { console.warn(`[Isolate ${slug}] dropped cookie '${name}' (would shadow a host cookie).`); continue; }
+                                if (HOST_AUTH_COOKIE_RE.test(name)) { console.warn(`[Isolate ${logSafe(slug)}] dropped cookie '${logSafe(name)}' (would shadow a host cookie).`); continue; }
                                 if (!name.startsWith(cookieNs)) name = cookieNs + name;
                                 options = { ...options };
                                 delete options.domain;
@@ -1348,7 +1438,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                     (global as any).wordjs_send_mail = (mailMsg: any) => invokeMail(mailMsg);
                     providedMail = true;
                 } else {
-                    console.warn(`[Isolate ${slug}] provideMail denied: the email:provider permission is not granted (grant it in /admin/plugins).`);
+                    console.warn(`[Isolate ${logSafe(slug)}] provideMail denied: the email:provider permission is not granted (grant it in /admin/plugins).`);
                 }
             } else if (msg.kind === 'mail-reply') {
                 rpcSettle(pendingMail, msg, msg.value);
@@ -1362,15 +1452,15 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                         // pluginSlug=null, so unregisterPluginTransports(slug) never matched it on unload and
                         // every later notify() RPC'd a DEAD worker and hung to the 30s timeout.
                         runWithContext(slug, () => require('./notifications').registerTransport(msg.name, (notification: any) => invokeNotifyTransport(msg.name, notification)));
-                    } catch (e: any) { console.warn(`[Isolate ${slug}] notify transport register failed:`, e && e.message); }
+                    } catch (e: any) { console.warn(`[Isolate ${logSafe(slug)}] notify transport register failed: ${logSafe(e && e.message)}`); }
                 } else {
-                    console.warn(`[Isolate ${slug}] notify.registerTransport denied: the notifications:provider permission is not granted (grant it in /admin/plugins).`);
+                    console.warn(`[Isolate ${logSafe(slug)}] notify.registerTransport denied: the notifications:provider permission is not granted (grant it in /admin/plugins).`);
                 }
             } else if (msg.kind === 'notify-transport-reply') {
                 rpcSettle(pendingTransport, msg, msg.value);
             }
           } catch (e: any) {
-            console.error(`[Isolate ${slug}] dropped malformed/poison IPC message (kind=${msg && msg.kind}):`, e && e.message);
+            console.error(`[Isolate ${logSafe(slug)}] dropped malformed/poison IPC message (kind=${logSafe(msg && msg.kind)}): ${logSafe(e && e.message)}`);
           }
         });
 
@@ -1404,25 +1494,104 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
         };
 
-        worker.on('error', (err: any) => { console.error(`[Isolate ${slug}] child error:`, err && err.message); if (!settled) { settled = true; reject(err); } });
+        /**
+         * THE ONLY WAY THIS LOAD MAY FAIL. Every reject path goes through here.
+         *
+         * `isolates.set()` runs at the END of this executor — synchronously, before the child has said
+         * anything — so by the time the child reports 'init-error'/'fatal', or errors, the isolate is
+         * ALREADY registered and the child is ALREADY wiring hooks, routes, shortcodes and providers
+         * into the host through the message handler above. Rejecting from those branches without
+         * undoing any of it left a live, registered, hook-applying child for a plugin whose activation
+         * had just returned 500 with `active_plugins` clean: nothing supervised it, deactivatePlugin
+         * early-returned 'Plugin not active', and only DELETE could clear it. The child does not even
+         * exit on its own — plugin-worker.js sends 'init-error' and keeps running.
+         *
+         * Wrapping the caller's `await` would only cover the callers that remembered to; the module that
+         * OWNS the child is the one place that can guarantee it, so the guarantee lives here: after a
+         * rejected loadIsolatedPlugin there is no registry entry, no host-side registration and no live
+         * process for this slug. Idempotent (a second failure signal is a no-op) and never rejects.
+         */
+        const failLoad = (err: Error, opts: { alreadyExited?: boolean } = {}) => {
+            if (settled) return;
+            settled = true;
+            // Is the slug currently owned by a DIFFERENT child (a reload that already replaced us)? If
+            // so, only our own process may be touched: `teardown` splices route layers by path+method
+            // and unregisters slug-wide transports/menus, and health is keyed by slug — all of which now
+            // describe the new child. Same guard the 'exit' handler uses, for the same reason. Note that
+            // "already absent" is NOT "owned by another": the exit handler deregisters before calling
+            // in here, and that case must still clean up.
+            const cur = isolates.get(slug);
+            const ownedByAnother = !!(cur && cur.worker !== worker);
+            if (readyTimer) { try { clearTimeout(readyTimer); } catch { /* */ } readyTimer = null; }
+            if (rssPoll) { try { clearInterval(rssPoll); } catch { /* */ } rssPoll = null; }
+            if (!ownedByAnother) {
+                // A supervised restart armed for this slug must not resurrect what we are tearing down.
+                const pendingRestart = restartTimers.get(slug);
+                if (pendingRestart) { clearTimeout(pendingRestart); restartTimers.delete(slug); }
+                if (cur) {
+                    isolates.delete(slug);
+                    try { teardown(); } catch (e: any) { console.error(`[Isolate ${logSafe(slug)}] teardown after a failed load: ${logSafe(e && e.message)}`); }
+                }
+            }
+            if (!opts.alreadyExited) { try { worker.terminate(); } catch { /* already gone */ } }
+            const h = getHealth(slug);
+            if (!ownedByAnother) { h.state = 'stopped'; h.pid = null; }
+            h.lastError = String((err && err.message) || err);
+            reject(err);
+        };
+
+        // A child that never says ANYTHING is the one failure the message/exit/error handlers cannot see.
+        // Arm the deadline here (the child exists from this point) and let failLoad clear it — .unref()
+        // so this timer alone never holds the process open, which is what turned an orphaned timer into
+        // a CI kill mid-IPC the last time (see the `--test-force-exit` flake).
+        const readyTimeoutMs = Number.isFinite(opts.readyTimeoutMs as number) && (opts.readyTimeoutMs as number) >= 0
+            ? (opts.readyTimeoutMs as number)
+            : READY_TIMEOUT_MS;
+        if (readyTimeoutMs > 0) {
+            readyTimer = setTimeout(() => {
+                readyTimer = null;
+                console.error(`[Isolate ${logSafe(slug)}] load timed out: no 'ready' within ${logSafe(readyTimeoutMs)}ms (init() never returned) — failing the load.`);
+                failLoad(new Error(`Isolated plugin '${slug}' did not become ready within ${readyTimeoutMs}ms`));
+            }, readyTimeoutMs);
+            if (readyTimer.unref) readyTimer.unref();
+        }
+
+        worker.on('error', (err: any) => { console.error(`[Isolate ${logSafe(slug)}] child error: ${logSafe(err && err.message)}`); failLoad(err instanceof Error ? err : new Error(String(err))); });
         worker.on('exit', (code: number) => {
             // Only act if WE are still the registered isolate — on reload a fresh child has already
             // replaced us, and tearing down here would rip out the new child's registrations.
             const cur = isolates.get(slug);
             const wasCurrent = cur && cur.worker === worker;
             if (wasCurrent) { isolates.delete(slug); try { teardown(); } catch { /* */ } }
-            if (code !== 0) console.warn(`[Isolate ${slug}] child exited with code ${code}`);
+            if (code !== 0) console.warn(`[Isolate ${logSafe(slug)}] child exited with code ${logSafe(code)}`);
+            // CONSUME the intentional-stop mark here, BEFORE any early return, and remember the answer.
+            //
+            // `stopping` is written by unloadIsolatedPlugin and read by exactly one place — this handler —
+            // so a mark that is not consumed here is never consumed at all. It used to be read below the
+            // `!settled` early return, which is reachable: unloadIsolatedPlugin only needs a REGISTERED
+            // isolate, and `isolates.set` runs at the end of this executor while the load stays unsettled
+            // until the child sends 'ready'. An unload landing in that window (the DELETE route, the
+            // activate backstop, a cross-node deactivate) therefore marked the slug, killed the child,
+            // and returned through the failed-load branch — stranding the mark forever. The NEXT child
+            // for that slug then had its very first crash classified as an intentional stop: no teardown
+            // of the crash path, no supervised restart, no 'crashed' health state, silently.
+            const wasIntentional = stopping.delete(slug);
             // child_process: a crash DURING init emits 'exit' (not 'error'); reject the load Promise so it
-            // doesn't hang forever if the child died before sending 'ready' / 'init-error'.
-            if (!settled) { settled = true; reject(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`)); return; }
+            // doesn't hang forever if the child died before sending 'ready' / 'init-error'. Routed through
+            // failLoad so this path clears the same state as every other failure (alreadyExited: the
+            // process is gone, so there is nothing left to terminate).
+            if (!settled) {
+                failLoad(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`), { alreadyExited: true });
+                return;
+            }
 
             // Settled = the child had been RUNNING, so this is a RUNTIME exit.
             const h = getHealth(slug);
             h.lastExitCode = code;
-            if (stopping.has(slug)) { stopping.delete(slug); h.state = 'stopped'; return; } // intentional unload/deactivate/reload
+            if (wasIntentional) { h.state = 'stopped'; return; } // intentional unload/deactivate/reload
             if (!wasCurrent) return; // a newer child already replaced us (reload race) — not our crash to supervise
             h.state = 'crashed';
-            console.warn(`[Isolate ${slug}] child crashed at runtime (code ${code}) — supervising.`);
+            console.warn(`[Isolate ${logSafe(slug)}] child crashed at runtime (code ${logSafe(code)}) — supervising.`);
             superviseRestart(slug, entryFile);
         });
 
@@ -1437,19 +1606,24 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
 }
 
 function unloadIsolatedPlugin(slug: string) {
-    // Mark this stop as INTENTIONAL so the exit handler doesn't mistake it for a crash and auto-restart,
-    // and cancel any pending backoff restart from an earlier crash.
-    stopping.add(slug);
+    // Cancel any pending backoff restart from an earlier crash. Unconditional: the whole point of the
+    // no-handle case is that a crashed plugin has NO registered isolate while its restart timer is armed.
     const pending = restartTimers.get(slug);
     if (pending) { clearTimeout(pending); restartTimers.delete(slug); }
     const health = isolateHealth.get(slug);
     if (health) health.state = 'stopped';
     const h = isolates.get(slug);
-    if (h) {
-        try { h.teardown && h.teardown(); } catch (e) { /* */ }
-        try { h.worker.terminate(); } catch (e) { /* */ }
-        isolates.delete(slug);
-    }
+    // Nothing registered ⇒ nothing to kill, and — crucially — no 'exit' is coming. `stopping` is
+    // consumed by a child's exit handler, so marking a slug with no handle leaves an entry that is never
+    // read and never removed: it accumulated on EVERY delete and on the activate backstop, and the next
+    // child's exit would then be silently classified as an intentional stop instead of a crash to
+    // supervise. Only mark the stop when there is actually a child whose exit will consume it.
+    if (!h) return;
+    // INTENTIONAL stop — so the exit handler doesn't mistake it for a crash and auto-restart it.
+    stopping.add(slug);
+    try { h.teardown && h.teardown(); } catch (e) { /* */ }
+    try { h.worker.terminate(); } catch (e) { /* */ }
+    isolates.delete(slug);
 }
 
 // Tear the plugin down and start it again, reusing the entry file from the original load. Used when a
@@ -1469,4 +1643,15 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     return result;
 }
 
-module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), getIsolateStatus, getAllIsolateStatuses, assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState, __bwrapProfile: bwrapProfile };
+module.exports = {
+    loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin,
+    isIsolated: (slug: string) => isolates.has(slug),
+    getLivePids, awaitIsolateStopped,
+    getIsolateStatus, getAllIsolateStatuses,
+    assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
+    __bwrapProfile: bwrapProfile,
+    // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
+    // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child
+    // behind it is a leak — it never goes away and it silences the supervisor for the NEXT child.
+    __stopIntentMarked: (slug: string) => stopping.has(slug),
+};

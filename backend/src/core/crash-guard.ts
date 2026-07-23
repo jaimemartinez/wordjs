@@ -24,18 +24,52 @@ if (!fs.existsSync(DATA_DIR)) {
 // ============================================
 
 /**
+ * The slug grammar the plugin routes validate on. A slug outside it never reaches the strike file.
+ */
+const STRIKE_SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+function isStrikeSlug(slug: any): boolean {
+    return typeof slug === 'string' && STRIKE_SLUG_RE.test(slug);
+}
+
+/**
+ * The strike file, as a Map.
+ *
+ * The slug reaching addStrike/clearStrikes comes from a request (uninstall purges strikes; the boot
+ * recovery blames a slug read off disk), and `strikes[slug] = …` / `delete strikes[slug]` on a plain
+ * object is a property write with a remote-controlled name — '__proto__' would mutate Object.prototype
+ * for the whole process instead of counting a strike, and the JSON on disk is itself attacker-shaped
+ * input, so even the READ side must not adopt inherited keys. A Map key is data, never a property, and
+ * the grammar check drops anything that is not a plugin slug before it is used at all.
+ */
+function readStrikeMap(label: string): Map<string, number> {
+    const m = new Map<string, number>();
+    try {
+        if (!fs.existsSync(STRIKE_FILE)) return m;
+        const parsed = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
+        if (!parsed || typeof parsed !== 'object') return m;
+        for (const [k, v] of Object.entries(parsed)) {
+            if (isStrikeSlug(k) && Number.isFinite(Number(v))) m.set(k, Number(v));
+        }
+    } catch (e) {
+        console.error(`[CrashGuard] Failed to parse strike file (${label}):`, e.message);
+    }
+    return m;
+}
+
+function writeStrikeMap(m: Map<string, number>) {
+    try {
+        fs.writeFileSync(STRIKE_FILE, JSON.stringify(Object.fromEntries(m), null, 2), 'utf8');
+    } catch (e) {
+        console.error('[CrashGuard] Failed to write strike file:', e.message);
+    }
+}
+
+/**
  * Get current strike count for a plugin
  */
 function getStrikes(slug: string) {
-    try {
-        if (fs.existsSync(STRIKE_FILE)) {
-            const strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
-            return strikes[slug] || 0;
-        }
-    } catch (e) {
-        console.error('[CrashGuard] Failed to parse strike file:', e.message);
-    }
-    return 0;
+    if (!isStrikeSlug(slug)) return 0;
+    return readStrikeMap('read').get(slug) || 0;
 }
 
 /**
@@ -43,41 +77,21 @@ function getStrikes(slug: string) {
  * @returns {number} New strike count
  */
 function addStrike(slug: string) {
-    let strikes: Record<string, number> = {};
-    try {
-        if (fs.existsSync(STRIKE_FILE)) {
-            strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
-        }
-    } catch (e) {
-        console.error('[CrashGuard] Failed to parse strike file for writing:', e.message);
-    }
-
-    strikes[slug] = (strikes[slug] || 0) + 1;
-
-    try {
-        fs.writeFileSync(STRIKE_FILE, JSON.stringify(strikes, null, 2), 'utf8');
-    } catch (e) {
-        console.error('[CrashGuard] Failed to write strike file:', e.message);
-    }
-
-    return strikes[slug];
+    if (!isStrikeSlug(slug)) return 0;
+    const strikes = readStrikeMap('write');
+    const next = (strikes.get(slug) || 0) + 1;
+    strikes.set(slug, next);
+    writeStrikeMap(strikes);
+    return next;
 }
 
 /**
  * Clear strikes for a plugin (successful load resets counter)
  */
 function clearStrikes(slug: string) {
-    try {
-        if (fs.existsSync(STRIKE_FILE)) {
-            const strikes = JSON.parse(fs.readFileSync(STRIKE_FILE, 'utf8'));
-            if (strikes[slug]) {
-                delete strikes[slug];
-                fs.writeFileSync(STRIKE_FILE, JSON.stringify(strikes, null, 2), 'utf8');
-            }
-        }
-    } catch (e) {
-        console.error('[CrashGuard] Failed to clear strikes:', e.message);
-    }
+    if (!isStrikeSlug(slug)) return;
+    const strikes = readStrikeMap('clear');
+    if (strikes.delete(slug)) writeStrikeMap(strikes);
 }
 
 // ============================================
