@@ -15,7 +15,12 @@ const crypto = require('crypto');
 const AdmZip = require('adm-zip');
 const { spawnSync } = require('child_process');
 
-const ROOT = path.resolve(__dirname, '../..');
+// Repo root. WORDJS_MARKETPLACE_ROOT lets the catalog tests drive THIS script (the real producer)
+// over a small fixture tree instead of re-implementing the packing rules in the test — a test whose
+// fixture is packed by anything other than the shipping builder proves nothing about the shipping builder.
+const ROOT = process.env.WORDJS_MARKETPLACE_ROOT
+    ? path.resolve(process.env.WORDJS_MARKETPLACE_ROOT)
+    : path.resolve(__dirname, '../..');
 const SRC = path.join(ROOT, 'marketplace', 'plugins');
 const DIST = path.join(ROOT, 'marketplace', 'dist');
 
