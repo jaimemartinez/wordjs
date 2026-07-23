@@ -181,17 +181,49 @@ export function createRemotePluginComponent(
 
 // Cached for the whole session: the block loader, the hooks loader and every editor mount ask for the
 // same list, and it only changes when an admin activates/deactivates a plugin (which reloads the page).
+// ONLY a SUCCESSFUL response is memoized — a failed attempt clears this back to null (see below).
 let activePromise: Promise<string[]> | null = null;
 
-/** The slugs of the currently ACTIVE plugins. Never rejects — an unreachable API yields []. */
+/**
+ * The slugs of the currently ACTIVE plugins.
+ *
+ * REJECTS when the list could not be obtained (network failure, non-2xx, unparseable or non-array body),
+ * and does NOT memoize that failure so the next caller re-fetches.
+ *
+ * WHY, in detail: this is the FIRST network call loadRuntimePluginHooks() makes. Collapsing a failure to
+ * `[]` — as this did — defeated the whole retry design downstream: a restarting gateway answering 502/503
+ * produced an empty id list → nothing to load → allSettled([]) had no rejections → loadRuntimePluginHooks
+ * RESOLVED → initPlugins() saw success and kept its run-once guard latched → every marketplace plugin's
+ * frontend hooks stayed dead for the rest of the session, with nothing logged. Worse, the empty result was
+ * cached module-wide and never invalidated, so even a retry triggered by some other failure re-read the
+ * cached `[]` and registered nothing — permanently.
+ *
+ * An empty list from a HEALTHY backend (HTTP 200 `[]`) is a real answer, not a failure: it resolves `[]`
+ * and stays cached. A 200 whose body is not an array is NOT an answer (e.g. a proxy's HTML error page) —
+ * caching it as "no plugins" would reproduce exactly the silent-death bug above, so it rejects too.
+ *
+ * Every caller must handle the rejection: loadRuntimePluginHooks() lets it propagate (initPlugins
+ * un-latches and the next admin-layout mount retries); useRuntimePuckConfig() catches it, because block
+ * loading is best-effort and must never break a page render.
+ */
 export function fetchActivePluginIds(): Promise<string[]> {
-    if (!activePromise) {
-        activePromise = fetch('/api/v1/plugins/active')
-            .then((r) => (r.ok ? r.json() : []))
-            .then((a) => (Array.isArray(a) ? a : []))
-            .catch(() => []);
-    }
-    return activePromise;
+    if (activePromise) return activePromise;
+    const attempt: Promise<string[]> = (async () => {
+        const res = await fetch('/api/v1/plugins/active');
+        if (!res.ok) throw new Error(`GET /api/v1/plugins/active failed: HTTP ${res.status}`);
+        const body: unknown = await res.json();
+        if (!Array.isArray(body)) throw new Error('GET /api/v1/plugins/active returned a non-array body');
+        return body as string[];
+    })();
+    activePromise = attempt;
+    // Un-memoize a FAILED attempt so the next mount re-fetches instead of replaying it forever. Attached
+    // AFTER the assignment (rather than inside the async body, which TS rightly rejects as reading
+    // `attempt` before it is assigned) and identity-guarded, so a newer in-flight attempt is never evicted
+    // by an older failure. This handler is on a DERIVED promise: `attempt` itself still rejects for the
+    // caller, and the derived one is handled here, so clearing the cache never causes an unhandled
+    // rejection of its own.
+    attempt.catch(() => { if (activePromise === attempt) activePromise = null; });
+    return attempt;
 }
 
 // ============================================
@@ -276,6 +308,11 @@ export async function loadActivePluginBlocks(pluginIds: string[]): Promise<Recor
 // plugin would be re-evaluated (a second module instance of its extension) on each pass.
 const hooksRegistered = new Set<string>();
 
+// One 404 warning per plugin per session. loadRuntimePluginHooks() is retried on later mounts (whenever
+// ANY plugin failed), and a 404 plugin is never added to hooksRegistered, so without this every retry
+// would re-log the same line for every hook-less plugin.
+const hooksAbsentWarned = new Set<string>();
+
 /**
  * Register ONE plugin's frontend hooks from its pre-compiled `hooks` bundle.
  *
@@ -285,20 +322,39 @@ const hooksRegistered = new Set<string>();
  * resolves `@/lib/plugin-hooks` to WordJS.host['lib/plugin-hooks'], so it registers into the HOST's
  * pluginHooks singleton — the same one <PluginHook> and applyFilters() read.
  *
- * Resolves false when the plugin simply ships no hooks bundle (404 — the normal case, most plugins
- * declare no `frontend.hooks`). REJECTS if the bundle exists but could not be fetched or evaluated, so
- * the caller can retry; an individual register() that throws is logged and does not fail the load.
+ * Resolves false on 404 — usually "this plugin declares no `frontend.hooks`", but a BROKEN INSTALL 404s
+ * identically (see the note in the body), which is why that path also warns. REJECTS if the bundle exists
+ * but could not be fetched or evaluated, so the caller can retry; an individual register() that throws is
+ * logged and does not fail the load.
  */
 async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
     if (hooksRegistered.has(pluginId)) return true;
     const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=hooks`);
-    // ONLY 404 means "this plugin ships no hooks bundle": routes/plugin-bundles.ts returns 404 solely for
-    // a missing dist/hooks.bundle.js, 400 for a bad slug/type, and a restarting gateway yields 502/503.
-    // Treating every non-ok status as "no bundle" made those transient failures resolve `false`, so
-    // loadRuntimePluginHooks saw no rejection, initPlugins never un-latched its run-once guard, and the
-    // plugin's hooks were silently dead for the rest of the session. Throw instead — the plugin is not in
-    // hooksRegistered yet, so the next admin-layout mount retries it.
-    if (response.status === 404) return false;      // plugin declares no frontend.hooks — normal
+    // 404 is the only status that can mean "no hooks bundle" — 400 is a bad slug/type and a restarting
+    // gateway yields 502/503. Treating every non-ok status as "no bundle" made those transient failures
+    // resolve `false`, so loadRuntimePluginHooks saw no rejection, initPlugins never un-latched its
+    // run-once guard, and the plugin's hooks were silently dead for the rest of the session. Throw
+    // instead — the plugin is not in hooksRegistered yet, so the next admin-layout mount retries it.
+    //
+    // But 404 is NOT proof the plugin merely ships no hooks: routes/plugin-bundles.ts resolves the slug to
+    // a folder FIRST and returns 404 whenever that resolution fails — unknown slug, missing plugin
+    // directory, or a manifest.json that is unreadable/invalid (its JSON.parse error is swallowed) — as
+    // well as for a genuinely absent dist/hooks.bundle.js. A broken install is therefore indistinguishable
+    // from the normal case and would stay silent forever. We only reach here for a plugin the backend
+    // reports as ACTIVE, so warn once per session: that is the admin's only breadcrumb when a plugin's UI
+    // extension never appears. (Fixing the ambiguity properly means new backend status codes — out of
+    // scope here; the warning names both causes.)
+    if (response.status === 404) {
+        if (!hooksAbsentWarned.has(pluginId)) {
+            hooksAbsentWarned.add(pluginId);
+            console.warn(
+                `[PluginLoader] No hooks bundle for ACTIVE plugin '${pluginId}' (HTTP 404). Expected if it ` +
+                `declares no frontend.hooks. Otherwise the install is broken (plugin folder missing or ` +
+                `manifest.json invalid) or it was never built: node scripts/build-plugin.js ${pluginId}`
+            );
+        }
+        return false;
+    }
     if (!response.ok) {
         throw new Error(`hooks bundle fetch for '${pluginId}' failed: HTTP ${response.status}`);
     }
@@ -330,8 +386,11 @@ async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
  * ships zero plugins) — without this their hooks never register and their UI extensions are invisible,
  * e.g. mail-server's "Professional Mail Account" toggle in the user form.
  *
- * Rejects if any active plugin's hooks bundle failed to LOAD (a plugin's own register() throwing is
- * logged and swallowed), so initPlugins can un-latch its run-once guard and retry on the next mount.
+ * Rejects if the ACTIVE-PLUGIN LIST itself could not be fetched, or if any active plugin's hooks bundle
+ * failed to LOAD (a plugin's own register() throwing is logged and swallowed) — so initPlugins can
+ * un-latch its run-once guard and retry on the next mount. The list comes first, so it is the failure
+ * that matters most: with it swallowed into `[]` there is nothing left to fail, and this resolved
+ * "successfully" having registered nothing.
  */
 export async function loadRuntimePluginHooks(): Promise<void> {
     if (typeof window === 'undefined') return;

@@ -26,7 +26,12 @@ export function useRuntimePuckConfig<T extends { components: Record<string, any>
             .then((b) => {
                 if (alive && b && Object.keys(b).length) setBlocks(b);
             })
-            .catch(() => { /* a plugin's block bundle failed to load — its block just stays absent */ });
+            // BEST-EFFORT BY DESIGN: this runs on public pages too, so a failure must never break the
+            // render — the plugin's block simply stays absent (Puck skips unknown component types).
+            // fetchActivePluginIds() REJECTS on an unreachable/erroring API (it no longer collapses that
+            // to []), so this catch is what keeps that from becoming an unhandled rejection. It also does
+            // not memoize the failure, so the next mount retries on its own — no retry logic needed here.
+            .catch((e) => console.warn('[PluginLoader] Runtime Puck blocks unavailable:', e));
         return () => { alive = false; };
     }, []);
 
