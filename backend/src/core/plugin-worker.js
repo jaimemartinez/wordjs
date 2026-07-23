@@ -290,7 +290,9 @@ const wordjs = {
     },
 
     // SAFE user lookups (gated host-side on users:read). Return a SAFE projection
-    // {id,userLogin,username,userEmail,displayName,role} — never user_pass.
+    // {id,userLogin,username,userEmail,displayName,role,hasProfessionalMailbox} — never user_pass.
+    // `hasProfessionalMailbox` is the ADMIN-OWNED corporate-mailbox grant (core/mailbox.ts): a plugin
+    // must read that boolean, never re-derive it from userEmail, which the account itself can write.
     users: {
         findByEmail: (e) => callHost('users.findByEmail', [e]),
         findByLogin: (l) => callHost('users.findByLogin', [l]),
