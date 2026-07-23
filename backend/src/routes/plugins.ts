@@ -1076,10 +1076,33 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
     }
     try { isolate.unloadIsolatedPlugin(slug); }
     catch (e: any) { console.error(`[plugin ${logSafe(slug)}] delete: could not stop the isolate / cancel its pending restart: ${logSafe(e && e.message)}`); }
+    //
+    // THE WAIT IS BOUNDED, AND THE REFUSAL CAN BE PERMANENT — an accepted trade, new here (main deleted
+    // unconditionally). A pid enters the live set at spawn and leaves it in the child's OWN 'exit'
+    // handler, so a pid whose exit event never arrives — a host paused/suspended across the child's
+    // death, a handler lost to a host-side crash — is never cleared. `livePids` is in-process state, so
+    // for that slug awaitIsolateStopped can then never succeed and DELETE answers 409 until the server
+    // is restarted. That is why the message below is explicit and names the restart.
+    //
+    // We take it because the two failure directions are not comparable. Refusing costs a restart and
+    // nothing else: the files are still there, and the plugin can be deleted right after. Deleting on a
+    // wrong "it's gone" is irreversible and lands on a RUNNING child that still holds this plugin's
+    // hooks, routes and any claimed provider — now wired to code that no longer exists on disk. So the
+    // check fails SAFE (refuse) rather than open (delete anyway).
+    //
+    // Bounded, not unbounded, for the same reason: an unbounded wait would hang the admin's request
+    // forever in exactly the case that has no resolution, and would still need this 409 to say anything
+    // at all — it would only turn a clear refusal into a hang. The escalation is carried by the response
+    // instead: it states that nothing was deleted, names the pids we still believe are alive (the same
+    // pid an admin can already read from GET /plugins/:slug/status) so they can be checked or killed
+    // directly, and gives the restart as the guaranteed way out.
     if (!(await isolate.awaitIsolateStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
+        const stuckPids: number[] = (typeof isolate.getLivePids === 'function' && isolate.getLivePids(slug)) || [];
+        console.error(`[plugin ${logSafe(slug)}] delete REFUSED: a child process was still alive ${logSafe(DELETE_STOP_TIMEOUT_MS)}ms after it was told to stop (pid ${logSafe(stuckPids.join(', ') || 'unknown')}) — the plugin directory was left untouched.`);
         return res.status(409).json({
-            message: `'${slug}' still has a running process that could not be stopped. Restart the server, then delete it.`,
+            message: `'${slug}' still has a running process${stuckPids.length ? ` (pid ${stuckPids.join(', ')})` : ''} that did not stop within ${DELETE_STOP_TIMEOUT_MS}ms. Nothing was deleted. End that process, or restart the server, then delete the plugin again.`,
             stillRunning: true,
+            pids: stuckPids,
         });
     }
 
