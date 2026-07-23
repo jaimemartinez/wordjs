@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.1',
+    version: '2.1.2',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -101,6 +101,25 @@ async function getSiteUrl() {
 }
 async function getSiteDomain() {
     try { return await wordjs.site.domain(); } catch (e) { return 'localhost'; }
+}
+
+/**
+ * Is `domain` a real, publicly-resolvable mail domain we could plausibly be authenticated FOR?
+ *
+ * getSiteDomain() is just `new URL(siteurl).hostname` (backend/src/core/plugin-api.ts) with a
+ * 'localhost' fallback — so on a LAN/homelab/Proxmox install it is routinely an IP literal
+ * ('192.168.1.50'), 'localhost', or a bare single-label hostname. None of those can ever host a
+ * mailbox, an SPF record or a DKIM key, so rewriting an outgoing From onto them produces an address
+ * that is strictly WORSE than the original (postmaster@192.168.1.50 is rejected by every receiver).
+ */
+function isPublicSendingDomain(domain) {
+    let d = String(domain || '').trim().toLowerCase().replace(/\.$/, '');
+    if (!d) return false;
+    if (d.startsWith('[') && d.endsWith(']')) d = d.slice(1, -1); // URL.hostname brackets IPv6 literals
+    if (net.isIP(d)) return false;                                 // IP literal — never a mail domain
+    if (!d.includes('.')) return false;                            // bare hostname ('localhost', 'mail')
+    if (/(^|\.)(localhost|local|localdomain|internal|home|lan|invalid|test|example)$/.test(d)) return false;
+    return /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/.test(d);
 }
 
 // Batch N option reads into ONE parallel wave. Every getOption is an RPC round-trip to the host (and
@@ -296,11 +315,53 @@ async function resolveMX(domain) {
 }
 
 /**
+ * Classify a DNS failure surfaced by the HOST bridge as "definitive no-record" vs "temporary".
+ *
+ * ENODATA / ENOTFOUND / NXDOMAIN are DEFINITIVE answers: the name genuinely has no record of that
+ * type, which SPF must treat as a plain non-match (or 'none' at the top level). EVERYTHING ELSE
+ * (ETIMEOUT, ESERVFAIL, EREFUSED, ECONNREFUSED, a missing 'network' grant, …) means we were simply
+ * UNABLE to evaluate right now — RFC 7208 §2.6.6 calls that 'temperror' and mandates a 4xx so the
+ * sender retries, NOT a permanent 550.
+ *
+ * We must match on the error TEXT, not `err.code`: the sandbox RPC boundary marshals a rejection as
+ * `String(e.message)` (backend/src/core/plugin-isolate.ts) and the worker rebuilds it with
+ * `new Error(msg)` (plugin-worker.js), so every property EXCEPT the message is lost crossing the
+ * isolate. node embeds the code in the message ("queryTxt ENODATA example.com"), which is why this
+ * (and the pre-existing TXT check it generalizes) sniffs the string.
+ */
+function isDnsNoRecord(err) {
+    return /ENODATA|ENOTFOUND|NXDOMAIN/i.test(String((err && err.message) || err));
+}
+
+/**
+ * Resolve `host` to the addresses that could possibly match the connecting IP, for the SPF `a` / `mx`
+ * mechanisms.
+ *
+ * The bridge maps `dns.resolve()` to resolve4 ONLY (backend/src/core/plugin-api.ts), so an IPv6-only
+ * sender evaluated against "v=spf1 mx -all" could NEVER match and was permanently rejected. resolve6
+ * exists on the bridge and was unused — so query the family that matches the connecting IP (a v6
+ * source address can only ever equal a AAAA answer, and vice versa; querying the other family is both
+ * useless and an extra DNS round-trip).
+ *
+ * Returns { addrs } on a definitive answer (possibly empty = genuine non-match), or { temp: true }
+ * when the lookup failed TEMPORARILY and the caller must yield 'temperror'.
+ */
+async function spfResolveAddrs(host, ip) {
+    try {
+        const addrs = net.isIPv6(ip) ? await dns.resolve6(host) : await dns.resolve4(host);
+        return { addrs: addrs || [], temp: false };
+    } catch (e) {
+        if (isDnsNoRecord(e)) return { addrs: [], temp: false }; // no A/AAAA of that family — non-match
+        return { addrs: [], temp: true };
+    }
+}
+
+/**
  * Real inbound SPF evaluation.
  *
  * We fetch the domain's TXT records ourselves (through the HOST DNS bridge) and evaluate the v=spf1
- * policy against the connecting IP: the a / mx / ip4 / ip6 / include mechanisms and the trailing
- * `all` qualifier.
+ * policy against the connecting IP: the a / mx / ip4 / ip6 / include mechanisms, the `redirect=`
+ * modifier and the trailing `all` qualifier.
  *
  * NOTE: this used to start with a `new SPFValidator(domain).hasRecords()` presence check. That package
  * does its OWN RAW DNS resolution internally, which the sandbox DENIES (dns.resolve* bypasses egress
@@ -308,11 +369,11 @@ async function resolveMX(domain) {
  * REJECTING ALL INBOUND MAIL with "unable to verify SPF". The TXT fetch below subsumes it: it yields
  * 'none' both when the domain publishes no TXT record at all and when none of them is a v=spf1 policy.
  *
- * Returns one of: 'pass' | 'fail' | 'softfail' | 'neutral' | 'none'.
- * Throws only on a REAL DNS error/timeout (the caller fails closed with a temporary 4xx).
+ * Returns one of: 'pass' | 'fail' | 'softfail' | 'neutral' | 'none' | 'temperror' | 'permerror'.
+ * 'temperror' is returned (never thrown) so the caller can answer 451 "retry" instead of 550.
  */
 async function evaluateSPF(domain, ip, depth = 0) {
-    if (!ip || depth > 5) return 'none'; // guard against include loops / missing IP
+    if (!ip || depth > 5) return 'none'; // guard against include/redirect loops / missing IP
 
     // Fetch and locate the v=spf1 record.
     //
@@ -321,16 +382,13 @@ async function evaluateSPF(domain, ip, depth = 0) {
     // instead of returning [], so it MUST be mapped to 'none' here — otherwise the caller's fail-closed
     // branch would 451 every legitimate sender that simply doesn't publish SPF, which is barely better
     // than the blanket rejection this whole change exists to fix.
-    // The error reaches us as a plain Error carrying only a MESSAGE (the sandbox RPC marshals errors as
-    // `String(e.message)`, so `err.code` does not survive the isolate boundary) — hence the text match
-    // on node's "queryTxt ENODATA <domain>" shape. Every OTHER failure (SERVFAIL, timeout, a missing
-    // 'network' grant) still throws and is treated as unverifiable.
+    // Any OTHER failure (SERVFAIL, timeout, a missing 'network' grant) is 'temperror' → 4xx.
     let txt;
     try {
         txt = await dns.resolveTxt(domain);
     } catch (e) {
-        if (/ENODATA|ENOTFOUND|NXDOMAIN/i.test(String((e && e.message) || e))) return 'none';
-        throw e;
+        if (isDnsNoRecord(e)) return 'none';
+        return 'temperror';
     }
     const records = (txt || []).map(chunks => Array.isArray(chunks) ? chunks.join('') : String(chunks));
     const spf = records.find(r => /^v=spf1\b/i.test(r.trim()));
@@ -338,7 +396,7 @@ async function evaluateSPF(domain, ip, depth = 0) {
 
     // Evaluate mechanisms left-to-right; first match wins.
     const terms = spf.trim().split(/\s+/).slice(1); // drop "v=spf1"
-    let defaultQualifier = '?'; // neutral if no all/match
+    let redirectTo = null;
     for (const term of terms) {
         const qualifier = '+-~?'.includes(term[0]) ? term[0] : '+';
         const mechanism = '+-~?'.includes(term[0]) ? term.slice(1) : term;
@@ -347,39 +405,70 @@ async function evaluateSPF(domain, ip, depth = 0) {
         const name = sepMatch ? mechanism.slice(0, sepMatch.index) : mechanism;
         const value = sepMatch ? mechanism.slice(sepMatch.index + 1) : null;
 
-        let matched = false;
-        try {
-            if (name === 'all') {
-                defaultQualifier = qualifier;
-                matched = true;
-            } else if (name === 'ip4' || name === 'ip6') {
-                matched = ipInCidr(ip, value);
-            } else if (name === 'a') {
-                const host = value || domain;
-                const addrs = await dns.resolve(host).catch(() => []);
-                matched = addrs.includes(ip);
-            } else if (name === 'mx') {
-                const host = value || domain;
-                const mx = await dns.resolveMx(host).catch(() => []);
-                for (const rec of mx) {
-                    const addrs = await dns.resolve(rec.exchange).catch(() => []);
-                    if (addrs.includes(ip)) { matched = true; break; }
-                }
-            } else if (name === 'include' && value) {
-                // Recurse into the included policy; a 'pass' there counts as a match here.
-                const sub = await evaluateSPF(value, ip, depth + 1);
-                matched = sub === 'pass';
-            }
-            // Unknown mechanisms (ptr, exists, redirect, etc.) are ignored — conservative.
-        } catch (e) {
-            // Ignore a single mechanism's lookup failure and keep evaluating.
-            matched = false;
-        }
+        // MODIFIERS (name=value) are not mechanisms: they never match and are applied only AFTER the
+        // whole mechanism list has been scanned (RFC 7208 §6). Just record them here.
+        if (name === 'redirect') { if (value) redirectTo = value; continue; }
+        if (name === 'exp') continue; // explanation string — cosmetic, ignored
 
-        if (matched && name !== 'all') return qualifierToResult(qualifier);
-        if (name === 'all') return qualifierToResult(qualifier);
+        let matched = false;
+        let temp = false;
+        if (name === 'all') {
+            matched = true;
+        } else if (name === 'ip4' || name === 'ip6') {
+            matched = ipInCidr(ip, value);
+        } else if (name === 'a') {
+            const r = await spfResolveAddrs(value || domain, ip);
+            temp = r.temp;
+            // Compare NUMERICALLY via ipInCidr (a bare address = /32 or /128): a textual `includes()`
+            // misses the many equivalent spellings of one IPv6 address (2001:db8::1 vs 2001:0db8:0:0:0:0:0:1).
+            matched = !temp && r.addrs.some(a => ipInCidr(ip, a));
+        } else if (name === 'mx') {
+            const host = value || domain;
+            let mx = [];
+            try {
+                mx = (await dns.resolveMx(host)) || [];
+            } catch (e) {
+                if (!isDnsNoRecord(e)) temp = true;
+            }
+            for (const rec of mx) {
+                const r = await spfResolveAddrs(rec.exchange, ip);
+                if (r.temp) { temp = true; continue; }
+                if (r.addrs.some(a => ipInCidr(ip, a))) { matched = true; temp = false; break; }
+            }
+        } else if (name === 'include' && value) {
+            // Recurse into the included policy; a 'pass' there counts as a match here. A 'temperror'
+            // inside the include propagates (RFC 7208 §5.2) — it is NOT a non-match.
+            const sub = await evaluateSPF(value, ip, depth + 1);
+            if (sub === 'temperror') temp = true;
+            else matched = sub === 'pass';
+        }
+        // Unknown mechanisms (ptr, exists, …) are ignored — conservative.
+
+        // A TEMPORARY DNS failure inside a mechanism must NOT be swallowed into "no match". The old code
+        // caught it and set matched=false, so evaluation fell through to a trailing `-all` → 'fail' →
+        // smtpError(550): a PERMANENT rejection of mail that was merely unverifiable at that instant (a
+        // real 32s queryTxt ETIMEOUT was observed live). RFC 7208 mandates temperror → 4xx here.
+        if (temp) return 'temperror';
+
+        // `all` always matches, so we return here — which is also exactly why a `redirect=` in a record
+        // that has an `all` mechanism is never applied (RFC 7208 §6.1 requires it to be ignored).
+        if (matched) return qualifierToResult(qualifier);
     }
-    return qualifierToResult(defaultQualifier);
+
+    // RFC 7208 §6.1 `redirect=`: applied ONLY when no mechanism matched, and it REPLACES this record's
+    // result wholesale (there is no `all` left to fall back on — see above). Without this, gmail.com's
+    // "v=spf1 redirect=_spf.google.com" evaluated to 'neutral' for EVERY IP, i.e. SPF was a complete
+    // NO-OP for the largest sender on the internet and a spoofed @gmail.com envelope sailed through.
+    // The recursion reuses the same `depth` budget, so a redirect chain counts against the DNS-lookup
+    // limit exactly like include: does.
+    if (redirectTo) {
+        const sub = await evaluateSPF(redirectTo, ip, depth + 1);
+        // "no SPF record at the redirect target" is a broken policy, not an absent one → permerror.
+        return sub === 'none' ? 'permerror' : sub;
+    }
+
+    // No mechanism matched, no `all`, no redirect → neutral.
+    return qualifierToResult('?');
 }
 
 function qualifierToResult(q) {
@@ -641,7 +730,10 @@ async function initSMTPServer() {
                 session.spfheader = `Received-SPF: ${result} (wordjs: ${domain || 'unknown'} via ${ip})`;
                 session.spfResult = result;
 
-                if (evalError) {
+                // TEMPORARY inability to evaluate (DNS timeout/SERVFAIL anywhere in the record, incl.
+                // inside an include:/a/mx) → 451, NEVER 550. Rejecting permanently would make the
+                // sending MTA give up for good over a transient resolver hiccup.
+                if (evalError || result === 'temperror') {
                     return callback(smtpError(451, 'Temporary failure: unable to verify SPF for ' + (domain || 'sender') + ', try again later'));
                 }
 
@@ -655,7 +747,9 @@ async function initSMTPServer() {
                     }
                     console.warn(`[Security][SPF] SPF ${result} for ${mailFrom} from ${ip} — tagged only (reject overridden off)`);
                 }
-                // 'pass' / 'neutral' / 'none' (domains without an SPF record) are accepted.
+                // 'pass' / 'neutral' / 'none' (domains without an SPF record) and 'permerror' (a broken
+                // published policy — RFC 7208 §8.6 leaves it to local policy; rejecting would punish the
+                // sender's admin error) are accepted; the result is recorded in Received-SPF either way.
                 callback();
             }).catch((e) => {
                 // The option lookup itself failed — fail closed for the external sender.
@@ -964,6 +1058,12 @@ async function sendMail(data) {
     // One stable Message-ID reused for BOTH the stored Sent record AND the on-the-wire Message-ID
     // header. When the remote party replies, their In-Reply-To/References echo this exact value, so the
     // inbound handler can look it up and thread the reply back into this conversation (THREAD-XREF).
+    //
+    // KNOWN NIT (deliberately not fixed here): the right-hand side is derived from the ORIGINAL
+    // fromEmail, so on the direct-to-MX path where the From is later rewritten for DMARC alignment the
+    // Message-ID domain no longer matches the From domain. That is cosmetic — no receiver authenticates
+    // the Message-ID — and it CANNOT be recomputed after the rewrite without desyncing the value already
+    // persisted on the Sent record above, which is exactly what threading looks replies up by.
     const outboundMessageId = `<${Date.now()}.${Math.random().toString(36).slice(2)}@${(fromEmail.split('@')[1] || 'wordjs')}>`;
 
     let dkimOptions = undefined;
@@ -1132,25 +1232,44 @@ async function sendMail(data) {
     const failed = [];
 
     if (externalRecipients.length > 0) {
-        // DMARC/SPF ALIGNMENT: we may only send as a domain we can actually AUTHENTICATE for (the one
-        // our DKIM key signs and our SPF/PTR cover). A user whose account email is on an EXTERNAL
-        // provider (e.g. someone@gmail.com) would otherwise make us emit `From: someone@gmail.com`
-        // from our IP — which every DMARC-enforcing receiver rejects outright:
+        // Snapshot the relay ONCE: the same decision must drive both the From-rewrite below and the
+        // delivery branch further down (a re-read could disagree if initTransporter() runs in between).
+        const relay = transporter;
+
+        // DMARC/SPF ALIGNMENT (DIRECT-TO-MX ONLY): when WE are the MTA, we may only send as a domain we
+        // can actually AUTHENTICATE for (the one our DKIM key signs and our SPF/PTR cover). A user whose
+        // account email is on an EXTERNAL provider (e.g. someone@gmail.com) would otherwise make us emit
+        // `From: someone@gmail.com` straight from our IP — which every DMARC-enforcing receiver rejects:
         //   "550-5.7.26 Unauthenticated email from gmail.com is not accepted due to domain's DMARC policy"
-        // So for EXTERNAL delivery we rewrite the wire identity to our own domain and put the user's
-        // real address in Reply-To, so replies still reach the human. LOCAL/internal delivery and the
-        // stored Sent copy keep the original address (no DMARC involved there).
+        // So we rewrite the wire identity to our own domain and put the user's real address in Reply-To,
+        // so replies still reach the human. LOCAL/internal delivery and the stored Sent copy keep the
+        // original address (no DMARC involved there).
+        //
+        // TWO CASES WHERE REWRITING IS WRONG AND MUST BE SKIPPED:
+        //  1. A RELAY/SMARTHOST IS CONFIGURED. Then the smarthost — not us — owns authentication and
+        //     alignment: it signs with its own DKIM key and its SPF covers its own IPs, and it enforces
+        //     which senders the authenticated account may use. Forcing postmaster@<sendingDomain> there
+        //     just hands it an identity the account is not authorized for, and it refuses the message
+        //     ("Sender address rejected: not owned by user" / SendGrid "does not match a verified Sender
+        //     Identity"). Leave the operator's From alone on this path.
+        //  2. sendingDomain IS NOT A REAL PUBLIC DOMAIN. On a LAN/homelab install siteDomain is an IP
+        //     literal or 'localhost' (see isPublicSendingDomain), so the "aligned" address we would
+        //     synthesize — postmaster@192.168.1.50 — is undeliverable and unverifiable. Keeping the
+        //     original From is strictly better.
         const sendingDomain = String(dkimDomain || siteDomain || '').toLowerCase();
         const fromDomain = String(fromEmail.split('@')[1] || '').toLowerCase();
         let wireFrom = fromEmail;
         let wireReplyTo = data.replyTo || undefined;
-        if (sendingDomain && fromDomain && fromDomain !== sendingDomain) {
+        const mayRewriteFrom = !relay && isPublicSendingDomain(sendingDomain);
+        if (mayRewriteFrom && fromDomain && fromDomain !== sendingDomain) {
             const configured = String(optFromEmail || '');
             wireFrom = (configured && String(configured.split('@')[1] || '').toLowerCase() === sendingDomain)
                 ? configured
                 : `postmaster@${sendingDomain}`;
             if (!wireReplyTo) wireReplyTo = fromEmail;
             console.warn(`[MailServer] From '${fromEmail}' is not on the sending domain '${sendingDomain}' — sending as '${wireFrom}' with Reply-To '${wireReplyTo}' so DMARC/SPF align (remote servers reject unauthenticated cross-domain From).`);
+        } else if (!relay && fromDomain && sendingDomain && fromDomain !== sendingDomain && !isPublicSendingDomain(sendingDomain)) {
+            console.warn(`[MailServer] From '${fromEmail}' is off our sending domain, but '${sendingDomain}' is not a public mail domain (LAN host/IP/localhost) — keeping the original From. Set a DKIM domain or a real site URL for DMARC alignment.`);
         }
 
         const attachments = (data.attachments || []).map(a => ({ filename: a.filename, path: a.path }));
@@ -1158,12 +1277,13 @@ async function sendMail(data) {
         const extraHeaders = data.isAutoReply ? { 'Auto-Submitted': 'auto-replied' } : undefined;
         const mailObj = { fromEmail: wireFrom, fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
 
-        if (transporter) {
-            // Relay/smarthost path (used only if a relay is configured).
+        if (relay) {
+            // Relay/smarthost path (used only if a relay is configured). NOTE: wireFrom === fromEmail
+            // here by construction (see mayRewriteFrom above) — the smarthost owns alignment.
             console.log(`[MailServer] Delivering ${externalRecipients.length} recipient(s) via configured relay...`);
             for (const extR of externalRecipients) {
                 try {
-                    const info = await transporter.sendMail({
+                    const info = await relay.sendMail({
                         envelope: { from: wireFrom, to: extR },
                         from: `"${fromName}" <${wireFrom}>`, to: extR,
                         replyTo: wireReplyTo,
