@@ -28,7 +28,8 @@
         "cluster": "node scripts/cluster.js",
         "node:join": "node scripts/node-join.js",
         "bundle-release": "node scripts/make-release.js",
-        "build:marketplace": "node backend/scripts/build-marketplace.js"
+        "build:marketplace": "node backend/scripts/build-marketplace.js",
+        "verify:marketplace": "node backend/scripts/verify-marketplace.js --rebuild"
     },
     "dependencies": {
         "@types/react": "^19.2.8",
