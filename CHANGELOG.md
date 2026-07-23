@@ -4,6 +4,46 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.6] - 2026-07-23
+
+### Fixed — inbound mail
+- **A `~all` (softfail) SPF result no longer rejects the message.** `spfAction()` let softfail fall through
+  to the same permanent 550 as a hard `-all` fail. RFC 7208 §8.5 says a softfail is weak evidence and
+  SHOULD NOT be used on its own to reject — and `~all` is what **gmail, google and microsoft all publish**,
+  so legitimate forwarded and mailing-list mail from the largest senders was permanently bounced. Softfail
+  is now accepted and tagged, like permerror; the verdict is still recorded in `Received-SPF`. A hard
+  `-all` still rejects. *(Found on a live MTA: it was the one lab row whose outcome never changed between
+  the broken and the fixed build while its cause did.)*
+- An `ip6:` network written with an IPv4 dotted quad is now parsed as the address it names (RFC 4291
+  §2.2(3)), and the CIDR-prefix guard is pinned by tests — reverting it previously left the suite green
+  while `ip4:198.51.100.0/0x1f` re-parsed to `/0` and produced a **forged SPF pass for any sender**.
+
+### Fixed — corporate mailboxes (behaviour change, read this)
+- **Only an administrator (or an `edit_users` delegate) can decide who has a mailbox.** The grant is now
+  explicit admin-owned state (`user_meta.professional_mailbox`) set by the "Professional Mail Account"
+  toggle, instead of being inferred from the account's own email address — which the account could rewrite
+  itself, making the mailbox self-issuable. `PUT /users/me` and `POST /auth/register` now also refuse to
+  put an unprivileged account on the site's mail domain.
+- **On upgrade, migration 0006 grants the mailbox only to administrators and `edit_users` holders.** Every
+  other account whose address is on the mail domain is left DISABLED, listed in the boot log and recorded
+  in the `professional_mailbox_migration_pending` option: a provisioned address and a self-assigned one are
+  indistinguishable after the fact, so the safe side is chosen. **A legitimate mailbox holder loses webmail
+  until an admin re-enables them** — their mail is not lost (catch-all, or a normal SMTP 5xx).
+- The mail plugin now publishes its resolved mail domain to the host as the `mail_domain` option. The host
+  previously read `mail_security_dkim_domain`, which is stored as a plugin secret and never appears in the
+  options table, so on a `www.` install the address reservation protected the wrong name.
+
+### Fixed — plugin & theme process lifecycle
+- Switching a theme no longer leaves the OUTGOING theme's isolate running with its hooks, shortcodes and
+  routes still wired to the host.
+- A second concurrent load of the same plugin or theme can no longer orphan the first child; a load that
+  fails now tears down anything it registered instead of leaving a live, unreachable process.
+- Repeated theme re-inits COALESCE instead of each running a full reload: `render()` re-inits lazily, so
+  concurrent page requests used to queue one sweep-and-re-fork cycle each, and renders landing between them
+  got no theme logic at all.
+- Activating a theme no longer reports success for a theme the site is not on (overlapping activations
+  could silently discard the last click).
+
 ## [1.12.5] - 2026-07-22
 
 ### Fixed
