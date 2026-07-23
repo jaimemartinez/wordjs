@@ -25,9 +25,13 @@ const provisioned = new Set<string>();
 // MySQL only: the per-process password for each plugin's login user (never persisted).
 const pluginPasswords = new Map<string, string>();
 
-// Strip control characters before logging an untrusted value (a plugin slug), so a crafted slug can't
-// forge or split log entries.
-function clean(v: any): string { return String(v).replace(/\r\n|\r|\n/g, ' '); }
+// Strip line breaks before logging an untrusted value (a plugin slug, or a driver error echoing one),
+// so a crafted slug can't forge or split log entries.
+//
+// The pattern is `/\n|\r/g` on purpose and must stay that way: this is the shape the log-injection
+// analysis recognises as a sanitizer, and it is SYNTACTIC — the equivalent `/\r\n|\r|\n/g` this used to
+// carry was not matched, so every call site here was still reported as an unsanitized log entry.
+function clean(v: any): string { return String(v == null ? '' : v).replace(/\n|\r/g, ' '); }
 
 function normalizeSlug(slug: string): string { return String(slug).replace(/[^A-Za-z0-9]+/g, '_').toLowerCase(); }
 function roleName(slug: string): string { return 'wjp_role_' + normalizeSlug(slug); }

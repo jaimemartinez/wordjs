@@ -15,7 +15,13 @@
  * child is removed from the registry before the backoff restart is scheduled, so for up to a minute the
  * registry says nothing is running while a live timer is waiting to spawn from the very directory this
  * handler is about to delete — and that timer is cancelled ONLY by unloadIsolatedPlugin. So the teardown
- * is unconditional, and the registry is consulted afterwards, to VERIFY.
+ * is unconditional, and the slug is VERIFIED quiet afterwards.
+ *
+ * AND "VERIFY" HAS TO MEAN THE PROCESS, NOT THE REGISTRY. unloadIsolatedPlugin removes the handle
+ * synchronously and kills asynchronously, so re-reading isIsolated() right after it always says false —
+ * it is a restatement of the call, not evidence the child died. The verify therefore waits for both the
+ * registry AND every pid spawned for the slug (awaitIsolateStopped), which is the only claim strong
+ * enough to justify an irreversible rmSync.
  *
  * Driven through the REAL router over supertest (real JWT, real admin gate, real password check, real
  * per-slug operation lock) because the guard lives in the handler and its whole job is which HTTP
@@ -58,25 +64,54 @@ const PASSWORD = 'Str0ng-Pa55word!';
 //     handler DELETES the crashed child from `isolates` (plugin-isolate.ts:1413) and only then calls
 //     superviseRestart, so throughout that window — up to 60s of backoff, 5 attempts — isIsolated() is
 //     FALSE while the slug is still owned by a live timer;
-//   - unloadIsolatedPlugin (plugin-isolate.ts:1442-1452) is the ONLY thing that cancels that timer, and
-//     it does so BEFORE it touches the handle — hence unconditionally with respect to `unloadIsNoop`.
+//   - unloadIsolatedPlugin is the ONLY thing that cancels that timer, and it does so BEFORE it touches
+//     the handle — hence unconditionally with respect to `unloadIsNoop`;
+//   - `livePids` is the third piece and the one a naive fake gets WRONG in the direction that matters:
+//     unloadIsolatedPlugin drops the registry entry SYNCHRONOUSLY, but the process dies from an
+//     asynchronous SIGKILL. So there is a real window in which isIsolated() is already false while the
+//     child is still running — which is precisely what the delete route used to accept as proof that it
+//     was safe to rmSync the directory. The fake reproduces that window (registry cleared now, pid
+//     dropped a tick later) so awaitIsolateStopped is exercised rather than trivially satisfied.
 
 /** Slugs a child process is registered for (`isolates`). */
 const liveIsolates = new Set<string>();
+/** Pids spawned for a slug and not yet observed exiting (`livePids`) — outlives the registry entry. */
+const livePids = new Map<string, Set<number>>();
 /** Slugs with a pending supervised restart (`restartTimers`) — deliberately NOT in liveIsolates. */
 const pendingRestarts = new Set<string>();
 /** When set, unloadIsolatedPlugin does NOT clear the slug — a child that refuses to die. */
 let unloadIsNoop = false;
+/** When set, the registry IS cleared but the SIGKILL never lands — the window described above, frozen. */
+let killNeverLands = false;
 let unloadCalls: string[] = [];
+let nextPid = 40000;
+
+function addPid(slug: string) {
+    let s = livePids.get(slug);
+    if (!s) { s = new Set<number>(); livePids.set(slug, s); }
+    s.add(++nextPid);
+}
+function dropPids(slug: string) { livePids.delete(slug); }
 
 const fakeIsolate: any = {
-    loadIsolatedPlugin: async (slug: string) => { liveIsolates.add(slug); pendingRestarts.delete(slug); return { ok: true }; },
+    loadIsolatedPlugin: async (slug: string) => { liveIsolates.add(slug); addPid(slug); pendingRestarts.delete(slug); return { ok: true }; },
     unloadIsolatedPlugin: (slug: string) => {
         unloadCalls.push(slug);
         pendingRestarts.delete(slug);            // clearTimeout(restartTimers.get(slug)) — always runs
-        if (!unloadIsNoop) liveIsolates.delete(slug);
+        if (unloadIsNoop) return;                // teardown ran, the handle survived it
+        liveIsolates.delete(slug);               // synchronous, exactly like the real one…
+        if (!killNeverLands) setTimeout(() => dropPids(slug), 5); // …the kill is not
     },
     isIsolated: (slug: string) => liveIsolates.has(slug),
+    getLivePids: (slug: string) => Array.from(livePids.get(slug) || []),
+    awaitIsolateStopped: async (slug: string, timeoutMs = 3000) => {
+        const deadline = Date.now() + Math.max(0, timeoutMs);
+        for (;;) {
+            if (!liveIsolates.has(slug) && (livePids.get(slug) || new Set()).size === 0) return true;
+            if (Date.now() >= deadline) return false;
+            await new Promise((r) => setTimeout(r, 5));
+        }
+    },
     reloadIsolatedPlugin: async () => null,
     getIsolateStatus: () => null,
     getAllIsolateStatuses: () => ({}),
@@ -138,9 +173,11 @@ describe('DELETE /plugins/:slug — never deletes the directory of a running plu
 
     beforeEach(async () => {
         liveIsolates.clear();
+        livePids.clear();
         pendingRestarts.clear();
         unloadCalls = [];
         unloadIsNoop = false;
+        killNeverLands = false;
         await setActive([]);
     });
 
@@ -182,7 +219,7 @@ describe('DELETE /plugins/:slug — never deletes the directory of a running plu
 
     it('refuses a plugin the option flags as ACTIVE (unchanged behaviour)', async () => {
         const dir = seedPluginDir(SLUG);
-        liveIsolates.add(SLUG);
+        liveIsolates.add(SLUG); addPid(SLUG);
         await setActive([SLUG]);
 
         const r = await del(SLUG);
@@ -197,7 +234,7 @@ describe('DELETE /plugins/:slug — never deletes the directory of a running plu
         // The state core/plugins.activatePlugin's guard exists for: a child is registered, the flag is
         // not set. `isPluginActive` alone waves this through.
         const dir = seedPluginDir(SLUG);
-        liveIsolates.add(SLUG);
+        liveIsolates.add(SLUG); addPid(SLUG);
         await setActive([]);
 
         const r = await del(SLUG);
@@ -214,7 +251,7 @@ describe('DELETE /plugins/:slug — never deletes the directory of a running plu
         // Removing the directory is irreversible, so a child that survives its teardown is a hard stop,
         // not something to delete around.
         const dir = seedPluginDir(SLUG);
-        liveIsolates.add(SLUG);
+        liveIsolates.add(SLUG); addPid(SLUG);
         unloadIsNoop = true;                 // teardown runs and the child is STILL registered
         await setActive([]);
 
@@ -227,9 +264,49 @@ describe('DELETE /plugins/:slug — never deletes the directory of a running plu
         assert.ok(fs.existsSync(path.join(dir, 'data')), 'nor its data');
     });
 
+    it('refuses when the registry is CLEAN but the process is still alive (the SIGKILL never landed)', async () => {
+        // THE GAP THE REGISTRY-ONLY VERIFY HAD. unloadIsolatedPlugin deletes the handle synchronously and
+        // then kills asynchronously, so `isIsolated(slug) === false` is true the instant we ask — whether
+        // or not the process died. The old check read exactly that and answered 200: the directory went
+        // away under a child that was still executing this plugin's hooks, routes and any provider it had
+        // claimed. Here the kill is frozen (killNeverLands), which is the same observable state, and the
+        // handler must refuse. Flip awaitIsolateStopped back to a plain isPluginRunning() check and this
+        // goes green with a deleted directory — which is the bug.
+        const dir = seedPluginDir(SLUG);
+        liveIsolates.add(SLUG); addPid(SLUG);
+        killNeverLands = true;
+        await setActive([]);
+
+        const r = await del(SLUG);
+
+        assert.strictEqual(fakeIsolate.isIsolated(SLUG), false,
+            'precondition: the registry says nothing is running — the answer the old verify trusted');
+        assert.ok(fakeIsolate.getLivePids(SLUG).length > 0, 'while the process this slug owns is demonstrably alive');
+        assert.strictEqual(r.status, 409, JSON.stringify(r.body));
+        assert.strictEqual(r.body.stillRunning, true);
+        assert.ok(fs.existsSync(path.join(dir, 'manifest.json')), 'and the code was NOT removed under it');
+    });
+
+    it('deletes as soon as the kill actually lands, without waiting out the timeout', async () => {
+        // The other direction: the guard must not turn every delete of a running plugin into a stall.
+        // The fake drops the pid a tick after the unload, exactly as a landed SIGKILL does.
+        const dir = seedPluginDir(SLUG);
+        liveIsolates.add(SLUG); addPid(SLUG);
+        await setActive([]);
+
+        const started = Date.now();
+        const r = await del(SLUG);
+        const waited = Date.now() - started;
+
+        assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+        assert.strictEqual(fakeIsolate.getLivePids(SLUG).length, 0, 'the child was observed to exit before anything was removed');
+        assert.ok(waited < 1500, `proceeded as soon as the process was gone (waited ${waited}ms)`);
+        assert.ok(!fs.existsSync(path.join(dir, 'manifest.json')), 'and then the code was removed');
+    });
+
     it('still requires the admin password (the new guard runs inside the authenticated path)', async () => {
         const dir = seedPluginDir(SLUG);
-        liveIsolates.add(SLUG);
+        liveIsolates.add(SLUG); addPid(SLUG);
 
         const r = await del(SLUG, { password: 'wrong-password' });
 

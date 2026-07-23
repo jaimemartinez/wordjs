@@ -220,6 +220,10 @@ const PLUGIN_OP_TTL_MS = 120000;
 const PLUGIN_OP_RENEW_MS = 30000;
 const PLUGIN_OP_ACQUIRE_TIMEOUT_MS = 3000;
 
+// How long DELETE waits for the plugin's child process to actually be gone before it refuses to remove
+// the directory. SIGKILL normally lands in milliseconds; this only has to cover a loaded host.
+const DELETE_STOP_TIMEOUT_MS = 3000;
+
 /**
  * ONE lock key per plugin DIRECTORY, case-folded.
  *
@@ -236,6 +240,14 @@ const PLUGIN_OP_ACQUIRE_TIMEOUT_MS = 3000;
  */
 function pluginOpKey(slug: any): string {
     return String(slug).toLowerCase();
+}
+
+/**
+ * Strip line breaks from a request-derived value before it goes into a log line, so a crafted slug or
+ * an error message echoing one cannot forge or split an entry in the operator's log.
+ */
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n|\r/g, ' ');
 }
 
 /**
@@ -277,6 +289,58 @@ async function drainPluginOps(timeoutMs: number, pollMs = 25): Promise<string[]>
 /** The dist-lock lease name a given in-flight key corresponds to (kept next to the one that builds it). */
 function pluginOpLeaseName(key: string): string { return `wordjs:plugin-op:${key}`; }
 
+/**
+ * Plugin-operation leases this process TOOK and has not CONFIRMED handing back, keyed by op key.
+ *
+ * THIS IS THE STATE THE SHUTDOWN NEEDED AND DID NOT HAVE. The previous attempt asked dist-lock for it
+ * — releaseAllHeld({ only: finishedOps }) — and that call could never release anything, because
+ * `heldLocks` answers a different question: the lease handle deletes its name from that map in the
+ * SAME synchronous step that begins the DB release, and the drain only ever observes an operation as
+ * finished AFTER that step has run. So every name the sweep was permitted to free was already gone
+ * from the map by construction, and both states it was meant to cover were missed:
+ *
+ *   - the release's DB write FAILED (it is swallowed as best-effort) — the row is still leased to us;
+ *   - the process exited between the operation finishing and that write completing — the drain sees an
+ *     empty in-flight set and the handler runs on to process.exit(0) while the UPDATE is in flight.
+ *
+ * Either way a 120s lease is stranded on a plugin whose critical section is provably over, which is
+ * exactly what blocks the next boot's crash recovery and 409s every operation on that plugin. Recorded
+ * when the lease is taken, deleted only once the release is CONFIRMED, so the shutdown can re-issue a
+ * holder-guarded release for whatever is left.
+ *
+ * It also makes the safety argument structural rather than a matter of building the allow-list
+ * correctly: only plugin-op leases are ever recorded here, so 'wordjs:active-plugins' and 'wordjs:cron'
+ * — held while activate/deactivate rewrites the option and while a backup or ACME renewal runs — are
+ * not reachable from this path at all, and cannot be handed to a peer mid-critical-section.
+ */
+const unreleasedOpLeases = new Map<string, string>();
+
+/**
+ * Hand back the leases of plugin operations whose critical section is CONFIRMED finished.
+ *
+ * Called from the graceful-shutdown handler with the keys the drain saw finish. Fails CLOSED per key:
+ * an operation still listed in flight keeps its lease and expires on its TTL, exactly as an abrupt kill
+ * leaves it (releasing it would hand a peer a plugin this process may be mid-swap on). Returns the
+ * lease names actually freed.
+ */
+async function releaseFinishedOpLeases(keys: string[]): Promise<string[]> {
+    const freed: string[] = [];
+    let release: (name: string) => Promise<void>;
+    try { ({ release } = require('../core/dist-lock')); }
+    catch (e: any) { console.warn(`[shutdown] dist-lock unavailable, leases will expire on their TTL: ${logSafe(e && e.message)}`); return freed; }
+    for (const key of Array.isArray(keys) ? keys : []) {
+        if (pluginOpsInFlight.has(key)) continue; // still executing ⇒ not ours to give away
+        const name = unreleasedOpLeases.get(key);
+        if (!name) continue;                      // already confirmed released by its own handle
+        try { await release(name); unreleasedOpLeases.delete(key); freed.push(name); }
+        catch (e: any) { console.warn(`[shutdown] could not release '${logSafe(name)}' (it will expire on its TTL): ${logSafe(e && e.message)}`); }
+    }
+    return freed;
+}
+
+/** Lease names this process has not confirmed releasing (diagnostics + tests). */
+function unreleasedOpLeaseNames(): string[] { return Array.from(unreleasedOpLeases.values()); }
+
 type PluginOpLock = { ok: true; release: () => Promise<void> } | { ok: false };
 
 async function acquirePluginOpLock(slug: string): Promise<PluginOpLock> {
@@ -303,6 +367,9 @@ async function acquirePluginOpLock(slug: string): Promise<PluginOpLock> {
         pluginOpsInFlight.delete(key);
         return { ok: false };
     }
+    // From here the lease is OURS until a release is CONFIRMED — see unreleasedOpLeases for why that
+    // record cannot be read back out of dist-lock's heldLocks.
+    if (lease) unreleasedOpLeases.set(key, pluginOpLeaseName(key));
     let released = false;
     return {
         ok: true,
@@ -310,7 +377,16 @@ async function acquirePluginOpLock(slug: string): Promise<PluginOpLock> {
             if (released) return; // idempotent: several exit paths may release
             released = true;
             pluginOpsInFlight.delete(key);
-            if (lease) { try { await lease.release(); } catch { /* best-effort */ } }
+            if (!lease) { unreleasedOpLeases.delete(key); return; }
+            // CONFIRMED means the UPDATE reached the database — dist-lock's release() reports that
+            // rather than swallowing the failure, which is what made a failed hand-back look identical
+            // to a successful one. Anything else keeps the record so the shutdown retries it, instead
+            // of leaving the successor locked out for the full TTL on a lease nobody is using.
+            let confirmed = false;
+            try { confirmed = (await lease.release()) !== false; }
+            catch (e: any) { console.warn(`[plugin-op ${logSafe(key)}] releasing the lease threw: ${logSafe(e && e.message)}`); }
+            if (confirmed) unreleasedOpLeases.delete(key);
+            else console.warn(`[plugin-op ${logSafe(key)}] the lease was not confirmed handed back; it will be retried at shutdown.`);
         },
     };
 }
@@ -341,6 +417,34 @@ function isPluginRunning(slug: string): boolean {
     try { return require('../core/plugin-isolate').isIsolated(slug) === true; }
     catch (e: any) {
         console.warn(`[plugin ${slug}] could not read the isolate registry:`, e && e.message);
+        return false;
+    }
+}
+
+/**
+ * Re-spawn a running isolate — the ONE place the routes that change a plugin's runtime configuration
+ * do it, and it exists because reloadIsolatedPlugin is an UNLOAD FOLLOWED BY AN AWAITED LOAD.
+ *
+ * Every caller must already hold the per-slug plugin-op lock. Without it, four admin routes
+ * (/permissions, /egress-hosts, /reload, /free-port) reloaded outside any serialization, so a
+ * deactivate landing inside that await produced an orphan — it unloaded the child that was already
+ * gone, and the load then re-registered a fresh one for a plugin `active_plugins` no longer lists.
+ * A deactivate + DELETE landing there was worse: DELETE's own post-unload verify runs BEFORE the
+ * reload's registration, so it returned 200, removed the directory, and the reload then registered a
+ * live child for a plugin that no longer exists on disk.
+ *
+ * `isIsolated` is read here, inside the caller's lock, rather than by the caller before taking it.
+ * Best-effort by design: the configuration change these routes make is already persisted, so a reload
+ * hiccup is reported as `reloaded: false` instead of failing the change.
+ */
+async function reloadUnderLock(slug: string, label: string): Promise<boolean> {
+    try {
+        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+        if (!isIsolated(slug)) return false;
+        await reloadIsolatedPlugin(slug);
+        return true;
+    } catch (e: any) {
+        console.warn(`[${label}] reload of '${logSafe(slug)}' failed: ${logSafe(e && e.message)}`);
         return false;
     }
 }
@@ -1454,37 +1558,41 @@ router.post('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req
     if (!validateSlug(req.params.slug as string)) {
         return res.status(400).json({ error: 'Invalid plugin slug' });
     }
-    const slug = req.params.slug;
+    const slug = req.params.slug as string;
     const { setGrants, getGrants } = require('../core/plugin-permissions');
 
-    // Body: { granted: ["scope:access", ...], network: boolean }. The admin's granted set is the source
-    // of truth (default-deny). We don't constrain to the manifest here — hasPermission already requires
-    // BOTH the manifest declaration AND the grant, so granting an undeclared scope simply has no effect.
-    const body = req.body || {};
-    const tokens: string[] = Array.isArray(body.granted) ? body.granted.map((t: any) => String(t)) : [];
-    if (body.network) tokens.push('network');
-    await setGrants(slug, tokens);
-
-    // Re-spawn the isolate so the NETWORK grant (passed in cfg → __WORDJS_PLUGIN_NETWORK__) takes effect.
-    // Bridge-scope grants are read live per call on the host, but reloading keeps everything consistent.
-    // Best-effort: the grant is already persisted, so a reload hiccup must not fail the change.
-    let reloaded = false;
-    try {
-        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
-        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
-    } catch (e: any) {
-        console.warn(`[Permissions] reload of '${slug}' after grant change failed:`, e && e.message);
+    // Same per-slug lock as activate/deactivate/install/update/delete — see reloadUnderLock for why
+    // EVERY route that reloads an isolate has to hold it.
+    const lock = await acquirePluginOpLock(slug);
+    if (!lock.ok) {
+        return res.status(409).json({ message: pluginBusyError(slug), busy: true });
     }
+    try {
+        // Body: { granted: ["scope:access", ...], network: boolean }. The admin's granted set is the source
+        // of truth (default-deny). We don't constrain to the manifest here — hasPermission already requires
+        // BOTH the manifest declaration AND the grant, so granting an undeclared scope simply has no effect.
+        const body = req.body || {};
+        const tokens: string[] = Array.isArray(body.granted) ? body.granted.map((t: any) => String(t)) : [];
+        if (body.network) tokens.push('network');
+        await setGrants(slug, tokens);
 
-    const granted = getGrants(slug);
-    res.json({
-        success: true,
-        slug,
-        granted,
-        network: granted.includes('network'),
-        reloaded,
-        message: `Permissions updated for '${slug}' (${granted.length} granted).${reloaded ? ' Isolate reloaded — changes are in effect.' : ' Reactivate the plugin to fully apply.'}`,
-    });
+        // Re-spawn the isolate so the NETWORK grant (passed in cfg → __WORDJS_PLUGIN_NETWORK__) takes effect.
+        // Bridge-scope grants are read live per call on the host, but reloading keeps everything consistent.
+        // Best-effort: the grant is already persisted, so a reload hiccup must not fail the change.
+        const reloaded = await reloadUnderLock(slug, 'Permissions');
+
+        const granted = getGrants(slug);
+        res.json({
+            success: true,
+            slug,
+            granted,
+            network: granted.includes('network'),
+            reloaded,
+            message: `Permissions updated for '${slug}' (${granted.length} granted).${reloaded ? ' Isolate reloaded — changes are in effect.' : ' Reactivate the plugin to fully apply.'}`,
+        });
+    } finally {
+        await lock.release();
+    }
 }));
 
 /**
@@ -1508,33 +1616,37 @@ router.get('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req
 
 router.post('/:slug/egress-hosts', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
     if (!validateSlug(req.params.slug as string)) return res.status(400).json({ error: 'Invalid plugin slug' });
-    const slug = req.params.slug;
+    const slug = req.params.slug as string;
     const { setEgressAllowlist, getEgressAllowlist } = require('../core/plugin-permissions');
-    // Body: { hosts: ["api.stripe.com", "*.example.com", ...] }. Invalid entries (schemes/paths/ports) are
-    // dropped by setEgressAllowlist. An empty array clears the list (back to allow-all-public).
-    const body = req.body || {};
-    const hosts: string[] = Array.isArray(body.hosts) ? body.hosts.map((h: any) => String(h)) : [];
-    await setEgressAllowlist(slug, hosts);
 
-    // Re-spawn the isolate so the child re-installs the new allowlist (pushed in cfg → egress-guard.setAllowedHosts).
-    let reloaded = false;
-    try {
-        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
-        if (isIsolated(slug)) { await reloadIsolatedPlugin(slug); reloaded = true; }
-    } catch (e: any) {
-        console.warn(`[EgressHosts] reload of '${slug}' after egress change failed:`, e && e.message);
+    // Under the per-slug lock like every other isolate-reloading route — see reloadUnderLock.
+    const lock = await acquirePluginOpLock(slug);
+    if (!lock.ok) {
+        return res.status(409).json({ message: pluginBusyError(slug), busy: true });
     }
+    try {
+        // Body: { hosts: ["api.stripe.com", "*.example.com", ...] }. Invalid entries (schemes/paths/ports) are
+        // dropped by setEgressAllowlist. An empty array clears the list (back to allow-all-public).
+        const body = req.body || {};
+        const hosts: string[] = Array.isArray(body.hosts) ? body.hosts.map((h: any) => String(h)) : [];
+        await setEgressAllowlist(slug, hosts);
 
-    const saved = getEgressAllowlist(slug);
-    res.json({
-        success: true,
-        slug,
-        hosts: saved,
-        reloaded,
-        message: saved.length
-            ? `Egress allowlist set for '${slug}' (${saved.length} host(s); all other public hosts now denied).${reloaded ? ' Isolate reloaded — in effect.' : ' Reactivate the plugin to apply.'}`
-            : `Egress allowlist cleared for '${slug}' (all public hosts allowed again).${reloaded ? ' Isolate reloaded — in effect.' : ''}`,
-    });
+        // Re-spawn the isolate so the child re-installs the new allowlist (pushed in cfg → egress-guard.setAllowedHosts).
+        const reloaded = await reloadUnderLock(slug, 'EgressHosts');
+
+        const saved = getEgressAllowlist(slug);
+        res.json({
+            success: true,
+            slug,
+            hosts: saved,
+            reloaded,
+            message: saved.length
+                ? `Egress allowlist set for '${slug}' (${saved.length} host(s); all other public hosts now denied).${reloaded ? ' Isolate reloaded — in effect.' : ' Reactivate the plugin to apply.'}`
+                : `Egress allowlist cleared for '${slug}' (all public hosts allowed again).${reloaded ? ' Isolate reloaded — in effect.' : ''}`,
+        });
+    } finally {
+        await lock.release();
+    }
 }));
 
 /**
@@ -1566,12 +1678,23 @@ router.post('/:slug/reload', authenticate, isAdmin, asyncHandler(async (req: Req
     // Reuse the exact same reload the grants route and the dev watcher use: tear the child process
     // down and load it again from its original entry file — the full pipeline (AST scan included)
     // re-runs, so this cannot be used to sidestep the security model.
-    const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
-    if (!isIsolated(slug)) {
-        return res.status(404).json({ error: `Plugin '${slug}' is not a loaded isolated plugin (is it active?)` });
+    //
+    // Under the per-slug lock, and the isIsolated() precondition is re-read INSIDE it: checked outside,
+    // a deactivate landing in between turns this into a load of a plugin that is no longer active.
+    const lock = await acquirePluginOpLock(slug);
+    if (!lock.ok) {
+        return res.status(409).json({ message: pluginBusyError(slug), busy: true });
     }
-    await reloadIsolatedPlugin(slug);
-    res.json({ success: true, slug, message: `Isolate for '${slug}' reloaded.` });
+    try {
+        const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+        if (!isIsolated(slug)) {
+            return res.status(404).json({ error: `Plugin '${slug}' is not a loaded isolated plugin (is it active?)` });
+        }
+        await reloadIsolatedPlugin(slug);
+        res.json({ success: true, slug, message: `Isolate for '${slug}' reloaded.` });
+    } finally {
+        await lock.release();
+    }
 }));
 
 /**
@@ -1720,18 +1843,18 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
         return res.status(400).json({ error: 'Port is not declared in this plugin\'s manifest claimPorts.' });
     }
     const { freeClaimedPort } = require('../core/port-conflicts');
-    const { reloadIsolatedPlugin, isIsolated } = require('../core/plugin-isolate');
+    // Under the per-slug lock like every other isolate-reloading route — see reloadUnderLock.
+    const lock = await acquirePluginOpLock(slug);
+    if (!lock.ok) {
+        return res.status(409).json({ message: pluginBusyError(slug), busy: true });
+    }
     try {
         // allowDisable = the admin's explicit modal confirmation travels WITH the request. Without it
         // the core refuses to disable anything (CONSENT_REQUIRED below) — so a stale client snapshot
         // can never turn into an unconsented systemctl disable (TOCTOU).
         const result = await freeClaimedPort(port, { allowDisable: req.body?.allowDisable === true });
         // Reload the (running) plugin so its own bind logic can take the freed port right away.
-        let reloaded = false;
-        if (isIsolated(slug)) {
-            await reloadIsolatedPlugin(slug);
-            reloaded = true;
-        }
+        const reloaded = await reloadUnderLock(slug, 'FreePort');
         res.json({ success: true, ...result, reloaded });
     } catch (e: any) {
         // `details` is the one structured field the frontend api() helper preserves on thrown errors —
@@ -1740,6 +1863,8 @@ router.post('/:slug/free-port', authenticate, isAdmin, asyncHandler(async (req: 
         if (e && e.code === 'PORT_NOT_FREEABLE') return res.status(409).json({ error: e.message, code: e.code });
         if (e && (e.code === 'PORT_STILL_IN_USE' || e.code === 'DISABLE_FAILED')) return res.status(502).json({ error: e.message, code: e.code });
         throw e;
+    } finally {
+        await lock.release();
     }
 }));
 
@@ -1890,15 +2015,22 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
         //     exactly the orphan the bullet above exists to clean up.
         //
         // unloadIsolatedPlugin does both (cancel the timer, tear the child down) and is idempotent, so
-        // it is called unconditionally — the same thing the update cycle's tearDownIsolate does. Then
-        // VERIFY: deleting the directory is irreversible, so if a child is somehow still registered
-        // afterwards we refuse rather than pull the files out from under it.
+        // it is called unconditionally — the same thing the update cycle's tearDownIsolate does.
+        //
+        // Then VERIFY, and verify the thing that is actually at stake. Deleting the directory is
+        // irreversible, so the precondition has to be "no process of ours is running for this slug" —
+        // and the registry cannot answer that: unloadIsolatedPlugin removes the entry SYNCHRONOUSLY
+        // while `kill(SIGKILL)` is asynchronous, so isPluginRunning() goes false the instant we ask it
+        // to stop, whether or not the signal has landed. awaitIsolateStopped waits (bounded) for both
+        // conditions — nothing registered AND every pid we spawned for this slug observed to exit —
+        // so a 409 here now means a process really is still alive.
         if (isPluginRunning(slug)) {
-            console.warn(`[plugin ${slug}] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.`);
+            console.warn(`[plugin ${logSafe(slug)}] delete: a child process is still registered although the plugin is not listed active (orphaned isolate) — stopping it before removing the directory.`);
         }
-        try { require('../core/plugin-isolate').unloadIsolatedPlugin(slug); }
-        catch (e: any) { console.error(`[plugin ${slug}] delete: could not stop the isolate / cancel its pending restart:`, e && e.message); }
-        if (isPluginRunning(slug)) {
+        const isolate = require('../core/plugin-isolate');
+        try { isolate.unloadIsolatedPlugin(slug); }
+        catch (e: any) { console.error(`[plugin ${logSafe(slug)}] delete: could not stop the isolate / cancel its pending restart: ${logSafe(e && e.message)}`); }
+        if (!(await isolate.awaitIsolateStopped(slug, DELETE_STOP_TIMEOUT_MS))) {
             return res.status(409).json({
                 message: `'${slug}' still has a running process that could not be stopped. Restart the server, then delete it.`,
                 stillRunning: true,
@@ -2115,3 +2247,8 @@ module.exports.acquirePluginOpLock = acquirePluginOpLock;
 module.exports.beginPluginOpShutdown = beginPluginOpShutdown;
 module.exports.drainPluginOps = drainPluginOps;
 module.exports.pluginOpLeaseName = pluginOpLeaseName;
+// …and then hand back the leases of the operations the drain saw FINISH. This is the step that has to
+// own the bookkeeping itself (unreleasedOpLeases): dist-lock's heldLocks has already forgotten a lease
+// by the time an operation counts as finished, so asking IT which ones to free frees nothing at all.
+module.exports.releaseFinishedOpLeases = releaseFinishedOpLeases;
+module.exports.unreleasedOpLeaseNames = unreleasedOpLeaseNames;

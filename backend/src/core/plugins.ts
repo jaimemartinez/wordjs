@@ -1347,6 +1347,43 @@ exports.deactivate = function() {
 // admin approved for the old code is ever silently inherited by code from somewhere else.
 const PLUGIN_ORIGINS_OPTION = 'plugin_origins';
 
+/**
+ * The same slug grammar routes/plugins.ts validates on (kept literal here rather than imported: this
+ * module must not depend on the route layer, and a copy that drifts LOOSER is the only dangerous
+ * direction — a slug this rejects simply never reaches the provenance map).
+ */
+const ORIGIN_SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+function isOriginSlug(slug: any): boolean {
+    return typeof slug === 'string' && ORIGIN_SLUG_RE.test(slug);
+}
+
+/**
+ * The stored provenance map, as a Map.
+ *
+ * The slug reaching setPluginOrigin/clearPluginOrigin comes from a request, and `stored[slug] = …` /
+ * `delete stored[slug]` on a plain object is a property write with a remote-controlled name: '__proto__'
+ * would mutate Object.prototype for the whole process instead of recording an origin, and 'constructor'
+ * or 'toString' would corrupt the record for every consumer of the option. Going through a Map removes
+ * the indexed write entirely — a Map key is data, never a property — and the slug is grammar-checked
+ * before it is used at all, so neither this nor a future edit of these functions can reintroduce it.
+ */
+function originsToMap(stored: any): Map<string, any> {
+    const m = new Map<string, any>();
+    if (!stored || typeof stored !== 'object') return m;
+    // Every OWN key is carried across, including any the current grammar would reject: this Map is the
+    // round-trip buffer for a rewrite of the whole option, and filtering here would silently DELETE
+    // another plugin's provenance record as a side effect of recording one. A key is only ever a Map
+    // key or an own property created by Object.fromEntries — never a computed property write — so
+    // carrying an odd one is inert. The grammar is enforced where it matters: on the slug being
+    // written or removed.
+    for (const [k, v] of Object.entries(stored)) m.set(k, v);
+    return m;
+}
+/** Back to the plain object the option is persisted as. Keys are grammar-checked by originsToMap/callers. */
+function originsToObject(m: Map<string, any>): Record<string, any> {
+    return Object.fromEntries(m);
+}
+
 /** Compare-safe form of a source URL/dir — the same trim + trailing-slash strip resolveSources applies. */
 function normalizeOriginSource(source: any): string {
     return String(source || '').trim().replace(/\/+$/, '');
@@ -1369,37 +1406,39 @@ function readOriginRecord(slug: string, rec: any): PluginOrigin | null {
 
 /** Every recorded origin, keyed by slug. One option read — for annotating a whole catalog listing. */
 async function getPluginOrigins(): Promise<Record<string, PluginOrigin>> {
-    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
-    const out: Record<string, PluginOrigin> = {};
-    for (const [slug, rec] of Object.entries(stored)) {
+    const stored = originsToMap(await getOption(PLUGIN_ORIGINS_OPTION, {}));
+    const out = new Map<string, PluginOrigin>();
+    for (const [slug, rec] of stored) {
         const parsed = readOriginRecord(slug, rec);
-        if (parsed) out[slug] = parsed;
+        if (parsed) out.set(slug, parsed);
     }
-    return out;
+    return Object.fromEntries(out);
 }
 
 /** The recorded origin of an installed plugin, or null when none/blank/malformed ("unknown", never a match). */
 async function getPluginOrigin(slug: string): Promise<PluginOrigin | null> {
-    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
-    return readOriginRecord(slug, stored[slug]);
+    if (!isOriginSlug(slug)) return null;
+    const stored = originsToMap(await getOption(PLUGIN_ORIGINS_OPTION, {}));
+    return readOriginRecord(slug, stored.get(slug));
 }
 
 /** Record where a plugin's code came from. Called ONLY by the catalog install/update paths (host context). */
 async function setPluginOrigin(slug: string, { source, catalogId, version = null }: { source: string; catalogId?: string; version?: string | null }): Promise<boolean> {
+    if (!isOriginSlug(slug)) return false; // a slug outside the grammar is not a plugin we installed
     const clean = normalizeOriginSource(source);
     if (!clean) return false; // a blank source would record "unknown" as if it were a real provenance
-    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
-    stored[slug] = { source: clean, catalogId: String(catalogId || slug), version: version ? String(version) : null, installedAt: Date.now() };
-    await updateOption(PLUGIN_ORIGINS_OPTION, stored);
+    const stored = originsToMap(await getOption(PLUGIN_ORIGINS_OPTION, {}));
+    stored.set(slug, { source: clean, catalogId: String(catalogId || slug), version: version ? String(version) : null, installedAt: Date.now() });
+    await updateOption(PLUGIN_ORIGINS_OPTION, originsToObject(stored));
     return true;
 }
 
 /** Forget a plugin's origin (uninstall). Mirrors removeGrants: a re-uploaded slug must inherit NOTHING. */
 async function clearPluginOrigin(slug: string): Promise<void> {
-    const stored = (await getOption(PLUGIN_ORIGINS_OPTION, {})) || {};
-    if (Object.prototype.hasOwnProperty.call(stored, slug)) {
-        delete stored[slug];
-        await updateOption(PLUGIN_ORIGINS_OPTION, stored);
+    if (!isOriginSlug(slug)) return;
+    const stored = originsToMap(await getOption(PLUGIN_ORIGINS_OPTION, {}));
+    if (stored.delete(slug)) {
+        await updateOption(PLUGIN_ORIGINS_OPTION, originsToObject(stored));
     }
 }
 

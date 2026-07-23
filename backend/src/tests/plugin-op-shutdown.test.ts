@@ -119,7 +119,7 @@ describe('graceful shutdown — plugin operations are drained before the leases 
 
         const iBegin = body.indexOf('beginPluginOpShutdown()');
         const iDrain = body.indexOf('drainPluginOps(');
-        const iRelease = body.indexOf('releaseAllHeld(');
+        const iRelease = body.indexOf('releaseFinishedOpLeases(');
         const iExit = body.indexOf('process.exit(0)');
 
         assert.ok(iBegin > 0, 'the shutdown refuses new plugin operations');
@@ -127,18 +127,19 @@ describe('graceful shutdown — plugin operations are drained before the leases 
         assert.ok(iRelease > iDrain, '…and only then hands the leases back');
         assert.ok(iExit > iRelease, '…before exiting');
 
-        // The shape of the release is the whole safety argument, so it is asserted rather than assumed:
-        // an ALLOW-LIST built from the drained operations. Written as an exclusion ({ skip }), the same
-        // call would also free 'wordjs:cron' out from under a running backup and 'wordjs:active-plugins'
-        // out from under an activate — neither of which the drain can see, because neither takes a
-        // plugin-op lock. Those must expire on their TTL instead.
-        assert.match(body, /releaseAllHeld\(\{\s*only\s*\}\)/, 'it passes an allow-list predicate…');
-        assert.doesNotMatch(body, /\bskip\b/, '…and no exclusion list survives anywhere in the handler');
-        assert.match(body, /pluginOpLeaseName\(/, '…built from the plugin-operation lease names');
+        // The shape of the release is the whole safety argument, so it is asserted rather than assumed.
+        // It must NOT be a sweep over dist-lock's heldLocks: every lease in that map is one whose
+        // critical section is still executing, so however it is filtered it can free 'wordjs:cron' out
+        // from under a running backup or 'wordjs:active-plugins' out from under an activate — neither of
+        // which the drain can see, because neither takes a plugin-op lock. (It also could not release
+        // anything: see plugin-op-lease-release.test.ts, which pins that directly.) The input is the
+        // operations that STARTED minus the ones still running at the deadline.
+        assert.doesNotMatch(body, /releaseAllHeld\(/, 'no heldLocks sweep survives in the signal handler…');
+        assert.doesNotMatch(body, /\bskip\b/, '…nor an exclusion list anywhere in it');
         const iFinished = body.indexOf('.filter((k) => !stillRunning.includes(k))');
         assert.ok(iFinished > iDrain && iFinished < iRelease,
-            'and the allow-list is the operations that STARTED minus the ones still running at the deadline — '
-            + 'i.e. exactly the ones whose critical section is confirmed over');
+            'and what is released is the operations that STARTED minus the ones still running at the '
+            + 'deadline — i.e. exactly the ones whose critical section is confirmed over');
 
         // SIGINT must go through the same handler; a second path would skip the drain entirely.
         const handlers = src.slice(end, end + 400);

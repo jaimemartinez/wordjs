@@ -956,24 +956,25 @@ process.on('unhandledRejection', (reason, promise) => {
 // Bounded so a wedged DB can never turn a graceful stop into a hang: past the deadline we exit anyway
 // and the TTL takes over, which is exactly what an abrupt kill already did.
 //
-// ORDER MATTERS, and it is the point of the drain below. A lease sits in dist-lock's `heldLocks` map
-// EXACTLY WHILE ITS CRITICAL SECTION IS RUNNING (the handle removes it on release), so releasing them
-// all the instant a signal arrives frees precisely the ones still in use: a peer node could take
-// 'wordjs:plugin-op:<slug>' and begin extracting into the directory this process is mid-swap on, which
-// is the corruption the lease exists to prevent. So: refuse NEW plugin operations, give the in-flight
-// ones a bounded chance to FINISH (they then release their own lease, leaving the successor unblocked
-// AND the directory consistent — the best outcome), and hand back ONLY the plugin-op leases of the
-// operations that are confirmed finished.
+// ORDER MATTERS, and it is the point of the drain below. So: refuse NEW plugin operations, give the
+// in-flight ones a bounded chance to FINISH — that is what does most of the work, because an operation
+// that finishes releases its own lease, leaving the successor unblocked AND the directory consistent —
+// and only then hand back the leases of the operations confirmed finished. What is left for step 3 is
+// the narrow pathological pair the drain cannot fix by itself: a release whose DB write FAILED (it is
+// swallowed as best-effort, so the row is still leased to us), and one still in flight when the signal
+// landed (the in-flight set is cleared before the DB write completes, so the drain converges and this
+// handler runs on to process.exit(0) mid-UPDATE). Both strand a 120s lease on a plugin whose critical
+// section is provably over.
 //
-// "ONLY" IS LOAD-BEARING — a blanket sweep with the busy ones excluded is NOT the same thing, because
-// the map holds far more than plugin-op leases and every one of them is, by the same invariant, in the
-// middle of its critical section: 'wordjs:active-plugins' is held while activatePlugin/deactivatePlugin
-// read-modify-write the option (neither takes a plugin-op lock, so the drain cannot see them), and
-// 'wordjs:cron' is held by runAsLeader for as long as this node's backup or ACME renewal runs. Freeing
-// those lets a peer interleave with work still executing here — a fresh failure mode, since before the
-// shutdown released anything at all nothing could be handed over early. Everything not named below
-// keeps its lease and expires on its TTL, exactly as an abrupt kill already leaves it, and
-// recoverInterruptedPluginUpdates reclaims any stash at the next boot.
+// WHAT MUST NOT BE HANDED OVER, and why step 3 no longer *can*: a lease sits in dist-lock's `heldLocks`
+// map exactly while its critical section is RUNNING, and that map holds far more than plugin-op leases
+// — 'wordjs:active-plugins' while activatePlugin/deactivatePlugin read-modify-write the option (neither
+// takes a plugin-op lock, so the drain cannot see them), and 'wordjs:cron' for as long as this node's
+// backup or ACME renewal runs. A sweep over that map, however carefully filtered, is a sweep over
+// sections that are executing. So the shutdown does not consult it: releaseFinishedOpLeases works off
+// the plugin-op bookkeeping in routes/plugins, which contains nothing else by construction. Everything
+// it does not name keeps its lease and expires on its TTL, exactly as an abrupt kill already leaves it,
+// and recoverInterruptedPluginUpdates reclaims any stash at the next boot.
 const SHUTDOWN_PLUGIN_DRAIN_MS = 3000;
 const SHUTDOWN_LEASE_RELEASE_MS = 2000;
 let shuttingDown = false;
@@ -1005,19 +1006,24 @@ async function gracefulShutdown(signal: string): Promise<void> {
     try { saveDatabase(); } catch (e: any) { console.warn('[shutdown] saveDatabase:', e && e.message); }
 
     // 3. Hand back the plugin-op leases whose operation is CONFIRMED finished — and nothing else.
-    //    The allow-list is built from names, not from a prefix or an exclusion, so no lease this
-    //    handler was never meant to touch can end up in it (see the header comment).
+    //
+    //    The list is built from the operations this handler drained, and releaseFinishedOpLeases only
+    //    ever knows about plugin-op leases, so 'wordjs:active-plugins' and 'wordjs:cron' are not
+    //    reachable from here at all — that safety property is structural now rather than a matter of
+    //    getting an allow-list right. It replaces the old sweep over dist-lock's `heldLocks` map, which
+    //    could not release anything at all: a lease leaves that map in the same step its DB release
+    //    starts, so by the time the drain reports an operation finished its name is already gone from
+    //    it. What is genuinely left after the drain is the pathological pair — a hand-back whose DB
+    //    write FAILED, and one still in flight when the signal landed — and those are retried here.
     const finishedOps = startedOps.filter((k) => !stillRunning.includes(k));
     if (finishedOps.length) {
         let deadline: NodeJS.Timeout | null = null;
         try {
-            const { releaseAllHeld } = require('./core/dist-lock');
-            const releasable = new Set(finishedOps.map((k: string) => require('./routes/plugins').pluginOpLeaseName(k)));
-            const only = (name: string) => releasable.has(name);
+            const { releaseFinishedOpLeases } = require('./routes/plugins');
             // clearTimeout the loser: an orphaned timer keeps the event loop alive and, under
             // --test-force-exit, gets the process killed mid-IPC (see the CI flake this pattern caused).
             const bounded = new Promise<void>((resolve) => { deadline = setTimeout(resolve, SHUTDOWN_LEASE_RELEASE_MS); });
-            const freed = await Promise.race([releaseAllHeld({ only }), bounded]);
+            const freed = await Promise.race([releaseFinishedOpLeases(finishedOps), bounded]);
             if (Array.isArray(freed) && freed.length) console.log(`[shutdown] released ${freed.length} plugin-operation lease(s): ${freed.join(', ')}`);
         } catch (e: any) {
             console.warn('[shutdown] could not release the plugin-operation leases (they will expire on their TTL):', e && e.message);

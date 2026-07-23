@@ -88,21 +88,31 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   written until afterwards), stop the just-registered child as an orphan and remove the directory —
   while the activation went on to complete its `active_plugins` write, leaving the flag naming a slug
   with no code on disk.
-- **`SIGTERM` / `SIGINT` drain plugin operations and give back their leases.** The shutdown now refuses
-  new plugin operations, waits up to 3s for the in-flight ones to finish, and hands back the
-  `wordjs:plugin-op:<slug>` leases of the ones that did. Previously nothing was released, so a
-  `systemctl restart` / `docker restart` / `pm2 reload` during an update stranded that slug's lease for
-  its full 120s TTL — blocking the next boot's crash recovery and every install/update/upload/delete of
-  that plugin, with a "locked by another operation" message that was not true. An operation still
-  running at the deadline **keeps** its lease (handing a peer the plugin this node is mid-swap on is
-  worse than the wait) and it expires on the TTL, exactly as an abrupt kill already left it. Only those
-  plugin-operation leases are released: `wordjs:cron` under a running backup or ACME renewal, and
-  `wordjs:active-plugins` under an activate/deactivate, are deliberately left to expire rather than be
-  handed to a peer mid-work.
+- **`SIGTERM` / `SIGINT` drain plugin operations, and then really do give back their leases.** The
+  shutdown refuses new plugin operations and waits up to 3s for the in-flight ones to finish — an
+  operation that finishes releases its own `wordjs:plugin-op:<slug>` lease, which is what makes a
+  planned restart mid-update stop blocking the next boot's crash recovery (and every
+  install/update/upload/delete of that plugin) for the lease's full 120s TTL, with a "locked by another
+  operation" message that was not true. What the shutdown then hands back is the leases of operations
+  the drain confirmed finished — and *that* step is the one this release actually delivers. It was
+  written as a sweep over the distributed lock's "held leases" map, filtered to the drained operations,
+  and it could never release anything: a lease leaves that map in the same step its release starts, so
+  by the time an operation counts as finished its name is already gone. It now works off the plugin
+  operations' own record, which is cleared only once a release is **confirmed** by the database, so the
+  two states that genuinely strand a lease are repaired: a hand-back whose DB write failed (previously
+  swallowed, and indistinguishable from success), and one still in flight when the signal landed.
+  An operation still running at the deadline **keeps** its lease (handing a peer the plugin this node is
+  mid-swap on is worse than the wait) and it expires on the TTL, exactly as an abrupt kill already left
+  it. `wordjs:cron` under a running backup or ACME renewal, and `wordjs:active-plugins` under an
+  activate/deactivate, are now **unreachable** from the shutdown path rather than merely excluded
+  from it.
 - **`DELETE /plugins/:slug` can answer `409 { stillRunning: true }`.** Removing the directory is
-  irreversible, so the handler stops the plugin's sandbox child first and then verifies; if a child is
-  somehow still registered, the delete is refused and the admin is told to restart the server rather
-  than have the files pulled out from under a live process.
+  irreversible, so the handler stops the plugin's sandbox child first and then waits (bounded) until
+  **the process is actually gone** — not merely until the registry is quiet. Stopping a child removes
+  its registry entry synchronously while the kill is asynchronous, so re-reading "is it running?" right
+  after asking it to stop restates the request instead of verifying it. If a process this slug owns is
+  still alive, the delete is refused and the admin is told to restart the server rather than have the
+  files pulled out from under it.
 - **Interrupted-update recovery restarts what it restores, and reports it honestly.** The boot sweep's
   result now separates `restored`, `reactivated`, `needsAttention` and `deferred`: a retry that puts a
   plugin's code back also brings it back up (the boot loader has already run by then), the answer is
@@ -125,6 +135,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   including the system mail sender — stayed wired to a process nobody supervised, and only deleting the
   plugin could clear it. Activation is now all-or-nothing: any failure after the child starts stops it
   again and undoes the `active_plugins` entry that call added.
+- **A plugin whose `init()` throws no longer leaves a live sandbox child behind.** The failure was one
+  layer deeper than the transactional activation above, which is why that fix could not cover it: the
+  isolate is registered *inside* the loader, before the child has said anything, and the child starts
+  wiring its hooks, routes and shortcodes into the host from its first message — while the sandbox
+  worker does **not** exit after reporting a failed `init()`. Every failure branch of the loader
+  rejected without undoing any of that, so `POST /plugins/:slug/activate` answered `500` with
+  `active_plugins` clean while a registered, unsupervised process kept applying that plugin's filters to
+  real content, unreachable by `Deactivate` ("Plugin not active"). The loader now tears the child down —
+  registry entry, host wiring, pending supervised restart and the process itself — on **every** path
+  that rejects, so a failed load leaves nothing of the plugin behind and the slug is immediately
+  reusable.
+- **Changing a plugin's permissions, egress allowlist, port or reloading it is serialized like the
+  rest.** `POST /:slug/permissions`, `/:slug/egress-hosts`, `/:slug/reload` and `/:slug/free-port` all
+  re-spawn the sandbox child, which is an unload followed by an awaited load — and they did it outside
+  the per-slug lock. A deactivate landing in that window left an orphan (the reload registered a child
+  for a plugin `active_plugins` no longer lists); a deactivate + delete was worse, because the delete's
+  own verify runs *before* the reload registers, so it answered `200`, removed the directory, and the
+  reload then started a child for a plugin that no longer existed on disk. All four now take the same
+  `409 busy` lock as activate/deactivate/install/update/delete.
 - **Deleting a plugin cancels a restart it had scheduled for itself.** After a plugin crashes, the
   supervisor schedules a retry with up to 60s of backoff — and during that window nothing is registered
   as running, so a delete removed the directory and left the timer armed. It then fired on a deleted

@@ -30,6 +30,10 @@ const crypto = require('crypto');
 // Unique identity for THIS process across the cluster (host:pid alone collides under containers).
 const HOLDER = `${os.hostname()}:${process.pid}:${crypto.randomBytes(4).toString('hex')}`;
 
+// A lock NAME can carry request-derived data ('wordjs:plugin-op:<slug>'), so strip line breaks before
+// it reaches a log line — otherwise a crafted slug forges or splits entries in the operator's log.
+function logSafe(v: any): string { return String(v == null ? '' : v).replace(/\n|\r/g, ' '); }
+
 function isPg(): boolean {
     try { return require('../config/database').getDbType().isPostgres === true; }
     catch { return false; }
@@ -46,15 +50,24 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
  * its successor, which has a brand-new HOLDER, cannot free them either. At the plugin-op lease's 120s
  * TTL that means a plain `systemctl restart` / `docker restart` / `pm2 reload` during a plugin update
  * leaves the next boot unable to touch the very plugin it was mid-swap on, with a "running elsewhere"
- * message that is not true. releaseAllHeld({ only }) is what the shutdown handler calls to give back the
- * ones whose critical section it has confirmed is over — see that function for why `only` is required.
+ * message that is not true.
+ *
+ * WHAT THIS MAP IS NOT: the list of leases a shutdown should hand back. A name is removed here in the
+ * same synchronous step that STARTS the DB release, so an operation only ever counts as finished after
+ * its name is already gone — which is why a shutdown sweep keyed on this map (releaseAllHeld({ only }),
+ * as index.ts once called it) could never release anything. The graceful shutdown therefore keeps its
+ * own record of the plugin-op leases it has not confirmed releasing (routes/plugins) and never consults
+ * this map, which also means it cannot reach 'wordjs:active-plugins' or 'wordjs:cron'. This map is a
+ * "critical section is executing here" registry, used for the heartbeat and for whole-process teardown.
  */
 const heldLocks = new Map<string, NodeJS.Timeout>();
 
 // Postgres "now" in epoch-milliseconds, computed server-side so all nodes compare against one clock.
 const NOW_MS = `(EXTRACT(EPOCH FROM now())*1000)::bigint`;
 
-type LockHandle = { held: boolean; release: () => Promise<void> };
+// release() reports whether the hand-back reached the DB, so a caller that must not lose the lease can
+// keep its own record open and retry (see release() and routes/plugins' unreleasedOpLeases).
+type LockHandle = { held: boolean; release: () => Promise<boolean> };
 
 /**
  * Create the lock table. Must run BEFORE the first acquire (the boot lock cannot live in a table
@@ -113,13 +126,22 @@ async function renew(name: string, ttlMs: number): Promise<boolean> {
 
 /**
  * Release a lock we hold (only clears it if we are still the recorded holder). No-op on SQLite.
+ *
+ * Returns whether the hand-back actually REACHED THE DATABASE. It used to swallow the failure and
+ * return void, which made an unreachable DB indistinguishable from a successful release for every
+ * caller — so a lease that was still ours after a failed UPDATE looked handed back, and nothing
+ * retried it: the successor stayed locked out for the full TTL. The caller that cares
+ * (routes/plugins' plugin-operation lease) keeps its record open on false and retries at shutdown.
+ * Still non-throwing: a release is best-effort by design and must never break a `finally`.
  */
-async function release(name: string): Promise<void> {
-    if (!isPg()) return;
+async function release(name: string): Promise<boolean> {
+    if (!isPg()) return true; // single host — there is no lease to hand back
     try {
         await db().run('UPDATE wordjs_locks SET locked_until = 0 WHERE lock_name = ? AND holder = ?', [name, HOLDER]);
+        return true;
     } catch (e: any) {
         console.warn('[dist-lock] release:', e && e.message);
+        return false;
     }
 }
 
@@ -142,7 +164,7 @@ async function acquireBlocking(
     const renewMs = opts.renewMs ?? Math.max(5000, Math.floor(ttlMs / 3));
     const timeoutMs = opts.timeoutMs ?? 120000;
     const pollMs = opts.pollMs ?? 500;
-    const noop: LockHandle = { held: true, release: async () => { } };
+    const noop: LockHandle = { held: true, release: async () => true };
     if (!isPg()) return noop;
 
     const start = Date.now();
@@ -152,13 +174,13 @@ async function acquireBlocking(
             heldLocks.set(name, timer);
             return {
                 held: true,
-                release: async () => { clearInterval(timer); heldLocks.delete(name); await release(name); },
+                release: async () => { clearInterval(timer); heldLocks.delete(name); return release(name); },
             };
         }
         await sleep(pollMs);
     }
-    console.warn(`[dist-lock] '${name}' acquire timed out after ${timeoutMs}ms.`);
-    return { held: false, release: async () => { } };
+    console.warn(`[dist-lock] '${logSafe(name)}' acquire timed out after ${timeoutMs}ms.`);
+    return { held: false, release: async () => true };
 }
 
 /**
@@ -181,25 +203,19 @@ async function runAsLeader<T>(
 }
 
 /**
- * Hand leases this process still holds back to the cluster. Called from the graceful-shutdown handler
- * (SIGTERM / SIGINT) so a planned restart does not strand a lease for its whole TTL — see heldLocks.
+ * Hand leases this process still holds back to the cluster. Returns the names it tried to free.
  *
- * Best-effort and bounded by design: it is running while the process is on its way out, so a failure
- * to reach the DB just falls back to the TTL, exactly as an abrupt kill would. Returns the names it
- * tried to free (used by the tests and to log what was given back).
- *
- * `only` IS THE SAFE WAY TO CALL THIS AT SHUTDOWN, and the reason is the invariant above: a lease is in
- * this map EXACTLY WHILE ITS CRITICAL SECTION IS RUNNING — the handle deletes it on release, runAsLeader
- * in its `finally`. So an unreviewed sweep hands back precisely the leases still IN USE: it can free
+ * NOT A SIGNAL-HANDLER API. Every lease in this map is one whose critical section is still RUNNING
+ * (see heldLocks), so a sweep over it — with or without a filter — hands back leases that are in use:
  * 'wordjs:active-plugins' in the middle of activatePlugin's read-modify-write of the option, or
  * 'wordjs:cron' while this node's backup or ACME renewal is running, letting a peer start the same work
- * concurrently. A caller must therefore name the leases whose critical sections it has CONFIRMED are
- * finished (the shutdown handler drains the plugin operations and then names those); everything it does
- * not name keeps its registration and heartbeat and expires on its TTL, exactly as after an abrupt kill.
- * A predicate that throws fails CLOSED — unconfirmed means not released.
+ * concurrently. Use it only from a test or a teardown path that owns the whole process. The graceful
+ * shutdown releases plugin-op leases through routes/plugins.releaseFinishedOpLeases instead, which
+ * cannot name any other lease.
  *
- * With no argument every held lease is released. That is for tests and for teardown paths that own the
- * whole process; do NOT use it from a signal handler.
+ * `only` narrows the sweep to the names a caller has CONFIRMED are finished; everything it does not
+ * name keeps its registration and heartbeat and expires on its TTL. A predicate that throws fails
+ * CLOSED — unconfirmed means not released. Best-effort: a DB failure just falls back to the TTL.
  */
 async function releaseAllHeld(opts: { only?: (name: string) => boolean } = {}): Promise<string[]> {
     const only = opts.only;

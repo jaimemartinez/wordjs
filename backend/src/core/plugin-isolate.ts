@@ -112,6 +112,48 @@ const isolateHealth = new Map<string, IsolateHealth>();
 const restartTimers = new Map<string, NodeJS.Timeout>();
 const stopping = new Set<string>(); // slugs whose exit is an INTENTIONAL unload (skip supervision)
 
+/**
+ * Child pids this process spawned for a slug and has NOT yet seen exit, per slug.
+ *
+ * The isolate REGISTRY is not proof of liveness in either direction, and both directions matter:
+ * unloadIsolatedPlugin drops the registry entry synchronously but `kill(SIGKILL)` is asynchronous, so
+ * a slug can be absent from `isolates` while its process is still running — which is all the DELETE
+ * route could check before it rmSync'd the plugin directory. A pid is added at spawn and removed in
+ * the child's own 'exit' handler, so membership means "we spawned it and have not observed its death";
+ * that is exact and immune to pid reuse (a recycled pid belongs to a process we never added).
+ * A reload can transiently have two (the outgoing child and the new one), hence a Set per slug.
+ */
+const livePids = new Map<string, Set<number>>();
+function addLivePid(slug: string, pid: number) {
+    let s = livePids.get(slug);
+    if (!s) { s = new Set<number>(); livePids.set(slug, s); }
+    s.add(pid);
+}
+function dropLivePid(slug: string, pid: number | undefined) {
+    const s = livePids.get(slug);
+    if (!s || !pid) return;
+    s.delete(pid);
+    if (s.size === 0) livePids.delete(slug);
+}
+/** Pids we spawned for this slug and have not observed exiting. Empty ⇒ nothing of ours is running. */
+function getLivePids(slug: string): number[] { return Array.from(livePids.get(slug) || []); }
+
+/**
+ * Wait (bounded) until this slug has NO registered isolate AND no child we spawned is still alive.
+ *
+ * The only honest precondition for deleting a plugin's files: `isIsolated(slug) === false` alone says
+ * the registry is clean, not that the process is gone. Returns false on timeout so the caller can
+ * refuse rather than pull the directory out from under a process that is still dying.
+ */
+async function awaitIsolateStopped(slug: string, timeoutMs = 3000): Promise<boolean> {
+    const deadline = Date.now() + Math.max(0, timeoutMs);
+    for (;;) {
+        if (!isolates.has(slug) && getLivePids(slug).length === 0) return true;
+        if (Date.now() >= deadline) return false;
+        await new Promise((r) => setTimeout(r, 25));
+    }
+}
+
 const SUPERVISOR = { backoff: [1000, 5000, 15000, 60000], maxRestarts: 5, windowMs: 5 * 60 * 1000 };
 
 function getHealth(slug: string): IsolateHealth {
@@ -839,6 +881,10 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             });
         }
         if (bpfFd >= 0) { try { require('fs').closeSync(bpfFd); } catch { /* parent's dup; the child kept its own */ } }
+        // Record the pid as OURS-and-alive from the moment it exists (see livePids): the registry entry
+        // below is not evidence of a running process, and every teardown path needs an answer that is.
+        const spawnedPid: number | undefined = child.pid;
+        if (spawnedPid) addLivePid(slug, spawnedPid);
         // WINDOWS preventive memory cap: assign the just-forked child to a Job Object whose per-process
         // commit limit (JOB_OBJECT_LIMIT_PROCESS_MEMORY = RSS_BUDGET_BYTES) makes the KERNEL fail any
         // allocation past the budget — the host stays safe even on a fast off-heap balloon, instead of
@@ -942,7 +988,7 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             }, process.platform === 'darwin' ? 400 : 1000);
             if (rssPoll.unref) rssPoll.unref();
         }
-        child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); });
+        child.on('exit', () => { if (rssPoll) clearInterval(rssPoll); dropLivePid(slug, spawnedPid); });
         const api = createPluginApi(slug);
         let invokeId = 0;
         // Backpressure: bound concurrent worker→host bridge calls so a runaway/malicious plugin can't
@@ -1093,10 +1139,13 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
                 const reason: string = String(msg.error || 'fatal error in sandbox');
                 getHealth(slug).lastError = reason;
                 console.error(`[Isolate ${slug}] fatal: ${reason}`);
-                if (!settled) { settled = true; reject(new Error(reason)); }
+                // failLoad, not a bare reject: the child is registered and hook-wired by now (see it).
+                failLoad(new Error(reason));
             } else if (msg.kind === 'init-error') {
-                settled = true;
-                reject(new Error(msg.error));
+                // The plugin's init() threw. plugin-worker.js does NOT exit after sending this, so the
+                // child stays alive with everything it registered before the throw still applying to
+                // host content — failLoad is what makes the rejection mean "nothing of it is left".
+                failLoad(new Error(msg.error));
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
                 if (inflightCalls >= MAX_INFLIGHT_CALLS) {
@@ -1404,7 +1453,52 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             try { require('./adminMenu').unregisterAdminMenu(slug); } catch { /* */ }
         };
 
-        worker.on('error', (err: any) => { console.error(`[Isolate ${slug}] child error:`, err && err.message); if (!settled) { settled = true; reject(err); } });
+        /**
+         * THE ONLY WAY THIS LOAD MAY FAIL. Every reject path goes through here.
+         *
+         * `isolates.set()` runs at the END of this executor — synchronously, before the child has said
+         * anything — so by the time the child reports 'init-error'/'fatal', or errors, the isolate is
+         * ALREADY registered and the child is ALREADY wiring hooks, routes, shortcodes and providers
+         * into the host through the message handler above. Rejecting from those branches without
+         * undoing any of it left a live, registered, hook-applying child for a plugin whose activation
+         * had just returned 500 with `active_plugins` clean: nothing supervised it, deactivatePlugin
+         * early-returned 'Plugin not active', and only DELETE could clear it. The child does not even
+         * exit on its own — plugin-worker.js sends 'init-error' and keeps running.
+         *
+         * Wrapping the caller's `await` would only cover the callers that remembered to; the module that
+         * OWNS the child is the one place that can guarantee it, so the guarantee lives here: after a
+         * rejected loadIsolatedPlugin there is no registry entry, no host-side registration and no live
+         * process for this slug. Idempotent (a second failure signal is a no-op) and never rejects.
+         */
+        const failLoad = (err: Error, opts: { alreadyExited?: boolean } = {}) => {
+            if (settled) return;
+            settled = true;
+            // Is the slug currently owned by a DIFFERENT child (a reload that already replaced us)? If
+            // so, only our own process may be touched: `teardown` splices route layers by path+method
+            // and unregisters slug-wide transports/menus, and health is keyed by slug — all of which now
+            // describe the new child. Same guard the 'exit' handler uses, for the same reason. Note that
+            // "already absent" is NOT "owned by another": the exit handler deregisters before calling
+            // in here, and that case must still clean up.
+            const cur = isolates.get(slug);
+            const ownedByAnother = !!(cur && cur.worker !== worker);
+            if (rssPoll) { try { clearInterval(rssPoll); } catch { /* */ } rssPoll = null; }
+            if (!ownedByAnother) {
+                // A supervised restart armed for this slug must not resurrect what we are tearing down.
+                const pendingRestart = restartTimers.get(slug);
+                if (pendingRestart) { clearTimeout(pendingRestart); restartTimers.delete(slug); }
+                if (cur) {
+                    isolates.delete(slug);
+                    try { teardown(); } catch (e: any) { console.error(`[Isolate ${slug}] teardown after a failed load:`, e && e.message); }
+                }
+            }
+            if (!opts.alreadyExited) { try { worker.terminate(); } catch { /* already gone */ } }
+            const h = getHealth(slug);
+            if (!ownedByAnother) { h.state = 'stopped'; h.pid = null; }
+            h.lastError = String((err && err.message) || err);
+            reject(err);
+        };
+
+        worker.on('error', (err: any) => { console.error(`[Isolate ${slug}] child error:`, err && err.message); failLoad(err instanceof Error ? err : new Error(String(err))); });
         worker.on('exit', (code: number) => {
             // Only act if WE are still the registered isolate — on reload a fresh child has already
             // replaced us, and tearing down here would rip out the new child's registrations.
@@ -1413,8 +1507,13 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
             if (wasCurrent) { isolates.delete(slug); try { teardown(); } catch { /* */ } }
             if (code !== 0) console.warn(`[Isolate ${slug}] child exited with code ${code}`);
             // child_process: a crash DURING init emits 'exit' (not 'error'); reject the load Promise so it
-            // doesn't hang forever if the child died before sending 'ready' / 'init-error'.
-            if (!settled) { settled = true; reject(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`)); return; }
+            // doesn't hang forever if the child died before sending 'ready' / 'init-error'. Routed through
+            // failLoad so this path clears the same state as every other failure (alreadyExited: the
+            // process is gone, so there is nothing left to terminate).
+            if (!settled) {
+                failLoad(new Error(`Isolated plugin '${slug}' exited during startup (code ${code})`), { alreadyExited: true });
+                return;
+            }
 
             // Settled = the child had been RUNNING, so this is a RUNTIME exit.
             const h = getHealth(slug);
@@ -1437,19 +1536,24 @@ async function loadIsolatedPlugin(slug: string, entryFile: string, opts: { super
 }
 
 function unloadIsolatedPlugin(slug: string) {
-    // Mark this stop as INTENTIONAL so the exit handler doesn't mistake it for a crash and auto-restart,
-    // and cancel any pending backoff restart from an earlier crash.
-    stopping.add(slug);
+    // Cancel any pending backoff restart from an earlier crash. Unconditional: the whole point of the
+    // no-handle case is that a crashed plugin has NO registered isolate while its restart timer is armed.
     const pending = restartTimers.get(slug);
     if (pending) { clearTimeout(pending); restartTimers.delete(slug); }
     const health = isolateHealth.get(slug);
     if (health) health.state = 'stopped';
     const h = isolates.get(slug);
-    if (h) {
-        try { h.teardown && h.teardown(); } catch (e) { /* */ }
-        try { h.worker.terminate(); } catch (e) { /* */ }
-        isolates.delete(slug);
-    }
+    // Nothing registered ⇒ nothing to kill, and — crucially — no 'exit' is coming. `stopping` is
+    // consumed by a child's exit handler, so marking a slug with no handle leaves an entry that is never
+    // read and never removed: it accumulated on EVERY delete and on the activate backstop, and the next
+    // child's exit would then be silently classified as an intentional stop instead of a crash to
+    // supervise. Only mark the stop when there is actually a child whose exit will consume it.
+    if (!h) return;
+    // INTENTIONAL stop — so the exit handler doesn't mistake it for a crash and auto-restart it.
+    stopping.add(slug);
+    try { h.teardown && h.teardown(); } catch (e) { /* */ }
+    try { h.worker.terminate(); } catch (e) { /* */ }
+    isolates.delete(slug);
 }
 
 // Tear the plugin down and start it again, reusing the entry file from the original load. Used when a
@@ -1469,4 +1573,15 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     return result;
 }
 
-module.exports = { loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin, isIsolated: (slug: string) => isolates.has(slug), getIsolateStatus, getAllIsolateStatuses, assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState, __bwrapProfile: bwrapProfile };
+module.exports = {
+    loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin,
+    isIsolated: (slug: string) => isolates.has(slug),
+    getLivePids, awaitIsolateStopped,
+    getIsolateStatus, getAllIsolateStatuses,
+    assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
+    __bwrapProfile: bwrapProfile,
+    // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
+    // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child
+    // behind it is a leak — it never goes away and it silences the supervisor for the NEXT child.
+    __stopIntentMarked: (slug: string) => stopping.has(slug),
+};
