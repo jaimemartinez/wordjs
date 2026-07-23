@@ -185,6 +185,52 @@ export default function MailServerAdmin() {
     const [draftId, setDraftId] = useState<number | null>(null);
     const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'error' | null>(null);
     const [suggestions, setSuggestions] = useState<{ email: string, name: string }[]>([]);
+
+    // Resizable columns (mail sidebar + message list), remembered per browser. The widths are applied
+    // INLINE, not via Tailwind `w-[Npx]`: arbitrary Tailwind values only exist in the served CSS when the
+    // host happened to scan this plugin at frontend-build time, so relying on `lg:w-[340px]` made the list
+    // lose its width and collapse the reading pane. Inline styles always apply — and let the user drag.
+    const [sidebarWidth, setSidebarWidth] = useState(280);
+    const [listWidth, setListWidth] = useState(360);
+    const [isDesktop, setIsDesktop] = useState(false);
+    useEffect(() => {
+        try {
+            const sw = parseInt(localStorage.getItem('wjp_mail_sidebar_w') || '', 10);
+            const lw = parseInt(localStorage.getItem('wjp_mail_list_w') || '', 10);
+            if (Number.isFinite(sw)) setSidebarWidth(Math.min(Math.max(sw, 220), 420));
+            if (Number.isFinite(lw)) setListWidth(Math.min(Math.max(lw, 280), 720));
+        } catch { /* localStorage blocked */ }
+        const mq = window.matchMedia('(min-width: 1024px)');
+        const sync = () => setIsDesktop(mq.matches);
+        sync();
+        mq.addEventListener('change', sync);
+        return () => mq.removeEventListener('change', sync);
+    }, []);
+    // Drag a divider to resize the neighbouring column; clamp within sane bounds and persist on release.
+    const startResize = (which: 'sidebar' | 'list', e: any) => {
+        e.preventDefault();
+        const startX = e.clientX;
+        const isSidebar = which === 'sidebar';
+        const startW = isSidebar ? sidebarWidth : listWidth;
+        const min = isSidebar ? 220 : 280;
+        const max = isSidebar ? 420 : 720;
+        const setW = isSidebar ? setSidebarWidth : setListWidth;
+        const key = isSidebar ? 'wjp_mail_sidebar_w' : 'wjp_mail_list_w';
+        const clamp = (x: number) => Math.min(Math.max(startW + (x - startX), min), max);
+        const onMove = (ev: any) => setW(clamp(ev.clientX));
+        const onUp = (ev: any) => {
+            document.removeEventListener('mousemove', onMove);
+            document.removeEventListener('mouseup', onUp);
+            document.body.style.userSelect = '';
+            document.body.style.cursor = '';
+            try { localStorage.setItem(key, String(clamp(ev.clientX))); } catch { /* */ }
+        };
+        document.body.style.userSelect = 'none';
+        document.body.style.cursor = 'col-resize';
+        document.addEventListener('mousemove', onMove);
+        document.addEventListener('mouseup', onUp);
+    };
+
     // Functional State
     const [searchQuery, setSearchQuery] = useState("");
     const [searching, setSearching] = useState(false); // For autocomplete
@@ -982,8 +1028,8 @@ export default function MailServerAdmin() {
                 <div onClick={() => setMobileMenuOpen(false)} style={{ zIndex: 30 }} className="fixed inset-0 bg-slate-900/50 md:hidden"></div>
             )}
 
-            <aside className={`
-                absolute inset-y-0 left-0 z-40 w-[280px] bg-gradient-to-b from-slate-900 to-slate-950 flex flex-col pt-8 pb-6 text-white overflow-hidden transition-transform duration-300 ease-out shadow-2xl md:shadow-none md:relative md:translate-x-0
+            <aside style={{ width: isDesktop ? sidebarWidth : 280 }} className={`
+                absolute inset-y-0 left-0 z-40 bg-gradient-to-b from-slate-900 to-slate-950 flex flex-col pt-8 pb-6 text-white overflow-hidden transition-transform duration-300 ease-out shadow-2xl md:shadow-none md:relative md:translate-x-0 flex-shrink-0
                 ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full'}
             `}>
                 {/* Decoration */}
@@ -1188,10 +1234,19 @@ export default function MailServerAdmin() {
             ) : (
                 // MAIL VIEW
                 <>
+                    {/* Resize handle: mail sidebar ↔ list (desktop only). Drag to resize; width is remembered. */}
+                    <div
+                        onMouseDown={(e) => startResize('sidebar', e)}
+                        title="Arrastra para ajustar el ancho"
+                        className="hidden lg:block w-1.5 cursor-col-resize bg-slate-200 hover:bg-violet-400 active:bg-violet-500 transition-colors flex-shrink-0"
+                    ></div>
+
                     {/* COLUMN 2: MESSAGE LIST */}
-                    <div className={`
+                    <div
+                        style={{ width: isDesktop ? listWidth : undefined }}
+                        className={`
                         bg-white border-r border-slate-200 flex flex-col z-10 shadow-sm relative transition-all duration-300
-                        ${selectedEmail ? 'hidden lg:flex lg:w-[340px] lg:flex-none lg:flex-shrink-0' : 'flex w-full md:flex-1 lg:w-[340px] lg:flex-none lg:flex-shrink-0'}
+                        ${selectedEmail ? 'hidden lg:flex lg:flex-none lg:flex-shrink-0' : 'flex w-full md:flex-1 lg:flex-none lg:flex-shrink-0'}
                     `}>
                         {/* Header & Search */}
                         <div className="h-20 px-4 md:px-6 flex items-center border-b border-slate-100 bg-white/90 backdrop-blur-sm sticky top-0 z-20 gap-3">
@@ -1400,6 +1455,13 @@ export default function MailServerAdmin() {
                             )}
                         </div>
                     </div>
+
+                    {/* Resize handle: list ↔ reading pane (desktop only). Drag to resize; width is remembered. */}
+                    <div
+                        onMouseDown={(e) => startResize('list', e)}
+                        title="Arrastra para ajustar el ancho"
+                        className="hidden lg:block w-1.5 cursor-col-resize bg-slate-200 hover:bg-violet-400 active:bg-violet-500 transition-colors flex-shrink-0"
+                    ></div>
 
                     {/* COLUMN 3: READING PANE */}
                     <main className={`
