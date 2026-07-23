@@ -104,6 +104,42 @@ async function getSiteDomain() {
 }
 
 /**
+ * === ACTIVE CORPORATE MAILBOX — THE ONE DEFINITION (SSOT) ======================================
+ *
+ * A user has an ACTIVE CORPORATE (professional) MAILBOX when their OWN configured account email is on
+ * the site domain. This is not a new rule: it is the rule the INBOUND path already enforces (mail for
+ * user@siteDomain is only stored when the matched user's own email is @siteDomain), the same rule the
+ * internal-delivery branch of sendMail uses, and exactly what the admin user-form toggle does — it
+ * rewrites the account email to username@siteDomain. A user on a personal address (gmail.com) has NO
+ * inbox here at all, even when a @siteDomain address maps to their username.
+ *
+ * It ALSO gates the outbound/webmail surface (the `mailbox: true` route option added in init): sending
+ * through this MTA signs the message with the SITE's DKIM key and spends the site domain's sending
+ * reputation, so it must be limited to accounts the operator actually provisioned a mailbox for.
+ *
+ * Every caller goes through here — inbound delivery, internal delivery, the route gate and the
+ * /mailbox probe the UI uses — so there is exactly one answer. The HOST mirrors the same predicate for
+ * admin-menu visibility (backend/src/routes/plugins.ts: `hasProfessionalMailbox` + the generic
+ * `requiresProfessionalMailbox` flag, admins always kept); a different answer there would surface a
+ * menu entry whose page only 403s, so keep the two in step.
+ *
+ * NOT cached, deliberately: `user` is the host's per-request projection, rebuilt from the DB by
+ * middleware/auth.ts on EVERY request, so an admin flipping the mailbox toggle off denies the very
+ * next request instead of a stale grant living on in this process.
+ */
+function mailboxDomainOf(email) {
+    const s = String(email == null ? '' : email).trim().toLowerCase();
+    const at = s.lastIndexOf('@'); // last '@' wins: the domain is everything after the final separator
+    if (at <= 0 || at === s.length - 1) return ''; // blank / no '@' / empty local part / empty domain
+    return s.slice(at + 1);
+}
+function hasCorporateMailbox(user, siteDomain) {
+    const domain = String(siteDomain == null ? '' : siteDomain).trim().toLowerCase();
+    if (!domain || !user) return false; // unknown site domain or no user -> fail closed
+    return mailboxDomainOf(user.userEmail) === domain;
+}
+
+/**
  * Is `domain` a real, publicly-resolvable mail domain we could plausibly be authenticated FOR?
  *
  * getSiteDomain() is just `new URL(siteurl).hostname` (backend/src/core/plugin-api.ts) with a
@@ -1160,13 +1196,13 @@ async function initSMTPServer() {
                         // domain (a user's personal gmail.com, or a foreign address) must never be
                         // captured into a WordJS inbox, and catch-all stays scoped to @siteDomain (never a
                         // blanket accept-anything that would hoard mail meant for other providers). A user
-                        // only has an inbox when their own configured email is on our domain (professional
-                        // mailbox); a personal-email user has none.
+                        // only has an inbox when they have an ACTIVE CORPORATE MAILBOX — one definition,
+                        // hasCorporateMailbox(); a personal-email user has none.
                         const isLocalDomain = !!(recDomain && recDomain === siteDomain);
                         let user = null;
                         if (isLocalDomain) {
                             const candidate = await User.findByEmail(addr.address) || await User.findByLogin(recName);
-                            if (candidate && String(candidate.userEmail || '').toLowerCase().split('@')[1] === siteDomain) {
+                            if (hasCorporateMailbox(candidate, siteDomain)) {
                                 user = candidate;
                             }
                         }
@@ -1493,10 +1529,11 @@ async function sendMail(data) {
             let localUser = null;
             if (rDomain && rDomain === siteDomain) {
                 const candidate = await User.findByEmail(recipient) || await User.findByLogin(rName);
-                // A user only has a WordJS inbox when their OWN configured email is on our domain (i.e.
-                // the professional mailbox is enabled). If their email is a personal address (gmail.com),
+                // A user only has a WordJS inbox when they have an ACTIVE CORPORATE MAILBOX (their OWN
+                // configured email is on our domain). If their email is a personal address (gmail.com),
                 // they have no inbox even when a @domain address maps to their username — deliver out.
-                if (candidate && String(candidate.userEmail || '').toLowerCase().split('@')[1] === siteDomain) {
+                // Same predicate as the inbound path and the route gate: hasCorporateMailbox().
+                if (hasCorporateMailbox(candidate, siteDomain)) {
                     localUser = candidate;
                 }
             }
@@ -2140,10 +2177,74 @@ exports.init = async function (bridge) {
     // === API ROUTES — namespaced by the host under /api/v1/plugin/mail-server/* ===
     // No 'absolute' bypass exists anymore: wordjs.http.route prefixes /api/v1/plugin/<slug>, so we pass
     // only the sub-path. The plugin's frontend (client/) calls api('/plugin/mail-server/...').
+
+    // === MAIL-SURFACE GATE ========================================================================
+    // Using the mail features requires an ACTIVE CORPORATE MAILBOX (hasCorporateMailbox — the one
+    // definition, up top). `{ auth: true }` alone is NOT enough: it only proves *some* account is
+    // logged in, so before this every authenticated user — a subscriber whose account email is a
+    // personal gmail address and who therefore has no inbox at all — could POST /send and push mail
+    // through the site MTA, signed with the site DKIM key, spending the site domain's reputation.
+    //
+    // The check lives in THIS helper rather than in ~30 handlers so it cannot be forgotten on a future
+    // route: a route opts in with `mailbox: true` and the guard is applied for it, once, here.
+    // `mailbox` is a PLUGIN-LOCAL option — the host only understands auth/admin/multipart — so it is
+    // stripped before the registration crosses the bridge, and it implies auth (a gated route without
+    // authentication would have no user to check, i.e. it would deny everything).
+    //
+    // ADMINISTRATORS PASS WITHOUT A MAILBOX OF THEIR OWN, deliberately:
+    //   - inbound catch-all mail (no matching mailbox) is stored OWNED BY THE SITE ADMIN
+    //     (getAdminUser() in the onData handler), so an admin whose account email is a personal
+    //     address would otherwise be locked out of the mail they own;
+    //   - canAccessEmail already grants administrators read access to any message (same role-based
+    //     override, same reason: req.user here is the users:read projection and carries no capability
+    //     map). Denying them the surface would contradict that;
+    //   - the host makes the same call for menu visibility — backend/src/routes/plugins.ts keeps
+    //     `requiresProfessionalMailbox` items visible to administrators — so a stricter rule here
+    //     would show an admin a menu entry whose page only 403s.
+    // If a capability bridge ever lands, replace BOTH role checks (here and canAccessEmail) with an
+    // explicit capability at the same time.
+    const canUseMailSurface = async (user) => {
+        if (!user) return false;
+        if (user.role === 'administrator') return true;
+        return hasCorporateMailbox(user, await getSiteDomain());
+    };
+    const denyNoMailbox = (res) => res.status(403).json({
+        code: 'mail_no_corporate_mailbox',
+        error: 'Your account has no active corporate mailbox, so it cannot send or read mail on this ' +
+            'server. Ask an administrator to enable the professional mail account for your user ' +
+            '(Users → edit user → Professional Mail Account), then reload this page.'
+    });
+
     const route = (method, sub, opts, handler) => {
         if (typeof opts === 'function') { handler = opts; opts = {}; }
-        wordjs.http.route(method, sub, opts, handler);
+        const { mailbox, ...hostOpts } = (opts || {});
+        if (mailbox) hostOpts.auth = true; // a mailbox-gated route is always authenticated
+        const finalHandler = mailbox
+            ? async (req, res) => {
+                // Re-evaluated on EVERY request off the host's freshly-loaded req.user — never cached,
+                // so losing the mailbox denies immediately (see hasCorporateMailbox).
+                if (!await canUseMailSurface(req.user)) return denyNoMailbox(res);
+                return handler(req, res);
+            }
+            : handler;
+        wordjs.http.route(method, sub, hostOpts, finalHandler);
     };
+
+    // GET /api/v1/plugin/mail-server/mailbox — "may I use the mail UI?", for the client shell.
+    // Deliberately NOT mailbox-gated: it is the probe that TELLS a user they have no mailbox, so it
+    // must answer instead of 403-ing. Answers through canUseMailSurface so the UI can never disagree
+    // with the gate.
+    route('get', '/mailbox', { auth: true }, async (req, res) => {
+        const siteDomain = await getSiteDomain();
+        const hasMailbox = hasCorporateMailbox(req.user, siteDomain);
+        res.json({
+            hasMailbox,
+            canUseMail: await canUseMailSurface(req.user),
+            isAdmin: req.user.role === 'administrator',
+            address: hasMailbox ? req.user.userEmail : null,
+            siteDomain
+        });
+    });
 
     // SECURITY: authorize a request against a single email record.
     //
@@ -2163,7 +2264,7 @@ exports.init = async function (bridge) {
 
     // GET /api/v1/plugin/mail-server/emails/search — operator-aware (from:/to:/subject:/label:/in:/
     // has:attachment/is:unread/is:starred + free text), scoped to the requester's mailbox.
-    route('get', '/emails/search', { auth: true }, async (req, res) => {
+    route('get', '/emails/search', { auth: true, mailbox: true }, async (req, res) => {
         const raw = String(req.query.q || '');
         if (raw.length < 2) return res.json({ emails: [] });
 
@@ -2188,7 +2289,7 @@ exports.init = async function (bridge) {
     // GET /api/v1/plugin/mail-server/emails — folder listing. Also accepts folder=spam and
     // folder=label:<id>. Returns badge counts + the listed messages' labels in the SAME response so
     // the client needs ONE request per poll (it used to issue /emails + /stats).
-    route('get', '/emails', { auth: true }, async (req, res) => {
+    route('get', '/emails', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const rawFolder = String(req.query.folder || 'inbox');
             const KNOWN = ['inbox', 'sent', 'drafts', 'archive', 'starred', 'trash', 'spam'];
@@ -2219,7 +2320,7 @@ exports.init = async function (bridge) {
     });
 
     // GET /api/v1/plugin/mail-server/stats — kept for back-compat; same single-pass counters.
-    route('get', '/stats', { auth: true }, async (req, res) => {
+    route('get', '/stats', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const counts = await Email.getCounts(req.user.id, req.user.userEmail);
             res.json({ unread: counts.inbox_unread, ...counts });
@@ -2231,7 +2332,7 @@ exports.init = async function (bridge) {
     // GET /api/v1/plugin/mail-server/emails/:id — full message + its whole conversation, with
     // attachments and labels for EVERY thread message in two batched queries (attachments used to be
     // dropped entirely whenever the conversation had more than one message).
-    route('get', '/emails/:id', { auth: true }, async (req, res) => {
+    route('get', '/emails/:id', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
@@ -2263,7 +2364,7 @@ exports.init = async function (bridge) {
     });
 
     // DELETE /api/v1/plugin/mail-server/emails/:id - Move to Trash (Soft Delete)
-    route('delete', '/emails/:id', { auth: true }, async (req, res) => {
+    route('delete', '/emails/:id', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
@@ -2282,7 +2383,7 @@ exports.init = async function (bridge) {
     });
 
     // PUT /api/v1/plugin/mail-server/emails/:id/restore - Restore from Trash
-    route('put', '/emails/:id/restore', { auth: true }, async (req, res) => {
+    route('put', '/emails/:id/restore', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
 
@@ -2295,13 +2396,13 @@ exports.init = async function (bridge) {
     });
 
     // DELETE /api/v1/plugin/mail-server/trash/empty - Empty Trash
-    route('delete', '/trash/empty', { auth: true }, async (req, res) => {
+    route('delete', '/trash/empty', { auth: true, mailbox: true }, async (req, res) => {
         await Email.emptyTrash(req.user.id, req.user.userEmail);
         res.json({ success: true, message: 'Trash emptied' });
     });
 
     // PUT /api/v1/plugin/mail-server/emails/:id/star
-    route('put', '/emails/:id/star', { auth: true }, async (req, res) => {
+    route('put', '/emails/:id/star', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
@@ -2311,7 +2412,7 @@ exports.init = async function (bridge) {
     });
 
     // PUT /api/v1/plugin/mail-server/emails/:id/archive
-    route('put', '/emails/:id/archive', { auth: true }, async (req, res) => {
+    route('put', '/emails/:id/archive', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
@@ -2321,7 +2422,7 @@ exports.init = async function (bridge) {
     });
 
     // POST /api/v1/plugin/mail-server/classification/train
-    route('post', '/classification/train', { auth: true }, async (req, res) => {
+    route('post', '/classification/train', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const { id, category } = req.body; // category: 'spam' or 'ham'
             if (!['spam', 'ham'].includes(category)) return res.status(400).json({ error: 'Invalid category' });
@@ -2359,7 +2460,7 @@ exports.init = async function (bridge) {
     });
 
     // POST /api/v1/plugin/mail-server/drafts
-    route('post', '/drafts', { auth: true }, async (req, res) => {
+    route('post', '/drafts', { auth: true, mailbox: true }, async (req, res) => {
         const { id, to, cc, bcc, subject, body, isHtml = true, replyToId, attachments } = req.body;
 
         try {
@@ -2407,7 +2508,7 @@ exports.init = async function (bridge) {
     });
 
     // POST /api/v1/plugin/mail-server/send
-    route('post', '/send', { auth: true }, async (req, res) => {
+    route('post', '/send', { auth: true, mailbox: true }, async (req, res) => {
         const { to, cc, bcc, subject, body, isHtml = true, replyToId, id, attachments, scheduledAt } = req.body;
         if (!to || !subject || !body) {
             return res.status(400).json({ error: 'Missing required fields' });
@@ -2542,7 +2643,7 @@ exports.init = async function (bridge) {
     // POST /api/v1/plugin/mail-server/emails/:id/unsend — cancel a message still in its undo window
     // (or a scheduled send) and turn it back into a draft. Guarded on is_sent = 0 in the UPDATE
     // itself, so racing the queue can never "unsend" something already handed to delivery.
-    route('post', '/emails/:id/unsend', { auth: true }, async (req, res) => {
+    route('post', '/emails/:id/unsend', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         const isOwner = email.user_id === req.user.id ||
@@ -2563,7 +2664,7 @@ exports.init = async function (bridge) {
     // holds exactly the still-failed recipients (updateRetryState rewrites it), so we re-send those
     // through sendMail with isRetry:true — reusing the same Sent record (no duplicate copy). Manual
     // retry resets the attempt counter so the user gets a fresh delivery cycle.
-    route('post', '/emails/:id/retry', { auth: true }, async (req, res) => {
+    route('post', '/emails/:id/retry', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         const isOwner = email.user_id === req.user.id ||
@@ -2622,7 +2723,7 @@ exports.init = async function (bridge) {
     });
 
     // GET /api/v1/plugin/mail-server/users/search
-    route('get', '/users/search', { auth: true }, async (req, res) => {
+    route('get', '/users/search', { auth: true, mailbox: true }, async (req, res) => {
         const query = req.query.q || '';
         if (query.length < 2) return res.json([]);
 
@@ -2885,7 +2986,7 @@ exports.init = async function (bridge) {
     });
 
     // GET /api/v1/plugin/mail-server/attachments/:fileId
-    route('get', '/attachments/:fileId', { auth: true }, async (req, res) => {
+    route('get', '/attachments/:fileId', { auth: true, mailbox: true }, async (req, res) => {
         const fileId = req.params.fileId;
 
         try {
@@ -2928,7 +3029,7 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/upload/attachment
     // Host parses the multipart upload (multer) and forwards req.file metadata to this handler.
-    route('post', '/upload/attachment', { auth: true, multipart: 'file' }, (req, res) => {
+    route('post', '/upload/attachment', { auth: true, mailbox: true, multipart: 'file' }, (req, res) => {
         if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
         res.json({
             success: true,
@@ -2942,7 +3043,7 @@ exports.init = async function (bridge) {
     });
 
     // PUT /api/v1/plugin/mail-server/emails/:id/read — explicit read/unread toggle (Gmail parity).
-    route('put', '/emails/:id/read', { auth: true }, async (req, res) => {
+    route('put', '/emails/:id/read', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         if (!Email.canUserAccess(email, req.user.userEmail)) return res.status(403).json({ error: 'Forbidden' });
@@ -2952,7 +3053,7 @@ exports.init = async function (bridge) {
     });
 
     // PUT /api/v1/plugin/mail-server/emails/:id/spam — mark/unmark spam AND teach the Bayes filter.
-    route('put', '/emails/:id/spam', { auth: true }, async (req, res) => {
+    route('put', '/emails/:id/spam', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
@@ -2968,7 +3069,7 @@ exports.init = async function (bridge) {
 
     // POST /api/v1/plugin/mail-server/emails/bulk — one round-trip for multi-select actions.
     // Ownership is enforced per-row: ids the caller can't access are silently dropped, never touched.
-    route('post', '/emails/bulk', { auth: true }, async (req, res) => {
+    route('post', '/emails/bulk', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const action = String((req.body && req.body.action) || '');
             const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 200) : [];
@@ -3018,7 +3119,7 @@ exports.init = async function (bridge) {
     });
 
     // === Labels (Gmail-style, per user) =====================================================
-    route('get', '/labels', { auth: true }, async (req, res) => {
+    route('get', '/labels', { auth: true, mailbox: true }, async (req, res) => {
         try {
             res.json({ labels: await Email.listLabels(req.user.id) });
         } catch (e) {
@@ -3027,7 +3128,7 @@ exports.init = async function (bridge) {
     });
 
     const LABEL_COLOR_RE = /^#[0-9a-f]{6}$/i;
-    route('post', '/labels', { auth: true }, async (req, res) => {
+    route('post', '/labels', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const name = String((req.body && req.body.name) || '').trim();
             if (!name) return res.status(400).json({ error: 'Label name is required' });
@@ -3043,7 +3144,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    route('put', '/labels/:id', { auth: true }, async (req, res) => {
+    route('put', '/labels/:id', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const patch = {};
             if (req.body.name !== undefined) {
@@ -3063,14 +3164,14 @@ exports.init = async function (bridge) {
         }
     });
 
-    route('delete', '/labels/:id', { auth: true }, async (req, res) => {
+    route('delete', '/labels/:id', { auth: true, mailbox: true }, async (req, res) => {
         const ok = await Email.deleteLabel(req.params.id, req.user.id);
         if (!ok) return res.status(404).json({ error: 'Label not found' });
         res.json({ success: true });
     });
 
     // PUT /api/v1/plugin/mail-server/emails/:id/labels — apply/remove labels on one message.
-    route('put', '/emails/:id/labels', { auth: true }, async (req, res) => {
+    route('put', '/emails/:id/labels', { auth: true, mailbox: true }, async (req, res) => {
         const email = await Email.findById(req.params.id);
         if (!email) return res.status(404).json({ error: 'Email not found' });
         if (!canAccessEmail(email, req.user)) return res.status(403).json({ error: 'Forbidden' });
@@ -3090,7 +3191,7 @@ exports.init = async function (bridge) {
     });
 
     // === Per-user preferences: signature + vacation auto-responder ==========================
-    route('get', '/prefs', { auth: true }, async (req, res) => {
+    route('get', '/prefs', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const prefs = await Email.getPrefs(req.user.id);
             const v = (prefs.vacation && typeof prefs.vacation === 'object') ? prefs.vacation : {};
@@ -3109,7 +3210,7 @@ exports.init = async function (bridge) {
         }
     });
 
-    route('put', '/prefs', { auth: true }, async (req, res) => {
+    route('put', '/prefs', { auth: true, mailbox: true }, async (req, res) => {
         try {
             const cur = await Email.getPrefs(req.user.id);
             const next = { ...cur };
@@ -3138,7 +3239,7 @@ exports.init = async function (bridge) {
 
     // GET /api/v1/plugin/mail-server/contacts/suggest — recipient autocomplete that merges the site
     // user directory with the user's OWN correspondence history (people they actually mail).
-    route('get', '/contacts/suggest', { auth: true }, async (req, res) => {
+    route('get', '/contacts/suggest', { auth: true, mailbox: true }, async (req, res) => {
         const query = String(req.query.q || '').trim();
         if (query.length < 2) return res.json([]);
         try {
