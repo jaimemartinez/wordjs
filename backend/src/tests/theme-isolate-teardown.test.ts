@@ -401,6 +401,16 @@ test('a CRASHED outgoing theme does not come back through its supervised restart
     }
     assert.strictEqual(seen, null, `the retired theme must not restart itself (came back ${seen})`);
 
+    // DETERMINISTIC HALF, so this test cannot decay into a vacuous pass. Everything above is a NEGATIVE
+    // assertion over a wall-clock window tuned to SUPERVISOR.backoff[0] (1s): widen that schedule and the
+    // watch above would expire before the resurrection it is looking for, and go green having proven
+    // nothing. The retirement is also observable as STATE — unloadIsolatedPlugin marks the slug 'stopped'
+    // and clears its restart timer — so assert the armed restart is GONE rather than merely un-fired. The
+    // precondition above already asserted this was 'restarting', so this is a real transition, not a
+    // tautology.
+    assert.strictEqual((getIsolateStatus(iso(CRASHER)) || {}).state, 'stopped',
+        "the crasher's armed restart was cancelled, not just out-waited");
+
     assert.deepStrictEqual(themeIsolates(), [iso(B)], 'only the active theme is loaded');
     assert.strictEqual(await marker(), '[b]x', "and the dead theme's filter is not back");
 });
@@ -533,19 +543,33 @@ test('the theme sweep does not SKIP a theme whose load is still in flight', asyn
 // hold even when these are bypassed (another node, a plugin writing the option, a future caller).
 // ---------------------------------------------------------------------------------------------------
 
-test('a double-clicked theme activation is ONE switch: the duplicate JOINS it', async () => {
-    const { switchTheme } = require('../core/themes');
+test('overlapping activations never leave the site on a theme other than the one the option names', async () => {
+    const { switchTheme, getCurrentTheme } = require('../core/themes');
     await switchTo(NO_LOGIC);
 
     // POST /themes/:slug/activate has no idempotency of its own — the route validates the slug and calls
-    // switchTheme — so two clicks arrive as two overlapping calls into the same theme switch.
-    const [r1, r2] = await Promise.all([switchTheme(A), switchTheme(A)]);
+    // switchTheme — so clicks arrive as overlapping calls.
+    //
+    // REGRESSION GUARD. An earlier version kept a Map<slug, inflight> so a duplicate JOINED the running
+    // switch. That is unsound: the key is the SLUG but the resource is GLOBAL — there is exactly one active
+    // theme. A -> B -> A inside one window made the third call join the FIRST, never run, and leave
+    // `template` on B while the API answered `{success:true, message:"Switched to theme A"}`. The admin's
+    // last click was silently lost and the site was on a theme nobody was told about.
+    //
+    // Which slug wins a genuine race is not something this test can (or should) pin — what must ALWAYS hold
+    // is that the answer, the stored option and the loaded child all describe the SAME theme.
+    await Promise.all([switchTheme(A), switchTheme(B), switchTheme(A)]);
 
-    assert.strictEqual(r1, r2, 'the duplicate activation joined the first instead of running a second switch');
-    assert.deepStrictEqual(themeIsolates(), [iso(A)], 'exactly one theme isolate exists afterwards');
-    const pids = await livePidCount(iso(A), 1);
+    const current = await getCurrentTheme();
+    const winner = typeof current === 'string' ? current : current?.slug;
+    assert.ok([A, B].includes(winner), `the stored theme is one of the two requested (got ${winner})`);
+
+    assert.deepStrictEqual(themeIsolates(), [iso(winner)],
+        `exactly one theme isolate, and it is the theme the option names (${winner})`);
+    const pids = await livePidCount(iso(winner), 1);
     assert.strictEqual(pids.length, 1, `and exactly one child (alive: ${pids.join(', ')})`);
-    assert.strictEqual(await marker(), '[a]x', "with the theme's filter wired exactly once");
+    assert.strictEqual(await marker(), `[${winner === A ? 'a' : 'b'}]x`,
+        'and the filter wired into the host is that same theme, wired exactly once');
 });
 
 test("overlapping theme-engine inits are SERIALIZED — one init's sweep cannot run before another's load", async () => {
@@ -557,18 +581,27 @@ test("overlapping theme-engine inits are SERIALIZED — one init's sweep cannot 
     // the second overwrites the first in `isolates` and orphans it. Three entry points can call init()
     // concurrently: boot, switchTheme (the admin action) and render()'s lazy re-init.
     const original = themeEngine.loadThemeLogic;
-    let concurrent = 0, peak = 0;
+    let concurrent = 0, peak = 0, runs = 0;
     themeEngine.loadThemeLogic = async function (...args: any[]) {
-        concurrent++; peak = Math.max(peak, concurrent);
+        concurrent++; runs++; peak = Math.max(peak, concurrent);
         try { return await original.apply(this, args); } finally { concurrent--; }
     };
+    const CALLERS = 8;
     try {
-        await Promise.all([themeEngine.init(), themeEngine.init(), themeEngine.init()]);
+        await Promise.all(Array.from({ length: CALLERS }, () => themeEngine.init()));
     } finally {
         delete themeEngine.loadThemeLogic; // restore the prototype method
     }
 
     assert.strictEqual(peak, 1, `theme re-inits never overlap (peak concurrent loadThemeLogic runs: ${peak})`);
+    // SERIALIZING IS NOT ENOUGH — it must also COALESCE. Queueing one full reload per caller reached the
+    // same end state the long way round: 8 concurrent inits ran 8 sweep+re-fork cycles (~6s) to arrive
+    // where one of them (~0.8s) would have, and every extra cycle SIGKILLs and re-forks the theme child, so
+    // renders landing in the gaps get no theme logic at all. render() re-inits lazily whenever `template`
+    // changed underneath the process, so the number of duplicate callers is unbounded — this is a public
+    // page-render path, not a double-click. A queued init re-reads the option when it starts, so one
+    // running plus one queued serves everyone: the ceiling is 2 regardless of how many callers pile up.
+    assert.ok(runs <= 2, `${CALLERS} concurrent inits collapse into at most 2 reloads (actual: ${runs})`);
     assert.deepStrictEqual(themeIsolates(), [iso(A)], 'three concurrent re-inits leave exactly one theme isolate');
     const pids = await livePidCount(iso(A), 1);
     assert.strictEqual(pids.length, 1, `and exactly one child (alive: ${pids.join(', ')})`);

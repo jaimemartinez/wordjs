@@ -149,32 +149,23 @@ async function getActiveTheme() {
 }
 
 /**
- * Activations for the SAME theme that are already running, so a duplicate JOINS instead of re-running.
+ * Switch to a different theme.
  *
- * POST /themes/:slug/activate had no idempotency at all: an admin double-click (or two admins acting at
- * once) ran switchTheme twice for the same slug, and the two theme-engine inits then overlapped — each
- * sweeping before the other loaded, so both children registered and one of them was overwritten in the
- * isolate registry and orphaned. theme-engine.init() is serialized now, which removes the overlap; this
- * removes the duplicate WORK on top, so a double-click is one switch, one child, one answer, instead of a
- * switch immediately followed by a redundant re-init that kills and re-forks the theme's process.
+ * DELIBERATELY NOT JOINED PER SLUG. An earlier version kept a Map<slug, inflight> so a double-clicked
+ * "Activate" joined the running switch instead of re-running it. That is unsound here: the join key is the
+ * SLUG, but the resource is GLOBAL — there is exactly one active theme. Joining "the same slug" is only
+ * correct when no OTHER slug was requested in between, and A -> B -> A inside one window breaks it: the
+ * third call joined the first, never ran, and the `template` option was left on B while the API answered
+ * `{ success: true, message: "Switched to theme A" }`. The admin's last click was silently lost and
+ * `doAction('switch_theme')` fired once, carrying the FIRST call's previousTheme.
  *
- * Per SLUG, because that is what "the same request twice" means; different slugs are still ordered (and
- * made safe) by the init() chain. Matches the in-flight-join discipline already used for duplicate work
- * elsewhere (middleware/image-negotiation.ts, core/plugin-dev-watch.ts).
- */
-const switchInFlight = new Map<string, Promise<any>>();
-
-/**
- * Switch to a different theme
+ * Losing a write to save a re-fork is a bad trade, and the re-fork was never what made this safe: overlapping
+ * activations cannot orphan a child because theme-engine.init() serializes them AND loadIsolatedPlugin
+ * retires any live child it would displace (core/plugin-isolate.ts). Correctness does not depend on this
+ * function being idempotent, so it does not pretend to be — every call runs, and the last writer wins.
  */
 async function switchTheme(slug: string) {
-  const joined = switchInFlight.get(slug);
-  if (joined) return joined;
-  const run = doSwitchTheme(slug);
-  switchInFlight.set(slug, run);
-  const clear = () => { if (switchInFlight.get(slug) === run) switchInFlight.delete(slug); };
-  run.then(clear, clear);
-  return run;
+  return doSwitchTheme(slug);
 }
 
 async function doSwitchTheme(slug: string) {
