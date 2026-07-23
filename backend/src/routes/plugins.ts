@@ -206,29 +206,59 @@ const UPDATE_STASH_PREFIX = 'plugin-update-';
  *   - the dist-lock lease — on Postgres/multi-node it stops node B from updating the plugin node A is
  *     mid-swap on (they share the DB, and in monolith/split deploys the plugins dir too).
  *
- * FAIL FAST (409) rather than queue: an admin double-clicking "Update" must be told "already running",
- * not silently start a second full cycle minutes later against a directory that has since changed.
+ * FAIL FAST (409) rather than queue: an admin double-clicking "Update" must be told the plugin is
+ * locked, not silently start a second full cycle minutes later against a directory that has since
+ * changed (see pluginBusyError for why the message does not assert that something IS running).
  */
 const pluginOpsInFlight = new Set<string>();
+
+// Lease sizing. The TTL must outlive a full cycle (npm install + isolate spawn) — the heartbeat keeps
+// it alive while we are running — and it is ALSO the worst-case delay before a lease stranded by a
+// killed process becomes claimable again, which is why both the 409 text and the boot-recovery retry
+// below are derived from it instead of hardcoding a second copy of the number.
+const PLUGIN_OP_TTL_MS = 120000;
+const PLUGIN_OP_RENEW_MS = 30000;
+const PLUGIN_OP_ACQUIRE_TIMEOUT_MS = 3000;
+
+/**
+ * ONE lock key per plugin DIRECTORY, case-folded.
+ *
+ * SLUG_RE deliberately allows mixed case, but resolveSafePluginDir resolves 'Mail-Server' and
+ * 'mail-server' to the SAME directory on a case-insensitive filesystem (Windows / default macOS).
+ * Keying the guard on the raw spelling therefore hands out two independent locks — and two different
+ * lease names — for one directory, so a DELETE spelled one way runs concurrently with an update
+ * holding the other and rmSync's the plugin dir mid-swap. Fold the key (never the slug itself: the
+ * on-disk name and the isolate registry keep the original spelling).
+ *
+ * On a case-SENSITIVE filesystem two genuinely distinct plugins whose slugs differ only by case now
+ * serialize against each other. That is the safe direction of the trade — an unnecessary 409 the admin
+ * can retry, versus a plugin directory deleted out from under a running swap.
+ */
+function pluginOpKey(slug: any): string {
+    return String(slug).toLowerCase();
+}
 
 type PluginOpLock = { ok: true; release: () => Promise<void> } | { ok: false };
 
 async function acquirePluginOpLock(slug: string): Promise<PluginOpLock> {
-    if (pluginOpsInFlight.has(slug)) return { ok: false };
-    pluginOpsInFlight.add(slug); // claimed synchronously — before any await, so two concurrent requests can't both pass
+    const key = pluginOpKey(slug);
+    if (pluginOpsInFlight.has(key)) return { ok: false };
+    pluginOpsInFlight.add(key); // claimed synchronously — before any await, so two concurrent requests can't both pass
     let lease: any = null;
     try {
         const { acquireBlocking } = require('../core/dist-lock');
         // Short timeout = fail fast (but tolerate a lease released microseconds ago); long TTL +
         // heartbeat so a slow cycle is never preempted mid-swap.
-        lease = await acquireBlocking(`wordjs:plugin-op:${slug}`, { ttlMs: 120000, renewMs: 30000, timeoutMs: 3000 });
+        lease = await acquireBlocking(`wordjs:plugin-op:${key}`, {
+            ttlMs: PLUGIN_OP_TTL_MS, renewMs: PLUGIN_OP_RENEW_MS, timeoutMs: PLUGIN_OP_ACQUIRE_TIMEOUT_MS,
+        });
     } catch (e: any) {
         // DB unreachable / pre-boot: degrade to the in-process guard rather than blocking the admin.
-        console.warn(`[plugin-op ${slug}] distributed lock unavailable, using the in-process guard only:`, e && e.message);
+        console.warn(`[plugin-op ${key}] distributed lock unavailable, using the in-process guard only:`, e && e.message);
         lease = null;
     }
     if (lease && !lease.held) {
-        pluginOpsInFlight.delete(slug);
+        pluginOpsInFlight.delete(key);
         return { ok: false };
     }
     let released = false;
@@ -237,15 +267,40 @@ async function acquirePluginOpLock(slug: string): Promise<PluginOpLock> {
         release: async () => {
             if (released) return; // idempotent: several exit paths may release
             released = true;
-            pluginOpsInFlight.delete(slug);
+            pluginOpsInFlight.delete(key);
             if (lease) { try { await lease.release(); } catch { /* best-effort */ } }
         },
     };
 }
 
-/** The 409 payload for "someone else is already touching this plugin". */
+/**
+ * The 409 payload for "someone else is already touching this plugin".
+ *
+ * It deliberately does NOT claim an operation is running: the distributed lease survives the process
+ * that took it (holder-guarded, TTL-expiring), so on Postgres this also fires for up to the TTL after
+ * a node was killed mid-cycle — telling the admin something is "running" when nothing is would send
+ * them hunting for a phantom. Say what is actually known, and that waiting resolves it.
+ */
 function pluginBusyError(slug: string): string {
-    return `Another install/update/uninstall of '${slug}' is already running. Wait for it to finish and try again.`;
+    return `'${slug}' is locked by another install/update/uninstall — either one is still running, or one was interrupted and its lock has not expired yet (up to ${Math.round(PLUGIN_OP_TTL_MS / 1000)}s). Wait and try again.`;
+}
+
+/**
+ * Is a child process actually registered for this plugin RIGHT NOW?
+ *
+ * The `active_plugins` option is a stored intention; the isolate registry is the running truth. They
+ * diverge precisely on the paths that matter here — an activation that threw after isolates.set, and
+ * an activatePlugin that early-returned 'Plugin already active' without spawning anything — so any
+ * claim to the admin that a plugin "was reactivated" has to be checked against this, not against a
+ * call having returned. The raw slug is used (never the folded lock key): the registry is keyed by
+ * the plugin's real slug.
+ */
+function isPluginRunning(slug: string): boolean {
+    try { return require('../core/plugin-isolate').isIsolated(slug) === true; }
+    catch (e: any) {
+        console.warn(`[plugin ${slug}] could not read the isolate registry:`, e && e.message);
+        return false;
+    }
 }
 
 /**
@@ -263,11 +318,36 @@ function pluginBusyError(slug: string): string {
  * Fully guarded and best-effort: a weird leftover must never stop the server from booting.
  *
  * Each stash is handled under the plugin's operation lock: if a REPLICA boots while another node is
- * mid-update on a shared plugins dir, that node holds the lease and we skip its stash — restoring the
- * old code from under a live update is exactly the corruption this function exists to prevent.
+ * mid-update on a shared plugins dir, that node holds the lease and we must not touch its stash —
+ * restoring the old code from under a live update is exactly the corruption this function exists to
+ * prevent.
+ *
+ * But losing that lock is NOT proof another node is working. On Postgres the lease outlives the
+ * process that took it (holder-guarded, so the successor's new HOLDER cannot free it; claimable only
+ * once locked_until lapses), so the single most likely reason THIS boot cannot take it is that the
+ * predecessor — the very process that was killed mid-update, leaving the stash we are looking at —
+ * still owns it for up to PLUGIN_OP_TTL_MS. Skipping silently in that case leaves the plugin GUTTED
+ * with its only code copy in a directory backups exclude, until some later restart happens to fall
+ * outside the TTL window. So we RETRY instead of skipping, and say so honestly in the log.
+ *
+ * Retrying (rather than stealing a lease whose recorded holder looks dead) is deliberate: pid
+ * liveness is only meaningful inside one pid namespace, and two containers can share a hostname, so
+ * "provably gone" cannot be decided from the holder string alone — and a wrong steal would let two
+ * live processes work on the same slug, the one outcome that must never happen. Waiting out the TTL
+ * is always safe, and the graceful-shutdown release (index.ts) means the common restart never waits.
  */
-async function recoverInterruptedPluginUpdates(): Promise<{ restored: string[]; discarded: string[] }> {
-    const out = { restored: [] as string[], discarded: [] as string[] };
+const RECOVERY_RETRY_MS = PLUGIN_OP_TTL_MS + 10000; // just past the worst-case stranded lease
+const RECOVERY_MAX_ATTEMPTS = 3;
+
+type RecoveryResult = { restored: string[]; discarded: string[]; deferred: string[] };
+
+async function recoverInterruptedPluginUpdates(
+    opts: { retryMs?: number; attempt?: number; maxAttempts?: number } = {},
+): Promise<RecoveryResult> {
+    const attempt = opts.attempt ?? 1;
+    const maxAttempts = opts.maxAttempts ?? RECOVERY_MAX_ATTEMPTS;
+    const retryMs = opts.retryMs ?? RECOVERY_RETRY_MS;
+    const out: RecoveryResult = { restored: [], discarded: [], deferred: [] };
     let entries: string[];
     try {
         if (!fs.existsSync(OS_TMP_DIR)) return out;
@@ -286,7 +366,14 @@ async function recoverInterruptedPluginUpdates(): Promise<{ restored: string[]; 
         const stashDir = path.join(OS_TMP_DIR, entry);
         const lock = await acquirePluginOpLock(slug);
         if (!lock.ok) {
-            console.warn(`[plugin-update] skipping ${entry}: an install/update of '${slug}' is running elsewhere.`);
+            out.deferred.push(slug);
+            console.warn(
+                `[plugin-update] ${entry}: could not take the operation lock for '${slug}' — either another node is mid-update, `
+                + `or a process was killed while holding the lease and it has not expired yet. `
+                + (attempt < maxAttempts
+                    ? `Retrying in ${retryMs >= 1000 ? `${Math.round(retryMs / 1000)}s` : `${retryMs}ms`} (attempt ${attempt}/${maxAttempts}).`
+                    : `Giving up after ${maxAttempts} attempts — if '${slug}' is missing, restart the server or reinstall it from the marketplace.`),
+            );
             continue;
         }
         try {
@@ -313,7 +400,24 @@ async function recoverInterruptedPluginUpdates(): Promise<{ restored: string[]; 
             await lock.release();
         }
     }
+    if (out.deferred.length && attempt < maxAttempts) scheduleRecoveryRetry({ retryMs, attempt, maxAttempts });
     return out;
+}
+
+/**
+ * Re-run the sweep once the stranded lease can have expired. unref'd on purpose: a pending retry must
+ * never be the reason the process stays alive (and must never keep `node --test` from exiting), and a
+ * shutdown before it fires costs nothing — the next boot sweeps again from the same directory.
+ */
+let recoveryRetryTimer: NodeJS.Timeout | null = null;
+function scheduleRecoveryRetry(opts: { retryMs: number; attempt: number; maxAttempts: number }): void {
+    if (recoveryRetryTimer) return; // one pending sweep at a time; it covers every deferred slug
+    recoveryRetryTimer = setTimeout(() => {
+        recoveryRetryTimer = null;
+        recoverInterruptedPluginUpdates({ retryMs: opts.retryMs, attempt: opts.attempt + 1, maxAttempts: opts.maxAttempts })
+            .catch((e: any) => console.warn('[plugin-update] deferred stash recovery failed:', e && e.message));
+    }, opts.retryMs);
+    if (typeof recoveryRetryTimer.unref === 'function') recoveryRetryTimer.unref();
 }
 
 /**
@@ -793,6 +897,53 @@ async function runPluginUpdate(
         catch (e: any) { console.warn(`[update ${slug}] restoring install origin failed:`, e && e.message); }
     };
 
+    /**
+     * Make sure NO child process is left registered for this slug.
+     *
+     * activatePlugin loads the isolate FIRST (isolates.set) and only then writes active_plugins and
+     * fires the 'activated_plugin' hook — and both of those can throw (the active_plugins write takes
+     * a lease that throws by design when it cannot be won within 15s; a hook is arbitrary code). The
+     * plugin is then NOT in active_plugins, so deactivatePlugin() alone early-returns 'Plugin not
+     * active' and leaves that child ALIVE. A later activation spawns a SECOND child and overwrites
+     * isolates[slug]; the orphan's 'exit' handler then sees wasCurrent === false and SKIPS teardown,
+     * so its hooks, routes and any claimed provider (the system mail sender!) stay wired to a process
+     * nobody supervises. unloadIsolatedPlugin is idempotent and runs teardown, so it is called
+     * unconditionally after deactivatePlugin (which covers the case where the flag DID get written).
+     */
+    const tearDownIsolate = async (what: string) => {
+        try { await deactivatePlugin(slug, { prune: false }); }
+        catch (e: any) { console.warn(`[update ${slug}] deactivating ${what}:`, e && e.message); }
+        try { require('../core/plugin-isolate').unloadIsolatedPlugin(slug); }
+        catch (e: any) { console.warn(`[update ${slug}] unloading ${what}:`, e && e.message); }
+    };
+
+    /**
+     * Bring the plugin back up and answer HONESTLY whether it is running. Two ways "it did not throw"
+     * lies, and both end with the admin told the site was restored while nothing is serving it:
+     *   - it threw AFTER the isolate was registered → an orphan (see tearDownIsolate);
+     *   - it did not spawn at all: activatePlugin EARLY-RETURNS { success:true, 'Plugin already
+     *     active' } while the slug is still listed in active_plugins, which is exactly the state a
+     *     failed deactivation leaves behind (its lease can time out and throw).
+     * So: tear down on throw, and confirm against the isolate registry — the process that would
+     * actually be serving the plugin's hooks and routes — rather than against the absence of an
+     * exception.
+     */
+    const reactivateAndConfirm = async (what: string): Promise<boolean> => {
+        try {
+            await activatePlugin(slug);
+        } catch (e: any) {
+            console.error(`[update ${slug}] could not reactivate ${what}:`, e && e.message);
+            await tearDownIsolate(`the isolate left behind by the failed activation of ${what}`);
+            return false;
+        }
+        if (isPluginRunning(slug)) return true;
+        console.error(
+            `[update ${slug}] activatePlugin reported success for ${what} but no isolate is registered — `
+            + `the plugin is NOT running (it is most likely still listed in active_plugins after a deactivation that failed).`,
+        );
+        return false;
+    };
+
     // Same dir + name shape the boot sweep looks for (recoverInterruptedPluginUpdates), so a stash the
     // process is killed on top of is recognized and reclaimed on the next start.
     const backupDir = path.join(OS_TMP_DIR, `${UPDATE_STASH_PREFIX}${slug}-${crypto.randomBytes(6).toString('hex')}`);
@@ -806,34 +957,36 @@ async function runPluginUpdate(
         // Nothing has been replaced yet. Put back whatever was moved and leave the site as it was.
         if (fs.existsSync(backupDir)) { try { restorePluginCode(installedDir, backupDir, { clear: false }); } catch { /* best-effort */ } }
         try { fs.unlinkSync(zipPath); } catch { /* best-effort */ }
-        if (wasActive) { try { await activatePlugin(slug); } catch { /* reported below */ } }
-        return { ok: false, status: 500, body: { error: `Could not prepare the update of '${slug}': ${e.message}` } };
+        // The throw can come from deactivatePlugin itself, i.e. the plugin may already be half-down (or
+        // half-up) — so restart it through the same guarded path as the rollback, never a bare
+        // activatePlugin: an orphaned isolate here would keep serving the routes of a plugin the admin
+        // is about to be told is untouched.
+        const backUp = wasActive ? await reactivateAndConfirm('the version that was running') : true;
+        return {
+            ok: false,
+            status: 500,
+            body: {
+                error: `Could not prepare the update of '${slug}': ${e.message}`
+                    + (wasActive ? (backUp ? ' — it is still running.' : ' — and it could NOT be restarted, check Plugins.') : ''),
+                reactivated: wasActive ? backUp : undefined,
+            },
+        };
     }
 
     // Old version's persisted footprint: grants/strikes/assets go, its DATA TABLES stay.
     await uninstallPluginData(slug, { dropTables: false });
 
     const rollback = async (reason: string, status: number, body: any) => {
-        // FIRST: make sure the FAILED new version is not still running. activatePlugin can throw AFTER
-        // loadIsolatedPlugin already registered the isolate (isolates.set) — the active_plugins write or
-        // the 'activated_plugin' hook can fail — and the plugin is then NOT in active_plugins, so
-        // deactivatePlugin() alone early-returns 'Plugin not active' and leaves that child alive.
-        // Reactivating the old version below would spawn a SECOND child and overwrite isolates[slug];
-        // the orphan's 'exit' handler then sees wasCurrent === false and SKIPS teardown, so its hooks,
-        // routes and any claimed provider (the system mail sender!) stay wired to a process nobody
-        // supervises. unloadIsolatedPlugin is idempotent and runs teardown, so call it unconditionally
-        // after deactivatePlugin (which covers the case where the flag DID get written).
-        try { await deactivatePlugin(slug, { prune: false }); }
-        catch (e: any) { console.warn(`[update ${slug}] deactivating the failed version:`, e && e.message); }
-        try { require('../core/plugin-isolate').unloadIsolatedPlugin(slug); }
-        catch (e: any) { console.warn(`[update ${slug}] unloading the failed isolate:`, e && e.message); }
+        // FIRST: make sure the FAILED new version is not still running (see tearDownIsolate) — the old
+        // version is about to be spawned into the same isolate slot.
+        await tearDownIsolate('the failed new version');
         try { restorePluginCode(installedDir, backupDir); } catch (e: any) { console.error(`[update ${slug}] ROLLBACK FAILED:`, e && e.message); }
         await restoreAdminState();
-        let reactivated = false;
-        if (wasActive) {
-            try { await activatePlugin(slug); reactivated = true; }
-            catch (e: any) { console.error(`[update ${slug}] could not reactivate the restored version:`, e && e.message); }
-        }
+        // NOT `try { activate } catch`: the deactivation just above can throw (its active_plugins lease
+        // times out), which leaves the slug listed as active, and activatePlugin then early-returns
+        // 'Plugin already active' having spawned NOTHING — so a throw-based flag would report "v1 was
+        // restored and reactivated" with no process running at all.
+        const reactivated = wasActive ? await reactivateAndConfirm('the restored version') : false;
         regenerateRegistry();
         const tail = wasActive
             ? (reactivated ? ' and reactivated' : ' but could NOT be reactivated — check Plugins')
@@ -871,6 +1024,10 @@ async function runPluginUpdate(
     const newPermissions = declaredNow.filter((t) => !previousPermissions.includes(t));
     const ungrantedPermissions = declaredNow.filter((t) => !grants.includes(t));
 
+    // Plain try/catch here, unlike the two rollback-side reactivations: the 'Plugin already active'
+    // early-return cannot apply on this path — installPluginFromZip refuses with 409 while the slug is
+    // still listed in active_plugins, so reaching this line PROVES the deactivation took effect and
+    // activatePlugin will really spawn. A throw is handled by rollback(), which tears the isolate down.
     let reactivated = false;
     let activationError: string | null = null;
     if (wasActive) {
@@ -1756,3 +1913,6 @@ module.exports.updatePluginFromZip = updatePluginFromZip;
 // active plugins load — a gutted plugins/<slug>/ would otherwise simply fail to load, with the only
 // copy of its code sitting in an os-tmp dir nothing ever reads again).
 module.exports.recoverInterruptedPluginUpdates = recoverInterruptedPluginUpdates;
+// The per-slug operation lock itself — exported so tests can HOLD a slug and prove what the boot
+// sweep does when it cannot take it (defer + retry, never a silent skip).
+module.exports.acquirePluginOpLock = acquirePluginOpLock;

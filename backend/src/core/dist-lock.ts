@@ -37,6 +37,19 @@ function isPg(): boolean {
 function db(): any { return require('../config/database').dbAsync; }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Every lease THIS process currently holds, with its heartbeat timer.
+ *
+ * A lease is freed ONLY by an explicit release(): HOLDER is unique per process, release()/CAS are
+ * holder-guarded, and tryAcquire only claims a row whose locked_until is already in the past. So a
+ * process that exits WITHOUT releasing strands each of its leases for up to that lease's ttlMs — and
+ * its successor, which has a brand-new HOLDER, cannot free them either. At the plugin-op lease's 120s
+ * TTL that means a plain `systemctl restart` / `docker restart` / `pm2 reload` during a plugin update
+ * leaves the next boot unable to touch the very plugin it was mid-swap on, with a "running elsewhere"
+ * message that is not true. releaseAllHeld() is what the shutdown handler calls to give them back.
+ */
+const heldLocks = new Map<string, NodeJS.Timeout>();
+
 // Postgres "now" in epoch-milliseconds, computed server-side so all nodes compare against one clock.
 const NOW_MS = `(EXTRACT(EPOCH FROM now())*1000)::bigint`;
 
@@ -135,7 +148,11 @@ async function acquireBlocking(
     while (Date.now() - start < timeoutMs) {
         if (await tryAcquire(name, ttlMs)) {
             const timer = startHeartbeat(name, ttlMs, renewMs);
-            return { held: true, release: async () => { clearInterval(timer); await release(name); } };
+            heldLocks.set(name, timer);
+            return {
+                held: true,
+                release: async () => { clearInterval(timer); heldLocks.delete(name); await release(name); },
+            };
         }
         await sleep(pollMs);
     }
@@ -157,8 +174,29 @@ async function runAsLeader<T>(
     const renewMs = opts.renewMs ?? Math.max(5000, Math.floor(ttlMs / 3));
     if (!(await tryAcquire(name, ttlMs))) return undefined;
     const timer = startHeartbeat(name, ttlMs, renewMs);
+    heldLocks.set(name, timer);
     try { return await fn(); }
-    finally { clearInterval(timer); await release(name); }
+    finally { clearInterval(timer); heldLocks.delete(name); await release(name); }
 }
 
-module.exports = { HOLDER, ensureLockTable, tryAcquire, renew, release, acquireBlocking, runAsLeader };
+/**
+ * Hand back EVERY lease this process still holds. Called from the graceful-shutdown handler (SIGTERM /
+ * SIGINT), so a planned restart does not strand a lease for its whole TTL — see heldLocks above.
+ *
+ * Best-effort and bounded by design: it is running while the process is on its way out, so a failure
+ * to reach the DB just falls back to the TTL, exactly as an abrupt kill would. Returns the names it
+ * tried to free (used by the tests and to log what was given back).
+ */
+async function releaseAllHeld(): Promise<string[]> {
+    const names = Array.from(heldLocks.keys());
+    for (const timer of heldLocks.values()) clearInterval(timer);
+    heldLocks.clear();
+    if (names.length === 0) return names;
+    await Promise.all(names.map((n) => release(n)));
+    return names;
+}
+
+/** Names of the leases this process currently holds (diagnostics + tests). */
+function heldLockNames(): string[] { return Array.from(heldLocks.keys()); }
+
+module.exports = { HOLDER, ensureLockTable, tryAcquire, renew, release, acquireBlocking, runAsLeader, releaseAllHeld, heldLockNames };

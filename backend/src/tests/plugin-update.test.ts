@@ -36,6 +36,13 @@
  * guard the deactivate → install → reactivate cycle exists to get past) passes for free and the whole
  * wasActive:true path proves nothing. So the stubs drive the REAL option instead, and the negative
  * control below asserts that skipping the deactivation does make the install refuse.
+ *
+ * The stubs also model the ISOLATE REGISTRY (`liveIsolates`), because "is this plugin running?" and
+ * "is this plugin listed in active_plugins?" are two different facts and every interesting failure
+ * here lives in the gap between them: activatePlugin registers the child FIRST and only then writes
+ * the flag and fires 'activated_plugin' (so a throw can leave an orphan), and it EARLY-RETURNS
+ * 'Plugin already active' — spawning nothing — whenever the flag is still set. A stub that only
+ * tracked the flag could not tell a reactivation that worked from one that did nothing at all.
  */
 
 const { describe, it, before, after, beforeEach } = require('node:test');
@@ -109,11 +116,24 @@ function stashDirs(): string[] {
     return fs.readdirSync(OS_TMP).filter((f: string) => f.startsWith('plugin-update-'));
 }
 
+/** Poll until `cond` holds — used to await the DEFERRED boot-recovery retry (a real setTimeout). */
+async function waitFor(cond: () => boolean, timeoutMs = 3000): Promise<void> {
+    const start = Date.now();
+    while (!cond()) {
+        if (Date.now() - start > timeoutMs) throw new Error(`condition not met within ${timeoutMs}ms`);
+        await new Promise((r) => setTimeout(r, 10));
+    }
+}
+
+/** The slugs a child process is currently registered for — the stand-in for plugin-isolate's map. */
+const liveIsolates = new Set<string>();
+
 describe('in-place plugin update', () => {
     let dbAsync: any;
     let plugins: any;
     let updatePluginFromZip: any;
     let recoverInterruptedPluginUpdates: any;
+    let acquirePluginOpLock: any;
     let permissions: any;
     let calls: string[];
 
@@ -124,7 +144,14 @@ describe('in-place plugin update', () => {
 
         plugins = require('../core/plugins');
         permissions = require('../core/plugin-permissions');
-        ({ updatePluginFromZip, recoverInterruptedPluginUpdates } = require('../routes/plugins'));
+        ({ updatePluginFromZip, recoverInterruptedPluginUpdates, acquirePluginOpLock } = require('../routes/plugins'));
+
+        // Model the isolate registry for the whole file. The real one is keyed off child processes we
+        // never spawn here, so left alone it would report "nothing is running" for every plugin and the
+        // update cycle's running/not-running distinction would be untestable.
+        const isolate = require('../core/plugin-isolate');
+        isolate.isIsolated = (s: string) => liveIsolates.has(s);
+        isolate.unloadIsolatedPlugin = (s: string) => { calls.push(`unload:${s}`); liveIsolates.delete(s); };
     });
 
     after(async () => {
@@ -140,20 +167,65 @@ describe('in-place plugin update', () => {
     /**
      * Stub the activation lifecycle on the cached core module (runPluginUpdate re-requires it per call,
      * so the stubs are what IT sees) — but have the stubs write the REAL `active_plugins` option, since
-     * that is the only thing installPluginFromZip's module-load `isPluginActive` binding can read.
-     * `deactivateIsNoop` models a deactivation that never took effect: the negative control.
+     * that is the only thing installPluginFromZip's module-load `isPluginActive` binding can read, and
+     * keep `liveIsolates` in step so "flagged active" and "actually running" can disagree exactly the
+     * way they do in production.
+     *
+     *   `deactivateIsNoop`                 — a deactivation that never took effect: the negative control.
+     *   `deactivateThrowsOnCall` (1-based) — deactivatePlugin's own withActivePluginsLock throws by
+     *                                        design when it cannot win the 'wordjs:active-plugins'
+     *                                        lease within 15s, and an 'activated_plugin'/'deactivated_
+     *                                        plugin' hook is arbitrary code that can throw too.
+     *   `deactivateThrowsAfterClearing`    — which of those two: false = the lease timed out and NOTHING
+     *                                        happened (the flag survives); true = the plugin really went
+     *                                        down and the hook afterwards threw.
+     *   `activateThrowsAfterRegistering`   — the failure mode that produces ORPHANS: the isolate is
+     *                                        registered and the flag written, and only then does it blow
+     *                                        up (vs. the default, which fails before anything is live).
+     *   `activateThrowsOnCall` (1-based)   — which activation fails. Default 1 = the NEW version only,
+     *                                        so the rollback's reactivation of the OLD one still works.
      */
-    const stubLifecycle = async ({ active = false, activateThrows = '', deactivateIsNoop = false, slug = SLUG } = {}) => {
+    const stubLifecycle = async ({
+        active = false,
+        activateThrows = '',
+        activateThrowsOnCall = 1,
+        activateThrowsAfterRegistering = false,
+        deactivateIsNoop = false,
+        deactivateThrowsOnCall = 0,
+        deactivateThrowsAfterClearing = false,
+        slug = SLUG,
+    } = {}) => {
         calls = [];
+        liveIsolates.clear();
+        if (active) liveIsolates.add(slug);
+        let deactivateCalls = 0;
         plugins.deactivatePlugin = async (s: string, opts: any = {}) => {
             calls.push(`deactivate:${s}:prune=${opts.prune !== false}`);
-            if (!deactivateIsNoop) await setActivePlugins((await readActivePlugins()).filter((x) => x !== s));
+            deactivateCalls += 1;
+            const throwsNow = deactivateThrowsOnCall === deactivateCalls;
+            if (throwsNow && !deactivateThrowsAfterClearing) {
+                throw new Error('Could not acquire active_plugins lock (another node/operation holds it)');
+            }
+            if (!deactivateIsNoop) {
+                await setActivePlugins((await readActivePlugins()).filter((x) => x !== s));
+                liveIsolates.delete(s);
+            }
+            if (throwsNow) throw new Error("doAction('deactivated_plugin') threw");
             return { success: true };
         };
+        let activateCalls = 0;
         plugins.activatePlugin = async (s: string) => {
             calls.push(`activate:${s}`);
-            if (activateThrows) throw new Error(activateThrows);
+            activateCalls += 1;
+            const throwsNow = !!activateThrows && activateThrowsOnCall === activateCalls;
+            if (throwsNow && !activateThrowsAfterRegistering) throw new Error(activateThrows);
+            // core/plugins.activatePlugin EARLY-RETURNS here — it spawns NOTHING and reports success.
+            // This is precisely the state a deactivation that failed leaves behind.
+            if ((await readActivePlugins()).includes(s)) return { success: true, message: 'Plugin already active' };
+            // loadIsolatedPlugin registers the child FIRST; the flag write and the hook come after.
+            liveIsolates.add(s);
             await setActivePlugins(Array.from(new Set([...(await readActivePlugins()), s])));
+            if (throwsNow) throw new Error(activateThrows);
             return { success: true };
         };
         await setActivePlugins(active ? [slug] : []);
@@ -324,15 +396,13 @@ describe('in-place plugin update', () => {
         // first child's exit handler would skip teardown — an orphan still holding hooks, routes and
         // any claimed provider. Rollback must unload it first.
         seedInstalled(SLUG, '1.0.0');
-        await stubLifecycle({ active: true, activateThrows: 'init crashed after the isolate was registered' });
-        const isolate = require('../core/plugin-isolate');
-        const realUnload = isolate.unloadIsolatedPlugin;
-        isolate.unloadIsolatedPlugin = (s: string) => { calls.push(`unload:${s}`); };
-        try {
-            await updatePluginFromZip(makeZip(SLUG, '5.0.0'), `${SLUG}-5.0.0.zip`, SLUG, { origin: ORIGIN });
-        } finally {
-            isolate.unloadIsolatedPlugin = realUnload;
-        }
+        await stubLifecycle({
+            active: true,
+            activateThrows: "doAction('activated_plugin') threw",
+            activateThrowsAfterRegistering: true,
+        });
+
+        const r = await updatePluginFromZip(makeZip(SLUG, '5.0.0'), `${SLUG}-5.0.0.zip`, SLUG, { origin: ORIGIN });
 
         // deactivate (pre-swap) → activate (fails) → deactivate + unload (kill the failed child) → activate (old).
         assert.deepStrictEqual(calls, [
@@ -342,6 +412,68 @@ describe('in-place plugin update', () => {
             `unload:${SLUG}`,
             `activate:${SLUG}`,
         ], 'the failed version is deactivated AND unloaded before the old one is brought back');
+        assert.strictEqual(r.body.reactivated, true, 'and the old version really is running again');
+        assert.deepStrictEqual([...liveIsolates], [SLUG], 'exactly one child is registered — the restored version');
+    });
+
+    it('tears down the isolate of a reactivation that fails on the STASH-PREPARATION path too', async () => {
+        // The pre-swap deactivate → stash step can throw (deactivatePlugin's own active_plugins lease
+        // times out). That path also puts the plugin back — and it used to do it with a bare
+        // `try { activatePlugin } catch {}`, which has exactly the orphan problem the rollback path was
+        // fixed for: activatePlugin registers the child before the flag write and the hook, so a throw
+        // there leaves a process holding this plugin's hooks, routes and any claimed provider (the
+        // system mail sender) while the API answers "nothing was replaced".
+        const dir = seedInstalled(SLUG, '1.0.0');
+        await stubLifecycle({
+            active: true,
+            deactivateThrowsOnCall: 1,
+            deactivateThrowsAfterClearing: true,     // the plugin went down, the hook after it threw
+            activateThrows: 'the restart hook threw after the isolate was registered',
+            activateThrowsAfterRegistering: true,
+        });
+
+        const r = await updatePluginFromZip(makeZip(SLUG, '15.0.0'), `${SLUG}-15.0.0.zip`, SLUG, { origin: ORIGIN });
+
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.status, 500);
+        assert.match(r.body.error, /Could not prepare the update/);
+        assert.match(r.body.error, /could NOT be restarted/, 'the admin is told the plugin is down, not that all is well');
+        assert.strictEqual(r.body.reactivated, false);
+        assert.deepStrictEqual(calls, [
+            `deactivate:${SLUG}:prune=false`,
+            `activate:${SLUG}`,
+            `deactivate:${SLUG}:prune=false`,
+            `unload:${SLUG}`,
+        ], 'the half-started isolate is deactivated AND unloaded');
+        assert.deepStrictEqual([...liveIsolates], [], 'no orphan child is left holding this slug');
+        assert.strictEqual(fs.readFileSync(path.join(dir, 'VERSION.txt'), 'utf8'), '1.0.0', 'and nothing was replaced');
+        assert.strictEqual(stashDirs().length, 0);
+    });
+
+    it('does NOT claim the old version was reactivated when activatePlugin only early-returned', async () => {
+        // The false-success report. Rollback's first step deactivates the failed new version, and that
+        // call can throw on its own lease — leaving the slug LISTED in active_plugins. activatePlugin
+        // then hits `if (await isPluginActive(slug)) return { success: true, 'Plugin already active' }`
+        // and spawns nothing, while the unconditional unload just before it took the only live child
+        // away. A `try { activate; reactivated = true } catch` reports "v1.0.0 was restored and
+        // reactivated" for a plugin with no process at all.
+        const dir = seedInstalled(SLUG, '1.0.0');
+        await stubLifecycle({
+            active: true,
+            activateThrows: 'init failed',
+            activateThrowsAfterRegistering: true,    // so the flag IS set when the rollback starts
+            deactivateThrowsOnCall: 2,               // the rollback's teardown loses the lease race
+        });
+
+        const r = await updatePluginFromZip(makeZip(SLUG, '14.0.0'), `${SLUG}-14.0.0.zip`, SLUG, { origin: ORIGIN });
+
+        assert.strictEqual(r.ok, false);
+        assert.strictEqual(r.body.rolledBack, true);
+        assert.strictEqual(r.body.reactivated, false, 'nothing is running — the API must not say it was reactivated');
+        assert.match(r.body.error, /could NOT be reactivated/, 'and the message says so');
+        assert.deepStrictEqual([...liveIsolates], [], 'the isolate registry agrees: no child for this slug');
+        assert.strictEqual(fs.readFileSync(path.join(dir, 'VERSION.txt'), 'utf8'), '1.0.0', 'the code was still rolled back');
+        assert.strictEqual(stashDirs().length, 0);
     });
 
     it('refuses a package that would install a DIFFERENT plugin', async () => {
@@ -502,6 +634,27 @@ describe('in-place plugin update', () => {
         assert.strictEqual(stashDirs().length, 0, 'the refused call left no stash behind');
     });
 
+    it('locks a plugin by its CASE-FOLDED slug, so a case variant is not a second lock', async () => {
+        // SLUG_RE allows mixed case, but on a case-insensitive filesystem (Windows / default macOS)
+        // resolveSafePluginDir maps 'Mail-Server' and 'mail-server' to the SAME directory. Keying the
+        // guard on the raw spelling hands out two independent locks — and two distributed lease names —
+        // for one directory, so a DELETE spelled one way rmSync's the dir an update spelled the other
+        // way is mid-swap on.
+        const held = await acquirePluginOpLock('Mail-Server');
+        assert.strictEqual(held.ok, true);
+        try {
+            const variant = await acquirePluginOpLock('mail-server');
+            assert.strictEqual(variant.ok, false, 'same directory ⇒ same lock, whatever the spelling');
+            const shouty = await acquirePluginOpLock('MAIL-SERVER');
+            assert.strictEqual(shouty.ok, false);
+        } finally {
+            await held.release();
+        }
+        const after = await acquirePluginOpLock('mail-SERVER');
+        assert.strictEqual(after.ok, true, 'and releasing one spelling frees them all');
+        await after.release();
+    });
+
     // ---- CRASH RECOVERY --------------------------------------------------------------------------
 
     it('restores a GUTTED plugin from the stash an interrupted update left behind', async () => {
@@ -541,5 +694,37 @@ describe('in-place plugin update', () => {
         assert.deepStrictEqual(out.discarded, [slug]);
         assert.ok(!fs.existsSync(stash), 'the stale stash is removed');
         assert.strictEqual(JSON.parse(fs.readFileSync(path.join(dir, 'manifest.json'), 'utf8')).version, '2.0.0', 'the installed version is untouched');
+    });
+
+    it('DEFERS and retries a stash it cannot lock, instead of silently skipping it', async () => {
+        // Losing the operation lock at boot is not proof another node is working: on Postgres the lease
+        // is holder-guarded and only lapses on its TTL, so the single likeliest holder is the very
+        // process that was killed mid-update and left this stash — its successor has a new HOLDER and
+        // cannot free it. Skipping then leaves the plugin GUTTED, with its only copy of the code in a
+        // directory core/backup.ts excludes, until some later restart happens to fall outside the TTL
+        // window. (Restore is what makes this observable: the plugin dir below has no manifest.)
+        const slug = 'deferred';
+        const dir = path.join(PLUGINS_DIR, slug);
+        fs.rmSync(dir, { recursive: true, force: true });
+        fs.mkdirSync(path.join(dir, 'data'), { recursive: true });
+        const stash = path.join(OS_TMP, `plugin-update-${slug}-ffeeddccbbaa`);
+        fs.mkdirSync(stash, { recursive: true });
+        fs.writeFileSync(path.join(stash, 'manifest.json'), JSON.stringify({ id: slug, name: 'Deferred', version: '1.0.0', isolated: true }));
+
+        // Stand in for the stranded lease / the other node: hold the slug for the first sweep.
+        const holder = await acquirePluginOpLock(slug);
+        assert.strictEqual(holder.ok, true);
+
+        const first = await recoverInterruptedPluginUpdates({ retryMs: 40 });
+
+        assert.deepStrictEqual(first.deferred, [slug], 'reported as deferred, not silently dropped');
+        assert.deepStrictEqual(first.restored, [], 'and NOT restored from under the lock holder');
+        assert.ok(!fs.existsSync(path.join(dir, 'manifest.json')), 'the plugin is still gutted');
+        assert.ok(fs.existsSync(stash), 'and the only copy of its code is still in os-tmp');
+
+        await holder.release();                                  // the lease expires / the other node finishes
+
+        await waitFor(() => fs.existsSync(path.join(dir, 'manifest.json')));
+        assert.ok(!fs.existsSync(stash), 'the scheduled retry consumed the stash');
     });
 });

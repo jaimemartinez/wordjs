@@ -945,18 +945,44 @@ process.on('unhandledRejection', (reason, promise) => {
     console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received. Shutting down gracefully...');
-    saveDatabase();
-    process.exit(0);
-});
+// Graceful shutdown.
+//
+// Handing back the distributed leases is NOT optional bookkeeping: a lease is holder-guarded and only
+// lapses on its own after its TTL, and the restarted process gets a brand-new HOLDER, so it can never
+// free what its predecessor left behind (core/dist-lock). Exiting while holding the 120s per-plugin
+// operation lease therefore made a plain `systemctl restart` / `docker restart` / `pm2 reload` during
+// a plugin update block the NEXT boot's crash recovery — and every install/update/upload/delete of
+// that plugin — for up to two minutes, with a "running elsewhere" message that was simply false.
+// Bounded so a wedged DB can never turn a graceful stop into a hang: past the deadline we exit anyway
+// and the TTL takes over, which is exactly what an abrupt kill already did.
+const SHUTDOWN_LEASE_RELEASE_MS = 2000;
+let shuttingDown = false;
 
-process.on('SIGINT', () => {
-    console.log('\nSIGINT received. Shutting down gracefully...');
-    saveDatabase();
+async function gracefulShutdown(signal: string): Promise<void> {
+    if (shuttingDown) return; // a second signal must not re-enter (or delay) the exit
+    shuttingDown = true;
+    console.log(`${signal} received. Shutting down gracefully...`);
+    try { saveDatabase(); } catch (e: any) { console.warn('[shutdown] saveDatabase:', e && e.message); }
+
+    let deadline: NodeJS.Timeout | null = null;
+    try {
+        const { releaseAllHeld } = require('./core/dist-lock');
+        // clearTimeout the loser: an orphaned timer keeps the event loop alive and, under
+        // --test-force-exit, gets the process killed mid-IPC (see the CI flake this pattern caused).
+        const bounded = new Promise<void>((resolve) => { deadline = setTimeout(resolve, SHUTDOWN_LEASE_RELEASE_MS); });
+        const freed = await Promise.race([releaseAllHeld(), bounded]);
+        if (Array.isArray(freed) && freed.length) console.log(`[shutdown] released ${freed.length} distributed lease(s): ${freed.join(', ')}`);
+    } catch (e: any) {
+        console.warn('[shutdown] could not release the distributed leases (they will expire on their TTL):', e && e.message);
+    } finally {
+        if (deadline) clearTimeout(deadline);
+    }
+
     process.exit(0);
-});
+}
+
+process.on('SIGTERM', () => { void gracefulShutdown('SIGTERM'); });
+process.on('SIGINT', () => { process.stdout.write('\n'); void gracefulShutdown('SIGINT'); });
 
 // Start the application — only when run directly (split mode via backend/server.js). When required by
 // the monolith (WORDJS_EMBEDDED=1), the entrypoint calls initialize() itself after mounting.
