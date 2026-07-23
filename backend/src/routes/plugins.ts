@@ -1238,24 +1238,21 @@ router.get('/menus', authenticate, asyncHandler(async (req: any, res: Response) 
     });
 
     // 4. Some plugin menu items are only meaningful to a user who owns a PROFESSIONAL mailbox on the
-    //    site domain (their account email is @site-domain) — e.g. a per-user webmail inbox; a personal-
-    //    email user has no such inbox, so the page would be an empty shell. A plugin marks those items
-    //    with `requiresProfessionalMailbox: true` when it registers them (adminMenu.add), and core hides
-    //    them from everyone without a professional mailbox. Administrators ALWAYS keep them. This is
-    //    slug/href-agnostic, so ANY mail (or other) plugin gets the behaviour — not just mail-server.
+    //    site's mail domain — e.g. a per-user webmail inbox; a user without one has no inbox, so the
+    //    page would be an empty shell. A plugin marks those items with `requiresProfessionalMailbox:
+    //    true` when it registers them (adminMenu.add), and core hides them from everyone without a
+    //    professional mailbox. Administrators ALWAYS keep them. This is slug/href-agnostic, so ANY mail
+    //    (or other) plugin gets the behaviour — not just mail-server.
+    //
+    //    THE FACT IS ADMIN-OWNED, NOT DERIVED. This used to compare the user's own email domain to the
+    //    site hostname — a field the user writes themselves via PUT /users/me, so menu visibility (and,
+    //    through the identical rule in the mail plugin, the whole mail surface) was self-grantable. It
+    //    now reads the SAME `user_meta.professional_mailbox` grant the mail plugin's route gate reads,
+    //    via the one helper in core/mailbox.ts: menu visibility and route access cannot disagree, and a
+    //    menu entry can no longer appear for a user whose page will only 403.
     const isAdmin = typeof req.user.getRole === 'function' && req.user.getRole() === 'administrator';
-    // Compute the site domain the SAME way a mail plugin does (wordjs.site.domain() → plugin-api.ts):
-    // from the live `siteurl` option (fallback `home`, then localhost). Deriving it from static
-    // config.site.url could drift from a mail plugin's own catch-all/inbox test, so a user could be
-    // hidden from the menu yet still own an inbox (or vice-versa). Use the one source.
-    let siteDomain = '';
-    try {
-        const { getOption } = require('../core/options');
-        siteDomain = new URL(await getOption('siteurl', await getOption('home', 'http://localhost'))).hostname.toLowerCase();
-    } catch { siteDomain = ''; }
-    const userDomain = String(req.user.userEmail || '').toLowerCase().split('@')[1] || '';
-    const hasProfessionalMailbox = !!siteDomain && userDomain === siteDomain;
-    const finalMenus = (isAdmin || hasProfessionalMailbox)
+    const { hasProfessionalMailbox } = require('../core/mailbox');
+    const finalMenus = (isAdmin || hasProfessionalMailbox(req.user))
         ? visibleMenus
         : visibleMenus.filter((m: any) => !m.requiresProfessionalMailbox);
 

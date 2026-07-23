@@ -47,7 +47,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '2.1.7',
+    version: '2.2.0',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -82,9 +82,12 @@ let queueInterval = null;  // scheduled/retry queue timer id (cleared on deactiv
 let _lastSpamPurge = 0;    // last 30-day spam-retention sweep (runs at most every 6h)
 
 // === User lookups via the SAFE host bridge (grant: users:read) ===
-// wordjs.users.* returns a PROJECTION {id,userLogin,username,userEmail,displayName,role} — never
-// user_pass. The field names already match what the rest of this file expects (mapUser-compatible),
-// so no normalization is needed here. The host writes the underlying query (core User model).
+// wordjs.users.* returns a PROJECTION
+// {id,userLogin,username,userEmail,displayName,role,hasProfessionalMailbox} — never user_pass. The
+// field names already match what the rest of this file expects (mapUser-compatible), so no
+// normalization is needed here. The host writes the underlying query (core User model).
+// `hasProfessionalMailbox` is the ADMIN-OWNED corporate-mailbox grant — see hasCorporateMailbox below;
+// it is the host's fact, not something this plugin may derive.
 const User = {
     findByEmail: (email) => wordjs.users.findByEmail(email),
     findByLogin: (login) => wordjs.users.findByLogin(login),
@@ -104,39 +107,97 @@ async function getSiteDomain() {
 }
 
 /**
+ * === THE MAIL DOMAIN — THE ONE EXPRESSION (SSOT) ==============================================
+ *
+ * The domain this server is AUTHORITATIVE FOR: the one it announces, signs and sends as, the one the
+ * DNS-records page tells the operator to publish SPF/DKIM/DMARC/MX on, and therefore the one whose
+ * local parts are corporate mailboxes.
+ *
+ * It is `mail_security_dkim_domain` when set, else the site hostname — NOT the site hostname alone.
+ * That override exists precisely for the `www.` case (see the long note at the From-rewrite below): an
+ * install at https://www.acme.com that publishes its mail records on acme.com sets it, and from then
+ * on every place that has to name "our mail domain" must move together. Four sites used to spell this
+ * expression out by hand (HELO host, DNS-records page, DNS-check page, From-alignment) and a fifth —
+ * the inbound/local-delivery test — used the bare site hostname, so on exactly that install the server
+ * signed and sent as acme.com while refusing to deliver anything addressed to it.
+ */
+function resolveMailDomain(dkimDomain, siteDomain) {
+    const explicit = String(dkimDomain == null ? '' : dkimDomain).trim().toLowerCase().replace(/\.$/, '');
+    if (explicit) return explicit;
+    return String(siteDomain == null ? '' : siteDomain).trim().toLowerCase();
+}
+async function getMailDomain() {
+    // Split from resolveMailDomain so sendMail — which already fetches both inputs in its one parallel
+    // RPC wave — can apply the SAME expression without paying two more round-trips per message.
+    const [dkimDomain, siteDomain] = await Promise.all([
+        getOption('mail_security_dkim_domain', ''),
+        getSiteDomain()
+    ]);
+    return resolveMailDomain(dkimDomain, siteDomain);
+}
+
+/**
  * === ACTIVE CORPORATE MAILBOX — THE ONE DEFINITION (SSOT) ======================================
  *
- * A user has an ACTIVE CORPORATE (professional) MAILBOX when their OWN configured account email is on
- * the site domain. This is not a new rule: it is the rule the INBOUND path already enforces (mail for
- * user@siteDomain is only stored when the matched user's own email is @siteDomain), the same rule the
- * internal-delivery branch of sendMail uses, and exactly what the admin user-form toggle does — it
- * rewrites the account email to username@siteDomain. A user on a personal address (gmail.com) has NO
- * inbox here at all, even when a @siteDomain address maps to their username.
+ * A user has an ACTIVE CORPORATE (professional) MAILBOX when an ADMINISTRATOR HAS ENABLED ONE for
+ * them — the "Professional Mail Account" toggle on the user form, stored by the host in
+ * `user_meta.professional_mailbox` and handed to this plugin as the projected boolean
+ * `user.hasProfessionalMailbox` (backend/src/core/mailbox.ts is the host-side definition).
  *
- * It ALSO gates the outbound/webmail surface (the `mailbox: true` route option added in init): sending
- * through this MTA signs the message with the SITE's DKIM key and spends the site domain's sending
- * reputation, so it must be limited to accounts the operator actually provisioned a mailbox for.
+ * IT IS NOT DERIVED FROM THE ACCOUNT'S EMAIL ADDRESS ANY MORE, and that is the whole point. The old
+ * rule — "their own account email is on the site domain" — read a field the account itself writes:
+ * PUT /users/me is guarded by `authenticate` alone, so any subscriber could set their address to
+ * me@<mailDomain> and self-issue the entire mail surface (sending DKIM-signed mail as the site), and
+ * with `users_can_register` on, POST /auth/register let an ANONYMOUS attacker do the same. The host
+ * now also refuses those two writes (core/mailbox.refuseSelfServiceEmailChange), so the address can no
+ * longer be claimed either — but the GATE deliberately no longer depends on it at all.
  *
- * Every caller goes through here — inbound delivery, internal delivery, the route gate and the
- * /mailbox probe the UI uses — so there is exactly one answer. The HOST mirrors the same predicate for
- * admin-menu visibility (backend/src/routes/plugins.ts: `hasProfessionalMailbox` + the generic
- * `requiresProfessionalMailbox` flag, admins always kept); a different answer there would surface a
- * menu entry whose page only 403s, so keep the two in step.
+ * Reading the FLAG (not the address) is also what makes the gate immune to a mail-domain change: an
+ * operator setting `mail_security_dkim_domain` cannot 403 every non-admin out of the whole webmail.
+ *
+ * The HOST reads the SAME fact for admin-menu visibility (backend/src/routes/plugins.ts, via the
+ * generic `requiresProfessionalMailbox` flag, admins always kept), so a menu entry can never appear
+ * for a user whose page only 403s.
  *
  * NOT cached, deliberately: `user` is the host's per-request projection, rebuilt from the DB by
  * middleware/auth.ts on EVERY request, so an admin flipping the mailbox toggle off denies the very
  * next request instead of a stale grant living on in this process.
  */
-function mailboxDomainOf(email) {
-    const s = String(email == null ? '' : email).trim().toLowerCase();
-    const at = s.lastIndexOf('@'); // last '@' wins: the domain is everything after the final separator
-    if (at <= 0 || at === s.length - 1) return ''; // blank / no '@' / empty local part / empty domain
-    return s.slice(at + 1);
+function hasCorporateMailbox(user) {
+    return !!(user && user.hasProfessionalMailbox === true); // fail closed on a missing/older projection
 }
-function hasCorporateMailbox(user, siteDomain) {
-    const domain = String(siteDomain == null ? '' : siteDomain).trim().toLowerCase();
-    if (!domain || !user) return false; // unknown site domain or no user -> fail closed
-    return mailboxDomainOf(user.userEmail) === domain;
+
+/**
+ * The domain part of an address, by the SAME rule the host applies (backend/src/core/mailbox.ts:
+ * `domainOfAddress`): an address is exactly one '@' with a non-empty local part and a dotted domain,
+ * and anything else has NO domain. `a@gmail.com@acme.example` is therefore not an address at all —
+ * previously this file took the text after the LAST '@' and the host took the text after the FIRST, so
+ * the two disagreed about who that user was. The two copies exist only because this plugin runs in a
+ * sandboxed child process and cannot require host modules; the gate suite asserts they agree on a
+ * shared adversarial table so they cannot drift.
+ */
+const MAIL_ADDRESS_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function mailboxDomainOf(email) {
+    const s = String(email == null ? '' : email).trim().normalize('NFC').toLowerCase();
+    if (!MAIL_ADDRESS_RE.test(s)) return '';
+    return s.slice(s.indexOf('@') + 1); // exactly one '@' — indexOf === lastIndexOf
+}
+
+/**
+ * The address a user actually RECEIVES at, or '' when they receive nowhere here.
+ *
+ * Delivery needs BOTH halves: the admin-owned grant AND an account address that really is on the mail
+ * domain. The grant alone would make a flagged user whose address is personal the delivery target for
+ * `<their login>@<mailDomain>`; the address alone is what let an attacker claim an unused corporate
+ * address and have its mail land in their inbox. Used by inbound onData and sendMail's internal
+ * delivery branch — never by the route gate, which is the grant alone (see hasCorporateMailbox).
+ */
+function mailboxAddressOf(user, mailDomain) {
+    if (!hasCorporateMailbox(user)) return '';
+    const domain = String(mailDomain == null ? '' : mailDomain).trim().toLowerCase();
+    if (!domain) return ''; // unknown mail domain -> fail closed
+    const addr = String(user.userEmail == null ? '' : user.userEmail).trim().normalize('NFC').toLowerCase();
+    return mailboxDomainOf(addr) === domain ? addr : '';
 }
 
 /**
@@ -999,7 +1060,8 @@ function smtpError(code, message) {
  * Initialize the Inbound SMTP Server
  */
 async function initSMTPServer() {
-    const siteDomain = await getSiteDomain();
+    // The domain we ACCEPT mail for — the same one we sign/send as and publish MX on (see getMailDomain).
+    const mailDomain = await getMailDomain();
     // Default to 25 — the ONLY port the world delivers mail to (the MX record implies :25). This makes
     // inbound work with zero config wherever the process may bind it (Windows; Linux once node has
     // CAP_NET_BIND_SERVICE via create-wordjs/setcap; any host running privileged). Where it CAN'T bind
@@ -1105,10 +1167,10 @@ async function initSMTPServer() {
                 session.spfHeader = buildReceivedSpf(result, {
                     domain, mailFrom, ip,
                     helo: session.clientHostname,
-                    // `receiver` is US. Use the siteDomain this listener was started with (already in
+                    // `receiver` is US. Use the mailDomain this listener was started with (already in
                     // closure scope) rather than getHeloName(), which would cost up to two extra option
                     // RPCs on the per-message inbound path for a purely cosmetic field.
-                    receiver: siteDomain
+                    receiver: mailDomain
                 });
 
                 const action = spfAction(result, rejectEnabled);
@@ -1138,7 +1200,6 @@ async function initSMTPServer() {
                 if (err) return callback(err);
 
                 try {
-                    const siteDomain = await getSiteDomain();
                     // 3. Bayesian Analysis
                     const text = (parsed.subject || '') + ' ' + (parsed.text || '');
                     const category = await classifier.categorize(text);
@@ -1192,17 +1253,21 @@ async function initSMTPServer() {
                         if (!addr || !addr.address) continue;
                         const [recName, recDomain] = addr.address.split('@');
 
-                        // Only ACCEPT/store inbound mail for OUR domain. A recipient on any external
+                        // Only ACCEPT/store inbound mail for OUR MAIL DOMAIN. A recipient on any external
                         // domain (a user's personal gmail.com, or a foreign address) must never be
-                        // captured into a WordJS inbox, and catch-all stays scoped to @siteDomain (never a
-                        // blanket accept-anything that would hoard mail meant for other providers). A user
-                        // only has an inbox when they have an ACTIVE CORPORATE MAILBOX — one definition,
-                        // hasCorporateMailbox(); a personal-email user has none.
-                        const isLocalDomain = !!(recDomain && recDomain === siteDomain);
+                        // captured into a WordJS inbox, and catch-all stays scoped to @mailDomain (never a
+                        // blanket accept-anything that would hoard mail meant for other providers).
+                        //
+                        // A user only receives here when mailboxAddressOf() gives them an address: the
+                        // ADMIN-ENABLED mailbox grant PLUS an account address genuinely on this domain.
+                        // The grant half is what closes the inbox-hijack — before it, self-setting an
+                        // unused corporate address on your own account was enough to have that address's
+                        // incoming mail delivered to you.
+                        const isLocalDomain = !!(recDomain && recDomain === mailDomain);
                         let user = null;
                         if (isLocalDomain) {
                             const candidate = await User.findByEmail(addr.address) || await User.findByLogin(recName);
-                            if (hasCorporateMailbox(candidate, siteDomain)) {
+                            if (mailboxAddressOf(candidate, mailDomain)) {
                                 user = candidate;
                             }
                         }
@@ -1307,7 +1372,7 @@ async function initSMTPServer() {
             console.warn(`   ⚠️  Inbound SMTP: could not bind port 25 (${inboundStatus.reason}). Fell back to ${port}. Internet mail is delivered to port 25, so EXTERNAL inbound will NOT arrive until you grant the port-25 bind or map 25 → ${port}. Local + relay mail are unaffected.`);
         } else {
             const note = port === 25 ? '' : ` — NON-STANDARD: internet mail expects port 25, so map 25 → ${port}`;
-            console.log(`   ✓ Inbound SMTP Server listening on port ${port} (Domain: ${siteDomain})${note}`);
+            console.log(`   ✓ Inbound SMTP Server listening on port ${port} (Domain: ${mailDomain})${note}`);
         }
     });
 }
@@ -1431,6 +1496,9 @@ async function sendMail(data) {
         getOption('mail_security_dkim_selector', 'default'),
         getSiteDomain()
     ]);
+    // THE mail domain, from the same one expression every other site uses (see getMailDomain) — built
+    // from the values this wave already fetched instead of paying two more RPCs per message.
+    const mailDomain = resolveMailDomain(dkimDomain, siteDomain);
 
     // stripCRLF the resolved fromEmail/fromName too (covers the admin-configured option fallbacks).
     const fromEmail = stripCRLF(data.fromEmail || optFromEmail || defaultEmail);
@@ -1508,8 +1576,8 @@ async function sendMail(data) {
         throw e; // If we can't save the sent record, we probably shouldn't send? Or warn?
     }
 
-    // 2. Deliver to Internal Users (Inbox Copy). siteDomain was prefetched in the parallel wave above.
-    console.log(`[MailServer] Processing internal delivery for domain: ${siteDomain}`);
+    // 2. Deliver to Internal Users (Inbox Copy). mailDomain came from the parallel wave above.
+    console.log(`[MailServer] Processing internal delivery for domain: ${mailDomain}`);
 
     // Track which recipients are local so we filter them out of SMTP
     const localRecipients = new Set();
@@ -1521,19 +1589,18 @@ async function sendMail(data) {
             console.log(`[MailServer] Checking recipient: ${recipient}`);
             const [rName, rDomain] = recipient.split('@');
             // A recipient is LOCAL (delivered into a WordJS inbox) ONLY when it is a corporate mailbox on
-            // OUR domain. A user's PERSONAL email (e.g. gmail.com) MUST be delivered OUT to that provider,
-            // never captured locally — a user without a professional @domain mailbox has no WordJS inbox;
-            // their personal address is only for things like password recovery / external notifications.
-            // (Previously `User.findByEmail(recipient)` matched regardless of domain, so mail to a user's
-            // personal address was stored in WordJS instead of being sent to Gmail/etc.)
+            // OUR mail domain. A user's PERSONAL email (e.g. gmail.com) MUST be delivered OUT to that
+            // provider, never captured locally — a user without a professional mailbox has no WordJS
+            // inbox; their personal address is only for things like password recovery / external
+            // notifications. (Previously `User.findByEmail(recipient)` matched regardless of domain, so
+            // mail to a user's personal address was stored in WordJS instead of being sent to Gmail/etc.)
             let localUser = null;
-            if (rDomain && rDomain === siteDomain) {
+            if (rDomain && rDomain === mailDomain) {
                 const candidate = await User.findByEmail(recipient) || await User.findByLogin(rName);
-                // A user only has a WordJS inbox when they have an ACTIVE CORPORATE MAILBOX (their OWN
-                // configured email is on our domain). If their email is a personal address (gmail.com),
-                // they have no inbox even when a @domain address maps to their username — deliver out.
-                // Same predicate as the inbound path and the route gate: hasCorporateMailbox().
-                if (hasCorporateMailbox(candidate, siteDomain)) {
+                // Exactly the predicate the INBOUND path uses — mailboxAddressOf(): the admin-enabled
+                // mailbox grant plus an account address really on this domain. Without the grant they
+                // have no inbox even when a @mailDomain address maps to their username — deliver out.
+                if (mailboxAddressOf(candidate, mailDomain)) {
                     localUser = candidate;
                 }
             }
@@ -1654,7 +1721,9 @@ async function sendMail(data) {
         //   - The escape hatch already exists and is one setting: mail_security_dkim_domain wins over
         //     siteDomain here AND on the DNS-records page, so an operator who wants the bare apex sets
         //     it to acme.com and both the rewrite target and the records to publish move together.
-        const sendingDomain = String(dkimDomain || siteDomain || '').toLowerCase();
+        // THE mail domain — the same one expression as the HELO host, the DNS-records page and the
+        // inbound/local-delivery test (resolveMailDomain), so an operator who moves it moves all of them.
+        const sendingDomain = mailDomain;
         const fromDomain = String(fromEmail.split('@')[1] || '').toLowerCase();
         let wireFrom = fromEmail;
         let wireReplyTo = data.replyTo || undefined;
@@ -1805,8 +1874,10 @@ async function sendBounce(data, failedList) {
 async function getHeloName() {
     const explicit = await getOption('mail_helo_host', '');
     if (explicit) return explicit;
-    const dkimDomain = await getOption('mail_security_dkim_domain', '');
-    if (dkimDomain) return dkimDomain;
+    // Otherwise it is THE mail domain (one expression — see resolveMailDomain), never the raw site
+    // hostname on its own: announcing a name we are not the authority for is what breaks rDNS/SPF.
+    const mailDomain = await getMailDomain();
+    if (mailDomain) return mailDomain;
     try { return new URL(await getSiteUrl()).hostname; } catch (e) { return os.hostname(); }
 }
 
@@ -2180,16 +2251,23 @@ exports.init = async function (bridge) {
 
     // === MAIL-SURFACE GATE ========================================================================
     // Using the mail features requires an ACTIVE CORPORATE MAILBOX (hasCorporateMailbox — the one
-    // definition, up top). `{ auth: true }` alone is NOT enough: it only proves *some* account is
-    // logged in, so before this every authenticated user — a subscriber whose account email is a
-    // personal gmail address and who therefore has no inbox at all — could POST /send and push mail
-    // through the site MTA, signed with the site DKIM key, spending the site domain's reputation.
+    // definition, up top: the grant an ADMINISTRATOR set, never anything the account can write itself).
+    // `{ auth: true }` alone is NOT enough: it only proves *some* account is logged in, so before this
+    // every authenticated user — a subscriber with no inbox on this server at all — could POST /send and
+    // push mail through the site MTA, signed with the site DKIM key, spending the domain's reputation.
     //
     // The check lives in THIS helper rather than in ~30 handlers so it cannot be forgotten on a future
     // route: a route opts in with `mailbox: true` and the guard is applied for it, once, here.
     // `mailbox` is a PLUGIN-LOCAL option — the host only understands auth/admin/multipart — so it is
     // stripped before the registration crosses the bridge, and it implies auth (a gated route without
     // authentication would have no user to check, i.e. it would deny everything).
+    //
+    // AND THE OPTION-LESS FORM FAILS CLOSED. `route(method, sub, handler)` — a form this helper has
+    // always accepted — used to register a route with NO options at all, i.e. UNAUTHENTICATED, which is
+    // the worst possible default for a mail plugin and the one a reviewer is least likely to notice. It
+    // now means `{ auth: true, mailbox: true }`. A route that genuinely wants to be public or
+    // admin-only has to say so, and the gate suite's registered-vs-declared set equality fails on any
+    // route that reaches the bridge without being classified — in ANY syntactic form.
     //
     // ADMINISTRATORS PASS WITHOUT A MAILBOX OF THEIR OWN, deliberately:
     //   - inbound catch-all mail (no matching mailbox) is stored OWNED BY THE SITE ADMIN
@@ -2203,10 +2281,14 @@ exports.init = async function (bridge) {
     //     would show an admin a menu entry whose page only 403s.
     // If a capability bridge ever lands, replace BOTH role checks (here and canAccessEmail) with an
     // explicit capability at the same time.
-    const canUseMailSurface = async (user) => {
+    //
+    // NOTE it does NOT consult the mail domain. Access is the GRANT alone, so changing
+    // `mail_security_dkim_domain` (or moving the site to/from a `www.` host) can never 403 every
+    // non-admin out of the whole webmail while the server happily keeps signing and sending.
+    const canUseMailSurface = (user) => {
         if (!user) return false;
         if (user.role === 'administrator') return true;
-        return hasCorporateMailbox(user, await getSiteDomain());
+        return hasCorporateMailbox(user);
     };
     const denyNoMailbox = (res) => res.status(403).json({
         code: 'mail_no_corporate_mailbox',
@@ -2216,14 +2298,15 @@ exports.init = async function (bridge) {
     });
 
     const route = (method, sub, opts, handler) => {
-        if (typeof opts === 'function') { handler = opts; opts = {}; }
+        // FAIL CLOSED on the option-less form: no declaration means the strictest one, not none.
+        if (typeof opts === 'function') { handler = opts; opts = { auth: true, mailbox: true }; }
         const { mailbox, ...hostOpts } = (opts || {});
         if (mailbox) hostOpts.auth = true; // a mailbox-gated route is always authenticated
         const finalHandler = mailbox
             ? async (req, res) => {
                 // Re-evaluated on EVERY request off the host's freshly-loaded req.user — never cached,
                 // so losing the mailbox denies immediately (see hasCorporateMailbox).
-                if (!await canUseMailSurface(req.user)) return denyNoMailbox(res);
+                if (!canUseMailSurface(req.user)) return denyNoMailbox(res);
                 return handler(req, res);
             }
             : handler;
@@ -2235,14 +2318,16 @@ exports.init = async function (bridge) {
     // must answer instead of 403-ing. Answers through canUseMailSurface so the UI can never disagree
     // with the gate.
     route('get', '/mailbox', { auth: true }, async (req, res) => {
-        const siteDomain = await getSiteDomain();
-        const hasMailbox = hasCorporateMailbox(req.user, siteDomain);
+        const mailDomain = await getMailDomain();
+        const hasMailbox = hasCorporateMailbox(req.user);
         res.json({
             hasMailbox,
-            canUseMail: await canUseMailSurface(req.user),
+            canUseMail: canUseMailSurface(req.user),
             isAdmin: req.user.role === 'administrator',
-            address: hasMailbox ? req.user.userEmail : null,
-            siteDomain
+            // The address they actually receive at — empty when the grant is on but the account address
+            // is not on the mail domain (an admin-side inconsistency the UI should not paper over).
+            address: mailboxAddressOf(req.user, mailDomain) || null,
+            siteDomain: mailDomain
         });
     });
 
@@ -2727,14 +2812,19 @@ exports.init = async function (bridge) {
         const query = req.query.q || '';
         if (query.length < 2) return res.json([]);
 
-        const siteDomain = await getSiteDomain();
-
+        // Suggest the address a colleague can actually RECEIVE at — the same mailboxAddressOf() the
+        // delivery paths use. Synthesizing `<login>@<domain>` for every user in the directory advertised
+        // addresses that do not exist (mail to them lands in the catch-all, or bounces).
+        const mailDomain = await getMailDomain();
         const users = await User.findAll({ search: query, limit: 5 });
-        res.json(users.map(u => ({
-            email: `${u.userLogin.toLowerCase()}@${siteDomain}`,
-            realEmail: u.userEmail,
-            name: u.displayName || u.userLogin
-        })));
+        res.json(users
+            .map(u => ({ addr: mailboxAddressOf(u, mailDomain), u }))
+            .filter(x => !!x.addr)
+            .map(({ addr, u }) => ({
+                email: addr,
+                realEmail: u.userEmail,
+                name: u.displayName || u.userLogin
+            })));
     });
 
     // GET /api/v1/plugin/mail-server/settings — one PARALLEL wave of option reads. The old handler
@@ -2866,8 +2956,11 @@ exports.init = async function (bridge) {
     // GET /api/v1/plugin/mail-server/security/dns-records — records to publish for deliverability
     route('get', '/security/dns-records', { auth: true, admin: true }, async (req, res) => {
         const priv = await getOption('mail_security_dkim_private_key', '');
-        let domain = await getOption('mail_security_dkim_domain', '');
-        if (!domain) { try { domain = await getSiteDomain(); } catch (e) { domain = ''; } }
+        // THE mail domain — one expression, shared with the HELO host, the From-alignment rewrite and
+        // the inbound/local-delivery test, so the records this page tells the operator to publish are
+        // always for the domain the server actually signs, sends and receives as.
+        let domain = '';
+        try { domain = await getMailDomain(); } catch (e) { domain = ''; }
         const selector = await getOption('mail_security_dkim_selector', 'default');
         let publicKeyPem = '';
         if (priv) {
@@ -2888,8 +2981,11 @@ exports.init = async function (bridge) {
     // (not just eyeball it). Needs the `network` grant (same DNS resolver the outbound path already uses).
     route('get', '/security/dns-check', { auth: true, admin: true }, async (req, res) => {
         const priv = await getOption('mail_security_dkim_private_key', '');
-        let domain = await getOption('mail_security_dkim_domain', '');
-        if (!domain) { try { domain = await getSiteDomain(); } catch (e) { domain = ''; } }
+        // THE mail domain — one expression, shared with the HELO host, the From-alignment rewrite and
+        // the inbound/local-delivery test, so the records this page tells the operator to publish are
+        // always for the domain the server actually signs, sends and receives as.
+        let domain = '';
+        try { domain = await getMailDomain(); } catch (e) { domain = ''; }
         const selector = await getOption('mail_security_dkim_selector', 'default');
         let publicKeyPem = '';
         if (priv) { try { publicKeyPem = crypto.createPublicKey(priv).export({ type: 'spki', format: 'pem' }); } catch (e) { } }
@@ -2958,7 +3054,7 @@ exports.init = async function (bridge) {
         try {
             const selector = String((req.body && req.body.selector) || 'default').replace(/[^a-z0-9_-]/gi, '') || 'default';
             let domain = (req.body && req.body.domain) || '';
-            if (!domain) { try { domain = await getSiteDomain(); } catch (e) { } }
+            if (!domain) { try { domain = await getMailDomain(); } catch (e) { } }
             if (!domain) return res.status(400).json({ error: 'A sending domain is required' });
 
             // F8: don't silently overwrite an existing DKIM key — rotating it breaks signing for all
@@ -3243,7 +3339,7 @@ exports.init = async function (bridge) {
         const query = String(req.query.q || '').trim();
         if (query.length < 2) return res.json([]);
         try {
-            const siteDomain = await getSiteDomain();
+            const mailDomain = await getMailDomain();
             const [users, history] = await Promise.all([
                 User.findAll({ search: query, limit: 5 }).catch(() => []),
                 Email.suggestContacts(req.user.id, query, 8).catch(() => [])
@@ -3251,7 +3347,11 @@ exports.init = async function (bridge) {
             const out = new Map();
             for (const u of (users || [])) {
                 if (!u || !u.userLogin) continue;
-                const addr = `${String(u.userLogin).toLowerCase()}@${siteDomain}`;
+                // Only colleagues who really have a mailbox here — same rule as delivery (see
+                // mailboxAddressOf); a synthesized `<login>@<domain>` for everyone suggested addresses
+                // that nobody receives at.
+                const addr = mailboxAddressOf(u, mailDomain);
+                if (!addr) continue;
                 if (!out.has(addr)) out.set(addr, { email: addr, name: u.displayName || u.userLogin, source: 'user' });
             }
             for (const c of history) {
@@ -3270,8 +3370,9 @@ exports.init = async function (bridge) {
         icon: 'fa-envelope',
         order: 90,
         cap: 'access_admin_panel',
-        // Only a user whose account email is on the site domain has a WordJS inbox here; core hides this
-        // per-user webmail from everyone else via the generic requiresProfessionalMailbox flag.
+        // Only a user for whom an ADMINISTRATOR enabled a professional mailbox has an inbox here; core
+        // hides this per-user webmail from everyone else via the generic requiresProfessionalMailbox
+        // flag, reading the same grant this plugin's route gate reads.
         requiresProfessionalMailbox: true
     });
 

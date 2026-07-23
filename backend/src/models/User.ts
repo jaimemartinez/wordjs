@@ -8,6 +8,10 @@ const bcrypt = require('bcryptjs');
 const config = require('../config/app');
 const { sanitizeTitle, currentTimeGMT } = require('../core/formatting');
 const { getRoles } = require('../core/roles');
+// The ACTIVE CORPORATE MAILBOX fact + the one address-shape rule. See core/mailbox.ts.
+const {
+    MAILBOX_META_KEY, EMAIL_FORMAT_RE, normalizeAddress, hasProfessionalMailbox, mailboxFlagValue
+} = require('../core/mailbox');
 
 const SALT_ROUNDS = 12;
 
@@ -50,9 +54,13 @@ function assertValidRole(role: string): void {
  * (NFC to also collapse equivalent composed/decomposed forms) before every store and lookup. With the
  * stored value already fully lowercased, the LOWER()-based index/queries then only have ASCII left to
  * fold and uniqueness holds across engines and scripts.
+ *
+ * Delegates to core/mailbox.normalizeAddress so the fold used for STORAGE here and the fold used for
+ * the corporate-mailbox domain comparison there are literally the same function — a second copy would
+ * eventually disagree about some address and silently split "the same" identity in two.
  */
 function normalizeEmail(email: any): string {
-    return String(email == null ? '' : email).trim().normalize('NFC').toLowerCase();
+    return normalizeAddress(email);
 }
 
 class User {
@@ -66,6 +74,13 @@ class User {
     userStatus?: number;
     meta?: { [key: string]: any };
     role?: string;
+    /**
+     * ACTIVE CORPORATE MAILBOX — the admin-owned fact, materialized from user_meta by loadMeta() so
+     * every projection of this user (plugin bridge, isolate req.user, toJSON) carries the SAME answer
+     * instead of each one re-deriving it. Never write this directly: it is set from
+     * user_meta.professional_mailbox, which only an `edit_users` caller can change.
+     */
+    hasProfessionalMailbox?: boolean;
 
     constructor(data: any) {
         this.id = data.id;
@@ -130,6 +145,13 @@ class User {
         // and uniqueness holds even where the DB's ASCII-only LOWER() would not. Store the canonical form.
         const normalizedEmail = normalizeEmail(email);
 
+        // Validate the SHAPE here, not only in update(). create() used to accept anything non-empty, so
+        // POST /api/v1/users (admin) could store 'a@gmail.com@acme.example' — an address whose domain two
+        // readers can legitimately disagree about (first '@' vs last '@'). One rule, both entry points:
+        // exactly one '@' (the character class forbids a second), a non-empty local part and a dotted
+        // domain. Rejecting it at the model covers every caller — REST, self-registration, both importers.
+        if (!EMAIL_FORMAT_RE.test(normalizedEmail)) throw new Error('Invalid email format');
+
         // Check if exists
         const existingUser = await User.findByLogin(username);
         if (existingUser) throw new Error('Username already exists');
@@ -170,6 +192,15 @@ class User {
         if (personalEmail) {
             await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)',
                 [userId, 'personal_email', String(personalEmail).trim().toLowerCase()]);
+        }
+
+        // ACTIVE CORPORATE MAILBOX. Written ONLY from the explicit `professionalMailbox` argument (the
+        // admin user form's toggle) — never derived from the email address, which the account itself can
+        // write. The caller is responsible for proving `edit_users`; routes/users.ts POST / is admin-only
+        // and /auth/register never passes it, so a self-registration can never arrive here with it set.
+        if (data.professionalMailbox !== undefined && mailboxFlagValue(data.professionalMailbox) === '1') {
+            await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)',
+                [userId, MAILBOX_META_KEY, '1']);
         }
 
         return await User.findById(userId);
@@ -295,13 +326,23 @@ class User {
             await User.updateMeta(id, 'role', data.role);
         }
 
+        // ACTIVE CORPORATE MAILBOX — its own guarded branch, exactly like `role`, so it can only be
+        // written by a caller that passed the explicit `professionalMailbox` field. routes/users.ts is
+        // what proves the caller holds `edit_users`; the PROTECTED_META entry below is what stops any
+        // route from reaching the same key through the generic `data.meta` bag.
+        if (data.professionalMailbox !== undefined) {
+            await User.updateMeta(id, MAILBOX_META_KEY, mailboxFlagValue(data.professionalMailbox));
+        }
+
         if (data.meta) {
             // Protected keys must NEVER be set through the generic meta path: 'role' has a dedicated
             // assertValidRole-guarded branch above (mass-assigning meta.role would bypass the allow-list
             // → privilege escalation, since getRole() reads meta.role and administrators short-circuit
-            // to '*'), and 'token_valid_after' is the JWT revocation epoch. Skip them here so a future
+            // to '*'), 'token_valid_after' is the JWT revocation epoch, and MAILBOX_META_KEY is the
+            // ACTIVE CORPORATE MAILBOX grant (mass-assigning it through a route that forwards req.body.meta
+            // would restore exactly the self-grant this whole change removes). Skip them here so a future
             // route forwarding req.body.meta into update() can't escalate or tamper with auth state.
-            const PROTECTED_META = new Set(['role', 'token_valid_after']);
+            const PROTECTED_META = new Set(['role', 'token_valid_after', MAILBOX_META_KEY]);
             for (const [key, value] of Object.entries(data.meta)) {
                 if (PROTECTED_META.has(key)) continue;
                 await User.updateMeta(id, key, value);
@@ -410,6 +451,9 @@ class User {
         this.meta = meta;
 
         if (meta.role) this.role = meta.role;
+        // Materialize the ACTIVE CORPORATE MAILBOX fact ONCE, here, so every downstream projection
+        // (plugin bridge, isolate req.user, toJSON) reports the same answer without re-deriving it.
+        this.hasProfessionalMailbox = hasProfessionalMailbox(meta);
     }
 
     static async getMeta(userId: number, key: string) {
@@ -472,6 +516,9 @@ class User {
             // top-level field for the user form; also present in `meta.personal_email`. It is deliberately
             // NON-sensitive (a mere contact address) so it is not stripped by SENSITIVE_META above.
             personalEmail: (this.meta && this.meta.personal_email) || null,
+            // ACTIVE CORPORATE MAILBOX, as a first-class boolean so the admin user form can render the
+            // "Professional Mail Account" toggle in its true state and send it straight back.
+            professionalMailbox: hasProfessionalMailbox(this),
             meta: safeMeta
         };
     }

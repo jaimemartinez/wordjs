@@ -189,6 +189,12 @@ export interface User {
     role: string;
     capabilities: string[];
     personalEmail?: string | null;
+    /**
+     * ACTIVE CORPORATE MAILBOX — the admin-owned grant (backend: user_meta.professional_mailbox).
+     * Only POST /users and PUT /users/:id accept it, and only from a caller holding `edit_users`; the
+     * self-service PUT /users/me ignores it entirely. A mail plugin gates its whole surface on this.
+     */
+    professionalMailbox?: boolean;
     mfa?: {
         required: boolean;
         enabled: boolean;

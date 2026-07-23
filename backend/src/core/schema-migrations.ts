@@ -197,6 +197,110 @@ const MIGRATIONS: Migration[] = [
                 console.warn(`   [migration 0005] webhooks.secret_enc→secret rename skipped (non-fatal): ${e && e.message}`);
             }
         }
+    },
+    {
+        // ACTIVE CORPORATE MAILBOX becomes an EXPLICIT, ADMIN-OWNED grant (user_meta.professional_mailbox)
+        // instead of being derived from the account's own email domain. See core/mailbox.ts for why the
+        // derivation was not an authorization fact (PUT /users/me and POST /auth/register both write
+        // user_email, so the grant was self-issuable, anonymously in the registration case).
+        //
+        // THE UPGRADE TRADE-OFF, stated plainly. On an existing install every account whose email is on
+        // the mail domain has a working mailbox today, and we cannot tell from the data whether that
+        // address was PROVISIONED BY AN ADMIN or SELF-ASSIGNED through the hole. Two bad options:
+        //   (a) grant to everyone on-domain — preserves every working mailbox, but also PERSISTS the
+        //       grant for anyone who exploited the hole, converting a live bug into stored permission;
+        //   (b) grant to nobody — closes it completely, and revokes every legitimate employee mailbox.
+        // We take the SAFE MIDDLE: grant only to accounts for which the hole conferred nothing, i.e.
+        // accounts that could already set the flag themselves — administrators and holders of
+        // `edit_users`. Every OTHER on-domain account is left DISABLED and reported.
+        //
+        // CONSEQUENCE FOR A LEGITIMATE USER (deliberate, not a bug): an editor at alice@acme.com loses
+        // webmail access at upgrade and must be re-enabled by an admin in Users → edit user →
+        // Professional Mail Account. Until then her inbound mail is NOT lost, but it is NOT hers either:
+        // it falls to the catch-all admin inbox when catch-all is enabled, and is rejected at SMTP
+        // (a normal 5xx to the sender, so nothing disappears silently) when it is not. The migration
+        // therefore names every affected account in the boot log AND stores the list in the
+        // `professional_mailbox_migration_pending` option, so the operator has the exact worklist.
+        //
+        // NEVER THROWS: the un-granted state is the DENY direction, so a partial run is safe; aborting
+        // boot over a data derivation would be worse. Recorded as applied either way (like 0001).
+        id: '0006_professional_mailbox_flag',
+        up: async (ctx: MigrationCtx) => {
+            const { domainOfAddress } = require('./mailbox');
+            const MAILBOX_META_KEY = 'professional_mailbox';
+            try {
+                // 1. The mail domain, read straight from the options table (the option store's own
+                //    accessor is not guaranteed to be wired this early in boot). SAME precedence as
+                //    core/mailbox.getMailDomain: the DKIM domain override wins over the site hostname.
+                const optionOf = async (name: string): Promise<string> => {
+                    const row = await ctx.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
+                    return row ? String(row.option_value ?? '') : '';
+                };
+                let mailDomain = String(await optionOf('mail_security_dkim_domain')).trim().toLowerCase().replace(/\.$/, '');
+                if (!mailDomain) {
+                    const siteUrl = (await optionOf('siteurl')) || (await optionOf('home'));
+                    try { mailDomain = new URL(siteUrl).hostname.toLowerCase(); } catch { mailDomain = ''; }
+                }
+                if (!mailDomain) {
+                    console.log('   [migration 0006] no site/mail domain configured — no professional mailboxes to derive.');
+                    return;
+                }
+
+                // 2. Which roles could ALREADY set this flag for themselves, i.e. gain nothing from the
+                //    old hole? Administrators always; plus any custom role carrying '*' or `edit_users`.
+                const privilegedRoles = new Set<string>(['administrator']);
+                try {
+                    const raw = await optionOf('wordjs_user_roles');
+                    const roles = raw ? JSON.parse(raw) : {};
+                    for (const [name, def] of Object.entries<any>(roles || {})) {
+                        const caps: string[] = (def && def.capabilities) || [];
+                        if (caps.includes('*') || caps.includes('edit_users')) privilegedRoles.add(name);
+                    }
+                } catch (e: any) {
+                    console.warn(`   [migration 0006] could not read the roles map (${e && e.message}); treating only 'administrator' as privileged.`);
+                }
+
+                // 3. Derive. A user with no role meta is a subscriber (User.getRole's default).
+                const rows = (await ctx.all(
+                    'SELECT u.id AS id, u.user_email AS user_email, m.meta_value AS role ' +
+                    'FROM users u LEFT JOIN user_meta m ON m.user_id = u.id AND m.meta_key = ?', ['role']
+                )) || [];
+                const granted: string[] = [];
+                const pending: string[] = [];
+                for (const r of rows) {
+                    if (domainOfAddress(r.user_email) !== mailDomain) continue;
+                    const role = String(r.role || 'subscriber');
+                    const existing = await ctx.get(
+                        'SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = ?', [r.id, MAILBOX_META_KEY]);
+                    if (existing) continue; // already decided (re-run / restored backup) — never overwrite
+                    if (privilegedRoles.has(role)) {
+                        await ctx.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)',
+                            [r.id, MAILBOX_META_KEY, '1']);
+                        granted.push(String(r.user_email));
+                    } else {
+                        pending.push(`${r.user_email} (${role})`);
+                    }
+                }
+
+                if (granted.length) {
+                    console.log(`   ✓ [migration 0006] professional mailbox kept for ${granted.length} privileged account(s): ${granted.join(', ')}`);
+                }
+                if (pending.length) {
+                    console.warn(`⚠️  [migration 0006] ${pending.length} account(s) hold an address on the mail domain '${mailDomain}' but are NOT administrators/user managers, so their professional mailbox was NOT auto-enabled (it could have been self-assigned before this release). Re-enable the legitimate ones in Users → edit user → Professional Mail Account:`);
+                    for (const p of pending.slice(0, 50)) console.warn(`      - ${p}`);
+                    if (pending.length > 50) console.warn(`      ...and ${pending.length - 50} more`);
+                    try {
+                        await ctx.run('DELETE FROM options WHERE option_name = ?', ['professional_mailbox_migration_pending']);
+                        await ctx.run("INSERT INTO options (option_name, option_value, autoload) VALUES (?, ?, 'no')",
+                            ['professional_mailbox_migration_pending', JSON.stringify(pending)]);
+                    } catch (e: any) {
+                        console.warn(`   [migration 0006] could not record the pending list as an option (the log above is the worklist): ${e && e.message}`);
+                    }
+                }
+            } catch (e: any) {
+                console.warn(`⚠️  [migration 0006] professional-mailbox derivation skipped (non-fatal — accounts stay DISABLED until an admin enables them): ${e && e.message}`);
+            }
+        }
     }
 ];
 
@@ -243,4 +347,6 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
     }
 }
 
-module.exports = { runSchemaMigrations };
+// MIGRATIONS is exported so a suite can drive a SINGLE migration against a throwaway database (and so
+// the runner contract test can keep using its own synthetic list). Never mutate it.
+module.exports = { runSchemaMigrations, MIGRATIONS };

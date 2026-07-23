@@ -17,6 +17,8 @@
 const path = require('path');
 const fs = require('fs');
 const { verifyPermission } = require('./plugin-context');
+// The ACTIVE CORPORATE MAILBOX grant, read the one way (core/mailbox.ts) — never re-derived.
+const { hasProfessionalMailbox } = require('./mailbox');
 
 // NO plugin bypasses the sandbox anymore — there is no "trusted" tier. Every capability is gated by an
 // admin GRANT (Android-style, default-deny). Privileged things that used to need trust are now either a
@@ -32,6 +34,13 @@ function projectUser(u: any): any {
         userEmail: u.userEmail || u.user_email,
         displayName: u.displayName || u.display_name,
         role: u.role,
+        // ACTIVE CORPORATE MAILBOX — the admin-owned grant (user_meta.professional_mailbox), projected
+        // as a plain boolean. A plugin must NOT re-derive this from userEmail: that field is written by
+        // the account itself, so deriving it made the grant self-issuable. Every caller of this bridge
+        // passes a User loaded via findById/findByLogin/findByEmail/findAll, which run loadMeta(), so
+        // the flag is materialized by the time we get here; a raw row without meta projects `false`
+        // (fail-closed).
+        hasProfessionalMailbox: hasProfessionalMailbox(u),
     };
 }
 

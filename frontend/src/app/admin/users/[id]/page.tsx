@@ -15,13 +15,19 @@ export default function UserEditorPage() {
     const isNew = params.id === "new";
     const userId = isNew ? null : Number(params.id);
 
-    const [formData, setFormData] = useState({
+    const [formData, setFormData] = useState<{
+        username: string; email: string; displayName: string; role: string;
+        password: string; personalEmail: string; professionalMailbox?: boolean;
+    }>({
         username: "",
         email: "",
         displayName: "",
         role: "subscriber",
         password: "",
         personalEmail: "",
+        // ACTIVE CORPORATE MAILBOX — the admin-owned grant written by a mail plugin's
+        // `user_form_before_email` toggle and submitted with the form. See UserFormModal for the full note.
+        professionalMailbox: undefined,
     });
     const [saving, setSaving] = useState(false);
     const [, setHookTick] = useState(0);
@@ -44,6 +50,7 @@ export default function UserEditorPage() {
                 role: user.role,
                 password: "", // Don't load password
                 personalEmail: user.personalEmail || "",
+                professionalMailbox: !!user.professionalMailbox,
             });
         } catch (error) {
             console.error("Failed to load user:", error);

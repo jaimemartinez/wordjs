@@ -12,6 +12,8 @@ const { authenticate } = require('../middleware/auth');
 const { can, isAdmin, ownerOrCan } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
+// ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
+const { refuseSelfServiceEmailChange, EMAIL_FORMAT_RE } = require('../core/mailbox');
 
 /**
  * @swagger
@@ -178,6 +180,13 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
         });
     }
 
+    // The PRIMARY email must be a real address. User.create enforces the same rule (it is the model-level
+    // backstop for the importers and self-registration), but reaching it here would surface as a raw 500;
+    // answer the API's own 400 shape instead. One rule, expressed once — EMAIL_FORMAT_RE from core/mailbox.
+    if (!EMAIL_FORMAT_RE.test(String(email).trim().normalize('NFC').toLowerCase())) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid email format.', data: { status: 400 } });
+    }
+
     // Optional personal/recovery email (coexists with the primary email; used for password recovery).
     if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(personalEmail).trim())) {
         return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
@@ -190,7 +199,11 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
             password,
             displayName,
             role,
-            personalEmail
+            personalEmail,
+            // ACTIVE CORPORATE MAILBOX — the "Professional Mail Account" toggle on the admin user form.
+            // Safe to forward unconditionally: this route is `isAdmin`, so the caller is by definition
+            // allowed to provision mailboxes. Self-registration (POST /auth/register) never reaches here.
+            professionalMailbox: req.body.professionalMailbox
         });
 
         res.status(201).json(user.toJSON());
@@ -296,8 +309,21 @@ router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => 
         return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
     }
 
+    // SECURITY (self-grant of a corporate mailbox): this route is guarded by `authenticate` ONLY, and it
+    // writes the PRIMARY email. Before this, any subscriber could set theirs to me@<mailDomain> — which
+    // is the address an inbound message is matched against, and which used to imply the whole
+    // professional-mailbox grant. A caller here never holds `edit_users` by construction (it is the
+    // self-service profile route), so the self-service rule applies unconditionally. Same helper as
+    // PUT /:id and /auth/register.
+    const emailRefusal = await refuseSelfServiceEmailChange(req.user, email);
+    if (emailRefusal) return res.status(403).json(emailRefusal);
+
     const updateData: any = { email, displayName, password, url };
     if (personalEmail !== undefined) updateData.meta = { personal_email: String(personalEmail).trim().toLowerCase() };
+    // NOTE: `professionalMailbox` is deliberately NOT read from the body here. It is the admin-owned
+    // grant; a self-service route must never be able to set it. User.update() only acts on the explicit
+    // field, and MAILBOX_META_KEY is in its PROTECTED_META list, so the `meta` bag above cannot reach it
+    // either.
 
     const updated = await User.update(req.user.id, updateData);
     res.json(updated.toJSON());
@@ -351,6 +377,32 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     const personalEmail = req.body.personalEmail;
 
     const updateData: any = { email, displayName, password, url };
+
+    // SECURITY (ACTIVE CORPORATE MAILBOX). This route also serves SELF-edits — `isOwn` skips the
+    // `edit_users` check above — so both the grant and the address it names must be re-gated on the
+    // capability, not on ownership.
+    //
+    //  - The grant itself is admin-owned state: writing it requires `edit_users`, whoever the target is.
+    //    Without this, a user editing their OWN record would set their own mailbox flag, which is the
+    //    self-grant this whole change removes, just through a different door.
+    //  - A caller WITHOUT `edit_users` (i.e. a self-edit) is held to the same email rule as
+    //    PUT /me — one helper, so the two self-service doors cannot drift apart. An `edit_users`
+    //    delegate is unaffected: assigning corporate addresses is precisely their job.
+    const canEditUsers = typeof req.user.can === 'function' && req.user.can('edit_users');
+    if (req.body.professionalMailbox !== undefined) {
+        if (!canEditUsers) {
+            return res.status(403).json({
+                code: 'rest_forbidden',
+                message: 'Only a user manager can enable or disable a professional mail account.',
+                data: { status: 403 }
+            });
+        }
+        updateData.professionalMailbox = req.body.professionalMailbox;
+    }
+    if (!canEditUsers) {
+        const emailRefusal = await refuseSelfServiceEmailChange(user, email);
+        if (emailRefusal) return res.status(403).json(emailRefusal);
+    }
 
     // Optional personal/recovery email (coexists with the primary/professional email). Stored as meta;
     // update() forwards updateData.meta.personal_email via updateMeta.
