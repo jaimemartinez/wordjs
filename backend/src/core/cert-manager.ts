@@ -39,8 +39,16 @@ class CertManager {
         // this.directoryUrl = acme.directory.letsencrypt.staging; // TODO: Configurable?
     }
 
-    async initClient(email: string, useStaging = false) {
-        if (useStaging) this.directoryUrl = acme.directory.letsencrypt.staging;
+    async initClient(email: string, useStaging = false, directoryUrlOverride: string | null = null) {
+        // ASSIGN BOTH BRANCHES. This was `if (useStaging) …` with NO else, on a module-level SINGLETON
+        // (`module.exports = new CertManager()`), so `directoryUrl` was process-global sticky state:
+        // one auto-renewal running with `acme.staging` set (renewIfDue → provisionAutoHTTP) pinned the
+        // whole process to staging, and every later order the UI asked for as PRODUCTION silently went
+        // to staging too. A restart then reset it back to production via the constructor. That is how a
+        // two-step DNS-01 flow ended up starting at one CA and finishing at the other, where the
+        // challenge URL does not exist — boulder answers "No such challenge".
+        this.directoryUrl = directoryUrlOverride
+            || (useStaging ? acme.directory.letsencrypt.staging : acme.directory.letsencrypt.production);
 
         // 1. Load or Generate Account Key
         let accountKey;
@@ -201,7 +209,13 @@ class CertManager {
                 orderUrl: orderData.orderUrl,
                 challenge: orderData.challenge,
                 authzUrl: orderData.authzUrl,
-                keyAuthorization: orderData.keyAuthorization
+                keyAuthorization: orderData.keyAuthorization,
+                // BIND THE CHALLENGE TO THE CA THAT MINTED IT. An order, its authorization and its
+                // challenge URLs only exist at ONE ACME endpoint. finishDNSChallenge re-inits against
+                // this value rather than a `staging` flag sent separately by the caller, so the second
+                // half of the flow cannot land on the other CA — not through a staging auto-renewal
+                // mutating the shared singleton, and not through a restart in the middle of the flow.
+                directoryUrl: this.directoryUrl
             };
         } catch (e) {
             console.error('[CertManager] DNS Start Error:', e);
@@ -215,8 +229,12 @@ class CertManager {
      */
     async finishDNSChallenge(step1Data: any, email: string, useStaging = false) {
         try {
-            // Re-init client if needed (in case of server restart)
-            await this.initClient(email, useStaging);
+            // Re-init against THE CA THAT MINTED THIS CHALLENGE (step1Data.directoryUrl), not against
+            // the caller's `staging` flag. The order/authz/challenge URLs in step1Data exist at exactly
+            // one endpoint; talking to the other one gets "No such challenge" from boulder after the
+            // operator has already published the TXT record — the failure this pairing removes.
+            // `useStaging` remains the fallback for a step1Data minted before this field existed.
+            await this.initClient(email, useStaging, step1Data && step1Data.directoryUrl);
 
             // Best-effort LOCAL pre-flight only — the CA performs the authoritative validation from
             // the outside after completeChallenge. Failing hard here strands setups whose local
@@ -270,6 +288,19 @@ class CertManager {
             };
         } catch (e) {
             console.error('[CertManager] DNS Finish Error:', e);
+            // "No such challenge" means the CA does not recognise the challenge URL we posted to — the
+            // order is gone (expired / already finalized) or it belongs to the OTHER ACME endpoint.
+            // Raw, that message sends the operator to re-check a TXT record that is perfectly correct.
+            // Tell them the only thing that actually resolves it: start the flow again and publish the
+            // NEW value, because a fresh order always mints a fresh token.
+            if (/no such challenge|urn:ietf:params:acme:error:malformed/i.test(String(e && e.message))) {
+                throw new Error(
+                    'DNS verification failed: this challenge is no longer valid at the certificate authority ' +
+                    '(the order expired, or it was issued by a different Let\'s Encrypt endpoint). Your TXT ' +
+                    'record is not the problem. Start the certificate request again and publish the NEW value ' +
+                    'it shows you — each order mints a new one.'
+                );
+            }
             throw new Error(`DNS verification failed: ${e.message}`);
         }
     }

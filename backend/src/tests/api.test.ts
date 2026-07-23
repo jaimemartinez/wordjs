@@ -63,6 +63,9 @@ describe('API HTTP layer', () => {
         const express = require('express');
         const cookieParser = require('cookie-parser');
         app = express();
+        // Honor X-Forwarded-For so tests can simulate distinct client IPs (mirrors the real app's
+        // `trust proxy` setting); req.ip then reflects the XFF value the login throttle keys on.
+        app.set('trust proxy', true);
         app.use(express.json());
         app.use(cookieParser());
         app.use('/api/v1', require('../routes'));
@@ -205,15 +208,42 @@ describe('API HTTP layer', () => {
         assert.ok(!('twofa_secret' in json.meta), '2fa secret must be stripped');
     });
 
-    // 9. Account lockout: repeated failed logins for one account must lock it (429), independent of
-    //    the per-IP rate limiter. Seeded 'admin' has an invalid stored hash so every attempt fails fast.
-    it('locks an account after repeated failed logins (429)', async () => {
-        for (let i = 0; i < 10; i++) {
-            const r = await request(app).post('/api/v1/auth/login').send({ username: 'admin', password: 'wrong-pass' });
+    // 9a. Primary gate: per-(IP + account) escalating lockout. After loginMaxFails (default 5)
+    //     consecutive failures from ONE IP for ONE account, further attempts are 429'd with a
+    //     Retry-After. Nonexistent usernames fail fast through the same code path as a wrong password.
+    it('throttles one (IP+account) after 5 failed logins (429 rest_login_throttled)', async () => {
+        const ip = '203.0.113.10';
+        for (let i = 0; i < 5; i++) {
+            const r = await request(app).post('/api/v1/auth/login').set('X-Forwarded-For', ip).send({ username: 'brute-a', password: 'wrong-pass' });
             assert.strictEqual(r.status, 401, `attempt ${i + 1} should be 401, got ${r.status}`);
         }
-        const locked = await request(app).post('/api/v1/auth/login').send({ username: 'admin', password: 'wrong-pass' });
-        assert.strictEqual(locked.status, 429, 'account must be locked after 10 failures');
+        const blocked = await request(app).post('/api/v1/auth/login').set('X-Forwarded-For', ip).send({ username: 'brute-a', password: 'wrong-pass' });
+        assert.strictEqual(blocked.status, 429, 'the 6th attempt must be throttled');
+        assert.strictEqual(blocked.body.code, 'rest_login_throttled');
+        assert.ok(Number(blocked.headers['retry-after']) > 0, 'a Retry-After (seconds) header must be sent');
+    });
+
+    // 9b. THE reported bug: a DIFFERENT account from the SAME public IP must NOT be affected by another
+    //     account's lockout — one user can never lock out everyone behind their shared NAT/VPN.
+    it('does not lock a second account sharing the same IP', async () => {
+        const ip = '203.0.113.20';
+        for (let i = 0; i < 6; i++) {
+            await request(app).post('/api/v1/auth/login').set('X-Forwarded-For', ip).send({ username: 'iso-a', password: 'wrong-pass' });
+        }
+        // iso-a is now throttled on this IP; iso-b on the SAME IP still gets its own fresh budget.
+        const other = await request(app).post('/api/v1/auth/login').set('X-Forwarded-For', ip).send({ username: 'iso-b', password: 'wrong-pass' });
+        assert.strictEqual(other.status, 401, `a co-located account must still get 401, got ${other.status}`);
+    });
+
+    // 9c. Account-wide backstop (AUTH-A3): a distributed attack spread across many IPs — invisible to
+    //     the per-(IP+account) gate — must still lock the account after LOGIN_MAX_FAILS failures.
+    it('locks an account after failures from many different IPs (429 rest_account_locked)', async () => {
+        for (let i = 1; i <= 10; i++) {
+            const r = await request(app).post('/api/v1/auth/login').set('X-Forwarded-For', `198.51.100.${i}`).send({ username: 'dist-victim', password: 'wrong-pass' });
+            assert.strictEqual(r.status, 401, `attempt ${i} (ip .${i}) should be 401, got ${r.status}`);
+        }
+        const locked = await request(app).post('/api/v1/auth/login').set('X-Forwarded-For', '198.51.100.200').send({ username: 'dist-victim', password: 'wrong-pass' });
+        assert.strictEqual(locked.status, 429, 'account must be locked after 10 distributed failures');
         assert.strictEqual(locked.body.code, 'rest_account_locked');
     });
 });

@@ -120,3 +120,95 @@ test('checkDNSPropagation trims the expected value and rejects an empty one', as
     assert.strictEqual(await certManager.checkDNSPropagation('unit-test.example', ''), false);
     assert.strictEqual(await certManager.checkDNSPropagation('unit-test.example', '   '), false);
 });
+
+/**
+ * The three tests below cover the SECOND live failure this file exists for: an operator published a
+ * perfectly correct TXT record, the propagation check found it, and the CA then answered
+ * "No such challenge".
+ *
+ * CAUSE: `directoryUrl` was process-global sticky state on a module-level singleton — `if (useStaging)`
+ * with no else — so a staging auto-renewal (renewIfDue → provisionAutoHTTP → initClient(…, true))
+ * pinned the whole process to staging, and the constructor reset it to production on the next restart.
+ * The two halves of the two-step DNS-01 flow could therefore address DIFFERENT CAs, and an order's
+ * challenge URL only exists at the one that minted it.
+ */
+test('initClient does not stay pinned to staging once a staging order has run', async () => {
+    const acmeLib = require('acme-client');
+    const OrigClient = acmeLib.Client;
+    const origKeyPath = certManager.accountKeyPath;
+    const tmpKey = path.join(require('os').tmpdir(), `wjs-acct-${Date.now()}.key`);
+    try {
+        // Stub ONLY the network boundary: the client constructor and its account registration.
+        acmeLib.Client = function () { return { createAccount: async () => ({}) }; };
+        certManager.accountKeyPath = tmpKey;
+
+        await certManager.initClient('a@b.c', true);
+        assert.strictEqual(certManager.directoryUrl, acmeLib.directory.letsencrypt.staging,
+            'a staging order must address the staging directory');
+
+        await certManager.initClient('a@b.c', false);
+        assert.strictEqual(certManager.directoryUrl, acmeLib.directory.letsencrypt.production,
+            'a production order after a staging one must go BACK to production — leaving it pinned is ' +
+            'what silently sent "production" certificates to staging and broke the two-step flow');
+    } finally {
+        acmeLib.Client = OrigClient;
+        certManager.accountKeyPath = origKeyPath;
+        try { fs.unlinkSync(tmpKey); } catch { /* may not have been created */ }
+    }
+});
+
+test('startDNSChallenge reports the directory the order was minted at', async () => {
+    const origInit = certManager.initClient;
+    const origClient = certManager.client;
+    const origDir = certManager.directoryUrl;
+    try {
+        certManager.initClient = async () => { certManager.directoryUrl = 'https://minted-here.example/dir'; };
+        certManager.client = {
+            createOrder: async () => ({ url: 'https://ca.example/order/9' }),
+            getAuthorizations: async () => ([{ url: 'https://ca.example/authz/9', challenges: [{ type: 'dns-01', url: 'https://ca.example/chal/9', token: 't' }] }]),
+            getChallengeKeyAuthorization: async () => 'value',
+        };
+        const out = await certManager.startDNSChallenge('unit-test.example', 'a@b.c');
+        assert.strictEqual(out.directoryUrl, 'https://minted-here.example/dir',
+            'step1Data must carry the CA that minted the order, or the finish step cannot pair with it');
+    } finally {
+        certManager.initClient = origInit;
+        certManager.client = origClient;
+        certManager.directoryUrl = origDir;
+    }
+});
+
+test('finishDNSChallenge re-inits against the minting CA, not the callers staging flag', async () => {
+    const origInit = certManager.initClient;
+    const origClient = certManager.client;
+    let seen: any = null;
+    try {
+        certManager.initClient = async (email: string, useStaging: boolean, override: string) => {
+            seen = { email, useStaging, override };
+        };
+        certManager.client = {
+            verifyChallenge: async () => true,
+            completeChallenge: async () => ({}),
+            waitForValidStatus: async () => ({}),
+            // Stop the flow right after the pairing decision — CSR/finalize are covered elsewhere.
+            getCertificate: async () => { throw new Error('STOP_AFTER_PAIRING'); },
+        };
+        const step1Data = {
+            domain: 'unit-test.example',
+            authzUrl: 'https://staging.ca.example/authz/1',
+            challenge: { type: 'dns-01', url: 'https://staging.ca.example/chal/1', token: 't' },
+            directoryUrl: 'https://staging.ca.example/dir',
+        };
+        // The caller says "production" (staging=false) — exactly what the UI always sends — while the
+        // challenge was minted at staging. The minting CA must win.
+        await certManager.finishDNSChallenge(step1Data, 'a@b.c', false).catch(() => { /* expected: stops later */ });
+
+        assert.ok(seen, 'initClient must have been called');
+        assert.strictEqual(seen.override, 'https://staging.ca.example/dir',
+            'finish must address the CA that issued the challenge; using the flag instead is what produced ' +
+            '"No such challenge" after the operator had already published the correct TXT record');
+    } finally {
+        certManager.initClient = origInit;
+        certManager.client = origClient;
+    }
+});
