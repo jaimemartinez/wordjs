@@ -21,6 +21,21 @@ const PLUGINS_DIR = path.resolve('./plugins');
 const ROOT_DIR = path.resolve('.');
 
 /**
+ * Strip line breaks from a value before it goes into a log line. A plugin slug, a manifest field and a
+ * driver error message that echoes either are all request-derived, so an unescaped one can forge or
+ * split entries in the operator's log — and passing it as a template literal FOLLOWED by more arguments
+ * additionally makes it a console format string, so `%s`/`%d` in a crafted value consume the rest.
+ * Every console call in this module therefore builds ONE sanitized string and passes no extra argument.
+ *
+ * TWO single-constant replacements, each replacing with the empty string, is deliberate: the
+ * log-injection analysis recognises a sanitizer SYNTACTICALLY, and an alternation (`/\n|\r/g`) has no
+ * constant value, so it is not matched. Match the documented remediation shape, not an equivalent.
+ */
+function logSafe(v: any): string {
+    return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
+}
+
+/**
  * True when a plugin's npm RUNTIME DEPENDENCIES are already packaged, so the host must NOT auto-install
  * them at activation. That is the case when either:
  *   1. manifest.json declares "bundled": true (operator says it's self-contained), OR
@@ -94,7 +109,7 @@ async function checkDependencyConflicts(slug: string, manifest: any) {
                 }
             }
         } catch (e) {
-            console.warn(`[Plugins] Error reading manifest for ${activeSlug}:`, e.message);
+            console.warn(`[Plugins] Error reading manifest for ${logSafe(activeSlug)}: ${logSafe(e.message)}`);
         }
     }
 
@@ -168,7 +183,7 @@ function semverRangesIntersect(range1: any, range2: any) {
         return false;
     } catch {
         // If parsing fails, assume compatible (fail open for edge cases)
-        console.warn(`⚠️ Could not parse semver ranges: ${range1}, ${range2}`);
+        console.warn(`⚠️ Could not parse semver ranges: ${logSafe(range1)}, ${logSafe(range2)}`);
         return true;
     }
 }
@@ -211,7 +226,7 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
 
     // Skip bundled plugins - they have their own dependencies
     if (pluginPath && isBundledPlugin(pluginPath, manifest)) {
-        console.log(`📦 Plugin '${slug}' is bundled - skipping shared dependency installation.`);
+        console.log(`📦 Plugin '${logSafe(slug)}' is bundled - skipping shared dependency installation.`);
         return;
     }
 
@@ -258,7 +273,7 @@ async function installPluginDependencies(slug: string, manifest: any, pluginPath
     }
 
     if (toInstall.length > 0) {
-        console.log(`📦 Plugin '${slug}' requires: ${toInstall.join(', ')}`);
+        console.log(`📦 Plugin '${logSafe(slug)}' requires: ${logSafe(toInstall.join(', '))}`);
         console.log(`   ⏳ Installing dependencies... (server may restart)`);
         try {
             // SECURITY: execFile with an argument array (no shell) so dependency names from
@@ -300,7 +315,7 @@ async function prunePluginDependencies(slug: string, manifest: any) {
                         }
                     }
                 } catch (e) {
-                    console.warn(`[Plugins] Error reading manifest during cleanup for ${activeSlug}:`, e.message);
+                    console.warn(`[Plugins] Error reading manifest during cleanup for ${logSafe(activeSlug)}: ${logSafe(e.message)}`);
                 }
             }
         }
@@ -315,7 +330,7 @@ async function prunePluginDependencies(slug: string, manifest: any) {
             const isLikelyCore = ['express', 'cors', 'dotenv', 'helmet', 'multer', 'nodemailer', 'sql.js', 'mongoose', 'pg', 'sqlite3', 'jsonwebtoken', 'bcryptjs'].includes(dep);
 
             if (isLikelyCore) {
-                console.log(`🛡️ Persisting core dependency: ${dep}`);
+                console.log(`🛡️ Persisting core dependency: ${logSafe(dep)}`);
             } else {
                 toRemove.push(dep);
             }
@@ -323,13 +338,13 @@ async function prunePluginDependencies(slug: string, manifest: any) {
     }
 
     if (toRemove.length > 0) {
-        console.log(`♻️ Garbage Collector: Removing unused dependencies for ${slug}: ${toRemove.join(', ')}`);
+        console.log(`♻️ Garbage Collector: Removing unused dependencies for ${logSafe(slug)}: ${logSafe(toRemove.join(', '))}`);
         try {
             // Async so pruning on the deactivate request path doesn't block the event loop.
             await execFileAsync(NPM_BIN, ['uninstall', ...toRemove, '--save'], { cwd: ROOT_DIR });
             console.log(`   ✅ Dependencies removed successfully.`);
         } catch (e) {
-            console.error(`   ⚠️ Failed to prune dependencies:`, e.message);
+            console.error(`   ⚠️ Failed to prune dependencies: ${logSafe(e.message)}`);
         }
     }
 }
@@ -490,7 +505,7 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
         } catch (e) {
             // FAIL-CLOSED: a file that is actually loaded but cannot be parsed is treated as
             // a violation, so an attacker cannot hide a payload behind a deliberate parse-buster.
-            console.warn(`[Security] Could not parse ${file} for AST analysis — treating as a violation (fail-closed).`);
+            console.warn(`[Security] Could not parse ${logSafe(file)} for AST analysis — treating as a violation (fail-closed).`);
             dangerousCalls.add(`Unparseable source file (${path.basename(file)})`);
             continue;
         }
@@ -778,7 +793,7 @@ function scanPlugins() {
                 };
                 // We don't load init/deactivate here to avoid requiring the file before deps match
             } catch (e) {
-                console.error(`Error parsing manifest for ${entry.name}:`, e.message);
+                console.error(`Error parsing manifest for ${logSafe(entry.name)}: ${logSafe(e.message)}`);
                 continue;
             }
         }
@@ -939,7 +954,7 @@ async function activatePlugin(slug: string) {
             const isBundled = isBundledPlugin(plugin.path, manifest);
 
             if (isBundled) {
-                console.log(`📦 Plugin '${slug}' detected as bundled - no shared dependencies.`);
+                console.log(`📦 Plugin '${logSafe(slug)}' detected as bundled - no shared dependencies.`);
             } else {
                 // 1b. HARD LOCK: Check for dependency conflicts with active plugins
                 const conflictResult = await checkDependencyConflicts(slug, manifest);
@@ -955,7 +970,7 @@ async function activatePlugin(slug: string) {
             }
         } catch (e) {
             // CRITICAL: Must throw to stop execution if security block or other failure occurs
-            console.error(`🛡️ Protection Active: Blocking ${slug} activation due to:`, e.message);
+            console.error(`🛡️ Protection Active: Blocking ${logSafe(slug)} activation due to: ${logSafe(e.message)}`);
             throw e;
         }
     }
@@ -965,10 +980,10 @@ async function activatePlugin(slug: string) {
     try {
         const testResult = await verifyPluginTests(slug);
         if (!testResult.skipped) {
-            console.log(`   🧪 Tests verified: ${testResult.passed}/${testResult.tests} passed`);
+            console.log(`   🧪 Tests verified: ${logSafe(testResult.passed)}/${logSafe(testResult.tests)} passed`);
         }
     } catch (testError) {
-        console.error(`🧪 Test Failure: Plugin '${slug}' blocked due to failing tests.`);
+        console.error(`🧪 Test Failure: Plugin '${logSafe(slug)}' blocked due to failing tests.`);
         throw testError;
     }
 
@@ -1039,13 +1054,13 @@ async function activatePlugin(slug: string) {
             await doAction('activated_plugin', slug);
         } catch (error) {
             try { unloadIsolatedPlugin(slug); }
-            catch (e: any) { console.error(`[plugins] '${slug}': could not stop the child after a failed activation:`, e && e.message); }
+            catch (e: any) { console.error(`[plugins] '${logSafe(slug)}': could not stop the child after a failed activation: ${logSafe(e && e.message)}`); }
             if (flagWritten) {
                 // Only the flag WE added — if the slug was already listed, another writer owns it.
                 try {
                     await withActivePluginsLock((active) => (active.includes(slug) ? active.filter(s => s !== slug) : undefined));
                 } catch (e: any) {
-                    console.error(`[plugins] '${slug}': activation failed AND the active_plugins flag could not be rolled back — the plugin is listed active but is not running:`, e && e.message);
+                    console.error(`[plugins] '${logSafe(slug)}': activation failed AND the active_plugins flag could not be rolled back — the plugin is listed active but is not running: ${logSafe(e && e.message)}`);
                 }
             }
             throw error;
@@ -1087,7 +1102,7 @@ async function deactivatePlugin(slug: string, { prune = true }: { prune?: boolea
                 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
                 await prunePluginDependencies(slug, manifest);
             } catch (e) {
-                console.error(`⚠️ Failed to process manifest for prune ${slug}:`, e.message);
+                console.error(`⚠️ Failed to process manifest for prune ${logSafe(slug)}: ${logSafe(e.message)}`);
             }
         }
     }
@@ -1127,9 +1142,9 @@ function publishPluginChange(slug: string, action: string) {
  */
 async function loadOnePlugin(slug: string) {
     const plugin = scanPlugins().find(p => p.slug === slug);
-    if (!plugin) { console.warn(`[plugins] cross-node activate '${slug}': not present on this node`); return false; }
+    if (!plugin) { console.warn(`[plugins] cross-node activate '${logSafe(slug)}': not present on this node`); return false; }
     const mainFile = findMainFile(plugin.path);
-    if (!mainFile) { console.warn(`[plugins] cross-node activate '${slug}': no main file`); return false; }
+    if (!mainFile) { console.warn(`[plugins] cross-node activate '${logSafe(slug)}': no main file`); return false; }
     let manifest: any = null;
     const manifestPath = path.join(plugin.path, 'manifest.json');
     if (fs.existsSync(manifestPath)) { try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')); } catch { /* */ } }
@@ -1140,10 +1155,10 @@ async function loadOnePlugin(slug: string) {
         try { unloadIsolatedPlugin(slug); } catch { /* not loaded here yet */ }
         await loadIsolatedPlugin(slug, mainFile);
         fixMiddlewareOrder();
-        console.log(`[plugins] '${slug}' loaded live (cross-node activation)`);
+        console.log(`[plugins] '${logSafe(slug)}' loaded live (cross-node activation)`);
         return true;
     } catch (e: any) {
-        console.error(`[plugins] cross-node load of '${slug}' failed:`, e && e.message);
+        console.error(`[plugins] cross-node load of '${logSafe(slug)}' failed: ${logSafe(e && e.message)}`);
         return false;
     }
 }
@@ -1152,8 +1167,8 @@ async function loadOnePlugin(slug: string) {
  * Unload ONE plugin live from THIS node (cross-node deactivation). Does NOT touch `active_plugins`.
  */
 function unloadOnePlugin(slug: string) {
-    try { unloadIsolatedPlugin(slug); console.log(`[plugins] '${slug}' unloaded live (cross-node deactivation)`); return true; }
-    catch (e: any) { console.warn(`[plugins] cross-node unload of '${slug}':`, e && e.message); return false; }
+    try { unloadIsolatedPlugin(slug); console.log(`[plugins] '${logSafe(slug)}' unloaded live (cross-node deactivation)`); return true; }
+    catch (e: any) { console.warn(`[plugins] cross-node unload of '${logSafe(slug)}': ${logSafe(e && e.message)}`); return false; }
 }
 
 /**
@@ -1170,8 +1185,8 @@ async function loadActivePlugins() {
 
     if (crashInfo && crashInfo.shouldDisable) {
         const culpritSlug = crashInfo.slug;
-        console.error(`🚨 CRASH DETECTED: Plugin '${culpritSlug}' has ${crashInfo.strikes} strikes.`);
-        console.error(`🛡️  CrashGuard: Automatically disabling '${culpritSlug}' to prevent boot loop.`);
+        console.error(`🚨 CRASH DETECTED: Plugin '${logSafe(culpritSlug)}' has ${logSafe(crashInfo.strikes)} strikes.`);
+        console.error(`🛡️  CrashGuard: Automatically disabling '${logSafe(culpritSlug)}' to prevent boot loop.`);
 
         // Remove from active plugins list (atomic read-modify-write under the dist-lock so a
         // concurrent activation on another node can't resurrect the crasher by clobbering this write).
@@ -1212,7 +1227,7 @@ async function loadActivePlugins() {
         if (index > -1) activePlugins.splice(index, 1);
     } else if (crashInfo && !crashInfo.shouldDisable) {
         // Crash detected but not at 3 strikes yet, just log and continue
-        console.warn(`⚠️ [CrashGuard] Previous crash during '${crashInfo.slug}' load (Strike ${crashInfo.strikes}/${CrashGuard.MAX_STRIKES}). Retrying...`);
+        console.warn(`⚠️ [CrashGuard] Previous crash during '${logSafe(crashInfo.slug)}' load (Strike ${logSafe(crashInfo.strikes)}/${logSafe(CrashGuard.MAX_STRIKES)}). Retrying...`);
     }
 
     // 2. Load Plugins
@@ -1235,7 +1250,7 @@ async function loadActivePlugins() {
 
                 await installPluginDependencies(slug, manifest, plugin.path);
             } catch (e) {
-                console.error(`   ✗ Security Block for ${slug} on load:`, e.message);
+                console.error(`   ✗ Security Block for ${logSafe(slug)} on load: ${logSafe(e.message)}`);
                 // We don't load plugins that fail validation
                 continue;
             }
@@ -1253,18 +1268,18 @@ async function loadActivePlugins() {
             // in-process execution has been removed — a plugin MUST declare "isolated": true.
             if (manifest && manifest.isolated) {
                 await loadIsolatedPlugin(slug, mainFile);
-                console.log(`   ✓ Plugin loaded ISOLATED: ${plugin.name} (${slug})`);
+                console.log(`   ✓ Plugin loaded ISOLATED: ${logSafe(plugin.name)} (${logSafe(slug)})`);
                 CrashGuard.finishLoading(slug);
                 continue;
             }
 
-            console.warn(`   ⚠ Skipping '${slug}': not isolated. Set "isolated": true to run it in the sandbox (legacy in-process loading was removed).`);
+            console.warn(`   ⚠ Skipping '${logSafe(slug)}': not isolated. Set "isolated": true to run it in the sandbox (legacy in-process loading was removed).`);
             CrashGuard.finishLoading(slug);
         } catch (error) {
             // If we caught the error (it didn't crash the process), we should still clear the lock
             CrashGuard.finishLoading(slug);
 
-            console.error(`   ✗ Failed to load plugin ${slug}:`, error.message);
+            console.error(`   ✗ Failed to load plugin ${logSafe(slug)}: ${logSafe(error.message)}`);
         }
     }
 }
@@ -1454,15 +1469,15 @@ async function clearPluginOrigin(slug: string): Promise<void> {
 async function uninstallPluginData(slug: string, { dropTables = false }: { dropTables?: boolean } = {}) {
     const result: { grantsRemoved: boolean; originCleared: boolean; strikesCleared: boolean; tablesDropped: string[] } = { grantsRemoved: false, originCleared: false, strikesCleared: false, tablesDropped: [] };
     try { const { removeGrants } = require('./plugin-permissions'); await removeGrants(slug); result.grantsRemoved = true; }
-    catch (e: any) { console.warn(`[uninstall ${slug}] removeGrants failed:`, e && e.message); }
+    catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] removeGrants failed: ${logSafe(e && e.message)}`); }
     // Same rule as the grants: the recorded install ORIGIN belongs to the code that is being removed.
     // Leaving it behind would let a later MANUAL upload of the same slug inherit a catalog provenance
     // it never had, and become silently updatable (grants and all) from that catalog.
     try { await clearPluginOrigin(slug); result.originCleared = true; }
-    catch (e: any) { console.warn(`[uninstall ${slug}] clearPluginOrigin failed:`, e && e.message); }
+    catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] clearPluginOrigin failed: ${logSafe(e && e.message)}`); }
     try { const { clearStrikes } = require('./crash-guard'); clearStrikes(slug); result.strikesCleared = true; }
-    catch (e: any) { console.warn(`[uninstall ${slug}] clearStrikes failed:`, e && e.message); }
-    try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { console.warn(`[uninstall ${slug}] clearAssets failed:`, e && e.message); }
+    catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] clearStrikes failed: ${logSafe(e && e.message)}`); }
+    try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] clearAssets failed: ${logSafe(e && e.message)}`); }
     if (dropTables) {
         try {
             const { dbAsync, getDbType } = require('../config/database');
@@ -1480,12 +1495,12 @@ async function uninstallPluginData(slug: string, { dropTables = false }: { dropT
                 await dbAsync.run(`DROP TABLE IF EXISTS "${String(name).replace(/"/g, '')}"`);
                 result.tablesDropped.push(name);
             }
-        } catch (e: any) { console.warn(`[uninstall ${slug}] table drop failed:`, e && e.message); }
+        } catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] table drop failed: ${logSafe(e && e.message)}`); }
     }
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
-    catch (e: any) { console.warn(`[uninstall ${slug}] db role drop failed:`, e && e.message); }
-    console.log(`[uninstall ${slug}] grants=${result.grantsRemoved} origin=${result.originCleared} strikes=${result.strikesCleared} tablesDropped=${result.tablesDropped.length}`);
+    catch (e: any) { console.warn(`[uninstall ${logSafe(slug)}] db role drop failed: ${logSafe(e && e.message)}`); }
+    console.log(`[uninstall ${logSafe(slug)}] grants=${logSafe(result.grantsRemoved)} origin=${logSafe(result.originCleared)} strikes=${logSafe(result.strikesCleared)} tablesDropped=${logSafe(result.tablesDropped.length)}`);
     return result;
 }
 

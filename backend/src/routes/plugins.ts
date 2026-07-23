@@ -75,18 +75,18 @@ function regenerateRegistry() {
             const scriptPath = path.join(scriptsDir, script);
 
             if (!fs.existsSync(scriptPath)) {
-                console.log(`⚠️  Script not found: ${script}`);
+                console.log(`⚠️  Script not found: ${logSafe(script)}`);
                 continue;
             }
 
             // SECURITY: Use execFile instead of exec to prevent command injection
             execFile('node', [scriptPath], { env }, (error: Error | null, stdout: string, stderr: string) => {
                 if (error) {
-                    console.error(`❌ Failed to run ${script}:`, error.message);
+                    console.error(`❌ Failed to run ${logSafe(script)}: ${logSafe(error.message)}`);
                     return;
                 }
                 if (process.env.NODE_ENV !== 'production') {
-                    console.log(`🔄 ${script}:`);
+                    console.log(`🔄 ${logSafe(script)}:`);
                     console.log(stdout);
                 }
             });
@@ -365,7 +365,7 @@ async function acquirePluginOpLock(slug: string): Promise<PluginOpLock> {
         });
     } catch (e: any) {
         // DB unreachable / pre-boot: degrade to the in-process guard rather than blocking the admin.
-        console.warn(`[plugin-op ${key}] distributed lock unavailable, using the in-process guard only:`, e && e.message);
+        console.warn(`[plugin-op ${logSafe(key)}] distributed lock unavailable, using the in-process guard only: ${logSafe(e && e.message)}`);
         lease = null;
     }
     if (lease && !lease.held) {
@@ -421,7 +421,7 @@ function pluginBusyError(slug: string): string {
 function isPluginRunning(slug: string): boolean {
     try { return require('../core/plugin-isolate').isIsolated(slug) === true; }
     catch (e: any) {
-        console.warn(`[plugin ${slug}] could not read the isolate registry:`, e && e.message);
+        console.warn(`[plugin ${logSafe(slug)}] could not read the isolate registry: ${logSafe(e && e.message)}`);
         return false;
     }
 }
@@ -449,7 +449,7 @@ async function reloadUnderLock(slug: string, label: string): Promise<boolean> {
         await reloadIsolatedPlugin(slug);
         return true;
     } catch (e: any) {
-        console.warn(`[${label}] reload of '${logSafe(slug)}' failed: ${logSafe(e && e.message)}`);
+        console.warn(`[${logSafe(label)}] reload of '${logSafe(slug)}' failed: ${logSafe(e && e.message)}`);
         return false;
     }
 }
@@ -530,9 +530,9 @@ async function restartRecoveredPlugin(slug: string): Promise<'running' | 'not-ac
     if (!(await core.isPluginActive(slug))) return 'not-active';
     if (isPluginRunning(slug)) return 'running';
     try { await core.deactivatePlugin(slug, { prune: false }); }
-    catch (e: any) { console.warn(`[plugin-update] '${slug}': clearing the stale active flag before the restart failed:`, e && e.message); }
+    catch (e: any) { console.warn(`[plugin-update] '${logSafe(slug)}': clearing the stale active flag before the restart failed: ${logSafe(e && e.message)}`); }
     try { await core.activatePlugin(slug); }
-    catch (e: any) { console.error(`[plugin-update] '${slug}': restart after recovery threw:`, e && e.message); return 'failed'; }
+    catch (e: any) { console.error(`[plugin-update] '${logSafe(slug)}': restart after recovery threw: ${logSafe(e && e.message)}`); return 'failed'; }
     return isPluginRunning(slug) ? 'running' : 'failed';
 }
 
@@ -587,19 +587,19 @@ async function recoverInterruptedPluginUpdates(
                 // Restoring the CODE is not the same as recovering the PLUGIN. Say which one happened.
                 if (!fs.existsSync(path.join(pluginDir, 'manifest.json'))) {
                     out.needsAttention.push(slug);
-                    console.error(`[plugin-update] '${slug}': code restored from ${entry}, but it still has no manifest.json — the stash itself was incomplete. Reinstall it from the marketplace.`);
+                    console.error(`[plugin-update] '${logSafe(slug)}': code restored from ${logSafe(entry)}, but it still has no manifest.json — the stash itself was incomplete. Reinstall it from the marketplace.`);
                 } else if (!reactivate) {
-                    console.warn(`[plugin-update] '${slug}': code restored from ${entry} by the boot sweep — loadActivePlugins starts it next if it is listed active.`);
+                    console.warn(`[plugin-update] '${logSafe(slug)}': code restored from ${logSafe(entry)} by the boot sweep — loadActivePlugins starts it next if it is listed active.`);
                 } else {
                     const state = await restartRecoveredPlugin(slug);
                     if (state === 'running') {
                         out.reactivated.push(slug);
-                        console.warn(`[plugin-update] '${slug}': code restored from ${entry} and the plugin is running again.`);
+                        console.warn(`[plugin-update] '${logSafe(slug)}': code restored from ${logSafe(entry)} and the plugin is running again.`);
                     } else if (state === 'not-active') {
-                        console.warn(`[plugin-update] '${slug}': code restored from ${entry}; it is not listed active, so nothing was started.`);
+                        console.warn(`[plugin-update] '${logSafe(slug)}': code restored from ${logSafe(entry)}; it is not listed active, so nothing was started.`);
                     } else {
                         out.needsAttention.push(slug);
-                        console.error(`[plugin-update] '${slug}': code restored from ${entry} but it could NOT be started — active_plugins lists it and no process is serving it. Check Plugins.`);
+                        console.error(`[plugin-update] '${logSafe(slug)}': code restored from ${logSafe(entry)} but it could NOT be started — active_plugins lists it and no process is serving it. Check Plugins.`);
                     }
                 }
             } else {
@@ -607,7 +607,7 @@ async function recoverInterruptedPluginUpdates(
                 out.discarded.push(slug);
             }
         } catch (e: any) {
-            console.error(`[plugin-update] could not recover ${entry}:`, e && e.message);
+            console.error(`[plugin-update] could not recover ${logSafe(entry)}: ${logSafe(e && e.message)}`);
         } finally {
             await lock.release();
         }
@@ -956,7 +956,7 @@ async function installPluginFromZip(
                     version: readInstalledVersion(installedDir),
                 });
             } catch (e: any) {
-                console.warn(`[install ${pluginSlug}] could not record the install origin (it will not be updatable from the catalog):`, e && e.message);
+                console.warn(`[install ${logSafe(pluginSlug)}] could not record the install origin (it will not be updatable from the catalog): ${logSafe(e && e.message)}`);
             }
         }
 
@@ -1116,10 +1116,10 @@ async function runPluginUpdate(
     const grants: string[] = getGrants(slug);
     const egress: string[] = getEgressAllowlist(slug);
     const restoreAdminState = async () => {
-        try { await setGrants(slug, grants); } catch (e: any) { console.warn(`[update ${slug}] restoring grants failed:`, e && e.message); }
-        try { await setEgressAllowlist(slug, egress); } catch (e: any) { console.warn(`[update ${slug}] restoring egress allowlist failed:`, e && e.message); }
+        try { await setGrants(slug, grants); } catch (e: any) { console.warn(`[update ${logSafe(slug)}] restoring grants failed: ${logSafe(e && e.message)}`); }
+        try { await setEgressAllowlist(slug, egress); } catch (e: any) { console.warn(`[update ${logSafe(slug)}] restoring egress allowlist failed: ${logSafe(e && e.message)}`); }
         try { await setPluginOrigin(slug, { source: recordedOrigin.source, catalogId: recordedOrigin.catalogId, version: recordedOrigin.version }); }
-        catch (e: any) { console.warn(`[update ${slug}] restoring install origin failed:`, e && e.message); }
+        catch (e: any) { console.warn(`[update ${logSafe(slug)}] restoring install origin failed: ${logSafe(e && e.message)}`); }
     };
 
     /**
@@ -1137,9 +1137,9 @@ async function runPluginUpdate(
      */
     const tearDownIsolate = async (what: string) => {
         try { await deactivatePlugin(slug, { prune: false }); }
-        catch (e: any) { console.warn(`[update ${slug}] deactivating ${what}:`, e && e.message); }
+        catch (e: any) { console.warn(`[update ${logSafe(slug)}] deactivating ${logSafe(what)}: ${logSafe(e && e.message)}`); }
         try { require('../core/plugin-isolate').unloadIsolatedPlugin(slug); }
-        catch (e: any) { console.warn(`[update ${slug}] unloading ${what}:`, e && e.message); }
+        catch (e: any) { console.warn(`[update ${logSafe(slug)}] unloading ${logSafe(what)}: ${logSafe(e && e.message)}`); }
     };
 
     /**
@@ -1157,7 +1157,7 @@ async function runPluginUpdate(
         try {
             await activatePlugin(slug);
         } catch (e: any) {
-            console.error(`[update ${slug}] could not reactivate ${what}:`, e && e.message);
+            console.error(`[update ${logSafe(slug)}] could not reactivate ${logSafe(what)}: ${logSafe(e && e.message)}`);
             await tearDownIsolate(`the isolate left behind by the failed activation of ${what}`);
             return false;
         }
@@ -1205,7 +1205,7 @@ async function runPluginUpdate(
         // FIRST: make sure the FAILED new version is not still running (see tearDownIsolate) — the old
         // version is about to be spawned into the same isolate slot.
         await tearDownIsolate('the failed new version');
-        try { restorePluginCode(installedDir, backupDir); } catch (e: any) { console.error(`[update ${slug}] ROLLBACK FAILED:`, e && e.message); }
+        try { restorePluginCode(installedDir, backupDir); } catch (e: any) { console.error(`[update ${logSafe(slug)}] ROLLBACK FAILED: ${logSafe(e && e.message)}`); }
         await restoreAdminState();
         // NOT `try { activate } catch`: the deactivation just above can throw (its active_plugins lease
         // times out), which leaves the slug listed as active, and activatePlugin then early-returns
@@ -1277,7 +1277,7 @@ async function runPluginUpdate(
 
     // Re-record the provenance uninstallPluginData cleared, now pointing at the version on disk.
     try { await setPluginOrigin(slug, { source: recordedOrigin.source, catalogId: recordedOrigin.catalogId, version: toVersion }); }
-    catch (e: any) { console.warn(`[update ${slug}] could not re-record the install origin:`, e && e.message); }
+    catch (e: any) { console.warn(`[update ${logSafe(slug)}] could not re-record the install origin: ${logSafe(e && e.message)}`); }
 
     // force:true only swallows ENOENT — on Windows an AV scanner or the search indexer holding a
     // handle raises EBUSY/EPERM. An uncaught throw here would skip regenerateRegistry() below and
@@ -1285,7 +1285,7 @@ async function runPluginUpdate(
     // again. Log it and continue; the boot sweep (recoverInterruptedPluginUpdates) sees a plugin dir
     // with a manifest and discards the leftover stash on the next start.
     try { fs.rmSync(backupDir, { recursive: true, force: true }); }
-    catch (e: any) { console.warn(`[update ${slug}] could not remove the backup stash ${backupDir} (it will be reclaimed at next boot):`, e && e.message); }
+    catch (e: any) { console.warn(`[update ${logSafe(slug)}] could not remove the backup stash ${logSafe(backupDir)} (it will be reclaimed at next boot): ${logSafe(e && e.message)}`); }
     regenerateRegistry();
 
     return {
@@ -1350,7 +1350,7 @@ router.get('/registry', asyncHandler(async (req: Request, res: Response) => {
                     path: `/plugins/${plugin.slug}`
                 });
             } catch (err) {
-                console.warn(`Failed to read manifest for ${plugin.slug}:`, err.message);
+                console.warn(`Failed to read manifest for ${logSafe(plugin.slug)}: ${logSafe(err.message)}`);
                 // Still include basic info even without manifest
                 registry.push({
                     id: plugin.slug,
@@ -1513,7 +1513,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
                     .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
                     .filter(Boolean))) as string[];
                 if (declared.length) { _setGrantsInMemory(slug, declared); seededDeclared = declared; }
-            } catch (e: any) { console.warn(`[Permissions] grant-on-activate (seed) for '${slug}' failed:`, e && e.message); }
+            } catch (e: any) { console.warn(`[Permissions] grant-on-activate (seed) for '${logSafe(slug)}' failed: ${logSafe(e && e.message)}`); }
         }
 
         let result;
@@ -1539,7 +1539,7 @@ router.post('/:slug/activate', authenticate, isAdmin, asyncHandler(async (req: R
 
         // Activation succeeded — NOW persist the grants we seeded (idempotent; only when it had none before).
         if (seededDeclared && hadNoGrants && getGrants(slug).length > 0) {
-            try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn(`[Permissions] grant-on-activate (persist) for '${slug}' failed:`, e && e.message); }
+            try { await setGrants(slug, seededDeclared); } catch (e: any) { console.warn(`[Permissions] grant-on-activate (persist) for '${logSafe(slug)}' failed: ${logSafe(e && e.message)}`); }
         }
 
         // Trigger frontend registry regeneration
