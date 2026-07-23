@@ -331,15 +331,29 @@ export async function loadActivePluginBlocks(pluginIds: string[]): Promise<Recor
 // Frontend hook loading (runtime, marketplace plugins)
 // ============================================
 
-// One registration per plugin per session. loadRuntimePluginHooks() is retried by initPlugins() when a
-// bundle fails, and the admin layout remounts on every navigation — without this an already-registered
-// plugin would be re-evaluated (a second module instance of its extension) on each pass.
-const hooksRegistered = new Set<string>();
+// One registration per plugin per session — including across passes that OVERLAP. This is the IN-FLIGHT
+// promise of a plugin's registration, deliberately, not a post-hoc "already done" Set: a Set can only be
+// written AFTER the bundle has been fetched and evaluated, so two passes overlapping anywhere in that
+// window both read an empty Set, both fetched, and both invoked the plugin's register* exports.
+//
+// Overlapping passes are reachable, not theoretical: plugins.ts runs the build-time and the runtime hook
+// loaders under ONE run-once latch and un-latches it on the FIRST of the two to reject — while the other
+// is still in flight — so the next admin-layout mount starts a second runtime pass on top of the first.
+// A measured probe (two simultaneous loadRuntimePluginHooks() calls) registered mail-server TWICE.
+//
+// Registering twice is invisible only for a plugin that passes pluginHooks KEYS, which make a repeat
+// registration replace rather than append. mail-server does; a third-party plugin registering keyless
+// callbacks stacks duplicate UI — precisely the duplicate-toggle bug initPlugins' latch exists to
+// prevent. So dedupe on the promise, the same shape loadingPromises and blockConfigCache already use:
+// concurrent callers JOIN the one attempt instead of racing it. Only a registration that actually
+// HAPPENED stays memoized — see loadPluginHooksBundle.
+const hooksRegistration = new Map<string, Promise<boolean>>();
 
 // One warning per BROKEN plugin per session. loadRuntimePluginHooks() is retried on later mounts
-// (whenever ANY plugin failed), and a 404 plugin is never added to hooksRegistered, so without this every
-// retry would re-log the same line. Plugins that simply declare no hooks never land here — they are not
-// warned about at all.
+// (whenever ANY plugin failed), and a 404 is deliberately evicted from hooksRegistration rather than
+// memoized, so without this every retry would re-log the same line. It also has to survive CONCURRENT
+// 404s, hence the re-check after the await in warnIfHooksBundleShouldExist. Plugins that simply declare
+// no hooks never land here — they are not warned about at all.
 const hooksAbsentWarned = new Set<string>();
 
 // The public plugin registry (GET /plugins/registry → each ACTIVE plugin's full manifest). Fetched
@@ -487,7 +501,40 @@ export function invokeHookRegistrars(pluginId: string, mod: Record<string, unkno
 }
 
 /**
- * Register ONE plugin's frontend hooks from its pre-compiled `hooks` bundle.
+ * Register ONE plugin's frontend hooks from its pre-compiled `hooks` bundle, AT MOST ONCE per session.
+ *
+ * The memo entry is the IN-FLIGHT attempt, published in the same synchronous run that starts it (nothing
+ * between the call and the `.set` can yield), so a second caller arriving anywhere in the fetch/evaluate
+ * window joins it instead of starting its own — which a "have I finished?" Set structurally cannot do,
+ * since it can only be written once that window has already closed. See hooksRegistration.
+ *
+ * Only a registration that actually HAPPENED stays memoized:
+ *  - resolves true  → the bundle was evaluated and its registrars ran. Kept, so no later pass repeats it.
+ *  - resolves false → 404: nothing was registered. Evicted, because the 404 may be an install that was
+ *                     never built (see below) and a later mount must be free to find a repaired one.
+ *  - rejects        → transient by construction (5xx / network / unloadable bytes). Evicted so the next
+ *                     mount retries; loadRuntimePluginHooks propagates it and initPlugins un-latches.
+ */
+function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
+    const inFlight = hooksRegistration.get(pluginId);
+    if (inFlight) return inFlight;
+    const attempt = fetchAndRegisterPluginHooks(pluginId);
+    hooksRegistration.set(pluginId, attempt);
+    // Identity-guarded exactly like activePromise / blockConfigCache, so a newer attempt is never evicted
+    // by an older one settling late. Attached to a DERIVED promise: `attempt` itself still settles for the
+    // caller, and the rejection is handled here, so eviction can never raise an unhandled rejection.
+    attempt.then(
+        (registered) => {
+            if (!registered && hooksRegistration.get(pluginId) === attempt) hooksRegistration.delete(pluginId);
+        },
+        () => { if (hooksRegistration.get(pluginId) === attempt) hooksRegistration.delete(pluginId); },
+    );
+    return attempt;
+}
+
+/**
+ * Fetch + evaluate + register one plugin's hooks bundle. Call it through loadPluginHooksBundle, never
+ * directly: on its own it has no dedupe at all.
  *
  * Convention (identical to the build-time registry generated by generate-plugin-registry.js): every
  * exported function whose name starts with `register` is invoked once. A plugin's hooks entry therefore
@@ -500,14 +547,13 @@ export function invokeHookRegistrars(pluginId: string, mod: Record<string, unkno
  * manifest. REJECTS if the bundle exists but could not be fetched or evaluated, so the caller can retry;
  * an individual register() that throws is logged and does not fail the load.
  */
-async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
-    if (hooksRegistered.has(pluginId)) return true;
+async function fetchAndRegisterPluginHooks(pluginId: string): Promise<boolean> {
     const response = await fetch(`/api/v1/plugins/${pluginId}/bundle?type=hooks`);
     // 404 is the only status that can mean "no hooks bundle" — 400 is a bad slug/type and a restarting
     // gateway yields 502/503. Treating every non-ok status as "no bundle" made those transient failures
     // resolve `false`, so loadRuntimePluginHooks saw no rejection, initPlugins never un-latched its
     // run-once guard, and the plugin's hooks were silently dead for the rest of the session. Throw
-    // instead — the plugin is not in hooksRegistered yet, so the next admin-layout mount retries it.
+    // instead — a rejected attempt is evicted from hooksRegistration, so the next mount retries it.
     //
     // But 404 is NOT proof the plugin merely ships no hooks: routes/plugin-bundles.ts resolves the slug to
     // a folder FIRST and returns 404 whenever that resolution fails — unknown slug, missing plugin
@@ -531,9 +577,10 @@ async function loadPluginHooksBundle(pluginId: string): Promise<boolean> {
     const url = URL.createObjectURL(blob);
     try {
         const mod: any = await import(/* webpackIgnore: true */ url);
-        // Mark BEFORE invoking: a register() that throws must not be retried on the next mount (it would
-        // throw again), and pluginHooks keys already make a partial registration idempotent.
-        hooksRegistered.add(pluginId);
+        // Once the module is EVALUATED the registration counts as done, even if an individual extension is
+        // broken: invokeHookRegistrars contains each registrar's own throw, so this resolves `true` and the
+        // memo is KEPT. Retrying a throwing register() on the next mount would only throw again, having
+        // re-run the registrars that did work — so committing here, before the fan-out, is deliberate.
         invokeHookRegistrars(pluginId, mod);
         return true;
     } finally {
@@ -559,8 +606,20 @@ export async function loadRuntimePluginHooks(): Promise<void> {
     if (typeof window === 'undefined') return;
     // In development the generated registry statically imports each active plugin's hooks SOURCE, which
     // keeps hot-reload working. Loading the pre-compiled bundle too would register a second module
-    // instance from a possibly stale dist/, racing the live one — so the runtime path is production-only
-    // (the same IS_DEV split pluginRegistry.ts uses for admin pages).
+    // instance from a possibly stale dist/, racing the live one — so skip the runtime path there (the
+    // same IS_DEV split pluginRegistry.ts uses for admin pages).
+    //
+    // Read this for exactly what it is: a DEV/PROD split, NOT "only plugins the build never saw". It
+    // fully separates the two sources only for a RELEASE build, which ships zero plugins, so its
+    // generated registry is empty and nothing can overlap. A SELF-BUILT production image is different: a
+    // plugin already present in backend/plugins at `next build` time is baked into the registry — whose
+    // loadPluginHooks() runs its hooks in every NODE_ENV — and is ALSO an active plugin here, so its
+    // register* exports run TWICE, once per module instance. Today that is harmless only because both
+    // registrations are identical and pluginHooks KEYS make a repeat registration replace rather than
+    // append (mail-server passes keys); a plugin registering keyless callbacks would stack duplicate UI.
+    // Skipping the ones already baked in needs the generated registry to publish which plugins' HOOKS it
+    // statically imported, which it does not: getRegisteredPlugins() lists plugins with an ADMIN PAGE
+    // (PRODUCTION_PLUGINS is filtered on componentPath), a different and overlapping-but-not-equal set.
     if (process.env.NODE_ENV === 'development') return;
 
     const ids = await fetchActivePluginIds();
