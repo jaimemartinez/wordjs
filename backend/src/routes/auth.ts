@@ -8,7 +8,7 @@ const express = require('express');
 const router = express.Router();
 const User = require('../models/User');
 const { authenticate, generateToken, verifyToken } = require('../middleware/auth');
-const { isAdmin } = require('../middleware/permissions');
+const { isAdmin, can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption } = require('../core/options');
 const config = require('../config/app');
@@ -555,7 +555,7 @@ function sessionOnly(req: any, res: Response, next: any) {
  * GET /auth/tokens
  * List the current user's API tokens (metadata only — the secret is never returned after creation).
  */
-router.get('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.get('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: any, res: Response) => {
     const tokens = await ApiToken.listForUser(req.user.id);
     res.json({ tokens });
 }));
@@ -568,7 +568,7 @@ router.get('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, r
  *   'posts:write','media:read' (comma-string or array). write implies read; a token holding only
  *   resource scopes is confined to those resources. Unrecognized scopes are REJECTED (400).
  */
-router.post('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.post('/tokens', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: any, res: Response) => {
     const { name, scopes, expiresInDays } = req.body || {};
 
     // Soft cap on active (non-revoked, unexpired) tokens to bound abuse / accidental runaway creation.
@@ -638,7 +638,7 @@ router.post('/tokens', authenticate, sessionOnly, asyncHandler(async (req: any, 
  * DELETE /auth/tokens/:id
  * Revoke one of the current user's tokens. Idempotent-ish: 404 if it isn't the caller's or is already gone.
  */
-router.delete('/tokens/:id', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
+router.delete('/tokens/:id', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: any, res: Response) => {
     const id = parseInt(req.params.id, 10);
     if (!Number.isInteger(id) || id <= 0) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid token id.', data: { status: 400 } });

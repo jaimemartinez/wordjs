@@ -4,6 +4,33 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.10] - 2026-07-23
+
+### Fixed — admin UI
+- **The media library's upload button did nothing.** The trigger was a real `<button>` nested inside a
+  `<label>` wrapping the hidden file input; per HTML an interactive descendant cancels the label's
+  activation, so the click never reached the input and the file picker never opened. It now triggers the
+  input directly.
+- **The media picker was untranslated and heavy-handed.** "Select Media", "Search media…", "Cancel",
+  "Refresh", "No media found" and "Select" were hardcoded English in an otherwise localized UI, over a
+  flat gray slab. All strings now route through i18n (es/en/pt) and the backdrop is a soft dark blur
+  matching the app's other modals.
+
+### Changed — security
+- **Creating, listing and revoking personal API tokens now requires a `manage_api_tokens` capability.**
+  It was self-service for every logged-in user; minting a token is a privileged action even though the
+  token inherits the owner's own permissions. Administrators hold the capability via the `*` wildcard,
+  and it is assignable to other roles in Users → Roles. Enforced at the backend routes and hidden from
+  the sidebar for users who lack it.
+
+### Fixed — mail-server plugin (2.2.1)
+- **The preferences modal (gear) and the undo-send countdown rendered behind the page.** They used
+  arbitrary Tailwind z-index classes (`z-[6500]`, `z-[7000]`) that are only present in the served CSS
+  when Tailwind happens to scan the plugin at frontend-build time; when absent, the z-index resolves to
+  `auto` and the elements stack behind the plugin's own content — so the settings modal looked broken and
+  the "undo send" toast never appeared. The z-index is now set inline, which always applies. The
+  overlay's backdrop-blur was also removed.
+
 ## [1.12.9] - 2026-07-23
 
 ### Fixed — TLS certificates (Let's Encrypt / ACME)
