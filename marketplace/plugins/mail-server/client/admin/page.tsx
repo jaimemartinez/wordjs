@@ -918,10 +918,11 @@ export default function MailServerAdmin() {
                     </div>
                     <h2 className="text-lg font-black text-slate-800 tracking-tight">No corporate mailbox</h2>
                     <p className="mt-3 text-sm text-slate-500 leading-relaxed">
-                        Mail on this site is only available to accounts with a professional
+                        Mail on this site is only available to accounts an administrator has given a
+                        professional
                         {mailAccess.siteDomain ? <> <strong className="text-slate-700">@{mailAccess.siteDomain}</strong> </> : ' '}
-                        address. Your account uses a personal address, so it has no inbox here and cannot
-                        send through this server.
+                        mailbox. Yours does not have one, so it has no inbox here and cannot send through
+                        this server.
                     </p>
                     <p className="mt-3 text-sm text-slate-500 leading-relaxed">
                         Ask an administrator to turn on <strong className="text-slate-700">Professional Mail Account</strong> for

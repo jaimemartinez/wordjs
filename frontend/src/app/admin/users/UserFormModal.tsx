@@ -16,13 +16,22 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
     const isNew = user === "new";
     const userId = isNew ? null : (user as User).id;
 
-    const [formData, setFormData] = useState({
+    const [formData, setFormData] = useState<{
+        username: string; email: string; displayName: string; role: string;
+        password: string; personalEmail: string; professionalMailbox?: boolean;
+    }>({
         username: "",
         email: "",
         displayName: "",
         role: "subscriber",
         password: "",
         personalEmail: "",
+        // ACTIVE CORPORATE MAILBOX — the admin-owned grant, rendered by whichever mail plugin registers
+        // the `user_form_before_email` hook (mail-server's "Professional Mail Account" toggle). It is
+        // carried in the form data and submitted with it, so the toggle writes an EXPLICIT permission
+        // instead of implying one by rewriting the email address. `undefined` = the plugin has not
+        // decided yet; the backend leaves an absent field untouched.
+        professionalMailbox: undefined,
     });
     const [saving, setSaving] = useState(false);
     const [, setHookTick] = useState(0);
@@ -38,6 +47,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                 role: user.role,
                 password: "", // Don't load password
                 personalEmail: user.personalEmail || "",
+                professionalMailbox: !!user.professionalMailbox,
             });
         }
         // Listen for plugin hook changes

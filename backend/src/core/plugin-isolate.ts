@@ -14,6 +14,8 @@ const { fork, spawn } = require('child_process');
 const path = require('path');
 const { createPluginApi } = require('./plugin-api');
 const { runWithContext } = require('./plugin-context');
+// The ACTIVE CORPORATE MAILBOX grant, read the one way (core/mailbox.ts) — never re-derived.
+const { hasProfessionalMailbox } = require('./mailbox');
 const hooks = require('./hooks');
 const { addShortcode, removeShortcode } = require('./shortcodes');
 
@@ -1486,7 +1488,15 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                         headers: { 'x-portal-token': req.headers['x-portal-token'] }, // selected non-sensitive headers
                         // Saved-upload metadata (multer) — the isolate gets the path/name, not the stream.
                         file: req.file ? { path: req.file.path, originalname: req.file.originalname, mimetype: req.file.mimetype, size: req.file.size, filename: req.file.filename } : undefined,
-                        user: req.user ? { id: req.user.id, role: req.user.role, userEmail: req.user.userEmail, userLogin: req.user.userLogin } : null
+                        // `hasProfessionalMailbox` is the ACTIVE CORPORATE MAILBOX grant
+                        // (user_meta.professional_mailbox, admin-owned — see core/mailbox.ts). It is
+                        // projected as a boolean so a plugin route gate reads the FACT instead of
+                        // re-deriving it from userEmail, which the account itself can write. Rebuilt per
+                        // request from req.user, so revoking the grant denies the very next request.
+                        user: req.user ? {
+                            id: req.user.id, role: req.user.role, userEmail: req.user.userEmail, userLogin: req.user.userLogin,
+                            hasProfessionalMailbox: hasProfessionalMailbox(req.user)
+                        } : null
                     };
                     try {
                         const r = await invokeRoute(msg.routeId, reqData);
