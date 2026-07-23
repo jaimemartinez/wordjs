@@ -1760,7 +1760,32 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
     });
 }
 
-function unloadIsolatedPlugin(slug: string) {
+// Returns void on the ordinary synchronous path, and a Promise only when it has to wait out an in-flight
+// load (see below). The annotation is required: the function references itself in a return expression.
+function unloadIsolatedPlugin(slug: string): void | Promise<void> {
+    // A load for this slug is IN FLIGHT — its `isolates.set` has not landed yet. The synchronous body below
+    // would therefore find no handle, do nothing, and leave a live child behind the moment that load
+    // completes: the unload silently lost. awaitIsolateSettled is the documented primitive for "I intend to
+    // retire what I enumerate", but only the theme sweep and reloadIsolatedPlugin were calling it — plain
+    // deactivate (core/plugins.ts), cross-node deactivate and DELETE all unloaded same-tick. Enforcing it
+    // HERE makes the contract hold for every caller instead of asking each one to remember it.
+    // Deliberately NOT made async: five call sites invoke this synchronously inside try/catch, and turning
+    // it into a promise there would let a rejection escape the catch that is meant to contain it. A promise
+    // is returned only on this path, so `await`ing callers get the deferred work and the rest still end up
+    // with the child retired.
+    // NOT simply `loading.has(slug)`: `isolates.set` runs at the END of the executor while the load stays
+    // unsettled until the child reports ready, so there is a window where the slug is REGISTERED and the
+    // load is still pending. In THAT window the synchronous body is correct and load-bearing — it marks the
+    // stop, kills the child, and the exit handler consumes the mark (see the 'unload that lands MID-LOAD'
+    // test). Deferring there would be a regression. Only the no-handle-yet case is the silent no-op.
+    if (!isolates.has(slug) && loading.has(slug)) {
+        return awaitIsolateSettled(slug).then(() => {
+            // Settled ⇒ recursing hits the sync path. If it never settled we would spin, so stop instead:
+            // a load stuck past the timeout has bigger problems than a missed unload.
+            if (loading.has(slug)) return;
+            return unloadIsolatedPlugin(slug);
+        });
+    }
     // Cancel any pending backoff restart from an earlier crash. Unconditional: the whole point of the
     // no-handle case is that a crashed plugin has NO registered isolate while its restart timer is armed.
     const pending = restartTimers.get(slug);

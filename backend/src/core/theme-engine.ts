@@ -95,6 +95,11 @@ async function unloadThemeIsolates(incomingIsoSlug: string): Promise<void> {
 // engine instance this module exports (and any other), and so a re-require can never hand out a second.
 let initChain: Promise<void> = Promise.resolve();
 
+// The init that is QUEUED but has not started running yet, if any. Callers arriving while it waits JOIN it
+// instead of queueing another — see init(). Cleared the moment that queued run begins, so the next caller
+// queues a fresh one and can never be served by a run that started before its request.
+let pendingInit: Promise<void> | null = null;
+
 class ThemeEngine {
     activeTheme: any;
     partialsLoaded: boolean;
@@ -164,11 +169,32 @@ class ThemeEngine {
      * Defence in depth only: the isolate layer holds the invariant on its own (loadIsolatedPlugin joins an
      * in-flight same-slug load and retires any child it would displace), so a bypass of this lock cannot
      * orphan a process.
+     *
+     * COALESCE, don't just queue. Serializing alone made every caller pay for a full reload: 8 concurrent
+     * init()s ran 8 sweep+re-fork cycles back to back (~6s) to reach the state ONE of them would have
+     * reached (~0.8s), and the extra cycles each SIGKILL and re-fork the theme child, so renders landing in
+     * the gaps get no theme logic at all. This is not a double-click path — render() re-inits lazily
+     * whenever the `template` option changed underneath the process, so N concurrent page requests all
+     * observe the stale slug and all call init(). A queued init re-reads that option when it starts, so it
+     * will serve whatever the joiners wanted: one running + one queued is sufficient, and any caller
+     * arriving while a queued run waits gets that run's result instead of scheduling another.
      */
     async init() {
-        const run = initChain.then(() => this.initLocked(), () => this.initLocked());
-        initChain = run.then(() => undefined, () => undefined);
-        return run;
+        // Join a run that has not started yet — it will re-read `template` and so covers this request too.
+        if (pendingInit) return pendingInit;
+
+        // Clearing pendingInit as the FIRST thing the queued run does is what bounds the coalescing window:
+        // a caller arriving after this point queues its own run, so it can never be answered by work that
+        // began before it asked.
+        const queued = initChain.then(
+            () => { pendingInit = null; return this.initLocked(); },
+            () => { pendingInit = null; return this.initLocked(); }
+        );
+        // Joiners share the caller's outcome, failure included. The CHAIN takes a neutered copy: an init
+        // that throws must not wedge every later switch.
+        pendingInit = queued;
+        initChain = queued.then(() => undefined, () => undefined);
+        return queued;
     }
 
     async initLocked() {
