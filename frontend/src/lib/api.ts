@@ -36,6 +36,14 @@ const getBaseUrl = () => {
             if (config.internalApiUrl) {
                 return String(config.internalApiUrl).replace(/\/+$/, '');
             }
+            // LOCAL SPLIT: an installed backend serves HTTPS with mTLS enforced, so the plain-HTTP
+            // fallback below can never reach it. Route SSR through the gateway (see lib/server-api.ts,
+            // which this deliberately mirrors — every SSR path must agree on the base).
+            const backendCert = path.resolve(path.dirname(configPath), 'certs', 'backend.crt');
+            if (fs.existsSync(backendCert)) {
+                const front = String(config.gatewayUrl || config.siteUrl || '').replace(/\/+$/, '');
+                if (front) return `${front}/api/v1`;
+            }
             if (config.port) {
                 backendPort = config.port;
             }

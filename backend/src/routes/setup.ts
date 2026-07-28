@@ -203,6 +203,10 @@ router.post('/install', async (req: any, res: Response) => {
 
     // newConfig is mutated below (mtls paths, host identities), so type it loosely.
     const newConfig: Record<string, any> = {
+        // Marks the site as SET UP, which is not the same as "a config file exists" — cluster enrollment
+        // writes this same file onto a fresh node that still needs the wizard (see core/configManager
+        // isInstalled).
+        installedAt: new Date().toISOString(),
         siteUrl,
         frontendUrl,
         port: 4000,
@@ -250,10 +254,13 @@ router.post('/install', async (req: any, res: Response) => {
 
             // Update options in DB
             const { updateOption } = require('../core/options');
-            await updateOption('blogname', siteName);
-            await updateOption('blogdescription', siteDescription);
-            await updateOption('siteurl', siteUrl);
-            await updateOption('home', frontendUrl);
+            // Coerce to a string HERE: updateOption serialises with String(value), so an omitted field
+            // (headless installs don't always send a tagline) would be stored as the literal text
+            // "undefined" and then render in <title>/og:title as "My site — undefined".
+            await updateOption('blogname', String(siteName ?? ''));
+            await updateOption('blogdescription', String(siteDescription ?? ''));
+            await updateOption('siteurl', String(siteUrl ?? ''));
+            await updateOption('home', String(frontendUrl ?? ''));
 
             // SECURITY: Generate mTLS Certificates
             console.log('🔐 Setup: Generating mTLS certificates...');

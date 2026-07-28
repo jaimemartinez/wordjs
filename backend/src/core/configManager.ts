@@ -45,13 +45,39 @@ function saveConfig(config: any) {
  * Check if the application is installed
  * @returns {boolean}
  */
+/**
+ * Does this config describe a site that has been through the installer?
+ *
+ * The config file's mere EXISTENCE is not proof: cluster enrollment (scripts/node-join.js) writes this
+ * same file to carry the gateway wiring + mTLS paths onto a brand-new backend node that has never been
+ * set up. Treating that as installed skipped the wizard, and the CMS bootstrap then seeded a default
+ * administrator on a node already published through the gateway.
+ *
+ * So key off something only the installer writes: `installedAt`, or `dbDriver` for sites installed
+ * before that marker existed (enrollment carries no database choice).
+ *
+ * Exported for tests — the predicate is pure, `isInstalled()` just supplies the file.
+ */
+function isInstalledConfig(cfg: any) {
+    if (!cfg || typeof cfg !== 'object') return false;
+    return !!(cfg.installedAt || cfg.dbDriver);
+}
+
 function isInstalled() {
-    return fs.existsSync(CONFIG_FILE);
+    if (!fs.existsSync(CONFIG_FILE)) return false;
+    try {
+        return isInstalledConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
+    } catch (e) {
+        // Unreadable/corrupt config → report INSTALLED. Fail closed: a parse error must never reopen the
+        // installer on a live site.
+        return true;
+    }
 }
 
 module.exports = {
     getConfig,
     saveConfig,
     isInstalled,
+    isInstalledConfig,
     CONFIG_FILE
 };
