@@ -14,12 +14,17 @@ class WordJSSetup {
         this.backendDir = path.join(this.rootDir, 'backend');
         this.gatewayDir = path.join(this.rootDir, 'gateway');
         this.frontDir = path.join(this.rootDir, 'frontend');
+        // Staging folder used by runSetup(): generate here so distribution can't wipe the source.
+        // Assigned in the CONSTRUCTOR because distribute() is also called on its own — the backend's
+        // installer (backend/src/routes/setup.ts) generates the certs itself and then calls
+        // distribute() directly, without init(). While this only existed inside init(), that path threw
+        // `The "path" argument must be of type string. Received undefined`, which the installer
+        // swallowed as a warning — leaving a split install with no certs at all.
+        this.genCertsDir = path.join(this.rootDir, '.certs_tmp');
     }
 
     async init() {
         await fs.ensureDir(this.gatewayDir);
-        // Use a temporary folder for generation so we don't wipe it during distribution
-        this.genCertsDir = path.join(this.rootDir, '.certs_tmp');
         await fs.ensureDir(this.genCertsDir);
 
         if (await fs.pathExists(this.frontDir)) {
@@ -166,20 +171,29 @@ class WordJSSetup {
             await fs.ensureDir(frontCertsDir);
         }
 
-        // Clean existing certs to avoid stale files
-        await Promise.all([
-            fs.emptyDir(gatewayCertsDir),
-            fs.emptyDir(backendCertsDir),
-            fs.pathExists(this.frontDir).then(exists => exists ? fs.emptyDir(frontCertsDir) : null)
-        ]);
+        // Where the freshly-issued certs actually are. runSetup() stages them in .certs_tmp; the
+        // backend installer writes them straight into backend/certs (core/certManager's CERTS_DIR) and
+        // then calls us. Reading from the wrong place used to combine with the blind emptyDir below to
+        // DELETE the only copy that existed.
+        const staged = await fs.pathExists(this.genCertsDir);
+        const sourceDir = staged ? this.genCertsDir : backendCertsDir;
+
+        // Clean existing certs to avoid stale files — but never the directory we are about to read.
+        const wipe = [gatewayCertsDir, backendCertsDir, frontCertsDir]
+            .filter(dir => path.resolve(dir) !== path.resolve(sourceDir));
+        await Promise.all(wipe.map(async dir => {
+            if (dir === frontCertsDir && !(await fs.pathExists(this.frontDir))) return;
+            await fs.emptyDir(dir);
+        }));
 
         const distributeCert = async (serviceName, targetDir) => {
             const files = ['cluster-ca.crt', `${serviceName}.crt`, `${serviceName}.key`];
             for (const file of files) {
-                const src = path.join(this.genCertsDir, file);
-                if (await fs.pathExists(src)) {
-                    await fs.copy(src, path.join(targetDir, file));
-                }
+                const src = path.join(sourceDir, file);
+                if (!(await fs.pathExists(src))) continue;
+                const dest = path.join(targetDir, file);
+                if (path.resolve(src) === path.resolve(dest)) continue; // already in place
+                await fs.copy(src, dest);
             }
         };
 
@@ -190,7 +204,7 @@ class WordJSSetup {
         }
 
         // 4. CLEANUP
-        await fs.remove(this.genCertsDir);
+        if (staged) await fs.remove(this.genCertsDir);
         const oldRootCerts = path.join(this.rootDir, 'certs');
         if (await fs.pathExists(oldRootCerts)) {
             await fs.remove(oldRootCerts);

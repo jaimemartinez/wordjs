@@ -79,7 +79,13 @@ async function updateOption(name: string, value: any, autoload = 'yes') {
     assertThemeOptionWritable(name); // #9
 
     return runWithContext(null, async () => {
-        const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        // An absent value stores as EMPTY, never as the text "undefined"/"null". String(undefined) is the
+        // literal "undefined", and options are rendered straight into pages — a missing tagline shipped
+        // "My site — undefined" into <title>, og:title and twitter:title. Guard it at the writer so no
+        // call site can reintroduce it.
+        const serialized = (value === undefined || value === null)
+            ? ''
+            : (typeof value === 'object' ? JSON.stringify(value) : String(value));
 
         // Atomic UPSERT instead of SELECT-then-(UPDATE|INSERT): the old check-then-write raced the
         // options(option_name) UNIQUE index — two concurrent first-writes both saw no row, both
@@ -119,7 +125,10 @@ async function addOption(name: string, value: any, autoload = 'yes') {
     assertThemeOptionWritable(name); // #9 — same backstop as updateOption
 
     return runWithContext(null, async () => {
-        const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
+        // Same absent-value guard as updateOption — never persist the text "undefined"/"null".
+        const serialized = (value === undefined || value === null)
+            ? ''
+            : (typeof value === 'object' ? JSON.stringify(value) : String(value));
         // Atomic insert-if-absent: ON CONFLICT DO NOTHING avoids the check-then-insert race against the
         // options(option_name) UNIQUE index (two concurrent first-writes / two nodes seeding the same
         // default). changes/rowCount === 0 means the row already existed (no insert happened).
