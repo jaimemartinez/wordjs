@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { fetchActivePluginIds, loadActivePluginBlocks } from "./pluginBundleLoader";
+import { withSharedBlockFields } from "@/components/puck/VisibilityField";
 
 /**
  * Merge marketplace plugins' Puck blocks into a base Puck config AT RUNTIME.
@@ -35,6 +36,23 @@ export function useRuntimePuckConfig<T extends { components: Record<string, any>
         return () => { alive = false; };
     }, []);
 
-    if (!Object.keys(blocks).length) return baseConfig;
-    return { ...baseConfig, components: { ...baseConfig.components, ...blocks } };
+    // STABLE IDENTITY (memoized): the merged object must NOT be a fresh literal on every render.
+    // Puck treats a new `config` identity as a real config change — it regenerates its whole app
+    // store, and because the root renderer (config.root.render) travels inside that object, React
+    // also sees a new component type and REMOUNTS the entire canvas subtree. The editor page
+    // re-renders on every edit (it mirrors Puck's data into local state), so an unmemoized merge
+    // made the canvas "reload" on every keystroke and on every block insert — but only once a
+    // plugin block had actually loaded, which is why it looked intermittent.
+    return useMemo(() => {
+        if (!Object.keys(blocks).length) return baseConfig;
+        // Runtime plugin blocks must go through withSharedBlockFields too. The base config is wrapped
+        // at module build time, which is BEFORE these blocks exist — so merging them in raw would give
+        // marketplace blocks no per-device visibility, no entrance animation and no Appearance panel,
+        // silently making them second-class next to core blocks. Wrapping only the new blocks keeps
+        // the already-wrapped base untouched (the helper is a no-op on them anyway).
+        return {
+            ...baseConfig,
+            components: { ...baseConfig.components, ...withSharedBlockFields(blocks) },
+        };
+    }, [baseConfig, blocks]);
 }

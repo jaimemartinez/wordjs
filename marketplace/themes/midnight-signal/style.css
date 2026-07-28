@@ -1,0 +1,401 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap');
+
+/* =========================================
+   THEME: MIDNIGHT SIGNAL (Data / Tech)
+   Concept: near-black midnight canvas with an
+   electric-blue + cyan signal palette, circuit
+   grid hero, gradient hairline borders, glow
+   shadows and JetBrains Mono labels.
+   Dark only.
+   ========================================= */
+
+:root {
+  /* --- CANONICAL COLORS --- */
+  --wjs-color-primary: #2563eb;
+  /* Electric blue (primary-container in the design, used on every filled CTA) */
+  --wjs-color-primary-dark: #1d4ed8;
+  --wjs-color-secondary: #4cd7f6;
+  /* Signal cyan (nav active, labels, accents) */
+  --wjs-color-secondary-dark: #03b5d3;
+  --wjs-color-accent: #06b6d4;
+  /* Focus/interaction cyan (input focus ring in the design) */
+  --wjs-color-success: #4ade80;
+  --wjs-color-danger: #ffb4ab;
+  --wjs-color-warning: #fbbf24;
+  --wjs-color-info: #38bdf8;
+  --wjs-color-light: #dce1fb;
+  --wjs-color-dark: #070d1f;
+
+  /* --- ON-COLORS (max-contrast text per solid, by luminance) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #003640;
+  --wjs-color-on-accent: #00303a;
+  --wjs-color-on-success: #052e16;
+  --wjs-color-on-danger: #690005;
+  --wjs-color-on-warning: #231a00;
+  --wjs-color-on-info: #04263a;
+  --wjs-color-on-light: #0c1324;
+  --wjs-color-on-dark: #dce1fb;
+
+  /* --- SURFACES / TEXT / BORDERS ---
+     The design's body overrides the config: canvas is #020617 (level 0), cards sit on #0f172a. */
+  --wjs-bg-canvas: #020617;
+  --wjs-bg-surface: #0f172a;
+  --wjs-bg-surface-glass: rgba(12, 19, 36, 0.8);
+  /* nav: bg-background/80 + backdrop-blur */
+  --wjs-bg-muted: #191f31;
+  --wjs-color-text-main: #dce1fb;
+  --wjs-color-text-muted: #c3c6d7;
+  --wjs-color-heading: #ffffff;
+  --wjs-color-link: #4cd7f6;
+  --wjs-color-link-hover: #acedff;
+  --wjs-border-subtle: #434655;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(6, 182, 212, 0.25);
+
+  /* --- TYPOGRAPHY (Inter body/headings, JetBrains Mono code+labels) --- */
+  --wjs-font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Inter', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.5;
+  /* measured body: 24px/16px */
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.17;
+  --wjs-h1-tracking: -0.02em;
+  /* measured h1: -0.96px/48px */
+  /* headline-xl 48/56 → h1; headline-lg 32/40 → h2; card titles 20/28 → h3 */
+  --wjs-h1: 3rem;
+  --wjs-h2: 2rem;
+  --wjs-h3: 1.25rem;
+  --wjs-h4: 1.125rem;
+  --wjs-h5: 1rem;
+  --wjs-h6: 0.875rem;
+
+  /* --- SHAPE / SHADOW (near-square radii; shadows are electric glows) --- */
+  --wjs-radius-sm: 2px;
+  --wjs-radius: 2px;
+  --wjs-radius-md: 4px;
+  --wjs-radius-lg: 8px;
+  --wjs-radius-pill: 12px;
+  /* design "full" is 0.75rem — rounded squares, never true pills */
+  --wjs-shadow-sm: 0 0 10px rgba(37, 99, 235, 0.12);
+  --wjs-shadow: 0 0 15px rgba(76, 215, 246, 0.1);
+  --wjs-shadow-md: 0 0 15px rgba(37, 99, 235, 0.3);
+  --wjs-shadow-lg: 0 0 30px rgba(37, 99, 235, 0.35);
+
+  /* ══ BLOCK TOKENS (derived from the design markup) ═══════════════════════ */
+
+  /* Buttons — hero primary CTA: blue fill, white text, 2px radius, blue glow */
+  --wjs-button-bg: var(--wjs-color-primary);
+  --wjs-button-color: #ffffff;
+  --wjs-button-radius: 2px;
+  --wjs-button-pad-x: 2rem;
+  --wjs-button-pad-y: 0.75rem;
+  --wjs-button-weight: 500;
+  --wjs-button-size: 1rem;
+  --wjs-button-border-width: 1px;
+  --wjs-button-border-color: transparent;
+  --wjs-button-shadow: 0 0 15px rgba(37, 99, 235, 0.4);
+  --wjs-button-hover-bg: var(--wjs-color-primary-dark);
+  --wjs-button-hover-color: #ffffff;
+  --wjs-button-hover-shadow: 0 0 22px rgba(37, 99, 235, 0.55);
+
+  /* Feature cards — measured surface #0c1324 (the glass base, a notch bluer than
+     #0f172a), gradient hairline, icon tile, cyan hover */
+  --wjs-card-bg: #0c1324;
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: rgba(59, 130, 246, 0.3);
+  --wjs-card-radius: 2px;
+  --wjs-card-shadow: none;
+  /* measured: the cards cast no resting shadow */
+  --wjs-card-pad: 2rem;
+  --wjs-card-title-color: #ffffff;
+  --wjs-card-title-size: 1.25rem;
+  --wjs-card-title-weight: 600;
+  --wjs-card-title-leading: 1.4;
+  /* measured: 28px/20px */
+  --wjs-card-desc-color: var(--wjs-color-text-muted);
+  --wjs-card-icon-bg: #23293c;
+  --wjs-card-icon-color: var(--wjs-color-text-main);
+  /* measured glyph: periwinkle #dce1fb, not cyan */
+  --wjs-card-icon-radius: 2px;
+  --wjs-card-hover-border-color: var(--wjs-color-secondary);
+  --wjs-card-hover-shadow: 0 0 18px rgba(76, 215, 246, 0.25);
+  --wjs-card-hover-transform: translateY(-2px);
+
+  /* Hero — circuit-line grid on the midnight canvas, centered, dual CTA */
+  --wjs-hero-bg: var(--wjs-bg-canvas);
+  --wjs-hero-bg-image: linear-gradient(to right, #1e293b 1px, transparent 1px),
+    linear-gradient(to bottom, #1e293b 1px, transparent 1px);
+  --wjs-hero-radius: 0;
+  --wjs-hero-text-align: center;
+  --wjs-hero-actions-justify: center;
+  --wjs-hero-title-color: #ffffff;
+  --wjs-hero-title-weight: 700;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: var(--wjs-color-text-muted);
+  --wjs-hero-button-bg: var(--wjs-color-primary);
+  --wjs-hero-button-color: #ffffff;
+  --wjs-hero-button-radius: 2px;
+  --wjs-hero-button-weight: 500;
+  --wjs-hero-button-pad: 0.75rem 2rem;
+  --wjs-hero-button-outline-bg: transparent;
+  --wjs-hero-button-outline-color: var(--wjs-color-secondary);
+  --wjs-hero-button-outline-border: var(--wjs-color-secondary);
+  --wjs-hero-button-outline-hover-bg: rgba(76, 215, 246, 0.1);
+
+  /* Pricing — command-center panels in the card language; highlighted plan glows cyan */
+  --wjs-pricing-bg: var(--wjs-bg-surface);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: var(--wjs-border-subtle);
+  --wjs-pricing-radius: 2px;
+  --wjs-pricing-pad: 2rem;
+  --wjs-pricing-shadow: var(--wjs-shadow-sm);
+  --wjs-pricing-name-color: #ffffff;
+  --wjs-pricing-name-weight: 600;
+  --wjs-pricing-price-color: #ffffff;
+  --wjs-pricing-price-family: var(--wjs-font-family-mono);
+  --wjs-pricing-period-color: var(--wjs-color-text-muted);
+  --wjs-pricing-feature-color: var(--wjs-color-text-muted);
+  --wjs-pricing-button-bg: var(--wjs-color-primary);
+  --wjs-pricing-button-color: #ffffff;
+  --wjs-pricing-button-radius: 2px;
+  --wjs-pricing-hover-border-color: var(--wjs-color-secondary);
+  --wjs-pricing-hover-shadow: 0 0 18px rgba(76, 215, 246, 0.2);
+  --wjs-pricing-highlight-bg: var(--wjs-bg-surface);
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-secondary);
+  --wjs-pricing-highlight-shadow: inset 0 0 10px rgba(6, 182, 212, 0.15), 0 0 24px rgba(76, 215, 246, 0.25);
+  --wjs-pricing-highlight-scale: 1.03;
+  --wjs-pricing-highlight-name-color: var(--wjs-color-secondary);
+  --wjs-pricing-highlight-button-bg: var(--wjs-color-primary);
+  --wjs-pricing-highlight-button-shadow: 0 0 15px rgba(37, 99, 235, 0.4);
+
+  /* Quote / testimonial — white 600 quote, mono cyan role line (CTO, DataCorp) */
+  --wjs-quote-accent: var(--wjs-color-secondary);
+  --wjs-quote-color: #ffffff;
+  --wjs-quote-size: 1.5rem;
+  --wjs-quote-weight: 600;
+  --wjs-quote-cite-color: var(--wjs-color-secondary);
+  --wjs-testimonial-bg: #070d1f;
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: var(--wjs-border-subtle);
+  --wjs-testimonial-radius: 2px;
+  --wjs-testimonial-shadow: var(--wjs-shadow-sm);
+  --wjs-testimonial-quote-color: #ffffff;
+  --wjs-testimonial-quote-size: 1.5rem;
+  --wjs-testimonial-mark-color: #8d90a0;
+  --wjs-testimonial-mark-opacity: 0.5;
+  --wjs-testimonial-author-color: #ffffff;
+  --wjs-testimonial-author-weight: 600;
+  --wjs-testimonial-role-color: var(--wjs-color-secondary);
+  --wjs-testimonial-role-family: var(--wjs-font-family-mono);
+  --wjs-testimonial-role-size: 0.875rem;
+  --wjs-testimonial-avatar-radius: 12px;
+
+  /* Search (= the design's input language: dark field, hairline, cyan focus glow).
+     Forms inherit these. */
+  --wjs-search-input-bg: var(--wjs-bg-surface);
+  --wjs-search-input-color: var(--wjs-color-text-main);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: var(--wjs-border-subtle);
+  --wjs-search-input-radius: 2px;
+  --wjs-search-input-family: var(--wjs-font-family-mono);
+  --wjs-search-placeholder-color: #8d90a0;
+  --wjs-search-focus-color: var(--wjs-color-accent);
+  --wjs-search-focus-ring: 0 0 0 4px rgba(6, 182, 212, 0.2);
+  --wjs-search-button-bg: var(--wjs-color-primary);
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-weight: 500;
+  --wjs-search-button-radius: 2px;
+  --wjs-search-button-shadow: 0 0 10px rgba(37, 99, 235, 0.3);
+  --wjs-form-accent: var(--wjs-color-accent);
+
+  /* Accordion — terminal panels: mono headers, cyan icon, deepest-black body */
+  --wjs-accordion-bg: var(--wjs-bg-surface);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-radius: 2px;
+  --wjs-accordion-shadow: var(--wjs-shadow-sm);
+  --wjs-accordion-header-bg: var(--wjs-bg-muted);
+  --wjs-accordion-header-color: var(--wjs-color-text-main);
+  --wjs-accordion-header-family: var(--wjs-font-family-mono);
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-header-size: 0.875rem;
+  --wjs-accordion-header-radius: 0;
+  --wjs-accordion-icon-color: var(--wjs-color-secondary);
+  --wjs-accordion-active-color: var(--wjs-color-secondary);
+  --wjs-accordion-panel-bg: #070d1f;
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+
+  /* Posts grid — card language + cyan hover signal, mono date chip */
+  --wjs-posts-bg: var(--wjs-bg-surface);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: var(--wjs-border-subtle);
+  --wjs-posts-radius: 2px;
+  --wjs-posts-shadow: var(--wjs-shadow-sm);
+  --wjs-posts-pad: 1.5rem;
+  --wjs-posts-hover-border-color: var(--wjs-color-secondary);
+  --wjs-posts-hover-shadow: 0 0 18px rgba(76, 215, 246, 0.2);
+  --wjs-posts-title-color: #ffffff;
+  --wjs-posts-title-weight: 600;
+  --wjs-posts-excerpt-color: var(--wjs-color-text-muted);
+  --wjs-posts-date-color: var(--wjs-color-secondary);
+  --wjs-posts-family: var(--wjs-font-family-base);
+  --wjs-posts-thumb-bg: linear-gradient(135deg, #191f31, #23293c);
+
+  /* --- FOOTER / NAV CONFIG (consumed by the public chrome) --- */
+  --wjs-bg-footer: #070d1f;
+  --wjs-color-text-footer-main: #dce1fb;
+  --wjs-color-text-footer-dim: #c3c6d7;
+  --wjs-bg-surface-hover: #23293c;
+  --wjs-logo-color: #b4c5ff;
+}
+
+/* =========================================
+   PUBLIC CHROME — header
+   ========================================= */
+
+/* Sticky bar: hairline bottom + faint cyan signal glow (nav shadow in the design).
+   Background comes from --wjs-bg-surface-glass, already read by the Header component.
+   [class] lifts the glow over the chrome's shadow-sm utility (same reason as the
+   doubled :hover trick on the footer). */
+header {
+  border-bottom: 1px solid var(--wjs-border-subtle);
+}
+
+header[class] {
+  box-shadow: 0 0 15px rgba(76, 215, 246, 0.1);
+}
+
+/* Brand: periwinkle #b4c5ff, bold, tight tracking ("Midnight Data") */
+.wjs-header-logo span {
+  color: var(--wjs-logo-color);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+/* Nav links: JetBrains Mono label-caps (12px / 700 / 0.1em), muted → cyan.
+   (Measured link is the ACTIVE one: cyan + 2px underline; the rest stay muted.) */
+.wjs-header-nav a {
+  font-family: var(--wjs-font-family-mono);
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #c3c6d7;
+  transition: color 0.3s ease;
+}
+
+.wjs-header-nav a:hover {
+  color: var(--wjs-color-secondary);
+}
+
+.wjs-header-nav a:focus-visible {
+  outline: none;
+  color: var(--wjs-color-secondary);
+  text-shadow: 0 0 8px rgba(76, 215, 246, 0.45);
+}
+
+/* Header action buttons follow the theme's near-square radius (measured CTA:
+   2px corners, blue glow 0 0 10px).
+   (Never `display:none` on .wjs-header-actions outside a media query — it holds the hamburger.) */
+.wjs-header-actions button {
+  border-radius: var(--wjs-radius);
+  box-shadow: 0 0 10px rgba(37, 99, 235, 0.3);
+}
+
+/* Mobile fit (design mobile spec: 36px hero headline, smaller brand) */
+@media (max-width: 767.98px) {
+  :root {
+    --wjs-h1: 2.25rem;
+  }
+
+  .wjs-header-logo span {
+    font-size: 1.375rem;
+  }
+}
+
+/* =========================================
+   PUBLIC CHROME — footer (deepest black, mono column labels, cyan link hover)
+   ========================================= */
+
+footer {
+  border-top: 1px solid var(--wjs-border-subtle);
+}
+
+/* Brand line in the footer: periwinkle like the header logo */
+footer h3 {
+  color: var(--wjs-logo-color);
+}
+
+/* Column headings: mono label-caps, white */
+footer h4 {
+  font-family: var(--wjs-font-family-mono);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #ffffff;
+}
+
+/* Link hover → signal cyan. Doubled :hover lifts specificity above the
+   component's hover utility (0,2,0) without any !important. */
+footer a:hover:hover {
+  color: var(--wjs-color-secondary);
+}
+
+/* =========================================
+   DISTINCTIVE RULES — the "electric signal" language
+   ========================================= */
+
+/* Circuit grid: the hero token supplies the line gradients; size them to the 24px grid */
+.wp-block-hero {
+  background-size: 24px 24px;
+}
+
+/* Gradient hairline border + cyan top signal line on cards (the design's
+   .gradient-border + accent bar), done purely with layered backgrounds:
+   1) 2px cyan line across the top, 2) surface fill, 3) blue→cyan border gradient. */
+.wp-block-card {
+  border: 1px solid transparent;
+  background:
+    linear-gradient(var(--wjs-color-secondary), var(--wjs-color-secondary)) left top / 100% 2px no-repeat padding-box,
+    linear-gradient(var(--wjs-card-bg, var(--wjs-bg-surface)), var(--wjs-card-bg, var(--wjs-bg-surface))) padding-box,
+    linear-gradient(135deg, rgba(37, 99, 235, 0.3), rgba(6, 182, 212, 0.3)) border-box;
+}
+
+.wp-block-card:hover {
+  background:
+    linear-gradient(var(--wjs-color-secondary), var(--wjs-color-secondary)) left top / 100% 2px no-repeat padding-box,
+    linear-gradient(var(--wjs-card-bg, var(--wjs-bg-surface)), var(--wjs-card-bg, var(--wjs-bg-surface))) padding-box,
+    linear-gradient(135deg, rgba(37, 99, 235, 0.6), rgba(76, 215, 246, 0.6)) border-box;
+}
+
+/* Icon tiles carry a measured 1px hairline (no token exists for an icon border) */
+.wp-block-card__icon {
+  border: 1px solid var(--wjs-border-subtle);
+}
+
+/* Electric text selection */
+::selection {
+  background: rgba(76, 215, 246, 0.3);
+  color: #ffffff;
+}
+
+/* Terminal scrollbar (from the design) */
+::-webkit-scrollbar {
+  width: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e293b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #2563eb;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #3b82f6;
+}

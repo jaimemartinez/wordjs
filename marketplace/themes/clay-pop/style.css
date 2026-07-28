@@ -1,0 +1,428 @@
+@import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@400;600;700&family=Quicksand:wght@400;500;600;700&display=swap');
+
+/* =========================================
+   THEME: CLAY POP (Claymorphism pastel)
+   Concept: soft 3D clay shapes on a cool-white canvas.
+   Pastel lilac / peach / mint containers, ultra-rounded
+   corners, double shadows (soft drop + inner highlight),
+   playful Quicksand type with Comfortaa labels.
+   Derived from the Stitch "ClayCreative" design.
+   ========================================= */
+
+:root {
+  /* ── CANONICAL TOKENS ─────────────────────────────── */
+  /* Colors (M3 palette of the design: primary #66558c lilac,
+     secondary #795745 clay-brown / peach container,
+     tertiary #2f685e teal / mint container) */
+  --wjs-color-primary: #66558c;
+  --wjs-color-primary-dark: #4e3e73;
+  --wjs-color-secondary: #795745;
+  --wjs-color-secondary-dark: #5f402f;
+  --wjs-color-accent: #2f685e;
+  --wjs-color-success: #2f685e;
+  --wjs-color-danger: #ba1a1a;
+  --wjs-color-warning: #8a5200;
+  --wjs-color-info: #4a5fa5;
+  --wjs-color-light: #f2f4f7;
+  --wjs-color-dark: #191c1e;
+  /* On-colors (by luminance: every solid above is dark → white text;
+     light surface gets near-black) */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #ffffff;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  /* Surfaces / text / borders (measured render: the page wrap itself is
+     the lilac #cbb7f5; light surfaces float on it) */
+  --wjs-bg-canvas: #cbb7f5;
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #eceef1;
+  --wjs-bg-surface-raised: #f2f4f7;
+  --wjs-bg-surface-glass: rgba(247, 249, 252, 0.85);
+  --wjs-color-text-main: #000000;
+  --wjs-color-text-muted: #49454f;
+  --wjs-color-heading: #191c1e;
+  /* link deepened one step so it keeps AA on the lilac canvas */
+  --wjs-color-link: #56467b;
+  --wjs-color-link-hover: #4e3e73;
+  --wjs-border-subtle: #e0e3e6;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(102, 85, 140, 0.3);
+
+  /* Typography (Quicksand display+body, Comfortaa labels) */
+  --wjs-font-family-base: 'Quicksand', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Quicksand', system-ui, -apple-system, sans-serif;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.5;
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.17;
+  --wjs-h1-tracking: -0.02em;
+  --wjs-h1: 3rem;
+  --wjs-h2: 2rem;
+  --wjs-h3: 1.5rem;
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.1rem;
+  --wjs-h6: 1rem;
+
+  /* Shape / shadow (design radii: 1rem / 2rem / 3rem / pill;
+     signature clay double shadows: soft drop + white inner bevel) */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 0.75rem;
+  --wjs-radius: 1rem;
+  --wjs-radius-md: 1.5rem;
+  --wjs-radius-lg: 2rem;
+  --wjs-radius-pill: 9999px;
+  --wjs-shadow-sm: 10px 10px 20px rgba(0, 0, 0, 0.04);
+  --wjs-shadow: 20px 20px 40px rgba(0, 0, 0, 0.05);
+  --wjs-shadow-md: 25px 25px 50px rgba(0, 0, 0, 0.08);
+  --wjs-shadow-lg: 30px 30px 60px rgba(0, 0, 0, 0.1);
+  /* elevation alias: hero/CTA/video buttons read --wjs-shadow-2 directly;
+     the design gives those the clay button shadow */
+  --wjs-shadow-2: var(--wjs-clay-btn-shadow);
+
+  /* ── THEME-LOCAL CLAY HELPERS ─────────────────────── */
+  --wjs-clay-surface: linear-gradient(135deg, #ffffff, #eceef1);
+  --wjs-clay-shadow: 20px 20px 40px rgba(0, 0, 0, 0.05), inset 10px 10px 20px rgba(255, 255, 255, 0.8), inset -10px -10px 20px rgba(0, 0, 0, 0.02);
+  --wjs-clay-shadow-hover: 25px 25px 50px rgba(0, 0, 0, 0.08), inset 10px 10px 20px rgba(255, 255, 255, 0.9), inset -10px -10px 20px rgba(0, 0, 0, 0.03);
+  --wjs-clay-inset: inset 8px 8px 16px rgba(0, 0, 0, 0.05), inset -8px -8px 16px rgba(255, 255, 255, 0.8);
+  --wjs-clay-btn-shadow: 10px 10px 20px rgba(102, 85, 140, 0.15), inset 5px 5px 15px rgba(255, 255, 255, 0.6), inset -5px -5px 15px rgba(0, 0, 0, 0.1);
+  --wjs-clay-btn-shadow-hover: 15px 15px 25px rgba(102, 85, 140, 0.2), inset 5px 5px 15px rgba(255, 255, 255, 0.8), inset -5px -5px 15px rgba(0, 0, 0, 0.05);
+
+  /* ── BLOCK TOKENS (derived from the design markup) ── */
+  /* Buttons — the hero's .clay-btn-primary: pastel lilac pill,
+     puffed clay shadow, grows on hover */
+  --wjs-button-bg: #cbb7f5;
+  --wjs-button-color: #000000;
+  --wjs-button-radius: var(--wjs-radius-pill);
+  --wjs-button-pad-x: 2rem;
+  --wjs-button-pad-y: 1rem;
+  --wjs-button-size: 1.125rem;
+  --wjs-button-weight: 700;
+  --wjs-button-leading: 1.5;
+  --wjs-button-family: var(--wjs-font-family-base);
+  --wjs-button-border-width: 0;
+  --wjs-button-border-color: transparent;
+  --wjs-button-shadow: var(--wjs-clay-btn-shadow);
+  --wjs-button-hover-bg: #cbb7f5;
+  --wjs-button-hover-color: #000000;
+  --wjs-button-hover-shadow: var(--wjs-clay-btn-shadow-hover);
+  --wjs-button-hover-transform: scale(1.05);
+  /* Secondary/outline variant — the mint clay twin of the primary */
+  --wjs-button-outline-bg: #93ccc1;
+  --wjs-button-outline-color: #000000;
+  --wjs-button-outline-border-color: transparent;
+  --wjs-button-outline-hover-bg: #a5d8ce;
+
+  /* Cards — the feature .clay-card measures TRANSPARENT: a lilac clay
+     tile shaped only by the white border + bevel shadows on the canvas */
+  --wjs-card-bg: transparent;
+  --wjs-card-border-width: 2px;
+  --wjs-card-border-color: rgba(255, 255, 255, 0.4);
+  --wjs-card-radius: 2rem;
+  --wjs-card-shadow: var(--wjs-clay-shadow);
+  --wjs-card-pad: 2.5rem;
+  --wjs-card-title-color: #191c1e;
+  --wjs-card-title-size: 1.5rem;
+  --wjs-card-title-weight: 700;
+  --wjs-card-desc-color: #49454f;
+  --wjs-card-hover-border-color: rgba(255, 255, 255, 0.5);
+  --wjs-card-hover-shadow: var(--wjs-clay-shadow-hover);
+  --wjs-card-hover-transform: translateY(-5px) scale(1.02);
+  --wjs-card-icon-bg: #cbb7f5;
+  --wjs-card-icon-color: #000000;
+  --wjs-card-icon-radius: var(--wjs-radius-pill);
+  --wjs-card-icon-size: 80px;
+
+  /* Hero — flat centered band directly on the lilac canvas (measured:
+     no wash, no frame; padding 96/64/128), clay CTA pair */
+  --wjs-hero-bg: transparent;
+  --wjs-hero-gradient: none;
+  --wjs-hero-pad: 6rem 4rem 8rem;
+  --wjs-hero-color: #191c1e;
+  --wjs-hero-text-align: center;
+  --wjs-hero-title-color: #191c1e;
+  --wjs-hero-title-size: clamp(2rem, 5vw, 3rem);
+  --wjs-hero-title-weight: 700;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: #49454f;
+  --wjs-hero-subtitle-size: 1.125rem;
+  --wjs-hero-button-bg: #cbb7f5;
+  --wjs-hero-button-color: #000000;
+  --wjs-hero-button-radius: var(--wjs-radius-pill);
+  --wjs-hero-button-size: 1.125rem;
+  --wjs-hero-button-weight: 700;
+  --wjs-hero-button-leading: 1.5;
+  --wjs-hero-button-pad: 1rem 2rem;
+  --wjs-hero-button-outline-bg: #93ccc1;
+  --wjs-hero-button-outline-color: #000000;
+  --wjs-hero-button-outline-border: transparent;
+  --wjs-hero-button-outline-hover-bg: #a5d8ce;
+
+  /* Pricing — transparent clay tiles like the cards; the Pro plan is a
+     solid cool-white slab with a 4px peach border and slight scale */
+  --wjs-pricing-bg: transparent;
+  --wjs-pricing-border-width: 2px;
+  --wjs-pricing-border-color: rgba(255, 255, 255, 0.4);
+  --wjs-pricing-radius: 2rem;
+  --wjs-pricing-shadow: var(--wjs-clay-shadow);
+  --wjs-pricing-name-color: #191c1e;
+  --wjs-pricing-name-weight: 700;
+  --wjs-pricing-price-color: #66558c;
+  --wjs-pricing-price-size: 2.25rem;
+  --wjs-pricing-price-weight: 700;
+  --wjs-pricing-period-color: #49454f;
+  --wjs-pricing-feature-color: #49454f;
+  --wjs-pricing-accent: #fed0b9;
+  --wjs-pricing-button-on-accent: #56467b;
+  --wjs-pricing-button-bg: #e6e8eb;
+  --wjs-pricing-button-color: #191c1e;
+  --wjs-pricing-button-radius: var(--wjs-radius-pill);
+  --wjs-pricing-button-weight: 700;
+  --wjs-pricing-button-hover-bg: #e0e3e6;
+  --wjs-pricing-hover-transform: translateY(-5px);
+  --wjs-pricing-hover-shadow: var(--wjs-clay-shadow-hover);
+  --wjs-pricing-highlight-bg: #f7f9fc;
+  --wjs-pricing-highlight-border-width: 4px;
+  --wjs-pricing-highlight-border-color: #fed0b9;
+  --wjs-pricing-highlight-scale: 1.06;
+  --wjs-pricing-highlight-shadow: var(--wjs-clay-shadow);
+  --wjs-pricing-highlight-name-color: #795745;
+  --wjs-pricing-highlight-button-bg: #cbb7f5;
+
+  /* Quote / testimonial — big clay panel, oversized pastel
+     quote mark, round avatar, Comfortaa role label */
+  --wjs-quote-accent: #cbb7f5;
+  --wjs-quote-color: #191c1e;
+  --wjs-quote-family: var(--wjs-font-family-base);
+  --wjs-quote-weight: 600;
+  --wjs-quote-style: normal;
+  --wjs-quote-cite-color: #49454f;
+  --wjs-testimonial-bg: var(--wjs-clay-surface);
+  --wjs-testimonial-border-width: 2px;
+  --wjs-testimonial-border-color: rgba(255, 255, 255, 0.4);
+  --wjs-testimonial-radius: 2rem;
+  --wjs-testimonial-shadow: var(--wjs-clay-shadow);
+  --wjs-testimonial-mark-color: #cbb7f5;
+  --wjs-testimonial-quote-color: #191c1e;
+  --wjs-testimonial-quote-size: 1.5rem;
+  --wjs-testimonial-quote-style: normal;
+  --wjs-testimonial-author-color: #191c1e;
+  --wjs-testimonial-author-weight: 700;
+  --wjs-testimonial-role-color: #49454f;
+  --wjs-testimonial-role-family: 'Comfortaa', var(--wjs-font-family-base);
+  --wjs-testimonial-avatar-bg: #cbb7f5;
+  --wjs-testimonial-avatar-color: #56467b;
+  --wjs-testimonial-avatar-radius: 9999px;
+
+  /* Search / inputs — the contact form's .clay-input: white sunken
+     pressed-clay wells, square corners, no border, lilac focus halo.
+     (Form fields inherit from these.) */
+  --wjs-search-input-bg: #ffffff;
+  --wjs-search-input-border-width: 0;
+  --wjs-search-input-border-color: transparent;
+  --wjs-search-input-radius: 0;
+  --wjs-search-input-color: #191c1e;
+  --wjs-search-input-weight: 500;
+  --wjs-search-input-pad: 1rem 1.5rem;
+  --wjs-search-input-shadow: var(--wjs-clay-inset);
+  --wjs-search-placeholder-color: #7a757f;
+  --wjs-search-focus-ring: inset 10px 10px 20px rgba(0, 0, 0, 0.08), inset -10px -10px 20px rgba(255, 255, 255, 0.9), 0 0 0 3px #d1bdfb;
+  --wjs-search-button-bg: #cbb7f5;
+  --wjs-search-button-color: #000000;
+  --wjs-search-button-radius: var(--wjs-radius-pill);
+  --wjs-search-button-weight: 700;
+  --wjs-search-button-pad: 1rem 2.5rem;
+  --wjs-search-button-shadow: var(--wjs-clay-btn-shadow);
+  --wjs-form-submit-size: 1.125rem;
+  --wjs-form-submit-pad: 1rem 2.5rem;
+
+  /* Accordion — soft clay stack */
+  --wjs-accordion-bg: var(--wjs-clay-surface);
+  --wjs-accordion-border-width: 2px;
+  --wjs-accordion-border-color: rgba(255, 255, 255, 0.4);
+  --wjs-accordion-radius: 1.5rem;
+  --wjs-accordion-shadow: var(--wjs-clay-shadow);
+  --wjs-accordion-header-bg: transparent;
+  --wjs-accordion-header-color: #56467b;
+  --wjs-accordion-header-weight: 700;
+  --wjs-accordion-panel-bg: #f2f4f7;
+  --wjs-accordion-panel-color: #49454f;
+  --wjs-accordion-icon-color: #66558c;
+
+  /* Posts grid — clay cards with rounded thumbs */
+  --wjs-posts-bg: var(--wjs-clay-surface);
+  --wjs-posts-border-width: 2px;
+  --wjs-posts-border-color: rgba(255, 255, 255, 0.4);
+  --wjs-posts-radius: 2rem;
+  --wjs-posts-shadow: var(--wjs-clay-shadow);
+  --wjs-posts-hover-shadow: var(--wjs-clay-shadow-hover);
+  --wjs-posts-hover-transform: translateY(-5px);
+  --wjs-posts-title-color: #191c1e;
+  --wjs-posts-title-weight: 700;
+  --wjs-posts-excerpt-color: #49454f;
+  --wjs-posts-date-color: #7a757f;
+  --wjs-posts-thumb-radius: 1.5rem;
+
+  /* CTA banner — lilac clay slab with white pill button */
+  --wjs-cta-bg: #cbb7f5;
+  --wjs-cta-color: #56467b;
+  --wjs-cta-title-color: #211044;
+  --wjs-cta-radius: 2rem;
+  --wjs-cta-shadow: var(--wjs-clay-shadow);
+  --wjs-cta-button-bg: #ffffff;
+  --wjs-cta-button-color: #56467b;
+  --wjs-cta-button-radius: var(--wjs-radius-pill);
+  --wjs-cta-button-weight: 700;
+  --wjs-cta-button-hover-bg: #f2f4f7;
+  --wjs-cta-button-hover-color: #4e3e73;
+
+  /* Site footer (component tokens) — pale grey clay slab */
+  --wjs-bg-footer: #e0e3e6;
+  --wjs-color-text-footer-main: #191c1e;
+  --wjs-color-text-footer-dim: #49454f;
+  --wjs-social-bg: #ffffff;
+  --wjs-social-color: #66558c;
+  --wjs-social-hover-bg: #cbb7f5;
+  --wjs-social-hover-color: #56467b;
+  --wjs-social-radius: 9999px;
+}
+
+/* =========================================
+   SITE CHROME — public header (floating clay pill)
+   ========================================= */
+
+div.wjs-header-container {
+  background: #f2f4f7;
+  border: 0;
+  border-radius: 9999px;
+  box-shadow: inset 4px 4px 8px rgba(255, 255, 255, 0.8), inset -4px -4px 8px rgba(0, 0, 0, 0.05);
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+  margin-top: 0.75rem;
+}
+
+.wjs-header-logo span {
+  font-family: var(--wjs-font-family-heading);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: #66558c;
+}
+
+.wjs-header-nav a {
+  font-family: var(--wjs-font-family-base);
+  font-weight: 500;
+  color: #49454f;
+  transition: color 0.3s ease, transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.wjs-header-nav a:hover {
+  color: #66558c;
+  transform: scale(1.05);
+}
+
+/* Hamburger inherits the primary tokens; give it the clay puff.
+   (Never hide .wjs-header-actions outside a media query.) */
+.wjs-header-actions button {
+  box-shadow: var(--wjs-clay-btn-shadow);
+}
+
+/* =========================================
+   SITE CHROME — public footer (rounded clay slab)
+   ========================================= */
+
+footer {
+  border-radius: 2rem 2rem 0 0;
+  box-shadow: inset 10px 10px 20px rgba(255, 255, 255, 0.5);
+}
+
+footer h3 {
+  color: #66558c;
+  font-weight: 700;
+}
+
+footer h4 {
+  color: #191c1e;
+  font-weight: 700;
+}
+
+footer a {
+  color: #66558c;
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+footer a:hover {
+  color: #4e3e73;
+}
+
+/* =========================================
+   DISTINCTIVE RULES — pastel atmosphere blobs
+   (the design's blurred lilac/mint background circles)
+   ========================================= */
+
+body::before {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  top: -120px;
+  left: -120px;
+  width: 500px;
+  height: 500px;
+  border-radius: 50%;
+  background: #cbb7f5;
+  filter: blur(80px);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+body::after {
+  content: "";
+  position: fixed;
+  z-index: -1;
+  bottom: -180px;
+  right: -80px;
+  width: 600px;
+  height: 600px;
+  border-radius: 50%;
+  background: #93ccc1;
+  filter: blur(80px);
+  opacity: 0.45;
+  pointer-events: none;
+}
+
+::selection {
+  background: #66558c;
+  color: #ffffff;
+}
+
+/* Media inside long-form content gets the soft clay rounding */
+.wjs-content img,
+.wjs-content video {
+  border-radius: 1.5rem;
+}
+
+/* ===== Mobile adjustments (design's mx-margin-mobile pill) ===== */
+@media (max-width: 767.98px) {
+  div.wjs-header-container {
+    padding-top: 0.5rem;
+    padding-bottom: 0.5rem;
+    margin-top: 0.5rem;
+    border-radius: 2rem;
+  }
+
+  .wjs-header-logo span {
+    font-size: 1.25rem;
+  }
+
+  /* Lighter atmosphere on phones (blur is costly, blobs overwhelm) */
+  body::before,
+  body::after {
+    width: 300px;
+    height: 300px;
+    filter: blur(60px);
+  }
+}

@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>WordJS | Design Token Reference</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@600&amp;family=Geist:wght@600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-secondary": "#233148",
+                    "surface": "#08132a",
+                    "on-surface-variant": "#b9cacb",
+                    "surface-dim": "#08132a",
+                    "error": "#ffb4ab",
+                    "tertiary-fixed": "#d8e2ff",
+                    "on-secondary-fixed": "#0d1c32",
+                    "inverse-primary": "#006970",
+                    "surface-tint": "#00dbe9",
+                    "tertiary": "#f4f5ff",
+                    "surface-container-lowest": "#030d25",
+                    "secondary-fixed-dim": "#b9c7e4",
+                    "primary-fixed-dim": "#00dbe9",
+                    "primary-container": "#00f0ff",
+                    "outline": "#849495",
+                    "on-tertiary-fixed": "#091b39",
+                    "primary": "#dbfcff",
+                    "background": "#08132a",
+                    "on-secondary-fixed-variant": "#39475f",
+                    "inverse-surface": "#d9e2ff",
+                    "on-error-container": "#ffdad6",
+                    "error-container": "#93000a",
+                    "secondary-container": "#3c4962",
+                    "on-secondary-container": "#abb9d6",
+                    "on-primary-container": "#006970",
+                    "inverse-on-surface": "#263049",
+                    "outline-variant": "#3b494b",
+                    "surface-container": "#151f37",
+                    "primary-fixed": "#7df4ff",
+                    "tertiary-fixed-dim": "#b6c6ed",
+                    "surface-bright": "#2f3952",
+                    "on-primary-fixed": "#002022",
+                    "on-background": "#d9e2ff",
+                    "on-tertiary-fixed-variant": "#374767",
+                    "on-primary-fixed-variant": "#004f54",
+                    "on-tertiary-container": "#4f5e80",
+                    "surface-container-high": "#1f2942",
+                    "on-primary": "#00363a",
+                    "surface-variant": "#2a344d",
+                    "secondary-fixed": "#d6e3ff",
+                    "on-surface": "#d9e2ff",
+                    "surface-container-highest": "#2a344d",
+                    "surface-container-low": "#101b33",
+                    "secondary": "#b9c7e4",
+                    "on-tertiary": "#20304f",
+                    "tertiary-container": "#cad9ff",
+                    "on-error": "#690005"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "lg": "24px",
+                    "sm": "8px",
+                    "md": "16px",
+                    "xs": "4px",
+                    "base": "4px",
+                    "xl": "48px",
+                    "2xl": "80px"
+            },
+            "fontFamily": {
+                    "h1": ["Geist"],
+                    "body": ["Inter"],
+                    "h2": ["Geist"],
+                    "small": ["Inter"],
+                    "label": ["JetBrains Mono"],
+                    "h3": ["Geist"]
+            },
+            "fontSize": {
+                    "h1": ["clamp(2.5rem, 5vw, 4.5rem)", { "lineHeight": "1.1", "letterSpacing": "-0.04em", "fontWeight": "800" }],
+                    "body": ["16px", { "lineHeight": "1.6", "letterSpacing": "0", "fontWeight": "400" }],
+                    "h2": ["clamp(2rem, 4vw, 3rem)", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                    "small": ["13px", { "lineHeight": "1.5", "letterSpacing": "0.01em", "fontWeight": "500" }],
+                    "label": ["11px", { "lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                    "h3": ["1.5rem", { "lineHeight": "1.4", "letterSpacing": "-0.01em", "fontWeight": "600" }]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        body {
+            background-color: #08132a;
+            color: #d9e2ff;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .luminous-border {
+            border: 1px solid rgba(0, 219, 233, 0.1);
+            position: relative;
+        }
+
+        .luminous-border::before {
+            content: "";
+            position: absolute;
+            top: 0; left: 0; right: 0;
+            height: 1px;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
+        }
+
+        .glass-panel {
+            background: rgba(3, 13, 37, 0.6);
+            backdrop-filter: blur(12px);
+        }
+
+        .token-row:hover {
+            background: rgba(0, 219, 233, 0.04);
+        }
+
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #3b494b; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb:hover { background: #00dbe9; }
+
+        .cyan-glow {
+            box-shadow: 0 0 10px rgba(0, 219, 233, 0.2);
+        }
+
+        .property-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 1px;
+            background-color: rgba(59, 73, 75, 0.3);
+        }
+    </style>
+</head>
+<body class="font-body selection:bg-primary-container selection:text-on-primary-container">
+<!-- Top Navigation Bar -->
+<nav class="fixed top-0 w-full z-50 border-b border-outline-variant/30 backdrop-blur-md bg-background/80 shadow-sm flex justify-between items-center px-lg py-sm">
+<div class="font-h3 text-h3 font-extrabold text-primary-fixed-dim tracking-tight">WordJS</div>
+<div class="hidden md:flex gap-md items-center font-body text-body font-bold">
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer" href="#">Dashboard</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer" href="#">Templates</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer" href="#">Blocks</a>
+<a class="text-primary-fixed-dim border-b-2 border-primary-fixed-dim pb-1 cursor-pointer" href="#">Assets</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer" href="#">Settings</a>
+</div>
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer active:scale-95 transition-transform" data-icon="help">help</span>
+<button class="bg-primary-container text-on-primary-container px-md py-xs rounded-lg font-bold cursor-pointer active:scale-95 transition-transform">Publish</button>
+</div>
+</nav>
+<!-- Side Navigation -->
+<aside class="fixed left-0 top-0 h-screen w-16 hover:w-64 transition-all duration-300 z-[60] bg-surface-container-lowest border-r border-outline-variant/20 shadow-lg flex flex-col py-md overflow-hidden group">
+<div class="px-md mb-xl flex items-center gap-4">
+<div class="w-8 h-8 bg-primary-fixed-dim rounded flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-surface font-bold" data-icon="token">token</span>
+</div>
+<span class="font-h3 text-h3 text-primary-fixed-dim opacity-0 group-hover:opacity-100 transition-opacity">Editor</span>
+</div>
+<div class="space-y-sm">
+<div class="flex items-center gap-4 cursor-pointer text-on-surface-variant hover:text-on-surface mx-2 p-3 transition-all duration-200 hover:bg-surface-variant/50 rounded-lg">
+<span class="material-symbols-outlined shrink-0" data-icon="layers">layers</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Layout</span>
+</div>
+<div class="bg-primary-container text-on-primary-container rounded-lg mx-2 p-3 shadow-md flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap">
+<span class="material-symbols-outlined shrink-0" data-icon="palette">palette</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Style</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer text-on-surface-variant hover:text-on-surface mx-2 p-3 transition-all duration-200 hover:bg-surface-variant/50 rounded-lg">
+<span class="material-symbols-outlined shrink-0" data-icon="edit">edit</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Content</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer text-on-surface-variant hover:text-on-surface mx-2 p-3 transition-all duration-200 hover:bg-surface-variant/50 rounded-lg">
+<span class="material-symbols-outlined shrink-0" data-icon="restore">restore</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">History</span>
+</div>
+</div>
+<div class="mt-auto space-y-sm">
+<div class="flex items-center gap-4 cursor-pointer text-on-surface-variant hover:text-on-surface mx-2 p-3 transition-all duration-200 hover:bg-surface-variant/50 rounded-lg">
+<span class="material-symbols-outlined shrink-0" data-icon="menu_book">menu_book</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100 transition-opacity">Docs</span>
+</div>
+</div>
+</aside>
+<main class="pl-16 pt-24 pb-xl px-xl max-w-7xl mx-auto">
+<!-- Header Section -->
+<header class="mb-xl">
+<div class="flex justify-between items-end gap-md">
+<div class="space-y-xs">
+<div class="flex items-center gap-xs text-primary-fixed-dim">
+<span class="material-symbols-outlined text-[18px]" data-icon="settings_input_component">settings_input_component</span>
+<span class="font-label text-label uppercase tracking-widest">System Architecture</span>
+</div>
+<h1 class="font-h1 text-h1 text-on-surface">Design Token Library</h1>
+<p class="text-on-surface-variant max-w-2xl font-body text-body">
+                        The definitive reference for all <span class="text-primary-fixed-dim font-label">--wjs-</span> semantic tokens. Use these for cross-block visual consistency and systematic theme overrides.
+                    </p>
+</div>
+<div class="flex items-center gap-sm bg-surface-container rounded-lg p-xs luminous-border cyan-glow">
+<span class="material-symbols-outlined px-sm text-on-surface-variant" data-icon="search">search</span>
+<input class="bg-transparent border-none focus:ring-0 text-on-surface font-label text-label placeholder:text-outline-variant w-64 uppercase tracking-tighter" id="tokenSearch" placeholder="Filter tokens (e.g. 'button' or 'radius')" type="text"/>
+</div>
+</div>
+</header>
+<!-- Main Token Table -->
+<div class="luminous-border glass-panel rounded-xl overflow-hidden shadow-2xl mb-2xl">
+<div class="property-grid bg-surface-container-high py-md px-lg">
+<div class="font-label text-label uppercase tracking-widest text-primary-fixed-dim">Token Name</div>
+<div class="font-label text-label uppercase tracking-widest text-primary-fixed-dim">Dark Value (Base)</div>
+<div class="font-label text-label uppercase tracking-widest text-primary-fixed-dim">Light Value</div>
+</div>
+<div class="max-h-[700px] overflow-y-auto font-label text-label" id="tokenContainer">
+<!-- Javascript will populate this -->
+<div class="flex items-center justify-center py-2xl">
+<div class="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-fixed-dim"></div>
+</div>
+</div>
+</div>
+<!-- Token Normalization Log -->
+<section class="luminous-border glass-panel rounded-xl p-lg relative overflow-hidden">
+<div class="absolute top-0 right-0 p-lg opacity-10 pointer-events-none">
+<span class="material-symbols-outlined text-[120px]" data-icon="terminal">terminal</span>
+</div>
+<h2 class="font-h3 text-h3 text-on-surface mb-md flex items-center gap-sm">
+<span class="material-symbols-outlined text-primary-fixed-dim" data-icon="history">history</span>
+                Token Normalization Log
+            </h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-md relative z-10">
+<div class="space-y-sm">
+<div class="flex justify-between items-center p-sm bg-surface-container-low border border-outline-variant/20 rounded">
+<span class="text-error line-through">--color-cyan</span>
+<span class="material-symbols-outlined text-primary-fixed-dim" data-icon="arrow_forward">arrow_forward</span>
+<span class="text-primary-fixed-dim">--wjs-color-primary</span>
+</div>
+<div class="flex justify-between items-center p-sm bg-surface-container-low border border-outline-variant/20 rounded">
+<span class="text-error line-through">--btn-radius</span>
+<span class="material-symbols-outlined text-primary-fixed-dim" data-icon="arrow_forward">arrow_forward</span>
+<span class="text-primary-fixed-dim">--wjs-button-radius</span>
+</div>
+<div class="flex justify-between items-center p-sm bg-surface-container-low border border-outline-variant/20 rounded">
+<span class="text-error line-through">--spacing-8</span>
+<span class="material-symbols-outlined text-primary-fixed-dim" data-icon="arrow_forward">arrow_forward</span>
+<span class="text-primary-fixed-dim">--wjs-space-md</span>
+</div>
+</div>
+<div class="space-y-sm">
+<div class="flex justify-between items-center p-sm bg-surface-container-low border border-outline-variant/20 rounded">
+<span class="text-error line-through">--table-bg</span>
+<span class="material-symbols-outlined text-primary-fixed-dim" data-icon="arrow_forward">arrow_forward</span>
+<span class="text-primary-fixed-dim">--wjs-table-background</span>
+</div>
+<div class="flex justify-between items-center p-sm bg-surface-container-low border border-outline-variant/20 rounded">
+<span class="text-error line-through">--font-title</span>
+<span class="material-symbols-outlined text-primary-fixed-dim" data-icon="arrow_forward">arrow_forward</span>
+<span class="text-primary-fixed-dim">--wjs-font-h1</span>
+</div>
+<div class="flex justify-between items-center p-sm bg-surface-container-low border border-outline-variant/20 rounded">
+<span class="text-error line-through">--card-border</span>
+<span class="material-symbols-outlined text-primary-fixed-dim" data-icon="arrow_forward">arrow_forward</span>
+<span class="text-primary-fixed-dim">--wjs-card-stroke</span>
+</div>
+</div>
+</div>
+</section>
+</main>
+<footer class="w-full mt-auto border-t border-outline-variant/10 bg-surface-dim flex flex-col md:flex-row justify-between items-center px-xl py-lg max-w-full font-small text-small text-on-surface-variant">
+<div class="font-label text-label font-black text-on-surface uppercase mb-md md:mb-0">WordJS Core</div>
+<div class="flex items-center gap-xl">
+<span class="opacity-70">© 2024 WordJS CMS Engine. All rights reserved. Built for precision.</span>
+<div class="flex gap-md">
+<a class="hover:text-on-surface transition-opacity" href="#">API Docs</a>
+<a class="hover:text-on-surface transition-opacity" href="#">Changelog</a>
+<a class="hover:text-on-surface transition-opacity" href="#">Support</a>
+</div>
+</div>
+</footer>
+<script>
+        const tokens = [
+            // Global
+            { name: "--wjs-color-primary", dark: "#00dbe9", light: "#006970" },
+            { name: "--wjs-color-background", dark: "#08132a", light: "#f8f9fa" },
+            { name: "--wjs-color-surface", dark: "#151f37", light: "#ffffff" },
+            { name: "--wjs-space-xs", dark: "4px", light: "4px" },
+            { name: "--wjs-space-sm", dark: "8px", light: "8px" },
+            { name: "--wjs-space-md", dark: "16px", light: "16px" },
+            { name: "--wjs-space-lg", dark: "24px", light: "24px" },
+            { name: "--wjs-radius-sm", dark: "2px", light: "2px" },
+            { name: "--wjs-radius-md", dark: "4px", light: "4px" },
+            { name: "--wjs-radius-lg", dark: "8px", light: "8px" },
+            { name: "--wjs-shadow-raised", dark: "0 4px 12px rgba(0,0,0,0.3)", light: "0 2px 8px rgba(0,0,0,0.1)" },
+            { name: "--wjs-font-h1", dark: "Geist, 800", light: "Geist, 800" },
+            { name: "--wjs-font-body", dark: "Inter, 400", light: "Inter, 400" },
+            { name: "--wjs-font-mono", dark: "JetBrains Mono, 600", light: "JetBrains Mono, 600" },
+            
+            // Component Specific
+            { name: "--wjs-accordion-header-bg", dark: "rgba(255,255,255,0.02)", light: "rgba(0,0,0,0.02)" },
+            { name: "--wjs-audio-player-bar", dark: "#00dbe9", light: "#006970" },
+            { name: "--wjs-button-primary-bg", dark: "#00dbe9", light: "#006970" },
+            { name: "--wjs-button-primary-text", dark: "#00363a", light: "#ffffff" },
+            { name: "--wjs-card-background", dark: "#151f37", light: "#ffffff" },
+            { name: "--wjs-card-stroke", dark: "rgba(0, 219, 233, 0.1)", light: "rgba(0, 0, 0, 0.1)" },
+            { name: "--wjs-cta-accent", dark: "#00f0ff", light: "#00b4c3" },
+            { name: "--wjs-grid-gap", dark: "24px", light: "24px" },
+            { name: "--wjs-hero-title-color", dark: "#ffffff", light: "#1a1a1a" },
+            { name: "--wjs-pricing-card-highlight", dark: "rgba(0, 219, 233, 0.2)", light: "rgba(0, 105, 112, 0.1)" },
+            { name: "--wjs-quote-border-left", dark: "4px solid #00dbe9", light: "4px solid #006970" },
+            { name: "--wjs-section-padding-y", dark: "80px", light: "80px" },
+            { name: "--wjs-stats-number-font", dark: "Geist, 900", light: "Geist, 900" },
+            { name: "--wjs-table-header-bg", dark: "#1f2942", light: "#f1f3f5" },
+            { name: "--wjs-tabs-active-indicator", dark: "#00dbe9", light: "#006970" },
+            { name: "--wjs-video-overlay-gradient", dark: "linear-gradient(transparent, rgba(0,0,0,0.8))", light: "linear-gradient(transparent, rgba(0,0,0,0.5))" },
+            { name: "--wjs-post-meta-color", dark: "#b9cacb", light: "#6c757d" },
+            { name: "--wjs-search-input-focus", dark: "0 0 10px rgba(0,219,233,0.3)", light: "0 0 10px rgba(0,105,112,0.2)" }
+        ].sort((a, b) => a.name.localeCompare(b.name));
+
+        const container = document.getElementById('tokenContainer');
+        const searchInput = document.getElementById('tokenSearch');
+
+        function renderTokens(filter = '') {
+            container.innerHTML = '';
+            const filtered = tokens.filter(t => t.name.toLowerCase().includes(filter.toLowerCase()));
+            
+            filtered.forEach(token => {
+                const row = document.createElement('div');
+                row.className = 'property-grid border-b border-outline-variant/10 token-row transition-colors';
+                row.innerHTML = `
+                    <div class="px-lg py-md text-primary-fixed-dim select-all">${token.name}</div>
+                    <div class="px-lg py-md text-on-surface-variant flex items-center gap-sm">
+                        <span class="w-3 h-3 rounded-full luminous-border" style="background-color: ${token.dark.startsWith('#') ? token.dark : 'transparent'}"></span>
+                        <code class="text-xs">${token.dark}</code>
+                    </div>
+                    <div class="px-lg py-md text-on-surface-variant/70 flex items-center gap-sm">
+                        <span class="w-3 h-3 rounded-full border border-black/10" style="background-color: ${token.light.startsWith('#') ? token.light : 'transparent'}"></span>
+                        <code class="text-xs">${token.light}</code>
+                    </div>
+                `;
+                container.appendChild(row);
+            });
+            
+            if (filtered.length === 0) {
+                container.innerHTML = '<div class="py-2xl text-center text-outline-variant uppercase tracking-widest">No matching tokens found</div>';
+            }
+        }
+
+        searchInput.addEventListener('input', (e) => renderTokens(e.target.value));
+
+        // Initial render with a slight delay for effect
+        setTimeout(renderTokens, 500);
+
+        // Simple interactivity for the nav
+        document.querySelectorAll('.active\\:scale-95').forEach(btn => {
+            btn.addEventListener('mousedown', () => btn.classList.add('scale-95'));
+            btn.addEventListener('mouseup', () => btn.classList.remove('scale-95'));
+            btn.addEventListener('mouseleave', () => btn.classList.remove('scale-95'));
+        });
+    </script>
+</body></html>

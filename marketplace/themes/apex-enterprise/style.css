@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0f172a;
+  --wjs-bg-surface: #1d2537;
+  --wjs-bg-surface-raised: #293141;
+  --wjs-color-primary: #6366f1;
+  --wjs-color-primary-dark: #4f46e5;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #4f46e5;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f8fafc;
+  --wjs-color-text-muted: #9fa4ac;
+  --wjs-color-heading: #f8fafc;
+  --wjs-color-link: #6366f1;
+  --wjs-color-link-hover: #4f46e5;
+  --wjs-border-subtle: #394050;
+  --wjs-outline: #686d7a;
+  --wjs-outline-variant: #32394a;
+  --wjs-focus-ring: #6366f1;
+}
+
 /* Theme: Apex Enterprise (Glassmorphism Aurora Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
 

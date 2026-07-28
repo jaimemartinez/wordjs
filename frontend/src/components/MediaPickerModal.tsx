@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import { MediaItem } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import MediaLibrarySelector from "./MediaLibrarySelector";
@@ -10,8 +11,61 @@ interface MediaPickerModalProps {
     onSelect: (item: MediaItem) => void;
 }
 
+// Focusable descendants for the Tab trap (standard dialog set; -1 tabindex is skipped).
+const FOCUSABLE_SELECTOR = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
 export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPickerModalProps) {
     const { t } = useI18n();
+    const panelRef = useRef<HTMLDivElement>(null);
+    const previousFocusRef = useRef<HTMLElement | null>(null);
+
+    // Dialog a11y: on open, remember the invoking element and move focus into the panel; a
+    // capture-phase keydown closes on Escape and traps Tab inside the panel (capture so the picker's
+    // own inputs can't swallow the keys first); on close, focus returns to the invoker.
+    // Hooks run unconditionally — the `!isOpen` early return stays BELOW them.
+    useEffect(() => {
+        if (!isOpen) return;
+        previousFocusRef.current = document.activeElement as HTMLElement | null;
+        panelRef.current?.focus();
+
+        const onKeyDown = (e: KeyboardEvent) => {
+            if (e.key === "Escape") {
+                e.preventDefault();
+                e.stopPropagation();
+                onClose();
+                return;
+            }
+            if (e.key !== "Tab") return;
+            const panel = panelRef.current;
+            if (!panel) return;
+            const focusables = Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR))
+                .filter((el) => !el.hasAttribute("disabled"));
+            if (focusables.length === 0) {
+                e.preventDefault();
+                return;
+            }
+            const first = focusables[0];
+            const last = focusables[focusables.length - 1];
+            const active = document.activeElement as HTMLElement | null;
+            if (e.shiftKey) {
+                // Wrap backwards from the first focusable (or from the panel itself / outside).
+                if (active === first || !panel.contains(active)) {
+                    e.preventDefault();
+                    last.focus();
+                }
+            } else if (active === last || !panel.contains(active)) {
+                e.preventDefault();
+                first.focus();
+            }
+        };
+        document.addEventListener("keydown", onKeyDown, true);
+        return () => {
+            document.removeEventListener("keydown", onKeyDown, true);
+            previousFocusRef.current?.focus();
+            previousFocusRef.current = null;
+        };
+    }, [isOpen, onClose]);
+
     if (!isOpen) return null;
 
     return (
@@ -25,7 +79,9 @@ export default function MediaPickerModal({ isOpen, onClose, onSelect }: MediaPic
 
             {/* Modal Panel */}
             <div
-                className="relative bg-white rounded-2xl text-left overflow-hidden shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col"
+                ref={panelRef}
+                tabIndex={-1}
+                className="relative bg-white rounded-2xl text-left overflow-hidden shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col outline-none"
                 role="dialog"
                 aria-modal="true"
                 aria-labelledby="modal-headline"

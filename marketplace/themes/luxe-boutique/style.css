@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #181204;
+  --wjs-bg-surface: #262013;
+  --wjs-bg-surface-raised: #312c20;
+  --wjs-color-primary: #fbbf24;
+  --wjs-color-primary-dark: #d97706;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #d97706;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #fef3c7;
+  --wjs-color-text-muted: #a79e7d;
+  --wjs-color-heading: #fef3c7;
+  --wjs-color-link: #fbbf24;
+  --wjs-color-link-hover: #d97706;
+  --wjs-border-subtle: #413a27;
+  --wjs-outline: #6f684e;
+  --wjs-outline-variant: #3a3421;
+  --wjs-focus-ring: #fbbf24;
+}
+
 /* Theme: Luxe Boutique (Obsidian Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@300;400;600&display=swap');
 

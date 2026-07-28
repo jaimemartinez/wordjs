@@ -105,6 +105,11 @@ export default function PostContent({ post, settings, category, showComments }: 
 
     return (
         <div className="w-full">
+            {/* Page identity for client-side blocks (the Form block stamps its submissions with it).
+                A plain global, set before hydration completes — read lazily inside event handlers. */}
+            <script
+                dangerouslySetInnerHTML={{ __html: `window.__WJS_PAGE_ID=${JSON.stringify(post.id)};` }}
+            />
             {dataWithMeta ? (
                 <div className="puck-content">
                     <Render config={config} data={dataWithMeta} />

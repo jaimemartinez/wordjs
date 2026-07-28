@@ -182,18 +182,13 @@ h3 {
   line-height: 1.25 !important;
 }
 
-/* Cards: Soft rounded surface with gentle shadow */
-.wp-block-card,
-article {
+/* Cards: Soft rounded surface with gentle shadow */article {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-lg) !important;
   box-shadow: var(--wjs-shadow-md) !important;
   transition: box-shadow 0.3s ease, border-color 0.3s ease !important;
-}
-
-.wp-block-card:hover,
-article:hover {
+}article:hover {
   box-shadow: var(--wjs-shadow-lg) !important;
   border-color: var(--wjs-color-primary) !important;
 }
@@ -235,229 +230,117 @@ footer .w-10:hover {
   background-color: var(--wjs-color-primary) !important;
 }
 
-/* =========================================
-   SAGE CALM: COMPONENT OVERRIDES
-   Wellness / Organic / Soft-rounded aesthetic
-   ========================================= */
-
-/* Accordion: Soft pillowed panels */
-.wp-block-accordion {
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  overflow: hidden !important;
-  box-shadow: var(--wjs-shadow-sm) !important;
-}
-
-.wp-block-accordion .accordion-item button {
-  background: var(--wjs-bg-surface) !important;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  font-family: 'Raleway', sans-serif !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.01em;
-  transition: color 0.25s ease, background-color 0.25s ease !important;
-}
-
-.wp-block-accordion .accordion-item button:hover {
-  color: var(--wjs-color-primary) !important;
-  background: #F4F7F2 !important;
-}
-
-.wp-block-accordion .accordion-item button:focus-visible {
-  outline: 2px solid var(--wjs-color-primary) !important;
-  outline-offset: -2px !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: #FBFCFA !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: Gentle underline tabs */
-.wp-block-tabs>div:first-child {
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-text-muted) !important;
-  font-family: 'Raleway', sans-serif !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.01em;
-  border-radius: var(--wjs-radius-sm) var(--wjs-radius-sm) 0 0 !important;
-  transition: color 0.25s ease !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-tabs button:focus-visible {
-  outline: 2px solid var(--wjs-color-primary) !important;
-  outline-offset: 2px !important;
-}
-
-.wp-block-tabs>div:last-child {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-top: none !important;
-  border-radius: 0 0 var(--wjs-radius-lg) var(--wjs-radius-lg) !important;
-}
-
-/* Video: Soft framed embed */
-.wp-block-video-embed {
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  overflow: hidden !important;
-  box-shadow: var(--wjs-shadow-md) !important;
-}
-
-/* Audio: Calm player surface */
-.wp-block-audio-player {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-sm) !important;
-}
-
-/* Pricing: Soft rounded cards */
-.wp-block-pricing>div {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-md) !important;
-  transition: box-shadow 0.3s ease !important;
-}
-
-.wp-block-pricing>div:hover {
-  box-shadow: var(--wjs-shadow-lg) !important;
-}
-
-.wp-block-pricing>div h3 {
-  font-family: 'Lora', Georgia, serif !important;
-  letter-spacing: 0.005em;
-}
-
-/* Highlighted plan: Sage-filled, no layout shift */
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: var(--wjs-color-primary) !important;
-  color: #F4F7F2 !important;
-  border: 1px solid var(--wjs-color-primary-dark) !important;
-  box-shadow: var(--wjs-shadow-lg) !important;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] h3 {
-  color: #FFFFFF !important;
-}
-
-/* Testimonial: Quiet quote card */
-.wp-block-testimonial {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-left: 4px solid var(--wjs-color-primary) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-md) !important;
-}
-
-.wp-block-testimonial>div:first-child {
-  color: var(--wjs-color-primary) !important;
-  font-family: 'Lora', Georgia, serif !important;
-}
-
-/* CTA Banner: Sage gradient block */
-.wp-block-cta-banner {
-  background: linear-gradient(135deg, var(--wjs-color-primary) 0%, var(--wjs-color-primary-dark) 100%) !important;
-  border: none !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-md) !important;
-}
-
-.wp-block-cta-banner h2 {
-  color: #FFFFFF !important;
-  letter-spacing: -0.005em;
-}
-
-.wp-block-cta-banner a {
-  background: #FFFFFF !important;
-  color: var(--wjs-color-primary-dark) !important;
-  font-family: 'Raleway', sans-serif !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.02em;
-  border-radius: var(--wjs-radius-md) !important;
-  box-shadow: var(--wjs-shadow-sm) !important;
-  transition: box-shadow 0.25s ease, background-color 0.25s ease !important;
-}
-
-.wp-block-cta-banner a:hover {
-  background: #F4F7F2 !important;
-  box-shadow: var(--wjs-shadow-md) !important;
-}
-
-/* Posts Grid: Airy cards */
-.wp-block-posts-grid article {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-sm) !important;
-  transition: box-shadow 0.3s ease, border-color 0.3s ease !important;
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-lg) !important;
-}
-
-/* Category Posts: Soft serif headlines */
-.wp-block-category-posts h3 {
-  font-family: 'Lora', Georgia, serif !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.005em;
-  border-bottom: 2px solid var(--wjs-color-primary) !important;
-  padding-bottom: 10px;
-}
-
-.wp-block-category-posts li {
-  border-color: var(--wjs-border-subtle) !important;
-}
-
-.wp-block-category-posts li a {
-  font-weight: 500 !important;
-  transition: color 0.25s ease !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Search: Soft pill input */
-.wp-block-search input {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: var(--wjs-radius-md) !important;
-  color: var(--wjs-color-text-main) !important;
-  transition: border-color 0.25s ease, box-shadow 0.25s ease !important;
-}
-
-.wp-block-search input::placeholder {
-  color: var(--wjs-color-text-muted) !important;
-}
-
-.wp-block-search input:focus {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: 0 0 0 3px rgba(59, 122, 87, 0.18) !important;
-  outline: none !important;
-}
-
-.wp-block-search button {
-  background: var(--wjs-color-primary) !important;
-  color: #FFFFFF !important;
-  font-family: 'Raleway', sans-serif !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.02em;
-  border-radius: var(--wjs-radius-md) !important;
-  transition: background-color 0.25s ease !important;
-}
-
-.wp-block-search button:hover {
-  background: var(--wjs-color-primary-dark) !important;
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: var(--wjs-bg-surface);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: var(--wjs-border-subtle);
+  --wjs-card-radius: var(--wjs-radius-lg);
+  --wjs-card-shadow: var(--wjs-shadow-md);
+  --wjs-card-hover-shadow: var(--wjs-shadow-lg);
+  --wjs-card-hover-border-color: var(--wjs-color-primary);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-radius: var(--wjs-radius-lg);
+  --wjs-accordion-shadow: var(--wjs-shadow-sm);
+  --wjs-accordion-header-bg: #F4F7F2;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-header-family: 'Raleway', sans-serif;
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-header-tracking: 0.01em;
+  --wjs-accordion-panel-bg: #FBFCFA;
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 1px;
+  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
+  --wjs-tabs-color: var(--wjs-color-text-muted);
+  --wjs-tabs-family: 'Raleway', sans-serif;
+  --wjs-tabs-weight: 600;
+  --wjs-tabs-tracking: 0.01em;
+  --wjs-tabs-radius: var(--wjs-radius-sm) var(--wjs-radius-sm) 0 0;
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
+  --wjs-tabs-panel-border-width: 0;
+  --wjs-tabs-panel-border-color: transparent;
+  --wjs-tabs-panel-radius: 0 0 var(--wjs-radius-lg) var(--wjs-radius-lg);
+  --wjs-video-border-width: 1px;
+  --wjs-video-border-color: var(--wjs-border-subtle);
+  --wjs-video-radius: var(--wjs-radius-lg);
+  --wjs-video-shadow: var(--wjs-shadow-md);
+  --wjs-audio-bg: var(--wjs-bg-surface);
+  --wjs-audio-border-width: 1px;
+  --wjs-audio-border-color: var(--wjs-border-subtle);
+  --wjs-audio-radius: var(--wjs-radius-lg);
+  --wjs-audio-shadow: var(--wjs-shadow-sm);
+  --wjs-pricing-bg: var(--wjs-bg-surface);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: var(--wjs-border-subtle);
+  --wjs-pricing-radius: var(--wjs-radius-lg);
+  --wjs-pricing-shadow: var(--wjs-shadow-md);
+  --wjs-pricing-hover-shadow: var(--wjs-shadow-lg);
+  --wjs-pricing-name-family: 'Lora', Georgia, serif;
+  --wjs-pricing-name-tracking: 0.005em;
+  --wjs-pricing-highlight-bg: var(--wjs-color-primary);
+  --wjs-pricing-highlight-color: #F4F7F2;
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-primary-dark);
+  --wjs-pricing-highlight-shadow: var(--wjs-shadow-lg);
+  --wjs-pricing-highlight-name-color: #FFFFFF;
+  --wjs-testimonial-bg: var(--wjs-bg-surface);
+  --wjs-testimonial-border-width: 4px;
+  --wjs-testimonial-border-color: var(--wjs-color-primary);
+  --wjs-testimonial-radius: var(--wjs-radius-lg);
+  --wjs-testimonial-shadow: var(--wjs-shadow-md);
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-testimonial-mark-family: 'Lora', Georgia, serif;
+  --wjs-cta-bg: linear-gradient(135deg, var(--wjs-color-primary) 0%, var(--wjs-color-primary-dark) 100%);
+  --wjs-cta-border-width: 0;
+  --wjs-cta-border-color: transparent;
+  --wjs-cta-radius: var(--wjs-radius-lg);
+  --wjs-cta-shadow: var(--wjs-shadow-md);
+  --wjs-cta-title-color: #FFFFFF;
+  --wjs-cta-title-tracking: -0.005em;
+  --wjs-cta-button-bg: #FFFFFF;
+  --wjs-cta-button-color: var(--wjs-color-primary-dark);
+  --wjs-cta-button-family: 'Raleway', sans-serif;
+  --wjs-cta-button-weight: 600;
+  --wjs-cta-button-tracking: 0.02em;
+  --wjs-cta-button-radius: var(--wjs-radius-md);
+  --wjs-cta-button-shadow: var(--wjs-shadow-sm);
+  --wjs-cta-button-hover-bg: #F4F7F2;
+  --wjs-cta-button-hover-shadow: var(--wjs-shadow-md);
+  --wjs-posts-bg: var(--wjs-bg-surface);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: var(--wjs-border-subtle);
+  --wjs-posts-radius: var(--wjs-radius-lg);
+  --wjs-posts-shadow: var(--wjs-shadow-sm);
+  --wjs-posts-hover-border-color: var(--wjs-color-primary);
+  --wjs-posts-hover-shadow: var(--wjs-shadow-lg);
+  --wjs-catposts-heading-family: 'Lora', Georgia, serif;
+  --wjs-catposts-heading-weight: 600;
+  --wjs-catposts-heading-tracking: 0.005em;
+  --wjs-catposts-heading-border-width: 2px;
+  --wjs-catposts-heading-border-color: var(--wjs-color-primary);
+  --wjs-catposts-heading-pad: 10px;
+  --wjs-catposts-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-link-weight: 500;
+  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
+  --wjs-search-input-bg: var(--wjs-bg-surface);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: var(--wjs-border-subtle);
+  --wjs-search-input-radius: var(--wjs-radius-md);
+  --wjs-search-input-color: var(--wjs-color-text-main);
+  --wjs-search-placeholder-color: var(--wjs-color-text-muted);
+  --wjs-search-focus-color: var(--wjs-color-primary);
+  --wjs-search-focus-ring: 0 0 0 3px rgba(59, 122, 87, 0.18);
+  --wjs-search-button-bg: var(--wjs-color-primary-dark);
+  --wjs-search-button-color: #FFFFFF;
+  --wjs-search-button-family: 'Raleway', sans-serif;
+  --wjs-search-button-weight: 600;
+  --wjs-search-button-tracking: 0.02em;
+  --wjs-search-button-radius: var(--wjs-radius-md);
 }

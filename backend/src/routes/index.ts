@@ -57,7 +57,8 @@ router.get('/', (req: Request, res: Response) => {
             import: '/api/v1/import',
             roles: '/api/v1/roles',
             notifications: '/api/v1/notifications',
-            hooks: '/api/v1/hooks'
+            hooks: '/api/v1/hooks',
+            forms: '/api/v1/forms'
         }
     });
 });
@@ -87,6 +88,8 @@ router.use('/health', healthRoutes);
 router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
+router.use('/forms', require('./forms'));
+router.use('/presence', require('./presence'));
 router.use('/import', require('./import'));
 router.use('/', exportRoutes);
 

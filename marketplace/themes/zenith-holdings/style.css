@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #022c22;
+  --wjs-bg-surface: #11392f;
+  --wjs-bg-surface-raised: #1e433a;
+  --wjs-color-primary: #047857;
+  --wjs-color-primary-dark: #065f46;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #065f46;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #d1fae5;
+  --wjs-color-text-muted: #82ac9b;
+  --wjs-color-heading: #d1fae5;
+  --wjs-color-link: #047857;
+  --wjs-color-link-hover: #065f46;
+  --wjs-border-subtle: #275145;
+  --wjs-outline: #517a6c;
+  --wjs-outline-variant: #214b3f;
+  --wjs-focus-ring: #047857;
+}
+
 /* Theme: Zenith Holdings (Obsidian Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@300;400;600&display=swap');
 

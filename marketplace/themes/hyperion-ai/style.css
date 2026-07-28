@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #130e2a;
+  --wjs-bg-surface: #211c37;
+  --wjs-bg-surface-raised: #2d2941;
+  --wjs-color-primary: #a855f7;
+  --wjs-color-primary-dark: #9333ea;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #9333ea;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #faf5ff;
+  --wjs-color-text-muted: #a29dae;
+  --wjs-color-heading: #faf5ff;
+  --wjs-color-link: #a855f7;
+  --wjs-color-link-hover: #9333ea;
+  --wjs-border-subtle: #3d3850;
+  --wjs-outline: #6b667b;
+  --wjs-outline-variant: #36314a;
+  --wjs-focus-ring: #a855f7;
+}
+
 /* Theme: Hyperion AI (Cyber Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 

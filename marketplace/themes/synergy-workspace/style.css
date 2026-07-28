@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #064e3b;
+  --wjs-bg-surface: #155947;
+  --wjs-bg-surface-raised: #216151;
+  --wjs-color-primary: #10b981;
+  --wjs-color-primary-dark: #059669;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #059669;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ecfdf5;
+  --wjs-color-text-muted: #95baae;
+  --wjs-color-heading: #ecfdf5;
+  --wjs-color-link: #10b981;
+  --wjs-color-link-hover: #059669;
+  --wjs-border-subtle: #2f6e5c;
+  --wjs-outline: #5d9082;
+  --wjs-outline-variant: #286857;
+  --wjs-focus-ring: #10b981;
+}
+
 /* Theme: Synergy Workspace (Glassmorphism Aurora Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
 

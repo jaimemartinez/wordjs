@@ -168,9 +168,7 @@ h3 {
   line-height: 1.1 !important;
 }
 
-/* Cards: Flat with Border */
-.wp-block-card,
-article {
+/* Cards: Flat with Border */article {
   background: #fff !important;
   border: 1px solid var(--wjs-border-subtle) !important;
 }
@@ -209,165 +207,6 @@ footer .w-10:hover {
   background-color: var(--wjs-color-primary) !important;
 }
 
-/* =========================================
-   SWISS MINIMAL: NEW COMPONENT OVERRIDES
-   Bauhaus / Flat / Grid-based aesthetic
-   ========================================= */
-
-/* Accordion: Flat Panels */
-.wp-block-accordion {
-  border: 2px solid #000000 !important;
-}
-
-.wp-block-accordion .accordion-item button {
-  background: #ffffff !important;
-  color: #000000 !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  font-weight: 700 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.wp-block-accordion .accordion-item button:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: #fafafa !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: Sharp Tabs */
-.wp-block-tabs>div:first-child {
-  border-bottom: 2px solid #000000 !important;
-}
-
-.wp-block-tabs button {
-  color: #000000 !important;
-  font-weight: 700 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-tabs>div:last-child {
-  background: #ffffff !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-top: none !important;
-}
-
-/* Video: Simple Frame */
-.wp-block-video-embed {
-  border: 2px solid #000000 !important;
-}
-
-/* Audio: Minimal Player */
-.wp-block-audio-player {
-  background: #ffffff !important;
-  border: 2px solid #000000 !important;
-}
-
-/* Pricing: Flat Cards */
-.wp-block-pricing>div {
-  background: #ffffff !important;
-  border: 2px solid #000000 !important;
-}
-
-.wp-block-pricing>div h3 {
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: var(--wjs-color-primary) !important;
-  color: #ffffff !important;
-  transform: none !important;
-  border: 2px solid #000000 !important;
-}
-
-/* Testimonial: Simple Quote */
-.wp-block-testimonial {
-  background: #ffffff !important;
-  border: 2px solid #000000 !important;
-  border-left: 8px solid var(--wjs-color-primary) !important;
-}
-
-.wp-block-testimonial>div:first-child {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* CTA Banner: Red Block */
-.wp-block-cta-banner {
-  background: var(--wjs-color-primary) !important;
-  border: none !important;
-}
-
-.wp-block-cta-banner h2 {
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.wp-block-cta-banner a {
-  background: #000000 !important;
-  color: #ffffff !important;
-  text-transform: uppercase;
-  letter-spacing: 0.15em;
-  font-weight: 700 !important;
-}
-
-/* Posts Grid: Clean Cards */
-.wp-block-posts-grid article {
-  background: #ffffff !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: #000000 !important;
-}
-
-/* Category Posts: Bold Headlines */
-.wp-block-category-posts h3 {
-  font-weight: 900 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  border-bottom: 2px solid #000000;
-  padding-bottom: 8px;
-}
-
-.wp-block-category-posts li {
-  border-color: var(--wjs-border-subtle) !important;
-}
-
-.wp-block-category-posts li a {
-  font-weight: 600 !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Search: Clean Input */
-.wp-block-search input {
-  background: #ffffff !important;
-  border: 2px solid #000000 !important;
-}
-
-.wp-block-search input:focus {
-  border-color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-search button {
-  background: #000000 !important;
-  color: #ffffff !important;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-weight: 700 !important;
-}
-
 /* ===== Mobile (auto responsive pass) ===== */
 /* The theme's signature is uppercase labels with wide letter-spacing.
    At 375px a long label widened ~10-15% by tracking can push past the
@@ -378,7 +217,7 @@ footer .w-10:hover {
   /* CTA button: widest tracking in the theme (0.15em). Slightly tighter
      on mobile and guaranteed to wrap instead of overflowing. Desktop rule
      has no !important on these properties, so this later override wins. */
-  .wp-block-cta-banner a {
+  .wp-block-cta-banner__button {
     letter-spacing: 0.1em;
     white-space: normal;
     max-width: 100%;
@@ -386,9 +225,9 @@ footer .w-10:hover {
 
   /* Uppercase + tracked buttons (accordion headers, tabs, search):
      never let a long label force a single unbreakable line. */
-  .wp-block-accordion .accordion-item button,
-  .wp-block-tabs button,
-  .wp-block-search button {
+  .wp-block-accordion__header,
+  .wp-block-tabs__tab,
+  .wp-block-search__button {
     white-space: normal;
     max-width: 100%;
   }
@@ -396,7 +235,7 @@ footer .w-10:hover {
   /* Tab strip: if the block lays tabs out as a single flex row, let the
      uppercase/tracked tabs wrap onto extra rows instead of widening the
      page. No-op when the strip is not a flex container. */
-  .wp-block-tabs>div:first-child {
+  .wp-block-tabs__list {
     flex-wrap: wrap;
   }
 
@@ -406,4 +245,86 @@ footer .w-10:hover {
   .wjs-header-nav a {
     white-space: normal;
   }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: #fff;
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-border-width: 2px;
+  --wjs-accordion-border-color: #000000;
+  --wjs-accordion-header-bg: #ffffff;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-header-weight: 700;
+  --wjs-accordion-header-transform: uppercase;
+  --wjs-accordion-header-tracking: 0.1em;
+  --wjs-accordion-panel-bg: #fafafa;
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 2px;
+  --wjs-tabs-list-border-color: #000000;
+  --wjs-tabs-color: #000000;
+  --wjs-tabs-weight: 700;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-tracking: 0.1em;
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-panel-bg: #ffffff;
+  --wjs-tabs-panel-border-width: 0;
+  --wjs-tabs-panel-border-color: transparent;
+  --wjs-video-border-width: 2px;
+  --wjs-video-border-color: #000000;
+  --wjs-audio-bg: #ffffff;
+  --wjs-audio-border-width: 2px;
+  --wjs-audio-border-color: #000000;
+  --wjs-pricing-bg: #ffffff;
+  --wjs-pricing-border-width: 2px;
+  --wjs-pricing-border-color: #000000;
+  --wjs-pricing-name-transform: uppercase;
+  --wjs-pricing-name-tracking: 0.1em;
+  --wjs-pricing-highlight-bg: var(--wjs-color-primary);
+  --wjs-pricing-highlight-color: #ffffff;
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-border-color: #000000;
+  --wjs-testimonial-bg: #ffffff;
+  --wjs-testimonial-border-width: 8px;
+  --wjs-testimonial-border-color: var(--wjs-color-primary);
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-cta-bg: var(--wjs-color-primary);
+  --wjs-cta-border-width: 0;
+  --wjs-cta-border-color: transparent;
+  --wjs-cta-title-transform: uppercase;
+  --wjs-cta-title-tracking: 0.05em;
+  --wjs-cta-button-bg: #000000;
+  --wjs-cta-button-color: #ffffff;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.15em;
+  --wjs-cta-button-weight: 700;
+  --wjs-posts-bg: #ffffff;
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: var(--wjs-border-subtle);
+  --wjs-posts-hover-border-color: #000000;
+  --wjs-catposts-heading-weight: 900;
+  --wjs-catposts-heading-transform: uppercase;
+  --wjs-catposts-heading-tracking: 0.1em;
+  --wjs-catposts-heading-border-width: 2px;
+  --wjs-catposts-heading-border-color: #000000;
+  --wjs-catposts-heading-pad: 8px;
+  --wjs-catposts-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-link-weight: 600;
+  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
+  --wjs-search-input-bg: #ffffff;
+  --wjs-search-input-border-width: 2px;
+  --wjs-search-input-border-color: #000000;
+  --wjs-search-focus-color: var(--wjs-color-primary);
+  --wjs-search-button-bg: #000000;
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.1em;
+  --wjs-search-button-weight: 700;
 }

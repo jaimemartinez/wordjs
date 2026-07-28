@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #140306;
+  --wjs-bg-surface: #221215;
+  --wjs-bg-surface-raised: #2e1f21;
+  --wjs-color-primary: #f43f5e;
+  --wjs-color-primary-dark: #e11d48;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #e11d48;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ffe4e6;
+  --wjs-color-text-muted: #a68e91;
+  --wjs-color-heading: #ffe4e6;
+  --wjs-color-link: #f43f5e;
+  --wjs-color-link-hover: #e11d48;
+  --wjs-border-subtle: #3e2c2e;
+  --wjs-outline: #6d585b;
+  --wjs-outline-variant: #372528;
+  --wjs-focus-ring: #f43f5e;
+}
+
 /* Theme: Audio Phile (Cyber Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 

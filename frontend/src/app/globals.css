@@ -37,34 +37,8 @@
   }
 }
 
-/* WordJS editor chrome — radius, elevation & semantic surfaces.
- * Distinct `--ed-*` namespace (NOT the theme/content `--wjs-*` tokens). A `.dark`
- * ancestor flips these for the editor's dark mode. */
-:root {
-  --ed-radius-sm: 8px;
-  --ed-radius-md: 12px;
-  --ed-radius-lg: 16px;
-  --ed-radius-xl: 20px;
-  --ed-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --ed-shadow-md: 0 4px 16px rgba(15, 23, 42, 0.08);
-  --ed-shadow-lg: 0 12px 40px rgba(15, 23, 42, 0.12);
-  --ed-surface: #ffffff;
-  --ed-surface-2: #f8fafc;
-  --ed-canvas: #f1f5f9;
-  --ed-line: #e2e8f0;
-  --ed-text: #0f172a;
-  --ed-text-dim: #64748b;
-}
-
-.dark {
-  --ed-surface: #0f172a;
-  --ed-surface-2: #1e293b;
-  --ed-canvas: #0b1220;
-  --ed-line: #334155;
-  --ed-text: #e2e8f0;
-  --ed-text-dim: #94a3b8;
-}
-
+/* (The old `--ed-*` editor-chrome tokens lived here; they had ZERO consumers and collided with the
+ * Stitch-design `--ed-*` roles that puck-theme.css now owns — deleted, single owner.) */
 
 html {
   scroll-behavior: smooth;

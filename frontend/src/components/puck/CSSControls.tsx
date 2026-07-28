@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import MSym from "../editor/MSym";
 
 // Types
 export interface CSSData {
@@ -51,61 +52,63 @@ export interface CSSData {
     overflow?: string;
 }
 
-const AccordionItem = ({ title, children, defaultOpen = false }: { title: string, children: React.ReactNode, defaultOpen?: boolean }) => {
+// These primitives are EXPORTED so every properties-panel control in the editor is built from the
+// same kit (see AppearanceField). Keep them presentational — no block-specific logic here.
+export const AccordionItem = ({ title, children, defaultOpen = false }: { title: string, children: React.ReactNode, defaultOpen?: boolean }) => {
     const [isOpen, setIsOpen] = useState(defaultOpen);
     return (
-        <div className="border-b border-gray-100 last:border-0 hover:bg-[var(--wjs-bg-surface-hover,white)] transition-colors group">
+        <div className="border-b border-[var(--ed-outline-variant)] last:border-0 group">
             <button
                 type="button"
                 onClick={() => setIsOpen(!isOpen)}
-                className={`flex items-center justify-between w-full px-3 py-2 text-[10px] font-bold uppercase tracking-wider transition-all ${isOpen ? 'text-gray-900' : 'text-gray-500 group-hover:text-gray-700'}`}
+                className={`flex items-center justify-between w-full px-3 py-2 text-[10px] font-bold uppercase tracking-wider transition-colors hover:bg-[var(--ed-surface-container-low)] ${isOpen ? 'text-[var(--ed-on-surface)]' : 'text-[var(--ed-outline)] group-hover:text-[var(--ed-on-surface-variant)]'}`}
             >
                 {title}
-                <i className={`fa-solid fa-chevron-${isOpen ? 'up' : 'down'} text-[9px] opacity-70`}></i>
+                <MSym name="expand_more" size={14} className={`transition-transform ${isOpen ? 'rotate-180' : ''}`} />
             </button>
             {isOpen && <div className="px-3 pb-3 space-y-3">{children}</div>}
         </div>
     );
 };
 
-const ControlGroup = ({ label, children }: { label: string, children: React.ReactNode }) => (
+export const ControlGroup = ({ label, children }: { label: string, children: React.ReactNode }) => (
     <div className="space-y-1.5 group/control">
-        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-wide group-hover/control:text-gray-700 transition-colors duration-300">{label}</label>
+        <label className="block text-[11px] font-medium text-[var(--ed-on-surface-variant)] group-hover/control:text-[var(--ed-on-surface)] transition-colors duration-300">{label}</label>
         {children}
     </div>
 );
 
-const Input = ({ value, onChange, placeholder, type = "text" }: any) => (
+export const Input = ({ value, onChange, placeholder, type = "text" }: any) => (
     <input
         type={type}
         value={value || ""}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder}
-        className="w-full px-2.5 py-1.5 text-xs bg-[var(--wjs-bg-surface,white)] border border-gray-200 rounded-md text-gray-900 placeholder-gray-400 hover:border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all duration-200 shadow-sm"
+        className="w-full px-2.5 py-1.5 text-[13px] bg-white border border-[var(--ed-outline-variant)] rounded text-[var(--ed-on-surface)] placeholder:text-[var(--ed-outline)] hover:border-[var(--ed-outline)] focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)] outline-none transition-colors duration-200"
     />
 );
 
-const Select = ({ value, onChange, options }: any) => (
+export const Select = ({ value, onChange, options }: any) => (
     <div className="relative">
         <select
             value={value || ""}
             onChange={(e) => onChange(e.target.value)}
-            className="w-full px-2.5 py-1.5 text-xs bg-[var(--wjs-bg-surface,white)] border border-gray-200 rounded-md text-gray-900 appearance-none hover:border-gray-300 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 outline-none transition-all duration-200 cursor-pointer shadow-sm"
+            className="w-full pl-2.5 pr-7 py-1.5 text-[13px] bg-white border border-[var(--ed-outline-variant)] rounded text-[var(--ed-on-surface)] appearance-none hover:border-[var(--ed-outline)] focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)] outline-none transition-colors duration-200 cursor-pointer"
         >
             <option value="">Default</option>
             {options.map((opt: any) => (
                 <option key={opt.value} value={opt.value}>{opt.label}</option>
             ))}
         </select>
-        <div className="absolute inset-y-0 right-2 flex items-center pointer-events-none opacity-50">
-            <i className="fa-solid fa-chevron-down text-[10px] text-gray-500"></i>
+        <div className="absolute inset-y-0 right-1.5 flex items-center pointer-events-none text-[var(--ed-outline)]">
+            <MSym name="expand_more" size={14} />
         </div>
     </div>
 );
 
-const ColorPicker = ({ value, onChange }: any) => (
+export const ColorPicker = ({ value, onChange }: any) => (
     <div className="flex gap-2 items-center group/picker">
-        <div className="relative w-8 h-8 rounded-md border border-gray-200 overflow-hidden shrink-0 shadow-sm group-hover/picker:shadow transition-all ring-offset-1 group-focus-within/picker:ring-2 ring-blue-500">
+        <div className="relative w-8 h-8 rounded border border-[var(--ed-outline-variant)] overflow-hidden shrink-0 transition-all ring-offset-1 group-focus-within/picker:ring-1 ring-[var(--ed-primary)]">
             <div className="absolute inset-0 bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPjxwYXRoIGQ9Ik0wIDBoNHY0SDB6bTQgNGg0djRINHoiIGZpbGw9IiNlN2U3ZTciLz48L3N2Zz4=')] opacity-30"></div>
             <div className="absolute inset-0" style={{ backgroundColor: value || 'transparent' }}></div>
             <input
@@ -115,7 +118,7 @@ const ColorPicker = ({ value, onChange }: any) => (
                 className="absolute inset-0 w-[150%] h-[150%] -top-1/4 -left-1/4 cursor-pointer opacity-0"
             />
         </div>
-        <div className="flex-1">
+        <div className="flex-1 text-[12px]" style={{ fontFamily: 'var(--puck-font-family-monospaced)' }}>
             <Input value={value} onChange={onChange} placeholder="#000000" />
         </div>
     </div>
@@ -174,7 +177,7 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
     };
 
     return (
-        <div className="flex flex-col bg-[var(--wjs-bg-surface,white)] -mx-4 -my-4 border-t border-b border-gray-100">
+        <div className="flex flex-col bg-[var(--ed-surface)] -mx-4 -my-4 border-t border-b border-[var(--ed-outline-variant)]">
             {/* LAYOUT */}
             <AccordionItem title="Layout & Spacing" defaultOpen={true}>
                 <div className="grid grid-cols-2 gap-3">
@@ -208,7 +211,7 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
                 </div>
 
                 {data.display === 'flex' && (
-                    <div className="grid grid-cols-2 gap-3 mt-3 p-3 bg-gray-50/50 rounded-lg border border-gray-50">
+                    <div className="grid grid-cols-2 gap-3 mt-3 p-3 bg-[var(--ed-surface-container-low)] rounded-lg border border-[var(--ed-outline-variant)]">
                         <ControlGroup label="Justify">
                             <Select
                                 value={data.justifyContent}
@@ -242,10 +245,10 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
                 )}
 
                 <div className="space-y-4 pt-2">
-                    <div className="p-3 bg-gray-50/30 rounded-lg border border-gray-50 hover:bg-gray-50/80 transition-colors">
-                        <div className="flex items-center gap-2 mb-2">
-                            <i className="fa-regular fa-square text-gray-300 text-[10px]"></i>
-                            <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wide">Spacing</p>
+                    <div className="p-3 bg-[var(--ed-surface-container-low)] rounded-lg border border-[var(--ed-outline-variant)] hover:bg-[var(--ed-surface-container)] transition-colors">
+                        <div className="flex items-center gap-2 mb-2 text-[var(--ed-outline)]">
+                            <MSym name="check_box_outline_blank" size={12} />
+                            <p className="text-[10px] font-bold uppercase tracking-wider">Spacing</p>
                         </div>
                         <div className="grid grid-cols-2 gap-3 mb-3">
                             <ControlGroup label="Padding">
@@ -378,10 +381,10 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
                     <ColorPicker value={data.backgroundColor} onChange={(v: string) => update('backgroundColor', v)} />
                 </ControlGroup>
 
-                <div className="mt-3 p-3 bg-gray-50/50 rounded-lg border border-gray-50">
+                <div className="mt-3 p-3 bg-[var(--ed-surface-container-low)] rounded-lg border border-[var(--ed-outline-variant)]">
                     <ControlGroup label="Background Image">
                         <Input value={data.backgroundImage} onChange={(v: string) => update('backgroundImage', v ? `url('${v}')` : '')} placeholder="https://..." />
-                        {data.backgroundImage && <div className="text-[9px] text-gray-400 mt-1 truncate font-mono">{data.backgroundImage}</div>}
+                        {data.backgroundImage && <div className="text-[9px] text-[var(--ed-outline)] mt-1 truncate" style={{ fontFamily: 'var(--puck-font-family-monospaced)' }}>{data.backgroundImage}</div>}
                     </ControlGroup>
 
                     {data.backgroundImage && (
@@ -413,13 +416,13 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
                 </div>
 
                 <div className="pt-2 mt-2">
-                    <div className="p-3 bg-[var(--wjs-bg-surface,white)] border border-gray-200 rounded-lg shadow-sm hover:border-gray-300 transition-colors">
+                    <div className="p-3 bg-white border border-[var(--ed-outline-variant)] rounded-lg hover:border-[var(--ed-outline)] transition-colors">
                         <div className="flex items-center justify-between mb-3">
-                            <div className="flex items-center gap-2">
-                                <i className="fa-regular fa-square text-gray-400 text-[10px]"></i>
-                                <span className="text-[10px] font-bold text-gray-600 uppercase tracking-wide">Border</span>
+                            <div className="flex items-center gap-2 text-[var(--ed-outline)]">
+                                <MSym name="check_box_outline_blank" size={12} />
+                                <span className="text-[10px] font-bold uppercase tracking-wider">Border</span>
                             </div>
-                            {data.borderWidth && <div className="w-2 h-2 rounded-full bg-blue-500"></div>}
+                            {data.borderWidth && <div className="w-2 h-2 rounded-full bg-[var(--ed-primary)]"></div>}
                         </div>
 
                         <div className="grid grid-cols-2 gap-3">
@@ -473,7 +476,7 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
 
                 <div className="mt-3">
                     <ControlGroup label="Opacity">
-                        <div className="flex items-center gap-2 bg-gray-50 px-2 py-1 rounded-md border border-gray-100">
+                        <div className="flex items-center gap-2 bg-[var(--ed-surface-container-low)] px-2 py-1 rounded border border-[var(--ed-outline-variant)]">
                             <input
                                 type="range"
                                 min="0"
@@ -481,9 +484,9 @@ export const CSSPropertiesControl = ({ value, onChange }: { value: CSSData, onCh
                                 step="0.1"
                                 value={data.opacity || "1"}
                                 onChange={(e) => update('opacity', e.target.value)}
-                                className="w-full h-1.5 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-blue-600"
+                                className="w-full h-1 bg-[var(--ed-surface-container-highest)] rounded-full cursor-pointer accent-[#1f108e]"
                             />
-                            <span className="text-[10px] font-mono w-6 text-right text-gray-500">{data.opacity || "1"}</span>
+                            <span className="text-[11px] w-6 text-right tabular-nums text-[var(--ed-primary)]" style={{ fontFamily: 'var(--puck-font-family-monospaced)' }}>{data.opacity || "1"}</span>
                         </div>
                     </ControlGroup>
                 </div>

@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0c0e1a;
+  --wjs-bg-surface: #1b1c28;
+  --wjs-bg-surface-raised: #272933;
+  --wjs-color-primary: #6366f1;
+  --wjs-color-primary-dark: #4338ca;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #4338ca;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #e0e7ff;
+  --wjs-color-text-muted: #8f95a8;
+  --wjs-color-heading: #e0e7ff;
+  --wjs-color-link: #6366f1;
+  --wjs-color-link-hover: #4338ca;
+  --wjs-border-subtle: #323543;
+  --wjs-outline: #5d6071;
+  --wjs-outline-variant: #2c2f3c;
+  --wjs-focus-ring: #6366f1;
+}
+
 /* Theme: Horizon Opinion (Editorial Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
 

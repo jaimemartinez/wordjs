@@ -1,0 +1,406 @@
+@import url('https://fonts.googleapis.com/css2?family=Anybody:ital,wght@0,100..900;1,100..900&family=Hanken+Grotesk:ital,wght@0,100..900;1,100..900&family=JetBrains+Mono:ital,wght@0,100..800;1,100..800&display=swap');
+
+/* =========================================
+   THEME: SUNSET DRIVE (Synthwave / Studio)
+   Concept: retrofuturist synthwave. Deep-purple
+   canvas, pink→violet gradient CTAs, glass cards
+   with chrome borders, neon glows, scanline +
+   retro-grid hero overlay. Anybody display type,
+   Hanken Grotesk body, JetBrains Mono labels.
+   Derived from the Stitch design "Synth Pulse".
+   ========================================= */
+
+:root {
+  /* ── Canonical palette ─────────────────────────────── */
+  --wjs-color-primary: #ff4a8d;          /* hot pink (primary-container CTA) */
+  --wjs-color-primary-dark: #ba005b;
+  --wjs-color-secondary: #9d05ff;        /* electric violet */
+  --wjs-color-secondary-dark: #6b00b0;
+  --wjs-color-accent: #ffb77d;           /* sunset orange (tertiary) */
+  --wjs-color-success: #63e6a4;
+  --wjs-color-danger: #ffb4ab;
+  --wjs-color-warning: #ffb77d;
+  --wjs-color-info: #dfb7ff;
+  --wjs-color-light: #ecdcff;
+  --wjs-color-dark: #140727;
+  /* on-colors (max-contrast text on each solid color) */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-accent: #4d2600;
+  --wjs-color-on-success: #0c2a1c;
+  --wjs-color-on-danger: #690005;
+  --wjs-color-on-warning: #4d2600;
+  --wjs-color-on-info: #2d004f;
+  --wjs-color-on-light: #190c2d;
+  --wjs-color-on-dark: #ecdcff;
+
+  /* ── Surfaces, text & borders ──────────────────────── */
+  --wjs-bg-canvas: #190c2d;
+  --wjs-bg-surface: #211536;             /* surface-container-low */
+  --wjs-bg-surface-glass: rgba(25, 12, 45, 0.8); /* scrolled public header */
+  --wjs-bg-muted: #26193a;
+  --wjs-color-text-main: #ecdcff;
+  --wjs-color-text-muted: #e5bcc5;       /* on-surface-variant, pink-tinted */
+  --wjs-color-heading: #ecdcff;
+  --wjs-h2-color: #ffb1c4;               /* section titles glow pink */
+  --wjs-color-link: #ffb1c4;
+  --wjs-color-link-hover: #ff4a8d;
+  --wjs-border-subtle: #3c2e50;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(255, 177, 196, 0.35);
+  --wjs-container-max: 1440px;
+
+  /* ── Public footer chrome (read by the Footer component) */
+  --wjs-bg-footer: #140727;
+  --wjs-color-text-footer-main: #ecdcff;
+  --wjs-color-text-footer-dim: #e5bcc5;
+
+  /* ── Typography ────────────────────────────────────── */
+  --wjs-font-family-base: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Anybody', system-ui, sans-serif;
+  --wjs-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.5;
+  --wjs-heading-weight: 800;
+  --wjs-heading-line-height: 1.12;
+  --wjs-h1: 4.5rem;                      /* display-lg 72px */
+  --wjs-h1-weight: 900;                  /* the display level is black, not extrabold */
+  --wjs-h2: 3rem;                        /* headline-lg 48px */
+  --wjs-h3: 2rem;                        /* headline-md 32px */
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.0625rem;
+  --wjs-h6: 0.875rem;
+  --wjs-h1-tracking: -0.04em;
+
+  /* ── Shape & shadow (neon glows) ───────────────────── */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 2px;
+  --wjs-radius: 4px;
+  --wjs-radius-md: 8px;                  /* the glass cards' rounded-xl */
+  --wjs-radius-lg: 12px;
+  --wjs-radius-pill: 999px;
+  --wjs-shadow-sm: 0 0 10px rgba(255, 177, 196, 0.15);
+  --wjs-shadow: 0 0 20px rgba(255, 74, 141, 0.25);
+  --wjs-shadow-md: 0 0 30px rgba(157, 5, 255, 0.25);
+  --wjs-shadow-lg: 0 0 40px rgba(255, 74, 141, 0.35);
+  /* hero/CTA/video buttons read --wjs-shadow-2 directly; the design's CTAs carry no glow at rest */
+  --wjs-shadow-2: none;
+
+  /* ══ Block tokens (values only; wordjs-ui.css owns the rules) ══ */
+
+  /* Buttons — violet→pink gradient, mono uppercase labels */
+  --wjs-button-bg: linear-gradient(90deg, #9d05ff, #e60070);
+  --wjs-button-color: #ffffff;
+  --wjs-button-family: 'JetBrains Mono', monospace;
+  --wjs-button-size: 0.75rem;
+  --wjs-button-weight: 500;
+  --wjs-button-leading: 1.334;
+  --wjs-button-tracking: 0.1em;
+  --wjs-button-transform: uppercase;
+  --wjs-button-radius: 2px;
+  --wjs-button-pad-x: 2rem;
+  --wjs-button-pad-y: 1rem;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-bg: linear-gradient(90deg, #9d05ff, #e60070);
+  --wjs-button-hover-color: #ffffff;
+  --wjs-button-hover-shadow: 0 0 25px rgba(255, 74, 141, 0.8);
+  --wjs-button-hover-transform: scale(1.05);
+
+  /* Hero — purple dusk gradient + scanlines + retro grid */
+  --wjs-hero-bg: #190c2d;
+  --wjs-hero-gradient: linear-gradient(180deg, #190c2d 0%, #3c2e50 55%, rgba(255, 74, 141, 0.25) 100%);
+  --wjs-hero-overlay: 1;
+  --wjs-hero-overlay-color: repeating-linear-gradient(180deg, rgba(0, 0, 0, 0) 0 2px, rgba(0, 0, 0, 0.16) 2px 4px), linear-gradient(to right, rgba(255, 74, 141, 0.12) 1px, transparent 1px) 0 0 / 48px 48px, linear-gradient(to bottom, rgba(255, 74, 141, 0.12) 1px, transparent 1px) 0 0 / 48px 48px;
+  --wjs-hero-pad: 5rem 4rem;
+  --wjs-hero-text-align: center;
+  --wjs-hero-title-color: #ffb1c4;
+  --wjs-hero-title-size: 4.5rem;
+  --wjs-hero-title-weight: 900;
+  --wjs-hero-title-tracking: -0.04em;
+  --wjs-hero-subtitle-color: #ecdcff;
+  --wjs-hero-subtitle-size: 1.125rem;
+  --wjs-hero-button-bg: linear-gradient(90deg, #e60070, #9d05ff);
+  --wjs-hero-button-color: #ffffff;
+  --wjs-hero-button-radius: 2px;
+  --wjs-hero-button-pad: 1rem 2rem;
+  --wjs-hero-button-size: 0.75rem;
+  --wjs-hero-button-weight: 500;
+  --wjs-hero-button-leading: 1.334;
+  --wjs-hero-button-outline-bg: transparent;
+  --wjs-hero-button-outline-border: #ffb1c4;
+  --wjs-hero-button-outline-color: #ffb1c4;
+  --wjs-hero-button-outline-hover-bg: rgba(255, 177, 196, 0.1);
+
+  /* Cards — panels with a true chrome border: the measured render paints
+     the fill padding-box and a white→violet gradient border-box under a
+     transparent 1px border */
+  --wjs-card-bg: linear-gradient(#26193a, #26193a) padding-box, linear-gradient(135deg, #ffffff, #9d05ff) border-box rgba(38, 25, 58, 0.7);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: transparent;
+  --wjs-card-radius: 8px;
+  --wjs-card-pad: 2rem;
+  --wjs-card-shadow: inset 0 0 10px rgba(255, 177, 196, 0.2);
+  --wjs-card-hover-shadow: inset 0 0 10px rgba(255, 177, 196, 0.2), 0 0 20px rgba(255, 74, 141, 0.2);
+  --wjs-card-hover-transform: scale(1.02);
+  --wjs-card-title-color: #dfb7ff;
+  --wjs-card-title-size: 1.125rem;
+  --wjs-card-title-weight: 400;
+  --wjs-card-title-leading: 1.56;
+  --wjs-card-desc-color: #e5bcc5;
+  --wjs-card-icon-bg: transparent;
+  --wjs-card-icon-color: #ffb1c4;
+
+  /* Pricing — glass tiers, chrome-bordered highlight */
+  --wjs-pricing-bg: rgba(38, 25, 58, 0.7);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: rgba(92, 63, 70, 0.3);
+  --wjs-pricing-radius: 8px;
+  --wjs-pricing-pad: 2rem;
+  --wjs-pricing-shadow: inset 0 0 10px rgba(255, 177, 196, 0.2);
+  --wjs-pricing-hover-shadow: 0 0 20px rgba(255, 74, 141, 0.2);
+  --wjs-pricing-accent: #ffb1c4;
+  --wjs-pricing-name-color: #ecdcff;
+  --wjs-pricing-name-family: 'Anybody', sans-serif;
+  --wjs-pricing-name-size: 2rem;
+  --wjs-pricing-name-weight: 700;
+  --wjs-pricing-price-color: #ffb1c4;
+  --wjs-pricing-price-family: 'Anybody', sans-serif;
+  --wjs-pricing-price-size: 3rem;
+  --wjs-pricing-price-weight: 800;
+  --wjs-pricing-period-color: #e5bcc5;
+  --wjs-pricing-feature-color: #e5bcc5;
+  --wjs-pricing-button-bg: transparent;
+  --wjs-pricing-button-border-color: #5c3f46;
+  --wjs-pricing-button-color: #ecdcff;
+  --wjs-pricing-button-hover-bg: #403355;
+  --wjs-pricing-button-radius: 2px;
+  --wjs-pricing-button-weight: 500;
+  --wjs-pricing-button-on-accent: #ffffff;
+  --wjs-pricing-highlight-bg: linear-gradient(#26193a, #26193a) padding-box, linear-gradient(135deg, #ffffff, #9d05ff) border-box rgba(38, 25, 58, 0.7);
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-border-color: transparent;
+  --wjs-pricing-highlight-color: #ecdcff;
+  --wjs-pricing-highlight-name-color: #dfb7ff;
+  --wjs-pricing-highlight-feature-color: #e5bcc5;
+  --wjs-pricing-highlight-scale: 1.03;
+  --wjs-pricing-highlight-shadow: 0 0 30px rgba(157, 5, 255, 0.2);
+  --wjs-pricing-highlight-hover-shadow: 0 0 40px rgba(157, 5, 255, 0.4);
+  --wjs-pricing-highlight-button-bg: linear-gradient(90deg, #9d05ff, #e60070);
+
+  /* Quote / testimonial — italic Anybody, neon pink mark */
+  --wjs-quote-accent: #ffb1c4;
+  --wjs-quote-bar-width: 0;
+  --wjs-quote-family: 'Anybody', sans-serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-size: 1.5rem;
+  --wjs-quote-color: #ecdcff;
+  --wjs-quote-mark-opacity: 0.3;
+  --wjs-quote-cite-color: #e5bcc5;
+  --wjs-testimonial-bg: rgba(33, 21, 54, 0.5);
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: rgba(92, 63, 70, 0.2);
+  --wjs-testimonial-radius: 0;           /* full-width tinted band, not a rounded card */
+  --wjs-testimonial-pad: 6rem 4rem;
+  --wjs-testimonial-quote-family: 'Anybody', sans-serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-size: 1.5rem;
+  --wjs-testimonial-quote-color: #ecdcff;
+  --wjs-testimonial-mark-color: #ffb1c4;
+  --wjs-testimonial-mark-opacity: 0.3;
+  --wjs-testimonial-author-color: #dfb7ff;
+  --wjs-testimonial-author-family: 'JetBrains Mono', monospace;
+  --wjs-testimonial-author-weight: 500;
+  --wjs-testimonial-role-color: #e5bcc5;
+  --wjs-testimonial-avatar-bg: #26193a;
+  --wjs-testimonial-avatar-color: #ffb1c4;
+  --wjs-testimonial-avatar-radius: 999px;
+
+  /* Search + form — dark inputs, neon-outline submit */
+  --wjs-search-input-bg: #190c2d;
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: rgba(92, 63, 70, 0.5);
+  --wjs-search-input-radius: 2px;
+  --wjs-search-input-pad: 0.75rem 1rem;
+  --wjs-search-input-color: #ecdcff;
+  --wjs-search-placeholder-color: rgba(229, 188, 197, 0.5);
+  --wjs-search-focus-color: #ffb1c4;
+  --wjs-search-focus-ring: 0 0 0 1px #ffb1c4;
+  --wjs-search-button-bg: rgba(255, 177, 196, 0.2);
+  --wjs-search-button-border-width: 1px;
+  --wjs-search-button-border-color: #ffb1c4;
+  --wjs-search-button-color: #ffb1c4;
+  --wjs-search-button-family: 'JetBrains Mono', monospace;
+  --wjs-search-button-weight: 500;
+  --wjs-search-button-tracking: 0.1em;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-radius: 2px;
+  --wjs-form-label-color: #e5bcc5;
+  --wjs-form-label-size: 0.75rem;
+  --wjs-form-submit-bg: rgba(255, 177, 196, 0.2);
+  --wjs-form-submit-color: #ffb1c4;
+  --wjs-form-submit-family: 'JetBrains Mono', monospace;
+  --wjs-form-submit-size: 0.75rem;
+  --wjs-form-submit-weight: 500;
+  --wjs-form-submit-border: 1px solid #ffb1c4;
+  --wjs-form-submit-pad: 1rem 2rem;
+  --wjs-form-submit-hover-bg: rgba(255, 177, 196, 0.3);
+  --wjs-form-submit-hover-color: #ffb1c4;
+  --wjs-form-submit-radius: 2px;
+
+  /* Accordion — glass items, mono neon headers */
+  --wjs-accordion-bg: transparent;
+  --wjs-accordion-item-bg: rgba(38, 25, 58, 0.7);
+  --wjs-accordion-item-border-width: 1px;
+  --wjs-accordion-item-border-color: rgba(92, 63, 70, 0.4);
+  --wjs-accordion-item-radius: 8px;
+  --wjs-accordion-header-family: 'JetBrains Mono', monospace;
+  --wjs-accordion-header-transform: uppercase;
+  --wjs-accordion-header-tracking: 0.05em;
+  --wjs-accordion-header-color: #ffb1c4;
+  --wjs-accordion-header-weight: 500;
+  --wjs-accordion-icon-color: #ffb1c4;
+  --wjs-accordion-panel-color: #e5bcc5;
+
+  /* Posts grid — elevated purple cards with pink hover glow */
+  --wjs-posts-bg: #211536;
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: #3c2e50;
+  --wjs-posts-radius: 8px;
+  --wjs-posts-shadow: none;
+  --wjs-posts-hover-border-color: #ff4a8d;
+  --wjs-posts-hover-shadow: 0 0 20px rgba(255, 74, 141, 0.2);
+  --wjs-posts-title-color: #ecdcff;
+  --wjs-posts-title-weight: 700;
+  --wjs-posts-excerpt-color: #e5bcc5;
+  --wjs-posts-date-color: #ac878f;
+  --wjs-posts-thumb-bg: linear-gradient(135deg, #26193a, #3c2e50);
+
+  /* CTA banner — full synthwave gradient */
+  --wjs-cta-gradient: linear-gradient(90deg, #9d05ff, #e60070);
+  --wjs-cta-color: #ffffff;
+  --wjs-cta-title-color: #ffffff;
+  --wjs-cta-title-family: 'Anybody', sans-serif;
+  --wjs-cta-radius: 8px;
+  --wjs-cta-shadow: 0 0 30px rgba(157, 5, 255, 0.3);
+  --wjs-cta-button-bg: #190c2d;
+  --wjs-cta-button-color: #ffb1c4;
+  --wjs-cta-button-family: 'JetBrains Mono', monospace;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.1em;
+  --wjs-cta-button-radius: 2px;
+}
+
+/* =========================================
+   SITE CHROME — public header
+   ========================================= */
+
+header {
+  border-bottom: 1px solid rgba(92, 63, 70, 0.3);
+  box-shadow: 0 0 20px rgba(255, 177, 196, 0.3);
+}
+
+.wjs-header-logo span {
+  font-family: 'Anybody', sans-serif;
+  font-style: italic;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  color: #ffb1c4;
+  text-shadow: 0 0 10px rgba(255, 177, 196, 0.5), 0 0 20px rgba(255, 74, 141, 0.3);
+}
+
+.wjs-header-nav a {
+  font-family: 'Hanken Grotesk', sans-serif;
+  font-size: 1.125rem;
+  font-weight: 400;
+  color: #e5bcc5;
+  transition: color 0.3s ease, text-shadow 0.3s ease;
+}
+
+.wjs-header-nav a:hover {
+  color: #ffb1c4;
+  text-shadow: 0 0 8px rgba(255, 177, 196, 0.6);
+}
+
+.wjs-header-actions a {
+  background: linear-gradient(90deg, #9d05ff, #e60070);
+  color: #ffffff;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 0.5rem 1.5rem;
+  border-radius: 2px;
+  transition: box-shadow 0.3s ease, transform 0.3s ease;
+}
+
+.wjs-header-actions a:hover {
+  box-shadow: 0 0 15px rgba(255, 74, 141, 0.6);
+  transform: scale(1.05);
+  color: #ffffff;
+}
+
+@media (max-width: 767.98px) {
+  .wjs-header-nav a {
+    font-size: 1rem;
+  }
+}
+
+/* =========================================
+   SITE CHROME — public footer
+   ========================================= */
+
+footer {
+  /* violet haze rising from the bottom, as in the design */
+  background-image: linear-gradient(to bottom, transparent, rgba(157, 5, 255, 0.1));
+  border-top: 1px solid rgba(255, 177, 196, 0.2);
+  --wjs-bg-surface-hover: #26193a;
+}
+
+footer h3 {
+  font-family: 'Anybody', sans-serif;
+  font-style: italic;
+  color: #ffb1c4;
+  text-shadow: 0 0 10px rgba(255, 177, 196, 0.5);
+}
+
+footer h4 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #dfb7ff;
+}
+
+footer a {
+  font-size: 0.875rem;
+  transition: color 0.3s ease;
+}
+
+/* =========================================
+   DISTINCTIVE RULES — neon retrofuturism
+   ========================================= */
+
+::selection {
+  background: #ff4a8d;
+  color: #ffffff;
+}
+
+/* chromatic gradient display headings with a neon halo */
+h1 {
+  font-weight: 900;
+  background-image: linear-gradient(90deg, #ffb1c4, #dfb7ff, #ffb77d);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  filter: drop-shadow(0 0 12px rgba(255, 74, 141, 0.35));
+}
+
+h2 {
+  text-shadow: 0 0 10px rgba(255, 177, 196, 0.35);
+}
+
+hr {
+  border-color: rgba(255, 177, 196, 0.2);
+}

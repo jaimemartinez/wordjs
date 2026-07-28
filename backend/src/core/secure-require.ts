@@ -370,7 +370,18 @@ const originalRequire = Module.prototype.require;
 // NOTE: keep in sync with the ESM import() blocklist in plugin-worker.js (esmBlocked). 'cluster' is
 // critical: cluster.fork() spawns a host node process through plumbing it captured at load time —
 // it never re-enters the patched require/_load, so it bypasses the child_process proxy entirely.
-const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8'];
+// 'sqlite' (node:sqlite, unflagged since Node ~22.13/23) is CRITICAL: DatabaseSync is a C++-backed
+// module that never routes through the fs proxy or io-guard's fs-method patches, so it opens/creates
+// ARBITRARY files on disk by native code — reading the core credential DB (users.user_pass, options
+// secrets), writing host .js/.node payloads, and, via new DatabaseSync(p,{allowExtension:true}) →
+// enableLoadExtension(true) → loadExtension(dll), mapping a native addon (process.dlopen is blocked, but
+// sqlite's extension loader is a SEPARATE native path) = host RCE. No plugin has any legitimate use for
+// it (their DB access is the RPC bridge / scoped dbAsync), so block it outright.
+// 'wasi' is the same escape class as 'sqlite': `new WASI({preopens:{'/':'C:\\'}})` maps a HOST directory
+// into a WASM instance, whose wasiImport (path_open/fd_read/fd_write/...) performs NATIVE filesystem I/O
+// that never touches the fs proxy or io-guard — a plugin bundles a small .wasm and reads/writes any host
+// file. No permission gates the preopen. Plugins have no legitimate WASI use; block it.
+const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8', 'sqlite', 'wasi'];
 
 // Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
 // (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and
@@ -507,29 +518,22 @@ function secureConfig() {
 
 const CONFIG_DB = path.join(CORE_DIR, '../config', 'database');
 
-// Core tables holding credentials / roles / secrets. Plugins get a SCOPED dbAsync that refuses
-// raw SQL touching these, so `database` permission can't be abused to read password hashes
-// (users), self-escalate (user_meta role), or steal stored secrets (options). Plugins use their
-// OWN tables (and the getOption/User APIs) for legitimate needs; this applies to every plugin.
-const PROTECTED_CORE_TABLES = new Set([
-    'users', 'user_meta', 'usermeta', 'options', 'user_roles', 'roles', 'sessions'
-]);
-
-function extractSqlTables(sql: any): string[] {
-    const out: string[] = [];
-    const re = /\b(?:from|join|into|update|table(?:\s+if\s+not\s+exists)?)\s+["'`\[]?([a-z_][a-z0-9_]*)/gi;
-    let m;
-    while ((m = re.exec(String(sql || '')))) out.push(m[1].toLowerCase());
-    return out;
-}
-
+// SECURITY (guard-divergence fix): the in-process config/database path must enforce EXACTLY the same
+// SQL policy as the RPC bridge (plugin-api.assertSqlAllowed). The previous regex-only check here was
+// trivially evaded — `FROM/**/users`, `FROM"users"`, `FROM(users)` all slipped past extractSqlTables
+// (which required literal whitespace after the keyword), and it had NO cross-plugin prefix restriction
+// at all (a theme/in-process plugin could read any other plugin's tables). Delegate to the lexer-based
+// guard so both DB surfaces share one implementation: comment/quote/dollar/bracket denial, catalog +
+// file-function denial, single-statement enforcement, the core-table denylist AND the positive
+// wjp_<slug>_ prefix allowlist. allowedVerbs=[] keeps every structural + ownership check while leaving
+// the verb mix to the calling method (get/all=read, run/exec=write) as before.
 function guardPluginSql(sql: any) {
-    for (const t of extractSqlTables(sql)) {
-        if (PROTECTED_CORE_TABLES.has(t)) {
-            throw createSecurityError(getEffectivePlugin() || 'plugin', `dbAsync(${t})`,
-                'plugins may not access core credential/role/option tables via raw SQL');
-        }
-    }
+    const slug = getEffectivePlugin() || '';
+    // Derive the plugin's owned-table prefix the same way plugin-api / the bridge do, so an in-process
+    // plugin is confined to its OWN wjp_<slug>_ tables (fail-closed for a slug-less/odd context: no
+    // prefix ⇒ assertSqlAllowed still applies the structural + core-table denials).
+    const tablePrefix = slug ? ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase() : undefined;
+    require('./plugin-api').assertSqlAllowed(String(sql == null ? '' : sql), [], tablePrefix, slug || undefined);
 }
 
 let _secureDb: any = null;
@@ -725,19 +729,31 @@ function installSecureRequire() {
             };
         }
     }
-    // 3e. process.report.writeReport() writes a diagnostic JSON to an arbitrary host path (file write +
-    //     worker-state/secret disclosure), bypassing io-guard. Block it for plugin context.
+    // 3e. process.report.* — writeReport() writes a diagnostic JSON to an arbitrary host path (file write,
+    //     bypassing io-guard) and getReport()/getReportSync() RETURN that diagnostic as an object whose
+    //     `environmentVariables` is the FULL host process.env (JWT_SECRET, DB creds, STRIPE_KEY, …) plus the
+    //     command line. In the ISOLATED worker env is a scrubbed allowlist, but an IN-PROCESS plugin/theme
+    //     runs in the host process where getReport() would hand back every secret — a full env exfil with no
+    //     io-guard/require involved. The AST scanner blocks `process.report` statically, but that is the ONLY
+    //     defense for getReport (writeReport already had a runtime backstop and getReport did not — the
+    //     asymmetry this closes). Block ALL callable report methods for any plugin context (harmless to core,
+    //     which has no effective plugin, and to the worker where the report holds no secrets).
     try {
         const rep = (process as any).report;
-        if (rep && typeof rep.writeReport === 'function') {
-            const origWriteReport = rep.writeReport.bind(rep);
-            rep.writeReport = function (...args: any[]) {
-                const pluginSlug = getEffectivePlugin();
-                if (pluginSlug) {
-                    throw createSecurityError(pluginSlug, 'process.report.writeReport', 'is not permitted in the plugin sandbox');
+        if (rep) {
+            for (const m of ['writeReport', 'getReport', 'getReportSync']) {
+                const orig = rep[m];
+                if (typeof orig === 'function') {
+                    const bound = orig.bind(rep);
+                    rep[m] = function (...args: any[]) {
+                        const pluginSlug = getEffectivePlugin();
+                        if (pluginSlug) {
+                            throw createSecurityError(pluginSlug, `process.report.${m}`, 'is not permitted in the plugin sandbox');
+                        }
+                        return bound(...args);
+                    };
                 }
-                return origWriteReport(...args);
-            };
+            }
         }
     } catch { /* process.report unavailable */ }
 

@@ -1,33 +1,332 @@
 /* WordJS — Puck chrome theming.
  *
- * Overrides Puck's CSS custom properties (its stable theming API) so the built-in
- * palette (<Puck.Components/>), outline tree (<Puck.Outline/>) and field renderer
- * (<Puck.Fields/>) match the WordJS creator design system instead of clashing with
- * the hand-built shell. Imported AFTER "@wordjs/puck/puck.css" in PuckEditor.tsx
- * so these definitions win the cascade. Only loaded on editor routes.
+ * Overrides Puck CSS custom properties (its stable theming API) so the built-in palette,
+ * outline tree and field renderer match the WordJS editor design instead of clashing with the
+ * hand-built shell. Imported AFTER "@wordjs/puck/puck.css" in PuckEditor.tsx so it wins the
+ * cascade. Only loaded on editor routes. NOTHING in the vendored Puck package is patched.
+ *
+ * The ramps below are DERIVED, not picked: generated from the Stitch design's own Material-3
+ * colour roles, with the steps it does not state interpolated between the ones it does, in OKLCH,
+ * evenly in lightness (scratchpad/build-ramps.js). Puck ramps run 01 = darkest to 12 = lightest.
+ *
+ * The "green" and "rose" ramps are intentionally NOT overridden: the design supplies no anchor for
+ * either, and a success colour invented out of an indigo palette would be fabrication, not fidelity.
  */
 
-:root {
-  /* Accent ramp — Puck calls it "azure" and uses azure-05 as the primary accent
-   * (selected outlines, focus rings, primary buttons). Remap the ramp to the WordJS
-   * creator blue, anchored on #2563EB at the accent step. */
-  --puck-color-azure-01: #172554;
-  --puck-color-azure-02: #1e3a8a;
-  --puck-color-azure-03: #1e40af;
-  --puck-color-azure-04: #1d4ed8;
-  --puck-color-azure-05: #2563eb; /* primary accent */
-  --puck-color-azure-06: #3b82f6;
-  --puck-color-azure-07: #60a5fa;
-  --puck-color-azure-08: #93c5fd;
-  --puck-color-azure-09: #bfdbfe;
-  --puck-color-azure-10: #dbeafe;
-  --puck-color-azure-11: #eff6ff;
-  --puck-color-azure-12: #f8fafc;
+/* ── Editor typefaces + iconography (Stitch design: Inter · JetBrains Mono · Material Symbols) ──
+ * SELF-HOSTED under frontend/public/fonts — homelab deploys run offline, a Google Fonts CDN link
+ * would silently strip the editor back to system fonts there. The Material Symbols file is a
+ * NAMED-ICON SUBSET (94KB, generated with the css2 API's icon_names parameter): adding a NEW icon
+ * name to the chrome requires regenerating the subset or the glyph renders as its ligature text.
+ * font-display: block on the icon font for the same reason — a flash of raw ligature text
+ * ("delete", "expand_more") is worse than a briefly empty 20px box. */
+@font-face {
+  font-family: "Material Symbols Outlined";
+  font-style: normal;
+  font-weight: 100 700;
+  font-display: block;
+  /* ?v= — bump when the subset is regenerated; same-URL fonts cache hard in the browser. */
+  src: url("/fonts/material-symbols-outlined-subset.woff2?v=2") format("woff2");
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 100 800;
+  font-display: swap;
+  src: url("/fonts/jetbrains-mono-var.woff2?v=1") format("woff2");
+}
 
-  /* Use the app's system UI font stack instead of Puck's bundled Inter so the
-   * editor internals read as one product with the admin shell. */
-  --puck-font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    Helvetica, Arial, sans-serif;
+/* Ligature-based icon glyph (use via <MSym name="…"/>). Default axes exactly as the design's
+ * reference markup pins them; filled variants set 'FILL' 1 inline. */
+.msym {
+  font-family: "Material Symbols Outlined";
+  font-weight: normal;
+  font-style: normal;
+  line-height: 1;
+  letter-spacing: normal;
+  text-transform: none;
+  display: inline-block;
+  white-space: nowrap;
+  word-wrap: normal;
+  direction: ltr;
+  -webkit-font-smoothing: antialiased;
+  font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 24;
+  user-select: none;
+  flex: none;
+}
+
+:root {
+  /* azure */
+  --puck-color-azure-01: #0f0069;
+  --puck-color-azure-02: #1d0f8b;
+  --puck-color-azure-03: #312a9e;
+  --puck-color-azure-04: #383ac7;
+  --puck-color-azure-05: #4e51dc;
+  --puck-color-azure-06: #6467ef;
+  --puck-color-azure-07: #7f81f6;
+  --puck-color-azure-08: #9a99fc;
+  --puck-color-azure-09: #b4b2ff;
+  --puck-color-azure-10: #cecbff;
+  --puck-color-azure-11: #e7e5ff;
+  --puck-color-azure-12: #ffffff;
+  /* grey */
+  --puck-color-grey-01: #1b1b22;
+  --puck-color-grey-02: #2c2c35;
+  --puck-color-grey-03: #3e3d4a;
+  --puck-color-grey-04: #51505e;
+  --puck-color-grey-05: #656372;
+  --puck-color-grey-06: #797786;
+  --puck-color-grey-07: #8f8c9c;
+  --puck-color-grey-08: #a5a1b2;
+  --puck-color-grey-09: #bbb7c8;
+  --puck-color-grey-10: #d2cedc;
+  --puck-color-grey-11: #e9e5f0;
+  --puck-color-grey-12: #ffffff;
+  /* red */
+  --puck-color-red-01: #93000a;
+  --puck-color-red-02: #a91013;
+  --puck-color-red-03: #bd2522;
+  --puck-color-red-04: #c8443c;
+  --puck-color-red-05: #d25c53;
+  --puck-color-red-06: #db7369;
+  --puck-color-red-07: #e4897f;
+  --puck-color-red-08: #ec9e96;
+  --puck-color-red-09: #f3b3ac;
+  --puck-color-red-10: #fac8c3;
+  --puck-color-red-11: #ffdedb;
+  --puck-color-red-12: #fff5f5;
+  --puck-font-family-monospaced: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Panel widths, as single values the design states rather than per-breakpoint guesses. */
+  /* Editor shell roles, taken verbatim from the generated design so the chrome can be built
+   * without pulling in its Tailwind config. These are STATED values, not derived ones. */
+  --ed-surface: #fcf8ff;
+  --ed-surface-container: #f0ecf6;
+  --ed-surface-container-low: #f6f2fc;
+  --ed-surface-container-high: #eae6f1;
+  --ed-surface-container-highest: #e4e1eb;
+  --ed-surface-container-lowest: #ffffff;
+  --ed-on-surface: #1b1b22;
+  --ed-on-surface-variant: #464553;
+  --ed-outline: #777584;
+  --ed-outline-variant: #c8c4d5;
+  --ed-primary: #1f108e;
+  --ed-primary-container: #3730a3;
+  --ed-on-primary-container: #a9a7ff;
+  --ed-inverse-surface: #303037;
+  --ed-inverse-on-surface: #f3eff9;
+  --ed-error: #ba1a1a;
+  /* Remaining stated roles from the Stitch screens (project 15016963210436703665). */
+  --ed-primary-fixed: #e2dfff;
+  --ed-secondary-container: #6063ee;
+  --ed-surface-dim: #dcd8e3;
+  --ed-error-container: #ffdad6;
+  --ed-on-error-container: #93000a;
+  /* The success green the design's toast states (text-green-400 in the reference markup). */
+  --ed-success: #4ade80;
+  --puck-side-bar-width: 280px;
+}
+
+/* Type: the design specifies Inter for the interface. Declared on BODY, not :root, on purpose:
+ * var() inside a custom property substitutes where the property is DECLARED, and next/font's
+ * --font-inter (the real, possibly hashed family) is set on <body> — declared at :root the
+ * variable is undefined and the chrome silently falls back. The "Inter" fallback still covers
+ * environments where next/font registers the literal name. */
+body {
+  --puck-font-family: var(--font-inter, "Inter"), "Inter", ui-sans-serif, system-ui, -apple-system,
+    "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════════════════════
+ * Puck internals, retinted to the Stitch design. Everything below targets the vendored fork's
+ * css-module class names by their READABLE fragment ([class*="ActionBar-action"]) — the trailing
+ * hash changes on every fork rebuild and must never appear here. Values with no --puck-* variable
+ * behind them (radii, the select chevron SVG, the dark toolbar surface) are hard overrides.
+ * ═══════════════════════════════════════════════════════════════════════════════════════════════ */
+
+/* ── Floating block toolbar (ActionBar) — the design's dark inverse-surface pill ─────────────────
+ * `_ActionBar_` (underscore-bounded) matches only the css-module ROOT class, not ActionBar-group /
+ * ActionBar-action, whose fragments continue with "-" instead of "_". */
+[class*="_ActionBar_"] {
+  background: var(--ed-inverse-surface);
+  color: var(--ed-inverse-on-surface);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(27, 27, 34, 0.28);
+}
+[class*="ActionBar-label"] {
+  color: var(--ed-inverse-on-surface);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+}
+[class*="ActionBar-group"] {
+  border-inline-start-color: rgba(119, 117, 132, 0.35);
+}
+[class*="ActionBar-action"] {
+  color: #bbb7c8;
+  border-radius: 4px;
+}
+[class*="ActionBar-action"]:hover {
+  color: #ffffff;
+  background: rgba(255, 255, 255, 0.12);
+}
+/* The design paints the DELETE action in error tones. Keyed on the action's accessible name (the
+ * fork hardcodes label="Delete" → title) — position-based :last-child broke as soon as another
+ * action was appended after it. */
+[class*="ActionBar-action"][title="Delete"] {
+  color: var(--ed-error-container);
+}
+[class*="ActionBar-action"][title="Delete"]:hover {
+  background: var(--ed-error);
+  color: #ffffff;
+}
+
+/* ── Selection / hover overlay — 2px primary outline + soft ring, per the reference canvas ────── */
+[class*="_DraggableComponent_"] {
+  /* Hover wash (Puck's local --overlay-background, stock azure-08 @ 30%) → a calmer indigo tint. */
+  --overlay-background: rgba(96, 99, 238, 0.08);
+}
+[class*="DraggableComponent--isSelected"] > [class*="DraggableComponent-overlayWrapper"] > [class*="DraggableComponent-overlay"] {
+  outline-color: var(--ed-primary-container);
+  box-shadow: 0 0 0 4px rgba(31, 16, 142, 0.12);
+}
+
+/* ── Structure tree (Puck.Outline / LayerTree) ──────────────────────────────────────────────────
+ * Design: 13px rows, type icons in on-surface-variant, ACTIVE row = primary text on a
+ * primary-container/10 wash with a 2px primary left edge, children behind a hairline indent guide. */
+[class*="_LayerTree_"] {
+  font-size: 13px;
+  color: var(--ed-on-surface);
+}
+[class*="Layer-icon"] {
+  color: var(--ed-on-surface-variant); /* stock Puck paints this rose-07 — a stray pink here */
+}
+[class*="Layer-chevron"] {
+  color: var(--ed-outline);
+}
+[class*="Layer-inner"] {
+  border-radius: 4px;
+  /* Reserve the selected state's 2px left edge on EVERY row (transparent at rest) so selecting a
+   * layer doesn't shift its content sideways or widen the row. */
+  border-left-width: 2px;
+}
+/* The stock fork also colors the <li>'s own border on selection (azure) — keep it invisible. */
+li[class*="Layer--isSelected"] {
+  border-color: transparent;
+}
+li[class*="_Layer_"]:not([class*="Layer--isSelected"]) > [class*="Layer-inner"]:hover {
+  background: var(--ed-surface-container);
+  border-color: transparent;
+  color: var(--ed-on-surface);
+}
+[class*="Layer--isSelected"] > [class*="Layer-inner"] {
+  background: rgba(55, 48, 163, 0.08);
+  border-color: transparent;
+  border-left: 2px solid var(--ed-primary);
+  color: var(--ed-primary);
+  font-weight: 500;
+}
+[class*="Layer--isSelected"] > [class*="Layer-inner"] [class*="Layer-icon"],
+[class*="Layer--isSelected"] > [class*="Layer-inner"] [class*="Layer-chevron"] {
+  color: var(--ed-primary);
+}
+[class*="Layer-zones"] {
+  border-left: 1px solid rgba(200, 196, 213, 0.45);
+}
+
+/* ── Field renderer (Puck.Fields) ───────────────────────────────────────────────────────────────
+ * Design: 11px/500 labels in on-surface-variant, bordered 4px inputs on outline-variant with the
+ * primary taking over on focus, and the segmented (radio) control filling its active cell primary. */
+/* The fork's own rules carry the --wrapFields ancestor, so a bare [class*="PuckFields-field"]
+ * selector loses on specificity — mirror the ancestor and win by source order. */
+[class*="PuckFields--wrapFields"] [class*="PuckFields-field"] {
+  padding: 12px;
+}
+[class*="PuckFields--wrapFields"] [class*="PuckFields-field"] + [class*="PuckFields-field"] {
+  border-top-color: var(--ed-outline-variant);
+}
+[class*="Input-label"] {
+  font-size: 11px;
+  line-height: 14px;
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  color: var(--ed-on-surface-variant);
+}
+/* "Input-label" is a substring of "Input-labelIcon" — keep the icon on its dimmer stock tone
+ * instead of inheriting the label override above (source order wins at equal specificity). */
+[class*="Input-labelIcon"] {
+  color: var(--puck-color-grey-07);
+}
+[class*="Input-input"] {
+  border-color: var(--ed-outline-variant);
+  border-radius: 4px;
+  font-size: 13px;
+}
+[class*="Input-input"]:hover {
+  border-color: var(--ed-outline);
+}
+/* Numeric inputs read best in the design's mono. */
+input[type="number"][class*="Input-input"] {
+  font-family: var(--puck-font-family-monospaced);
+  font-size: 12px;
+}
+/* The select chevron is an inline SVG with a HARDCODED #c3c3c3 fill in the fork (and a second,
+ * darker one swapped in on :hover) — repaint it on-surface-variant in every state (!important
+ * beats the fork's hover swap) and center it vertically. */
+select[class*="Input-input"] {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' stroke='%23464553' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>") !important;
+  background-position: right 12px center !important;
+}
+/* Segmented (radio-group) control: active cell = primary fill + white glyph, like the design's
+ * alignment control. */
+[class*="Input-radioGroupItems"] {
+  border-color: var(--ed-outline-variant);
+  background: var(--ed-surface-container-high);
+  border-radius: 4px;
+}
+[class*="Input-radio"] [class*="Input-radioInput"]:checked ~ [class*="Input-radioInner"] {
+  background: var(--ed-primary);
+  color: #ffffff;
+}
+
+/* ── Properties-panel tabs (Contenido / Estilo / Avanzado) ──────────────────────────────────────
+ * Puck renders every field a block declares as ONE flat list; the panel can't ask it to split.
+ * But the three SHARED fields are ours and carry marker classes (wjs-f-look / wjs-f-anim /
+ * wjs-f-hide), so the panel tags itself with data-ptab and CSS files each field wrapper into the
+ * right tab: Contenido = the block's own fields · Estilo = Apariencia · Avanzado = animación +
+ * visibilidad. Same DOM, one <Puck.Fields>, no fork changes. */
+[data-ptab="content"] [class*="PuckFields-field"]:has(.wjs-f-look),
+[data-ptab="content"] [class*="PuckFields-field"]:has(.wjs-f-anim),
+[data-ptab="content"] [class*="PuckFields-field"]:has(.wjs-f-hide) {
+  display: none;
+}
+[data-ptab="style"] [class*="PuckFields-field"]:not(:has(.wjs-f-look)) {
+  display: none;
+}
+[data-ptab="advanced"] [class*="PuckFields-field"]:not(:has(.wjs-f-anim)):not(:has(.wjs-f-hide)) {
+  display: none;
+}
+
+/* ── Editor-panel scrollbars — the design's 4px primary-fixed thumb ─────────────────────────────
+ * .puck-editor-ui marks editor UI that PORTALS OUT of .puck-container (the ⌘K palette on <body>). */
+.puck-container .custom-scrollbar::-webkit-scrollbar,
+.puck-editor-ui .custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+.puck-container .custom-scrollbar::-webkit-scrollbar-thumb,
+.puck-editor-ui .custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--ed-primary-fixed);
+  border-radius: 10px;
+}
+.puck-container .custom-scrollbar::-webkit-scrollbar-thumb:hover,
+.puck-editor-ui .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--ed-primary-container);
+}
+.puck-container .custom-scrollbar,
+.puck-editor-ui .custom-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: var(--ed-primary-fixed) transparent;
 }
 
 /* In-place inline text editor (Tiptap): Puck sets pointer-events:none on a component's rendered

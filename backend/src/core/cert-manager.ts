@@ -779,6 +779,8 @@ class CertManager {
         return null;
     }
 
+    private isRenewing = false;
+
     /**
      * Auto-renewal entry point — invoked by the cron job (wordjs_cert_renewal) and the manual
      * "renew now" route. Reads config.acme, skips unless the live cert is within renewBeforeDays of
@@ -787,6 +789,18 @@ class CertManager {
      * The outcome is recorded in the 'acme_last_renewal' option for the renewal-status endpoint.
      */
     async renewIfDue({ force = false } = {}): Promise<any> {
+        if (this.isRenewing) {
+            return { skipped: true, reason: 'already_in_progress' };
+        }
+        this.isRenewing = true;
+        try {
+            return await this._doRenewIfDue({ force });
+        } finally {
+            this.isRenewing = false;
+        }
+    }
+
+    private async _doRenewIfDue({ force = false } = {}): Promise<any> {
         const config = require('../config/app');
         const acme = config.acme || {};
         const { getOption, updateOption } = require('./options');

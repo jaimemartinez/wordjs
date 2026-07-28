@@ -1,0 +1,371 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap');
+
+/* =========================================
+   THEME: COBALT CORPORATE (SaaS Glass Claro)
+   Concept: Corporate SaaS on a pale blue canvas.
+   Frosted-glass panels (white 70% + blur), cobalt
+   #00327d primary, teal/cyan secondaries, Outfit
+   headlines + Inter body, soft blue-tinted shadows,
+   generous 12-16px radii.
+   Converted from the Stitch "SaaS Glass" design.
+   ========================================= */
+
+:root {
+  /* --- CANONICAL COLORS (from tailwind.config + markup) --- */
+  --wjs-color-primary: #00327d;
+  /* Deep cobalt (design "primary") */
+  --wjs-color-primary-dark: #00419e;
+  /* Hover cobalt (design on-primary-fixed-variant) */
+  --wjs-color-secondary: #00677e;
+  /* Teal (design "secondary") */
+  --wjs-color-secondary-dark: #004e5f;
+  /* Deep teal (design on-secondary-fixed-variant) */
+  --wjs-color-accent: #00d2fd;
+  /* Cyan (design secondary-container) */
+  --wjs-color-success: #16a34a;
+  --wjs-color-danger: #ba1a1a;
+  /* Design "error" */
+  --wjs-color-warning: #f59e0b;
+  --wjs-color-info: #0ea5e9;
+  --wjs-color-light: #f8f9ff;
+  /* Design surface */
+  --wjs-color-dark: #0b1c30;
+  /* Design on-surface */
+
+  /* --- ON-COLORS (max-contrast text per luminance) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-accent: #001f27;
+  /* Dark ink on bright cyan (design on-secondary-fixed) */
+  --wjs-color-on-success: #161616;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #161616;
+  --wjs-color-on-light: #0b1c30;
+  --wjs-color-on-dark: #ffffff;
+
+  /* --- SURFACES / TEXT / BORDERS --- */
+  --wjs-bg-canvas: #f8f9ff;
+  /* Pale blue canvas (design background) */
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #eff4ff;
+  /* Design surface-container-low */
+  --wjs-bg-surface-glass: rgba(248, 249, 255, 0.6);
+  /* Frosted header/panels (measured: design bg-surface/60 + blur) */
+  --wjs-bg-footer: #eff4ff;
+  /* Measured footer panel (design surface-container-low) */
+  --wjs-color-text-footer-main: #0b1c30;
+  --wjs-color-text-footer-dim: #434653;
+  --wjs-color-text-main: #0b1c30;
+  --wjs-color-text-muted: #434653;
+  /* Design on-surface-variant */
+  --wjs-color-heading: #0b1c30;
+  --wjs-color-link: #00327d;
+  --wjs-color-link-hover: #00419e;
+  --wjs-border-subtle: #c3c6d5;
+  /* Design outline-variant */
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(0, 50, 125, 0.3);
+
+  /* --- TYPOGRAPHY (Outfit headlines / Inter body) --- */
+  --wjs-font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Outfit', 'Inter', system-ui, sans-serif;
+  --wjs-font-family-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.5;
+  /* Measured body 16px/24px */
+  --wjs-heading-weight: 600;
+  --wjs-heading-line-height: 1.15;
+  --wjs-h1: 3rem;
+  /* headline-xl 48px */
+  --wjs-h2: 2rem;
+  /* headline-lg 32px */
+  --wjs-h3: 1.5rem;
+  /* headline-md 24px */
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.125rem;
+  --wjs-h6: 1rem;
+  --wjs-h1-tracking: -0.02em;
+  --wjs-h2-tracking: -0.01em;
+
+  /* --- SHAPE / SHADOW (glass language) --- */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 0.25rem;
+  --wjs-radius: 0.5rem;
+  --wjs-radius-md: 0.75rem;
+  --wjs-radius-lg: 1rem;
+  --wjs-radius-pill: 9999px;
+  --wjs-shadow-sm: 0 2px 8px rgba(0, 71, 171, 0.04);
+  --wjs-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
+  /* Design .glass-panel shadow */
+  --wjs-shadow-md: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
+  /* Design .glass-card-hover shadow */
+  --wjs-shadow-lg: 0 24px 60px 0 rgba(0, 71, 171, 0.12);
+
+  /* ── BLOCK TOKENS (derived from the design markup) ─────────────── */
+
+  /* Buttons — hero primary CTA: bg-primary px-8 py-4 rounded-xl,
+     label-md 14px/600/+0.05em, shadow-lg shadow-primary/20 */
+  --wjs-button-bg: #00327d;
+  --wjs-button-color: #ffffff;
+  --wjs-button-family: 'Inter', system-ui, sans-serif;
+  --wjs-button-size: 0.875rem;
+  --wjs-button-weight: 600;
+  --wjs-button-tracking: 0.05em;
+  --wjs-button-radius: 0.75rem;
+  --wjs-button-pad-x: 32px;
+  --wjs-button-pad-y: 16px;
+  --wjs-button-border-width: 0;
+  --wjs-button-border-color: transparent;
+  --wjs-button-shadow: 0 10px 15px -3px rgba(0, 50, 125, 0.2), 0 4px 6px -4px rgba(0, 50, 125, 0.2);
+  --wjs-button-hover-bg: #00419e;
+  --wjs-button-hover-color: #ffffff;
+  --wjs-button-hover-shadow: 0 20px 25px -5px rgba(0, 50, 125, 0.2);
+
+  /* Cards — .glass-panel rounded-2xl p-8 + .glass-card-hover */
+  --wjs-card-bg: rgba(255, 255, 255, 0.7);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-card-radius: 1rem;
+  --wjs-card-pad: 2rem;
+  --wjs-card-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
+  --wjs-card-title-color: #0b1c30;
+  --wjs-card-title-size: 1.25rem;
+  --wjs-card-title-weight: 500;
+  --wjs-card-title-leading: 1.4;
+  --wjs-card-desc-color: #434653;
+  --wjs-card-icon-bg: rgba(0, 50, 125, 0.1);
+  --wjs-card-icon-color: #00327d;
+  --wjs-card-icon-radius: 0.75rem;
+  --wjs-card-hover-bg: rgba(255, 255, 255, 0.8);
+  --wjs-card-hover-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-card-hover-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
+  --wjs-card-hover-transform: translateY(-4px);
+
+  /* Hero — light canvas hero, left aligned, dark ink text,
+     cobalt CTA + glass secondary CTA */
+  --wjs-hero-bg: transparent;
+  /* Measured: the design hero is transparent — the body aurora shows through */
+  --wjs-hero-pad: 64px 40px;
+  --wjs-hero-color: #0b1c30;
+  --wjs-hero-text-align: left;
+  --wjs-hero-actions-justify: flex-start;
+  --wjs-hero-title-color: #0b1c30;
+  --wjs-hero-title-size: 3rem;
+  --wjs-hero-title-weight: 600;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: #434653;
+  --wjs-hero-subtitle-size: 1.125rem;
+  --wjs-hero-subtitle-opacity: 1;
+  --wjs-hero-radius: 0;
+  --wjs-hero-button-bg: #00327d;
+  --wjs-hero-button-color: #ffffff;
+  --wjs-hero-button-radius: 0.75rem;
+  --wjs-hero-button-pad: 16px 32px;
+  --wjs-hero-button-size: 0.875rem;
+  --wjs-hero-button-weight: 600;
+  --wjs-hero-button-outline-bg: rgba(255, 255, 255, 0.7);
+  --wjs-hero-button-outline-border: rgba(255, 255, 255, 0.8);
+  --wjs-hero-button-outline-color: #00327d;
+  --wjs-hero-button-outline-hover-bg: rgba(255, 255, 255, 0.85);
+
+  /* Pricing — glass panels; highlighted plan keyed on cobalt */
+  --wjs-pricing-accent: #00327d;
+  --wjs-pricing-bg: rgba(255, 255, 255, 0.7);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-pricing-radius: 1rem;
+  --wjs-pricing-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
+  --wjs-pricing-name-color: #0b1c30;
+  --wjs-pricing-price-color: #00327d;
+  --wjs-pricing-feature-color: #434653;
+  --wjs-pricing-button-bg: rgba(0, 50, 125, 0.08);
+  --wjs-pricing-button-color: #00327d;
+  --wjs-pricing-button-border-color: rgba(0, 50, 125, 0.15);
+  --wjs-pricing-button-radius: 0.75rem;
+  --wjs-pricing-button-weight: 600;
+  --wjs-pricing-highlight-bg: rgba(255, 255, 255, 0.85);
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-border-color: #00327d;
+  --wjs-pricing-highlight-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
+  --wjs-pricing-highlight-name-color: #00327d;
+  --wjs-pricing-highlight-button-bg: #00327d;
+  --wjs-pricing-button-on-accent: #ffffff;
+
+  /* Testimonial — big glass panel, italic Outfit quote,
+     giant watermark quote mark at primary/10 */
+  --wjs-testimonial-bg: rgba(255, 255, 255, 0.7);
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-testimonial-radius: 1.5rem;
+  --wjs-testimonial-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
+  --wjs-testimonial-quote-family: 'Outfit', system-ui, sans-serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-color: #0b1c30;
+  --wjs-testimonial-quote-size: 1.5rem;
+  --wjs-testimonial-mark-color: #00327d;
+  --wjs-testimonial-mark-opacity: 0.1;
+  --wjs-testimonial-mark-size: 5rem;
+  --wjs-testimonial-author-color: #0b1c30;
+  --wjs-testimonial-role-color: #434653;
+
+  /* Blockquote */
+  --wjs-quote-accent: #00327d;
+  --wjs-quote-color: #0b1c30;
+  --wjs-quote-style: italic;
+  --wjs-quote-cite-color: #434653;
+
+  /* Search — inheritance source for all inputs: glass field,
+     cobalt pill button */
+  --wjs-search-input-bg: rgba(255, 255, 255, 0.7);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: #c3c6d5;
+  --wjs-search-input-radius: 0.75rem;
+  --wjs-search-input-pad: 12px 16px;
+  --wjs-search-input-color: #0b1c30;
+  --wjs-search-placeholder-color: #737784;
+  --wjs-search-focus-color: #00327d;
+  --wjs-search-focus-ring: 0 0 0 3px rgba(0, 50, 125, 0.15);
+  --wjs-search-button-bg: #00327d;
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-radius: 0.75rem;
+  --wjs-search-button-weight: 600;
+  --wjs-search-button-tracking: 0.05em;
+
+  /* Accordion — glass items, cobalt headers */
+  --wjs-accordion-bg: rgba(255, 255, 255, 0.7);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-accordion-radius: 0.75rem;
+  --wjs-accordion-header-bg: transparent;
+  --wjs-accordion-header-color: #00327d;
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-panel-bg: transparent;
+  --wjs-accordion-panel-color: #434653;
+
+  /* Posts grid — glass cards */
+  --wjs-posts-bg: rgba(255, 255, 255, 0.7);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-posts-radius: 1rem;
+  --wjs-posts-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
+  --wjs-posts-hover-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
+  --wjs-posts-title-color: #0b1c30;
+
+  /* CTA banner — cobalt→teal gradient (the hero's gradient text motif) */
+  --wjs-cta-bg: #00327d;
+  --wjs-cta-gradient: linear-gradient(90deg, #00327d, #00677e);
+  --wjs-cta-title-color: #ffffff;
+  --wjs-cta-radius: 1rem;
+  --wjs-cta-button-bg: #ffffff;
+  --wjs-cta-button-color: #00327d;
+  --wjs-cta-button-radius: 0.75rem;
+  --wjs-cta-button-weight: 600;
+
+  /* Hero grid pattern (design .bg-grid-pattern) via the bg-image token */
+  --wjs-hero-bg-image: linear-gradient(to right, rgba(0, 50, 125, 0.05) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 50, 125, 0.05) 1px, transparent 1px);
+}
+
+/* =========================================
+   SITE CHROME (no !important)
+   ========================================= */
+
+/* Header: frosted glass bar (bg driven by --wjs-bg-surface-glass) */
+header {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.4);
+}
+
+.wjs-header-logo span {
+  font-family: 'Outfit', system-ui, sans-serif;
+  font-weight: 700;
+  color: #00327d;
+}
+
+.wjs-header-nav a {
+  font-family: 'Inter', system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #434653;
+  padding: 4px 8px;
+  border-radius: 0.25rem;
+  transition: color 0.3s ease, background-color 0.3s ease;
+}
+
+.wjs-header-nav a:hover {
+  color: #00327d;
+  background-color: rgba(0, 50, 125, 0.06);
+}
+
+/* Footer: pale panel (design surface-container-low, rounded top) */
+footer {
+  border-top-left-radius: 0.75rem;
+  border-top-right-radius: 0.75rem;
+}
+
+footer h3 {
+  font-family: 'Outfit', system-ui, sans-serif;
+  color: #00327d;
+}
+
+footer h4 {
+  font-family: 'Outfit', system-ui, sans-serif;
+  color: #0b1c30;
+}
+
+footer a {
+  font-size: 0.75rem;
+  /* Measured footer links 12px */
+  transition: color 0.3s ease, opacity 0.3s ease;
+}
+
+/* ===== Mobile fit (design's compact nav) ===== */
+@media (max-width: 767.98px) {
+
+  .wjs-header-logo span {
+    font-size: 1.25rem;
+  }
+
+  /* Drawer nav links may carry long labels — let them wrap */
+  .wjs-header-nav a {
+    white-space: normal;
+  }
+}
+
+/* =========================================
+   DISTINCTIVE RULES (glass signature)
+   ========================================= */
+
+/* Fixed aurora blobs behind the whole page (design background decorators) */
+body {
+  background-image:
+    radial-gradient(ellipse 50% 50% at -5% -5%, rgba(229, 238, 255, 0.9), transparent 70%),
+    radial-gradient(ellipse 55% 55% at 105% 105%, rgba(180, 235, 255, 0.45), transparent 70%);
+  background-attachment: fixed;
+}
+
+/* Blueprint grid inside the hero (multi-layer bg needs its tile size) */
+.wp-block-hero {
+  background-size: 40px 40px;
+}
+
+/* Frosted panels actually blur what's behind them */
+.wp-block-card,
+.wp-block-testimonial,
+.wp-block-pricing__plan {
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}
+
+/* Hero CTAs (measured): cobalt-tinted twin shadow on the solid button,
+   glass shadow + blur on the outline one */
+.wp-block-hero__button:not(.wp-block-hero__button--outline) {
+  box-shadow: 0 10px 15px -3px rgba(0, 50, 125, 0.2), 0 4px 6px -4px rgba(0, 50, 125, 0.2);
+}
+
+.wp-block-hero__button--outline {
+  box-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+}

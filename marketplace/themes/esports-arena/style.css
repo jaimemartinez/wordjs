@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #1a0b02;
+  --wjs-bg-surface: #281a11;
+  --wjs-bg-surface-raised: #33261e;
+  --wjs-color-primary: #f97316;
+  --wjs-color-primary-dark: #c2410c;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #c2410c;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ffedd5;
+  --wjs-color-text-muted: #a89785;
+  --wjs-color-heading: #ffedd5;
+  --wjs-color-link: #f97316;
+  --wjs-color-link-hover: #c2410c;
+  --wjs-border-subtle: #433428;
+  --wjs-outline: #716152;
+  --wjs-outline-variant: #3c2d22;
+  --wjs-focus-ring: #f97316;
+}
+
 /* Theme: Esports Arena (Cyber Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 

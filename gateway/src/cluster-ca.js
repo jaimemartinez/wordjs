@@ -41,7 +41,8 @@ function serial() {
  * must sign enrolment CSRs at runtime. Returns { caCertPem, caKeyPem, created }.
  */
 function ensureClusterCA(certsDir) {
-    fs.mkdirSync(certsDir, { recursive: true });
+    fs.mkdirSync(certsDir, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(certsDir, 0o700); } catch { /* Windows */ }
     const caCrtPath = path.join(certsDir, 'cluster-ca.crt');
     const caKeyPath = path.join(certsDir, 'cluster-ca.key');
     if (fs.existsSync(caCrtPath) && fs.existsSync(caKeyPath)) {

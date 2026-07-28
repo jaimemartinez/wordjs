@@ -59,7 +59,12 @@ const parser = new XMLParser({
     parseTagValue: false,        // keep everything as strings; we parse ints explicitly
     parseAttributeValue: false,
     trimValues: true,
-    processEntities: true,
+    // SECURITY: processEntities: false disables recursive entity expansion (Billion Laughs DoS). WXR
+    // only uses the standard HTML entities (&amp; &lt; &gt; &quot; &apos;) which htmlEntities covers
+    // without allowing user-defined DTD entities. fast-xml-parser is JS-pure so external entities are
+    // inherently inert, but fail-closed on internal expansion is defense in depth.
+    processEntities: false,
+    htmlEntities: true,
     // CDATA is merged into the element's text value (default) — exactly what we want for
     // content:encoded / titles.
 });

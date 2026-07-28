@@ -9,6 +9,8 @@
 
     /* --- COLOR SEMANTICS --- */
     --wjs-bg-canvas: #000000;
+  /* the public header reads this; without it a dark theme paints a literal white bar */
+  --wjs-bg-surface-glass: rgba(0, 0, 0, 0.85);
     /* Pure Black */
     --wjs-bg-surface: #0a0a0a;
     /* Slightly off-black */
@@ -156,40 +158,6 @@ body {
     }
 }
 
-/* Block Refinements for Brutalist Terminal */
-.wp-block-card {
-    transition: none;
-    /* Instant feedback */
-}
-
-.wp-block-card:hover {
-    transform: translate(-4px, -4px);
-    box-shadow: 12px 12px 0px var(--wjs-color-primary);
-    background-color: #001100;
-}
-
-.wp-block-button a {
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-    border: 2px solid var(--wjs-color-primary);
-    transition: none;
-}
-
-.wp-block-button a:hover {
-    background-color: var(--wjs-color-primary);
-    color: black;
-    box-shadow: 4px 4px 0px var(--wjs-color-secondary);
-}
-
-h1.wp-block-heading {
-    text-transform: uppercase;
-    border-bottom: 2px solid var(--wjs-color-primary);
-    padding-bottom: 0.5rem;
-    color: var(--wjs-color-primary);
-    background: none;
-    -webkit-text-fill-color: initial;
-}
-
 /* Header: Solid Black Bar with Green Border */
 header {
     background-color: #000000 !important;
@@ -326,178 +294,6 @@ footer .w-10:hover {
     color: #000000 !important;
 }
 
-/* =========================================
-   NEO DIGITAL: NEW COMPONENT OVERRIDES
-   Cyberpunk terminal aesthetic
-   ========================================= */
-
-/* Accordion: Terminal Panel */
-.wp-block-accordion {
-    border: 1px solid var(--wjs-color-primary) !important;
-    border-radius: 0 !important;
-    background: rgba(0, 255, 65, 0.02);
-}
-
-.wp-block-accordion .accordion-item button {
-    background: transparent !important;
-    color: var(--wjs-color-primary) !important;
-    border-bottom: 1px dashed rgba(0, 255, 65, 0.3) !important;
-    font-family: 'Courier New', monospace !important;
-}
-
-.wp-block-accordion .accordion-item button::before {
-    content: "> " !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-    background: rgba(0, 255, 65, 0.05) !important;
-    color: var(--wjs-color-text-muted) !important;
-    font-family: 'Courier New', monospace !important;
-}
-
-/* Tabs: Console Tabs */
-.wp-block-tabs>div:first-child {
-    border-bottom: 2px solid var(--wjs-color-primary) !important;
-}
-
-.wp-block-tabs button {
-    color: var(--wjs-color-text-muted) !important;
-    border-radius: 0 !important;
-    font-family: 'Courier New', monospace !important;
-    text-transform: uppercase;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-    color: var(--wjs-color-primary) !important;
-    background: rgba(0, 255, 65, 0.1);
-    text-shadow: 0 0 8px var(--wjs-color-primary);
-}
-
-.wp-block-tabs>div:last-child {
-    background: rgba(0, 255, 65, 0.02) !important;
-    border: 1px solid rgba(0, 255, 65, 0.2);
-    border-radius: 0 !important;
-}
-
-/* Video: Scanline Overlay */
-.wp-block-video-embed {
-    border-radius: 0 !important;
-    border: 2px solid var(--wjs-color-primary);
-    box-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
-}
-
-/* Audio: Terminal Player */
-.wp-block-audio-player {
-    background: transparent !important;
-    border: 1px solid var(--wjs-color-primary) !important;
-    border-radius: 0 !important;
-}
-
-.wp-block-audio-player div:first-child>div:first-child {
-    background: transparent !important;
-    border: 1px solid var(--wjs-color-primary) !important;
-    border-radius: 0 !important;
-}
-
-/* Pricing: Hacker Tiers */
-.wp-block-pricing>div {
-    background: rgba(0, 0, 0, 0.8) !important;
-    border: 1px solid rgba(0, 255, 65, 0.3) !important;
-    border-radius: 0 !important;
-}
-
-.wp-block-pricing>div:hover {
-    border-color: var(--wjs-color-primary) !important;
-    box-shadow: 0 0 30px rgba(0, 255, 65, 0.2);
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] {
-    background: rgba(0, 255, 65, 0.1) !important;
-    border: 2px solid var(--wjs-color-primary) !important;
-    box-shadow: 0 0 40px rgba(0, 255, 65, 0.4);
-}
-
-/* Testimonial: Quote Terminal */
-.wp-block-testimonial {
-    background: rgba(0, 0, 0, 0.8) !important;
-    border: 1px solid rgba(0, 255, 65, 0.3) !important;
-    border-radius: 0 !important;
-}
-
-.wp-block-testimonial>div:first-child {
-    color: var(--wjs-color-primary) !important;
-    text-shadow: 0 0 10px var(--wjs-color-primary);
-}
-
-/* CTA Banner: Alert Mode */
-.wp-block-cta-banner {
-    border-radius: 0 !important;
-    border: 2px solid var(--wjs-color-primary) !important;
-    background: linear-gradient(180deg, rgba(0, 255, 65, 0.1), rgba(0, 0, 0, 0.9)) !important;
-    box-shadow: inset 0 0 60px rgba(0, 255, 65, 0.1);
-}
-
-.wp-block-cta-banner a {
-    background: var(--wjs-color-primary) !important;
-    color: #000 !important;
-    border-radius: 0 !important;
-    text-transform: uppercase;
-    letter-spacing: 2px;
-}
-
-/* Posts Grid: Data Cards */
-.wp-block-posts-grid article {
-    background: rgba(0, 0, 0, 0.8) !important;
-    border: 1px solid rgba(0, 255, 65, 0.2) !important;
-    border-radius: 0 !important;
-}
-
-.wp-block-posts-grid article:hover {
-    border-color: var(--wjs-color-primary) !important;
-    box-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
-}
-
-/* Category Posts: File Listing */
-.wp-block-category-posts h3 {
-    color: var(--wjs-color-primary) !important;
-    font-family: 'Courier New', monospace !important;
-}
-
-.wp-block-category-posts h3::before {
-    content: "$ ls -la ";
-}
-
-.wp-block-category-posts li {
-    border-color: rgba(0, 255, 65, 0.2) !important;
-}
-
-.wp-block-category-posts li a::before {
-    content: "-rw-r--r-- 1 user  ";
-    color: var(--wjs-color-text-muted);
-    font-size: 0.75rem;
-}
-
-/* Search: Terminal Input */
-.wp-block-search input {
-    background: transparent !important;
-    border: 1px solid var(--wjs-color-primary) !important;
-    border-radius: 0 !important;
-    color: var(--wjs-color-primary) !important;
-    font-family: 'Courier New', monospace !important;
-}
-
-.wp-block-search input::placeholder {
-    color: rgba(0, 255, 65, 0.5);
-}
-
-.wp-block-search button {
-    background: var(--wjs-color-primary) !important;
-    color: #000 !important;
-    border-radius: 0 !important;
-    text-transform: uppercase;
-}
-
 /* ===== Mobile (auto responsive pass) ===== */
 @media (max-width: 767.98px) {
 
@@ -527,12 +323,12 @@ footer .w-10:hover {
 
     /* Uppercase + tracked button labels can outgrow full-width buttons at
        375px: allow wrapping and relax (not remove) the tracking. */
-    .wp-block-button a {
+    .wp-block-button__link {
         white-space: normal;
         letter-spacing: 0.05em;
     }
 
-    .wp-block-cta-banner a {
+    .wp-block-cta-banner__button {
         white-space: normal;
         letter-spacing: 1px;
     }
@@ -541,8 +337,8 @@ footer .w-10:hover {
        overflows a full-width single-column card. The 2px border + glow
        (styled above) already convey the emphasis on mobile.
        !important is required to beat the inline style. */
-    .wp-block-pricing>div[style*="scale(1.05)"] {
-        transform: none !important;
+    .wp-block-pricing__plan--highlighted {
+        transform: none;
     }
 
     /* Header divider gutters: 20px each side of the logo/actions borders is
@@ -562,4 +358,108 @@ footer .w-10:hover {
 @media (max-width: 991.98px) {
   .wjs-header-container { flex-wrap: wrap; }
   .wjs-header-nav { flex-wrap: wrap; justify-content: center; }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-hover-transform: translate(-4px, -4px);
+  --wjs-card-hover-shadow: 12px 12px 0px var(--wjs-color-primary);
+  --wjs-card-hover-bg: #001100;
+  --wjs-button-transform: uppercase;
+  --wjs-button-tracking: 0.1em;
+  --wjs-button-border-width: 2px;
+  --wjs-button-border-color: var(--wjs-color-primary);
+  --wjs-button-hover-bg: var(--wjs-color-primary);
+  --wjs-button-hover-color: black;
+  --wjs-button-hover-shadow: 4px 4px 0px var(--wjs-color-secondary);
+  --wjs-heading-transform: uppercase;
+  --wjs-heading-border-width: 2px;
+  --wjs-heading-border-color: var(--wjs-color-primary);
+  --wjs-heading-pad: 0.5rem;
+  --wjs-heading-color: var(--wjs-color-primary);
+  --wjs-heading-bg: none;
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: var(--wjs-color-primary);
+  --wjs-accordion-radius: 0;
+  --wjs-accordion-bg: rgba(0, 255, 65, 0.02);
+  --wjs-accordion-header-bg: transparent;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: rgba(0, 255, 65, 0.3);
+  --wjs-accordion-header-family: 'Courier New', monospace;
+  --wjs-accordion-panel-bg: rgba(0, 255, 65, 0.05);
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-accordion-panel-family: 'Courier New', monospace;
+  --wjs-tabs-list-border-width: 2px;
+  --wjs-tabs-list-border-color: var(--wjs-color-primary);
+  --wjs-tabs-color: var(--wjs-color-text-muted);
+  --wjs-tabs-radius: 0;
+  --wjs-tabs-family: 'Courier New', monospace;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-active-bg: rgba(0, 255, 65, 0.1);
+  --wjs-tabs-panel-bg: rgba(0, 255, 65, 0.02);
+  --wjs-tabs-panel-border-width: 1px;
+  --wjs-tabs-panel-border-color: rgba(0, 255, 65, 0.2);
+  --wjs-tabs-panel-radius: 0;
+  --wjs-video-radius: 0;
+  --wjs-video-border-width: 2px;
+  --wjs-video-border-color: var(--wjs-color-primary);
+  --wjs-video-shadow: 0 0 20px rgba(0, 255, 65, 0.3);
+  --wjs-audio-bg: transparent;
+  --wjs-audio-border-width: 1px;
+  --wjs-audio-border-color: var(--wjs-color-primary);
+  --wjs-audio-radius: 0;
+  --wjs-audio-icon-bg: transparent;
+  --wjs-audio-icon-border-width: 1px;
+  --wjs-audio-icon-border-color: var(--wjs-color-primary);
+  --wjs-audio-icon-radius: 0;
+  --wjs-pricing-bg: rgba(0, 0, 0, 0.8);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: rgba(0, 255, 65, 0.3);
+  --wjs-pricing-radius: 0;
+  --wjs-pricing-hover-border-color: var(--wjs-color-primary);
+  --wjs-pricing-hover-shadow: 0 0 30px rgba(0, 255, 65, 0.2);
+  --wjs-pricing-highlight-bg: rgba(0, 255, 65, 0.1);
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-primary);
+  --wjs-pricing-highlight-shadow: 0 0 40px rgba(0, 255, 65, 0.4);
+  --wjs-testimonial-bg: rgba(0, 0, 0, 0.8);
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: rgba(0, 255, 65, 0.3);
+  --wjs-testimonial-radius: 0;
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-cta-radius: 0;
+  --wjs-cta-border-width: 2px;
+  --wjs-cta-border-color: var(--wjs-color-primary);
+  --wjs-cta-bg: linear-gradient(180deg, rgba(0, 255, 65, 0.1), rgba(0, 0, 0, 0.9));
+  --wjs-cta-shadow: inset 0 0 60px rgba(0, 255, 65, 0.1);
+  --wjs-cta-button-bg: var(--wjs-color-primary);
+  --wjs-cta-button-color: #000;
+  --wjs-cta-button-radius: 0;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 2px;
+  --wjs-posts-bg: rgba(0, 0, 0, 0.8);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: rgba(0, 255, 65, 0.2);
+  --wjs-posts-radius: 0;
+  --wjs-posts-hover-border-color: var(--wjs-color-primary);
+  --wjs-posts-hover-shadow: 0 0 20px rgba(0, 255, 65, 0.2);
+  --wjs-catposts-heading-color: var(--wjs-color-primary);
+  --wjs-catposts-heading-family: 'Courier New', monospace;
+  --wjs-catposts-border-color: rgba(0, 255, 65, 0.2);
+  --wjs-search-input-bg: transparent;
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: var(--wjs-color-primary);
+  --wjs-search-input-radius: 0;
+  --wjs-search-input-color: var(--wjs-color-primary);
+  --wjs-search-input-family: 'Courier New', monospace;
+  --wjs-search-placeholder-color: rgba(0, 255, 65, 0.5);
+  --wjs-search-button-bg: var(--wjs-color-primary);
+  --wjs-search-button-color: #000;
+  --wjs-search-button-radius: 0;
+  --wjs-search-button-transform: uppercase;
 }
