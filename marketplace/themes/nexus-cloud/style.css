@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #090d16;
+  --wjs-bg-surface: #181c24;
+  --wjs-bg-surface-raised: #242830;
+  --wjs-color-primary: #0ea5e9;
+  --wjs-color-primary-dark: #0284c7;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #0284c7;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f0f9ff;
+  --wjs-color-text-muted: #989fa6;
+  --wjs-color-heading: #f0f9ff;
+  --wjs-color-link: #0ea5e9;
+  --wjs-color-link-hover: #0284c7;
+  --wjs-border-subtle: #333740;
+  --wjs-outline: #61676f;
+  --wjs-outline-variant: #2c3039;
+  --wjs-focus-ring: #0ea5e9;
+}
+
 /* Theme: Nexus Cloud (Cyber Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 

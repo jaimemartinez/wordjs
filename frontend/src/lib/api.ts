@@ -456,6 +456,11 @@ export interface MarketplaceEntry {
     active: boolean;
     installedVersion: string | null;
     updateAvailable: boolean;
+    // One-click update is possible only if installed + a newer version + the entry's source MATCHES the
+    // source it was installed from. `installedFrom` is that recorded source (null = installed by upload or
+    // before origin-binding existed → not one-click updatable; uninstall+reinstall from the catalog first).
+    updatable?: boolean;
+    installedFrom?: string | null;
 }
 
 export interface MarketplaceSourceStatus {
@@ -472,7 +477,10 @@ export type MarketplaceSources = { configured: string[]; default: string; usingD
 export const marketplaceApi = {
     catalog: (refresh = false) =>
         apiGet<{ source: string; isLocal: boolean; sources: MarketplaceSourceStatus[]; count: number; plugins: MarketplaceEntry[] }>(`/marketplace/catalog${refresh ? '?refresh=1' : ''}`),
-    install: (id: string) => apiPost<{ success: boolean; message: string; slug: string }>(`/marketplace/install`, { id }),
+    install: (id: string) => apiPost<{ success: boolean; message?: string; slug: string; updated?: boolean; newPermissions?: string[]; ungrantedPermissions?: string[] }>(`/marketplace/install`, { id }),
+    // In-place update of an already-installed plugin (preserves data + tables + grants; gated to the
+    // install origin server-side). /install also updates when installed, so this is the explicit alias.
+    update: (id: string) => apiPost<{ success: boolean; slug: string; updated: boolean; fromVersion: string | null; toVersion: string | null; newPermissions: string[]; ungrantedPermissions: string[] }>(`/marketplace/update`, { id }),
     // Configurable catalog sources (managed from the Marketplace UI — no hard-coded URL).
     // Saving an EMPTY list disables the remote marketplace; resetSources returns to the official default.
     getSources: () => apiGet<MarketplaceSources>(`/marketplace/sources`),
@@ -835,6 +843,35 @@ export const webhooksApi = {
     deliveries: (id: number) => apiGet<{ deliveries: WebhookDelivery[] }>(`/webhooks/${id}/deliveries`),
     redeliver: (deliveryId: number) =>
         apiPost<{ requeued: boolean; id: number }>(`/webhooks/deliveries/${deliveryId}/redeliver`, {}),
+};
+
+// ── Form submissions (Webflow "Forms + submissions" parity) ────────────────────────────────────────
+export interface FormSubmission {
+    id: number;
+    formName: string;
+    pageId: number | null;
+    fields: Record<string, string>;
+    ip: string;
+    userAgent: string;
+    createdAt: string;
+}
+export interface FormName {
+    formName: string;
+    count: number;
+}
+export const formsApi = {
+    /** Paged list with totals (backend caps per_page at 100; gated on manage_options). */
+    listSubmissions: (opts: { formName?: string; page?: number; perPage?: number } = {}) => {
+        const params = new URLSearchParams();
+        if (opts.formName !== undefined) params.append("formName", opts.formName);
+        params.append("page", String(opts.page || 1));
+        params.append("per_page", String(opts.perPage || 20));
+        return apiGetPaged<FormSubmission[]>(`/forms/submissions?${params.toString()}`);
+    },
+    /** DISTINCT form names with submission counts (the admin viewer's form picker). */
+    names: () => apiGet<{ names: FormName[] }>("/forms/names"),
+    removeSubmission: (id: number) =>
+        apiDelete<{ deleted: boolean; previous: FormSubmission }>(`/forms/submissions/${id}`),
 };
 
 // ── Multi-factor auth (TOTP) ─────────────────────────────────────────────────────────────────────

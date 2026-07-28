@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0c0a09;
+  --wjs-bg-surface: #1b1918;
+  --wjs-bg-surface-raised: #272524;
+  --wjs-color-primary: #eab308;
+  --wjs-color-primary-dark: #ca8a04;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #ca8a04;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #fef08a;
+  --wjs-color-text-muted: #a29959;
+  --wjs-color-heading: #fef08a;
+  --wjs-color-link: #eab308;
+  --wjs-color-link-hover: #ca8a04;
+  --wjs-border-subtle: #383320;
+  --wjs-outline: #68613a;
+  --wjs-outline-variant: #302c1c;
+  --wjs-focus-ring: #eab308;
+}
+
 /* Theme: Quantum Fintech (Obsidian Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@300;400;600&display=swap');
 

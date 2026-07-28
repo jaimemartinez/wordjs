@@ -15,6 +15,8 @@
 
   /* --- COLOR SEMANTICS --- */
   --wjs-bg-canvas: #0a0a0a;
+  /* the public header reads this; without it a dark theme paints a literal white bar */
+  --wjs-bg-surface-glass: rgba(10, 10, 10, 0.85);
   /* Deep Black */
   --wjs-bg-surface: #141414;
   /* Card Background */
@@ -170,16 +172,11 @@ h3 {
   color: var(--wjs-color-text-main) !important;
 }
 
-/* Cards: Dark Surface with Gold Border on Hover */
-.wp-block-card,
-article {
+/* Cards: Dark Surface with Gold Border on Hover */article {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   transition: border-color 0.3s ease;
-}
-
-.wp-block-card:hover,
-article:hover {
+}article:hover {
   border-color: var(--wjs-color-primary) !important;
 }
 
@@ -219,175 +216,6 @@ footer .w-10:hover {
   color: #000 !important;
 }
 
-/* =========================================
-   MIDNIGHT LUXURY: NEW COMPONENT OVERRIDES
-   Dark premium / Gold accent aesthetic
-   ========================================= */
-
-/* Accordion: Dark Panels */
-.wp-block-accordion {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: 8px !important;
-}
-
-.wp-block-accordion .accordion-item button {
-  background: transparent !important;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-}
-
-.wp-block-accordion .accordion-item button i {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: rgba(212, 175, 55, 0.05) !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: Gold Indicator */
-.wp-block-tabs>div:first-child {
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-text-muted) !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: var(--wjs-color-primary) !important;
-  border-bottom-color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-tabs>div:last-child {
-  background: var(--wjs-bg-surface) !important;
-  border-radius: 8px !important;
-}
-
-/* Video: Elegant Frame */
-.wp-block-video-embed {
-  border-radius: 8px !important;
-  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
-  border: 1px solid var(--wjs-border-subtle);
-}
-
-/* Audio: Dark Player */
-.wp-block-audio-player {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: 8px !important;
-}
-
-.wp-block-audio-player div:first-child>div:first-child {
-  background: var(--wjs-color-primary) !important;
-  color: #000 !important;
-}
-
-/* Pricing: Luxury Tiers */
-.wp-block-pricing>div {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: 12px !important;
-}
-
-.wp-block-pricing>div:hover {
-  border-color: rgba(212, 175, 55, 0.3) !important;
-}
-
-.wp-block-pricing>div h3 {
-  font-family: 'Playfair Display', serif !important;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: linear-gradient(180deg, #1a1510, var(--wjs-bg-surface)) !important;
-  border: 2px solid var(--wjs-color-primary) !important;
-  box-shadow: 0 0 60px rgba(212, 175, 55, 0.2);
-}
-
-/* Testimonial: Elegant Quote */
-.wp-block-testimonial {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: 12px !important;
-}
-
-.wp-block-testimonial>div:first-child {
-  color: var(--wjs-color-primary) !important;
-  font-family: 'Playfair Display', serif !important;
-}
-
-.wp-block-testimonial p {
-  font-family: 'Playfair Display', serif !important;
-  font-style: italic;
-}
-
-/* CTA Banner: Gold Premium */
-.wp-block-cta-banner {
-  background: linear-gradient(180deg, rgba(212, 175, 55, 0.15), var(--wjs-bg-surface)) !important;
-  border: 1px solid var(--wjs-color-primary) !important;
-  border-radius: 16px !important;
-}
-
-.wp-block-cta-banner h2 {
-  font-family: 'Playfair Display', serif !important;
-}
-
-.wp-block-cta-banner a {
-  background: var(--wjs-color-primary) !important;
-  color: #000 !important;
-  border-radius: 8px !important;
-}
-
-/* Posts Grid: Dark Cards */
-.wp-block-posts-grid article {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: 12px !important;
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-posts-grid article h3 {
-  font-family: 'Playfair Display', serif !important;
-}
-
-/* Category Posts: Gold Accent */
-.wp-block-category-posts h3 {
-  color: var(--wjs-color-primary) !important;
-  font-family: 'Playfair Display', serif !important;
-}
-
-.wp-block-category-posts li {
-  border-color: var(--wjs-border-subtle) !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Search: Dark Input */
-.wp-block-search input {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-radius: 8px !important;
-  color: var(--wjs-color-text-main) !important;
-}
-
-.wp-block-search input:focus {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: 0 0 0 3px rgba(212, 175, 55, 0.1);
-}
-
-.wp-block-search button {
-  background: var(--wjs-color-primary) !important;
-  color: #000 !important;
-  border-radius: 8px !important;
-}
-
 /* ===== Mobile (auto responsive pass) ===== */
 @media (max-width: 767.98px) {
 
@@ -406,7 +234,91 @@ footer .w-10:hover {
      full-width on mobile, that 5% up-scale makes the card wider than the
      viewport (horizontal overflow). Neutralize the scale on small screens
      only — the gold border + glow still distinguish the featured tier. */
-  .wp-block-pricing>div[style*="scale(1.05)"] {
-    transform: none !important;
+  .wp-block-pricing__plan--highlighted {
+    transform: none;
   }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: var(--wjs-bg-surface);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: var(--wjs-border-subtle);
+  --wjs-card-hover-border-color: var(--wjs-color-primary);
+  --wjs-accordion-bg: var(--wjs-bg-surface);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-radius: 8px;
+  --wjs-accordion-header-bg: transparent;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-panel-bg: rgba(212, 175, 55, 0.05);
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 1px;
+  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
+  --wjs-tabs-color: var(--wjs-color-text-muted);
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-active-border-color: var(--wjs-color-primary);
+  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
+  --wjs-tabs-panel-radius: 8px;
+  --wjs-video-radius: 8px;
+  --wjs-video-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  --wjs-video-border-width: 1px;
+  --wjs-video-border-color: var(--wjs-border-subtle);
+  --wjs-audio-bg: var(--wjs-bg-surface);
+  --wjs-audio-border-width: 1px;
+  --wjs-audio-border-color: var(--wjs-border-subtle);
+  --wjs-audio-radius: 8px;
+  --wjs-audio-icon-bg: var(--wjs-color-primary);
+  --wjs-audio-icon-color: #000;
+  --wjs-pricing-bg: var(--wjs-bg-surface);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: var(--wjs-border-subtle);
+  --wjs-pricing-radius: 12px;
+  --wjs-pricing-hover-border-color: rgba(212, 175, 55, 0.3);
+  --wjs-pricing-name-family: 'Playfair Display', serif;
+  --wjs-pricing-highlight-bg: linear-gradient(180deg, #1a1510, var(--wjs-bg-surface));
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-primary);
+  --wjs-pricing-highlight-shadow: 0 0 60px rgba(212, 175, 55, 0.2);
+  --wjs-testimonial-bg: var(--wjs-bg-surface);
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: var(--wjs-border-subtle);
+  --wjs-testimonial-radius: 12px;
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-testimonial-mark-family: 'Playfair Display', serif;
+  --wjs-testimonial-quote-family: 'Playfair Display', serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-cta-bg: linear-gradient(180deg, rgba(212, 175, 55, 0.15), var(--wjs-bg-surface));
+  --wjs-cta-border-width: 1px;
+  --wjs-cta-border-color: var(--wjs-color-primary);
+  --wjs-cta-radius: 16px;
+  --wjs-cta-title-family: 'Playfair Display', serif;
+  --wjs-cta-button-bg: var(--wjs-color-primary);
+  --wjs-cta-button-color: #000;
+  --wjs-cta-button-radius: 8px;
+  --wjs-posts-bg: var(--wjs-bg-surface);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: var(--wjs-border-subtle);
+  --wjs-posts-radius: 12px;
+  --wjs-posts-hover-border-color: var(--wjs-color-primary);
+  --wjs-posts-family: 'Playfair Display', serif;
+  --wjs-catposts-heading-color: var(--wjs-color-primary);
+  --wjs-catposts-heading-family: 'Playfair Display', serif;
+  --wjs-catposts-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
+  --wjs-search-input-bg: var(--wjs-bg-surface);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: var(--wjs-border-subtle);
+  --wjs-search-input-radius: 8px;
+  --wjs-search-input-color: var(--wjs-color-text-main);
+  --wjs-search-focus-color: var(--wjs-color-primary);
+  --wjs-search-focus-ring: 0 0 0 3px rgba(212, 175, 55, 0.1);
+  --wjs-search-button-bg: var(--wjs-color-primary);
+  --wjs-search-button-color: #000;
+  --wjs-search-button-radius: 8px;
 }

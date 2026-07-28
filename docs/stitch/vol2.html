@@ -1,0 +1,455 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>WordJS Block Library - Vol 2</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@500;600&family=Geist:wght@600;700;800&family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=JetBrains+Mono:wght@100..900&display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "secondary-fixed-dim": "#b9c7e4",
+                        "outline-variant": "#3b494b",
+                        "inverse-on-surface": "#263049",
+                        "background": "#08132a",
+                        "on-surface-variant": "#b9cacb",
+                        "tertiary-fixed": "#d8e2ff",
+                        "surface-container-highest": "#2a344d",
+                        "inverse-surface": "#d9e2ff",
+                        "on-secondary-container": "#abb9d6",
+                        "inverse-primary": "#006970",
+                        "on-secondary-fixed-variant": "#39475f",
+                        "tertiary-container": "#cad9ff",
+                        "secondary-container": "#3c4962",
+                        "surface-container-lowest": "#030d25",
+                        "on-tertiary-fixed-variant": "#374767",
+                        "on-tertiary": "#20304f",
+                        "tertiary-fixed-dim": "#b6c6ed",
+                        "surface-dim": "#08132a",
+                        "on-error": "#690005",
+                        "primary-fixed-dim": "#00dbe9",
+                        "error-container": "#93000a",
+                        "on-primary-fixed": "#002022",
+                        "on-primary": "#00363a",
+                        "on-error-container": "#ffdad6",
+                        "surface-tint": "#00dbe9",
+                        "on-primary-container": "#006970",
+                        "on-primary-fixed-variant": "#004f54",
+                        "on-tertiary-fixed": "#091b39",
+                        "tertiary": "#f4f5ff",
+                        "on-background": "#d9e2ff",
+                        "secondary": "#b9c7e4",
+                        "primary": "#dbfcff",
+                        "surface": "#08132a",
+                        "on-secondary-fixed": "#0d1c32",
+                        "surface-container": "#151f37",
+                        "surface-variant": "#2a344d",
+                        "on-surface": "#d9e2ff",
+                        "on-secondary": "#233148",
+                        "secondary-fixed": "#d6e3ff",
+                        "error": "#ffb4ab",
+                        "on-tertiary-container": "#4f5e80",
+                        "surface-container-high": "#1f2942",
+                        "surface-container-low": "#101b33",
+                        "surface-bright": "#2f3952",
+                        "primary-fixed": "#7df4ff",
+                        "outline": "#849495",
+                        "primary-container": "#00f0ff"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "xs": "4px",
+                        "sm": "8px",
+                        "lg": "24px",
+                        "base": "4px",
+                        "2xl": "80px",
+                        "xl": "48px",
+                        "md": "16px"
+                    },
+                    "fontFamily": {
+                        "h3": ["Geist"],
+                        "h2": ["Geist"],
+                        "label": ["JetBrains Mono"],
+                        "small": ["Inter"],
+                        "body": ["Inter"],
+                        "h1": ["Geist"]
+                    },
+                    "fontSize": {
+                        "h3": ["1.5rem", { "lineHeight": "1.4", "letterSpacing": "-0.01em", "fontWeight": "600" }],
+                        "h2": ["clamp(2rem, 4vw, 3rem)", { "lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "700" }],
+                        "label": ["11px", { "lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "600" }],
+                        "small": ["13px", { "lineHeight": "1.5", "letterSpacing": "0.01em", "fontWeight": "500" }],
+                        "body": ["16px", { "lineHeight": "1.6", "letterSpacing": "0", "fontWeight": "400" }],
+                        "h1": ["clamp(2.5rem, 5vw, 4.5rem)", { "lineHeight": "1.1", "letterSpacing": "-0.04em", "fontWeight": "800" }]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+        body {
+            background-color: #08132a;
+            color: #d9e2ff;
+            -webkit-font-smoothing: antialiased;
+        }
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        .luminous-border-top {
+            background: linear-gradient(to bottom, rgba(255,255,255,0.1), transparent);
+        }
+        .glass-card {
+            backdrop-filter: blur(8px);
+            background: rgba(21, 31, 55, 0.4);
+            border: 1px solid rgba(132, 148, 149, 0.1);
+        }
+        .token-row:nth-child(even) { background: rgba(59, 73, 75, 0.1); }
+        
+        /* Custom Component Tokens via CSS Variables */
+        :root {
+            --wjs-card-bg: theme('colors.surface-container-low');
+            --wjs-card-border: theme('colors.outline-variant');
+            --wjs-card-icon-color: theme('colors.primary-fixed-dim');
+            --wjs-iconlist-gap: theme('spacing.lg');
+            --wjs-iconlist-icon-size: 24px;
+            --wjs-quote-bar-width: 4px;
+            --wjs-quote-font-size: theme('fontSize.h3');
+            --wjs-table-header-bg: theme('colors.surface-container-highest');
+            --wjs-table-zebra-bg: theme('colors.surface-container-low');
+            --wjs-btn-px: theme('spacing.md');
+            --wjs-btn-font-weight: 600;
+            --wjs-img-radius: theme('borderRadius.xl');
+            --wjs-img-shadow: 0 12px 32px rgba(0,0,0,0.4);
+        }
+    </style>
+</head>
+<body class="font-body selection:bg-primary-container selection:text-on-primary-container">
+<!-- TopNavBar Navigation Shell -->
+<nav class="fixed top-0 w-full z-50 border-b border-outline-variant/30 backdrop-blur-md bg-background/80 shadow-sm flex justify-between items-center px-lg py-sm">
+<div class="font-h3 text-h3 font-extrabold text-primary-fixed-dim tracking-tight">WordJS</div>
+<div class="hidden md:flex gap-lg">
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Dashboard</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Templates</a>
+<a class="text-primary-fixed-dim border-b-2 border-primary-fixed-dim pb-1 font-body text-body font-bold transition-colors duration-150 cursor-pointer active:scale-95" href="#">Blocks</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Assets</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Settings</a>
+</div>
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary-fixed">history</span>
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary-fixed">help</span>
+<button class="px-md py-xs bg-surface-container-high text-on-surface rounded-lg font-bold text-small hover:bg-surface-bright transition-all">Preview</button>
+<button class="px-md py-xs bg-primary-fixed-dim text-on-primary rounded-lg font-bold text-small hover:scale-105 active:scale-95 transition-all shadow-lg">Publish</button>
+</div>
+</nav>
+<!-- SideNavBar (Extended/Collapsed Hybrid) -->
+<aside class="fixed left-0 top-0 h-screen w-16 hover:w-64 transition-all duration-300 z-[60] bg-surface-container-lowest dark:bg-surface-container-lowest border-r border-outline-variant/20 shadow-lg flex flex-col py-md overflow-hidden group">
+<div class="flex items-center gap-4 px-4 mb-xl">
+<span class="material-symbols-outlined text-primary-fixed-dim text-3xl">token</span>
+<span class="font-h3 text-h3 text-primary-fixed-dim opacity-0 group-hover:opacity-100 transition-opacity">Vol. 2</span>
+</div>
+<div class="flex flex-col gap-sm flex-grow">
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap text-on-surface-variant hover:text-on-surface mx-2 p-3 hover:bg-surface-variant/50 transition-all rounded-lg">
+<span class="material-symbols-outlined">layers</span>
+<span class="font-label text-label uppercase tracking-widest">Layout</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap bg-primary-container text-on-primary-container rounded-lg mx-2 p-3 shadow-md">
+<span class="material-symbols-outlined">palette</span>
+<span class="font-label text-label uppercase tracking-widest">Style</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap text-on-surface-variant hover:text-on-surface mx-2 p-3 hover:bg-surface-variant/50 transition-all rounded-lg">
+<span class="material-symbols-outlined">edit</span>
+<span class="font-label text-label uppercase tracking-widest">Content</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap text-on-surface-variant hover:text-on-surface mx-2 p-3 hover:bg-surface-variant/50 transition-all rounded-lg">
+<span class="material-symbols-outlined">stack</span>
+<span class="font-label text-label uppercase tracking-widest">Layers</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap text-on-surface-variant hover:text-on-surface mx-2 p-3 hover:bg-surface-variant/50 transition-all rounded-lg">
+<span class="material-symbols-outlined">restore</span>
+<span class="font-label text-label uppercase tracking-widest">History</span>
+</div>
+</div>
+<div class="mt-auto px-2 flex flex-col gap-xs border-t border-outline-variant/10 pt-md">
+<div class="flex items-center gap-4 p-3 text-on-surface-variant hover:text-on-surface cursor-pointer">
+<span class="material-symbols-outlined">menu_book</span>
+<span class="font-label text-label uppercase group-hover:block hidden">Docs</span>
+</div>
+<div class="flex items-center gap-4 p-3 text-on-surface-variant hover:text-on-surface cursor-pointer">
+<span class="material-symbols-outlined">support_agent</span>
+<span class="font-label text-label uppercase group-hover:block hidden">Support</span>
+</div>
+</div>
+</aside>
+<main class="ml-16 mt-20 p-xl max-w-[1400px] mx-auto">
+<header class="mb-2xl">
+<span class="font-label text-label text-primary-fixed-dim uppercase tracking-widest block mb-sm">Visual Page Builder</span>
+<h1 class="font-h1 text-h1 text-on-surface mb-md">Block Library <span class="text-outline">Vol. 2</span></h1>
+<p class="text-body text-on-surface-variant max-w-2xl">A comprehensive guide to the tokenized component specifications of the WordJS CMS engine. Designed for precision, efficiency, and high-focus creative environments.</p>
+</header>
+<!-- Section 1: CARDS -->
+<section class="mb-2xl border-l-2 border-primary-fixed-dim pl-lg">
+<h2 class="font-h2 text-h2 mb-xl">01. Card Components</h2>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-lg mb-xl">
+<!-- Variant: Dark (Default) -->
+<div class="p-lg rounded-xl border border-outline-variant/30 transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_4px_12px_rgba(0,0,0,0.3),0_0_0_1px_rgba(0,219,233,0.3)] group" style="background: var(--wjs-card-bg)">
+<span class="material-symbols-outlined mb-md text-3xl" style="color: var(--wjs-card-icon-color)">dynamic_form</span>
+<h4 class="font-h3 text-h3 text-on-surface mb-sm">Standard Block</h4>
+<p class="text-small text-on-surface-variant">Default state for canvas elements with standard container padding and border weight.</p>
+</div>
+<!-- Variant: Light/Glass -->
+<div class="p-lg rounded-xl border border-white/10 glass-card transition-all duration-300 hover:-translate-y-1 hover:shadow-lg group">
+<span class="material-symbols-outlined mb-md text-3xl text-primary-fixed">auto_awesome</span>
+<h4 class="font-h3 text-h3 text-primary mb-sm">Glass Variant</h4>
+<p class="text-small text-on-surface-variant">Utilizes backdrop blurring and luminous top-strokes for high-contrast visibility.</p>
+</div>
+<!-- Variant: Accent -->
+<div class="p-lg rounded-xl border border-primary-container/20 bg-primary-container/5 transition-all duration-300 hover:-translate-y-1 hover:shadow-[0_0_24px_rgba(0,240,255,0.1)] group">
+<span class="material-symbols-outlined mb-md text-3xl text-primary-container">electric_bolt</span>
+<h4 class="font-h3 text-h3 text-primary-container mb-sm">Accent Highlight</h4>
+<p class="text-small text-on-surface-variant">Used for emphasized features or interactive call-outs within the component grid.</p>
+</div>
+</div>
+<!-- Documentation Table -->
+<div class="bg-surface-container-low rounded-lg overflow-hidden border border-outline-variant/20">
+<div class="grid grid-cols-3 font-label text-label bg-surface-container-highest p-4 text-on-surface border-b border-outline-variant/30">
+<div>TOKEN</div>
+<div>CSS VARIABLE</div>
+<div>FALLBACK</div>
+</div>
+<div class="p-4 grid grid-cols-3 font-small text-small text-on-surface-variant token-row">
+<div class="font-label">Card Background</div>
+<code class="text-primary-fixed-dim">--wjs-card-bg</code>
+<code>surface-container-low</code>
+</div>
+<div class="p-4 grid grid-cols-3 font-small text-small text-on-surface-variant token-row">
+<div class="font-label">Icon Color</div>
+<code class="text-primary-fixed-dim">--wjs-card-icon-color</code>
+<code>primary-fixed-dim</code>
+</div>
+</div>
+</section>
+<!-- Section 2: ICON LIST -->
+<section class="mb-2xl border-l-2 border-primary-fixed-dim pl-lg">
+<h2 class="font-h2 text-h2 mb-xl">02. Icon Grid Systems</h2>
+<div class="space-y-xl">
+<!-- 2-Column Layout -->
+<div>
+<h5 class="font-label text-label uppercase tracking-widest text-outline mb-md">2-Column Layout</h5>
+<div class="grid grid-cols-1 md:grid-cols-2" style="gap: var(--wjs-iconlist-gap)">
+<div class="flex items-start gap-md">
+<div class="p-sm bg-surface-container-high rounded-lg">
+<span class="material-symbols-outlined text-primary-fixed-dim" style="font-size: var(--wjs-iconlist-icon-size)">memory</span>
+</div>
+<div>
+<h6 class="font-body font-bold text-on-surface">Neural Processing</h6>
+<p class="text-small text-on-surface-variant">Real-time edge computation for predictive layout suggestions.</p>
+</div>
+</div>
+<div class="flex items-start gap-md">
+<div class="p-sm bg-surface-container-high rounded-lg">
+<span class="material-symbols-outlined text-primary-fixed-dim" style="font-size: var(--wjs-iconlist-icon-size)">terminal</span>
+</div>
+<div>
+<h6 class="font-body font-bold text-on-surface">Live Code Injector</h6>
+<p class="text-small text-on-surface-variant">Direct React/Vue component injection with HMR support.</p>
+</div>
+</div>
+</div>
+</div>
+<!-- 3-Column Layout -->
+<div>
+<h5 class="font-label text-label uppercase tracking-widest text-outline mb-md">3-Column Layout</h5>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-lg">
+<div class="flex items-center gap-md p-md bg-surface-container-lowest border border-outline-variant/10 rounded-xl">
+<span class="material-symbols-outlined text-primary-fixed-dim">database</span>
+<span class="text-small font-medium text-on-surface">Global Assets</span>
+</div>
+<div class="flex items-center gap-md p-md bg-surface-container-lowest border border-outline-variant/10 rounded-xl">
+<span class="material-symbols-outlined text-primary-fixed-dim">cloud_sync</span>
+<span class="text-small font-medium text-on-surface">Auto-Save</span>
+</div>
+<div class="flex items-center gap-md p-md bg-surface-container-lowest border border-outline-variant/10 rounded-xl">
+<span class="material-symbols-outlined text-primary-fixed-dim">security</span>
+<span class="text-small font-medium text-on-surface">Encrypted Edit</span>
+</div>
+</div>
+</div>
+</div>
+</section>
+<!-- Section 3: QUOTE -->
+<section class="mb-2xl border-l-2 border-primary-fixed-dim pl-lg">
+<h2 class="font-h2 text-h2 mb-xl">03. Typography Pull-Quotes</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-2xl">
+<!-- Variant: Bar Quote -->
+<div class="relative pl-lg py-sm border-l-4 border-primary-fixed-dim" style="border-left-width: var(--wjs-quote-bar-width)">
+<p class="font-h3 text-h3 text-on-surface italic leading-relaxed" style="font-size: var(--wjs-quote-font-size)">
+                        "The interface of the future is not a tool, but a frictionless extension of human intent."
+                    </p>
+<cite class="mt-md block font-label text-label uppercase text-primary-fixed-dim">— Dr. Aris Thorne, Lead Architect</cite>
+</div>
+<!-- Variant: Large Centered -->
+<div class="text-center relative py-xl bg-surface-container-low rounded-2xl overflow-hidden px-lg">
+<span class="material-symbols-outlined text-6xl text-primary-container/20 absolute -top-4 -left-4 select-none" style="font-variation-settings: 'FILL' 1;">format_quote</span>
+<p class="font-h3 text-h3 text-primary relative z-10">
+                        Precision engineering meets creative freedom in every WordJS block.
+                    </p>
+<cite class="mt-md block font-label text-label uppercase text-on-surface-variant">— CMS Principles 2024</cite>
+</div>
+</div>
+</section>
+<!-- Section 4: TABLE -->
+<section class="mb-2xl border-l-2 border-primary-fixed-dim pl-lg">
+<h2 class="font-h2 text-h2 mb-xl">04. Data Grids & Tables</h2>
+<div class="relative group">
+<div class="overflow-x-auto rounded-xl border border-outline-variant/20 scrollbar-hide">
+<table class="w-full text-left border-collapse min-w-[600px]">
+<thead>
+<tr style="background: var(--wjs-table-header-bg)">
+<th class="p-md font-label text-label text-on-surface border-b border-outline-variant/30">MODULE</th>
+<th class="p-md font-label text-label text-on-surface border-b border-outline-variant/30">VERSION</th>
+<th class="p-md font-label text-label text-on-surface border-b border-outline-variant/30">STATUS</th>
+<th class="p-md font-label text-label text-on-surface border-b border-outline-variant/30">LATENCY</th>
+</tr>
+</thead>
+<tbody>
+<tr class="transition-colors hover:bg-surface-variant/20">
+<td class="p-md text-small text-on-surface font-medium">Core Engine</td>
+<td class="p-md text-small text-on-surface-variant">v2.4.1</td>
+<td class="p-md">
+<span class="px-sm py-1 bg-green-500/10 text-green-400 text-[10px] uppercase font-bold rounded-full">Optimal</span>
+</td>
+<td class="p-md text-small font-label text-primary-fixed-dim">12ms</td>
+</tr>
+<tr class="transition-colors hover:bg-surface-variant/20" style="background: var(--wjs-table-zebra-bg)">
+<td class="p-md text-small text-on-surface font-medium">Shader Pipeline</td>
+<td class="p-md text-small text-on-surface-variant">v1.0.8</td>
+<td class="p-md">
+<span class="px-sm py-1 bg-primary-container/10 text-primary-container text-[10px] uppercase font-bold rounded-full">Active</span>
+</td>
+<td class="p-md text-small font-label text-primary-fixed-dim">45ms</td>
+</tr>
+<tr class="transition-colors hover:bg-surface-variant/20">
+<td class="p-md text-small text-on-surface font-medium">Asset Bundler</td>
+<td class="p-md text-small text-on-surface-variant">v3.2.0</td>
+<td class="p-md">
+<span class="px-sm py-1 bg-green-500/10 text-green-400 text-[10px] uppercase font-bold rounded-full">Optimal</span>
+</td>
+<td class="p-md text-small font-label text-primary-fixed-dim">8ms</td>
+</tr>
+</tbody>
+</table>
+</div>
+<div class="absolute right-0 top-0 bottom-0 w-12 bg-gradient-to-l from-background to-transparent pointer-events-none md:hidden animate-pulse"></div>
+</div>
+<p class="mt-sm text-small text-outline italic">Note: Table features horizontal overflow with visual fade cues for mobile responsiveness.</p>
+</section>
+<!-- Section 5: BUTTONS -->
+<section class="mb-2xl border-l-2 border-primary-fixed-dim pl-lg">
+<h2 class="font-h2 text-h2 mb-xl">05. Action Components</h2>
+<div class="flex flex-wrap gap-lg items-end mb-xl">
+<!-- Primary -->
+<div class="flex flex-col gap-sm">
+<span class="font-label text-[10px] uppercase text-outline">Primary</span>
+<button class="px-lg py-md bg-primary-container text-on-primary-container rounded-lg transition-all duration-150 hover:shadow-[0_0_20px_rgba(0,240,255,0.4)] active:scale-95" style="font-weight: var(--wjs-btn-font-weight)">
+                        Execute Module
+                    </button>
+</div>
+<!-- Secondary -->
+<div class="flex flex-col gap-sm">
+<span class="font-label text-[10px] uppercase text-outline">Secondary</span>
+<button class="px-lg py-md bg-surface-bright text-on-surface rounded-lg transition-all duration-150 hover:bg-surface-variant active:scale-95" style="font-weight: var(--wjs-btn-font-weight)">
+                        Configure Settings
+                    </button>
+</div>
+<!-- Outline -->
+<div class="flex flex-col gap-sm">
+<span class="font-label text-[10px] uppercase text-outline">Outline</span>
+<button class="px-lg py-md border border-outline-variant text-on-surface rounded-lg transition-all duration-150 hover:border-primary-fixed-dim hover:text-primary-fixed-dim active:scale-95" style="font-weight: var(--wjs-btn-font-weight)">
+                        Dismiss Entry
+                    </button>
+</div>
+<!-- Focus Visible State -->
+<div class="flex flex-col gap-sm">
+<span class="font-label text-[10px] uppercase text-outline">Focus State</span>
+<button class="px-lg py-md bg-primary-container text-on-primary-container rounded-lg ring-4 ring-primary-fixed-dim/50 shadow-lg">
+                        Focused Control
+                    </button>
+</div>
+<!-- Disabled -->
+<div class="flex flex-col gap-sm">
+<span class="font-label text-[10px] uppercase text-outline">Disabled</span>
+<button class="px-lg py-md bg-surface-container-high text-on-surface-variant/30 rounded-lg cursor-not-allowed grayscale" disabled="">
+                        System Locked
+                    </button>
+</div>
+</div>
+</section>
+<!-- Section 6: IMAGE -->
+<section class="mb-2xl border-l-2 border-primary-fixed-dim pl-lg">
+<h2 class="font-h2 text-h2 mb-xl">06. Visual Assets</h2>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-xl">
+<figure class="group">
+<div class="overflow-hidden border border-outline-variant/30 relative" style="border-radius: var(--wjs-img-radius); box-shadow: var(--wjs-img-shadow);">
+<img class="w-full h-80 object-cover transition-transform duration-700 group-hover:scale-105" data-alt="A macro cinematic shot of a sleek, dark-themed computer processor with glowing cyan fiber optic paths running across its surface. The lighting is dramatic and low-key, with the deep navy blue substrate reflecting soft blue ambient light. The scene is incredibly detailed, showcasing the intricate industrial design of high-performance creative hardware in a modern dark-mode aesthetic. Depth of field is shallow, focusing on a central luminous core." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDVsdE2z4PHFqtuloNlCAx0_OTOHUaicbDEivHUbvAZJnhv3f7Mb_1m5GLP-FE1a-uAqmffC4XV0t1epu51eHjDkeWvOdi65iEuSVJR0KaModRTBGTA8mg9b_wcoAwzoXdY1ppAddM4JbLB-hbbs5JWN9yIMONa7azlypBgEm5QK_RbZC5fXNrH2H3OOz_QbG07B1SmNe6ga13OWVNncz9InyxHTP83RMDNw1CrZDPOZWHutnGA_YeaIHxTPiNCqvE1x2NEkqIdpW_E"/>
+<div class="absolute inset-0 bg-gradient-to-t from-background/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-md">
+<span class="material-symbols-outlined text-primary-fixed-dim">zoom_in</span>
+</div>
+</div>
+<figcaption class="mt-md text-small text-on-surface-variant italic px-2">
+                        Fig 1.1: Core Processing Unit visualized with WordJS accent lighting.
+                    </figcaption>
+</figure>
+<div class="flex flex-col justify-center gap-md">
+<h5 class="font-h3 text-h3 text-on-surface">Image Block Specifications</h5>
+<p class="text-body text-on-surface-variant">The WordJS image component is built to frame visual narratives. It features an integrated caption system, interactive hover states, and fully tokenized radius and shadow properties.</p>
+<div class="p-md bg-surface-container-low rounded-xl border border-outline-variant/20 flex items-center justify-between">
+<span class="font-label text-label uppercase tracking-widest text-primary-fixed-dim">Current Radius</span>
+<code class="px-2 py-1 bg-background rounded text-on-surface">12px (xl)</code>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer Shell -->
+<footer class="w-full mt-auto border-t border-outline-variant/10 bg-surface-dim px-xl py-lg flex flex-col md:flex-row justify-between items-center max-w-full">
+<div class="font-label text-label font-black text-on-surface mb-4 md:mb-0">WORDJS ENGINE</div>
+<div class="flex items-center gap-xl mb-4 md:mb-0">
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Terms of Service</a>
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Privacy Policy</a>
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">API Docs</a>
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Changelog</a>
+</div>
+<div class="font-small text-small text-on-surface-variant">© 2024 WordJS CMS Engine. All rights reserved. Built for precision.</div>
+</footer>
+<script>
+        // Micro-interactions for button states
+        document.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('mousedown', () => btn.classList.add('scale-95'));
+            btn.addEventListener('mouseup', () => btn.classList.remove('scale-95'));
+            btn.addEventListener('mouseleave', () => btn.classList.remove('scale-95'));
+        });
+
+        // Simple table scroll indicator handling
+        const tableContainer = document.querySelector('.overflow-x-auto');
+        const fadeIndicator = document.querySelector('.animate-pulse');
+        
+        if(tableContainer && fadeIndicator) {
+            tableContainer.addEventListener('scroll', () => {
+                const maxScroll = tableContainer.scrollWidth - tableContainer.clientWidth;
+                const opacity = 1 - (tableContainer.scrollLeft / maxScroll);
+                fadeIndicator.style.opacity = opacity;
+            });
+        }
+    </script>
+</body></html>

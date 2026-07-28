@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #04151f;
+  --wjs-bg-surface: #13232c;
+  --wjs-bg-surface-raised: #202f38;
+  --wjs-color-primary: #06b6d4;
+  --wjs-color-primary-dark: #0891b2;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #0891b2;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #cffaff;
+  --wjs-color-text-muted: #82a3aa;
+  --wjs-color-heading: #cffaff;
+  --wjs-color-link: #06b6d4;
+  --wjs-color-link-hover: #0891b2;
+  --wjs-border-subtle: #293e47;
+  --wjs-outline: #516c74;
+  --wjs-outline-variant: #223741;
+  --wjs-focus-ring: #06b6d4;
+}
+
 /* Theme: Hologram 3D (Cyber Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 

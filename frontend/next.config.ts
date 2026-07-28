@@ -1,6 +1,23 @@
 import type { NextConfig } from "next";
 
+// Real app version exposed to the client (editor chrome, about panels). Read from the ROOT
+// package.json — release bumps touch that one; frontend/package.json is pinned at 0.1.0 and never
+// versioned. fs+JSON.parse (not a JSON import) so it compiles cleanly under next.config.ts.
+let wordjsVersion = '';
+try {
+  const fs = require('fs');
+  const path = require('path');
+  wordjsVersion = String(
+    JSON.parse(fs.readFileSync(path.resolve(__dirname, '../package.json'), 'utf8')).version || ''
+  );
+} catch (e: any) {
+  console.warn('[NextConfig] Failed to read root package.json version:', e.message);
+}
+
 const nextConfig: NextConfig = {
+  env: {
+    NEXT_PUBLIC_WORDJS_VERSION: wordjsVersion,
+  },
   turbopack: {
     // We must include the parent directory as root because we import from ../plugins
     root: require('path').resolve(__dirname, '..'),
@@ -56,6 +73,14 @@ const nextConfig: NextConfig = {
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+        ],
+      },
+      {
+        // Self-hosted font files are content-addressed by filename and never change in place —
+        // cache them hard so the editor/admin doesn't re-fetch fonts on every navigation.
+        source: '/fonts/:path*',
+        headers: [
+          { key: 'Cache-Control', value: 'public, max-age=31536000, immutable' },
         ],
       },
     ];

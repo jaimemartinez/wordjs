@@ -1,7 +1,9 @@
 "use client";
 
 import React from "react";
+import MSym from "../editor/MSym";
 import { AnimSpec, AnimationControl, animClasses, useEntranceAnimation } from "./AnimationField";
+import { Appearance, AppearanceControl, appearanceToStyle } from "./AppearanceField";
 
 /**
  * Per-block responsive visibility (Webflow-style "hide on device"). The field stores
@@ -22,16 +24,17 @@ export const hideClasses = (hide?: Hide): string =>
         .join(" ");
 
 const DEVICES: { key: keyof Hide; icon: string; label: string }[] = [
-    { key: "mobile", icon: "fa-mobile-screen-button", label: "Móvil" },
-    { key: "tablet", icon: "fa-tablet-screen-button", label: "Tablet" },
-    { key: "desktop", icon: "fa-desktop", label: "Escritorio" },
+    { key: "mobile", icon: "smartphone", label: "Móvil" },
+    { key: "tablet", icon: "tablet_mac", label: "Tablet" },
+    { key: "desktop", icon: "desktop_windows", label: "Escritorio" },
 ];
 
 export function VisibilityControl({ value, onChange }: { value: Hide; onChange: (v: Hide) => void }) {
     const hide = value || {};
     return (
-        <div>
-            <div className="flex gap-1.5">
+        // wjs-f-hide — marker for the properties panel's AVANZADO tab filter (see puck-theme.css).
+        <div className="wjs-f-hide">
+            <div className="flex gap-0.5 bg-[var(--ed-surface-container-high)] p-0.5 rounded border border-[var(--ed-outline-variant)]">
                 {DEVICES.map((d) => {
                     const hidden = !!hide[d.key];
                     return (
@@ -40,22 +43,19 @@ export function VisibilityControl({ value, onChange }: { value: Hide; onChange: 
                             type="button"
                             title={hidden ? `Oculto en ${d.label} — clic para mostrar` : `Visible en ${d.label} — clic para ocultar`}
                             onClick={() => onChange({ ...hide, [d.key]: !hidden })}
-                            className={`flex-1 flex flex-col items-center gap-1 py-2 rounded-lg border text-[10px] font-semibold transition ${
+                            className={`flex-1 flex flex-col items-center gap-0.5 py-1.5 rounded text-[10px] font-medium transition ${
                                 hidden
-                                    ? "bg-red-50 border-red-200 text-red-500"
-                                    : "bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100"
+                                    ? "bg-[var(--ed-primary)] text-white shadow-sm"
+                                    : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                             }`}
                         >
-                            <span className="relative inline-flex items-center justify-center w-5 h-5">
-                                <i className={`fa-solid ${d.icon} text-sm`}></i>
-                                {hidden && <i className="fa-solid fa-slash absolute text-sm"></i>}
-                            </span>
+                            <MSym name={hidden ? "visibility_off" : d.icon} size={16} />
                             {d.label}
                         </button>
                     );
                 })}
             </div>
-            <p className="text-[10px] text-gray-400 mt-1.5">
+            <p className="text-[10px] text-[var(--ed-outline)] mt-1.5">
                 Los bloques ocultos desaparecen también en la vista previa del dispositivo del editor.
             </p>
         </div>
@@ -64,14 +64,19 @@ export function VisibilityControl({ value, onChange }: { value: Hide; onChange: 
 
 /**
  * Wrap every component in a config so it gains the shared block fields — `hide` (per-device
- * visibility) and `anim` (entrance animation) — plus the single wrapper element that carries both.
- * Applied once at config build time (module scope) so each wrapped render is a stable component
- * and inner hooks stay valid. Blocks that already define `hide` are left untouched.
+ * visibility), `anim` (entrance animation) and `look` (the full Appearance system: background,
+ * border, shadow, spacing, typography, hover motion) — plus the single wrapper element that
+ * carries all three. Applied once at config build time (module scope) so each wrapped render is a
+ * stable component and inner hooks stay valid. Blocks that already define `hide` are left alone.
  *
- * Wrapper box model: `display: contents` normally (zero layout impact), but an ANIMATED block
- * needs a real box — transform/opacity do nothing on a contents element — so it becomes a plain
- * block-level div that simply takes the block's place in flow/grid/flex. The `wjs-hide-*` media
- * queries use !important, so device-hiding still wins over the block display.
+ * This is the single highest-leverage seam in the editor: it is why every block — core AND
+ * marketplace-plugin blocks, which are compiled elsewhere and merged in at runtime — is fully
+ * restyleable from the properties panel without each block re-implementing colour/spacing fields.
+ *
+ * Wrapper box model: `display: contents` normally (zero layout impact), but an ANIMATED or STYLED
+ * block needs a real box — transform/opacity/background do nothing on a contents element — so it
+ * becomes a plain block-level div that simply takes the block's place in flow/grid/flex. The
+ * `wjs-hide-*` media queries use !important, so device-hiding still wins over the block display.
  */
 export function withSharedBlockFields(components: Record<string, any>): Record<string, any> {
     const out: Record<string, any> = {};
@@ -84,18 +89,44 @@ export function withSharedBlockFields(components: Record<string, any>): Record<s
         const Wrapped = (props: any) => {
             const hideCls = hideClasses(props.hide);
             const anim = (props.anim || {}) as AnimSpec;
-            // Never animate inside the editor canvas — authoring must stay still (preview shows it).
-            const animActive = !!anim.type && !props.puck?.isEditing;
+            const animActive = !!anim.type;
+            // Scroll-driven effects need the wrapper (and a REAL box) even with entrance "Ninguna" —
+            // animClasses emits both families, but a display:contents element can't animate.
+            const scrollActive = !!anim.scroll;
+            const wrapActive = animActive || scrollActive;
+            const look = appearanceToStyle(props.look as Appearance);
             const ref = React.useRef<HTMLDivElement>(null);
             useEntranceAnimation(ref, animActive ? anim : null);
             const inner = <Inner {...props} />;
-            if (!hideCls && !animActive) return inner;
+            // Untouched block → no wrapper element at all, so its own render() is untouched.
+            if (!hideCls && !animActive && !look.hasBox) return inner;
+
+            // TWO NESTED LAYERS, deliberately — they must never share an element.
+            // The entrance animation owns `animation` and `transform` on the OUTER element; the
+            // appearance box owns `animation` (moving gradient) and `transform` (hover) on the
+            // INNER one. On a single element they collide: a running/filled animation beats a
+            // plain `:hover` declaration in the cascade, so `animation-fill-mode: both` would pin
+            // `transform: none` after the entrance and silently kill every hover effect — and the
+            // moving gradient and the entrance effect would fight over one `animation-name`.
+            const box = look.hasBox ? (
+                <div className={look.className || undefined} style={look.style}>
+                    {look.overlay && <div style={look.overlay} aria-hidden="true" />}
+                    {/* The overlay is absolutely positioned over the box, so the block's own content
+                        needs its own stacking context to stay above it. */}
+                    {look.overlay ? <div style={{ position: "relative" }}>{inner}</div> : inner}
+                </div>
+            ) : (
+                inner
+            );
+
+            if (!hideCls && !wrapActive) return box;
+
             return (
                 <div
                     ref={ref}
-                    className={[hideCls, animActive ? animClasses(anim) : ""].filter(Boolean).join(" ")}
+                    className={[hideCls, wrapActive ? animClasses(anim) : ""].filter(Boolean).join(" ")}
                     style={
-                        animActive
+                        animActive || scrollActive
                             ? ({
                                   // Clamp defensively: sanitize-meta passes numbers through untouched,
                                   // so hostile _puck_data (API/WXR import) could set a multi-hour delay
@@ -107,7 +138,7 @@ export function withSharedBlockFields(components: Record<string, any>): Record<s
                             : { display: "contents" }
                     }
                 >
-                    {inner}
+                    {box}
                 </div>
             );
         };
@@ -126,10 +157,24 @@ export function withSharedBlockFields(components: Record<string, any>): Record<s
                     label: "Animación de entrada",
                     render: ({ value, onChange }: any) => <AnimationControl value={value} onChange={onChange} />,
                 },
+                look: {
+                    type: "custom",
+                    label: "Apariencia",
+                    render: ({ value, onChange }: any) => <AppearanceControl value={value} onChange={onChange} />,
+                },
             },
-            defaultProps: { ...(def.defaultProps || {}), hide: {}, anim: {} },
+            // New blocks arrive with a subtle entrance already on: a page built by dropping blocks
+            // should feel alive without the author hunting for the setting. It is one dropdown away
+            // from "Ninguna", and reduced-motion users never see it.
+            defaultProps: {
+                ...(def.defaultProps || {}),
+                hide: {},
+                anim: { type: "fade-up", duration: 600, delay: 0 },
+                look: {},
+            },
             render: Wrapped,
         };
     }
     return out;
 }
+

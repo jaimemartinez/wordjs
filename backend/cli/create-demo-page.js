@@ -13,42 +13,84 @@ async function createDemoPage() {
     const puckData = {
         content: [
             {
+                type: 'Hero',
+                props: {
+                    title: 'WordJS Luminous Architecture',
+                    subtitle: 'Experiencias de contenido visuales construidas con arquitectura atómica, rendimiento extremo e identidad visual adaptable.',
+                    align: 'center',
+                    height: '60vh',
+                    buttons: [
+                        { label: 'Empezar ahora', href: '#', variant: 'primary' },
+                        { label: 'Documentación', href: '#', variant: 'outline' }
+                    ],
+                    id: 'hero-1'
+                }
+            },
+            {
+                type: 'Stats',
+                props: {
+                    items: [
+                        { value: '240ms', label: 'Carga Promedio' },
+                        { value: '99.9%', label: 'Disponibilidad' },
+                        { value: '100%', label: 'Basado en Tokens' }
+                    ],
+                    id: 'stats-1'
+                }
+            },
+            {
+                type: 'Spacer',
+                props: { css: { height: '32px' }, id: 'spacer-1' }
+            },
+            {
                 type: 'Heading',
-                props: { title: 'Identidad Visual WordJS', level: 'h1', id: 'heading-1' }
+                props: { title: 'Librería de Componentes Stitch', level: 'h2', id: 'heading-1' }
             },
             {
                 type: 'Text',
                 props: {
-                    content: '<p>Los temas de WordJS no solo cambian colores, sino que redefinen la forma en que los elementos interactúan con el usuario. Abajo verás componentes avanzados que cambian drásticamente entre temas.</p>',
+                    content: '<p>Los componentes de WordJS se adaptan automáticamente a las reglas del tema activo a través del contrato de tokens <code>--wjs-*</code>.</p>',
                     id: 'text-1'
                 }
             },
             {
-                type: 'Divider',
-                props: { type: 'gradient', id: 'divider-1' }
-            },
-            {
                 type: 'Card',
                 props: {
-                    title: 'Diseño Adaptativo',
-                    description: 'Nuestros componentes se adaptan no solo al tamaño de la pantalla, sino al espíritu del tema activo.',
+                    title: 'Diseño Adaptativo Atómico',
+                    description: 'Nuestros componentes se adaptan no solo al tamaño de la pantalla, sino a la identidad visual del tema activo.',
                     icon: 'fa-wand-magic-sparkles',
                     theme: 'accent',
                     id: 'card-1'
                 }
             },
             {
-                type: 'Spacer',
-                props: { css: { height: '40px' }, id: 'spacer-1' }
+                type: 'PricingTable',
+                props: {
+                    plans: [
+                        { name: 'Starter', price: '$0', period: '/mes', features: '3 Proyectos\nBloques Estándar\nSoporte Comunidad', highlighted: 'false', buttonText: 'Comenzar Gratis', buttonLink: '#' },
+                        { name: 'Professional', price: '$29', period: '/mes', features: 'Proyectos Ilimitados\nTodos los Bloques Stitch\nPersonalizador de Temas\nSoporte Prioritario', highlighted: 'true', buttonText: 'Probar 14 Días', buttonLink: '#' },
+                        { name: 'Enterprise', price: '$99', period: '/mes', features: 'Infraestructura Aislada\nPlugins Sandbox OS\nSLA 99.99%\nSoporte Dedicado 24/7', highlighted: 'false', buttonText: 'Contactar Ventas', buttonLink: '#' }
+                    ],
+                    id: 'pricing-1'
+                }
             },
             {
-                type: 'Button',
+                type: 'Testimonial',
                 props: {
-                    label: 'Ver Documentación',
-                    href: '#',
+                    quote: 'La precisión del sistema de bloques de WordJS transformó la interacción de nuestro equipo con el CMS. Es un instrumento de alta precisión.',
+                    author: 'Elena Korova',
+                    role: 'Lead Product Designer',
+                    id: 'testimonial-1'
+                }
+            },
+            {
+                type: 'CTABanner',
+                props: {
+                    title: '¿Listo para construir el futuro?',
+                    subtitle: 'Únete a miles de creadores construyendo experiencias web modernas con WordJS.',
+                    buttonText: 'Comenzar Ahora',
+                    buttonLink: '#',
                     variant: 'primary',
-                    align: 'center',
-                    id: 'button-1'
+                    id: 'cta-1'
                 }
             }
         ],
@@ -58,19 +100,68 @@ async function createDemoPage() {
     };
 
     const htmlContent = `
-        <h1 class="wp-block-heading font-bold text-4xl my-4">Identidad Visual WordJS</h1>
-        <div class="wp-block-text prose">
-            <p>Los temas de WordJS no solo cambian colores, sino que redefinen la forma en que los elementos interactúan con el usuario. Abajo verás componentes avanzados que cambian drásticamente entre temas.</p>
+        <div class="wp-block-hero">
+            <div class="wp-block-hero__inner">
+                <h1 class="wp-block-hero__title">WordJS Luminous Architecture</h1>
+                <p class="wp-block-hero__subtitle">Experiencias de contenido visuales construidas con arquitectura atómica, rendimiento extremo e identidad visual adaptable.</p>
+                <div class="wp-block-hero__actions">
+                    <a href="#" class="wp-block-hero__button">Empezar ahora</a>
+                    <a href="#" class="wp-block-hero__button wp-block-hero__button--outline">Documentación</a>
+                </div>
+            </div>
         </div>
-        <hr class="wp-block-divider divider-gradient my-10 border-gray-100" />
+        <div class="wp-block-stats my-10">
+            <div class="wp-block-stats__item">
+                <div class="wp-block-stats__value">240ms</div>
+                <div class="wp-block-stats__label">Carga Promedio</div>
+            </div>
+            <div class="wp-block-stats__item">
+                <div class="wp-block-stats__value">99.9%</div>
+                <div class="wp-block-stats__label">Disponibilidad</div>
+            </div>
+            <div class="wp-block-stats__item">
+                <div class="wp-block-stats__value">100%</div>
+                <div class="wp-block-stats__label">Basado en Tokens</div>
+            </div>
+        </div>
+        <h2 class="wp-block-heading font-bold text-3xl my-6">Librería de Componentes Stitch</h2>
+        <div class="wp-block-text prose mb-6">
+            <p>Los componentes de WordJS se adaptan automáticamente a las reglas del tema activo a través del contrato de tokens <code>--wjs-*</code>.</p>
+        </div>
         <div class="wp-block-card card-theme-accent p-8 rounded-3xl border my-6">
             <i class="fa-solid fa-wand-magic-sparkles text-2xl mb-4"></i>
-            <h3 class="text-xl font-bold mb-2">Diseño Adaptativo</h3>
-            <p class="opacity-80">Nuestros componentes se adaptan no solo al tamaño de la pantalla, sino al espíritu del tema activo.</p>
+            <h3 class="text-xl font-bold mb-2">Diseño Adaptativo Atómico</h3>
+            <p class="opacity-80">Nuestros componentes se adaptan no solo al tamaño de la pantalla, sino a la identidad visual del tema activo.</p>
         </div>
-        <div style="height: 40px"></div>
-        <div class="wp-block-button my-6 text-center">
-            <a href="#" class="wp-button button-primary bg-blue-600 text-white px-8 py-3 rounded-full font-bold">Ver Documentación</a>
+        <div class="wp-block-pricing my-12">
+            <div class="wp-block-pricing__plan">
+                <h3 class="wp-block-pricing__name">Starter</h3>
+                <div class="wp-block-pricing__price">$0<span class="wp-block-pricing__period">/mes</span></div>
+                <ul class="wp-block-pricing__features">
+                    <li class="wp-block-pricing__feature"><i class="fa-solid fa-check"></i>3 Proyectos</li>
+                    <li class="wp-block-pricing__feature"><i class="fa-solid fa-check"></i>Bloques Estándar</li>
+                </ul>
+                <a href="#" class="wp-block-pricing__button">Comenzar Gratis</a>
+            </div>
+            <div class="wp-block-pricing__plan wp-block-pricing__plan--highlighted">
+                <h3 class="wp-block-pricing__name">Professional</h3>
+                <div class="wp-block-pricing__price">$29<span class="wp-block-pricing__period">/mes</span></div>
+                <ul class="wp-block-pricing__features">
+                    <li class="wp-block-pricing__feature"><i class="fa-solid fa-check"></i>Proyectos Ilimitados</li>
+                    <li class="wp-block-pricing__feature"><i class="fa-solid fa-check"></i>Todos los Bloques Stitch</li>
+                </ul>
+                <a href="#" class="wp-block-pricing__button">Probar 14 Días</a>
+            </div>
+        </div>
+        <div class="wp-block-testimonial my-8">
+            <div class="wp-block-testimonial__quote">"La precisión del sistema de bloques de WordJS transformó la interacción de nuestro equipo con el CMS."</div>
+            <div class="wp-block-testimonial__author">Elena Korova</div>
+            <div class="wp-block-testimonial__role">Lead Product Designer</div>
+        </div>
+        <div class="wp-block-cta-banner my-10">
+            <h2 class="wp-block-cta-banner__title">¿Listo para construir el futuro?</h2>
+            <p class="wp-block-cta-banner__subtitle">Únete a miles de creadores construyendo experiencias web modernas con WordJS.</p>
+            <a href="#" class="wp-block-cta-banner__button">Comenzar Ahora</a>
         </div>
     `;
 

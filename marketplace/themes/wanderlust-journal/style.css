@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #041f1e;
+  --wjs-bg-surface: #132c2c;
+  --wjs-bg-surface-raised: #203837;
+  --wjs-color-primary: #14b8a6;
+  --wjs-color-primary-dark: #0f766e;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #0f766e;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ccfbf1;
+  --wjs-color-text-muted: #80a7a1;
+  --wjs-color-heading: #ccfbf1;
+  --wjs-color-link: #14b8a6;
+  --wjs-color-link-hover: #0f766e;
+  --wjs-border-subtle: #284744;
+  --wjs-outline: #50736e;
+  --wjs-outline-variant: #22403e;
+  --wjs-focus-ring: #14b8a6;
+}
+
 /* Theme: Wanderlust Journal (Organic Pastel Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap');
 

@@ -133,13 +133,26 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
     const doInstall = async (entry: MarketplaceEntry) => {
         setConfirmEntry(null);
         setInstalling((m) => ({ ...m, [entry.id]: true }));
+        const isUpdate = !!(entry.installed && entry.updateAvailable);
         try {
-            await marketplaceApi.install(entry.id);
-            addToast(`"${entry.name}" instalado. Actívalo y otorga sus permisos en Instalados.`, "success");
-            setEntries((list) => list.map((e) => (e.id === entry.id ? { ...e, installed: true, installedVersion: e.version, updateAvailable: false } : e)));
+            if (isUpdate) {
+                const res = await marketplaceApi.update(entry.id);
+                const newPerms = res.newPermissions || [];
+                addToast(
+                    newPerms.length
+                        ? `"${entry.name}" actualizado a v${entry.version}. Declara ${newPerms.length} permiso(s) nuevo(s) — revísalos en Instalados.`
+                        : `"${entry.name}" actualizado a v${entry.version}.`,
+                    "success"
+                );
+                setEntries((list) => list.map((e) => (e.id === entry.id ? { ...e, installedVersion: entry.version, updateAvailable: false, updatable: false } : e)));
+            } else {
+                await marketplaceApi.install(entry.id);
+                addToast(`"${entry.name}" instalado. Actívalo y otorga sus permisos en Instalados.`, "success");
+                setEntries((list) => list.map((e) => (e.id === entry.id ? { ...e, installed: true, installedVersion: e.version, updateAvailable: false } : e)));
+            }
             onInstalled();
         } catch (e: any) {
-            addToast(e?.message || "No se pudo instalar el plugin.", "error");
+            addToast(e?.message || (isUpdate ? "No se pudo actualizar el plugin." : "No se pudo instalar el plugin."), "error");
         } finally {
             setInstalling((m) => ({ ...m, [entry.id]: false }));
         }
@@ -310,6 +323,14 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
                                     <div className="flex items-center gap-2 text-emerald-600 text-xs font-black uppercase tracking-wider bg-emerald-50 border border-emerald-100 rounded-xl px-4 py-3 justify-center w-full shadow-sm">
                                         <FaCheck className="text-[10px]" /> Instalado {e.active ? "(activo)" : "(inactivo)"}
                                     </div>
+                                ) : e.installed && e.updateAvailable && !e.updatable ? (
+                                    // Update exists but can't be applied in one click: this copy was installed by
+                                    // upload or from a different source, so replaying its grants/data onto catalog
+                                    // code would be a takeover. The safe path is uninstall (data + tables kept) then
+                                    // install from the catalog.
+                                    <div title="Se instaló por subida manual o desde otra fuente. Para actualizarlo, desinstálalo (conserva sus datos y tablas) e instálalo desde el catálogo." className="text-amber-700 text-[11px] font-semibold leading-snug bg-amber-50 border border-amber-100 rounded-xl px-4 py-3 w-full text-center">
+                                        v{e.version} disponible · desinstala y reinstálalo desde el catálogo para actualizar
+                                    </div>
                                 ) : (
                                     <Button onClick={() => setConfirmEntry(e)} disabled={busy} className="w-full justify-center shadow-lg shadow-gray-200/50">
                                         {busy ? (
@@ -333,7 +354,7 @@ export default function MarketplaceTab({ onInstalled }: { onInstalled: () => voi
             {confirmEntry && (
                 <div className="fixed inset-0 bg-slate-950/40 backdrop-blur-sm z-[100] flex items-center justify-center p-4" onClick={() => setConfirmEntry(null)}>
                     <div className="bg-white/95 backdrop-blur-lg rounded-[32px] shadow-[0_32px_64px_-16px_rgba(0,0,0,0.12)] border border-slate-200/50 w-full max-w-md p-8 animate-in fade-in zoom-in-95 duration-200" onClick={(ev) => ev.stopPropagation()}>
-                        <h3 className="font-extrabold text-lg text-slate-900 mb-1">Instalar {confirmEntry.name}</h3>
+                        <h3 className="font-extrabold text-lg text-slate-900 mb-1">{confirmEntry.installed && confirmEntry.updateAvailable ? "Actualizar" : "Instalar"} {confirmEntry.name}</h3>
                         <p className="text-xs font-medium text-slate-500 mb-5 leading-relaxed">
                             v{confirmEntry.version} · {fmtKB(confirmEntry.size)} · el paquete se verifica con sha256 y pasa el mismo escaneo de seguridad que una subida manual.
                         </p>

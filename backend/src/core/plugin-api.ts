@@ -71,6 +71,11 @@ const PROTECTED_OPTION_NAMES = new Set([
     // its OWN egress (or tamper with other plugins' entries), routing around the setEgressAllowlist
     // no-self-grant guard — same self-escalation class as plugin_grants. Off-limits to untrusted plugins.
     'plugin_egress_hosts',
+    // 'plugin_origins' binds each installed plugin to the catalog SOURCE it came from, gating one-click
+    // updates so a second source an admin adds can't push an "update" that takes over the plugin with its
+    // approved grants + preserved secrets (see core/plugin-origins.ts). A settings:write plugin rewriting
+    // it could forge its own provenance / re-open the takeover hole. Off-limits to untrusted plugins.
+    'plugin_origins',
     // 'cron' is the scheduled-events blob. Writing it raw injects hook callbacks (spoofed/omitted
     // pluginSlug runs core & cross-plugin handlers) and bypasses the capacity caps that only sit on the
     // scheduleEvent API. 'plugin_strikes'/'plugin_health' let a plugin clear its own crash record to
@@ -766,4 +771,4 @@ function createPluginApi(slug: string) {
 // projectUser is exported for TESTS only: it is one of the two wires carrying the corporate-mailbox grant
 // to a plugin, and deleting that field left the whole suite green because the gate suite hand-builds the
 // projection. Asserting the real function is what makes that wire load-bearing.
-module.exports = { createPluginApi, isProtectedOption, projectUser };
+module.exports = { createPluginApi, isProtectedOption, projectUser, assertSqlAllowed };

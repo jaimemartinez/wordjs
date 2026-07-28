@@ -1,0 +1,402 @@
+@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@400;600;700&family=Be+Vietnam+Pro:wght@400;500;700&display=swap');
+
+/* =========================================
+   THEME: VERDANT STUDIO (Botanical / Landscaping)
+   Concept: fresh botanical calm. Ivory canvas,
+   deep-forest headings, sage chips, generous pill
+   radii, soft forest-green shadows, organic radial
+   washes. Quicksand headings over Be Vietnam Pro
+   body. Derived from the Stitch design "Verdant".
+   ========================================= */
+
+:root {
+  /* ── Canonical palette ─────────────────────────────── */
+  --wjs-color-primary: #2d4b3e;          /* forest (primary-container CTA) */
+  --wjs-color-primary-dark: #163428;
+  --wjs-color-secondary: #4a654e;        /* moss */
+  --wjs-color-secondary-dark: #334d38;
+  --wjs-color-accent: #c9e8cb;           /* sage chip */
+  --wjs-color-success: #4a654e;
+  --wjs-color-danger: #ba1a1a;
+  --wjs-color-warning: #bf8b30;
+  --wjs-color-info: #4e7a8c;
+  --wjs-color-light: #f4f4f0;
+  --wjs-color-dark: #163428;
+  /* on-colors (max-contrast text on each solid color) */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-accent: #07200f;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #241a00;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #1b1c1a;
+  --wjs-color-on-dark: #ffffff;
+
+  /* ── Surfaces, text & borders ──────────────────────── */
+  --wjs-bg-canvas: #faf9f5;
+  --wjs-bg-surface: #faf9f5;             /* cards float on muted sections */
+  --wjs-bg-surface-glass: rgba(250, 249, 245, 0.9); /* scrolled public header */
+  --wjs-bg-muted: #f4f4f0;               /* surface-container-low sections */
+  --wjs-color-text-main: #1b1c1a;
+  --wjs-color-text-muted: #424844;
+  --wjs-color-heading: #163428;          /* every heading is deep forest */
+  --wjs-color-link: #2d4b3e;
+  --wjs-color-link-hover: #163428;
+  --wjs-border-subtle: #e3e2df;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(74, 101, 78, 0.3);
+  --wjs-container-max: 1280px;
+
+  /* ── Public footer chrome (read by the Footer component) */
+  --wjs-bg-footer: #163428;
+  --wjs-color-text-footer-main: #ffffff;
+  --wjs-color-text-footer-dim: rgba(233, 232, 228, 0.8);
+
+  /* ── Typography ────────────────────────────────────── */
+  --wjs-font-family-base: 'Be Vietnam Pro', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Quicksand', system-ui, sans-serif;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.5;
+  --wjs-heading-weight: 600;
+  --wjs-heading-line-height: 1.2;
+  --wjs-h1: 3rem;                        /* display-lg 48px */
+  --wjs-h2: 2rem;                        /* headline-md 32px */
+  --wjs-h3: 1.5rem;                      /* headline-sm 24px */
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.0625rem;
+  --wjs-h6: 0.875rem;
+  --wjs-h1-tracking: -0.02em;
+
+  /* ── Shape & shadow (organic pills, soft green depth) */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 0.75rem;
+  --wjs-radius: 1rem;                    /* rounded-DEFAULT 1rem */
+  --wjs-radius-md: 1.5rem;
+  --wjs-radius-lg: 2rem;
+  --wjs-radius-pill: 9999px;
+  --wjs-shadow-sm: 0 1px 2px rgba(45, 75, 62, 0.05);
+  --wjs-shadow: 0 20px 40px -10px rgba(45, 75, 62, 0.08);   /* the soft-shadow */
+  --wjs-shadow-md: 0 24px 48px -12px rgba(45, 75, 62, 0.12);
+  --wjs-shadow-lg: 0 32px 64px -16px rgba(45, 75, 62, 0.16);
+
+  /* ══ Block tokens (values only; wordjs-ui.css owns the rules) ══ */
+
+  /* Buttons — forest pill CTAs, Quicksand bold labels */
+  --wjs-button-bg: #2d4b3e;
+  --wjs-button-color: #ffffff;
+  --wjs-button-family: 'Quicksand', sans-serif;
+  --wjs-button-size: 0.875rem;
+  --wjs-button-weight: 700;
+  --wjs-button-tracking: 0.05em;
+  --wjs-button-radius: 9999px;
+  --wjs-button-pad-x: 2rem;
+  --wjs-button-pad-y: 1rem;
+  --wjs-button-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --wjs-button-hover-bg: #163428;
+  --wjs-button-hover-color: #ffffff;
+  --wjs-button-hover-shadow: var(--wjs-shadow);
+  --wjs-button-hover-transform: none;
+
+  /* Hero — ivory stage with organic radial washes */
+  --wjs-hero-bg: #faf9f5;
+  /* Design: half-size organic wash divs at opacity .20, fading out at 70% */
+  --wjs-hero-gradient: radial-gradient(circle at top right, rgba(201, 232, 203, 0.2), transparent 70%), radial-gradient(circle at bottom left, rgba(200, 234, 216, 0.2), transparent 70%);
+  --wjs-hero-pad: 6rem 1.5rem;
+  --wjs-hero-text-align: center;
+  --wjs-hero-title-color: #163428;
+  --wjs-hero-title-size: 3rem;
+  --wjs-hero-title-weight: 700;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: #424844;
+  --wjs-hero-subtitle-size: 1.125rem;
+  --wjs-hero-button-bg: #2d4b3e;
+  --wjs-hero-button-color: #ffffff;
+  --wjs-hero-button-radius: 9999px;
+  --wjs-hero-button-pad: 1rem 2rem;
+  --wjs-hero-button-size: 0.875rem;
+  --wjs-hero-button-weight: 700;
+  --wjs-hero-button-outline-bg: transparent;
+  --wjs-hero-button-outline-border: #4a654e;
+  --wjs-hero-button-outline-color: #4a654e;
+  --wjs-hero-button-outline-hover-bg: rgba(74, 101, 78, 0.05);
+
+  /* Cards — floating rounded panels with sage icon coins */
+  --wjs-card-bg: #faf9f5;
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: rgba(227, 226, 223, 0.3);
+  --wjs-card-radius: 1rem;
+  --wjs-card-pad: 2rem;
+  --wjs-card-shadow: 0 20px 40px -10px rgba(45, 75, 62, 0.08);
+  --wjs-card-hover-shadow: 0 24px 48px -12px rgba(45, 75, 62, 0.12);
+  --wjs-card-hover-transform: translateY(-8px);
+  --wjs-card-title-color: #163428;
+  --wjs-card-title-size: 1.5rem;
+  --wjs-card-title-weight: 600;
+  --wjs-card-desc-color: #424844;
+  --wjs-card-icon-bg: #c9e8cb;
+  --wjs-card-icon-color: #2d4b3e;
+  --wjs-card-icon-radius: 9999px;
+  --wjs-card-icon-size: 1.875rem;
+  --wjs-card-icon-glyph: 1rem;
+
+  /* Pricing — soft tiers, deep-forest highlighted plan */
+  --wjs-pricing-bg: #faf9f5;
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: rgba(227, 226, 223, 0.5);
+  --wjs-pricing-radius: 1.5rem;
+  --wjs-pricing-pad: 2rem;
+  --wjs-pricing-shadow: none;
+  --wjs-pricing-hover-shadow: var(--wjs-shadow);
+  --wjs-pricing-accent: #4a654e;
+  --wjs-pricing-name-color: #163428;
+  --wjs-pricing-name-family: 'Quicksand', sans-serif;
+  --wjs-pricing-name-size: 1.5rem;
+  --wjs-pricing-name-weight: 600;
+  --wjs-pricing-price-color: #163428;
+  --wjs-pricing-price-family: 'Be Vietnam Pro', sans-serif;
+  --wjs-pricing-price-size: 2.25rem;
+  --wjs-pricing-price-weight: 700;
+  --wjs-pricing-period-color: #424844;
+  --wjs-pricing-feature-color: #424844;
+  --wjs-pricing-button-bg: #faf9f5;
+  --wjs-pricing-button-border-color: #2d4b3e;
+  --wjs-pricing-button-color: #2d4b3e;
+  --wjs-pricing-button-hover-bg: #e3e2df;
+  --wjs-pricing-button-radius: 9999px;
+  --wjs-pricing-button-pad: 0.75rem 1.5rem;
+  --wjs-pricing-button-weight: 700;
+  --wjs-pricing-button-on-accent: #07200f;
+  --wjs-pricing-highlight-bg: #2d4b3e;
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-border-color: #2d4b3e;
+  --wjs-pricing-highlight-color: rgba(255, 255, 255, 0.9);
+  --wjs-pricing-highlight-name-color: #ffffff;
+  --wjs-pricing-highlight-price-color: #ffffff;
+  --wjs-pricing-highlight-period-color: rgba(255, 255, 255, 0.75);
+  --wjs-pricing-highlight-feature-color: rgba(255, 255, 255, 0.9);
+  --wjs-pricing-highlight-scale: 1.04;
+  --wjs-pricing-highlight-shadow: 0 20px 40px -10px rgba(45, 75, 62, 0.08);
+  --wjs-pricing-highlight-button-bg: #cceace;
+  --wjs-pricing-highlight-button-shadow: none;
+
+  /* Quote / testimonial — italic Quicksand in deep forest */
+  --wjs-quote-accent: #4a654e;
+  --wjs-quote-bar-width: 0;
+  --wjs-quote-family: 'Quicksand', sans-serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-size: 1.5rem;
+  --wjs-quote-color: #163428;
+  --wjs-quote-mark-opacity: 0.3;
+  --wjs-quote-cite-color: #424844;
+  --wjs-testimonial-bg: transparent;
+  --wjs-testimonial-border-width: 0;
+  --wjs-testimonial-shadow: none;
+  --wjs-testimonial-quote-family: 'Quicksand', sans-serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-size: 1.75rem;
+  --wjs-testimonial-quote-color: #163428;
+  --wjs-testimonial-mark-color: #4a654e;
+  --wjs-testimonial-mark-opacity: 0.3;
+  --wjs-testimonial-author-color: #163428;
+  --wjs-testimonial-author-family: 'Quicksand', sans-serif;
+  --wjs-testimonial-author-weight: 700;
+  --wjs-testimonial-role-color: #424844;
+  --wjs-testimonial-avatar-bg: #e3e2df;
+  --wjs-testimonial-avatar-color: #2d4b3e;
+  --wjs-testimonial-avatar-radius: 9999px;
+
+  /* Search + form — rounded sage-ringed inputs, pill submit */
+  --wjs-search-input-bg: #faf9f5;
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: rgba(74, 101, 78, 0.3);
+  --wjs-search-input-radius: 3rem;
+  --wjs-search-input-pad: 0.75rem 1rem;
+  --wjs-search-input-color: #1b1c1a;
+  --wjs-search-input-family: 'Be Vietnam Pro', sans-serif;
+  --wjs-search-placeholder-color: rgba(66, 72, 68, 0.6);
+  --wjs-search-focus-color: #4a654e;
+  --wjs-search-focus-ring: 0 0 0 1px #4a654e;
+  --wjs-search-button-bg: #2d4b3e;
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-family: 'Quicksand', sans-serif;
+  --wjs-search-button-weight: 700;
+  --wjs-search-button-tracking: 0.05em;
+  --wjs-search-button-radius: 9999px;
+  --wjs-search-button-pad: 1rem 2rem;
+  --wjs-form-label-color: #163428;
+  --wjs-form-label-weight: 700;
+  --wjs-form-label-size: 0.875rem;
+  --wjs-form-submit-size: 0.875rem;
+
+  /* Accordion — rounded leaf-soft items */
+  --wjs-accordion-bg: transparent;
+  --wjs-accordion-item-bg: #faf9f5;
+  --wjs-accordion-item-border-width: 1px;
+  --wjs-accordion-item-border-color: rgba(227, 226, 223, 0.7);
+  --wjs-accordion-item-radius: 1rem;
+  --wjs-accordion-item-gap: 0.75rem;
+  --wjs-accordion-header-family: 'Quicksand', sans-serif;
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-header-color: #163428;
+  --wjs-accordion-icon-color: #4a654e;
+  --wjs-accordion-panel-color: #424844;
+
+  /* Posts grid — soft floating cards */
+  --wjs-posts-bg: #faf9f5;
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: rgba(227, 226, 223, 0.7);
+  --wjs-posts-radius: 1rem;
+  --wjs-posts-shadow: var(--wjs-shadow-sm);
+  --wjs-posts-hover-shadow: var(--wjs-shadow);
+  --wjs-posts-hover-transform: translateY(-6px);
+  --wjs-posts-title-color: #163428;
+  --wjs-posts-title-weight: 600;
+  --wjs-posts-excerpt-color: #424844;
+  --wjs-posts-date-color: #4a654e;
+  --wjs-posts-thumb-radius: 0.75rem;
+  --wjs-posts-thumb-bg: linear-gradient(135deg, #c9e8cb, #dde5d9);
+
+  /* CTA banner — sage-washed rounded panel */
+  --wjs-cta-bg: rgba(173, 206, 189, 0.2);
+  --wjs-cta-color: #424844;
+  --wjs-cta-title-color: #163428;
+  --wjs-cta-title-family: 'Quicksand', sans-serif;
+  --wjs-cta-radius: 2rem;
+  --wjs-cta-shadow: var(--wjs-shadow);
+  --wjs-cta-button-bg: #2d4b3e;
+  --wjs-cta-button-color: #ffffff;
+  --wjs-cta-button-family: 'Quicksand', sans-serif;
+  --wjs-cta-button-weight: 700;
+  --wjs-cta-button-radius: 9999px;
+  --wjs-cta-button-hover-bg: #163428;
+}
+
+/* =========================================
+   SITE CHROME — public header
+   ========================================= */
+
+header {
+  /* the design's floating nav rounds its bottom corners and
+     floats on a forest-tinted hairline shadow (measured) */
+  border-bottom-left-radius: 2rem;
+  border-bottom-right-radius: 2rem;
+  box-shadow: 0 1px 2px rgba(22, 52, 40, 0.05);
+}
+
+.wjs-header-logo span {
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 700;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+  color: #163428;
+}
+
+.wjs-header-nav a {
+  font-family: 'Quicksand', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #424844;
+  transition: color 0.3s ease;
+}
+
+.wjs-header-nav a:hover {
+  color: #163428;
+}
+
+.wjs-header-actions a {
+  background: #2d4b3e;
+  color: #ffffff;
+  font-family: 'Quicksand', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  padding: 0.75rem 1.5rem;
+  border-radius: 9999px;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+  transition: background-color 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+.wjs-header-actions a:hover {
+  background: #163428;
+  color: #ffffff;
+}
+
+@media (max-width: 767.98px) {
+  .wjs-header-logo span {
+    font-size: 1.25rem;
+  }
+}
+
+/* =========================================
+   SITE CHROME — public footer
+   ========================================= */
+
+footer {
+  /* deep forest footer: rescope the tokens its links and
+     chips read so hovers stay visible on the dark green */
+  --wjs-color-primary: #c9e8cb;
+  --wjs-bg-surface-hover: rgba(255, 255, 255, 0.12);
+  --wjs-border-subtle: rgba(255, 255, 255, 0.15);
+  border-top-left-radius: 2rem;
+  border-top-right-radius: 2rem;
+  /* Measured: a moss hairline seams the footer to the page */
+  border-top: 1px solid rgba(74, 101, 78, 0.2);
+}
+
+footer h3 {
+  font-family: 'Quicksand', sans-serif;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+footer h4 {
+  font-family: 'Quicksand', sans-serif;
+  font-size: 0.875rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  color: #99baa9;
+}
+
+footer a {
+  transition: color 0.3s ease;
+}
+
+/* =========================================
+   DISTINCTIVE RULES — organic freshness
+   ========================================= */
+
+::selection {
+  background: #c9e8cb;
+  color: #163428;
+}
+
+h1 {
+  font-weight: 700;
+}
+
+/* Quicksand CTA labels (measured); the framework exposes no
+   family/tracking seams for these buttons */
+.wp-block-hero__button,
+.wp-block-pricing__button {
+  font-family: 'Quicksand', sans-serif;
+  letter-spacing: 0.05em;
+}
+
+.wp-block-pricing__button {
+  font-size: 0.875rem;
+}
+
+.wjs-form-submit {
+  letter-spacing: 0.05em;
+}
+
+/* generously rounded imagery, like the design's botanical photos */
+.wjs-content img {
+  border-radius: 1.5rem;
+}
+
+hr {
+  border-color: #e3e2df;
+}

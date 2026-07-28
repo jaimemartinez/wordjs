@@ -25,9 +25,14 @@ export default function PostEditorPage() {
 
     const [title, setTitle] = useState("");
     const [slug, setSlug] = useState("");
-    const [content, setContent] = useState("");
-    // Store Puck data
+    // The serialized HTML body is REF, not state: it is regenerated on every canvas change (i.e. on
+    // every keystroke) and is only ever read inside handleSubmit — never during render. As state it
+    // re-rendered the whole editor on each letter typed.
+    const contentRef = useRef("");
+    // Store Puck data. `puckData` seeds the canvas ONCE (initialData); the live mirror used at save
+    // time is the ref, updated in onChange — writing state there re-rendered the editor per keystroke.
     const [puckData, setPuckData] = useState<Data>({ content: [], root: {} });
+    const puckDataRef = useRef<Data>({ content: [], root: {} });
     const [status, setStatus] = useState("draft");
     const [commentStatus, setCommentStatus] = useState("open");
     const [categories, setCategories] = useState<Category[]>([]);
@@ -65,7 +70,7 @@ export default function PostEditorPage() {
                 .replace(/^-+|-+$/g, '');
             setSlug(generatedSlug);
             // Also update puckData to keep sidebar in sync
-            setPuckData(prev => ({
+            const withSlug = (prev: Data): Data => ({
                 ...prev,
                 root: {
                     ...(prev.root as any),
@@ -75,7 +80,9 @@ export default function PostEditorPage() {
                         slug: generatedSlug
                     }
                 }
-            }));
+            });
+            setPuckData(withSlug);
+            puckDataRef.current = withSlug(puckDataRef.current);
             setLastSyncedTitle(title);
         }
     }, [title, slugManuallyEdited, lastSyncedTitle]);
@@ -95,13 +102,14 @@ export default function PostEditorPage() {
             const post = await postsApi.get(postId!);
             setTitle(post.title);
             setSlug(post.slug);
-            setContent(post.content);
+            contentRef.current = post.content;
             setStatus(post.status);
             setCommentStatus(post.commentStatus || "open");
 
             // Load Puck data from meta if available
             if (post.meta && post.meta._puck_data) {
                 setPuckData(post.meta._puck_data);
+                puckDataRef.current = post.meta._puck_data;
                 legacyHtmlRef.current = null; // real Puck blocks — not a legacy HTML body
                 if (post.meta._puck_data.root?.title) {
                     setTitle(post.meta._puck_data.root.title);
@@ -129,6 +137,7 @@ export default function PostEditorPage() {
                     }
                 };
                 setPuckData(seededData);
+                puckDataRef.current = seededData;
                 // Safety net (belt-and-braces): keep the original body so an empty-canvas save can't blank
                 // the post if the HTMLEmbed block is deleted before its HTML round-trips. Once the block
                 // round-trips through onChange (content.length > 0), legacyHtmlRef is cleared.
@@ -161,7 +170,9 @@ export default function PostEditorPage() {
     // Cleared once the user builds real blocks, after which the normal block→HTML path takes over.
     const legacyHtmlRef = useRef<string | null>(null);
 
-    const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }) => {
+    // Returns whether the save actually landed, so the editor chrome can distinguish success from
+    // failure (saved-state pill, autosave backoff) instead of assuming every attempt succeeded.
+    const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }): Promise<boolean> => {
         const isAutosave = !!(e && "autosave" in e && e.autosave);
         if (e && "preventDefault" in e) e.preventDefault();
         setSaving(true);
@@ -171,14 +182,14 @@ export default function PostEditorPage() {
         if (unhydratedSaveBlocked({ isNew, loaded })) {
             if (!isAutosave) await alert(trStr("No se pudo cargar el contenido; el guardado está deshabilitado para no sobrescribir la publicación.", language));
             setSaving(false);
-            return;
+            return false;
         }
 
         try {
             // Flush any open inline editor and read the LIVE Puck store (same hardening as the page
             // editor): Puck's onChange deep-equal guard can leave the mirrored state stale.
             try { (window as any).puckCommitActive?.(); } catch { /* no open editor */ }
-            const liveData = ((window as any).puckGetData?.() ?? puckData);
+            const liveData = ((window as any).puckGetData?.() ?? puckDataRef.current);
             const root = liveData.root as any;
             const finalTitle = root?.props?.title || root?.title || title;
             const finalSlug = root?.props?.slug || root?.slug || slug;
@@ -187,13 +198,13 @@ export default function PostEditorPage() {
                 // A background save must never pop a modal — just wait for a title.
                 if (!isAutosave) await alert(t('post.edit.titleRequired'));
                 setSaving(false);
-                return;
+                return false;
             }
 
             const postData = {
                 title: finalTitle,
                 slug: finalSlug,
-                content, // This content is now generated from Puck
+                content: contentRef.current, // This content is now generated from Puck
                 status,
                 commentStatus,
                 meta: {
@@ -228,11 +239,13 @@ export default function PostEditorPage() {
             }
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
+            return true;
         } catch (error: any) {
             console.error("Failed to save post:", error);
             if (!isAutosave) {
                 await alert(`${t('post.edit.saveFailed')}: ${error.message || t('post.edit.unknownError')}`);
             }
+            return false;
         } finally {
             setSaving(false);
         }
@@ -263,6 +276,7 @@ export default function PostEditorPage() {
                 hasChanges={isDirty}
                 onSave={handleSubmit as any}
                 onCancel={() => router.back()}
+                breadcrumbRoot="Entradas"
                 pageId={postId || undefined}
                 previewSlug={slug || undefined}
                 onChange={(data) => {
@@ -271,7 +285,9 @@ export default function PostEditorPage() {
                         setIsDirty(true);
                     }
 
-                    setPuckData(data);
+                    // Mirror into the ref (not state): saving reads this, and a setState here would
+                    // re-render the whole editor on every keystroke.
+                    puckDataRef.current = data;
                     const root = data.root as any;
                     const newTitle = root?.props?.title || root?.title;
                     const newSlug = root?.props?.slug || root?.slug;
@@ -307,7 +323,7 @@ export default function PostEditorPage() {
                                 html += props.html || '';
                             }
                         });
-                        setContent(html);
+                        contentRef.current = html;
                     }
                 }}
             />

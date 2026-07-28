@@ -8,45 +8,53 @@
  * so nothing is ever hidden.
  */
 
-export type BlockMeta = { icon: string; group: string; desc?: string; label?: string };
+/**
+ * `icon` is the legacy Font Awesome class (still consumed elsewhere); `ms` is the Material Symbols
+ * ligature name for the Stitch editor chrome (<MSym/>). The MS font is a NAMED-ICON SUBSET — a name
+ * outside it renders as an empty box — so `ms` values MUST exist in the subset (see puck-theme.css);
+ * consumers fall back to "widgets" when `ms` is missing.
+ */
+export type BlockMeta = { icon: string; ms?: string; group: string; desc?: string; label?: string };
 
 export const BLOCK_META: Record<string, BlockMeta> = {
     // Layout
-    Hero: { icon: "fa-mountain-sun", group: "Diseño", desc: "Cabecera a pantalla con imagen y botones" },
-    Section: { icon: "fa-square-full", group: "Diseño", desc: "Sección a todo el ancho" },
-    Columns: { icon: "fa-table-columns", group: "Diseño", desc: "Columnas" },
-    Grid: { icon: "fa-table-cells", group: "Diseño", desc: "Cuadrícula responsive" },
-    FlexRow: { icon: "fa-grip-lines", group: "Diseño", desc: "Fila flexible" },
-    Spacer: { icon: "fa-arrows-up-down", group: "Diseño", desc: "Espaciado vertical" },
-    Divider: { icon: "fa-minus", group: "Diseño", desc: "Línea divisoria" },
+    Hero: { icon: "fa-mountain-sun", ms: "web", group: "Diseño", desc: "Cabecera a pantalla con imagen y botones" },
+    Section: { icon: "fa-square-full", ms: "crop_16_9", group: "Diseño", desc: "Sección a todo el ancho" },
+    Columns: { icon: "fa-table-columns", ms: "view_column", group: "Diseño", desc: "Columnas" },
+    Grid: { icon: "fa-table-cells", ms: "grid_view", group: "Diseño", desc: "Cuadrícula responsive" },
+    FlexRow: { icon: "fa-grip-lines", ms: "view_stream", group: "Diseño", desc: "Fila flexible" },
+    Spacer: { icon: "fa-arrows-up-down", ms: "unfold_more", group: "Diseño", desc: "Espaciado vertical" },
+    Divider: { icon: "fa-minus", ms: "horizontal_rule", group: "Diseño", desc: "Línea divisoria" },
     // Content
-    Heading: { icon: "fa-heading", group: "Contenido", desc: "Título" },
-    Text: { icon: "fa-align-left", group: "Contenido", desc: "Párrafo de texto enriquecido" },
-    Button: { icon: "fa-hand-pointer", group: "Contenido", desc: "Botón / llamada a la acción" },
-    Card: { icon: "fa-id-card", group: "Contenido", desc: "Tarjeta con imagen y texto" },
-    Accordion: { icon: "fa-chevron-down", group: "Contenido", desc: "Acordeón / FAQ" },
-    Tabs: { icon: "fa-folder", group: "Contenido", desc: "Pestañas" },
-    Quote: { icon: "fa-quote-left", group: "Contenido", desc: "Cita destacada" },
-    Table: { icon: "fa-table", group: "Contenido", desc: "Tabla de datos" },
-    IconList: { icon: "fa-list-check", group: "Contenido", desc: "Lista de ventajas con iconos" },
-    HTMLEmbed: { icon: "fa-code", group: "Contenido", desc: "HTML personalizado (limpio)" },
+    Heading: { icon: "fa-heading", ms: "title", group: "Contenido", desc: "Título" },
+    Text: { icon: "fa-align-left", ms: "subject", group: "Contenido", desc: "Párrafo de texto enriquecido" },
+    Button: { icon: "fa-hand-pointer", ms: "smart_button", group: "Contenido", desc: "Botón / llamada a la acción" },
+    Card: { icon: "fa-id-card", ms: "badge", group: "Contenido", desc: "Tarjeta con imagen y texto" },
+    Accordion: { icon: "fa-chevron-down", ms: "expand_more", group: "Contenido", desc: "Acordeón / FAQ" },
+    Tabs: { icon: "fa-folder", ms: "web_asset", group: "Contenido", desc: "Pestañas" },
+    Quote: { icon: "fa-quote-left", ms: "format_quote", group: "Contenido", desc: "Cita destacada" },
+    Table: { icon: "fa-table", ms: "table_chart", group: "Contenido", desc: "Tabla de datos" },
+    IconList: { icon: "fa-list-check", ms: "list_alt", group: "Contenido", desc: "Lista de ventajas con iconos" },
+    HTMLEmbed: { icon: "fa-code", ms: "code", group: "Contenido", desc: "HTML personalizado (limpio)" },
     // Media
-    Image: { icon: "fa-image", group: "Medios", desc: "Imagen" },
-    VideoEmbed: { icon: "fa-video", group: "Medios", desc: "Video incrustado" },
-    AudioPlayer: { icon: "fa-music", group: "Medios", desc: "Reproductor de audio" },
-    CardGallery: { icon: "fa-images", group: "Medios", desc: "Galería de tarjetas", label: "Card Gallery" },
-    PhotoCarousel: { icon: "fa-images", group: "Medios", desc: "Carrusel de fotos", label: "Photo Carousel" },
-    VideoGallery: { icon: "fa-film", group: "Medios", desc: "Galería de videos", label: "Video Gallery" },
+    Image: { icon: "fa-image", ms: "image", group: "Medios", desc: "Imagen" },
+    VideoEmbed: { icon: "fa-video", ms: "play_circle", group: "Medios", desc: "Video incrustado" },
+    AudioPlayer: { icon: "fa-music", ms: "music_note", group: "Medios", desc: "Reproductor de audio" },
+    CardGallery: { icon: "fa-images", ms: "collections", group: "Medios", desc: "Galería de tarjetas", label: "Card Gallery" },
+    PhotoCarousel: { icon: "fa-images", ms: "view_carousel", group: "Medios", desc: "Carrusel de fotos", label: "Photo Carousel" },
+    VideoGallery: { icon: "fa-film", ms: "movie", group: "Medios", desc: "Galería de videos", label: "Video Gallery" },
     // Marketing
-    PricingTable: { icon: "fa-tags", group: "Marketing", desc: "Tabla de precios" },
-    Testimonial: { icon: "fa-quote-left", group: "Marketing", desc: "Testimonio" },
-    CTABanner: { icon: "fa-bullhorn", group: "Marketing", desc: "Banner de conversión" },
-    Stats: { icon: "fa-chart-simple", group: "Marketing", desc: "Cifras destacadas" },
-    SocialLinks: { icon: "fa-share-nodes", group: "Marketing", desc: "Iconos de redes sociales" },
+    PricingTable: { icon: "fa-tags", ms: "storefront", group: "Marketing", desc: "Tabla de precios" },
+    Testimonial: { icon: "fa-quote-left", ms: "forum", group: "Marketing", desc: "Testimonio" },
+    CTABanner: { icon: "fa-bullhorn", ms: "call_to_action", group: "Marketing", desc: "Banner de conversión" },
+    Stats: { icon: "fa-chart-simple", ms: "insert_chart", group: "Marketing", desc: "Cifras destacadas" },
+    SocialLinks: { icon: "fa-share-nodes", ms: "share", group: "Marketing", desc: "Iconos de redes sociales" },
     // Dynamic
-    PostsGrid: { icon: "fa-newspaper", group: "Dinámicos", desc: "Cuadrícula de entradas" },
-    CategoryPosts: { icon: "fa-folder-tree", group: "Dinámicos", desc: "Entradas por categoría" },
-    SearchBar: { icon: "fa-magnifying-glass", group: "Dinámicos", desc: "Barra de búsqueda" },
+    PostsGrid: { icon: "fa-newspaper", ms: "newspaper", group: "Dinámicos", desc: "Cuadrícula de entradas" },
+    CategoryPosts: { icon: "fa-folder-tree", ms: "category", group: "Dinámicos", desc: "Entradas por categoría" },
+    SearchBar: { icon: "fa-magnifying-glass", ms: "search", group: "Dinámicos", desc: "Barra de búsqueda" },
+    Form: { icon: "fa-envelope-open-text", ms: "mail", group: "Marketing", desc: "Formulario con envíos guardados" },
+    Symbol: { icon: "fa-clone", ms: "collections", group: "Diseño", desc: "Grupo reutilizable sincronizado: editas el símbolo y cambia en todas las páginas" },
 };
 
 export const FALLBACK_GROUP = "Más";
@@ -59,8 +67,17 @@ export const GROUP_ICON: Record<string, string> = {
     "Dinámicos": "fa-bolt",
     [FALLBACK_GROUP]: "fa-puzzle-piece",
 };
+/** Material Symbols counterpart of GROUP_ICON (same subset constraint as BlockMeta.ms). */
+export const GROUP_MS_ICON: Record<string, string> = {
+    "Diseño": "space_dashboard",
+    "Contenido": "edit",
+    "Medios": "imagesmode",
+    "Marketing": "bolt",
+    "Dinámicos": "rss_feed",
+    [FALLBACK_GROUP]: "widgets",
+};
 
-export type BlockItem = { name: string; label: string; icon: string; desc?: string; group: string };
+export type BlockItem = { name: string; label: string; icon: string; ms: string; desc?: string; group: string };
 
 /**
  * Flatten the live Puck components into a display-ready, filtered, group-ordered list. Optional
@@ -74,10 +91,11 @@ export function getBlockItems(components: Record<string, any> | undefined, query
         const meta = BLOCK_META[name];
         const label = (def?.label as string) || meta?.label || name;
         const icon = meta?.icon || "fa-cube";
+        const ms = meta?.ms || "widgets";
         const desc = meta?.desc;
         const group = meta?.group || FALLBACK_GROUP;
         if (q && !`${label} ${name} ${desc || ""}`.toLowerCase().includes(q)) continue;
-        items.push({ name, label, icon, desc, group });
+        items.push({ name, label, icon, ms, desc, group });
     }
     const groupRank = (g: string) => {
         const i = GROUP_ORDER.indexOf(g);

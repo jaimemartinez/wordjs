@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import MSym from "../editor/MSym";
 
 /**
  * Per-block entrance animation (Webflow-style "scroll reveal"). The field stores
@@ -11,19 +12,76 @@ import React from "react";
  *  - The SSR markup ships fully visible; only live JS sets data-wjs-anim="armed" (opacity 0) right
  *    before observing, so no-JS visitors and crawlers always see content.
  *  - `prefers-reduced-motion: reduce` skips both the JS arming AND the CSS rules (belt + braces).
- *  - Inside the editor canvas (puck.isEditing) nothing animates — authors preview on the live site.
+ *  - The editor canvas DOES animate, so authors judge the motion where they are working. It fires
+ *    once per block on scroll-in (the observer disconnects), never on every re-render, so it can
+ *    never flicker while typing; the toolbar's replay button re-arms everything on demand.
  * The JS-driven state lives in a data attribute, not className: React owns className and would
  * wipe classes added imperatively on any re-render; it never touches attributes it didn't render.
  */
 
 export type AnimSpec = {
-    type?: "" | "fade" | "fade-up" | "fade-left" | "fade-right" | "zoom";
+    type?:
+        | ""
+        | "fade"
+        | "fade-up"
+        | "fade-down"
+        | "fade-left"
+        | "fade-right"
+        | "zoom"
+        | "zoom-out"
+        | "blur"
+        | "rise"
+        | "flip"
+        | "reveal"
+        | "swing";
     duration?: number;
     delay?: number;
+    // ── Interacción de scroll (independiente de la entrada) ─────────────
+    // Scroll-driven effect via CSS `animation-timeline: view()`: progress follows the element's own
+    // journey through the viewport, forwards AND backwards, with no JS and no observer. Browsers
+    // without support simply skip it (@supports-gated in wordjs-ui.css).
+    scroll?: "" | "parallax" | "fade" | "scale" | "rotate";
+    /** Intensity 0–100 (default 30). Quantised to steps of ten — see animClasses. */
+    scrollAmount?: number;
 };
 
-export const animClasses = (anim?: AnimSpec): string =>
-    anim?.type ? `wjs-anim wjs-anim-${anim.type}` : "";
+/**
+ * Classes the shared wrapper puts on the block for its animations.
+ *
+ * The scroll intensity travels as a DISCRETE class (`wjs-scroll-amt-10` … `-100`, steps of ten,
+ * round(scrollAmount/10)*10 clamped to 10..100) rather than a CSS variable: the
+ * withSharedBlockFields wrapper only applies this function's output as className — it has no
+ * per-var style channel for this field — so each step class pins `--wjs-scroll-amt` in
+ * wordjs-ui.css and the keyframes calc() from it.
+ *
+ * NOTE: the wrapper's animActive gate predates `scroll` and only renders these classes when an
+ * entrance `type` is set. Blocks default to a subtle entrance, so in practice the scroll classes
+ * reach the DOM unless the author explicitly picks "Ninguna" as entrance (a wrapper-side relax of
+ * that gate is the pending half of scroll-only support).
+ *
+ * Output is byte-identical to the previous version whenever `scroll` is unset.
+ */
+export const animClasses = (anim?: AnimSpec): string => {
+    const cls: string[] = [];
+    if (anim?.type) cls.push("wjs-anim", `wjs-anim-${anim.type}`);
+    if (anim?.scroll) {
+        const amt = Math.min(100, Math.max(10, Math.round((Number(anim.scrollAmount ?? 30) || 0) / 10) * 10));
+        cls.push("wjs-scroll", `wjs-scroll-${anim.scroll}`, `wjs-scroll-amt-${amt}`);
+    }
+    return cls.join(" ");
+};
+
+/** Event that re-arms every animated block so the author can watch the sequence again. */
+export const ANIM_REPLAY_EVENT = "wjs-anim-replay";
+
+/**
+ * Re-arm and replay every entrance animation in a document (the editor canvas iframe, normally).
+ * Exposed as a plain DOM event so it crosses the iframe boundary without a React bridge: the
+ * toolbar dispatches it into the canvas document and each armed block re-runs its own effect.
+ */
+export function replayAnimations(doc: Document) {
+    doc.dispatchEvent(new CustomEvent(ANIM_REPLAY_EVENT));
+}
 
 export function useEntranceAnimation(ref: React.RefObject<HTMLDivElement | null>, anim: AnimSpec | null) {
     const type = anim?.type || "";
@@ -32,6 +90,18 @@ export function useEntranceAnimation(ref: React.RefObject<HTMLDivElement | null>
         if (!type || !el || typeof window === "undefined") return;
         if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
         if (typeof IntersectionObserver === "undefined") return; // ancient browser → stay visible
+
+        // Replay: strip the state, force a reflow so the browser cannot coalesce the attribute
+        // removal and re-add into "no change" (which would skip the animation entirely), then
+        // re-arm and let it run. Listening on the element's OWN document keeps this working inside
+        // the canvas iframe, whose document is not the editor's.
+        const onReplay = () => {
+            el.removeAttribute("data-wjs-anim");
+            void el.offsetWidth; // force reflow — do not remove
+            el.setAttribute("data-wjs-anim", "in");
+        };
+        el.ownerDocument.addEventListener(ANIM_REPLAY_EVENT, onReplay);
+
         el.setAttribute("data-wjs-anim", "armed");
         // threshold MUST be 0 (first visible pixel) with no negative rootMargin: a ratio threshold
         // is geometrically unreachable for blocks taller than ~viewport/threshold (a tall Section,
@@ -52,6 +122,7 @@ export function useEntranceAnimation(ref: React.RefObject<HTMLDivElement | null>
         io.observe(el);
         return () => {
             io.disconnect();
+            el.ownerDocument.removeEventListener(ANIM_REPLAY_EVENT, onReplay);
             // If the block unmounts/re-keys mid-flight, never leave it armed-invisible.
             if (el.getAttribute("data-wjs-anim") === "armed") el.removeAttribute("data-wjs-anim");
         };
@@ -62,9 +133,16 @@ const EFFECTS: { value: NonNullable<AnimSpec["type"]>; label: string }[] = [
     { value: "", label: "Ninguna" },
     { value: "fade", label: "Desvanecer" },
     { value: "fade-up", label: "Aparecer subiendo" },
+    { value: "fade-down", label: "Aparecer bajando" },
     { value: "fade-left", label: "Desde la izquierda" },
     { value: "fade-right", label: "Desde la derecha" },
     { value: "zoom", label: "Zoom suave" },
+    { value: "zoom-out", label: "Zoom hacia atrás" },
+    { value: "blur", label: "Enfocar (desenfoque)" },
+    { value: "rise", label: "Ascenso lento" },
+    { value: "flip", label: "Giro 3D" },
+    { value: "reveal", label: "Revelado (cortinilla)" },
+    { value: "swing", label: "Balanceo" },
 ];
 
 const DURATIONS: { value: number; label: string }[] = [
@@ -75,15 +153,26 @@ const DURATIONS: { value: number; label: string }[] = [
 
 const DELAYS = [0, 100, 200, 300, 450, 600];
 
+const SCROLL_EFFECTS: { value: NonNullable<AnimSpec["scroll"]>; label: string }[] = [
+    { value: "", label: "Ninguno" },
+    { value: "parallax", label: "Parallax" },
+    { value: "fade", label: "Desvanecer" },
+    { value: "scale", label: "Escalar" },
+    { value: "rotate", label: "Rotar" },
+];
+
 export function AnimationControl({ value, onChange }: { value: AnimSpec; onChange: (v: AnimSpec) => void }) {
     const anim = value || {};
     const active = !!anim.type;
+    const scrollActive = !!anim.scroll;
+    const scrollAmt = Math.min(100, Math.max(10, Math.round((Number(anim.scrollAmount ?? 30) || 0) / 10) * 10));
     return (
-        <div>
+        // wjs-f-anim — marker for the properties panel's AVANZADO tab filter (see puck-theme.css).
+        <div className="wjs-f-anim">
             <select
                 value={anim.type || ""}
                 onChange={(e) => onChange({ ...anim, type: e.target.value as AnimSpec["type"] })}
-                className="w-full p-2 border border-gray-200 rounded-lg text-sm bg-white focus:outline-none focus:ring-2 focus:ring-editor-primary/30 focus:border-editor-primary"
+                className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
             >
                 {EFFECTS.map((e) => (
                     <option key={e.value} value={e.value}>{e.label}</option>
@@ -91,7 +180,7 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
             </select>
             {active && (
                 <>
-                    <div className="flex gap-1.5 mt-2">
+                    <div className="flex gap-0.5 mt-2 bg-[var(--ed-surface-container-high)] p-0.5 rounded border border-[var(--ed-outline-variant)]">
                         {DURATIONS.map((d) => {
                             const selected = (anim.duration || 600) === d.value;
                             return (
@@ -99,10 +188,10 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                                     key={d.value}
                                     type="button"
                                     onClick={() => onChange({ ...anim, duration: d.value })}
-                                    className={`flex-1 py-1.5 rounded-lg border text-[11px] font-semibold transition ${
+                                    className={`flex-1 py-1 rounded text-[11px] font-medium transition ${
                                         selected
-                                            ? "bg-editor-primary/10 border-editor-primary text-editor-primary"
-                                            : "bg-gray-50 border-gray-200 text-gray-600 hover:bg-gray-100"
+                                            ? "bg-[var(--ed-primary)] text-white shadow-sm"
+                                            : "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
                                     }`}
                                 >
                                     {d.label}
@@ -111,22 +200,71 @@ export function AnimationControl({ value, onChange }: { value: AnimSpec; onChang
                         })}
                     </div>
                     <div className="flex items-center gap-2 mt-2">
-                        <label className="text-[11px] text-gray-500 shrink-0">Retardo</label>
+                        <label className="text-[11px] font-medium text-[var(--ed-on-surface-variant)] shrink-0">Retardo</label>
                         <select
                             value={String(anim.delay || 0)}
                             onChange={(e) => onChange({ ...anim, delay: parseInt(e.target.value, 10) || 0 })}
-                            className="flex-1 p-1.5 border border-gray-200 rounded-lg text-xs bg-white focus:outline-none"
+                            className="flex-1 px-2 py-1 bg-white border border-[var(--ed-outline-variant)] rounded text-xs text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
+                            style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
                         >
                             {DELAYS.map((d) => (
                                 <option key={d} value={d}>{d === 0 ? "Sin retardo" : `${d} ms`}</option>
                             ))}
                         </select>
                     </div>
-                    <p className="text-[10px] text-gray-400 mt-1.5">
-                        Se reproduce al entrar en pantalla en el sitio publicado. En el editor no se anima: usa Vista previa. Usa el retardo para escalonar bloques contiguos.
+                    <p className="text-[10px] text-[var(--ed-outline)] mt-1.5">
+                        Se reproduce al entrar en pantalla, tanto aquí en el editor como en el sitio publicado. Usa
+                        el botón <MSym name="play_arrow" size={11} className="align-[-2px]" /> de la barra superior para volver a
+                        verlas, y el retardo para escalonar bloques contiguos.
                     </p>
                 </>
             )}
+
+            {/* ── Al hacer scroll — scroll-driven effect, independent of the entrance ── */}
+            <div className="mt-3 pt-3 border-t border-[var(--ed-outline-variant)]">
+                <label className="block text-[11px] font-medium text-[var(--ed-on-surface-variant)] mb-1.5">
+                    Al hacer scroll
+                </label>
+                <select
+                    value={anim.scroll || ""}
+                    onChange={(e) => onChange({ ...anim, scroll: e.target.value as AnimSpec["scroll"] })}
+                    className="w-full px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
+                >
+                    {SCROLL_EFFECTS.map((e) => (
+                        <option key={e.value} value={e.value}>{e.label}</option>
+                    ))}
+                </select>
+                {scrollActive && (
+                    <>
+                        <div className="flex items-center gap-2 mt-2">
+                            <label className="text-[11px] font-medium text-[var(--ed-on-surface-variant)] shrink-0">
+                                Intensidad
+                            </label>
+                            <input
+                                type="range"
+                                min={10}
+                                max={100}
+                                step={10}
+                                value={scrollAmt}
+                                onChange={(e) => onChange({ ...anim, scrollAmount: Number(e.target.value) })}
+                                className="flex-1 h-1 accent-[#1f108e] bg-[var(--ed-surface-container-highest)] rounded-full"
+                            />
+                            <span
+                                className="text-[11px] text-[var(--ed-primary)] w-8 text-right tabular-nums"
+                                style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
+                            >
+                                {scrollAmt}
+                            </span>
+                        </div>
+                        <p className="text-[10px] text-[var(--ed-outline)] mt-1.5">
+                            El efecto avanza y retrocede con el scroll, sin JavaScript. En navegadores sin animaciones
+                            por scroll no ocurre nada; si además hay animación de entrada, el efecto de scroll tiene
+                            prioridad y la entrada se omite.
+                        </p>
+                    </>
+                )}
+            </div>
         </div>
     );
 }
+

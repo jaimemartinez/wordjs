@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0a0f1d;
+  --wjs-bg-surface: #191d2b;
+  --wjs-bg-surface-raised: #252936;
+  --wjs-color-primary: #3b82f6;
+  --wjs-color-primary-dark: #1d4ed8;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #1d4ed8;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #eff6ff;
+  --wjs-color-text-muted: #989ea9;
+  --wjs-color-heading: #eff6ff;
+  --wjs-color-link: #3b82f6;
+  --wjs-color-link-hover: #1d4ed8;
+  --wjs-border-subtle: #333946;
+  --wjs-outline: #616773;
+  --wjs-outline-variant: #2c323f;
+  --wjs-focus-ring: #3b82f6;
+}
+
 /* Theme: Silicon Digest (Glassmorphism Aurora Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
 

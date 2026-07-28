@@ -1,6 +1,6 @@
 "use client";
 
-import { Puck, Config, Data, migrate, useGetPuck, createUsePuck } from "@wordjs/puck";
+import { Puck, Config, Data, migrate, useGetPuck, createUsePuck, ActionBar } from "@wordjs/puck";
 import "@wordjs/puck/puck.css";
 import "./puck-theme.css";
 import React, { useState, useEffect, useRef } from "react";
@@ -13,11 +13,21 @@ import CommandPalette from "./CommandPalette";
 import { PATTERNS, insertPattern, regenIds } from "@/lib/puckPatterns";
 import InlineTiptap from "./InlineTiptap";
 import { hideClasses } from "./puck/VisibilityField";
+import { replayAnimations } from "./puck/AnimationField";
+import { ASSET_VERSION } from "@/lib/assetVersion";
+import { blockVars, unit } from "./puck/blockVars";
 import { revisionsApi, Revision, themesApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { trStr } from "@/lib/puckI18n";
 import { sanitizeHTML } from "@/lib/sanitize";
+import MSym from "./editor/MSym";
+import MediaPickerModal from "./MediaPickerModal";
+import { BLOCK_META } from "@/lib/blockCatalog";
+import { setOutlineMode, showSpacingOverlay } from "./editor/canvasGuides";
+import { runA11yAudit, A11yPanel, type A11yIssue } from "./editor/A11yAudit";
+import { symbolsApi } from "@/lib/symbols";
+import ReviewComments from "./editor/ReviewComments";
 
 // Viewport switcher + responsive preview frame. The canvas renders in an iframe (#preview-frame; see
 // <Puck iframe>) that fills its container, so we drive responsiveness by sizing the container to the
@@ -31,6 +41,8 @@ const usePuck = createUsePuck();
 
 // ---- Block clipboard (copy/paste across pages; ids regenerated on paste via regenIds) ----
 const BLOCK_CLIPBOARD_KEY = "wjs_block_clipboard";
+// Style clipboard (Elementor-style "copy styles" between blocks — the shared look/anim/hide props).
+const STYLE_CLIPBOARD_KEY = "wjs_style_clipboard";
 
 const writeBlockClipboard = (item: any) => {
     try { localStorage.setItem(BLOCK_CLIPBOARD_KEY, JSON.stringify(item)); } catch { /* storage full/blocked */ }
@@ -55,18 +67,62 @@ function HistoryControls() {
             title={title}
             disabled={!enabled}
             onClick={onClick}
-            className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${
-                enabled ? "text-gray-500 hover:text-blue-600 hover:bg-gray-100" : "text-gray-300 cursor-not-allowed"
+            className={`p-1.5 rounded-md flex items-center justify-center transition-colors ${
+                enabled
+                    ? "text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"
+                    : "text-[var(--ed-outline-variant)] cursor-not-allowed"
             }`}
         >
-            <i className={`fa-solid ${icon}`}></i>
+            <MSym name={icon} size={20} />
         </button>
     );
     return (
-        <div className="flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100">
-            {btn(hasPast, "fa-rotate-left", trStr("Deshacer (Ctrl+Z)", language), () => getPuck().history.back())}
-            {btn(hasFuture, "fa-rotate-right", trStr("Rehacer (Ctrl+Shift+Z)", language), () => getPuck().history.forward())}
+        <div className="flex items-center gap-0.5">
+            {btn(hasPast, "undo", trStr("Deshacer (Ctrl+Z)", language), () => getPuck().history.back())}
+            {btn(hasFuture, "redo", trStr("Rehacer (Ctrl+Shift+Z)", language), () => getPuck().history.forward())}
         </div>
+    );
+}
+
+/**
+ * Header save-state chip, per the design: a filled cloud_done + "Guardado hace Xm" when clean,
+ * cloud_upload while dirty, a spinning sync while a save is in flight. Re-renders on a 30s tick so
+ * the relative time stays honest without the parent re-rendering. The span stays MOUNTED (and
+ * merely sr-only below xl) so its aria-live region exists before its content changes — an
+ * announcement region that appears together with its first message is not announced.
+ */
+function SaveStateChip({ saving, hasChanges, savedAt, wasAuto, status }: {
+    saving: boolean; hasChanges: boolean; savedAt: Date | null; wasAuto: boolean; status: string;
+}) {
+    const { language } = useI18n();
+    const [, tick] = useState(0);
+    useEffect(() => {
+        const t = setInterval(() => tick((x) => x + 1), 30000);
+        return () => clearInterval(t);
+    }, []);
+    let icon: React.ReactNode = null;
+    let text = "";
+    let cls = "text-[var(--ed-outline)]";
+    if (saving) {
+        icon = <MSym name="sync" size={16} className="animate-spin" />;
+        text = trStr("Guardando…", language);
+    } else if (hasChanges) {
+        icon = <MSym name="cloud_upload" size={16} />;
+        text = status === "draft" ? trStr("Sin guardar", language) : trStr("Cambios sin publicar", language);
+        cls = "text-amber-700";
+    } else if (savedAt) {
+        icon = <MSym name="cloud_done" size={16} fill className="text-[var(--ed-primary)]" />;
+        const mins = Math.max(0, Math.round((Date.now() - savedAt.getTime()) / 60000));
+        // Whole-string templates — word order differs per language; concatenation can't translate.
+        text = mins < 1
+            ? (wasAuto ? trStr("Autoguardado", language) : trStr("Guardado", language))
+            : trStr(wasAuto ? "Autoguardado hace {m}m" : "Guardado hace {m}m", language).replace("{m}", String(mins));
+    }
+    return (
+        <span className={`sr-only xl:not-sr-only xl:flex items-center gap-1.5 text-[11px] select-none ${cls}`} aria-live="polite">
+            {icon}
+            {text}
+        </span>
     );
 }
 
@@ -208,27 +264,119 @@ function EditorHotkeys({ onSave, onCommandPalette, components }: { onSave?: () =
     return null;
 }
 const VIEWPORT_WIDTH: Record<ViewportKey, number> = { desktop: 1280, tablet: 768, mobile: 375 };
-const EDITOR_VIEWPORTS: { key: ViewportKey; icon: string }[] = [
-    { key: "desktop", icon: "desktop" },
-    { key: "tablet", icon: "tablet-screen-button" },
-    { key: "mobile", icon: "mobile-screen-button" },
+const EDITOR_VIEWPORTS: { key: ViewportKey; icon: string; label: string }[] = [
+    { key: "desktop", icon: "desktop_windows", label: "Escritorio" },
+    { key: "tablet", icon: "tablet_mac", label: "Tableta" },
+    { key: "mobile", icon: "smartphone", label: "Móvil" },
 ];
 
+// Device switcher — the design's segmented control: a surface-container track with the active
+// segment lifted onto a white chip.
 function ViewportControls({ value, onChange }: { value: ViewportKey; onChange: (v: ViewportKey) => void }) {
+    const { language } = useI18n();
     return (
-        <div className="hidden lg:flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100 absolute left-1/2 -translate-x-1/2">
+        <div className="hidden lg:flex items-center bg-[var(--ed-surface-container)] p-0.5 rounded-lg">
             {EDITOR_VIEWPORTS.map((v) => (
                 <button
                     key={v.key}
-                    title={v.key}
+                    title={trStr(v.label, language)}
+                    aria-label={trStr(v.label, language)}
+                    aria-pressed={value === v.key}
                     onClick={() => onChange(v.key)}
-                    className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${
-                        value === v.key ? "bg-white shadow-md text-blue-600 scale-105" : "text-gray-400 hover:text-gray-600 hover:bg-gray-100"
+                    className={`px-2 py-1 rounded-md flex items-center justify-center transition-colors ${
+                        value === v.key
+                            ? "bg-white shadow-sm text-[var(--ed-primary)]"
+                            : "text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)]"
                     }`}
                 >
-                    <i className={`fa-solid fa-${v.icon}`}></i>
+                    <MSym name={v.icon} size={18} />
                 </button>
             ))}
+        </div>
+    );
+}
+
+/**
+ * Per-block toolbar override — Puck's stock bar (label · edit · duplicate · delete) plus the
+ * design's MOVE UP / MOVE DOWN arrows (Gutenberg parity: reordering without drag). Composes the
+ * fork's public <ActionBar> primitives; the reorder goes through the store's own action so it
+ * lands in history. The zone length (for clamping "down" at the end) comes from the internal
+ * store bridge — optional-chained, so if that internal ever moves the arrows simply stop
+ * clamping instead of crashing.
+ */
+function ActionBarOverride({ label, children, parentAction }: any) {
+    const getPuck = useGetPuck();
+    const { language } = useI18n();
+    const move = (dir: -1 | 1) => {
+        const puck = getPuck();
+        const sel = puck.appState.ui.itemSelector as { index: number; zone?: string } | null;
+        if (!sel) return;
+        const zone = sel.zone ?? "root:default-zone";
+        const dest = sel.index + dir;
+        if (dest < 0) return;
+        const len = (window as any).__PUCK_INTERNAL_DO_NOT_USE?.appStore?.getState?.()
+            ?.state?.indexes?.zones?.[zone]?.contentIds?.length;
+        if (typeof len === "number" && dest >= len) return;
+        puck.dispatch({ type: "reorder", sourceIndex: sel.index, destinationIndex: dest, destinationZone: zone });
+        // Selection follows the moved block (Gutenberg behaviour) — reorder alone leaves the
+        // selector pointing at the old index, so a second click would move the WRONG block.
+        puck.dispatch({ type: "setUi", ui: { itemSelector: { index: dest, zone } } });
+    };
+    return (
+        <ActionBar>
+            <ActionBar.Group>
+                {parentAction}
+                {label && <ActionBar.Label label={label} />}
+            </ActionBar.Group>
+            <ActionBar.Group>
+                <ActionBar.Action onClick={() => move(-1)} label={trStr("Subir", language)}>
+                    <MSym name="expand_less" size={16} />
+                </ActionBar.Action>
+                <ActionBar.Action onClick={() => move(1)} label={trStr("Bajar", language)}>
+                    <MSym name="expand_more" size={16} />
+                </ActionBar.Action>
+            </ActionBar.Group>
+            <ActionBar.Group>{children}</ActionBar.Group>
+        </ActionBar>
+    );
+}
+
+/**
+ * Canvas guides (Webflow-style): dashed outlines on every block + a padding/margin measure overlay
+ * on the SELECTED block, following it through selection changes and canvas scroll. Lives inside
+ * <Puck> so it can watch the selection; the actual painting is DOM-only (editor/canvasGuides.ts)
+ * inside the iframe document.
+ */
+function GuidesController({ enabled }: { enabled: boolean }) {
+    const selId = usePuck((s: any) => s.selectedItem?.props?.id);
+    useEffect(() => {
+        const doc = (document.querySelector(".puck-container iframe") as HTMLIFrameElement | null)?.contentDocument;
+        if (!doc) return;
+        setOutlineMode(doc, enabled);
+        if (!enabled) { showSpacingOverlay(doc, null); return; }
+        const paint = () => showSpacingOverlay(doc, selId ? doc.querySelector(`[data-puck-component="${selId}"]`) : null);
+        paint();
+        doc.addEventListener("scroll", paint, true);
+        doc.defaultView?.addEventListener("resize", paint);
+        return () => {
+            doc.removeEventListener("scroll", paint, true);
+            doc.defaultView?.removeEventListener("resize", paint);
+            showSpacingOverlay(doc, null);
+        };
+    }, [enabled, selId]);
+    return null;
+}
+
+// While a block drag is live, the design shows a guide pill at the bottom of the canvas. The flag
+// is public Puck state, so this stays a pure reader (renders nothing when idle).
+function DragHint() {
+    const { language } = useI18n();
+    const isDragging = usePuck((s: any) => s.appState.ui.isDragging);
+    if (!isDragging) return null;
+    return (
+        <div className="fixed bottom-20 md:bottom-6 left-1/2 -translate-x-1/2 z-[70] px-4 py-2 rounded-full bg-[var(--ed-inverse-surface)] text-[var(--ed-inverse-on-surface)] text-[12px] font-medium shadow-lg flex items-center gap-2 pointer-events-none whitespace-nowrap">
+            <MSym name="info" size={18} />
+            {trStr("Arrastra a una zona iluminada para añadir el bloque", language)}
         </div>
     );
 }
@@ -332,64 +480,90 @@ function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?
     // guarded, so it's a safe no-op if the public layout already injected these into the iframe.
     React.useEffect(() => {
         let cancelled = false;
-        let activeSlug = "default";
-        const ensureLink = (doc: Document, id: string, href: string) => {
-            const existing = doc.getElementById(id) as HTMLLinkElement | null;
-            if (existing) {
-                if (existing.getAttribute("href") !== href) existing.setAttribute("href", href);
-                return;
+        let activeSlug: string | null = null;
+        const ensureLink = (doc: Document, id: string, href: string): HTMLLinkElement => {
+            let l = doc.getElementById(id) as HTMLLinkElement | null;
+            if (!l) {
+                l = doc.createElement("link");
+                l.id = id;
+                l.rel = "stylesheet";
             }
-            const l = doc.createElement("link");
-            l.id = id;
-            l.rel = "stylesheet";
-            l.href = href;
-            doc.head.appendChild(l);
+            if (l.getAttribute("href") !== href) l.setAttribute("href", href);
+            return l;
         };
-        const inject = (): boolean => {
+        const inject = () => {
             const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
             const doc = iframe?.contentDocument;
-            if (!doc?.head) return false;
-            ensureLink(doc, "wjs-ui-framework", "/public/css/wordjs-ui.css"); // framework first
-            ensureLink(doc, "wjs-theme-stylesheet", `/themes/${activeSlug}/style.css`); // theme overrides
-            return true;
+            if (!doc?.head || !activeSlug) return;
+            // Version-stamped exactly like the public site's ThemeLoader. Both files are served with a
+            // ~1-day Cache-Control, so without ?v= the canvas kept serving the PREVIOUS release's CSS
+            // for a day after an update — the editor would disagree with the live site about spacing,
+            // hover effects and animations, with nothing on screen to explain why.
+            const ui = ensureLink(doc, "wjs-ui-framework", `/public/css/wordjs-ui.css?v=${ASSET_VERSION}`);
+            const theme = ensureLink(doc, "wjs-theme-stylesheet", `/themes/${activeSlug}/style.css?v=${activeSlug}-${ASSET_VERSION}`);
+            // CASCADE CONTRACT: the framework's :root declares default values for the canonical
+            // --wjs-* tokens, so the theme sheet must sit AFTER it or every theme renders half-default
+            // in the canvas. AutoFrame document reloads clone links back in arbitrary positions (and
+            // sometimes into <body>), so presence alone isn't enough — enforce the order and drop any
+            // unmanaged clones, or a stale/misordered pair survives the whole session.
+            if (ui.parentNode !== doc.head) doc.head.appendChild(ui);
+            if (theme.parentNode !== doc.head || !(ui.compareDocumentPosition(theme) & Node.DOCUMENT_POSITION_FOLLOWING)) {
+                doc.head.appendChild(theme);
+            }
+            doc.querySelectorAll('link[href*="/themes/"]:not(#wjs-theme-stylesheet), link[href*="wordjs-ui.css"]:not(#wjs-ui-framework)')
+                .forEach((n) => n.remove());
         };
-        themesApi.list().then((list) => {
-            if (cancelled) return;
-            const active = list.find((t) => t.active) || list.find((t) => t.slug === "default");
-            if (active?.slug) activeSlug = active.slug;
-            inject();
-        }).catch(() => { /* fall back to the default theme link */ });
-        inject();
-        const t = setInterval(inject, 500);
-        const stop = setTimeout(() => clearInterval(t), 12000);
+        const resolveSlug = () => {
+            themesApi.list().then((list) => {
+                if (cancelled) return;
+                const active = list.find((t) => t.active) || list.find((t) => t.slug === "default");
+                const slug = active?.slug || "default";
+                if (slug !== activeSlug) {
+                    activeSlug = slug;
+                    inject();
+                }
+            }).catch(() => {
+                if (!activeSlug) { activeSlug = "default"; inject(); } // offline fallback, never stay linkless
+            });
+        };
+        resolveSlug();
+        // Re-assert for the WHOLE editor lifetime (same lesson as the doc contract above): AutoFrame
+        // reloads the iframe and the fresh document inherits cloned, mis-ordered, possibly stale links
+        // with nobody left to fix them if this stops after a warm-up window. The slug poll also tracks
+        // theme switches made from another tab while the editor is open.
+        const t = setInterval(inject, 700);
+        const slugTimer = setInterval(resolveSlug, 10000);
         return () => {
             cancelled = true;
             clearInterval(t);
-            clearTimeout(stop);
+            clearInterval(slugTimer);
         };
     }, []);
     const isDesktop = viewport === "desktop";
-    // Desktop fills the ENTIRE preview area (full width + height, like a normal editing canvas, no frame).
-    // Mobile/tablet render at their true device width inside a scaled device frame so they never overflow.
-    const PAD = isDesktop ? 0 : 24;
-    const availW = Math.max(320, area.w - PAD * 2);
+    // Every viewport renders at its TRUE device width and scales to fit, floating as a page card on
+    // the design's dotted surface. Desktop = a bordered white card (the design's canvas); mobile/
+    // tablet keep the device bezel. Rendering desktop at 1280 (not the available width) is what the
+    // "Desktop" preset promises: the page's lg: breakpoint styles, identical on every monitor.
+    // On a PHONE (narrow editor window) the switcher is hidden and the page simply renders at the
+    // real available width — the design's mobile canvas, no bezel, no downscaling.
+    const isNarrow = area.w > 0 && area.w < 640;
+    const PAD = isNarrow ? 12 : isDesktop ? 28 : 24;
+    const availW = Math.max(280, area.w - PAD * 2);
     const availH = Math.max(320, area.h - PAD * 2);
-    const frameW = isDesktop ? availW : VIEWPORT_WIDTH[viewport];
-    const scale = Math.min(1, availW / frameW); // desktop = 1 (no scaling)
+    const frameW = isNarrow ? availW : VIEWPORT_WIDTH[viewport];
+    const scale = Math.min(1, availW / frameW);
     const innerH = availH / scale; // inner height so that, once scaled, it exactly fills the area height
     return (
-        <div ref={areaRef} className="flex-1 relative overflow-hidden bg-gray-100/50 h-full min-h-0">
-            {/* Dotted background — only around the device frame; desktop is full-bleed */}
-            {!isDesktop && (
-                <div className="absolute inset-0 opacity-40 pointer-events-none" style={{ backgroundImage: "radial-gradient(#cbd5e1 1px, transparent 1px)", backgroundSize: "24px 24px" }}></div>
-            )}
+        <div ref={areaRef} className="flex-1 relative overflow-hidden bg-[var(--ed-surface-container-low)] h-full min-h-0">
+            {/* Dotted grid — the design's canvas surface, behind every device frame */}
+            <div className="absolute inset-0 pointer-events-none" style={{ backgroundImage: "radial-gradient(#c8c4d5 0.5px, transparent 0.5px)", backgroundSize: "20px 20px" }}></div>
             {/* OUTER box = on-screen (scaled) footprint so it centers cleanly; INNER box = true device
                 width, scaled into it. The iframe (Puck.Preview) fills the inner box, so its viewport
                 equals the device width. Puck.Preview stays in one DOM position across viewports so the
                 iframe never reloads when switching. */}
             <div className="absolute inset-0 flex items-start justify-center" style={{ padding: PAD }}>
                 <div
-                    className={`relative z-10 bg-white overflow-hidden shrink-0 ${isDesktop ? "" : "rounded-[2rem] ring-[7px] ring-gray-900 shadow-2xl"}`}
+                    className={`relative z-10 bg-white overflow-hidden shrink-0 ${isNarrow ? "rounded-xl border border-[var(--ed-outline-variant)] shadow-lg" : isDesktop ? "border border-[var(--ed-outline-variant)] shadow-lg" : "rounded-[2rem] ring-[7px] ring-gray-900 shadow-2xl"}`}
                     style={{ width: frameW * scale, height: availH }}
                 >
                     <div className="absolute top-0 left-0 origin-top-left" style={{ width: frameW, height: innerH, transform: scale === 1 ? "none" : `scale(${scale})` }}>
@@ -411,13 +585,18 @@ interface PuckEditorProps {
     onStatusChange?: (status: string) => void;
     saving?: boolean;
     hasChanges?: boolean;
-    /** Called with {autosave:true} for background saves (parent should skip alerts/revisions). */
-    onSave?: (opts?: { autosave?: boolean }) => void | Promise<void>;
+    /** Called with {autosave:true} for background saves (parent should skip alerts/revisions).
+     *  Return `false` to signal a FAILED/BLOCKED save — the parents swallow their own errors
+     *  (alert + return), so without this signal the editor would announce success for saves that
+     *  never happened. void/true = success (back-compat). */
+    onSave?: (opts?: { autosave?: boolean }) => boolean | void | Promise<boolean | void>;
     onCancel?: () => void;
     config?: Config;
     pageId?: number;
     /** Slug of the post/page being edited — enables the "Preview" button (/slug?preview=1). */
     previewSlug?: string;
+    /** Breadcrumb root label (Spanish source string, translated via trStr) — "Entradas" for posts. */
+    breadcrumbRoot?: string;
 }
 
 // Context for Inline Editing
@@ -428,7 +607,7 @@ export const EditorContext = React.createContext<{
 } | null>(null);
 
 // Inline Text Component - Simple Textarea Swap
-const InlineText = ({ id, content, title, elementId }: any) => {
+const InlineText = ({ id, content, title, elementId, level, color, size, weight, tracking, leading, measure }: any) => {
     const ctx = React.useContext(EditorContext);
 
     // Distinguish Text (content) vs Heading (title) by which prop is DEFINED, not by truthiness —
@@ -450,6 +629,17 @@ const InlineText = ({ id, content, title, elementId }: any) => {
     }, []);
     const isEditing = activeId === id;
 
+    // WYSIWYG: wear the SAME contract class + variables the published block renders with, so the
+    // canvas shows the active theme's real heading scale and body typography. Without this the
+    // editor fell back to generic `prose` and every heading looked like a paragraph — the one
+    // place the promise "what you see is what you get" is most visible.
+    // Exactly the class list the published block renders with — `prose` included, so Tailwind
+    // Typography and the contract resolve against each other here the same way they do live.
+    const blockClass = isTextBlock ? "wp-block-text prose max-w-none" : `wp-block-heading heading-${level || "h2"}`;
+    const blockStyle = isTextBlock
+        ? blockVars("text", { color, size: unit(size), leading, measure: unit(measure) })
+        : blockVars("heading", { color, size: unit(size), weight, tracking: unit(tracking) });
+
     // The inline editor opens ONLY via the per-block "Edit" (pencil) action in Puck's overlay
     // (patch-puck-actions.js → window.puckSetActiveEditorId). A bare click on the text falls through
     // to Puck (selects the block + shows its action bar), so editing is always intentional. The
@@ -460,7 +650,8 @@ const InlineText = ({ id, content, title, elementId }: any) => {
         return (
             <div
                 id={elementId || undefined}
-                className="prose max-w-none"
+                className={blockClass}
+                style={blockStyle}
                 dangerouslySetInnerHTML={{ __html: sanitizeHTML(actualContent) }}
             />
         );
@@ -471,9 +662,12 @@ const InlineText = ({ id, content, title, elementId }: any) => {
             {/* In-place editing: when active, the block's own element hosts the Tiptap editor (same
                 position, transparent background, real color) so it looks identical to the rendered
                 text. Otherwise it shows the sanitized static content. */}
+            {/* The contract class lives on this WRAPPER so the Tiptap editing surface inherits the
+                same size/weight/colour as the static view — text must not resize the moment you
+                click into it. The inner view therefore carries no second copy of the class. */}
             <div
-                style={{ position: 'relative', zIndex: isEditing ? 60 : 20, pointerEvents: 'auto' }}
-                className={`group min-h-[40px] px-1 -mx-1 rounded-lg transition-all inline-text-view ${
+                style={{ position: 'relative', zIndex: isEditing ? 60 : 20, pointerEvents: 'auto', ...blockStyle }}
+                className={`group min-h-[40px] px-1 -mx-1 rounded-lg transition-all inline-text-view ${blockClass} ${
                     isEditing
                         ? 'ring-2 ring-editor-primary/40'
                         : 'border border-transparent hover:border-blue-200 hover:bg-blue-50/10 cursor-pointer'
@@ -492,7 +686,6 @@ const InlineText = ({ id, content, title, elementId }: any) => {
                 ) : (
                     <div
                         id={elementId || undefined}
-                        className="prose max-w-none"
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(actualContent) }}
                     />
                 )}
@@ -600,81 +793,199 @@ const OverlayBlocker = () => {
     return null;
 };
 
-// Floating Properties Panel with Premium Design
-const FloatingPropertiesPanel = () => {
-    const { t } = useI18n();
-    const [panelState, setPanelState] = useState({ x: 0, y: 0, minimized: true });
-    const panelRef = useRef<HTMLDivElement>(null);
-    const dragRef = useRef<{ startX: number, startY: number, initialX: number, initialY: number } | null>(null);
+// CANVAS ROOT — MODULE SCOPE ON PURPOSE (do not move it back inside a hook).
+// React identifies a component by its FUNCTION REFERENCE. This one is `config.root.render`, so if it
+// were re-created whenever the editor config object is rebuilt, React would see a different component
+// type at the top of the canvas and unmount + remount the ENTIRE tree inside the iframe — the page
+// visibly "reloads", selection/scroll/undo context is lost, and any in-progress inline edit dies.
+// Defined once at module scope, the root survives every config change (e.g. marketplace plugin blocks
+// arriving mid-session): new blocks merge into the palette without disturbing the canvas.
+const StablePuckRoot = ({ children }: { children: React.ReactNode }) => {
+    // Expose Puck's dispatch to updateComponent (which lives outside the Puck provider).
+    // useGetPuck() returns a stable getter and does NOT subscribe, so this root never
+    // re-renders on store changes — preserving the "stable root" guarantee above.
+    const getPuck = useGetPuck();
+    React.useEffect(() => {
+        (window as any).puckDispatch = getPuck().dispatch;
+        // Live store getter — authoritative at save time (Puck's onChange has a deep-equal
+        // guard that can leave the parent's mirrored ref stale).
+        (window as any).puckGetData = () => getPuck().appState.data;
+    }, [getPuck]);
+    return (
+        <div id="puck-root-wrapper">
+            <OverlayBlocker />
+            <EditorContext.Provider value={{
+                updateComponent: (id: string, data: any) => {
+                    const fn = (window as any).puckUpdateComponent || (window.parent as any)?.puckUpdateComponent;
+                    if (fn) fn(id, data);
+                },
+                activeEditorId: (window as any).puckActiveEditorId || (window.parent as any)?.puckActiveEditorId || null,
+                setActiveEditorId: (id: string | null) => {
+                    const fn = (window as any).puckSetActiveEditorId || (window.parent as any)?.puckSetActiveEditorId;
+                    if (fn) fn(id);
+                }
+            }}>
+                <PublicLayoutShell>
+                    {children}
+                </PublicLayoutShell>
+            </EditorContext.Provider>
+        </div>
+    );
+};
 
-    const handlePanelDragStart = (e: React.MouseEvent) => {
-        if ((e.target as HTMLElement).closest('button')) return;
-        e.preventDefault();
-        dragRef.current = {
-            startX: e.clientX,
-            startY: e.clientY,
-            initialX: panelState.x,
-            initialY: panelState.y
+// Inline-editable Text/Heading renderer — module scope for the same reason as StablePuckRoot: a block's
+// `render` identity is its component type, so re-creating it per config rebuild remounts every Text and
+// Heading on the canvas (losing the caret mid-typing).
+// Replacing render drops the withSharedBlockFields wrapper, so re-apply the wjs-hide-* classes here —
+// otherwise "ocultar en móvil" on a Text/Heading previews on the live site but not in the canvas device
+// preview. (Animations stay off in the editor by design.)
+const inlineRender = (props: any) => {
+    const cls = hideClasses(props.hide);
+    const inner = <InlineText {...props} id={props.id || props.puck?.id} />;
+    return cls ? <div className={cls} style={{ display: "contents" }}>{inner}</div> : inner;
+};
+
+/**
+ * Right panel — 320px, docked, per the design's "Bloque seleccionado" screen: a block-identity
+ * header (icon chip + name + mono ID) over the field list, and a "Panel bloqueado" state while a
+ * drag is in flight. The earlier three-tab strip is gone on purpose: Puck renders every field a
+ * block declares as ONE list, so two of the three tabs could never hold anything — a dead control
+ * dressed as the design. The identity header is the design element that CAN be real.
+ */
+const PropertiesPanel = ({ onClose, components, mobileOpen = false }: { onClose: () => void; components: Record<string, any>; mobileOpen?: boolean }) => {
+    const { t, language } = useI18n();
+    const selectedItem = usePuck((s: any) => s.selectedItem);
+    const isDragging = usePuck((s: any) => s.appState.ui.isDragging);
+
+    const type = selectedItem?.type as string | undefined;
+    // Block icons live in the shared catalog (Material Symbols subset); unknown blocks get the
+    // generic glyph, the page (no selection) its own identity.
+    const msIcon = type ? ((BLOCK_META as any)[type]?.ms || "widgets") : "web";
+    const label = type
+        ? (components[type]?.label ? trStr(components[type].label, language) : type)
+        : trStr("Página", language);
+    const blockId: string | undefined = selectedItem?.props?.id;
+
+    /* REAL tabs (design: Contenido · Estilo · Avanzado). Puck renders one flat field list; the
+     * split is done by CSS over the shared fields' marker classes (see puck-theme.css, data-ptab).
+     * Availability is probed from the rendered DOM — a block without shared fields (or the page
+     * root) greys the tabs out instead of showing an empty pane. */
+    const [tab, setTab] = useState<'content' | 'style' | 'advanced'>('content');
+    const fieldsRef = useRef<HTMLDivElement>(null);
+    const [avail, setAvail] = useState({ style: false, advanced: false });
+    useEffect(() => {
+        const probe = () => {
+            const c = fieldsRef.current;
+            if (!c) return;
+            setAvail({
+                style: !!c.querySelector('.wjs-f-look'),
+                advanced: !!(c.querySelector('.wjs-f-anim') || c.querySelector('.wjs-f-hide')),
+            });
         };
-        const handleMouseMove = (moveEvent: MouseEvent) => {
-            if (!dragRef.current || !panelRef.current) return;
-            const newX = dragRef.current.initialX + (moveEvent.clientX - dragRef.current.startX);
-            const newY = dragRef.current.initialY + (moveEvent.clientY - dragRef.current.startY);
-            panelRef.current.style.transform = `translate(${newX}px, ${newY}px)`;
-            (dragRef.current as any).currentX = newX;
-            (dragRef.current as any).currentY = newY;
-        };
-        const handleMouseUp = () => {
-            if (dragRef.current) {
-                const finalX = (dragRef.current as any).currentX ?? panelState.x;
-                const finalY = (dragRef.current as any).currentY ?? panelState.y;
-                setPanelState(prev => ({ ...prev, x: finalX, y: finalY }));
-            }
-            dragRef.current = null;
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
-        };
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
+        // Puck.Fields swaps its field list asynchronously after a selection change — probe twice.
+        const t1 = setTimeout(probe, 50);
+        const t2 = setTimeout(probe, 300);
+        return () => { clearTimeout(t1); clearTimeout(t2); };
+    }, [blockId, type]);
+    useEffect(() => {
+        if ((tab === 'style' && !avail.style) || (tab === 'advanced' && !avail.advanced)) setTab('content');
+    }, [avail, tab]);
+
+    // The design's RESET, made honest: back to this block's OWN default look/animation/visibility
+    // (content untouched), through the normal update path so it lands in history and Ctrl+Z works.
+    const resetStyles = () => {
+        if (!blockId || !type) return;
+        const def = components[type]?.defaultProps || {};
+        const fn = (window as any).puckUpdateComponent;
+        fn?.(blockId, { look: def.look ?? {}, anim: def.anim ?? {}, hide: def.hide ?? {} });
     };
 
+    const TABS = [
+        { id: 'content' as const, label: trStr("Contenido", language), enabled: true },
+        { id: 'style' as const, label: trStr("Estilo", language), enabled: avail.style },
+        { id: 'advanced' as const, label: trStr("Avanzado", language), enabled: avail.advanced },
+    ];
+
     return (
-        <div
-            ref={panelRef}
-            className={`absolute right-6 top-20 w-[340px] flex flex-col bg-white/90 backdrop-blur-xl shadow-2xl shadow-blue-900/10 rounded-[32px] border border-white/50 overflow-hidden z-[4000] transition-all duration-300 ring-1 ring-black/5 ${panelState.minimized ? 'h-[72px]' : 'max-h-[80vh]'}`}
-            style={{ transform: `translate(${panelState.x}px, ${panelState.y}px)` }}
-        >
-            <div
-                className="p-5 cursor-move flex flex-col justify-center h-[72px] shrink-0 select-none group"
-                onMouseDown={handlePanelDragStart}
-            >
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="w-8 h-8 rounded-full bg-blue-50 text-blue-500 flex items-center justify-center shadow-inner">
-                            <i className="fa-solid fa-sliders text-sm"></i>
-                        </div>
-                        <div>
-                            <h3 className="text-sm font-black text-gray-800 italic tracking-tight">{t('editor.properties')}</h3>
-                            <p className="text-[10px] text-gray-400 font-bold uppercase tracking-wider">{t('editor.editorControls')}</p>
-                        </div>
-                    </div>
-                    <button
-                        onClick={() => setPanelState(s => ({ ...s, minimized: !s.minimized }))}
-                        className="w-8 h-8 rounded-full hover:bg-gray-100 flex items-center justify-center text-gray-400 hover:text-blue-600 transition-all shadow-sm border border-transparent hover:border-gray-200"
-                    >
-                        <i className={`fa-solid fa-${panelState.minimized ? 'chevron-down' : 'chevron-up'} text-xs`}></i>
-                    </button>
+        // Mobile (per the design's "Propiedades del Bloque" screen): a full sheet between the header
+        // and the bottom nav. Desktop: the docked 320px column.
+        <aside className={`flex-col bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] ${mobileOpen ? "flex fixed inset-x-0 top-12 bottom-14 z-40" : "hidden"} md:flex md:static md:inset-auto md:w-[320px] md:shrink-0 md:z-30`}>
+            <div className="shrink-0 p-3 flex items-center gap-2.5 bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
+                <div className="w-8 h-8 shrink-0 rounded bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] flex items-center justify-center">
+                    <MSym name={msIcon} size={20} />
                 </div>
+                <div className="min-w-0 flex-1">
+                    <h3 className="text-[12px] font-bold text-[var(--ed-on-surface)] leading-4 truncate">{label}</h3>
+                    <p
+                        className="text-[10px] text-[var(--ed-on-surface-variant)] truncate"
+                        style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
+                    >
+                        {blockId ? `ID: ${blockId}` : t('editor.properties')}
+                    </p>
+                </div>
+                <button
+                    type="button"
+                    onClick={onClose}
+                    title={t('editor.hideProperties')}
+                    className="w-6 h-6 shrink-0 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                >
+                    <MSym name="chevron_right" size={16} />
+                </button>
             </div>
 
-            {!panelState.minimized && (
-                <div className="p-5 pt-0 overflow-y-auto flex-1 custom-scrollbar">
-                    <div className="space-y-4">
-                        <Puck.Fields />
+            {/* Tabs — the design's three-way split, backed by the marker-class CSS filter. */}
+            <div className="flex shrink-0 border-b border-[var(--ed-outline-variant)]" role="tablist">
+                {TABS.map((x) => (
+                    <button
+                        key={x.id}
+                        type="button"
+                        role="tab"
+                        aria-selected={tab === x.id}
+                        disabled={!x.enabled}
+                        onClick={() => setTab(x.id)}
+                        className={`flex-1 py-2.5 text-[11px] font-medium transition-colors border-b-2 ${tab === x.id
+                            ? 'text-[var(--ed-primary)] border-[var(--ed-primary)] bg-[var(--ed-surface-container-low)]'
+                            : x.enabled
+                                ? 'text-[var(--ed-on-surface-variant)] border-transparent hover:bg-[var(--ed-surface-container)]'
+                                : 'text-[var(--ed-outline-variant)] border-transparent cursor-not-allowed'}`}
+                    >
+                        {x.label}
+                    </button>
+                ))}
+            </div>
+
+            <div className="relative flex-1 min-h-0">
+                <div ref={fieldsRef} data-ptab={tab} className="absolute inset-0 overflow-y-auto custom-scrollbar">
+                    <Puck.Fields />
+                </div>
+                {/* Drag state — the fields can't apply to a block that is mid-air. */}
+                {isDragging && (
+                    <div className="absolute inset-0 z-10 bg-[var(--ed-surface-container-lowest)]/90 flex flex-col items-center justify-center text-center p-6 pointer-events-none select-none">
+                        <div className="w-16 h-16 rounded-full bg-[var(--ed-surface-container)] flex items-center justify-center mb-4">
+                            <MSym name="replace_image" size={32} className="text-[var(--ed-outline)]" />
+                        </div>
+                        <p className="text-[12px] font-semibold text-[var(--ed-on-surface)]">{trStr("Panel bloqueado", language)}</p>
+                        <p className="text-[13px] text-[var(--ed-on-surface-variant)] mt-2">
+                            {trStr("Suelta el bloque en el lienzo para editar sus propiedades.", language)}
+                        </p>
                     </div>
+                )}
+            </div>
+
+            {/* Footer — reset this block's styles to its own defaults (undoable; content untouched). */}
+            {blockId && (avail.style || avail.advanced) && (
+                <div className="shrink-0 p-2.5 border-t border-[var(--ed-outline-variant)] bg-[var(--ed-surface-container-lowest)]">
+                    <button
+                        type="button"
+                        onClick={resetStyles}
+                        className="w-full py-2 rounded-md border border-[var(--ed-outline-variant)] text-[11px] font-bold uppercase tracking-wide text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] hover:text-[var(--ed-error)] transition-colors flex items-center justify-center gap-1.5"
+                    >
+                        <MSym name="refresh" size={14} />
+                        {trStr("Restablecer estilos", language)}
+                    </button>
                 </div>
             )}
-        </div>
+        </aside>
     );
 };
 
@@ -690,7 +1001,8 @@ export default function PuckEditor({
     onCancel,
     config: passedConfig,
     pageId,
-    previewSlug
+    previewSlug,
+    breadcrumbRoot
 }: PuckEditorProps) {
     const { t, language } = useI18n();
     const activeConfig = passedConfig || puckConfig;
@@ -709,12 +1021,27 @@ export default function PuckEditor({
     const [savedAt, setSavedAt] = useState<Date | null>(null);
     const [lastSaveWasAuto, setLastSaveWasAuto] = useState(false);
 
+    // Design toast: dark inverse-surface pill, bottom-right beside the properties panel, 4s.
+    // Message-based so palette actions (styles copied, page imported…) reuse it. Only MANUAL
+    // saves earn the save toast — autosave already reports through the header chip, and a toast
+    // every 30s would be noise.
+    const [toastMsg, setToastMsg] = useState<string | null>(null);
+    useEffect(() => {
+        if (!toastMsg) return;
+        const t = setTimeout(() => setToastMsg(null), 4000);
+        return () => clearTimeout(t);
+    }, [toastMsg]);
+
     const handleManualSave = React.useCallback(async () => {
         if (!onSave) return;
-        await onSave();
+        // The parents alert-and-swallow their own failures and signal them by returning false —
+        // a failed save must not stamp savedAt or celebrate with the success toast.
+        const ok = await onSave();
+        if (ok === false) return;
         setSavedAt(new Date());
         setLastSaveWasAuto(false);
-    }, [onSave]);
+        setToastMsg(trStr("¡Cambios guardados con éxito!", language));
+    }, [onSave, language]);
 
     // Autosave: drafts only (a published page must never go live in the background). Fires 8s after
     // the page first becomes dirty, with a 30s floor between runs; the parent passes autosave:true
@@ -726,7 +1053,8 @@ export default function PuckEditor({
         const t = setTimeout(async () => {
             lastAutosaveRef.current = Date.now();
             try {
-                await onSave({ autosave: true });
+                const ok = await onSave({ autosave: true });
+                if (ok === false) return; // blocked/failed — don't stamp a save that didn't happen
                 setSavedAt(new Date());
                 setLastSaveWasAuto(true);
             } catch { /* background save — the next manual save surfaces real errors */ }
@@ -839,51 +1167,12 @@ export default function PuckEditor({
     }, [onChange]);
 
     // STABLE CONFIG: No dependencies on state that changes during editing
-    // This prevents Puck from reloading the iframe when activeEditorId changes
+    // This prevents Puck from reloading the iframe when activeEditorId changes.
+    // The root and the inline renderers live at MODULE scope (see above) so that even when this memo
+    // DOES recompute — the config identity legitimately changes when runtime plugin blocks load — the
+    // component types stay identical and React updates the canvas in place instead of remounting it.
     const editorConfig = React.useMemo(() => {
-        // Stable PuckRoot that uses Window/Events to stay synced
-        const StablePuckRoot = ({ children }: { children: React.ReactNode }) => {
-            // Expose Puck's dispatch to updateComponent (which lives outside the Puck provider).
-            // useGetPuck() returns a stable getter and does NOT subscribe, so this root never
-            // re-renders on store changes — preserving the "stable root" guarantee above.
-            const getPuck = useGetPuck();
-            React.useEffect(() => {
-                (window as any).puckDispatch = getPuck().dispatch;
-                // Live store getter — authoritative at save time (Puck's onChange has a deep-equal
-                // guard that can leave the parent's mirrored ref stale).
-                (window as any).puckGetData = () => getPuck().appState.data;
-            }, [getPuck]);
-            return (
-                <div id="puck-root-wrapper">
-                    <OverlayBlocker />
-                    <EditorContext.Provider value={{
-                        updateComponent: (id: string, data: any) => {
-                            const fn = (window as any).puckUpdateComponent || (window.parent as any)?.puckUpdateComponent;
-                            if (fn) fn(id, data);
-                        },
-                        activeEditorId: (window as any).puckActiveEditorId || (window.parent as any)?.puckActiveEditorId || null,
-                        setActiveEditorId: (id: string | null) => {
-                            const fn = (window as any).puckSetActiveEditorId || (window.parent as any)?.puckSetActiveEditorId;
-                            if (fn) fn(id);
-                        }
-                    }}>
-                        <PublicLayoutShell>
-                            {children}
-                        </PublicLayoutShell>
-                    </EditorContext.Provider>
-                </div>
-            );
-        };
-
         const baseConfig = activeConfig;
-        // Replacing render drops the withSharedBlockFields wrapper, so re-apply the wjs-hide-*
-        // classes here — otherwise "ocultar en móvil" on a Text/Heading previews on the live site
-        // but not in the canvas device preview. (Animations stay off in the editor by design.)
-        const inlineRender = (props: any) => {
-            const cls = hideClasses(props.hide);
-            const inner = <InlineText {...props} id={props.id || props.puck?.id} />;
-            return cls ? <div className={cls} style={{ display: "contents" }}>{inner}</div> : inner;
-        };
         const editorOverrides = {
             Text: {
                 ...baseConfig.components.Text,
@@ -1005,19 +1294,274 @@ export default function PuckEditor({
             }
             return <>{children}</>;
         },
+        // Block toolbar + the design's move up/down arrows (module-scope component: stable identity).
+        actionBar: ActionBarOverride,
     }), [onStatusChange, status, onCancel, onSave, handleManualSave, saving, hasChanges, activeEditorId, previewSlug, handlePreview, language]);
 
 
 
 
     // Layout Visibility State
-    const { alert } = useModal();
+    const { alert, confirm } = useModal();
     const [showSidebar, setShowSidebar] = useState(true);
     const [showProperties, setShowProperties] = useState(true);
     const [showRevisions, setShowRevisions] = useState(false);
+    /* Which view the 64px rail is showing in the left panel. The design splits what used to be one
+     * stacked column (inserter above, outline below, with a drag handle between) into rail-selected
+     * views, so the panel shows one thing at a time at full height. */
+    const [railView, setRailView] = useState<'blocks' | 'outline' | 'patterns'>('blocks');
+    // "Recursos" rail entry — the media library modal; picking an item appends an Image block.
+    const [mediaOpen, setMediaOpen] = useState(false);
+    /* MOBILE (<md): the design turns both side panels into full sheets driven by a bottom nav.
+     * Deliberately SEPARATE from showSidebar/showProperties so phone usage never rewrites the
+     * persisted desktop layout preferences. */
+    const [mobileSheet, setMobileSheet] = useState<null | 'left' | 'right'>(null);
+    const isPhone = () => typeof window !== 'undefined' && window.matchMedia('(max-width: 767px)').matches;
     const [isUiLoaded, setIsUiLoaded] = useState(false);
     const [viewport, setViewport] = useState<ViewportKey>("desktop");
     const [cmdkOpen, setCmdkOpen] = useState(false); // ⌘K command palette (insert block)
+    const [guidesOn, setGuidesOn] = useState(false); // canvas outlines + spacing measures
+    const [commentsOpen, setCommentsOpen] = useState(false); // review-comments drawer (meta-based)
+    // A11y audit panel state — the audit itself is a pure DOM scan of the canvas (editor/A11yAudit).
+    const [a11yOpen, setA11yOpen] = useState(false);
+    const [a11yIssues, setA11yIssues] = useState<A11yIssue[]>([]);
+    const [a11yRunning, setA11yRunning] = useState(false);
+    const runAudit = React.useCallback(() => {
+        const doc = (document.querySelector(".puck-container iframe") as HTMLIFrameElement | null)?.contentDocument;
+        if (!doc) return;
+        setA11yRunning(true);
+        // Next frame so the "running" state paints before a potentially heavy scan.
+        requestAnimationFrame(() => {
+            try { setA11yIssues(runA11yAudit(doc)); } finally { setA11yRunning(false); }
+        });
+    }, []);
+    const selectBlockById = React.useCallback((blockId?: string) => {
+        if (!blockId) return;
+        try {
+            const st = (window as any).__PUCK_INTERNAL_DO_NOT_USE?.appStore?.getState?.()?.state;
+            const node = st?.indexes?.nodes?.[blockId];
+            // node.zone is only the SEGMENT ("default-zone"); itemSelector needs the COMPOUND
+            // ("root:default-zone") — the node's path ends with exactly that.
+            const zone = node?.path?.[node.path.length - 1] || (node?.parentId && node?.zone ? `${node.parentId}:${node.zone}` : null);
+            const index = zone ? st?.indexes?.zones?.[zone]?.contentIds?.indexOf(blockId) : -1;
+            if (zone && index >= 0) (window as any).puckDispatch?.({ type: "setUi", ui: { itemSelector: { index, zone } } });
+        } catch { /* stale internal bridge — selection simply doesn't move */ }
+    }, []);
+
+    /* PRESENCE (collaboration v1): heartbeat while this post is open; the backend answers with the
+     * OTHER active editors and the header shows a warning chip. sendBeacon on the way out so the
+     * server doesn't wait a full TTL to drop us. */
+    const [coEditors, setCoEditors] = useState<{ id: number; name: string }[]>([]);
+    useEffect(() => {
+        if (!pageId) return;
+        let dead = false;
+        const ping = async () => {
+            try {
+                const res = await fetch(`/api/v1/presence/${pageId}`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    credentials: "same-origin",
+                    body: "{}",
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (!dead) setCoEditors(Array.isArray(data.editors) ? data.editors : []);
+            } catch { /* offline tick — keep the last known state */ }
+        };
+        ping();
+        const t = setInterval(ping, 10000);
+        const leave = () => {
+            try {
+                navigator.sendBeacon?.(
+                    `/api/v1/presence/${pageId}`,
+                    new Blob([JSON.stringify({ action: "leave" })], { type: "application/json" })
+                );
+            } catch { /* beacon is best-effort */ }
+        };
+        window.addEventListener("beforeunload", leave);
+        return () => { dead = true; clearInterval(t); window.removeEventListener("beforeunload", leave); leave(); };
+    }, [pageId]);
+
+    // ── ⌘K palette ACTIONS — editor commands surfaced above the block list (the design's
+    // "ACCIONES SUGERIDAS"): save/preview, page export/import as JSON, Elementor-style copy/paste
+    // of a block's styles, block ops, panels. Selection-dependent commands read the selection
+    // LAZILY at run time (through the internal store bridge, optional-chained) — the palette can
+    // stay open across selection changes and a missing selection just no-ops.
+    const readSelected = React.useCallback(() => {
+        try {
+            return (window as any).__PUCK_INTERNAL_DO_NOT_USE?.appStore?.getState?.()?.selectedItem ?? null;
+        } catch { return null; }
+    }, []);
+    const readSelector = React.useCallback(() => {
+        try {
+            return (window as any).__PUCK_INTERNAL_DO_NOT_USE?.appStore?.getState?.()?.state?.ui?.itemSelector ?? null;
+        } catch { return null; }
+    }, []);
+
+    const paletteActions = React.useMemo(() => {
+        const acts: { id: string; ms: string; label: string; hint?: string; run: () => void }[] = [];
+        if (onSave) acts.push({
+            id: "save", ms: "cloud_done", hint: "Ctrl+S",
+            label: status === "draft" ? trStr("Guardar", language) : trStr("Publicar", language),
+            run: () => { void handleManualSave(); },
+        });
+        if (previewSlug) acts.push({
+            id: "preview", ms: "open_in_new",
+            label: trStr("Vista previa", language),
+            run: () => { void handlePreview(); },
+        });
+        acts.push({
+            id: "export", ms: "arrow_downward",
+            label: trStr("Exportar página (JSON)", language),
+            run: () => {
+                const data = (window as any).puckGetData?.() || dataRef.current;
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+                const a = document.createElement("a");
+                a.href = URL.createObjectURL(blob);
+                a.download = `wordjs-page-${pageId ?? "borrador"}.json`;
+                a.click();
+                setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+            },
+        });
+        acts.push({
+            id: "import", ms: "arrow_upward",
+            label: trStr("Importar página (JSON)", language),
+            run: () => {
+                const input = document.createElement("input");
+                input.type = "file";
+                input.accept = "application/json,.json";
+                input.onchange = async () => {
+                    const f = input.files?.[0];
+                    if (!f) return;
+                    try {
+                        const parsed = JSON.parse(await f.text());
+                        if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.content)) throw new Error("shape");
+                        const ok = await confirm(
+                            trStr("¿Reemplazar todo el contenido de la página con el archivo importado?", language),
+                            trStr("Importar", language)
+                        );
+                        if (!ok) return;
+                        // Through the same migrate() the initial load uses; recordHistory → Ctrl+Z restores.
+                        const migrated = migrate(parsed, activeConfig);
+                        (window as any).puckDispatch?.({ type: "setData", data: () => migrated, recordHistory: true });
+                        setToastMsg(trStr("Página importada", language));
+                    } catch {
+                        await alert(trStr("El archivo no es una página válida", language), "Error");
+                    }
+                };
+                input.click();
+            },
+        });
+        acts.push({
+            id: "media", ms: "image",
+            label: trStr("Biblioteca de medios", language),
+            // Also the PHONE's only route to the media library — the rail that opens it is md-only,
+            // and the mobile FAB opens this palette.
+            run: () => setMediaOpen(true),
+        });
+        acts.push({
+            id: "copy-styles", ms: "palette",
+            label: trStr("Copiar estilos del bloque", language),
+            run: () => {
+                const sel = readSelected();
+                if (!sel?.props) return;
+                const { look = {}, anim = {}, hide = {} } = sel.props;
+                try { localStorage.setItem(STYLE_CLIPBOARD_KEY, JSON.stringify({ look, anim, hide })); } catch { /* storage full */ }
+                setToastMsg(trStr("Estilos copiados", language));
+            },
+        });
+        acts.push({
+            id: "paste-styles", ms: "edit",
+            label: trStr("Pegar estilos en el bloque", language),
+            run: () => {
+                const sel = readSelected();
+                if (!sel?.props?.id) return;
+                try {
+                    const raw = localStorage.getItem(STYLE_CLIPBOARD_KEY);
+                    if (raw) (window as any).puckUpdateComponent?.(sel.props.id, JSON.parse(raw));
+                } catch { /* malformed clipboard */ }
+            },
+        });
+        acts.push({
+            id: "duplicate", ms: "content_copy", hint: "Ctrl+D",
+            label: trStr("Duplicar bloque", language),
+            run: () => {
+                const sel = readSelector();
+                if (!sel) return;
+                (window as any).puckDispatch?.({ type: "duplicate", sourceIndex: sel.index, sourceZone: sel.zone ?? "root:default-zone" });
+            },
+        });
+        acts.push({
+            id: "delete-block", ms: "delete", hint: "Supr",
+            label: trStr("Eliminar bloque", language),
+            run: () => {
+                const sel = readSelector();
+                if (!sel) return;
+                (window as any).puckDispatch?.({ type: "remove", index: sel.index, zone: sel.zone ?? "root:default-zone" });
+            },
+        });
+        acts.push({
+            id: "page-settings", ms: "settings",
+            label: trStr("Ajustes de página", language),
+            run: () => {
+                (window as any).puckDispatch?.({ type: "setUi", ui: { itemSelector: null } });
+                if (isPhone()) setMobileSheet('right'); else setShowProperties(true);
+            },
+        });
+        if (pageId) acts.push({
+            id: "revisions", ms: "history",
+            label: trStr("Historial de revisiones", language),
+            run: () => setShowRevisions(true),
+        });
+        acts.push({
+            id: "replay", ms: "play_arrow",
+            label: trStr("Reproducir las animaciones de entrada", language),
+            run: () => {
+                const doc = (document.querySelector(".puck-container iframe") as HTMLIFrameElement | null)?.contentDocument;
+                if (doc) replayAnimations(doc);
+            },
+        });
+        acts.push({
+            id: "save-symbol", ms: "collections",
+            label: trStr("Guardar bloque como símbolo", language),
+            run: () => {
+                const sel = readSelected();
+                if (!sel?.type || sel.type === "Symbol") return;
+                void (async () => {
+                    try {
+                        // Strip SSR-injected resolutions — the resolver re-derives them per render.
+                        const props: any = { ...sel.props };
+                        delete props.resolvedPosts;
+                        delete props.resolvedFiltered;
+                        delete props.resolvedSymbolItems;
+                        const blockLabel = (activeConfig.components as any)[sel.type]?.label || sel.type;
+                        const stamp = new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+                        await symbolsApi.create(`${trStr(blockLabel, language)} · ${stamp}`, [{ type: sel.type, props }]);
+                        setToastMsg(trStr("Símbolo guardado", language));
+                    } catch {
+                        await alert(trStr("No se pudo guardar el símbolo", language), "Error");
+                    }
+                })();
+            },
+        });
+        if (pageId) acts.push({
+            id: "comments", ms: "forum",
+            label: trStr("Comentarios de revisión", language),
+            run: () => setCommentsOpen(true),
+        });
+        acts.push({
+            id: "a11y", ms: "check_circle",
+            label: trStr("Auditoría de accesibilidad", language),
+            run: () => { setA11yOpen(true); runAudit(); },
+        });
+        acts.push({
+            id: "guides", ms: "grid_view",
+            label: trStr("Guías y contornos", language),
+            run: () => setGuidesOn((v) => !v),
+        });
+        return acts;
+        // eslint-disable-next-line react-hooks/exhaustive-deps -- setters are stable; isPhone reads live
+    }, [onSave, previewSlug, status, language, pageId, handleManualSave, handlePreview, activeConfig, alert, confirm, readSelected, readSelector]);
 
 
     const handleRestore = async (revision: Revision) => {
@@ -1066,61 +1610,6 @@ export default function PuckEditor({
         return () => clearTimeout(timer);
     }, [showSidebar]);
 
-    // Resizable Outline State
-    const [outlineHeight, setOutlineHeight] = useState('35%');
-    const sidebarRef = useRef<HTMLDivElement>(null);
-    const isResizingRef = useRef(false);
-
-    useEffect(() => {
-        if (isUiLoaded) {
-            const savedHeight = localStorage.getItem('puck_outline_height');
-            if (savedHeight) setOutlineHeight(savedHeight);
-        }
-    }, [isUiLoaded]);
-
-    const startResizing = (e: React.MouseEvent) => {
-        e.preventDefault();
-        isResizingRef.current = true;
-        document.body.style.cursor = 'row-resize';
-        document.body.style.userSelect = 'none';
-
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', stopResizing);
-    };
-
-    const handleMouseMove = (e: MouseEvent) => {
-        if (!isResizingRef.current || !sidebarRef.current) return;
-
-        const sidebarRect = sidebarRef.current.getBoundingClientRect();
-        const newHeight = sidebarRect.bottom - e.clientY;
-        const totalHeight = sidebarRect.height;
-
-        // Min height constraints (px)
-        if (newHeight > 50 && newHeight < totalHeight - 50) {
-            const percentage = (newHeight / totalHeight) * 100;
-            setOutlineHeight(`${percentage}%`);
-        }
-    };
-
-    const stopResizing = () => {
-        isResizingRef.current = false;
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
-        window.removeEventListener('mousemove', handleMouseMove);
-        window.removeEventListener('mouseup', stopResizing);
-
-        // Save current height (we need to access the state, but event listeners close over values)
-        // Since we are setting state during move, we can just save the value from state in a subsequent effect
-        // or just accept that the last move set the state.
-        // We'll save to localStorage in a useEffect to be safe and clean.
-    };
-
-    useEffect(() => {
-        if (isUiLoaded && !isResizingRef.current) {
-            localStorage.setItem('puck_outline_height', outlineHeight);
-        }
-    }, [outlineHeight, isUiLoaded]);
-
     return (
         <EditorContext.Provider value={{ updateComponent, activeEditorId, setActiveEditorId }}>
             {activeEditorId && (
@@ -1131,7 +1620,10 @@ export default function PuckEditor({
                     [class*="DraggableComponent-overlay"], [class*="DraggableComponent-actionsOverlay"] { display: none !important; visibility: hidden !important; pointer-events: none !important; }
                 `}} />
             )}
-            <div className="puck-container absolute inset-0 bg-gray-50">
+            {/* FULL-VIEWPORT workspace (fixed, over the admin shell) — the design's editor owns the
+                whole screen; its own rail + breadcrumb replace the admin sidebar while editing.
+                Modals/drawers still win (RevisionsSidebar z-5000, pickers/palette z-9999). */}
+            <div className="puck-container fixed inset-0 z-50 bg-[var(--ed-surface)]">
                 <Puck
                     config={editorConfig}
                     data={data}
@@ -1150,81 +1642,137 @@ export default function PuckEditor({
                         {/* Global keyboard layer: save/undo/redo/duplicate/delete/copy/paste + ⌘K palette */}
                         <EditorHotkeys onSave={handleManualSave} onCommandPalette={() => setCmdkOpen((v) => !v)} components={editorConfig.components} />
 
-                        {/* ⌘K command palette — insert any block by search (portals to <body>) */}
-                        <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} components={editorConfig.components} />
+                        {/* ⌘K command palette — actions + insert any block by search (portals to <body>) */}
+                        <CommandPalette open={cmdkOpen} onClose={() => setCmdkOpen(false)} components={editorConfig.components} actions={paletteActions} />
 
-                        {/* PREMIUM HEADER (h-20) */}
-                        <div className="h-20 flex items-center justify-between bg-white/80 backdrop-blur-md px-6 md:px-8 shrink-0 z-20 relative border-b border-gray-100 shadow-sm gap-6">
+                        {/* HEADER — 48px, per the generated design: three groups (identity, view
+                            controls + save state, actions) on a flat surface with one hairline
+                            underneath. Colours come from --ed-* (the design's stated role values). */}
+                        <div className="h-12 shrink-0 z-20 relative flex items-center justify-between gap-3 px-3 bg-[var(--ed-surface)] border-b border-[var(--ed-outline-variant)]">
 
-                            {/* Left: Branding & Visibility */}
-                            <div className="flex items-center gap-6">
-                                <div className="flex items-center gap-3 text-gray-900">
-                                    <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-indigo-600 rounded-xl flex items-center justify-center text-white shadow-lg shadow-blue-500/20">
-                                        <i className="fa-solid fa-pen-nib text-lg"></i>
-                                    </div>
-                                    <div className="hidden md:block">
-                                        <h1 className="font-black italic text-xl tracking-tighter leading-none">{t('editor.title')}</h1>
-                                        <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest leading-none">{t('editor.visualBuilder')}</span>
-                                    </div>
-                                </div>
-
-                                <div className="h-8 w-px bg-gray-100 hidden md:block"></div>
-
-                                {/* Visibility Controls */}
-                                <div className="flex items-center bg-gray-50/50 rounded-2xl p-1.5 gap-1 border border-gray-100">
+                            {/* Left: wordmark + breadcrumb (the breadcrumb root navigates back) */}
+                            <div className="flex items-center gap-3 min-w-0">
+                                {/* Phone exit — the breadcrumb is md-only, and without this the
+                                    fullscreen editor would have no way back on a phone. */}
+                                {onCancel && (
                                     <button
-                                        onClick={() => setShowSidebar(!showSidebar)}
-                                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showSidebar ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-                                        title={showSidebar ? t('editor.hideSidebar') : t('editor.showSidebar')}
+                                        type="button"
+                                        onClick={onCancel}
+                                        title={t('editor.cancel')}
+                                        aria-label={t('editor.cancel')}
+                                        className="md:hidden w-8 h-8 -ml-1 shrink-0 rounded-md flex items-center justify-center text-[var(--ed-on-surface-variant)] active:bg-[var(--ed-surface-container)]"
                                     >
-                                        <i className={`fa-solid fa-table-columns`}></i>
+                                        <MSym name="chevron_left" size={22} />
                                     </button>
-                                    <button
-                                        onClick={() => setShowProperties(!showProperties)}
-                                        className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all duration-300 ${showProperties ? 'bg-white shadow-md text-blue-600 font-bold' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-100'}`}
-                                        title={showProperties ? t('editor.hideProperties') : t('editor.showProperties')}
-                                    >
-                                        <i className={`fa-solid fa-sliders`}></i>
-                                    </button>
-                                </div>
+                                )}
+                                <span className="text-[18px] font-black tracking-tight text-[var(--ed-primary)] select-none shrink-0">
+                                    WordJS
+                                </span>
 
-                                {/* Undo / Redo */}
+                                <div className="h-4 w-px bg-[var(--ed-outline-variant)] hidden md:block"></div>
+
+                                {/* Breadcrumb — the design's "Páginas / <nombre>" */}
+                                <div className="hidden md:flex items-center gap-1.5 text-[12px] text-[var(--ed-on-surface-variant)] min-w-0">
+                                    {onCancel ? (
+                                        <button
+                                            type="button"
+                                            onClick={onCancel}
+                                            title={t('editor.cancel')}
+                                            className="shrink-0 px-1 py-0.5 rounded hover:bg-[var(--ed-surface-container)] hover:text-[var(--ed-primary)] transition-colors"
+                                        >
+                                            {trStr(breadcrumbRoot || "Páginas", language)}
+                                        </button>
+                                    ) : (
+                                        <span className="shrink-0">{trStr(breadcrumbRoot || "Páginas", language)}</span>
+                                    )}
+                                    <MSym name="chevron_right" size={12} className="opacity-50 shrink-0" />
+                                    <span className="font-semibold text-[var(--ed-on-surface)] truncate max-w-[220px]">
+                                        {(data as any)?.root?.props?.title || trStr("Sin título", language)}
+                                    </span>
+                                </div>
+                            </div>
+
+                            {/* Centre: device switcher · history · save state, the design's pairing */}
+                            <div className="flex items-center gap-3 shrink-0">
+                                <ViewportControls value={viewport} onChange={setViewport} />
+                                <div className="h-4 w-px bg-[var(--ed-outline-variant)] hidden md:block"></div>
                                 <HistoryControls />
+                                {onSave && (
+                                    <SaveStateChip
+                                        saving={saving}
+                                        hasChanges={hasChanges}
+                                        savedAt={savedAt}
+                                        wasAuto={lastSaveWasAuto}
+                                        status={status}
+                                    />
+                                )}
+                                {/* Presence warning — someone else has this post open right now */}
+                                {coEditors.length > 0 && (
+                                    <span
+                                        role="status"
+                                        className="hidden lg:flex items-center gap-1.5 text-[11px] font-medium text-amber-800 bg-amber-50 border border-amber-200 rounded-full px-2.5 py-1 select-none"
+                                        title={coEditors.map((e) => e.name).join(", ")}
+                                    >
+                                        <MSym name="person" size={14} fill />
+                                        <span className="truncate max-w-[180px]">
+                                            {coEditors.map((e) => e.name).join(", ")}{" "}
+                                            {trStr(coEditors.length === 1 ? "también está editando" : "también están editando", language)}
+                                        </span>
+                                    </span>
+                                )}
+                            </div>
 
-                                {/* ⌘K command palette launcher (insert any block by search) */}
+                            {/* Right: insert · replay · properties · status · preview · publish · avatar */}
+                            <div className="flex items-center gap-2 min-w-0">
+                                {/* Insert (⌘K) */}
                                 <button
                                     type="button"
                                     onClick={() => setCmdkOpen(true)}
                                     title={trStr("Insertar bloque (Ctrl/⌘ + K)", language)}
-                                    className="hidden lg:flex items-center gap-2 h-12 px-3.5 rounded-2xl bg-gray-50/50 border border-gray-100 text-gray-500 hover:text-blue-600 hover:bg-gray-100 transition-all duration-300"
+                                    className="hidden lg:flex items-center gap-2 h-7 px-2.5 rounded-md border border-[var(--ed-outline-variant)] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
                                 >
-                                    <i className="fa-solid fa-magnifying-glass text-sm"></i>
-                                    <span className="text-xs font-bold">{trStr("Insertar", language)}</span>
-                                    <kbd className="text-[10px] font-black text-gray-400 bg-white border border-gray-200 rounded px-1.5 py-0.5 leading-none">⌘K</kbd>
+                                    <MSym name="search" size={14} />
+                                    <span className="text-[11px]">{trStr("Insertar", language)}</span>
+                                    <kbd
+                                        className="text-[9px] text-[var(--ed-on-surface-variant)] bg-[var(--ed-surface-container)] rounded px-1 py-0.5 leading-none"
+                                        style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
+                                    >⌘K</kbd>
                                 </button>
-                            </div>
 
-                            {/* Center: Viewport Controls */}
-                            <ViewportControls value={viewport} onChange={setViewport} />
+                                {/* Replay entrance animations in the canvas */}
+                                <button
+                                    type="button"
+                                    onClick={() => {
+                                        const doc = (document.querySelector(".puck-container iframe") as HTMLIFrameElement | null)?.contentDocument;
+                                        if (doc) replayAnimations(doc);
+                                    }}
+                                    title={trStr("Reproducir las animaciones de entrada", language)}
+                                    className="hidden md:flex w-7 h-7 rounded-md items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)] transition-colors"
+                                >
+                                    <MSym name="play_arrow" size={18} />
+                                </button>
 
-                            {/* Right: Actions */}
-                            <div className="flex items-center gap-4">
-                                {/* Save-state indicator (autosave keeps drafts safe in the background) */}
-                                {onSave && (
-                                    <div className="hidden xl:flex flex-col items-end leading-tight select-none" aria-live="polite">
-                                        {hasChanges ? (
-                                            <span className="text-[11px] font-bold text-amber-500 flex items-center gap-1.5">
-                                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse"></span>
-                                                {status === "draft" ? trStr("Sin guardar · autoguardado activo", language) : trStr("Cambios sin publicar", language)}
-                                            </span>
-                                        ) : savedAt ? (
-                                            <span className="text-[11px] font-bold text-emerald-600 flex items-center gap-1.5">
-                                                <i className="fa-solid fa-circle-check text-[10px]"></i>
-                                                {lastSaveWasAuto ? "Autoguardado" : "Guardado"} {savedAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
-                                            </span>
-                                        ) : null}
-                                    </div>
-                                )}
+                                {/* Guides — dashed outlines on every block + spacing measures on the
+                                    selected one (Webflow-style), painted inside the canvas iframe. */}
+                                <button
+                                    onClick={() => setGuidesOn(!guidesOn)}
+                                    className={`hidden md:flex w-7 h-7 rounded-md items-center justify-center transition-colors ${guidesOn ? 'bg-[var(--ed-surface-container-high)] text-[var(--ed-primary)]' : 'text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]'}`}
+                                    title={trStr("Guías y contornos", language)}
+                                    aria-pressed={guidesOn}
+                                >
+                                    <MSym name="grid_view" size={16} />
+                                </button>
+
+                                {/* Properties-panel toggle — the panel's own close leaves no way back
+                                    without this; the left panel reopens from the rail instead. */}
+                                <button
+                                    onClick={() => setShowProperties(!showProperties)}
+                                    className={`hidden md:flex w-7 h-7 rounded-md items-center justify-center transition-colors ${showProperties ? 'bg-[var(--ed-surface-container-high)] text-[var(--ed-primary)]' : 'text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]'}`}
+                                    title={showProperties ? t('editor.hideProperties') : t('editor.showProperties')}
+                                >
+                                    <MSym name="tune" size={18} />
+                                </button>
+
                                 {onStatusChange && (
                                     <div className="hidden md:block">
                                         <ModernSelect
@@ -1236,95 +1784,169 @@ export default function PuckEditor({
                                                 { value: "pending", label: t('editor.status.pending') },
                                             ]}
                                             placeholder={trStr("Select an option", language)}
-                                            className="!py-2.5 !px-4 !bg-gray-50 !border-gray-100 !rounded-xl !text-xs !font-bold !uppercase !tracking-wider min-w-[120px]"
+                                            className="!py-1 !px-2 !bg-[var(--ed-surface-container)] !border-[var(--ed-outline-variant)] !rounded-md !text-[11px] min-w-[104px]"
                                         />
                                     </div>
                                 )}
 
-                                {pageId && (
+                                {previewSlug && (
                                     <button
-                                        onClick={() => setShowRevisions(!showRevisions)}
-                                        className={`w-10 h-10 rounded-xl flex items-center justify-center transition-all duration-300 ${showRevisions ? 'bg-amber-500 text-white shadow-lg shadow-amber-200 scale-105' : 'bg-gray-50/50 text-gray-400 hover:text-amber-500 hover:bg-gray-100 border border-gray-100'}`}
-                                        title={t('editor.revisionHistory')}
+                                        type="button"
+                                        onClick={handlePreview}
+                                        disabled={saving}
+                                        className="hidden md:block px-4 py-1.5 rounded-lg text-[12px] font-medium text-[var(--ed-on-surface)] border border-[var(--ed-outline-variant)] hover:bg-[var(--ed-surface-container)] active:scale-95 duration-75 transition disabled:opacity-50"
                                     >
-                                        <i className="fa-solid fa-clock-rotate-left"></i>
+                                        {trStr("Vista Previa", language)}
                                     </button>
                                 )}
 
-                                <div className="flex items-center gap-2">
-                                    {onCancel && (
-                                        <button
-                                            type="button"
-                                            onClick={onCancel}
-                                            className="px-6 py-3 rounded-xl text-gray-500 font-bold hover:bg-gray-50 hover:text-red-500 transition-colors text-xs uppercase tracking-widest"
-                                        >
-                                            {t('editor.cancel')}
-                                        </button>
-                                    )}
-                                    {onSave && (
-                                        <button
-                                            type="button"
-                                            onClick={handleManualSave}
-                                            disabled={saving || (!hasChanges && !activeEditorId)}
-                                            className={`px-8 py-3 rounded-xl text-xs font-black uppercase tracking-widest transition-all flex items-center gap-2 shadow-lg ${hasChanges
-                                                ? 'bg-gray-900 hover:bg-blue-600 text-white shadow-gray-200 hover:shadow-blue-500/30 hover:-translate-y-0.5'
-                                                : 'bg-gray-100 text-gray-400 cursor-not-allowed shadow-none'
-                                                }`}
-                                        >
-                                            {saving ? (
-                                                <i className="fa-solid fa-circle-notch fa-spin"></i>
-                                            ) : (
-                                                <i className="fa-solid fa-floppy-disk"></i>
-                                            )}
-                                            {saving ? t('editor.saving') : t('editor.saveChanges')}
-                                        </button>
-                                    )}
+                                {onSave && (
+                                    <button
+                                        type="button"
+                                        onClick={handleManualSave}
+                                        disabled={saving || (!hasChanges && !activeEditorId)}
+                                        className="px-4 py-1.5 rounded-lg text-[12px] font-medium text-white bg-[var(--ed-primary)] hover:opacity-90 active:scale-95 duration-75 transition disabled:opacity-40 flex items-center gap-2"
+                                    >
+                                        {saving && <MSym name="sync" size={12} className="animate-spin" />}
+                                        {status === "draft" ? trStr("Guardar", language) : trStr("Publicar", language)}
+                                    </button>
+                                )}
+
+                                {/* Avatar — the design closes the bar with it */}
+                                <div className="hidden md:flex w-8 h-8 rounded-full bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)] items-center justify-center shrink-0 border border-[var(--ed-outline-variant)]">
+                                    <MSym name="person" size={16} fill />
                                 </div>
                             </div>
                         </div>
 
-                        {/* 2. Content Area (Below Header) */}
-                        <div className="relative flex-1 w-full bg-gray-50/50 overflow-hidden flex flex-col min-h-0 md:flex-row">
+                        {/* 2. Content Area (Below Header) — mobile reserves the bottom-nav strip */}
+                        <div className="relative flex-1 w-full bg-[var(--ed-surface-container-low)] overflow-hidden flex flex-col min-h-0 md:flex-row pb-14 md:pb-0">
 
-                            {/* EDITOR SIDEBAR (Left) */}
+                            {/* RAIL — 64px, per the design. Selects what the left panel shows, so the
+                                panel holds one view at full height instead of the old stacked
+                                inserter-over-outline column with a drag handle between them. Every
+                                entry is REAL: Plantillas is the inserter's patterns view, Recursos
+                                opens the media library (picking appends an Image block), Historial
+                                the revisions drawer, Ajustes selects the page itself so its settings
+                                land in the properties panel. A rail of dead icons would look like
+                                the design and behave like a mock. */}
+                            <nav className="hidden md:flex w-16 shrink-0 bg-[var(--ed-surface)] border-r border-[var(--ed-outline-variant)] flex-col items-center py-2 gap-1 z-30">
+                                {([
+                                    { id: 'blocks' as const, icon: 'add_box', label: trStr("Bloques", language) },
+                                    { id: 'outline' as const, icon: 'layers', label: trStr("Estructura", language) },
+                                    { id: 'patterns' as const, icon: 'dashboard_customize', label: trStr("Plantillas", language) },
+                                ]).map((item) => {
+                                    const active = showSidebar && railView === item.id;
+                                    return (
+                                        <button
+                                            key={item.id}
+                                            type="button"
+                                            onClick={() => {
+                                                // Clicking the active view collapses the panel — the design's
+                                                // "both sidebars collapsed" state, reachable without a separate control.
+                                                if (showSidebar && railView === item.id) setShowSidebar(false);
+                                                else { setRailView(item.id); setShowSidebar(true); }
+                                            }}
+                                            title={item.label}
+                                            aria-pressed={active}
+                                            className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${active
+                                                ? 'bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]'
+                                                : 'text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]'}`}
+                                        >
+                                            <MSym name={item.icon} size={20} fill={active} />
+                                            <span className="text-[9px] leading-none">{item.label}</span>
+                                        </button>
+                                    );
+                                })}
+
+                                <button
+                                    type="button"
+                                    onClick={() => setMediaOpen(true)}
+                                    title={trStr("Biblioteca de medios", language)}
+                                    className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                                >
+                                    <MSym name="image" size={20} />
+                                    <span className="text-[9px] leading-none">{trStr("Recursos", language)}</span>
+                                </button>
+
+                                <div className="mt-auto flex flex-col items-center gap-1">
+                                    {pageId && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setCommentsOpen(!commentsOpen)}
+                                            title={trStr("Comentarios de revisión", language)}
+                                            aria-pressed={commentsOpen}
+                                            className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${commentsOpen
+                                                ? 'bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]'
+                                                : 'text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]'}`}
+                                        >
+                                            <MSym name="forum" size={20} fill={commentsOpen} />
+                                            <span className="text-[9px] leading-none">{trStr("Notas", language)}</span>
+                                        </button>
+                                    )}
+                                    {pageId && (
+                                        <button
+                                            type="button"
+                                            onClick={() => setShowRevisions(!showRevisions)}
+                                            title={t('editor.revisionHistory')}
+                                            aria-pressed={showRevisions}
+                                            className={`w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 transition-colors ${showRevisions
+                                                ? 'bg-[var(--ed-primary-container)] text-[var(--ed-on-primary-container)]'
+                                                : 'text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)]'}`}
+                                        >
+                                            <MSym name="history" size={20} fill={showRevisions} />
+                                            <span className="text-[9px] leading-none">{trStr("Historial", language)}</span>
+                                        </button>
+                                    )}
+                                    <button
+                                        type="button"
+                                        onClick={() => {
+                                            // Deselect → Puck.Fields falls back to the ROOT (page) fields.
+                                            (window as any).puckDispatch?.({ type: 'setUi', ui: { itemSelector: null } });
+                                            setShowProperties(true);
+                                        }}
+                                        title={trStr("Ajustes de página", language)}
+                                        className="w-12 h-12 rounded-lg flex flex-col items-center justify-center gap-1 text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                                    >
+                                        <MSym name="settings" size={20} />
+                                        <span className="text-[9px] leading-none">{trStr("Ajustes", language)}</span>
+                                    </button>
+                                </div>
+                            </nav>
+
+                            {/* LEFT PANEL — desktop: docked 280px column; mobile: a full sheet between
+                                the header and the bottom nav (design's mobile Bloques/Capas screens).
+                                `inert` removes the collapsed panel's controls from the tab order —
+                                w-0/opacity-0 hides them visually but keyboard focus still landed there. */}
                             <div
-                                ref={sidebarRef}
-                                className={`
-                                flex flex-col bg-white z-30 shadow-[4px_0_24px_-4px_rgba(0,0,0,0.05)] transition-all duration-300 ease-in-out relative
-                                ${showSidebar ? 'w-[360px] opacity-100' : 'w-0 opacity-0 overflow-hidden'}
-                            `}>
-
-                                {/* Gradient Border Line */}
-                                <div className="absolute top-0 bottom-0 right-0 w-px bg-gradient-to-b from-gray-100 via-gray-200 to-gray-100"></div>
-
-                                {/* Components Area */}
-                                <div className="flex-1 overflow-y-auto overflow-x-hidden custom-scrollbar min-h-0 relative">
-                                    <BlockInserter components={editorConfig.components} />
+                                inert={!showSidebar && mobileSheet !== 'left'}
+                                className={`flex-col bg-[var(--ed-surface-container-lowest)] border-r border-[var(--ed-outline-variant)] md:transition-[width,opacity] duration-200 ease-in-out ${mobileSheet === 'left' ? 'flex fixed inset-x-0 top-12 bottom-14 z-40' : 'hidden'} md:flex md:static md:inset-auto md:z-30 ${showSidebar ? 'md:w-[280px] md:opacity-100' : 'md:w-0 md:opacity-0 md:overflow-hidden'}`}
+                            >
+                                <div className="h-10 shrink-0 px-3 flex items-center justify-between bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
+                                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ed-on-surface-variant)]">
+                                        {railView === 'blocks' ? trStr("Bloques", language)
+                                            : railView === 'patterns' ? trStr("Plantillas", language)
+                                            : t('editor.panel.structure')}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => { if (isPhone()) setMobileSheet(null); else setShowSidebar(false); }}
+                                        title={t('editor.hideSidebar')}
+                                        className="w-6 h-6 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                                    >
+                                        <MSym name="chevron_left" size={16} className="hidden md:block" />
+                                        <MSym name="close" size={16} className="md:hidden" />
+                                    </button>
                                 </div>
 
-                                {/* Resizer Handle */}
-                                <div
-                                    className="h-2 hover:bg-blue-50 cursor-row-resize flex items-center justify-center transition-colors shrink-0 z-20 group relative"
-                                    onMouseDown={startResizing}
-                                >
-                                    <div className="absolute inset-x-0 h-px bg-gray-100 top-1/2 -translate-y-1/2 group-hover:bg-blue-200 transition-colors"></div>
-                                    <div className="w-12 h-1.5 rounded-full bg-gray-300 group-hover:bg-blue-400 transition-all z-10 shadow-sm"></div>
-                                </div>
-
-                                {/* Outline Area */}
-                                <div
-                                    style={{ height: outlineHeight }}
-                                    className="overflow-y-auto overflow-x-hidden custom-scrollbar bg-gray-50/30 flex-shrink-0 relative"
-                                >
-                                    <div className="p-6 w-[360px]">
-                                        <div className="sticky top-0 bg-gray-50/95 backdrop-blur-sm z-10 py-3 -mt-2 mb-4 border-b border-gray-100">
-                                            <h3 className="text-xs font-black uppercase text-gray-900 tracking-widest flex items-center gap-2">
-                                                <i className="fa-solid fa-list-tree text-indigo-500"></i>
-                                                {t('editor.panel.structure')}
-                                            </h3>
-                                        </div>
-                                        <Puck.Outline />
-                                    </div>
+                                <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden custom-scrollbar">
+                                    {railView === 'outline'
+                                        ? <div className="p-3"><Puck.Outline /></div>
+                                        : <BlockInserter
+                                            components={editorConfig.components}
+                                            view={railView}
+                                            onInsert={mobileSheet === 'left' ? () => setMobileSheet(null) : undefined}
+                                        />}
                                 </div>
                             </div>
 
@@ -1337,21 +1959,33 @@ export default function PuckEditor({
                                     the pattern quick-pick buttons. */}
                                 {(!data?.content || data.content.length === 0) && (
                                     <div className="absolute inset-0 z-30 flex items-center justify-center p-6 pointer-events-none">
-                                        <div className="text-center max-w-sm bg-white/95 backdrop-blur rounded-2xl border border-gray-200 shadow-xl p-8 pointer-events-none">
-                                            <div className="w-16 h-16 mx-auto rounded-2xl bg-editor-primary/10 flex items-center justify-center text-editor-primary mb-4">
-                                                <i className="fa-solid fa-wand-magic-sparkles text-2xl"></i>
+                                        {/* The design's "Comienza tu diseño" state: illustration circle,
+                                            headline, one primary pill CTA (opens the ⌘K inserter),
+                                            pattern quick-picks as the secondary row. It floats OVER the
+                                            themed page, which may be dark — the frosted white card keeps
+                                            the on-surface text readable on any theme. */}
+                                        <div className="text-center max-w-md pointer-events-none bg-white/95 backdrop-blur rounded-2xl border border-[var(--ed-outline-variant)] shadow-xl p-8">
+                                            <div className="w-36 h-36 mx-auto rounded-full bg-[var(--ed-surface-container)] border border-[var(--ed-outline-variant)] flex items-center justify-center mb-6">
+                                                <MSym name="space_dashboard" size={56} className="text-[var(--ed-outline)]" />
                                             </div>
-                                            <h3 className="text-lg font-bold text-gray-800 mb-1">{trStr("Empieza tu página", language)}</h3>
-                                            <p className="text-sm text-gray-500 mb-5">{trStr("Arrastra un bloque desde la izquierda, o inserta una plantilla para arrancar rápido.", language)}</p>
-                                            <div className="flex flex-wrap justify-center gap-2">
+                                            <h3 className="text-[18px] font-semibold tracking-tight text-[var(--ed-on-surface)] mb-2">{trStr("Comienza tu diseño", language)}</h3>
+                                            <p className="text-[14px] text-[var(--ed-on-surface-variant)] mb-6">{trStr("Tu lienzo está listo. Añade el primer bloque para empezar a construir tu visión.", language)}</p>
+                                            <button
+                                                type="button"
+                                                onClick={() => setCmdkOpen(true)}
+                                                className="pointer-events-auto inline-flex items-center gap-2 px-6 py-3 rounded-full bg-[var(--ed-primary)] text-white text-[12px] font-semibold hover:shadow-lg transition-all active:scale-95"
+                                            >
+                                                <MSym name="add_circle" size={20} />
+                                                {trStr("Añadir primer bloque", language)}
+                                            </button>
+                                            <div className="flex flex-wrap justify-center gap-2 mt-5">
                                                 {PATTERNS.slice(0, 3).map((p) => (
                                                     <button
                                                         key={p.id}
                                                         type="button"
                                                         onClick={() => insertPattern(p, editorConfig.components)}
-                                                        className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-gray-50 hover:bg-editor-primary/10 border border-gray-200 hover:border-editor-primary text-xs font-semibold text-gray-700 hover:text-editor-primary transition"
+                                                        className="pointer-events-auto inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[var(--ed-surface-container-lowest)] border border-[var(--ed-outline-variant)] hover:border-[var(--ed-primary)] text-[11px] font-semibold text-[var(--ed-on-surface-variant)] hover:text-[var(--ed-primary)] transition"
                                                     >
-                                                        <i className={`fa-solid ${p.icon}`}></i>
                                                         {trStr(p.name, language)}
                                                     </button>
                                                 ))}
@@ -1362,9 +1996,139 @@ export default function PuckEditor({
                             </PreviewFrame>
 
                             {/* Floating Properties Panel handled by state, rendered here for z-index context if needed */}
-                            {showProperties && <FloatingPropertiesPanel />}
+                            {(showProperties || mobileSheet === 'right') && (
+                                <PropertiesPanel
+                                    onClose={() => { if (isPhone()) setMobileSheet(null); else setShowProperties(false); }}
+                                    components={editorConfig.components}
+                                    mobileOpen={mobileSheet === 'right'}
+                                />
+                            )}
                         </div>
+
+                        {/* MOBILE bottom navigation — the design's 4 tabs. Sheets open between the
+                            48px header and this bar; the FAB below is the phone's insert gesture. */}
+                        <div className="md:hidden fixed inset-x-0 bottom-0 h-14 z-40 bg-[var(--ed-surface)] border-t border-[var(--ed-outline-variant)] flex items-stretch">
+                            {([
+                                { id: 'blocks', icon: 'add_box', label: trStr("Bloques", language), active: mobileSheet === 'left' && railView !== 'outline' },
+                                { id: 'layers', icon: 'layers', label: trStr("Capas", language), active: mobileSheet === 'left' && railView === 'outline' },
+                                { id: 'props', icon: 'tune', label: trStr("Propiedades", language), active: mobileSheet === 'right' },
+                                { id: 'settings', icon: 'settings', label: trStr("Ajustes", language), active: false },
+                            ] as const).map((tab) => (
+                                <button
+                                    key={tab.id}
+                                    type="button"
+                                    aria-pressed={tab.active}
+                                    onClick={() => {
+                                        if (tab.id === 'blocks') {
+                                            const wasOpen = mobileSheet === 'left' && railView !== 'outline';
+                                            setRailView('blocks');
+                                            setMobileSheet(wasOpen ? null : 'left');
+                                        } else if (tab.id === 'layers') {
+                                            const wasOpen = mobileSheet === 'left' && railView === 'outline';
+                                            setRailView('outline');
+                                            setMobileSheet(wasOpen ? null : 'left');
+                                        } else if (tab.id === 'props') {
+                                            setMobileSheet(mobileSheet === 'right' ? null : 'right');
+                                        } else {
+                                            (window as any).puckDispatch?.({ type: 'setUi', ui: { itemSelector: null } });
+                                            setMobileSheet('right');
+                                        }
+                                    }}
+                                    className="flex-1 flex flex-col items-center justify-center gap-0.5"
+                                >
+                                    <span className={`w-10 h-6 rounded-md flex items-center justify-center transition-colors ${tab.active ? 'bg-[var(--ed-primary)] text-white' : 'text-[var(--ed-on-surface-variant)]'}`}>
+                                        <MSym name={tab.icon} size={18} fill={tab.active} />
+                                    </span>
+                                    <span className={`text-[10px] leading-none ${tab.active ? 'text-[var(--ed-primary)] font-semibold' : 'text-[var(--ed-on-surface-variant)]'}`}>
+                                        {tab.label}
+                                    </span>
+                                </button>
+                            ))}
+                        </div>
+
+                        {/* MOBILE FAB — insert a block (opens the palette; tap-to-insert). Hidden
+                            while a sheet is open (the sheet owns the screen then). */}
+                        {!mobileSheet && (
+                            <button
+                                type="button"
+                                onClick={() => setCmdkOpen(true)}
+                                title={trStr("Insertar bloque (Ctrl/⌘ + K)", language)}
+                                className="md:hidden fixed right-4 bottom-[72px] z-40 w-12 h-12 rounded-full bg-[var(--ed-primary)] text-white shadow-xl flex items-center justify-center active:scale-95 transition"
+                            >
+                                <MSym name="add" size={24} />
+                            </button>
+                        )}
+
+                        {/* Drag guide pill (renders only while a block drag is live) */}
+                        <DragHint />
+
+                        {/* Canvas guides — outlines + spacing measures, driven by selection */}
+                        <GuidesController enabled={guidesOn} />
+
+                        {/* Accessibility audit drawer */}
+                        {a11yOpen && (
+                            <div className="fixed top-12 bottom-0 right-0 w-[340px] z-[90] bg-[var(--ed-surface-container-lowest)] border-l border-[var(--ed-outline-variant)] flex flex-col shadow-2xl">
+                                <div className="shrink-0 h-10 px-3 flex items-center justify-between bg-[var(--ed-surface-container-low)] border-b border-[var(--ed-outline-variant)]">
+                                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[var(--ed-on-surface-variant)]">
+                                        {trStr("Accesibilidad", language)}
+                                    </span>
+                                    <button
+                                        type="button"
+                                        onClick={() => setA11yOpen(false)}
+                                        aria-label={t('common.close')}
+                                        className="w-6 h-6 rounded flex items-center justify-center text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container-high)] transition-colors"
+                                    >
+                                        <MSym name="close" size={16} />
+                                    </button>
+                                </div>
+                                <div className="flex-1 min-h-0 overflow-y-auto custom-scrollbar">
+                                    <A11yPanel
+                                        issues={a11yIssues}
+                                        running={a11yRunning}
+                                        onRefresh={runAudit}
+                                        onSelect={selectBlockById}
+                                    />
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Toast — dark pill beside the properties panel, per the design */}
+                        {toastMsg && (
+                            <div
+                                className="fixed bottom-16 md:bottom-4 right-4 md:right-[var(--toast-right)] z-[80] bg-[var(--ed-inverse-surface)] text-[var(--ed-inverse-on-surface)] pl-3 pr-2 py-2.5 rounded-lg shadow-xl flex items-center gap-2.5"
+                                style={{ "--toast-right": showProperties ? "336px" : "16px" } as React.CSSProperties}
+                                role="status"
+                            >
+                                <MSym name="check_circle" size={20} fill className="text-[var(--ed-success)]" />
+                                <span className="text-[13px] font-medium">{toastMsg}</span>
+                                <button
+                                    type="button"
+                                    aria-label={t('common.close')}
+                                    onClick={() => setToastMsg(null)}
+                                    className="p-1 rounded hover:bg-white/10 transition-colors"
+                                >
+                                    <MSym name="close" size={16} />
+                                </button>
+                            </div>
+                        )}
                     </div>
+
+                    {/* Media library ("Recursos"): picking an item appends an Image block to the page. */}
+                    <MediaPickerModal
+                        isOpen={mediaOpen}
+                        onClose={() => setMediaOpen(false)}
+                        onSelect={(item: any) => {
+                            const def = (editorConfig.components as any).Image?.defaultProps || {};
+                            // Relative sourceUrl, not guid — guid embeds the upload-time host.
+                            const block = regenIds({ type: "Image", props: { ...def, src: item.sourceUrl || item.guid, alt: item.title || "" } });
+                            (window as any).puckDispatch?.({
+                                type: "setData",
+                                data: (prev: any) => ({ ...prev, content: [...(prev.content || []), block] }),
+                                recordHistory: true,
+                            });
+                            setMediaOpen(false);
+                        }}
+                    />
                 </Puck>
             </div>
             {pageId && (
@@ -1375,6 +2139,15 @@ export default function PuckEditor({
                     onRestore={handleRestore}
                 />
             )}
+            {/* Review comments (Figma/Webflow-style editorial thread; meta-based, never public) */}
+            {pageId && (
+                <ReviewComments
+                    postId={pageId}
+                    isOpen={commentsOpen}
+                    onClose={() => setCommentsOpen(false)}
+                />
+            )}
         </EditorContext.Provider>
     );
 }
+

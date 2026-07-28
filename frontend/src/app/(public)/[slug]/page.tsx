@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import { getPostBySlug, getPostBySlugPreview, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
 interface RouteParams {
     slug: string;
@@ -42,6 +43,8 @@ export default async function SinglePostPage(
         resolveSiteBase(),
     ]);
     if (!post) notFound();
+    // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
+    const withBlocks = await withResolvedBlocks(post);
     return (
         <>
             {preview && post.status !== "publish" && (
@@ -51,7 +54,7 @@ export default async function SinglePostPage(
                 </div>
             )}
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
-            <PostContent post={post} settings={settings} showComments />
+            <PostContent post={withBlocks} settings={settings} showComments />
         </>
     );
 }

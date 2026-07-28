@@ -17,6 +17,8 @@
 
   /* --- COLOR SEMANTICS --- */
   --wjs-bg-canvas: #14110F;
+  /* the public header reads this; without it a dark theme paints a literal white bar */
+  --wjs-bg-surface-glass: rgba(20, 17, 15, 0.85);
   /* Warm near-black */
   --wjs-bg-surface: #1C1917;
   /* Raised charcoal */
@@ -186,17 +188,12 @@ h1 {
   font-weight: 500 !important;
 }
 
-/* Cards: Charcoal surface, thin border, soft depth */
-.wp-block-card,
-article {
+/* Cards: Charcoal surface, thin border, soft depth */article {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
   transition: border-color 0.3s ease, box-shadow 0.3s ease !important;
-}
-
-.wp-block-card:hover,
-article:hover {
+}article:hover {
   border-color: rgba(212, 162, 76, 0.45) !important;
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55) !important;
 }
@@ -240,220 +237,6 @@ footer .w-10:hover {
   color: #14110F !important;
 }
 
-/* =========================================
-   NOIR & OR: COMPONENT OVERRIDES
-   Luxury / hairline / serif aesthetic
-   ========================================= */
-
-/* Accordion: Hairline-framed panels */
-.wp-block-accordion {
-  border: 1px solid var(--wjs-border-subtle) !important;
-  background: var(--wjs-bg-surface) !important;
-}
-
-.wp-block-accordion .accordion-item button {
-  background: var(--wjs-bg-surface) !important;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  font-family: 'Montserrat', sans-serif !important;
-  font-weight: 500 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.8125rem !important;
-  transition: color 0.3s ease !important;
-}
-
-.wp-block-accordion .accordion-item button:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: var(--wjs-bg-canvas) !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: Underlined gold active rail */
-.wp-block-tabs>div:first-child {
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-text-muted) !important;
-  font-family: 'Montserrat', sans-serif !important;
-  font-weight: 500 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.16em;
-  font-size: 0.8125rem !important;
-  transition: color 0.3s ease, border-color 0.3s ease !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: var(--wjs-color-primary) !important;
-  border-bottom: 1px solid var(--wjs-color-primary) !important;
-}
-
-.wp-block-tabs>div:last-child {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-top: none !important;
-}
-
-/* Video: Thin gold-tinted frame */
-.wp-block-video-embed {
-  border: 1px solid rgba(212, 162, 76, 0.35) !important;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55) !important;
-}
-
-/* Audio: Minimal charcoal player */
-.wp-block-audio-player {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
-}
-
-/* Pricing: Hairline cards, gold-leaf highlight */
-.wp-block-pricing>div {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
-}
-
-.wp-block-pricing>div h3 {
-  text-transform: none;
-  letter-spacing: 0.03em;
-  color: var(--wjs-color-text-main) !important;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: linear-gradient(160deg, #1C1917 0%, #221E1A 100%) !important;
-  color: var(--wjs-color-text-main) !important;
-  transform: none !important;
-  border: 1px solid var(--wjs-color-primary) !important;
-  box-shadow: 0 0 0 1px rgba(212, 162, 76, 0.35), 0 16px 40px rgba(0, 0, 0, 0.6) !important;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] h3 {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Testimonial: Quiet quote with gold rule */
-.wp-block-testimonial {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-left: 2px solid var(--wjs-color-primary) !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
-}
-
-.wp-block-testimonial>div:first-child {
-  color: var(--wjs-color-primary) !important;
-  font-family: 'Cormorant', serif !important;
-}
-
-/* CTA Banner: Charcoal field, gold-outlined action */
-.wp-block-cta-banner {
-  background: linear-gradient(160deg, #1C1917 0%, #14110F 100%) !important;
-  border: 1px solid rgba(212, 162, 76, 0.3) !important;
-}
-
-.wp-block-cta-banner h2 {
-  font-family: 'Cormorant', serif !important;
-  font-weight: 400 !important;
-  text-transform: none;
-  letter-spacing: 0.01em;
-  color: var(--wjs-color-text-main) !important;
-}
-
-.wp-block-cta-banner a {
-  background: var(--wjs-color-primary) !important;
-  color: #14110F !important;
-  text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-family: 'Montserrat', sans-serif !important;
-  font-weight: 600 !important;
-  font-size: 0.8125rem !important;
-  border: 1px solid var(--wjs-color-primary) !important;
-  transition: background-color 0.3s ease, color 0.3s ease !important;
-}
-
-.wp-block-cta-banner a:hover {
-  background: transparent !important;
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Posts Grid: Restrained cards, gold-hairline on hover */
-.wp-block-posts-grid article {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease !important;
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: rgba(212, 162, 76, 0.45) !important;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55) !important;
-}
-
-/* Category Posts: Serif headline over gold rule */
-.wp-block-category-posts h3 {
-  font-family: 'Cormorant', serif !important;
-  font-weight: 500 !important;
-  text-transform: none;
-  letter-spacing: 0.02em;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid rgba(212, 162, 76, 0.3);
-  padding-bottom: 10px;
-}
-
-.wp-block-category-posts li {
-  border-color: var(--wjs-border-subtle) !important;
-}
-
-.wp-block-category-posts li a {
-  font-weight: 400 !important;
-  color: var(--wjs-color-text-main) !important;
-  transition: color 0.3s ease !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Search: Charcoal input, gold focus ring */
-.wp-block-search input {
-  background: var(--wjs-bg-surface) !important;
-  color: var(--wjs-color-text-main) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease !important;
-}
-
-.wp-block-search input::placeholder {
-  color: var(--wjs-color-text-muted) !important;
-}
-
-.wp-block-search input:focus {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: 0 0 0 1px rgba(212, 162, 76, 0.4) !important;
-  outline: none !important;
-}
-
-.wp-block-search button {
-  background: var(--wjs-color-primary) !important;
-  color: #14110F !important;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-family: 'Montserrat', sans-serif !important;
-  font-weight: 600 !important;
-  border: 1px solid var(--wjs-color-primary) !important;
-  transition: background-color 0.3s ease, color 0.3s ease !important;
-}
-
-.wp-block-search button:hover {
-  background: var(--wjs-color-primary-dark) !important;
-  border-color: var(--wjs-color-primary-dark) !important;
-  color: #14110F !important;
-}
-
 /* ===== Mobile (auto responsive pass) ===== */
 @media (max-width: 767.98px) {
 
@@ -469,24 +252,144 @@ footer .w-10:hover {
 
   /* Accordion headers + tab buttons: uppercase 0.16em-tracked labels get
      cramped on narrow screens — reduce tracking, guarantee wrapping. */
-  .wp-block-accordion .accordion-item button,
-  .wp-block-tabs button {
-    letter-spacing: 0.1em !important;
-    white-space: normal !important;
+  .wp-block-accordion__header,
+  .wp-block-tabs__tab {
+    letter-spacing: 0.1em;
+    white-space: normal;
   }
 
   /* Tab strip: if several tracked uppercase tabs exceed the viewport,
      wrap them onto extra rows (inert unless the block lays tabs out
      with flex, which it does). */
-  .wp-block-tabs>div:first-child {
-    flex-wrap: wrap !important;
+  .wp-block-tabs__list {
+    flex-wrap: wrap;
   }
 
   /* CTA + search actions: uppercase with 0.14–0.18em tracking — tighten
      so button labels fit narrow layouts and wrap rather than overflow. */
-  .wp-block-cta-banner a,
-  .wp-block-search button {
-    letter-spacing: 0.1em !important;
-    white-space: normal !important;
+  .wp-block-cta-banner__button,
+  .wp-block-search__button {
+    letter-spacing: 0.1em;
+    white-space: normal;
   }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: var(--wjs-bg-surface);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: var(--wjs-border-subtle);
+  --wjs-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wjs-card-hover-border-color: rgba(212, 162, 76, 0.45);
+  --wjs-card-hover-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-bg: var(--wjs-bg-surface);
+  --wjs-accordion-header-bg: var(--wjs-bg-surface);
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-header-family: 'Montserrat', sans-serif;
+  --wjs-accordion-header-weight: 500;
+  --wjs-accordion-header-transform: uppercase;
+  --wjs-accordion-header-tracking: 0.16em;
+  --wjs-accordion-header-size: 0.8125rem;
+  --wjs-accordion-panel-bg: var(--wjs-bg-canvas);
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 1px;
+  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
+  --wjs-tabs-color: var(--wjs-color-text-muted);
+  --wjs-tabs-family: 'Montserrat', sans-serif;
+  --wjs-tabs-weight: 500;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-tracking: 0.16em;
+  --wjs-tabs-size: 0.8125rem;
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-active-border-width: 1px;
+  --wjs-tabs-active-border-color: var(--wjs-color-primary);
+  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
+  --wjs-tabs-panel-border-width: 0;
+  --wjs-tabs-panel-border-color: transparent;
+  --wjs-video-border-width: 1px;
+  --wjs-video-border-color: rgba(212, 162, 76, 0.35);
+  --wjs-video-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --wjs-audio-bg: var(--wjs-bg-surface);
+  --wjs-audio-border-width: 1px;
+  --wjs-audio-border-color: var(--wjs-border-subtle);
+  --wjs-audio-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wjs-pricing-bg: var(--wjs-bg-surface);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: var(--wjs-border-subtle);
+  --wjs-pricing-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wjs-pricing-name-transform: none;
+  --wjs-pricing-name-tracking: 0.03em;
+  --wjs-pricing-name-color: var(--wjs-color-text-main);
+  --wjs-pricing-highlight-bg: linear-gradient(160deg, #1C1917 0%, #221E1A 100%);
+  --wjs-pricing-highlight-color: var(--wjs-color-text-main);
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-primary);
+  --wjs-pricing-highlight-shadow: 0 0 0 1px rgba(212, 162, 76, 0.35), 0 16px 40px rgba(0, 0, 0, 0.6);
+  --wjs-pricing-highlight-name-color: var(--wjs-color-primary);
+  --wjs-testimonial-bg: var(--wjs-bg-surface);
+  --wjs-testimonial-border-width: 2px;
+  --wjs-testimonial-border-color: var(--wjs-color-primary);
+  --wjs-testimonial-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-testimonial-mark-family: 'Cormorant', serif;
+  --wjs-cta-bg: linear-gradient(160deg, #1C1917 0%, #14110F 100%);
+  --wjs-cta-border-width: 1px;
+  --wjs-cta-border-color: rgba(212, 162, 76, 0.3);
+  --wjs-cta-title-family: 'Cormorant', serif;
+  --wjs-cta-title-weight: 400;
+  --wjs-cta-title-transform: none;
+  --wjs-cta-title-tracking: 0.01em;
+  --wjs-cta-title-color: var(--wjs-color-text-main);
+  --wjs-cta-button-bg: var(--wjs-color-primary);
+  --wjs-cta-button-color: #14110F;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.18em;
+  --wjs-cta-button-family: 'Montserrat', sans-serif;
+  --wjs-cta-button-weight: 600;
+  --wjs-cta-button-size: 0.8125rem;
+  --wjs-cta-button-border-width: 1px;
+  --wjs-cta-button-border-color: var(--wjs-color-primary);
+  --wjs-cta-button-hover-bg: transparent;
+  --wjs-cta-button-hover-color: var(--wjs-color-primary);
+  --wjs-posts-bg: var(--wjs-bg-surface);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: var(--wjs-border-subtle);
+  --wjs-posts-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --wjs-posts-hover-border-color: rgba(212, 162, 76, 0.45);
+  --wjs-posts-hover-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+  --wjs-catposts-heading-family: 'Cormorant', serif;
+  --wjs-catposts-heading-weight: 500;
+  --wjs-catposts-heading-transform: none;
+  --wjs-catposts-heading-tracking: 0.02em;
+  --wjs-catposts-heading-color: var(--wjs-color-text-main);
+  --wjs-catposts-heading-border-width: 1px;
+  --wjs-catposts-heading-border-color: rgba(212, 162, 76, 0.3);
+  --wjs-catposts-heading-pad: 10px;
+  --wjs-catposts-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-link-weight: 400;
+  --wjs-catposts-link-color: var(--wjs-color-text-main);
+  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
+  --wjs-search-input-bg: var(--wjs-bg-surface);
+  --wjs-search-input-color: var(--wjs-color-text-main);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: var(--wjs-border-subtle);
+  --wjs-search-placeholder-color: var(--wjs-color-text-muted);
+  --wjs-search-focus-color: var(--wjs-color-primary);
+  --wjs-search-focus-ring: 0 0 0 1px rgba(212, 162, 76, 0.4);
+  --wjs-search-button-bg: var(--wjs-color-primary-dark);
+  --wjs-search-button-color: #14110F;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.14em;
+  --wjs-search-button-family: 'Montserrat', sans-serif;
+  --wjs-search-button-weight: 600;
+  --wjs-search-button-border-width: 1px;
+  --wjs-search-button-border-color: var(--wjs-color-primary-dark);
 }

@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #042f2e;
+  --wjs-bg-surface: #133b3b;
+  --wjs-bg-surface-raised: #204645;
+  --wjs-color-primary: #14b8a6;
+  --wjs-color-primary-dark: #0d9488;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #0d9488;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ccfbf1;
+  --wjs-color-text-muted: #80ada7;
+  --wjs-color-heading: #ccfbf1;
+  --wjs-color-link: #14b8a6;
+  --wjs-color-link-hover: #0d9488;
+  --wjs-border-subtle: #285451;
+  --wjs-outline: #507d78;
+  --wjs-outline-variant: #224e4b;
+  --wjs-focus-ring: #14b8a6;
+}
+
 /* Theme: Omni Stack (Cyber Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 

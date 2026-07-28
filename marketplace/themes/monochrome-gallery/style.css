@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #000000;
+  --wjs-bg-surface: #0f0f0f;
+  --wjs-bg-surface-raised: #1c1c1c;
+  --wjs-color-primary: #ffffff;
+  --wjs-color-primary-dark: #a1a1aa;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #a1a1aa;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #ffffff;
+  --wjs-color-text-muted: #9e9e9e;
+  --wjs-color-heading: #ffffff;
+  --wjs-color-link: #ffffff;
+  --wjs-color-link-hover: #a1a1aa;
+  --wjs-border-subtle: #2e2e2e;
+  --wjs-outline: #616161;
+  --wjs-outline-variant: #262626;
+  --wjs-focus-ring: #ffffff;
+}
+
 /* Theme: Monochrome Gallery (Brutalist Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Public+Sans:wght@400;700&display=swap');
 

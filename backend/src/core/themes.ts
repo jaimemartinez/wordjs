@@ -273,53 +273,31 @@ module.exports = () => {
   const styleCss = `/* =========================================================================
    THEME: WORDJS  (default)
    WordJS's own visual identity — modern, JavaScript-native, developer-first.
-   Signature indigo->violet gradient, Space Grotesk display + Inter body +
+   Signature indigo→violet gradient, Space Grotesk display + Inter body +
    JetBrains Mono for code. Light, airy canvas with a deep-indigo footer edged
-   by the brand gradient. Styles the live (Next.js) chrome via the
-   .wjs-header- and footer hooks and the --wjs- framework tokens.
+   by the brand gradient. Rounded corners, soft indigo-tinted depth.
+
+   Styles the live (Next.js) public chrome via the .wjs-header- and footer
+   hooks and the --wjs- framework tokens — the same contract every theme uses.
    ========================================================================= */
 
-@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600&display=swap');
+
 
 :root {
-  /* Signature gradient (the WordJS mark) */
+/* WordJS's OWN tokens only. Everything this theme used to restate — palette, type scale,
+     radii, shadows, spacing — now comes from the framework defaults in public/css/wordjs-ui.css.
+     Re-declaring them here made the default theme silently mask the design system, so the
+     shipped defaults could never actually be seen. Only tokens the framework does NOT define
+     (nav, logo, footer chrome and the signature gradient) belong here. */
+
+  /* --- SIGNATURE GRADIENT (the WordJS mark) --- */
   --wjs-gradient: linear-gradient(120deg, #4f46e5 0%, #7c3aed 55%, #a855f7 100%);
   --wjs-gradient-soft: linear-gradient(120deg, rgba(79, 70, 229, 0.10), rgba(168, 85, 247, 0.10));
 
-  /* Color palette: Indigo / Violet */
-  --wjs-color-primary: #4f46e5;
-  --wjs-color-primary-dark: #4338ca;
-  --wjs-color-secondary: #64748b;
-  --wjs-color-secondary-dark: #475569;
-  --wjs-color-accent: #a855f7;
-  --wjs-color-success: #10b981;
-  --wjs-color-danger: #ef4444;
-  --wjs-color-warning: #f59e0b;
-  --wjs-color-info: #3b82f6;
-  --wjs-color-light: #f8f9ff;
-  --wjs-color-dark: #0b1120;
-  --wjs-color-on-primary: #ffffff;
-  --wjs-color-on-secondary: #ffffff;
-  --wjs-color-on-success: #ffffff;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #ffffff;
-  --wjs-color-on-light: #161616;
-  --wjs-color-on-dark: #ffffff;
-
-  --wjs-bg-canvas: #f8f9ff;
-  --wjs-bg-surface: #ffffff;
-  --wjs-bg-muted: #f1f2fb;
-  --wjs-color-text-main: #1e293b;
-  --wjs-color-text-muted: #64748b;
-  --wjs-color-heading: #0b1120;
-  --wjs-color-link: #4f46e5;
-  --wjs-color-link-hover: #7c3aed;
-  --wjs-border-subtle: #e6e8f4;
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(79, 70, 229, 0.28);
-
-  /* Navigation config */
+  
+  
+  
+  /* --- NAVIGATION CONFIG --- */
   --wjs-nav-font-family: 'Inter', sans-serif;
   --wjs-nav-font-size: 0.95rem;
   --wjs-nav-font-weight: 500;
@@ -330,7 +308,7 @@ module.exports = () => {
   --wjs-nav-transition: color 0.2s ease;
   --wjs-logo-color: #4f46e5;
 
-  /* Footer config (deep indigo) */
+  /* --- FOOTER CONFIG (deep indigo) --- */
   --wjs-footer-bg: #0b1120;
   --wjs-footer-text-heading: #ffffff;
   --wjs-footer-text-body: #94a3b8;
@@ -338,34 +316,11 @@ module.exports = () => {
   --wjs-footer-icon-bg: rgba(255, 255, 255, 0.06);
   --wjs-footer-icon-color: #c4b5fd;
 
-  /* Typography */
-  --wjs-font-family-base: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  --wjs-font-family-heading: 'Space Grotesk', 'Inter', sans-serif;
-  --wjs-font-family-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.7;
-  --wjs-heading-weight: 700;
-  --wjs-heading-line-height: 1.15;
-  --wjs-h1: 3rem;
-  --wjs-h2: 2.1rem;
-  --wjs-h3: 1.6rem;
-  --wjs-h4: 1.3rem;
-  --wjs-h5: 1.1rem;
-  --wjs-h6: 1rem;
-
-  /* Spacing / shape / depth */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 8px;
-  --wjs-radius: 12px;
-  --wjs-radius-md: 16px;
-  --wjs-radius-lg: 24px;
-  --wjs-radius-pill: 9999px;
-  --wjs-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
-  --wjs-shadow: 0 6px 20px -6px rgba(79, 70, 229, 0.15), 0 2px 6px rgba(15, 23, 42, 0.05);
-  --wjs-shadow-md: 0 14px 34px -10px rgba(79, 70, 229, 0.22);
-  --wjs-shadow-lg: 0 28px 60px -18px rgba(79, 70, 229, 0.30);
+  
+  
 }
 
+/* ============================ BASE ============================ */
 body {
   background-color: var(--wjs-bg-canvas) !important;
   color: var(--wjs-color-text-main) !important;
@@ -390,7 +345,7 @@ code, pre, kbd, samp { font-family: var(--wjs-font-family-mono) !important; }
 code:not(pre code) { background: var(--wjs-gradient-soft); color: var(--wjs-color-primary-dark); padding: 0.15em 0.4em; border-radius: 6px; font-size: 0.9em; }
 ::selection { background: rgba(124, 58, 237, 0.18); }
 
-/* Header */
+/* ============================ HEADER ============================ */
 header {
   background-color: rgba(255, 255, 255, 0.85) !important;
   border-bottom: 1px solid var(--wjs-border-subtle) !important;
@@ -398,6 +353,7 @@ header {
   -webkit-backdrop-filter: saturate(180%) blur(12px) !important;
 }
 
+/* Logo: WordJS gradient wordmark */
 .wjs-header-logo {
   font-family: var(--wjs-font-family-heading) !important;
   font-weight: 700 !important;
@@ -407,9 +363,10 @@ header {
   -webkit-background-clip: text !important;
   background-clip: text !important;
   -webkit-text-fill-color: transparent !important;
-  color: var(--wjs-logo-color) !important;
+  color: var(--wjs-logo-color) !important; /* fallback for no background-clip */
 }
 
+/* Nav links with an animated gradient underline */
 .wjs-header-nav a {
   font-family: var(--wjs-nav-font-family) !important;
   font-size: var(--wjs-nav-font-size) !important;
@@ -433,7 +390,7 @@ header {
 .wjs-header-nav a:hover { color: var(--wjs-nav-color-hover) !important; }
 .wjs-header-nav a:hover::after { width: 100%; }
 
-/* Content */
+/* ============================ CONTENT ============================ */
 .container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
 
 article, .wp-block-card {
@@ -449,10 +406,17 @@ article:hover, .wp-block-card:hover {
   box-shadow: var(--wjs-shadow-md);
 }
 
-.post-meta { color: var(--wjs-color-text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.06em; font-size: 0.8rem; }
+.post-meta {
+  color: var(--wjs-color-text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 0.8rem;
+}
 .content { font-size: 1.125rem; }
 .excerpt { font-size: 1.1rem; color: var(--wjs-color-text-muted); }
 
+/* Buttons — the gradient pill is the WordJS call to action */
 .wjs-btn-primary,
 .wp-block-button a,
 .wp-button.button-primary,
@@ -474,14 +438,18 @@ article:hover, .wp-block-card:hover {
   color: #ffffff !important;
 }
 
-/* Footer */
+/* ============================ FOOTER ============================ */
 footer {
   background-color: var(--wjs-footer-bg) !important;
   color: var(--wjs-footer-text-body) !important;
   border-top: 3px solid transparent !important;
   border-image: var(--wjs-gradient) 1 !important;
 }
-footer h3, footer h4 { color: var(--wjs-footer-text-heading) !important; font-family: var(--wjs-font-family-heading) !important; font-weight: 700 !important; }
+footer h3, footer h4 {
+  color: var(--wjs-footer-text-heading) !important;
+  font-family: var(--wjs-font-family-heading) !important;
+  font-weight: 700 !important;
+}
 footer a { color: var(--wjs-footer-text-body) !important; text-decoration: none !important; transition: color 0.2s ease; }
 footer a:hover { color: var(--wjs-footer-text-hover) !important; }
 footer .w-10 {
@@ -490,49 +458,141 @@ footer .w-10 {
   border: 1px solid rgba(255, 255, 255, 0.08);
   transition: transform 0.2s ease, background 0.2s ease, color 0.2s ease;
 }
-footer .w-10:hover { background: var(--wjs-gradient) !important; color: #ffffff !important; border-color: transparent !important; transform: translateY(-2px); }
+footer .w-10:hover {
+  background: var(--wjs-gradient) !important;
+  color: #ffffff !important;
+  border-color: transparent !important;
+  transform: translateY(-2px);
+}
 
-/* Blocks */
+/* ============================ BLOCKS ============================ */
+/* Hero */
 .wp-block-hero h1, .wp-block-hero h2 { font-family: var(--wjs-font-family-heading) !important; }
-.wp-block-stats .stat-value, .wp-block-stats [class*="value"] {
+
+/* Stats — gradient figures */
+.wp-block-stats .stat-value,
+.wp-block-stats [class*="value"] {
   background: var(--wjs-gradient);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
   font-family: var(--wjs-font-family-heading) !important;
 }
-.wp-block-accordion { background: var(--wjs-bg-surface) !important; border: 1px solid var(--wjs-border-subtle) !important; border-radius: var(--wjs-radius) !important; }
+
+/* Accordion */
+.wp-block-accordion {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius) !important;
+}
 .wp-block-accordion .accordion-item button { color: var(--wjs-color-heading) !important; }
 .wp-block-accordion .accordion-item button i { color: var(--wjs-color-primary) !important; }
 .wp-block-accordion .accordion-item > div { background: var(--wjs-gradient-soft) !important; color: var(--wjs-color-text-muted) !important; }
+
+/* Tabs — gradient indicator */
 .wp-block-tabs > div:first-child { border-bottom: 1px solid var(--wjs-border-subtle) !important; }
 .wp-block-tabs button { color: var(--wjs-color-text-muted) !important; }
-.wp-block-tabs button:hover, .wp-block-tabs button:focus { color: var(--wjs-color-primary) !important; border-bottom-color: var(--wjs-color-primary) !important; }
-.wp-block-pricing > div { background: var(--wjs-bg-surface) !important; border: 1px solid var(--wjs-border-subtle) !important; border-radius: var(--wjs-radius-md) !important; transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease; }
+.wp-block-tabs button:hover,
+.wp-block-tabs button:focus {
+  color: var(--wjs-color-primary) !important;
+  border-bottom-color: var(--wjs-color-primary) !important;
+}
+
+/* Pricing — featured tier wears the gradient */
+.wp-block-pricing > div {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-md) !important;
+  transition: border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease;
+}
 .wp-block-pricing > div:hover { border-color: rgba(79, 70, 229, 0.4) !important; box-shadow: var(--wjs-shadow-md); }
 .wp-block-pricing > div[style*="scale(1.05)"] {
   border: 2px solid transparent !important;
-  background: linear-gradient(var(--wjs-bg-surface), var(--wjs-bg-surface)) padding-box, var(--wjs-gradient) border-box !important;
+  background:
+    linear-gradient(var(--wjs-bg-surface), var(--wjs-bg-surface)) padding-box,
+    var(--wjs-gradient) border-box !important;
   box-shadow: 0 0 50px -10px rgba(124, 58, 237, 0.35) !important;
 }
-.wp-block-testimonial { background: var(--wjs-bg-surface) !important; border: 1px solid var(--wjs-border-subtle) !important; border-radius: var(--wjs-radius-md) !important; }
+
+/* Testimonial */
+.wp-block-testimonial {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-md) !important;
+}
 .wp-block-testimonial > div:first-child { color: var(--wjs-color-primary) !important; }
-.wp-block-cta-banner { background: var(--wjs-gradient) !important; color: #ffffff !important; border: none !important; border-radius: var(--wjs-radius-lg) !important; }
+
+/* CTA Banner — full gradient */
+.wp-block-cta-banner {
+  background: var(--wjs-gradient) !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: var(--wjs-radius-lg) !important;
+}
 .wp-block-cta-banner h2, .wp-block-cta-banner p { color: #ffffff !important; }
-.wp-block-cta-banner a { background: #ffffff !important; color: var(--wjs-color-primary) !important; border-radius: var(--wjs-radius-pill) !important; font-weight: 700 !important; }
+.wp-block-cta-banner a {
+  background: #ffffff !important;
+  color: var(--wjs-color-primary) !important;
+  border-radius: var(--wjs-radius-pill) !important;
+  font-weight: 700 !important;
+}
+
+/* Posts grid */
 .wp-block-posts-grid article { border-radius: var(--wjs-radius-md) !important; }
 .wp-block-posts-grid article:hover { border-color: rgba(79, 70, 229, 0.35) !important; }
+
+/* Category posts */
 .wp-block-category-posts h3 { color: var(--wjs-color-primary) !important; }
 .wp-block-category-posts li { border-color: var(--wjs-border-subtle) !important; }
 .wp-block-category-posts li a:hover { color: var(--wjs-color-primary) !important; }
+
+/* Icon list */
 .wp-block-icon-list i, .wp-block-icon-list .icon { color: var(--wjs-color-primary) !important; }
-.wp-block-search input { background: var(--wjs-bg-surface) !important; border: 1px solid var(--wjs-border-subtle) !important; border-radius: var(--wjs-radius-pill) !important; color: var(--wjs-color-text-main) !important; }
-.wp-block-search input:focus { border-color: var(--wjs-color-primary) !important; box-shadow: 0 0 0 4px var(--wjs-focus-ring); outline: none; }
-.wp-block-search button { background: var(--wjs-gradient) !important; color: #ffffff !important; border: none !important; border-radius: var(--wjs-radius-pill) !important; }
+
+/* Search */
+.wp-block-search input {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-pill) !important;
+  color: var(--wjs-color-text-main) !important;
+}
+.wp-block-search input:focus {
+  border-color: var(--wjs-color-primary) !important;
+  box-shadow: 0 0 0 4px var(--wjs-focus-ring);
+  outline: none;
+}
+.wp-block-search button {
+  background: var(--wjs-gradient) !important;
+  color: #ffffff !important;
+  border: none !important;
+  border-radius: var(--wjs-radius-pill) !important;
+}
+
+/* Divider / video / audio */
 .wp-block-divider { border-color: var(--wjs-border-subtle) !important; }
 .wp-block-video-embed { border-radius: var(--wjs-radius-md) !important; box-shadow: var(--wjs-shadow-md); }
-.wp-block-audio-player { background: var(--wjs-bg-surface) !important; border: 1px solid var(--wjs-border-subtle) !important; border-radius: var(--wjs-radius-md) !important; }
+.wp-block-audio-player {
+  background: var(--wjs-bg-surface) !important;
+  border: 1px solid var(--wjs-border-subtle) !important;
+  border-radius: var(--wjs-radius-md) !important;
+}
 .wp-block-audio-player div:first-child > div:first-child { background: var(--wjs-gradient) !important; color: #ffffff !important; }
+
+/* ===== Mobile (auto responsive pass) ===== */
+@media (max-width: 767.98px) {
+  /* Featured pricing tier: the block flags it with an inline
+     \`transform: scale(1.05)\` — a deliberate pop-out in the desktop
+     multi-column row, but once the tiers stack into a single column the
+     enlarged card bleeds into the container gutters and overlaps the
+     cards stacked above/below it. Flatten the scale on small screens;
+     the tier keeps its gradient border + violet glow (the desktop rule
+     above still matches on the same style attribute), so it stays
+     visually "featured" without breaking the layout. !important is
+     required to beat the inline style. */
+  .wp-block-pricing > div[style*="scale(1.05)"] {
+    transform: none !important;
+  }
+}
 `;
   writeIfAbsent(path.join(defaultDir, 'style.css'), styleCss);
 

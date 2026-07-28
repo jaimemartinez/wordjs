@@ -166,9 +166,7 @@ header[class*='fixed'] {
   transform: translateY(-2px);
 }
 
-/* Cards / Content Blocks (Glass) */
-.wp-block-card,
-article {
+/* Cards / Content Blocks (Glass) */article {
   background: rgba(255, 255, 255, 0.6) !important;
   backdrop-filter: blur(8px);
   border: 1px solid rgba(255, 255, 255, 0.8) !important;
@@ -200,171 +198,6 @@ footer a:hover {
   text-decoration: underline !important;
 }
 
-/* =========================================
-   SOFT GLASS: NEW COMPONENT OVERRIDES
-   Glassmorphism / Pastel aesthetic
-   ========================================= */
-
-/* Accordion: Glass Panels */
-.wp-block-accordion {
-  background: rgba(255, 255, 255, 0.5) !important;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.8) !important;
-  border-radius: 20px !important;
-  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.1);
-}
-
-.wp-block-accordion .accordion-item button {
-  background: transparent !important;
-  color: var(--wjs-color-primary) !important;
-  border-bottom: 1px solid rgba(139, 92, 246, 0.2) !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: rgba(255, 255, 255, 0.3) !important;
-  color: var(--wjs-color-text-main) !important;
-}
-
-/* Tabs: Pill Tabs */
-.wp-block-tabs>div:first-child {
-  border-bottom: none !important;
-  background: rgba(255, 255, 255, 0.5);
-  border-radius: 20px;
-  padding: 4px;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-primary) !important;
-  border-radius: 16px !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  background: #ffffff !important;
-  color: var(--wjs-logo-color) !important;
-  box-shadow: 0 4px 12px rgba(219, 39, 119, 0.15);
-}
-
-.wp-block-tabs>div:last-child {
-  background: rgba(255, 255, 255, 0.6) !important;
-  backdrop-filter: blur(8px);
-  border-radius: 20px !important;
-}
-
-/* Video: Glass Frame */
-.wp-block-video-embed {
-  border-radius: 24px !important;
-  box-shadow: 0 20px 40px rgba(139, 92, 246, 0.2);
-}
-
-/* Audio: Glass Player */
-.wp-block-audio-player {
-  background: rgba(255, 255, 255, 0.6) !important;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.8) !important;
-  border-radius: 20px !important;
-  box-shadow: 0 8px 24px rgba(31, 38, 135, 0.1);
-}
-
-/* Pricing: Floating Glass Cards */
-.wp-block-pricing>div {
-  background: rgba(255, 255, 255, 0.7) !important;
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(255, 255, 255, 0.8) !important;
-  border-radius: 24px !important;
-  box-shadow: 0 10px 40px rgba(31, 38, 135, 0.1);
-}
-
-.wp-block-pricing>div:hover {
-  transform: translateY(-8px);
-  box-shadow: 0 20px 50px rgba(139, 92, 246, 0.2);
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: linear-gradient(135deg, #8b5cf6, #db2777) !important;
-  color: #ffffff !important;
-  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.4);
-}
-
-/* Testimonial: Soft Glass Quote */
-.wp-block-testimonial {
-  background: rgba(255, 255, 255, 0.7) !important;
-  backdrop-filter: blur(10px);
-  border: 1px solid rgba(255, 255, 255, 0.9) !important;
-  border-radius: 24px !important;
-  box-shadow: 0 8px 32px rgba(31, 38, 135, 0.08);
-}
-
-.wp-block-testimonial>div:first-child {
-  color: var(--wjs-logo-color) !important;
-}
-
-/* CTA Banner: Gradient Glass */
-.wp-block-cta-banner {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(219, 39, 119, 0.9)) !important;
-  backdrop-filter: blur(10px);
-  border-radius: 32px !important;
-  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
-}
-
-.wp-block-cta-banner a {
-  background: #ffffff !important;
-  color: var(--wjs-color-primary) !important;
-  border-radius: 20px !important;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
-}
-
-/* Posts Grid: Glass Cards */
-.wp-block-posts-grid article {
-  background: rgba(255, 255, 255, 0.7) !important;
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.8) !important;
-  border-radius: 24px !important;
-  box-shadow: 0 8px 24px rgba(31, 38, 135, 0.08);
-}
-
-.wp-block-posts-grid article:hover {
-  transform: translateY(-4px);
-  box-shadow: 0 16px 40px rgba(139, 92, 246, 0.15);
-}
-
-/* Category Posts: Pill List */
-.wp-block-category-posts h3 {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-category-posts li {
-  border-color: rgba(139, 92, 246, 0.2) !important;
-}
-
-.wp-block-category-posts li a {
-  color: var(--wjs-color-text-main) !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-logo-color) !important;
-}
-
-/* Search: Pill Input */
-.wp-block-search input {
-  background: rgba(255, 255, 255, 0.8) !important;
-  backdrop-filter: blur(8px);
-  border: 1px solid rgba(255, 255, 255, 0.9) !important;
-  border-radius: 24px !important;
-  box-shadow: 0 4px 16px rgba(31, 38, 135, 0.08);
-}
-
-.wp-block-search input:focus {
-  box-shadow: 0 0 0 4px rgba(139, 92, 246, 0.2);
-}
-
-.wp-block-search button {
-  background: linear-gradient(135deg, #8b5cf6, #db2777) !important;
-  color: #ffffff !important;
-  border-radius: 20px !important;
-  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
-}
-
 /* ===== Mobile (auto responsive pass) ===== */
 @media (max-width: 767.98px) {
 
@@ -374,8 +207,8 @@ footer a:hover {
      The gradient background above already marks it as featured, so
      drop the scale on mobile. !important is required to beat the
      inline style; the selector keeps it tightly scoped. */
-  .wp-block-pricing>div[style*="scale(1.05)"] {
-    transform: none !important;
+  .wp-block-pricing__plan--highlighted {
+    transform: none;
   }
 
   /* The body gradient uses `fixed` attachment, which iOS Safari
@@ -386,4 +219,90 @@ footer a:hover {
   body {
     background-attachment: scroll !important;
   }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: rgba(255, 255, 255, 0.6);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-card-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.05);
+  --wjs-card-radius: 24px;
+  --wjs-accordion-bg: rgba(255, 255, 255, 0.5);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-accordion-radius: 20px;
+  --wjs-accordion-shadow: 0 8px 32px rgba(31, 38, 135, 0.1);
+  --wjs-accordion-header-bg: transparent;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: rgba(139, 92, 246, 0.2);
+  --wjs-accordion-panel-bg: rgba(255, 255, 255, 0.3);
+  --wjs-accordion-panel-color: var(--wjs-color-text-main);
+  --wjs-tabs-list-border-width: 0;
+  --wjs-tabs-list-border-color: transparent;
+  --wjs-tabs-list-bg: rgba(255, 255, 255, 0.5);
+  --wjs-tabs-list-radius: 20px;
+  --wjs-tabs-list-pad: 4px;
+  --wjs-tabs-color: var(--wjs-color-primary);
+  --wjs-tabs-radius: 16px;
+  --wjs-tabs-active-bg: #ffffff;
+  --wjs-tabs-active-color: var(--wjs-logo-color);
+  --wjs-tabs-active-shadow: 0 4px 12px rgba(219, 39, 119, 0.15);
+  --wjs-tabs-panel-bg: rgba(255, 255, 255, 0.6);
+  --wjs-tabs-panel-radius: 20px;
+  --wjs-video-radius: 24px;
+  --wjs-video-shadow: 0 20px 40px rgba(139, 92, 246, 0.2);
+  --wjs-audio-bg: rgba(255, 255, 255, 0.6);
+  --wjs-audio-border-width: 1px;
+  --wjs-audio-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-audio-radius: 20px;
+  --wjs-audio-shadow: 0 8px 24px rgba(31, 38, 135, 0.1);
+  --wjs-pricing-bg: rgba(255, 255, 255, 0.7);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-pricing-radius: 24px;
+  --wjs-pricing-shadow: 0 10px 40px rgba(31, 38, 135, 0.1);
+  --wjs-pricing-hover-transform: translateY(-8px);
+  --wjs-pricing-hover-shadow: 0 20px 50px rgba(139, 92, 246, 0.2);
+  --wjs-pricing-highlight-bg: linear-gradient(135deg, #8b5cf6, #db2777);
+  --wjs-pricing-highlight-color: #ffffff;
+  --wjs-pricing-highlight-shadow: 0 20px 60px rgba(139, 92, 246, 0.4);
+  --wjs-testimonial-bg: rgba(255, 255, 255, 0.7);
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: rgba(255, 255, 255, 0.9);
+  --wjs-testimonial-radius: 24px;
+  --wjs-testimonial-shadow: 0 8px 32px rgba(31, 38, 135, 0.08);
+  --wjs-testimonial-mark-color: var(--wjs-logo-color);
+  --wjs-cta-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(219, 39, 119, 0.9));
+  --wjs-cta-radius: 32px;
+  --wjs-cta-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
+  --wjs-cta-button-bg: #ffffff;
+  --wjs-cta-button-color: var(--wjs-color-primary);
+  --wjs-cta-button-radius: 20px;
+  --wjs-cta-button-shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+  --wjs-posts-bg: rgba(255, 255, 255, 0.7);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: rgba(255, 255, 255, 0.8);
+  --wjs-posts-radius: 24px;
+  --wjs-posts-shadow: 0 8px 24px rgba(31, 38, 135, 0.08);
+  --wjs-posts-hover-transform: translateY(-4px);
+  --wjs-posts-hover-shadow: 0 16px 40px rgba(139, 92, 246, 0.15);
+  --wjs-catposts-heading-color: var(--wjs-color-primary);
+  --wjs-catposts-border-color: rgba(139, 92, 246, 0.2);
+  --wjs-catposts-link-color: var(--wjs-color-text-main);
+  --wjs-catposts-link-hover-color: var(--wjs-logo-color);
+  --wjs-search-input-bg: rgba(255, 255, 255, 0.8);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: rgba(255, 255, 255, 0.9);
+  --wjs-search-input-radius: 24px;
+  --wjs-search-input-shadow: 0 4px 16px rgba(31, 38, 135, 0.08);
+  --wjs-search-focus-ring: 0 0 0 4px rgba(139, 92, 246, 0.2);
+  --wjs-search-button-bg: linear-gradient(135deg, #8b5cf6, #db2777);
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-radius: 20px;
+  --wjs-search-button-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
 }

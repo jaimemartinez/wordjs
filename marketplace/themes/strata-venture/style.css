@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0b1329;
+  --wjs-bg-surface: #1a2136;
+  --wjs-bg-surface-raised: #262d41;
+  --wjs-color-primary: #3b82f6;
+  --wjs-color-primary-dark: #2563eb;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #2563eb;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f0f6ff;
+  --wjs-color-text-muted: #99a0ae;
+  --wjs-color-heading: #f0f6ff;
+  --wjs-color-link: #3b82f6;
+  --wjs-color-link-hover: #2563eb;
+  --wjs-border-subtle: #343c50;
+  --wjs-outline: #62697a;
+  --wjs-outline-variant: #2d3549;
+  --wjs-focus-ring: #3b82f6;
+}
+
 /* Theme: Strata Venture (Glassmorphism Aurora Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
 

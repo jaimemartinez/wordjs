@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0a0a0a;
+  --wjs-bg-surface: #191919;
+  --wjs-bg-surface-raised: #252525;
+  --wjs-color-primary: #ef4444;
+  --wjs-color-primary-dark: #dc2626;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #dc2626;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #fef2f2;
+  --wjs-color-text-muted: #a19a9a;
+  --wjs-color-heading: #fef2f2;
+  --wjs-color-link: #ef4444;
+  --wjs-color-link-hover: #dc2626;
+  --wjs-border-subtle: #363434;
+  --wjs-outline: #676262;
+  --wjs-outline-variant: #2f2d2d;
+  --wjs-focus-ring: #ef4444;
+}
+
 /* Theme: Kinetic Motion (Brutalist Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Public+Sans:wght@400;700&display=swap');
 

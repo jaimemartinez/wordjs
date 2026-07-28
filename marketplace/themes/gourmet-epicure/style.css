@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #1c1604;
+  --wjs-bg-surface: #2a2413;
+  --wjs-bg-surface-raised: #353020;
+  --wjs-color-primary: #eab308;
+  --wjs-color-primary-dark: #ca8a04;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #ca8a04;
+  --wjs-color-on-accent: #111111;
+  --wjs-color-text-main: #fef9c3;
+  --wjs-color-text-muted: #a8a37a;
+  --wjs-color-heading: #fef9c3;
+  --wjs-color-link: #eab308;
+  --wjs-color-link-hover: #ca8a04;
+  --wjs-border-subtle: #453f26;
+  --wjs-outline: #726c4d;
+  --wjs-outline-variant: #3e3821;
+  --wjs-focus-ring: #eab308;
+}
+
 /* Theme: Gourmet Epicure (Editorial Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
 
