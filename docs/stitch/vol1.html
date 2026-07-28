@@ -1,0 +1,617 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>WordJS Block Library | Precision CMS Components</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@600&amp;family=Geist:wght@400;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                    "on-primary-container": "#006970",
+                    "on-error": "#690005",
+                    "surface-container-highest": "#2a344d",
+                    "secondary-container": "#3c4962",
+                    "primary": "#dbfcff",
+                    "surface-container-low": "#101b33",
+                    "surface-variant": "#2a344d",
+                    "primary-fixed": "#7df4ff",
+                    "tertiary": "#f4f5ff",
+                    "on-secondary-fixed": "#0d1c32",
+                    "primary-fixed-dim": "#00dbe9",
+                    "inverse-on-surface": "#263049",
+                    "error": "#ffb4ab",
+                    "tertiary-container": "#cad9ff",
+                    "on-secondary": "#233148",
+                    "outline-variant": "#3b494b",
+                    "inverse-primary": "#006970",
+                    "on-primary-fixed": "#002022",
+                    "outline": "#849495",
+                    "on-tertiary-fixed": "#091b39",
+                    "secondary-fixed-dim": "#b9c7e4",
+                    "surface-dim": "#08132a",
+                    "secondary": "#b9c7e4",
+                    "on-background": "#d9e2ff",
+                    "inverse-surface": "#d9e2ff",
+                    "background": "#08132a",
+                    "surface-bright": "#2f3952",
+                    "error-container": "#93000a",
+                    "tertiary-fixed-dim": "#b6c6ed",
+                    "on-surface": "#d9e2ff",
+                    "on-tertiary-fixed-variant": "#374767",
+                    "on-primary-fixed-variant": "#004f54",
+                    "on-secondary-container": "#abb9d6",
+                    "tertiary-fixed": "#d8e2ff",
+                    "on-primary": "#00363a",
+                    "surface": "#08132a",
+                    "secondary-fixed": "#d6e3ff",
+                    "on-error-container": "#ffdad6",
+                    "surface-tint": "#00dbe9",
+                    "on-secondary-fixed-variant": "#39475f",
+                    "on-tertiary-container": "#4f5e80",
+                    "surface-container": "#151f37",
+                    "surface-container-lowest": "#030d25",
+                    "on-tertiary": "#20304f",
+                    "on-surface-variant": "#b9cacb",
+                    "primary-container": "#00f0ff",
+                    "surface-container-high": "#1f2942"
+            },
+            "borderRadius": {
+                    "DEFAULT": "0.125rem",
+                    "lg": "0.25rem",
+                    "xl": "0.5rem",
+                    "full": "0.75rem"
+            },
+            "spacing": {
+                    "xl": "48px",
+                    "base": "4px",
+                    "md": "16px",
+                    "sm": "8px",
+                    "2xl": "80px",
+                    "xs": "4px",
+                    "lg": "24px"
+            },
+            "fontFamily": {
+                    "small": ["Inter"],
+                    "h2": ["Geist"],
+                    "h3": ["Geist"],
+                    "body": ["Inter"],
+                    "h1": ["Geist"],
+                    "label": ["JetBrains Mono"]
+            },
+            "fontSize": {
+                    "small": ["13px", {"lineHeight": "1.5", "letterSpacing": "0.01em", "fontWeight": "500"}],
+                    "h2": ["clamp(2rem, 4vw, 3rem)", {"lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                    "h3": ["1.5rem", {"lineHeight": "1.4", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                    "body": ["16px", {"lineHeight": "1.6", "letterSpacing": "0", "fontWeight": "400"}],
+                    "h1": ["clamp(2.5rem, 5vw, 4.5rem)", {"lineHeight": "1.1", "letterSpacing": "-0.04em", "fontWeight": "800"}],
+                    "label": ["11px", {"lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "600"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+            vertical-align: middle;
+        }
+        .luminous-border {
+            border: 1px solid rgba(0, 219, 233, 0.2);
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        }
+        .level-2-shadow {
+            box-shadow: 0 2px 4px rgba(0,0,0,0.3), 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .level-3-shadow {
+            box-shadow: 0 4px 8px rgba(0,0,0,0.4), 0 12px 32px rgba(0,0,0,0.2);
+        }
+        .glass-panel {
+            background: rgba(3, 13, 37, 0.8);
+            backdrop-filter: blur(12px);
+        }
+        .active-tab-indicator {
+            position: absolute;
+            bottom: -1px;
+            height: 2px;
+            background: #00dbe9;
+            transition: all 0.3s ease;
+        }
+        .token-table tr {
+            border-bottom: 1px solid rgba(132, 148, 149, 0.1);
+        }
+        .block-container {
+            transition: transform 0.2s ease;
+        }
+        .block-container:hover .block-toolbar {
+            opacity: 1;
+            transform: translateY(0);
+        }
+    </style>
+</head>
+<body class="bg-background text-on-background font-body min-h-screen">
+<!-- TopNavBar -->
+<nav class="fixed top-0 w-full z-50 border-b border-outline-variant/30 backdrop-blur-md bg-background/80 shadow-sm flex justify-between items-center px-lg py-sm">
+<div class="font-h3 text-h3 font-extrabold text-primary-fixed-dim tracking-tight">WordJS</div>
+<div class="hidden md:flex gap-xl">
+<a class="font-body text-body font-bold text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95 transition-transform" href="#">Dashboard</a>
+<a class="font-body text-body font-bold text-primary-fixed-dim border-b-2 border-primary-fixed-dim pb-1 transition-colors duration-150 cursor-pointer active:scale-95 transition-transform" href="#">Blocks</a>
+<a class="font-body text-body font-bold text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95 transition-transform" href="#">Templates</a>
+<a class="font-body text-body font-bold text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95 transition-transform" href="#">Assets</a>
+<a class="font-body text-body font-bold text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95 transition-transform" href="#">Settings</a>
+</div>
+<div class="flex items-center gap-md">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary-fixed">history</span>
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary-fixed">help</span>
+<button class="px-md py-sm rounded-lg bg-surface-container-highest border border-outline-variant text-primary font-bold">Preview</button>
+<button class="px-md py-sm rounded-lg bg-primary-container text-on-primary-container font-bold shadow-md hover:scale-105 active:scale-95 transition-all">Publish</button>
+</div>
+</nav>
+<!-- SideNavBar -->
+<aside class="fixed left-0 top-0 h-screen w-16 hover:w-64 transition-all duration-300 z-[60] bg-surface-container-lowest border-r border-outline-variant/20 shadow-lg flex flex-col py-md overflow-hidden group">
+<div class="px-md mb-xl flex items-center gap-4">
+<div class="w-8 h-8 rounded bg-primary-container flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-on-primary-container text-[20px]">edit</span>
+</div>
+<div class="opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+<div class="font-h3 text-h3 text-primary-fixed-dim">WordJS Editor</div>
+<div class="font-label text-[9px] uppercase tracking-widest text-on-surface-variant">V2.4.0-Alpha</div>
+</div>
+</div>
+<div class="flex-1 space-y-2">
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap bg-primary-container text-on-primary-container rounded-lg mx-2 p-3 shadow-md">
+<span class="material-symbols-outlined shrink-0" style="font-variation-settings: 'FILL' 1;">stack</span>
+<span class="font-label text-label uppercase tracking-widest">Blocks</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/50 mx-2 p-3 transition-all duration-200">
+<span class="material-symbols-outlined shrink-0">layers</span>
+<span class="font-label text-label uppercase tracking-widest">Layout</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/50 mx-2 p-3 transition-all duration-200">
+<span class="material-symbols-outlined shrink-0">palette</span>
+<span class="font-label text-label uppercase tracking-widest">Style</span>
+</div>
+<div class="flex items-center gap-4 cursor-pointer overflow-hidden whitespace-nowrap text-on-surface-variant hover:text-on-surface hover:bg-surface-variant/50 mx-2 p-3 transition-all duration-200">
+<span class="material-symbols-outlined shrink-0">restore</span>
+<span class="font-label text-label uppercase tracking-widest">History</span>
+</div>
+</div>
+<div class="mt-auto px-md py-md border-t border-outline-variant/10">
+<button class="w-full bg-primary-container text-on-primary-container py-3 rounded-lg font-bold flex items-center justify-center gap-2 overflow-hidden">
+<span class="material-symbols-outlined">add</span>
+<span class="font-label text-label uppercase tracking-widest hidden group-hover:block">New Block</span>
+</button>
+</div>
+</aside>
+<main class="ml-16 pt-2xl px-lg pb-2xl max-w-7xl mx-auto">
+<!-- Header Section -->
+<section class="mb-2xl">
+<div class="max-w-3xl">
+<h1 class="font-h1 text-h1 text-primary-fixed mb-md">Block Library</h1>
+<p class="font-body text-body text-on-surface-variant leading-relaxed">Explore the core atomic components of WordJS. Every block is engineered for precision, high-focus creativity, and extreme adaptability across dark-first digital environments.</p>
+</div>
+</section>
+<!-- 1. HERO BLOCK SECTION -->
+<div class="mb-2xl">
+<header class="flex items-center gap-md mb-lg border-b border-outline-variant/20 pb-sm">
+<span class="material-symbols-outlined text-primary-fixed">view_quilt</span>
+<h2 class="font-h2 text-h2 text-on-surface">Hero Blocks</h2>
+</header>
+<div class="grid grid-cols-1 gap-xl">
+<!-- Variant 1: Left Aligned Image BG -->
+<div class="block-container group/item relative overflow-hidden rounded-xl bg-surface-container-low luminous-border">
+<!-- Toolbar -->
+<div class="block-toolbar absolute top-4 right-4 z-20 opacity-0 transform translate-y-2 transition-all flex gap-2">
+<button class="p-2 bg-surface-container-highest rounded-lg luminous-border text-on-surface hover:text-primary-fixed"><span class="material-symbols-outlined text-sm">edit</span></button>
+<button class="p-2 bg-surface-container-highest rounded-lg luminous-border text-on-surface hover:text-primary-fixed"><span class="material-symbols-outlined text-sm">content_copy</span></button>
+</div>
+<div class="flex flex-col md:flex-row min-h-[500px]">
+<div class="w-full md:w-1/2 p-2xl flex flex-col justify-center relative z-10">
+<h3 class="font-h1 text-[40px] text-white leading-tight mb-md">Redefining Digital Architecture</h3>
+<p class="font-body text-on-surface-variant mb-lg">Build complex visual experiences with zero friction. Our block system handles the precision while you focus on the vision.</p>
+<div class="flex gap-md">
+<button class="px-lg py-md bg-primary-container text-on-primary-container font-bold rounded-lg level-2-shadow">Start Building</button>
+<button class="px-lg py-md bg-transparent border border-outline text-white font-bold rounded-lg hover:bg-white/5 transition-colors">Watch Demo</button>
+</div>
+</div>
+<div class="w-full md:w-1/2 min-h-[300px] relative">
+<div class="absolute inset-0 bg-cover bg-center" data-alt="A cinematic, high-contrast shot of a sleek architectural structure made of dark metal and illuminated by cyan neon light strips in a futuristic minimalist landscape at dusk. The atmosphere is sharp, professional, and sophisticated, mirroring a premium software interface." style="background-image: url('https://lh3.googleusercontent.com/aida-public/AB6AXuDTV0pAKn4NUEp4UmvAkYqA4_zlMM7j-jDSRlYTpxr855egzhzRa6FlB2lAitXBgIq0NrKO0Fx19GfqPiTyjNMQg36-dcpfnNz2YXHnSmiEO0TE88M7mey2a2xGW6iyx-MaCVgj30pGHUScokkqYXb0MVB4nqmdeybAHjqrwEyJdJfva-kBZTmQHn69xQ9jePdN2qOY_2iNoN2WTPNLuHH87CqaiqXRATXbhP1IWODSh0fH6WThV8P9o3EWeARdx7GoN4NpW2Ux9Bqb')"></div>
+<div class="absolute inset-0 bg-gradient-to-r from-surface-container-low via-surface-container-low/40 to-transparent"></div>
+</div>
+</div>
+</div>
+<!-- Variant 2: Centered Gradient BG -->
+<div class="block-container group/item relative overflow-hidden rounded-xl min-h-[500px] flex items-center justify-center p-2xl luminous-border">
+
+<div class="absolute inset-0 bg-background/60"></div>
+<div class="relative z-10 text-center max-w-2xl">
+<span class="font-label text-label text-primary-fixed mb-sm inline-block">WORDJS ENTERPRISE</span>
+<h3 class="font-h1 text-[48px] text-white leading-none mb-md">Master the Canvas</h3>
+<p class="font-body text-on-surface-variant mb-lg text-lg">Unleash enterprise-grade precision in every pixel. WordJS provides the tooling; you provide the inspiration.</p>
+<button class="px-2xl py-md bg-primary-container text-on-primary-container font-bold rounded-lg level-3-shadow hover:scale-105 transition-transform">Get Started Free</button>
+</div>
+</div>
+<!-- Token Table -->
+<div class="bg-surface-container-low rounded-lg p-lg luminous-border mt-md">
+<h4 class="font-label text-label uppercase text-primary-fixed-dim mb-md">Token Architecture: Hero Block</h4>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-label text-small token-table">
+<thead>
+<tr class="text-on-surface-variant border-b border-outline-variant/30">
+<th class="pb-sm px-md">Variable Name</th>
+<th class="pb-sm px-md">Value</th>
+<th class="pb-sm px-md">Description</th>
+</tr>
+</thead>
+<tbody class="text-on-surface">
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--hero-bg-overlay</td>
+<td class="py-sm px-md">rgba(8, 19, 42, 0.8)</td>
+<td class="py-sm px-md">Background glass effect for readability</td>
+</tr>
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--hero-title-font</td>
+<td class="py-sm px-md">Geist 800</td>
+<td class="py-sm px-md">Primary impact typography token</td>
+</tr>
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--hero-border-luminous</td>
+<td class="py-sm px-md">1px solid #00dbe933</td>
+<td class="py-sm px-md">High-contrast structural definition</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<!-- 2. CTA BANNER SECTION -->
+<div class="mb-2xl">
+<header class="flex items-center gap-md mb-lg border-b border-outline-variant/20 pb-sm">
+<span class="material-symbols-outlined text-primary-fixed">campaign</span>
+<h2 class="font-h2 text-h2 text-on-surface">CTA Banners</h2>
+</header>
+<div class="space-y-lg">
+<!-- Variant: Solid Accent -->
+<div class="bg-primary-container p-xl rounded-xl flex flex-col md:flex-row items-center justify-between gap-xl">
+<div>
+<h3 class="font-h3 text-h3 text-on-primary-container font-extrabold mb-base">Ready to ship your next big project?</h3>
+<p class="font-body text-on-primary-container opacity-80">Join 5,000+ creators building with WordJS today.</p>
+</div>
+<button class="px-xl py-md bg-on-primary-container text-white font-bold rounded-lg level-2-shadow hover:translate-x-1 transition-transform">Get Started</button>
+</div>
+<!-- Variant: Dark Glass -->
+<div class="luminous-border glass-panel p-xl rounded-xl flex flex-col md:flex-row items-center justify-between gap-xl relative overflow-hidden">
+<div class="absolute -top-12 -left-12 w-32 h-32 bg-primary-container/10 blur-3xl"></div>
+<div class="relative z-10">
+<h3 class="font-h3 text-h3 text-white font-bold mb-base">Explore the documentation</h3>
+<p class="font-body text-on-surface-variant">Deep dive into our API and component library architecture.</p>
+</div>
+<button class="relative z-10 px-xl py-md bg-surface-container-highest border border-primary-fixed text-primary-fixed font-bold rounded-lg hover:bg-primary-fixed hover:text-on-primary-container transition-all">Open API Docs</button>
+</div>
+<!-- Token Table -->
+<div class="bg-surface-container-low rounded-lg p-lg luminous-border mt-md">
+<h4 class="font-label text-label uppercase text-primary-fixed-dim mb-md">Token Architecture: CTA Banner</h4>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-label text-small token-table">
+<thead>
+<tr class="text-on-surface-variant border-b border-outline-variant/30">
+<th class="pb-sm px-md">Variable Name</th>
+<th class="pb-sm px-md">Value</th>
+<th class="pb-sm px-md">Description</th>
+</tr>
+</thead>
+<tbody class="text-on-surface">
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--cta-height</td>
+<td class="py-sm px-md">160px</td>
+<td class="py-sm px-md">Standard inner-page strip height</td>
+</tr>
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--cta-glass-blur</td>
+<td class="py-sm px-md">12px</td>
+<td class="py-sm px-md">Backdrop-filter value for dark variants</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</div>
+<!-- 3. PRICING TABLE SECTION -->
+<div class="mb-2xl">
+<header class="flex items-center gap-md mb-lg border-b border-outline-variant/20 pb-sm">
+<span class="material-symbols-outlined text-primary-fixed">payments</span>
+<h2 class="font-h2 text-h2 text-on-surface">Pricing Table</h2>
+</header>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-lg">
+<!-- Plan 1 -->
+<div class="bg-surface-container-low p-xl rounded-xl luminous-border flex flex-col h-full hover:translate-y-[-8px] transition-transform duration-300">
+<div class="mb-lg">
+<span class="font-label text-label text-on-surface-variant uppercase tracking-widest">Personal</span>
+<div class="flex items-baseline gap-base mt-sm">
+<span class="font-h1 text-[40px] text-white leading-none">$0</span>
+<span class="font-body text-on-surface-variant">/mo</span>
+</div>
+</div>
+<ul class="space-y-md mb-xl flex-1">
+<li class="flex items-center gap-md text-on-surface-variant text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>3 Projects</span>
+</li>
+<li class="flex items-center gap-md text-on-surface-variant text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Standard Blocks</span>
+</li>
+<li class="flex items-center gap-md text-on-surface-variant text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Community Support</span>
+</li>
+</ul>
+<button class="w-full py-md border border-outline text-white font-bold rounded-lg hover:bg-white/5">Select Starter</button>
+</div>
+<!-- Plan 2 (Recommended) -->
+<div class="bg-surface-container p-xl rounded-xl border-2 border-primary-fixed level-3-shadow flex flex-col h-full relative overflow-hidden transform scale-[1.02]">
+<div class="absolute top-0 right-0 bg-primary-fixed text-on-secondary-fixed px-lg py-xs font-label text-[10px] uppercase tracking-tighter transform rotate-45 translate-x-8 translate-y-3">Popular</div>
+<div class="mb-lg">
+<span class="font-label text-label text-primary-fixed uppercase tracking-widest">Professional</span>
+<div class="flex items-baseline gap-base mt-sm">
+<span class="font-h1 text-[40px] text-white leading-none">$29</span>
+<span class="font-body text-on-surface-variant">/mo</span>
+</div>
+</div>
+<ul class="space-y-md mb-xl flex-1">
+<li class="flex items-center gap-md text-on-surface text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Unlimited Projects</span>
+</li>
+<li class="flex items-center gap-md text-on-surface text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Premium Asset Library</span>
+</li>
+<li class="flex items-center gap-md text-on-surface text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Priority Email Support</span>
+</li>
+<li class="flex items-center gap-md text-on-surface text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Custom Domain Mapping</span>
+</li>
+</ul>
+<button class="w-full py-md bg-primary-container text-on-primary-container font-bold rounded-lg shadow-md hover:brightness-110">Go Pro Now</button>
+</div>
+<!-- Plan 3 -->
+<div class="bg-surface-container-low p-xl rounded-xl luminous-border flex flex-col h-full hover:translate-y-[-8px] transition-transform duration-300">
+<div class="mb-lg">
+<span class="font-label text-label text-on-surface-variant uppercase tracking-widest">Enterprise</span>
+<div class="flex items-baseline gap-base mt-sm">
+<span class="font-h1 text-[40px] text-white leading-none">$99</span>
+<span class="font-body text-on-surface-variant">/mo</span>
+</div>
+</div>
+<ul class="space-y-md mb-xl flex-1">
+<li class="flex items-center gap-md text-on-surface-variant text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Custom Security Roles</span>
+</li>
+<li class="flex items-center gap-md text-on-surface-variant text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>White-label CMS</span>
+</li>
+<li class="flex items-center gap-md text-on-surface-variant text-small">
+<span class="material-symbols-outlined text-primary-fixed-dim text-[18px]">check_circle</span>
+<span>Dedicated Success Manager</span>
+</li>
+</ul>
+<button class="w-full py-md border border-outline text-white font-bold rounded-lg hover:bg-white/5">Contact Sales</button>
+</div>
+</div>
+<!-- Token Table -->
+<div class="bg-surface-container-low rounded-lg p-lg luminous-border mt-xl">
+<h4 class="font-label text-label uppercase text-primary-fixed-dim mb-md">Token Architecture: Pricing Cards</h4>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-label text-small token-table">
+<thead>
+<tr class="text-on-surface-variant border-b border-outline-variant/30">
+<th class="pb-sm px-md">Variable Name</th>
+<th class="pb-sm px-md">Value</th>
+<th class="pb-sm px-md">Description</th>
+</tr>
+</thead>
+<tbody class="text-on-surface">
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--pricing-accent-glow</td>
+<td class="py-sm px-md">0 0 20px rgba(0, 219, 233, 0.1)</td>
+<td class="py-sm px-md">Outer highlight for recommended tier</td>
+</tr>
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--pricing-card-radius</td>
+<td class="py-sm px-md">0.5rem (xl)</td>
+<td class="py-sm px-md">Corner rounding for content containers</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<!-- 4. STATS BLOCK SECTION -->
+<div class="mb-2xl">
+<header class="flex items-center gap-md mb-lg border-b border-outline-variant/20 pb-sm">
+<span class="material-symbols-outlined text-primary-fixed">query_stats</span>
+<h2 class="font-h2 text-h2 text-on-surface">Stats Grid</h2>
+</header>
+<div class="space-y-xl">
+<!-- 3-Item Row -->
+<div class="grid grid-cols-1 md:grid-cols-3 gap-md">
+<div class="p-xl bg-surface-container-low luminous-border rounded-xl text-center">
+<div class="font-h1 text-[48px] text-primary-fixed mb-xs">240ms</div>
+<div class="font-label text-label uppercase text-on-surface-variant tracking-widest">Avg Load Time</div>
+</div>
+<div class="p-xl bg-surface-container-low luminous-border rounded-xl text-center">
+<div class="font-h1 text-[48px] text-primary-fixed mb-xs">99.9%</div>
+<div class="font-label text-label uppercase text-on-surface-variant tracking-widest">Platform Uptime</div>
+</div>
+<div class="p-xl bg-surface-container-low luminous-border rounded-xl text-center">
+<div class="font-h1 text-[48px] text-primary-fixed mb-xs">15k+</div>
+<div class="font-label text-label uppercase text-on-surface-variant tracking-widest">Live Components</div>
+</div>
+</div>
+<!-- 4-Item Row -->
+<div class="grid grid-cols-2 md:grid-cols-4 gap-md">
+<div class="p-lg bg-surface-container-highest/30 luminous-border rounded-xl">
+<div class="font-h2 text-[32px] text-white mb-base">4k</div>
+<div class="font-label text-[10px] uppercase text-on-surface-variant">Active Users</div>
+</div>
+<div class="p-lg bg-surface-container-highest/30 luminous-border rounded-xl">
+<div class="font-h2 text-[32px] text-white mb-base">128</div>
+<div class="font-label text-[10px] uppercase text-on-surface-variant">Integrations</div>
+</div>
+<div class="p-lg bg-surface-container-highest/30 luminous-border rounded-xl">
+<div class="font-h2 text-[32px] text-white mb-base">24/7</div>
+<div class="font-label text-[10px] uppercase text-on-surface-variant">Expert Support</div>
+</div>
+<div class="p-lg bg-surface-container-highest/30 luminous-border rounded-xl">
+<div class="font-h2 text-[32px] text-white mb-base">100%</div>
+<div class="font-label text-[10px] uppercase text-on-surface-variant">Open Standards</div>
+</div>
+</div>
+</div>
+<!-- Token Table -->
+<div class="bg-surface-container-low rounded-lg p-lg luminous-border mt-md">
+<h4 class="font-label text-label uppercase text-primary-fixed-dim mb-md">Token Architecture: Stats Grid</h4>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-label text-small token-table">
+<thead>
+<tr class="text-on-surface-variant border-b border-outline-variant/30">
+<th class="pb-sm px-md">Variable Name</th>
+<th class="pb-sm px-md">Value</th>
+<th class="pb-sm px-md">Description</th>
+</tr>
+</thead>
+<tbody class="text-on-surface">
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--stat-value-font</td>
+<td class="py-sm px-md">Geist 800</td>
+<td class="py-sm px-md">Impact level for metrics</td>
+</tr>
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--stat-card-gap</td>
+<td class="py-sm px-md">16px (md)</td>
+<td class="py-sm px-md">Strict grid spacing token</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+<!-- 5. TESTIMONIAL SECTION -->
+<div class="mb-2xl">
+<header class="flex items-center gap-md mb-lg border-b border-outline-variant/20 pb-sm">
+<span class="material-symbols-outlined text-primary-fixed">format_quote</span>
+<h2 class="font-h2 text-h2 text-on-surface">Testimonials</h2>
+</header>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-xl">
+<!-- Testimonial 1 -->
+<div class="bg-surface-container p-xl rounded-xl luminous-border level-3-shadow relative">
+<span class="material-symbols-outlined text-[64px] absolute top-4 right-8 text-primary-fixed-dim opacity-10" style="font-variation-settings: 'FILL' 1;">format_quote</span>
+<p class="font-body text-body text-white italic mb-xl relative z-10 leading-relaxed">
+                        "The precision of WordJS changed how our design team interacts with CMS data. It's no longer a black box; it's a precision instrument that we can play like a piano."
+                    </p>
+<div class="flex items-center gap-md">
+<div class="w-12 h-12 rounded-full bg-primary-fixed-dim flex items-center justify-center text-on-primary-fixed font-bold font-h3 text-base">EK</div>
+<div>
+<div class="font-body font-bold text-white">Elena Korova</div>
+<div class="font-label text-[10px] text-on-surface-variant uppercase tracking-widest">Lead Product Designer, Vora</div>
+</div>
+</div>
+</div>
+<!-- Testimonial 2 -->
+<div class="bg-surface-container p-xl rounded-xl luminous-border level-3-shadow relative">
+<span class="material-symbols-outlined text-[64px] absolute top-4 right-8 text-primary-fixed-dim opacity-10" style="font-variation-settings: 'FILL' 1;">format_quote</span>
+<p class="font-body text-body text-white italic mb-xl relative z-10 leading-relaxed">
+                        "The block library is extensive and actually useful. We went from Figma to a live environment in record time without losing any of our high-end aesthetic details."
+                    </p>
+<div class="flex items-center gap-md">
+<div class="w-12 h-12 rounded-full overflow-hidden luminous-border">
+<img class="w-full h-full object-cover" data-alt="A professional headshot of a creative director in their early 40s, with a stylish and minimalist vibe. Soft rim lighting highlights their features against a dark, tech-oriented studio background with subtle cyan light leaks. The style is sophisticated and modern, fitting for a high-end software company's testimonials." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDjVMQirb4roLJmwLZBcCkDdgrTfNWNttulDKlv0kfekjRnS9tA8GcUkqsZdeYNeHh_DWNEJPIKx0Z0kIpqnb__rtYMBcoDEcclVvI6ntdaA9u28gQJJ_YPuvjlbmLIFhAyrX4OzjMSrtlC2LorC2-87bwxagg6VvAvTePGq8ke8JznuFTPADecOVDDFFCyACOOTHfhAu4ARl16oRtXdHylq3ZvT-Kg1pFpepQCYrgg-89GCPxulA_7jgSxsGl2yP8yfSOY2zXWX42v"/>
+</div>
+<div>
+<div class="font-body font-bold text-white">Marcus Thorne</div>
+<div class="font-label text-[10px] text-on-surface-variant uppercase tracking-widest">CTO, Lumina Labs</div>
+</div>
+</div>
+</div>
+</div>
+<!-- Token Table -->
+<div class="bg-surface-container-low rounded-lg p-lg luminous-border mt-md">
+<h4 class="font-label text-label uppercase text-primary-fixed-dim mb-md">Token Architecture: Testimonial</h4>
+<div class="overflow-x-auto">
+<table class="w-full text-left font-label text-small token-table">
+<thead>
+<tr class="text-on-surface-variant border-b border-outline-variant/30">
+<th class="pb-sm px-md">Variable Name</th>
+<th class="pb-sm px-md">Value</th>
+<th class="pb-sm px-md">Description</th>
+</tr>
+</thead>
+<tbody class="text-on-surface">
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--quote-icon-opacity</td>
+<td class="py-sm px-md">0.1</td>
+<td class="py-sm px-md">Background atmospheric icon transparency</td>
+</tr>
+<tr>
+<td class="py-sm px-md text-primary-fixed-dim">--avatar-size</td>
+<td class="py-sm px-md">48px</td>
+<td class="py-sm px-md">Standard portrait dimension</td>
+</tr>
+</tbody>
+</table>
+</div>
+</div>
+</div>
+</main>
+<!-- Footer -->
+<footer class="w-full mt-auto border-t border-outline-variant/10 bg-surface-dim text-on-surface-variant font-small flex flex-col md:flex-row justify-between items-center px-xl py-lg max-w-full">
+<div class="flex items-center gap-xl mb-md md:mb-0">
+<div class="font-label text-label font-black text-on-surface">WORDJS</div>
+<p class="opacity-70">© 2024 WordJS CMS Engine. All rights reserved. Built for precision.</p>
+</div>
+<div class="flex items-center gap-xl">
+<a class="text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Terms of Service</a>
+<a class="text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Privacy Policy</a>
+<a class="text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">API Docs</a>
+<a class="text-primary-fixed-dim underline" href="#">Changelog</a>
+</div>
+</footer>
+<script>
+        // Micro-interactions for navigation
+        const navLinks = document.querySelectorAll('nav a');
+        navLinks.forEach(link => {
+            link.addEventListener('click', (e) => {
+                navLinks.forEach(l => {
+                    l.classList.remove('text-primary-fixed-dim', 'border-b-2', 'border-primary-fixed-dim');
+                    l.classList.add('text-on-surface-variant', 'font-medium');
+                });
+                e.currentTarget.classList.add('text-primary-fixed-dim', 'border-b-2', 'border-primary-fixed-dim');
+                e.currentTarget.classList.remove('text-on-surface-variant', 'font-medium');
+            });
+        });
+
+        // Atmospheric parallax for the shader background on mouse move
+        const shaderContainer = document.querySelector('webgl-shader');
+        if(shaderContainer) {
+            document.addEventListener('mousemove', (e) => {
+                const moveX = (e.clientX - window.innerWidth / 2) / 50;
+                const moveY = (e.clientY - window.innerHeight / 2) / 50;
+                shaderContainer.style.transform = `translate(${moveX}px, ${moveY}px) scale(1.05)`;
+            });
+        }
+    </script>
+</body></html>

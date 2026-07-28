@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #041c14;
+  --wjs-bg-surface: #132a22;
+  --wjs-bg-surface-raised: #20352e;
+  --wjs-color-primary: #10b981;
+  --wjs-color-primary-dark: #047857;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #047857;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #d1fae5;
+  --wjs-color-text-muted: #83a696;
+  --wjs-color-heading: #d1fae5;
+  --wjs-color-link: #10b981;
+  --wjs-color-link-hover: #047857;
+  --wjs-border-subtle: #29443a;
+  --wjs-outline: #527063;
+  --wjs-outline-variant: #233d33;
+  --wjs-focus-ring: #10b981;
+}
+
 /* Theme: Crypto Chronicle (Cyber Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;700&family=JetBrains+Mono:wght@400;700&display=swap');
 

@@ -18,6 +18,8 @@
 
   /* --- COLOR SEMANTICS --- */
   --wjs-bg-canvas: #0B0F19;
+  /* the public header reads this; without it a dark theme paints a literal white bar */
+  --wjs-bg-surface-glass: rgba(11, 15, 25, 0.85);
   /* OLED near-black */
   --wjs-bg-surface: #111827;
   /* Elevated panel */
@@ -187,9 +189,7 @@ h3 {
   line-height: 1.2 !important;
 }
 
-/* Cards: elevated surface clearly lifted off OLED bg */
-.wp-block-card,
-article {
+/* Cards: elevated surface clearly lifted off OLED bg */article {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   box-shadow: var(--wjs-shadow-1) !important;
@@ -234,229 +234,109 @@ footer .w-10:hover {
   box-shadow: 0 0 14px rgba(34, 197, 94, 0.35) !important;
 }
 
-/* =========================================
-   CARBON TERMINAL: COMPONENT OVERRIDES
-   Code-block surfaces, hairline borders,
-   green focus glow. No layout-shifting states.
-   ========================================= */
-
-/* Accordion: stacked code panels */
-.wp-block-accordion {
-  border: 1px solid var(--wjs-border-subtle) !important;
-  background: var(--wjs-bg-surface) !important;
-  box-shadow: var(--wjs-shadow-1) !important;
-  overflow: hidden;
-}
-
-.wp-block-accordion .accordion-item button {
-  background: var(--wjs-bg-surface) !important;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
-  font-weight: 500 !important;
-  border-radius: 0 !important;
-  transition: color 0.15s ease, background-color 0.15s ease !important;
-}
-
-.wp-block-accordion .accordion-item button:hover {
-  color: var(--wjs-color-primary) !important;
-  background: #18212E !important;
-}
-
-.wp-block-accordion .accordion-item button:focus-visible {
-  outline: none !important;
-  box-shadow: var(--wjs-glow) !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: var(--wjs-bg-canvas) !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: sharp terminal tabs */
-.wp-block-tabs>div:first-child {
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-text-muted) !important;
-  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
-  font-weight: 500 !important;
-  border-radius: 0 !important;
-  transition: color 0.15s ease, border-color 0.15s ease !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: var(--wjs-color-primary) !important;
-  outline: none !important;
-}
-
-.wp-block-tabs button:focus-visible {
-  text-shadow: 0 0 8px rgba(34, 197, 94, 0.4) !important;
-}
-
-.wp-block-tabs>div:last-child {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-top: none !important;
-}
-
-/* Video: framed surface */
-.wp-block-video-embed {
-  border: 1px solid var(--wjs-border-subtle) !important;
-  background: #000000 !important;
-  box-shadow: var(--wjs-shadow-2) !important;
-  overflow: hidden;
-}
-
-/* Audio: minimal player surface */
-.wp-block-audio-player {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: var(--wjs-shadow-1) !important;
-}
-
-/* Pricing: elevated code cards */
-.wp-block-pricing>div {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: var(--wjs-shadow-1) !important;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
-}
-
-.wp-block-pricing>div:hover {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-2) !important;
-}
-
-.wp-block-pricing>div h3 {
-  color: var(--wjs-color-text-main) !important;
-  letter-spacing: 0.01em;
-}
-
-/* Highlighted plan: green-bordered glow, no layout shift */
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: #0F1A14 !important;
-  color: var(--wjs-color-text-main) !important;
-  transform: none !important;
-  border: 1px solid var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-glow), var(--wjs-shadow-2) !important;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] h3 {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Testimonial: quoted code block with green rail */
-.wp-block-testimonial {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  border-left: 3px solid var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-1) !important;
-}
-
-.wp-block-testimonial>div:first-child {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* CTA Banner: green-accented terminal block */
-.wp-block-cta-banner {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-glow) !important;
-}
-
-.wp-block-cta-banner h2 {
-  color: var(--wjs-color-text-main) !important;
-  letter-spacing: 0.01em;
-}
-
-.wp-block-cta-banner a {
-  background: var(--wjs-color-primary) !important;
-  color: #070A12 !important;
-  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.02em;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease !important;
-}
-
-.wp-block-cta-banner a:hover {
-  background: var(--wjs-color-primary-dark) !important;
-  box-shadow: 0 0 16px rgba(34, 197, 94, 0.4) !important;
-}
-
-/* Posts Grid: elevated cards */
-.wp-block-posts-grid article {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: var(--wjs-shadow-1) !important;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-2) !important;
-}
-
-/* Category Posts: monospace headlines */
-.wp-block-category-posts h3 {
-  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
-  font-weight: 600 !important;
-  color: var(--wjs-color-text-main) !important;
-  letter-spacing: 0.01em;
-  border-bottom: 1px solid var(--wjs-border-subtle);
-  padding-bottom: 8px;
-}
-
-.wp-block-category-posts li {
-  border-color: var(--wjs-border-subtle) !important;
-}
-
-.wp-block-category-posts li a {
-  color: var(--wjs-color-text-muted) !important;
-  font-weight: 500 !important;
-  transition: color 0.15s ease !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Search: terminal input with green focus glow */
-.wp-block-search input {
-  background: var(--wjs-bg-canvas) !important;
-  color: var(--wjs-color-text-main) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
-  transition: box-shadow 0.15s ease, border-color 0.15s ease !important;
-}
-
-.wp-block-search input::placeholder {
-  color: var(--wjs-color-text-muted) !important;
-}
-
-.wp-block-search input:focus {
-  outline: none !important;
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-glow) !important;
-}
-
-.wp-block-search button {
-  background: var(--wjs-color-primary) !important;
-  color: #070A12 !important;
-  font-family: 'JetBrains Mono', ui-monospace, monospace !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.02em;
-  transition: background-color 0.15s ease, box-shadow 0.15s ease !important;
-}
-
-.wp-block-search button:hover {
-  background: var(--wjs-color-primary-dark) !important;
-  box-shadow: 0 0 14px rgba(34, 197, 94, 0.35) !important;
-}
-
-.wp-block-search button:focus-visible {
-  outline: none !important;
-  box-shadow: var(--wjs-glow) !important;
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: var(--wjs-bg-surface);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: var(--wjs-border-subtle);
+  --wjs-card-shadow: var(--wjs-shadow-1);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-bg: var(--wjs-bg-surface);
+  --wjs-accordion-shadow: var(--wjs-shadow-1);
+  --wjs-accordion-header-bg: #18212E;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-header-family: 'JetBrains Mono', ui-monospace, monospace;
+  --wjs-accordion-header-weight: 500;
+  --wjs-accordion-header-radius: 0;
+  --wjs-accordion-header-shadow: var(--wjs-glow);
+  --wjs-accordion-panel-bg: var(--wjs-bg-canvas);
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 1px;
+  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
+  --wjs-tabs-color: var(--wjs-color-text-muted);
+  --wjs-tabs-family: 'JetBrains Mono', ui-monospace, monospace;
+  --wjs-tabs-weight: 500;
+  --wjs-tabs-radius: 0;
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
+  --wjs-tabs-panel-border-width: 0;
+  --wjs-tabs-panel-border-color: transparent;
+  --wjs-video-border-width: 1px;
+  --wjs-video-border-color: var(--wjs-border-subtle);
+  --wjs-video-bg: #000000;
+  --wjs-video-shadow: var(--wjs-shadow-2);
+  --wjs-audio-bg: var(--wjs-bg-surface);
+  --wjs-audio-border-width: 1px;
+  --wjs-audio-border-color: var(--wjs-border-subtle);
+  --wjs-audio-shadow: var(--wjs-shadow-1);
+  --wjs-pricing-bg: var(--wjs-bg-surface);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: var(--wjs-border-subtle);
+  --wjs-pricing-shadow: var(--wjs-shadow-1);
+  --wjs-pricing-hover-border-color: var(--wjs-color-primary);
+  --wjs-pricing-hover-shadow: var(--wjs-shadow-2);
+  --wjs-pricing-name-color: var(--wjs-color-text-main);
+  --wjs-pricing-name-tracking: 0.01em;
+  --wjs-pricing-highlight-bg: #0F1A14;
+  --wjs-pricing-highlight-color: var(--wjs-color-text-main);
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-primary);
+  --wjs-pricing-highlight-shadow: var(--wjs-glow), var(--wjs-shadow-2);
+  --wjs-pricing-highlight-name-color: var(--wjs-color-primary);
+  --wjs-testimonial-bg: var(--wjs-bg-surface);
+  --wjs-testimonial-border-width: 3px;
+  --wjs-testimonial-border-color: var(--wjs-color-primary);
+  --wjs-testimonial-shadow: var(--wjs-shadow-1);
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-cta-bg: var(--wjs-bg-surface);
+  --wjs-cta-border-width: 1px;
+  --wjs-cta-border-color: var(--wjs-color-primary);
+  --wjs-cta-shadow: var(--wjs-glow);
+  --wjs-cta-title-color: var(--wjs-color-text-main);
+  --wjs-cta-title-tracking: 0.01em;
+  --wjs-cta-button-bg: var(--wjs-color-primary);
+  --wjs-cta-button-color: #070A12;
+  --wjs-cta-button-family: 'JetBrains Mono', ui-monospace, monospace;
+  --wjs-cta-button-weight: 600;
+  --wjs-cta-button-tracking: 0.02em;
+  --wjs-cta-button-hover-bg: var(--wjs-color-primary-dark);
+  --wjs-cta-button-hover-shadow: 0 0 16px rgba(34, 197, 94, 0.4);
+  --wjs-posts-bg: var(--wjs-bg-surface);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: var(--wjs-border-subtle);
+  --wjs-posts-shadow: var(--wjs-shadow-1);
+  --wjs-posts-hover-border-color: var(--wjs-color-primary);
+  --wjs-posts-hover-shadow: var(--wjs-shadow-2);
+  --wjs-catposts-heading-family: 'JetBrains Mono', ui-monospace, monospace;
+  --wjs-catposts-heading-weight: 600;
+  --wjs-catposts-heading-color: var(--wjs-color-text-main);
+  --wjs-catposts-heading-tracking: 0.01em;
+  --wjs-catposts-heading-border-width: 1px;
+  --wjs-catposts-heading-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-heading-pad: 8px;
+  --wjs-catposts-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-link-color: var(--wjs-color-text-muted);
+  --wjs-catposts-link-weight: 500;
+  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
+  --wjs-search-input-bg: var(--wjs-bg-canvas);
+  --wjs-search-input-color: var(--wjs-color-text-main);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: var(--wjs-border-subtle);
+  --wjs-search-input-family: 'JetBrains Mono', ui-monospace, monospace;
+  --wjs-search-placeholder-color: var(--wjs-color-text-muted);
+  --wjs-search-focus-color: var(--wjs-color-primary);
+  --wjs-search-focus-ring: var(--wjs-glow);
+  --wjs-search-button-bg: var(--wjs-color-primary-dark);
+  --wjs-search-button-color: #070A12;
+  --wjs-search-button-family: 'JetBrains Mono', ui-monospace, monospace;
+  --wjs-search-button-weight: 600;
+  --wjs-search-button-tracking: 0.02em;
+  --wjs-search-button-shadow: var(--wjs-glow);
 }

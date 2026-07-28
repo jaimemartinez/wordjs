@@ -1,6 +1,7 @@
 "use client";
 
 import React from "react";
+import MSym from "../editor/MSym";
 import { postsApi, Post } from "@/lib/api";
 
 /**
@@ -69,10 +70,10 @@ export default function LinkField({ value, onChange, label }: { value: string; o
 
     return (
         <div ref={ref} className="relative">
-            {label && <label className="block text-xs text-gray-500 mb-1">{label}</label>}
+            {label && <label className="block text-[11px] font-medium text-[var(--ed-on-surface-variant)] mb-1">{label}</label>}
             <div className="flex gap-1.5">
                 <input
-                    className="flex-1 min-w-0 p-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-editor-primary/30 focus:border-editor-primary"
+                    className="flex-1 min-w-0 px-2 py-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
                     value={value || ""}
                     onChange={(e) => onChange(e.target.value)}
                     placeholder="https://… o /pagina"
@@ -82,24 +83,24 @@ export default function LinkField({ value, onChange, label }: { value: string; o
                     type="button"
                     title="Buscar contenido del sitio"
                     onClick={() => setOpen((o) => !o)}
-                    className={`px-2.5 rounded-lg border text-sm transition ${open ? "bg-editor-primary/10 border-editor-primary text-editor-primary" : "bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100"}`}
+                    className={`px-2 rounded border inline-flex items-center transition ${open ? "bg-[var(--ed-primary)] border-[var(--ed-primary)] text-white shadow-sm" : "bg-white border-[var(--ed-outline-variant)] text-[var(--ed-on-surface-variant)] hover:bg-[var(--ed-surface-container)]"}`}
                 >
-                    <i className="fa-solid fa-magnifying-glass text-xs"></i>
+                    <MSym name="search" size={14} />
                 </button>
             </div>
             {open && (
-                <div className="absolute left-0 right-0 top-full mt-1.5 z-[5000] rounded-xl bg-white shadow-2xl border border-gray-200 p-2">
+                <div className="absolute left-0 right-0 top-full mt-1.5 z-[5000] rounded-lg bg-white shadow-lg border border-[var(--ed-outline-variant)] p-1.5">
                     <input
                         autoFocus
-                        className="w-full p-2 mb-1.5 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-editor-primary/30"
+                        className="w-full px-2 py-1.5 mb-1.5 bg-white border border-[var(--ed-outline-variant)] rounded text-[13px] text-[var(--ed-on-surface)] focus:outline-none focus:border-[var(--ed-primary)] focus:ring-1 focus:ring-[var(--ed-primary)]"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         placeholder="Buscar páginas y entradas…"
                     />
                     <div className="max-h-[220px] overflow-y-auto">
-                        {searching && <div className="px-2 py-2 text-xs text-gray-400">Buscando…</div>}
+                        {searching && <div className="px-2 py-2 text-xs text-[var(--ed-outline)]">Buscando…</div>}
                         {!searching && query.trim().length >= 2 && results.length === 0 && (
-                            <div className="px-2 py-2 text-xs text-gray-400">Sin resultados.</div>
+                            <div className="px-2 py-2 text-xs text-[var(--ed-outline)]">Sin resultados.</div>
                         )}
                         {results.map((r) => (
                             <button
@@ -110,12 +111,15 @@ export default function LinkField({ value, onChange, label }: { value: string; o
                                     setOpen(false);
                                     setQuery("");
                                 }}
-                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg text-left hover:bg-gray-50"
+                                className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-left hover:bg-[var(--ed-surface-container)]"
                             >
-                                <i className={`fa-solid ${r.type === "page" ? "fa-file" : "fa-newspaper"} text-[11px] text-gray-400 shrink-0`}></i>
+                                <MSym name={r.type === "page" ? "description" : "newspaper"} size={14} className="text-[var(--ed-outline)] shrink-0" />
                                 <span className="min-w-0 flex-1">
-                                    <span className="block text-sm text-gray-800 truncate">{r.title}</span>
-                                    <span className="block text-[11px] text-gray-400 truncate">/{r.slug}</span>
+                                    <span className="block text-[13px] text-[var(--ed-on-surface)] truncate">{r.title}</span>
+                                    <span
+                                        className="block text-[11px] text-[var(--ed-outline)] truncate"
+                                        style={{ fontFamily: "var(--puck-font-family-monospaced)" }}
+                                    >/{r.slug}</span>
                                 </span>
                             </button>
                         ))}

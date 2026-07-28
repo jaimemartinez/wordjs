@@ -1,0 +1,524 @@
+@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@0,400;0,600;0,700;0,800;1,400;1,700&family=Source+Serif+4:ital,wght@0,400;0,500;0,600;1,400&family=Archivo+Narrow:wght@400;500;600;700&display=swap');
+
+/* =========================================
+   THEME: PAPER PRESS (Classic broadsheet)
+   Concept: newsprint canvas, ink hairlines and double
+   filetes, Bodoni Moda mastheads, Source Serif 4 body,
+   Archivo Narrow uppercase labels, editorial red accent,
+   zero radius / zero shadow — everything is print.
+   Derived from the Stitch "THE GAZETTE" design.
+   ========================================= */
+
+:root {
+  /* ── CANONICAL TOKENS ─────────────────────────────── */
+  /* Colors (design: ink #1a1c1c on paper #faf9f8, editorial
+     red #930000 with bright #c00000 tint, archive blue tertiary) */
+  --wjs-color-primary: #930000;
+  --wjs-color-primary-dark: #6e0000;
+  --wjs-color-secondary: #5f5e5e;
+  --wjs-color-secondary-dark: #474746;
+  --wjs-color-accent: #c00000;
+  --wjs-color-success: #2f6b3f;
+  --wjs-color-danger: #ba1a1a;
+  --wjs-color-warning: #8a5200;
+  --wjs-color-info: #0034bf;
+  --wjs-color-light: #f4f3f2;
+  --wjs-color-dark: #1a1c1c;
+  /* On-colors (by luminance: all solids are dark → white text;
+     the paper light gets ink) */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #ffffff;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #161616;
+  --wjs-color-on-dark: #ffffff;
+
+  /* Surfaces / text / borders — every rule is an ink filete */
+  --wjs-bg-canvas: #faf9f8;
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #f4f3f2;
+  --wjs-bg-surface-raised: #eeeeed;
+  --wjs-bg-surface-glass: rgba(250, 249, 248, 0.96);
+  --wjs-color-text-main: #1a1c1c;
+  --wjs-color-text-muted: #5d3f3b;
+  --wjs-color-heading: #1a1c1c;
+  --wjs-color-link: #930000;
+  --wjs-color-link-hover: #c00000;
+  --wjs-border-subtle: #1a1c1c;
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(147, 0, 0, 0.3);
+  --wjs-outline: #1a1c1c;
+  --wjs-outline-variant: #c8c6c5;
+
+  /* Typography (Bodoni Moda headlines, Source Serif 4 body) */
+  --wjs-font-family-base: 'Source Serif 4', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-heading: 'Bodoni Moda', 'Didot', Georgia, serif;
+  --wjs-font-size-base: 1.0625rem;
+  --wjs-line-height-base: 1.6;
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.15;
+  /* Measured masthead h1: 800 over 1.1 leading with -0.02em tracking */
+  --wjs-h1-weight: 800;
+  --wjs-h1-leading: 1.1;
+  --wjs-h1-tracking: -0.02em;
+  --wjs-h1: 4rem;
+  --wjs-h2: 2.75rem;
+  --wjs-h3: 2.25rem;
+  --wjs-h4: 1.5rem;
+  --wjs-h5: 1.2rem;
+  --wjs-h6: 1rem;
+
+  /* Shape / shadow — print is flat and square (all radii 0) */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 0;
+  --wjs-radius: 0;
+  --wjs-radius-md: 0;
+  --wjs-radius-lg: 0;
+  --wjs-radius-pill: 0;
+  --wjs-shadow-sm: none;
+  --wjs-shadow: none;
+  --wjs-shadow-md: none;
+  --wjs-shadow-lg: none;
+
+  /* ── THEME-LOCAL HELPERS ──────────────────────────── */
+  --wjs-ink: #1a1c1c;
+  --wjs-paper: #faf9f8;
+  --wjs-label-family: 'Archivo Narrow', 'Arial Narrow', sans-serif;
+
+  /* ── BLOCK TOKENS (derived from the design markup) ── */
+  /* Buttons — the masthead SUBSCRIBE / hero LEER MÁS: solid ink
+     slab, Archivo Narrow 12px uppercase wide-tracked, red on hover */
+  --wjs-button-bg: #1a1c1c;
+  --wjs-button-color: #faf9f8;
+  --wjs-button-radius: 0;
+  --wjs-button-pad-x: 2rem;
+  --wjs-button-pad-y: 0.75rem;
+  --wjs-button-weight: 700;
+  --wjs-button-size: 0.75rem;
+  --wjs-button-family: var(--wjs-label-family);
+  --wjs-button-transform: uppercase;
+  --wjs-button-tracking: 0.1em;
+  --wjs-button-border-width: 0;
+  --wjs-button-border-color: transparent;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-bg: #930000;
+  --wjs-button-hover-color: #faf9f8;
+  --wjs-button-hover-shadow: none;
+  --wjs-button-hover-transform: none;
+
+  /* Cards — the feature boxes: 1px ink border, flat, uppercase
+     underlined kicker titles, tint fill on hover */
+  --wjs-card-bg: transparent;
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: #1a1c1c;
+  --wjs-card-radius: 0;
+  --wjs-card-shadow: none;
+  --wjs-card-pad: 1.5rem;
+  --wjs-card-title-color: #1a1c1c;
+  --wjs-card-title-weight: 700;
+  --wjs-card-title-size: 0.85rem;
+  --wjs-card-title-transform: uppercase;
+  --wjs-card-title-tracking: 0.1em;
+  --wjs-card-desc-color: #1a1c1c;
+  --wjs-card-desc-family: var(--wjs-font-family-base);
+  --wjs-card-hover-bg: #f4f3f2;
+  --wjs-card-hover-border-color: #1a1c1c;
+  --wjs-card-hover-shadow: none;
+  --wjs-card-hover-transform: none;
+  --wjs-card-icon-bg: transparent;
+  --wjs-card-icon-color: #1a1c1c;
+  --wjs-card-icon-radius: 0;
+
+  /* Hero — front-page opening: paper band, huge Bodoni headline,
+     ink CTA + hairline-outlined ARCHIVO ghost button */
+  --wjs-hero-bg: #faf9f8;
+  --wjs-hero-gradient: none;
+  --wjs-hero-color: #1a1c1c;
+  --wjs-hero-text-align: center;
+  --wjs-hero-title-color: #1a1c1c;
+  --wjs-hero-title-size: clamp(2.6rem, 6vw, 4rem);
+  --wjs-hero-title-weight: 800;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: #1a1c1c;
+  --wjs-hero-subtitle-size: 1.25rem;
+  --wjs-hero-radius: 0;
+  --wjs-hero-shadow: none;
+  --wjs-hero-border-width: 0;
+  --wjs-hero-button-bg: #1a1c1c;
+  --wjs-hero-button-color: #faf9f8;
+  --wjs-hero-button-radius: 0;
+  --wjs-hero-button-size: 0.75rem;
+  --wjs-hero-button-weight: 700;
+  --wjs-hero-button-pad: 0.75rem 2rem;
+  --wjs-hero-button-outline-bg: transparent;
+  --wjs-hero-button-outline-color: #1a1c1c;
+  --wjs-hero-button-outline-border: #1a1c1c;
+  --wjs-hero-button-outline-hover-bg: #e3e2e1;
+
+  /* Pricing — bordered subscription boxes; RECOMENDADO plan gets
+     a 2px red frame, tinted paper and a red slab button */
+  --wjs-pricing-bg: transparent;
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: #1a1c1c;
+  --wjs-pricing-radius: 0;
+  --wjs-pricing-pad: 2rem;
+  --wjs-pricing-shadow: none;
+  --wjs-pricing-name-family: var(--wjs-font-family-heading);
+  --wjs-pricing-name-color: #1a1c1c;
+  --wjs-pricing-name-weight: 600;
+  --wjs-pricing-price-family: var(--wjs-font-family-base);
+  --wjs-pricing-price-color: #1a1c1c;
+  --wjs-pricing-period-color: #5d3f3b;
+  --wjs-pricing-feature-color: #1a1c1c;
+  --wjs-pricing-accent: #930000;
+  --wjs-pricing-button-on-accent: #faf9f8;
+  --wjs-pricing-button-bg: transparent;
+  --wjs-pricing-button-color: #1a1c1c;
+  --wjs-pricing-button-border-color: #1a1c1c;
+  --wjs-pricing-button-radius: 0;
+  --wjs-pricing-button-weight: 700;
+  --wjs-pricing-button-hover-bg: #e3e2e1;
+  --wjs-pricing-hover-transform: none;
+  --wjs-pricing-hover-shadow: none;
+  --wjs-pricing-highlight-bg: #f4f3f2;
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-border-color: #930000;
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-shadow: none;
+  --wjs-pricing-highlight-name-color: #930000;
+  --wjs-pricing-highlight-button-bg: #930000;
+
+  /* Quote / testimonial — italic Bodoni pull-quote between
+     filetes, uppercase attribution in warm archive brown */
+  --wjs-quote-accent: #930000;
+  --wjs-quote-bar-width: 3px;
+  --wjs-quote-color: #1a1c1c;
+  --wjs-quote-family: var(--wjs-font-family-heading);
+  --wjs-quote-style: italic;
+  --wjs-quote-size: 1.5rem;
+  --wjs-quote-cite-color: #5d3f3b;
+  --wjs-testimonial-bg: transparent;
+  --wjs-testimonial-border-width: 0;
+  --wjs-testimonial-border-color: transparent;
+  --wjs-testimonial-radius: 0;
+  --wjs-testimonial-shadow: none;
+  --wjs-testimonial-family: var(--wjs-font-family-heading);
+  --wjs-testimonial-quote-family: var(--wjs-font-family-heading);
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-size: 1.75rem;
+  --wjs-testimonial-quote-color: #1a1c1c;
+  --wjs-testimonial-mark-color: #c00000;
+  --wjs-testimonial-author-color: #1a1c1c;
+  --wjs-testimonial-author-weight: 700;
+  --wjs-testimonial-author-family: var(--wjs-label-family);
+  --wjs-testimonial-role-color: #5d3f3b;
+  --wjs-testimonial-role-family: var(--wjs-label-family);
+  --wjs-testimonial-role-transform: uppercase;
+  --wjs-testimonial-role-tracking: 0.1em;
+  --wjs-testimonial-avatar-radius: 0;
+
+  /* Search / inputs — Cartas al Director: transparent fields,
+     measured underline-only hairline (no side borders), red focus.
+     (Form fields inherit from these.) */
+  --wjs-search-input-bg: transparent;
+  --wjs-search-input-border-width: 0;
+  --wjs-search-input-border-color: #1a1c1c;
+  --wjs-search-input-radius: 0;
+  --wjs-search-input-pad: 0.5rem 0;
+  --wjs-search-input-size: 1.0625rem;
+  --wjs-search-input-color: #1a1c1c;
+  --wjs-search-input-family: var(--wjs-font-family-base);
+  --wjs-search-input-shadow: inset 0 -1px 0 #1a1c1c;
+  --wjs-search-placeholder-color: #926f69;
+  --wjs-search-focus-color: #930000;
+  --wjs-search-focus-ring: inset 0 -2px 0 #930000;
+  --wjs-search-button-bg: #1a1c1c;
+  --wjs-search-button-color: #faf9f8;
+  --wjs-search-button-radius: 0;
+  --wjs-search-button-pad: 0.5rem 2rem;
+  --wjs-search-button-family: var(--wjs-label-family);
+  --wjs-search-button-weight: 700;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.1em;
+
+  /* Form specifics that differ from the inherited fields:
+     uppercase compact labels + ink/red submit slab */
+  --wjs-form-family: var(--wjs-font-family-base);
+  --wjs-form-label-color: #1a1c1c;
+  --wjs-form-label-size: 0.75rem;
+  --wjs-form-label-weight: 700;
+  --wjs-form-accent: #930000;
+  --wjs-form-input-radius: 0;
+  --wjs-form-submit-bg: #1a1c1c;
+  --wjs-form-submit-color: #faf9f8;
+  --wjs-form-submit-radius: 0;
+  --wjs-form-submit-size: 0.75rem;
+  --wjs-form-submit-pad: 0.5rem 2rem;
+  --wjs-form-submit-weight: 700;
+  --wjs-form-submit-family: var(--wjs-label-family);
+  --wjs-form-submit-hover-bg: #930000;
+  --wjs-form-submit-hover-color: #faf9f8;
+
+  /* Accordion — ruled index rows with uppercase headers */
+  --wjs-accordion-bg: transparent;
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: #1a1c1c;
+  --wjs-accordion-radius: 0;
+  --wjs-accordion-shadow: none;
+  --wjs-accordion-header-bg: #faf9f8;
+  --wjs-accordion-header-color: #1a1c1c;
+  --wjs-accordion-header-family: var(--wjs-label-family);
+  --wjs-accordion-header-weight: 700;
+  --wjs-accordion-header-transform: uppercase;
+  --wjs-accordion-header-tracking: 0.1em;
+  --wjs-accordion-panel-bg: #faf9f8;
+  --wjs-accordion-panel-color: #1a1c1c;
+  --wjs-accordion-icon-color: #930000;
+
+  /* Posts grid — article boxes ruled in ink, red on hover */
+  --wjs-posts-bg: transparent;
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: #1a1c1c;
+  --wjs-posts-radius: 0;
+  --wjs-posts-shadow: none;
+  --wjs-posts-hover-shadow: none;
+  --wjs-posts-hover-transform: none;
+  --wjs-posts-hover-border-color: #930000;
+  --wjs-posts-title-color: #1a1c1c;
+  --wjs-posts-title-weight: 700;
+  --wjs-posts-excerpt-color: #1a1c1c;
+  --wjs-posts-date-color: #5d3f3b;
+  --wjs-posts-thumb-radius: 0;
+
+  /* CTA banner — inverted ink band with paper slab button */
+  --wjs-cta-bg: #1a1c1c;
+  --wjs-cta-color: #faf9f8;
+  --wjs-cta-title-color: #faf9f8;
+  --wjs-cta-title-family: var(--wjs-font-family-heading);
+  --wjs-cta-radius: 0;
+  --wjs-cta-shadow: none;
+  --wjs-cta-button-bg: #faf9f8;
+  --wjs-cta-button-color: #1a1c1c;
+  --wjs-cta-button-radius: 0;
+  --wjs-cta-button-family: var(--wjs-label-family);
+  --wjs-cta-button-weight: 700;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.1em;
+  --wjs-cta-button-hover-bg: #c00000;
+  --wjs-cta-button-hover-color: #faf9f8;
+
+  /* Tables — archive listings with uppercase narrow heads */
+  --wjs-table-border-color: #1a1c1c;
+  --wjs-table-head-bg: #f4f3f2;
+  --wjs-table-head-color: #1a1c1c;
+  --wjs-table-head-family: var(--wjs-label-family);
+  --wjs-table-head-transform: uppercase;
+  --wjs-table-head-tracking: 0.08em;
+
+  /* Site footer (component tokens) — footer stays on paper,
+     ruled off from the page, square ink social tiles */
+  --wjs-bg-footer: #faf9f8;
+  --wjs-color-text-footer-main: #1a1c1c;
+  --wjs-color-text-footer-dim: #5d3f3b;
+  --wjs-social-bg: transparent;
+  --wjs-social-color: #1a1c1c;
+  --wjs-social-hover-bg: #930000;
+  --wjs-social-hover-color: #faf9f8;
+  --wjs-social-radius: 0;
+}
+
+/* =========================================
+   SITE CHROME — public header (masthead)
+   ========================================= */
+
+/* Measured masthead: a single 1px ink hairline, flat, no shadow */
+div.wjs-header-container {
+  border-bottom: 1px solid #1a1c1c;
+  padding-bottom: 0.75rem;
+}
+
+.wjs-header-logo span {
+  font-family: var(--wjs-font-family-heading);
+  font-weight: 800;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+  color: #1a1c1c;
+}
+
+.wjs-header-nav a {
+  font-family: var(--wjs-label-family);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: #1a1c1c;
+  transition: color 0.15s ease;
+}
+
+.wjs-header-nav a:hover {
+  color: #930000;
+}
+
+/* Masthead SUBSCRIBE slab (measured: ink 8px/24px, 12px caps) */
+.wjs-header-actions a {
+  background: #1a1c1c;
+  color: #faf9f8;
+  font-family: var(--wjs-label-family);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  padding: 0.5rem 1.5rem;
+  border-radius: 0;
+  transition: background 0.15s ease;
+}
+
+.wjs-header-actions a:hover {
+  background: #930000;
+  color: #faf9f8;
+}
+
+/* Square press-button hamburger (never hide .wjs-header-actions
+   outside a media query). */
+.wjs-header-actions button {
+  border-radius: 0;
+  box-shadow: none;
+}
+
+/* =========================================
+   SITE CHROME — public footer (ruled colophon)
+   ========================================= */
+
+/* Measured footer: flat paper, no rule above it, no shadow */
+
+footer h3 {
+  font-family: var(--wjs-font-family-heading);
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+footer h4 {
+  font-family: var(--wjs-label-family);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+footer a {
+  color: #5d3f3b;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  transition: color 0.2s ease;
+}
+
+footer a:hover {
+  color: #930000;
+}
+
+/* =========================================
+   DISTINCTIVE RULES — print furniture
+   ========================================= */
+
+/* Horizontal rules render as double filetes */
+hr {
+  border: 0;
+  border-top: 3px double #1a1c1c;
+  opacity: 1;
+}
+
+/* Section headings carry a hairline, like column heads */
+.wjs-content h2 {
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid #1a1c1c;
+}
+
+/* Broadsheet drop cap on the opening paragraph */
+article > p:first-of-type::first-letter,
+.wjs-content > p:first-of-type::first-letter {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 3.2em;
+  line-height: 0.8;
+  font-weight: 800;
+  float: left;
+  margin: 0.06em 0.1em 0 0;
+  color: #930000;
+}
+
+/* Diamond markers, as in the subscription feature lists */
+.wjs-content ul li::marker {
+  content: "◆  ";
+  color: #930000;
+  font-size: 0.85em;
+}
+
+/* Captions set as archive labels */
+figcaption {
+  font-family: var(--wjs-label-family);
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #5d3f3b;
+}
+
+/* The design sets every CTA label in Archivo Narrow caps; the
+   framework has no family/transform/tracking seams for these two,
+   so the theme states them directly as plain rules. */
+.wp-block-hero__button,
+.wp-block-pricing__button {
+  font-family: var(--wjs-label-family);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+.wp-block-pricing__button {
+  font-size: 0.75rem;
+}
+
+/* Measured RECOMENDADO plan breathes wider than the base plans */
+.wp-block-pricing__plan--highlighted {
+  padding: 2.5rem;
+}
+
+.wjs-form-submit {
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+
+::selection {
+  background: #930000;
+  color: #faf9f8;
+}
+
+/* ===== Mobile adjustments ===== */
+@media (max-width: 767.98px) {
+  .wjs-header-logo span {
+    font-size: 1.35rem;
+  }
+
+  /* Wide-tracked uppercase labels overflow narrow drawers/buttons:
+     relax the tracking and allow wrapping */
+  .wjs-header-nav a {
+    letter-spacing: 0.06em;
+    white-space: normal;
+  }
+
+  .wp-block-search__button,
+  .wp-block-cta-banner__button,
+  .wp-block-hero__button,
+  .wp-block-pricing__button,
+  .wjs-form-submit {
+    letter-spacing: 0.06em;
+    white-space: normal;
+    overflow-wrap: break-word;
+  }
+
+  /* Scale the drop cap to the narrower column */
+  article > p:first-of-type::first-letter,
+  .wjs-content > p:first-of-type::first-letter {
+    font-size: 2.5em;
+  }
+}

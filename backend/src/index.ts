@@ -192,6 +192,18 @@ const uploadLimiter = rateLimit({
     message: { error: 'Too many file uploads, please try again later.' }
 });
 
+// Public form submissions (POST /forms/submit is unauthenticated and bot-attractive): a per-IP cap far
+// tighter than the global apiLimiter, but generous for a human filling a contact form.
+const formsSubmitLimiter = rateLimit({
+    windowMs: 60 * 1000, // 1 minute
+    max: 10, // Limit each IP to 10 form submissions per minute
+    standardHeaders: true,
+    legacyHeaders: false,
+    store: limiterStore('rl:forms:'),
+    passOnStoreError: true,
+    message: { error: 'Too many form submissions, please try again later.' }
+});
+
 const setupLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 min
     max: 20, // tight cap on the PUBLIC install / test-db endpoints (pre-config, unauthenticated)
@@ -231,6 +243,9 @@ app.use(`${config.api.prefix}/backups`, uploadLimiter); // Apply limiter to back
 // (defense in depth). Pair with the uniform-response fix in routes/setup.ts.
 app.use(`${config.api.prefix}/setup/migrate`, authLimiter);
 app.use(`${config.api.prefix}/setup`, setupLimiter); // tight cap on the public install/test-db endpoints
+// Exact-path mount (like /auth/mfa above) so the admin's authenticated /forms/submissions viewer never
+// consumes the public submit budget.
+app.post(`${config.api.prefix}/forms/submit`, formsSubmitLimiter);
 
 // SECURITY: CSRF Protection for all API routes
 const { csrfProtection } = require('./middleware/auth');
@@ -344,7 +359,16 @@ app.use('/plugins', express.static(path.resolve('./plugins'), { dotfiles: 'deny'
 app.use('/.well-known', express.static(path.resolve('./public/.well-known'), { dotfiles: 'allow' }));
 
 // Framework assets (wordjs-ui.css etc.) change only on a WordJS update → 1d + ETag revalidation.
-app.use('/public', express.static(path.resolve('./public'), { dotfiles: 'deny', maxAge: '1d' }));
+// DEV: force revalidation (ETag makes it a cheap 304) — wordjs-ui.css and friends change during
+// development but keep the same ?v= until a release bumps ASSET_VERSION, so a 1-day freshness
+// window serves day-old block styles to both the canvas iframe and the public preview.
+app.use('/public', express.static(path.resolve('./public'), {
+    dotfiles: 'deny',
+    maxAge: config.nodeEnv === 'development' ? 0 : '1d',
+    setHeaders: config.nodeEnv === 'development'
+        ? (res: Response) => res.setHeader('Cache-Control', 'no-cache')
+        : undefined,
+}));
 
 // Request logging in development
 if (config.nodeEnv === 'development') {
@@ -658,6 +682,15 @@ async function initialize() {
         // nodes proceed; the rest of init (plugins, cron) is per-node. On a throw before here the
         // process exits, its heartbeat timer dies with it, and the lease expires within ~ttl.
         await bootLock.release();
+
+        // Reconcile any plugin update that was killed mid-flight (old code stashed, new code not yet
+        // installed) BEFORE loading plugins — so a plugin is never loaded from a half-updated directory.
+        try {
+            const { recoverInterruptedPluginUpdates } = require('./routes/plugins');
+            await recoverInterruptedPluginUpdates();
+        } catch (e: any) {
+            console.warn('[boot] plugin-update recovery skipped:', e && e.message);
+        }
 
         // Load active plugins
         console.log('🔌 Loading plugins...');

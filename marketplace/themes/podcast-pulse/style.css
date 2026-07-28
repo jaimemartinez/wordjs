@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #160926;
+  --wjs-bg-surface: #241833;
+  --wjs-bg-surface-raised: #30243e;
+  --wjs-color-primary: #a855f7;
+  --wjs-color-primary-dark: #7e22ce;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #7e22ce;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f3e8ff;
+  --wjs-color-text-muted: #9f93ad;
+  --wjs-color-heading: #f3e8ff;
+  --wjs-color-link: #a855f7;
+  --wjs-color-link-hover: #7e22ce;
+  --wjs-border-subtle: #3e314d;
+  --wjs-outline: #6a5e78;
+  --wjs-outline-variant: #372a47;
+  --wjs-focus-ring: #a855f7;
+}
+
 /* Theme: Podcast Pulse (Glassmorphism Aurora Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
 

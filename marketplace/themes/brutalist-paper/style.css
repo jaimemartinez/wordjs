@@ -273,163 +273,6 @@ footer .w-10:hover {
     box-shadow: 2px 2px 0px #000000;
 }
 
-/* =========================================
-   BRUTALIST PAPER: NEW COMPONENT OVERRIDES
-   Neo-brutalist / Newspaper aesthetic
-   ========================================= */
-
-/* Accordion: Stacked Papers */
-.wp-block-accordion {
-    border: 3px solid #000000 !important;
-    border-radius: 0 !important;
-    box-shadow: 6px 6px 0px #000000;
-}
-
-.wp-block-accordion .accordion-item button {
-    background: #ffffff !important;
-    color: #000000 !important;
-    border-bottom: 2px solid #000000 !important;
-    font-weight: 900 !important;
-    text-transform: uppercase;
-}
-
-.wp-block-accordion .accordion-item>div {
-    background: #f5f5f0 !important;
-    color: #333333 !important;
-}
-
-/* Tabs: Index Card Tabs */
-.wp-block-tabs>div:first-child {
-    border-bottom: 3px solid #000000 !important;
-}
-
-.wp-block-tabs button {
-    color: #000000 !important;
-    border: 2px solid transparent !important;
-    font-weight: 700 !important;
-    text-transform: uppercase;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-    background: #000000 !important;
-    color: #ffffff !important;
-}
-
-.wp-block-tabs>div:last-child {
-    background: #ffffff !important;
-    border: 3px solid #000000 !important;
-    border-top: none !important;
-}
-
-/* Video: Framed Picture */
-.wp-block-video-embed {
-    border: 4px solid #000000 !important;
-    box-shadow: 8px 8px 0px #000000;
-}
-
-/* Audio: Record Player */
-.wp-block-audio-player {
-    background: #ffffff !important;
-    border: 3px solid #000000 !important;
-    box-shadow: 6px 6px 0px #000000;
-}
-
-/* Pricing: Bold Posters */
-.wp-block-pricing>div {
-    background: #ffffff !important;
-    border: 3px solid #000000 !important;
-    box-shadow: 6px 6px 0px #000000;
-}
-
-.wp-block-pricing>div:hover {
-    transform: translate(-2px, -2px);
-    box-shadow: 8px 8px 0px #000000;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] {
-    background: #ff3333 !important;
-    color: #ffffff !important;
-    border: 3px solid #000000 !important;
-    box-shadow: 10px 10px 0px #000000;
-}
-
-/* Testimonial: Quote Card */
-.wp-block-testimonial {
-    background: #fff9e6 !important;
-    border: 3px solid #000000 !important;
-    box-shadow: 6px 6px 0px #000000;
-    position: relative;
-}
-
-.wp-block-testimonial>div:first-child {
-    color: #ff3333 !important;
-    font-weight: 900;
-}
-
-/* CTA Banner: Bold Poster */
-.wp-block-cta-banner {
-    background: #ff3333 !important;
-    border: 4px solid #000000 !important;
-    box-shadow: 10px 10px 0px #000000;
-}
-
-.wp-block-cta-banner h2 {
-    text-transform: uppercase;
-    letter-spacing: -2px;
-}
-
-.wp-block-cta-banner a {
-    background: #000000 !important;
-    color: #ffffff !important;
-    border: 2px solid #ffffff !important;
-    box-shadow: 4px 4px 0px #ffffff;
-}
-
-/* Posts Grid: Newspaper Columns */
-.wp-block-posts-grid article {
-    background: #ffffff !important;
-    border: 2px solid #000000 !important;
-    box-shadow: 4px 4px 0px #000000;
-}
-
-.wp-block-posts-grid article>div:first-child {
-    background: #000000 !important;
-}
-
-/* Category Posts: Headlines */
-.wp-block-category-posts h3 {
-    font-weight: 900 !important;
-    text-transform: uppercase;
-    border-bottom: 3px solid #000000;
-    padding-bottom: 10px;
-}
-
-.wp-block-category-posts li {
-    border-color: #000000 !important;
-}
-
-.wp-block-category-posts li a {
-    font-weight: 700 !important;
-}
-
-/* Search: Typewriter Input */
-.wp-block-search input {
-    background: #ffffff !important;
-    border: 3px solid #000000 !important;
-    box-shadow: 4px 4px 0px #000000;
-    font-weight: 600;
-}
-
-.wp-block-search button {
-    background: #000000 !important;
-    color: #ffffff !important;
-    border: none;
-    box-shadow: 4px 4px 0px #ff3333;
-    text-transform: uppercase;
-    font-weight: 900;
-}
-
 /* ===== Mobile (auto responsive pass) ===== */
 /* 767.98px matches the chrome's md breakpoint (768px), where the inline
    .wjs-header-nav is swapped for the hamburger drawer. */
@@ -482,8 +325,8 @@ footer .w-10:hover {
        the red background + heavier border already mark it as featured —
        and keep the poster shadow chunky but proportionate. (!important is
        required to beat the inline style.) */
-    .wp-block-pricing>div[style*="scale(1.05)"] {
-        transform: none !important;
+    .wp-block-pricing__plan--highlighted {
+        transform: none;
         box-shadow: 6px 6px 0px #000000;
     }
 
@@ -495,7 +338,96 @@ footer .w-10:hover {
 
     /* Tab labels are uppercase + bold and cannot hyphenate; let the tab
        strip wrap to a second row instead of forcing sideways overflow. */
-    .wp-block-tabs>div:first-child {
+    .wp-block-tabs__list {
         flex-wrap: wrap;
     }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-accordion-border-width: 3px;
+  --wjs-accordion-border-color: #000000;
+  --wjs-accordion-radius: 0;
+  --wjs-accordion-shadow: 6px 6px 0px #000000;
+  --wjs-accordion-header-bg: #ffffff;
+  --wjs-accordion-header-color: #000000;
+  --wjs-accordion-header-border-width: 2px;
+  --wjs-accordion-header-border-color: #000000;
+  --wjs-accordion-header-weight: 900;
+  --wjs-accordion-header-transform: uppercase;
+  --wjs-accordion-panel-bg: #f5f5f0;
+  --wjs-accordion-panel-color: #333333;
+  --wjs-tabs-list-border-width: 3px;
+  --wjs-tabs-list-border-color: #000000;
+  --wjs-tabs-color: #000000;
+  --wjs-tabs-border-width: 2px;
+  --wjs-tabs-border-color: transparent;
+  --wjs-tabs-weight: 700;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-active-bg: #000000;
+  --wjs-tabs-active-color: #ffffff;
+  --wjs-tabs-panel-bg: #ffffff;
+  --wjs-tabs-panel-border-width: 0;
+  --wjs-tabs-panel-border-color: transparent;
+  --wjs-video-border-width: 4px;
+  --wjs-video-border-color: #000000;
+  --wjs-video-shadow: 8px 8px 0px #000000;
+  --wjs-audio-bg: #ffffff;
+  --wjs-audio-border-width: 3px;
+  --wjs-audio-border-color: #000000;
+  --wjs-audio-shadow: 6px 6px 0px #000000;
+  --wjs-pricing-bg: #ffffff;
+  --wjs-pricing-border-width: 3px;
+  --wjs-pricing-border-color: #000000;
+  --wjs-pricing-shadow: 6px 6px 0px #000000;
+  --wjs-pricing-hover-transform: translate(-2px, -2px);
+  --wjs-pricing-hover-shadow: 8px 8px 0px #000000;
+  --wjs-pricing-highlight-bg: #ff3333;
+  --wjs-pricing-highlight-color: #ffffff;
+  --wjs-pricing-highlight-border-width: 3px;
+  --wjs-pricing-highlight-border-color: #000000;
+  --wjs-pricing-highlight-shadow: 10px 10px 0px #000000;
+  --wjs-testimonial-bg: #fff9e6;
+  --wjs-testimonial-border-width: 3px;
+  --wjs-testimonial-border-color: #000000;
+  --wjs-testimonial-shadow: 6px 6px 0px #000000;
+  --wjs-testimonial-mark-color: #ff3333;
+  --wjs-testimonial-mark-weight: 900;
+  --wjs-cta-bg: #ff3333;
+  --wjs-cta-border-width: 4px;
+  --wjs-cta-border-color: #000000;
+  --wjs-cta-shadow: 10px 10px 0px #000000;
+  --wjs-cta-title-transform: uppercase;
+  --wjs-cta-title-tracking: -2px;
+  --wjs-cta-button-bg: #000000;
+  --wjs-cta-button-color: #ffffff;
+  --wjs-cta-button-border-width: 2px;
+  --wjs-cta-button-border-color: #ffffff;
+  --wjs-cta-button-shadow: 4px 4px 0px #ffffff;
+  --wjs-posts-bg: #000000;
+  --wjs-posts-border-width: 2px;
+  --wjs-posts-border-color: #000000;
+  --wjs-posts-shadow: 4px 4px 0px #000000;
+  --wjs-catposts-heading-weight: 900;
+  --wjs-catposts-heading-transform: uppercase;
+  --wjs-catposts-heading-border-width: 3px;
+  --wjs-catposts-heading-border-color: #000000;
+  --wjs-catposts-heading-pad: 10px;
+  --wjs-catposts-border-color: #000000;
+  --wjs-catposts-link-weight: 700;
+  --wjs-search-input-bg: #ffffff;
+  --wjs-search-input-border-width: 3px;
+  --wjs-search-input-border-color: #000000;
+  --wjs-search-input-shadow: 4px 4px 0px #000000;
+  --wjs-search-input-weight: 600;
+  --wjs-search-button-bg: #000000;
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-border-width: 0;
+  --wjs-search-button-border-color: transparent;
+  --wjs-search-button-shadow: 4px 4px 0px #ff3333;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-weight: 900;
 }

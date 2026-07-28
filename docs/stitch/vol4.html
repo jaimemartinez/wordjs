@@ -1,0 +1,551 @@
+<!DOCTYPE html>
+
+<html class="dark" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>WordJS Editor | Volume 4: Layout &amp; Typography</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&amp;family=JetBrains+Mono:wght@600&amp;family=Geist:wght@400;600;700;800&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+      tailwind.config = {
+        darkMode: "class",
+        theme: {
+          extend: {
+            "colors": {
+                "on-error": "#690005",
+                "surface-container-high": "#1f2942",
+                "surface-container": "#151f37",
+                "on-secondary-container": "#abb9d6",
+                "background": "#08132a",
+                "surface-container-lowest": "#030d25",
+                "on-surface-variant": "#b9cacb",
+                "on-primary": "#00363a",
+                "on-error-container": "#ffdad6",
+                "surface-container-highest": "#2a344d",
+                "tertiary-container": "#cad9ff",
+                "surface-container-low": "#101b33",
+                "on-secondary-fixed-variant": "#39475f",
+                "on-primary-container": "#006970",
+                "inverse-on-surface": "#263049",
+                "surface": "#08132a",
+                "on-tertiary-fixed-variant": "#374767",
+                "on-background": "#d9e2ff",
+                "secondary-container": "#3c4962",
+                "error-container": "#93000a",
+                "primary-container": "#00f0ff",
+                "on-primary-fixed": "#002022",
+                "outline": "#849495",
+                "on-secondary": "#233148",
+                "on-tertiary-container": "#4f5e80",
+                "surface-variant": "#2a344d",
+                "surface-tint": "#00dbe9",
+                "outline-variant": "#3b494b",
+                "primary-fixed": "#7df4ff",
+                "secondary-fixed": "#d6e3ff",
+                "secondary": "#b9c7e4",
+                "primary": "#dbfcff",
+                "surface-bright": "#2f3952",
+                "error": "#ffb4ab",
+                "on-tertiary": "#20304f",
+                "on-secondary-fixed": "#0d1c32",
+                "primary-fixed-dim": "#00dbe9",
+                "on-surface": "#d9e2ff",
+                "tertiary-fixed-dim": "#b6c6ed",
+                "on-primary-fixed-variant": "#004f54",
+                "surface-dim": "#08132a",
+                "on-tertiary-fixed": "#091b39",
+                "tertiary": "#f4f5ff",
+                "inverse-surface": "#d9e2ff",
+                "secondary-fixed-dim": "#b9c7e4",
+                "inverse-primary": "#006970",
+                "tertiary-fixed": "#d8e2ff"
+            },
+            "borderRadius": {
+                "DEFAULT": "0.125rem",
+                "lg": "0.25rem",
+                "xl": "0.5rem",
+                "full": "0.75rem"
+            },
+            "spacing": {
+                "xl": "48px",
+                "xs": "4px",
+                "sm": "8px",
+                "base": "4px",
+                "2xl": "80px",
+                "md": "16px",
+                "lg": "24px"
+            },
+            "fontFamily": {
+                "h3": ["Geist"],
+                "h1": ["Geist"],
+                "h2": ["Geist"],
+                "small": ["Inter"],
+                "body": ["Inter"],
+                "label": ["JetBrains Mono"]
+            },
+            "fontSize": {
+                "h3": ["1.5rem", {"lineHeight": "1.4", "letterSpacing": "-0.01em", "fontWeight": "600"}],
+                "h1": ["clamp(2.5rem, 5vw, 4.5rem)", {"lineHeight": "1.1", "letterSpacing": "-0.04em", "fontWeight": "800"}],
+                "h2": ["clamp(2rem, 4vw, 3rem)", {"lineHeight": "1.2", "letterSpacing": "-0.02em", "fontWeight": "700"}],
+                "small": ["13px", {"lineHeight": "1.5", "letterSpacing": "0.01em", "fontWeight": "500"}],
+                "body": ["16px", {"lineHeight": "1.6", "letterSpacing": "0", "fontWeight": "400"}],
+                "label": ["11px", {"lineHeight": "1", "letterSpacing": "0.05em", "fontWeight": "600"}]
+            }
+          },
+        },
+      }
+    </script>
+<style>
+        :root {
+            --wjs-color-border-subtle: rgba(132, 148, 149, 0.2);
+            --wjs-accent: #00dbe9;
+            --wjs-surface-raised: #151f37;
+            --wjs-transition-snappy: cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        body {
+            background-color: #08132a;
+            color: #d9e2ff;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        .luminous-border {
+            box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+            border: 1px solid var(--wjs-color-border-subtle);
+        }
+
+        .luminous-border-accent {
+            border: 1px solid rgba(0, 219, 233, 0.3);
+            box-shadow: 0 0 15px rgba(0, 219, 233, 0.1);
+        }
+
+        .glass-card {
+            background: rgba(21, 31, 55, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(132, 148, 149, 0.2);
+        }
+
+        .block-toolbar {
+            opacity: 0;
+            transform: translateY(4px);
+            transition: all 150ms var(--wjs-transition-snappy);
+        }
+
+        .editor-block:hover .block-toolbar {
+            opacity: 1;
+            transform: translateY(0);
+        }
+
+        .token-table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+
+        .token-table th, .token-table td {
+            border-bottom: 1px solid rgba(132, 148, 149, 0.1);
+            padding: 12px 16px;
+        }
+
+        .drop-zone-indicator {
+            height: 2px;
+            background-image: linear-gradient(to right, #00dbe9 50%, transparent 50%);
+            background-size: 8px 2px;
+            background-repeat: repeat-x;
+        }
+
+        .gradient-fade-divider {
+            height: 1px;
+            background: linear-gradient(90deg, transparent 0%, rgba(132, 148, 149, 0.5) 50%, transparent 100%);
+        }
+
+        .shape-divider-wave {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            overflow: hidden;
+            line-height: 0;
+        }
+
+        .shape-divider-wave svg {
+            position: relative;
+            display: block;
+            width: calc(140% + 1.3px);
+            height: 48px;
+        }
+
+        .shape-divider-wave .shape-fill {
+            fill: #08132a;
+        }
+    </style>
+</head>
+<body class="font-body selection:bg-primary-fixed-dim/30">
+<!-- Top Navigation Bar -->
+<nav class="fixed top-0 w-full z-50 border-b border-outline-variant/30 backdrop-blur-md bg-background/80 shadow-sm flex justify-between items-center px-lg py-sm">
+<div class="flex items-center gap-md">
+<span class="font-h3 text-h3 font-extrabold text-primary-fixed-dim tracking-tight">WordJS</span>
+<div class="hidden md:flex items-center gap-lg ml-xl">
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Dashboard</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Templates</a>
+<a class="text-primary-fixed-dim border-b-2 border-primary-fixed-dim pb-1 cursor-pointer active:scale-95" href="#">Blocks</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Assets</a>
+<a class="text-on-surface-variant font-medium hover:text-primary-fixed transition-colors duration-150 cursor-pointer active:scale-95" href="#">Settings</a>
+</div>
+</div>
+<div class="flex items-center gap-md">
+<div class="hidden sm:flex items-center gap-sm mr-md">
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary-fixed">history</span>
+<span class="material-symbols-outlined text-on-surface-variant cursor-pointer hover:text-primary-fixed">help</span>
+</div>
+<button class="px-md py-xs rounded bg-surface-container-high text-on-surface border border-outline-variant/20 hover:bg-surface-container-highest transition-all">Preview</button>
+<button class="px-md py-xs rounded bg-primary-container text-on-primary-container font-bold shadow-md hover:brightness-110 active:scale-95 transition-all">Publish</button>
+</div>
+</nav>
+<!-- Sidebar Navigation -->
+<aside class="fixed left-0 top-0 h-screen w-16 hover:w-64 transition-all duration-300 z-[60] bg-surface-container-lowest border-r border-outline-variant/20 shadow-lg flex flex-col py-md group overflow-hidden">
+<div class="px-4 mb-xl flex items-center gap-4">
+<div class="w-8 h-8 bg-primary-container rounded flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined text-on-primary-container text-[20px]">widgets</span>
+</div>
+<div class="opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+<div class="font-h3 text-h3 text-primary-fixed-dim scale-75 origin-left">WordJS Editor</div>
+<div class="font-label text-label uppercase text-on-surface-variant tracking-widest">V2.4.0-Alpha</div>
+</div>
+</div>
+<div class="flex-1 space-y-2">
+<div class="bg-primary-container text-on-primary-container rounded-lg mx-2 p-3 shadow-md flex items-center gap-4 cursor-pointer">
+<span class="material-symbols-outlined">layers</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100">Layout</span>
+</div>
+<div class="text-on-surface-variant hover:bg-surface-variant/50 hover:text-on-surface mx-2 p-3 flex items-center gap-4 cursor-pointer transition-all rounded-lg">
+<span class="material-symbols-outlined">palette</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100">Style</span>
+</div>
+<div class="text-on-surface-variant hover:bg-surface-variant/50 hover:text-on-surface mx-2 p-3 flex items-center gap-4 cursor-pointer transition-all rounded-lg">
+<span class="material-symbols-outlined">edit</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100">Content</span>
+</div>
+<div class="text-on-surface-variant hover:bg-surface-variant/50 hover:text-on-surface mx-2 p-3 flex items-center gap-4 cursor-pointer transition-all rounded-lg">
+<span class="material-symbols-outlined">stack</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100">Layers</span>
+</div>
+<div class="text-on-surface-variant hover:bg-surface-variant/50 hover:text-on-surface mx-2 p-3 flex items-center gap-4 cursor-pointer transition-all rounded-lg">
+<span class="material-symbols-outlined">restore</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100">History</span>
+</div>
+</div>
+<div class="mt-auto pt-md border-t border-outline-variant/10 space-y-2">
+<div class="text-on-surface-variant/70 hover:text-on-surface mx-2 p-3 flex items-center gap-4 cursor-pointer transition-all">
+<span class="material-symbols-outlined">menu_book</span>
+<span class="font-label text-label uppercase tracking-widest opacity-0 group-hover:opacity-100">Documentation</span>
+</div>
+</div>
+</aside>
+<!-- Main Content Canvas -->
+<main class="ml-16 pt-24 pb-2xl px-lg lg:px-xl max-w-7xl mx-auto">
+<header class="mb-2xl">
+<h1 class="font-h1 text-h1 text-on-surface mb-md">Volume 4: Layout &amp; Typography</h1>
+<p class="font-body text-body text-on-surface-variant max-w-2xl">
+                The foundational building blocks for precision digital publishing. These components handle the spatial dynamics and reading rhythms of the WordJS ecosystem.
+            </p>
+</header>
+<!-- SECTION: BLOCK -->
+<section class="editor-block relative group mb-2xl">
+<!-- Block Header & Toolbar -->
+<div class="flex items-center justify-between mb-sm">
+<div class="flex items-center gap-sm">
+<span class="font-label text-label uppercase text-primary-fixed-dim">Block 01</span>
+<span class="font-h3 text-h3 text-on-surface">Section Block</span>
+</div>
+<div class="block-toolbar flex gap-xs bg-surface-container-highest p-xs rounded-lg shadow-lg border border-outline-variant/30">
+<button class="p-1 hover:bg-surface-variant rounded"><span class="material-symbols-outlined text-[18px]">drag_indicator</span></button>
+<button class="p-1 hover:bg-surface-variant rounded"><span class="material-symbols-outlined text-[18px]">settings</span></button>
+<button class="p-1 hover:bg-surface-variant rounded text-error"><span class="material-symbols-outlined text-[18px]">delete</span></button>
+</div>
+</div>
+<div class="space-y-lg">
+<!-- Tinted Variant -->
+<div class="w-full bg-surface-container-low rounded-xl luminous-border overflow-hidden p-xl text-center">
+<div class="max-w-2xl mx-auto py-lg">
+<span class="font-label text-label uppercase text-primary-fixed-dim mb-xs block">Tinted Surface</span>
+<h2 class="font-h2 text-h2 mb-sm">Full-width Section with Container</h2>
+<p class="font-body text-body text-on-surface-variant">The standard section wrapper providing vertical rhythm and semantic containment for page architecture.</p>
+</div>
+</div>
+<!-- Divider Shape Variant -->
+<div class="w-full bg-surface-bright rounded-xl luminous-border overflow-hidden relative min-h-[300px] flex items-center justify-center">
+<div class="z-10 text-center">
+<h2 class="font-h3 text-h3">Geometric Shape Divider</h2>
+<p class="font-small text-small text-on-surface-variant/80">Subtle wave or geometric transitions between sections.</p>
+</div>
+<div class="shape-divider-wave">
+<svg data-name="Layer 1" preserveaspectratio="none" viewbox="0 0 1200 120" xmlns="http://www.w3.org/2000/svg">
+<path class="shape-fill opacity-30" d="M321.39,56.44c58-10.79,114.16-30.13,172-41.86,82.39-16.72,168.19-17.73,250.45-.39C823.78,31,906.67,72,985.66,92.83c70.05,18.48,146.53,26.09,214.34,3V0H0V27.35A600.21,600.21,0,0,0,321.39,56.44Z"></path>
+<path class="shape-fill" d="M985.66,92.83C906.67,72,823.78,31,743.84,14.19c-82.26-17.34-168.06-16.33-250.45.39-57.84,11.73-114,31.07-172,41.86A600.21,600.21,0,0,1,0,27.35V120H1200V95.8C1132.19,118.92,1055.71,111.31,985.66,92.83Z"></path>
+</svg>
+</div>
+</div>
+<!-- Token Table -->
+<div class="glass-card rounded-xl overflow-hidden mt-xl">
+<table class="w-full text-left token-table">
+<thead class="bg-surface-container-highest">
+<tr>
+<th class="font-label text-label text-on-surface-variant">Token Name</th>
+<th class="font-label text-label text-on-surface-variant">Value / Purpose</th>
+</tr>
+</thead>
+<tbody class="font-label text-[12px]">
+<tr><td class="text-primary-fixed-dim">--wjs-section-max-width</td><td>1280px (Fluid Container)</td></tr>
+<tr><td class="text-primary-fixed-dim">--wjs-section-v-padding</td><td>clamp(48px, 8vw, 120px)</td></tr>
+<tr><td class="text-primary-fixed-dim">--wjs-divider-fill</td><td>var(--wjs-color-surface)</td></tr>
+</tbody>
+</table>
+</div>
+</div>
+<div class="drop-zone-indicator mt-xl"></div>
+</section>
+<!-- GRID: BLOCK -->
+<section class="editor-block relative group mb-2xl">
+<div class="flex items-center justify-between mb-sm">
+<div class="flex items-center gap-sm">
+<span class="font-label text-label uppercase text-primary-fixed-dim">Block 02</span>
+<span class="font-h3 text-h3 text-on-surface">Grid System</span>
+</div>
+<div class="block-toolbar flex gap-xs bg-surface-container-highest p-xs rounded-lg shadow-lg border border-outline-variant/30">
+<button class="p-1 hover:bg-surface-variant rounded"><span class="material-symbols-outlined text-[18px]">drag_indicator</span></button>
+<button class="p-1 hover:bg-surface-variant rounded"><span class="material-symbols-outlined text-[18px]">settings</span></button>
+</div>
+</div>
+<div class="space-y-xl">
+<!-- Grid Display -->
+<div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-md">
+<div class="h-32 bg-surface-container-high rounded luminous-border flex items-center justify-center font-label text-on-surface-variant">Col 1</div>
+<div class="h-32 bg-surface-container-high rounded luminous-border flex items-center justify-center font-label text-on-surface-variant">Col 2</div>
+<div class="h-32 bg-surface-container-high rounded luminous-border flex items-center justify-center font-label text-on-surface-variant">Col 3</div>
+<div class="h-32 bg-surface-container-high rounded luminous-border flex items-center justify-center font-label text-on-surface-variant">Col 4</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-md">
+<div class="h-32 bg-surface-container rounded-lg luminous-border-accent border-dashed border-2 flex flex-col items-center justify-center">
+<span class="font-h3 text-h3 text-primary-fixed-dim">3-Up</span>
+<span class="font-label text-on-surface-variant">Standard Grid</span>
+</div>
+<div class="h-32 bg-surface-container rounded-lg luminous-border-accent border-dashed border-2 flex items-center justify-center font-h3 text-h3">3-Up</div>
+<div class="h-32 bg-surface-container rounded-lg luminous-border-accent border-dashed border-2 flex items-center justify-center font-h3 text-h3">3-Up</div>
+</div>
+<!-- Stacking Diagram -->
+<div class="p-lg bg-surface-container-lowest rounded-xl border border-outline-variant/10">
+<div class="flex items-center justify-between mb-lg">
+<h4 class="font-h3 text-on-surface">Stacking Logic</h4>
+<div class="flex gap-sm">
+<div class="flex items-center gap-xs text-primary-fixed-dim"><span class="material-symbols-outlined text-sm">desktop_windows</span><span class="font-label">Desktop: 4 Col</span></div>
+<div class="flex items-center gap-xs text-on-surface-variant"><span class="material-symbols-outlined text-sm">tablet</span><span class="font-label">Tablet: 2 Col</span></div>
+<div class="flex items-center gap-xs text-on-surface-variant"><span class="material-symbols-outlined text-sm">smartphone</span><span class="font-label">Mobile: 1 Col</span></div>
+</div>
+</div>
+<div class="flex flex-wrap gap-sm">
+<div class="w-full md:w-[calc(50%-8px)] lg:w-[calc(25%-12px)] h-8 bg-primary-container/20 border border-primary-container/30 rounded"></div>
+<div class="w-full md:w-[calc(50%-8px)] lg:w-[calc(25%-12px)] h-8 bg-primary-container/20 border border-primary-container/30 rounded"></div>
+<div class="w-full md:w-[calc(50%-8px)] lg:w-[calc(25%-12px)] h-8 bg-primary-container/20 border border-primary-container/30 rounded"></div>
+<div class="w-full md:w-[calc(50%-8px)] lg:w-[calc(25%-12px)] h-8 bg-primary-container/20 border border-primary-container/30 rounded"></div>
+</div>
+</div>
+</div>
+<div class="drop-zone-indicator mt-xl"></div>
+</section>
+<!-- TYPOGRAPHY: BLOCK -->
+<section class="editor-block relative group mb-2xl">
+<div class="flex items-center justify-between mb-sm">
+<div class="flex items-center gap-sm">
+<span class="font-label text-label uppercase text-primary-fixed-dim">Block 03</span>
+<span class="font-h3 text-h3 text-on-surface">Typography Scale</span>
+</div>
+<div class="block-toolbar flex gap-xs bg-surface-container-highest p-xs rounded-lg shadow-lg border border-outline-variant/30">
+<button class="p-1 hover:bg-surface-variant rounded"><span class="material-symbols-outlined text-[18px]">text_fields</span></button>
+</div>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-xl items-start">
+<div class="lg:col-span-8 glass-card p-xl rounded-2xl relative overflow-hidden">
+<div class="absolute top-0 left-0 w-1 h-full bg-primary-fixed-dim"></div>
+<div class="max-w-[75ch] space-y-lg">
+<h1 class="font-h1 text-h1 text-on-background">System Level H1 Heading</h1>
+<h2 class="font-h2 text-h2 text-on-surface">Sub-heading H2 Structure</h2>
+<h3 class="font-h3 text-h3 text-on-surface-variant">Section Title H3 Level</h3>
+<div class="font-body text-body text-on-surface-variant leading-relaxed">
+                            This is the standard body text measurement. It is optimized for 
+                            <span class="text-primary-fixed-dim font-bold">readability</span> and sustained focus. 
+                            In a dark-first environment, subtle contrast management is crucial for accessibility. 
+                            You can see <a class="text-primary underline decoration-primary/30 hover:decoration-primary transition-all" href="#">inline links</a> behave with a soft highlight.
+                        </div>
+<ul class="space-y-sm font-body text-body text-on-surface-variant ml-md">
+<li class="flex items-center gap-md">
+<div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim"></div>
+<span>Precision typography for technical documentation.</span>
+</li>
+<li class="flex items-center gap-md">
+<div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim"></div>
+<span>Support for JetBrains Mono for code snippets.</span>
+</li>
+<li class="flex items-center gap-md">
+<div class="w-1.5 h-1.5 rounded-full bg-primary-fixed-dim"></div>
+<span>Geist for high-impact headlines.</span>
+</li>
+</ul>
+</div>
+</div>
+<div class="lg:col-span-4 space-y-md">
+<div class="p-md bg-surface-container-lowest rounded-lg luminous-border">
+<span class="font-label text-label uppercase text-on-surface-variant mb-sm block">Scale Definitions</span>
+<div class="space-y-sm">
+<div class="flex justify-between items-center"><span class="font-label">H1 Headline</span><span class="text-primary-fixed-dim">4.5rem</span></div>
+<div class="flex justify-between items-center"><span class="font-label">H2 Headline</span><span class="text-primary-fixed-dim">3.0rem</span></div>
+<div class="flex justify-between items-center"><span class="font-label">H3 Headline</span><span class="text-primary-fixed-dim">1.5rem</span></div>
+<div class="flex justify-between items-center"><span class="font-label">Body Text</span><span class="text-primary-fixed-dim">16px</span></div>
+</div>
+</div>
+<div class="p-md bg-surface-bright rounded-lg luminous-border">
+<span class="font-label text-label uppercase text-on-surface-variant mb-sm block">Reading Measure</span>
+<div class="h-2 w-full bg-surface-container rounded-full overflow-hidden">
+<div class="w-[75%] h-full bg-primary-fixed-dim"></div>
+</div>
+<span class="font-small text-small text-on-surface-variant mt-sm block">Current: 75 Characters</span>
+</div>
+</div>
+</div>
+<div class="drop-zone-indicator mt-xl"></div>
+</section>
+<!-- FLEX & COLUMNS: BLOCK -->
+<section class="editor-block relative group mb-2xl">
+<div class="flex items-center justify-between mb-sm">
+<div class="flex items-center gap-sm">
+<span class="font-label text-label uppercase text-primary-fixed-dim">Block 04</span>
+<span class="font-h3 text-h3 text-on-surface">Flexible Containers</span>
+</div>
+<div class="block-toolbar flex gap-xs bg-surface-container-highest p-xs rounded-lg shadow-lg border border-outline-variant/30">
+<button class="p-1 hover:bg-surface-variant rounded"><span class="material-symbols-outlined text-[18px]">flex_direction</span></button>
+<button class="p-1 hover:bg-surface-variant rounded"><span class="material-symbols-outlined text-[18px]">view_column</span></button>
+</div>
+</div>
+<div class="space-y-lg">
+<!-- Unequal Distributions -->
+<div class="flex flex-col md:flex-row gap-md h-64">
+<div class="md:w-[70%] bg-surface-container p-lg rounded-xl luminous-border flex flex-col justify-end group/col overflow-hidden relative">
+<div class="absolute inset-0 bg-primary-fixed-dim/5 opacity-0 group-hover/col:opacity-100 transition-opacity"></div>
+<span class="font-label text-on-surface-variant">70% Column</span>
+<h4 class="font-h3 text-h3">Main Content Area</h4>
+</div>
+<div class="md:w-[30%] bg-surface-bright p-lg rounded-xl luminous-border-accent border-dashed border-2 flex flex-col justify-end">
+<span class="font-label text-primary-fixed-dim">30% Sidebar</span>
+<h4 class="font-body font-bold">Metadata</h4>
+</div>
+</div>
+<div class="flex flex-col md:flex-row gap-md">
+<div class="flex-1 bg-surface-container-low p-md rounded-lg border border-outline-variant/10 text-center font-label">33%</div>
+<div class="flex-1 bg-surface-container-low p-md rounded-lg border border-outline-variant/10 text-center font-label">33%</div>
+<div class="flex-1 bg-surface-container-low p-md rounded-lg border border-outline-variant/10 text-center font-label">33%</div>
+</div>
+<!-- Flex Alignment Controls -->
+<div class="p-lg glass-card rounded-2xl">
+<div class="flex items-center gap-lg mb-lg border-b border-outline-variant/10 pb-md">
+<button class="bg-primary-fixed-dim/10 text-primary-fixed-dim px-sm py-xs rounded font-label border border-primary-fixed-dim/20">Flex-Start</button>
+<button class="text-on-surface-variant px-sm py-xs rounded font-label hover:bg-surface-variant">Center</button>
+<button class="text-on-surface-variant px-sm py-xs rounded font-label hover:bg-surface-variant">Space-Between</button>
+</div>
+<div class="flex items-center gap-md">
+<div class="w-12 h-12 bg-primary-container rounded shadow-md"></div>
+<div class="w-16 h-12 bg-secondary-container rounded shadow-md"></div>
+<div class="w-10 h-12 bg-tertiary-container rounded shadow-md"></div>
+</div>
+</div>
+</div>
+<div class="drop-zone-indicator mt-xl"></div>
+</section>
+<!-- DIVIDER & SPACER: BLOCK -->
+<section class="editor-block relative group mb-2xl">
+<div class="flex items-center justify-between mb-sm">
+<div class="flex items-center gap-sm">
+<span class="font-label text-label uppercase text-primary-fixed-dim">Block 05</span>
+<span class="font-h3 text-h3 text-on-surface">Separators &amp; Spacing</span>
+</div>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-2 gap-xl">
+<!-- Divider Variants -->
+<div class="space-y-lg">
+<h4 class="font-label text-on-surface-variant uppercase tracking-widest mb-md">Dividers</h4>
+<div class="space-y-xl">
+<div>
+<span class="font-small text-on-surface-variant/60 block mb-xs">Solid Separator</span>
+<hr class="border-outline-variant/30"/>
+</div>
+<div>
+<span class="font-small text-on-surface-variant/60 block mb-xs">Dashed Separator</span>
+<hr class="border-dashed border-outline-variant/30"/>
+</div>
+<div>
+<span class="font-small text-on-surface-variant/60 block mb-xs">Gradient Fade</span>
+<div class="gradient-fade-divider"></div>
+</div>
+</div>
+</div>
+<!-- Spacer Variants -->
+<div class="space-y-lg">
+<h4 class="font-label text-on-surface-variant uppercase tracking-widest mb-md">Vertical Spacers</h4>
+<div class="space-y-md">
+<div class="relative group/spacer">
+<div class="h-8 w-full border-2 border-dashed border-primary-fixed-dim/20 flex items-center justify-center rounded">
+<span class="font-label text-[10px] text-primary-fixed-dim/40 opacity-0 group-hover/spacer:opacity-100 transition-opacity">SPACER: 32px</span>
+</div>
+</div>
+<div class="relative group/spacer">
+<div class="h-16 w-full border-2 border-dashed border-primary-fixed-dim/20 flex items-center justify-center rounded">
+<span class="font-label text-[10px] text-primary-fixed-dim/40 opacity-0 group-hover/spacer:opacity-100 transition-opacity">SPACER: 64px</span>
+</div>
+</div>
+<div class="relative group/spacer">
+<div class="h-24 w-full border-2 border-dashed border-primary-fixed-dim/20 flex items-center justify-center rounded">
+<span class="font-label text-[10px] text-primary-fixed-dim/40 opacity-0 group-hover/spacer:opacity-100 transition-opacity">SPACER: 96px</span>
+</div>
+</div>
+</div>
+</div>
+</div>
+</section>
+</main>
+<!-- Footer -->
+<footer class="w-full mt-auto border-t border-outline-variant/10 bg-surface-dim flex flex-col md:flex-row justify-between items-center px-xl py-lg max-w-full">
+<div class="flex flex-col gap-xs mb-md md:mb-0">
+<span class="font-label text-label font-black text-on-surface">WordJS CMS</span>
+<p class="font-small text-small text-on-surface-variant">© 2024 WordJS CMS Engine. All rights reserved. Built for precision.</p>
+</div>
+<div class="flex items-center gap-xl">
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Terms of Service</a>
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Privacy Policy</a>
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">API Docs</a>
+<a class="font-small text-small text-on-surface-variant/70 hover:text-on-surface transition-opacity" href="#">Changelog</a>
+</div>
+</footer>
+<script>
+        // Micro-interaction for block hover states
+        document.querySelectorAll('.editor-block').forEach(block => {
+            block.addEventListener('mouseenter', () => {
+                block.classList.add('luminous-border-accent');
+            });
+            block.addEventListener('mouseleave', () => {
+                block.classList.remove('luminous-border-accent');
+            });
+        });
+
+        // Simple tab/active logic simulation
+        document.querySelectorAll('aside div').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('aside div').forEach(t => {
+                    t.classList.remove('bg-primary-container', 'text-on-primary-container', 'shadow-md');
+                    t.classList.add('text-on-surface-variant');
+                });
+                tab.classList.add('bg-primary-container', 'text-on-primary-container', 'shadow-md');
+                tab.classList.remove('text-on-surface-variant');
+            });
+        });
+    </script>
+</body></html>

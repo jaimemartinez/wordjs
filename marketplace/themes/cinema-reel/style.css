@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #170308;
+  --wjs-bg-surface: #251217;
+  --wjs-bg-surface-raised: #311f23;
+  --wjs-color-primary: #e11d48;
+  --wjs-color-primary-dark: #9f1239;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #9f1239;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ffe4e6;
+  --wjs-color-text-muted: #a78e92;
+  --wjs-color-heading: #ffe4e6;
+  --wjs-color-link: #e11d48;
+  --wjs-color-link-hover: #9f1239;
+  --wjs-border-subtle: #412c30;
+  --wjs-outline: #6f585c;
+  --wjs-outline-variant: #3a2529;
+  --wjs-focus-ring: #e11d48;
+}
+
 /* Theme: Cinema Reel (Obsidian Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@300;400;600&display=swap');
 

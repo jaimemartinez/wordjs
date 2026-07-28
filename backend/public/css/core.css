@@ -152,14 +152,16 @@ body {
    CONTAINMENT: Prevent children from overflowing parents
    ========================================= */
 
-/* All Puck blocks must contain their children */
+/* Blocks must not widen the page. Only `max-width` — the blanket `overflow: hidden` and
+   `position: relative` that used to be here clipped anything a block deliberately paints
+   outside its box: the hero's overlay, the testimonial's oversized quote glyph, the featured
+   pricing plan's scale(1.02). The contract sets overflow/position on the specific blocks that
+   need them (hero, video, accordion), which is the only place that decision belongs. */
 [class*="wp-block-"],
 [class*="puck-"],
 .puck-content>div,
 .puck-content section,
 .puck-content article {
-    position: relative;
-    overflow: hidden;
     max-width: 100%;
 }
 
@@ -175,22 +177,13 @@ iframe {
     max-width: 100%;
 }
 
-/* Grid and Flex children containment */
+/* Grid and flex children: `min-width: 0` is what actually stops a long unbreakable string from
+   blowing the track out. `overflow: hidden` was cargo-culted alongside it and clipped hover
+   lifts and scaled cards, so it is gone. */
 [class*="wp-block-grid"]>*,
 [class*="wp-block-flex"]>*,
+[class*="wp-block-columns"]>*,
 [class*="columns-grid"]>* {
-    min-width: 0;
-    /* Prevent grid/flex blowout */
-    overflow: hidden;
-}
-
-/* Columns specific containment */
-[class*="columns-grid"] {
-    overflow: hidden;
-}
-
-[class*="columns-grid"]>div {
-    overflow: hidden;
     min-width: 0;
 }
 
@@ -209,49 +202,9 @@ p {
     margin-bottom: var(--wjs-size-4);
 }
 
-.wp-block-heading {
-    color: var(--wjs-foreground);
-    font-weight: var(--wjs-h2-weight);
-    margin-bottom: var(--wjs-space-sm);
-}
-
-h1.wp-block-heading {
-    font-size: var(--wjs-h1-size);
-    font-weight: var(--wjs-h1-weight);
-}
-
-h2.wp-block-heading {
-    font-size: var(--wjs-h2-size);
-}
-
-h3.wp-block-heading {
-    font-size: var(--wjs-h3-size);
-}
-
-.wp-block-text {
-    font-size: var(--wjs-font-size-base);
-    line-height: var(--wjs-line-height-base);
-    color: var(--wjs-foreground);
-}
-
-.wp-block-card {
-    padding: var(--wjs-space-md);
-    background-color: var(--puck-card-bg);
-    border: 1px solid var(--puck-card-border);
-    border-radius: var(--puck-card-radius);
-    color: var(--puck-card-color);
-    box-shadow: var(--wjs-shadow-md);
-}
-
-.wp-block-button a {
-    font-family: var(--wjs-font-family);
-    border-radius: var(--puck-button-radius);
-    transition: filter 0.2s ease;
-}
-
-.wp-block-button a:hover {
-    filter: brightness(1.1);
-}
+/* The .wp-block-heading / -text / -card / -button rules that used to sit here are gone for the
+   same reason as section 7 below: wordjs-ui.css defines them, this file loads after it, so these
+   won and pinned every block to the --puck-* look. See the note at the end of this file. */
 
 /* -------------------------------------
    5. STRUCTURAL UTILITIES (Global Layout)
@@ -369,193 +322,19 @@ h3.wp-block-heading {
     --puck-search-btn-color: #ffffff;
     --puck-search-btn-radius: var(--wjs-radius-base);
 }
-
 /* =========================================
-   7. NEW PUCK COMPONENT BASE STYLES
+   7. VISUAL-EDITOR BLOCK STYLES — MOVED
+   -----------------------------------------
+   The .wp-block-* rules that used to live here now live ONCE, in
+   public/css/wordjs-ui.css, as the block contract: every value behind a
+   var(--wjs-<block>-<prop>, <base>) a theme can override.
+
+   They could not stay. This file is emitted AFTER wordjs-ui.css by the
+   Handlebars "wordjs_head" helper, so at equal specificity these rules won —
+   a Handlebars-rendered page got the old --puck-* look and silently ignored
+   the theme tokens, while the same block on a Next-rendered page did not.
+   Two definitions of one class is the bug; there is one now.
+
+   The --puck-* tokens above are kept as a legacy alias surface for themes and
+   plugins that still read them; nothing in the contract requires them.
    ========================================= */
-
-/* Section */
-.wp-block-section {
-    width: 100%;
-    padding: var(--puck-section-padding);
-    background: var(--puck-section-bg);
-}
-
-/* Grid */
-.wp-block-grid {
-    display: grid;
-    gap: var(--puck-grid-gap);
-}
-
-/* FlexRow */
-.wp-block-flex-row {
-    display: flex;
-    gap: var(--puck-flex-gap);
-    flex-wrap: wrap;
-}
-
-/* Accordion */
-.wp-block-accordion {
-    border-radius: var(--puck-accordion-radius);
-    border: 1px solid var(--puck-accordion-border);
-    overflow: hidden;
-}
-
-.wp-block-accordion .accordion-item button {
-    background: var(--puck-accordion-header-bg);
-    color: var(--puck-accordion-header-color);
-}
-
-.wp-block-accordion .accordion-item>div {
-    background: var(--puck-accordion-content-bg);
-    color: var(--puck-accordion-content-color);
-}
-
-/* Tabs */
-.wp-block-tabs>div:first-child {
-    border-bottom: 2px solid var(--puck-tabs-border);
-}
-
-.wp-block-tabs button {
-    color: var(--puck-tabs-inactive-color);
-}
-
-.wp-block-tabs button[data-active="true"],
-.wp-block-tabs button:focus {
-    color: var(--puck-tabs-active-color);
-    border-bottom-color: var(--puck-tabs-active-color);
-}
-
-.wp-block-tabs>div:last-child {
-    background: var(--puck-tabs-content-bg);
-}
-
-/* Video Embed */
-.wp-block-video-embed {
-    border-radius: var(--puck-video-radius);
-    overflow: hidden;
-}
-
-/* Audio Player */
-.wp-block-audio-player {
-    background: var(--puck-audio-bg);
-    border: 1px solid var(--puck-audio-border);
-    border-radius: var(--puck-audio-radius);
-}
-
-.wp-block-audio-player .audio-icon {
-    background: var(--puck-audio-icon-bg);
-    color: var(--puck-audio-icon-color);
-}
-
-/* Pricing Table */
-.wp-block-pricing>div {
-    background: var(--puck-pricing-bg);
-    border: 1px solid var(--puck-pricing-border);
-    border-radius: var(--puck-pricing-radius);
-}
-
-.wp-block-pricing>div[data-highlighted="true"] {
-    background: var(--puck-pricing-highlight-bg);
-    color: var(--puck-pricing-highlight-color);
-    box-shadow: var(--puck-pricing-shadow);
-}
-
-/* Testimonial */
-.wp-block-testimonial {
-    background: var(--puck-testimonial-bg);
-    border: 1px solid var(--puck-testimonial-border);
-    border-radius: var(--puck-testimonial-radius);
-}
-
-.wp-block-testimonial .quote-mark {
-    color: var(--puck-testimonial-quote-color);
-}
-
-/* CTA Banner */
-.wp-block-cta-banner {
-    border-radius: var(--puck-cta-radius);
-    color: var(--puck-cta-text-color);
-}
-
-.wp-block-cta-banner a {
-    background: var(--puck-cta-btn-bg);
-    border-radius: var(--puck-cta-btn-radius);
-}
-
-/* Posts Grid */
-.wp-block-posts-grid {
-    gap: var(--puck-posts-gap);
-}
-
-.wp-block-posts-grid article {
-    background: var(--puck-posts-card-bg);
-    border: 1px solid var(--puck-posts-card-border);
-    border-radius: var(--puck-posts-card-radius);
-}
-
-/* Category Posts */
-.wp-block-category-posts ul {
-    list-style: none;
-    padding: 0;
-    margin: 0;
-}
-
-.wp-block-category-posts li {
-    padding: var(--wjs-size-4) 0;
-    border-bottom: 1px solid var(--wjs-border-subtle);
-}
-
-/* Search Bar */
-.wp-block-search {
-    display: flex;
-    gap: var(--wjs-size-2);
-}
-
-.wp-block-search input {
-    background: var(--puck-search-input-bg);
-    border: 1px solid var(--puck-search-input-border);
-    border-radius: var(--puck-search-input-radius);
-    padding: var(--wjs-size-3) var(--wjs-size-4);
-    color: var(--wjs-text-main);
-}
-
-.wp-block-search input:focus {
-    outline: none;
-    border-color: var(--wjs-color-primary);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
-}
-
-.wp-block-search button {
-    background: var(--puck-search-btn-bg);
-    color: var(--puck-search-btn-color);
-    border: none;
-    border-radius: var(--puck-search-btn-radius);
-    padding: var(--wjs-size-3) var(--wjs-size-5);
-    cursor: pointer;
-    font-weight: var(--wjs-font-medium);
-    transition: filter 0.2s ease;
-}
-
-.wp-block-search button:hover {
-    filter: brightness(1.1);
-}
-
-/* Responsive Grid */
-@media (max-width: 768px) {
-    .wp-block-grid {
-        grid-template-columns: 1fr !important;
-    }
-
-    .wp-block-pricing {
-        grid-template-columns: 1fr !important;
-    }
-
-    .wp-block-pricing>div[data-highlighted="true"] {
-        transform: none !important;
-    }
-
-    .wp-block-posts-grid {
-        grid-template-columns: 1fr !important;
-    }
-}

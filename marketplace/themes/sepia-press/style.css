@@ -213,9 +213,7 @@ article > p:first-of-type::first-letter {
   color: var(--wjs-color-primary);
 }
 
-/* Cards: Flat paper with hairline */
-.wp-block-card,
-article {
+/* Cards: Flat paper with hairline */article {
   background: var(--wjs-bg-surface) !important;
   border: var(--wjs-hairline) !important;
   box-shadow: var(--wjs-shadow-soft) !important;
@@ -258,212 +256,6 @@ footer .w-10:hover {
   color: #faf8f3 !important;
 }
 
-/* =========================================
-   SEPIA PRESS: COMPONENT OVERRIDES
-   Print-like / editorial aesthetic
-   ========================================= */
-
-/* Accordion: Hairline-divided panels */
-.wp-block-accordion {
-  border: var(--wjs-hairline) !important;
-  background: var(--wjs-bg-surface) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
-  overflow: hidden;
-}
-
-.wp-block-accordion .accordion-item button {
-  background: var(--wjs-bg-surface) !important;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  font-family: var(--wjs-nav-font-family) !important;
-  font-weight: 600 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  transition: color 0.2s ease, background-color 0.2s ease !important;
-}
-
-.wp-block-accordion .accordion-item button:hover {
-  color: var(--wjs-color-primary) !important;
-  background: #faf8f3 !important;
-}
-
-.wp-block-accordion .accordion-item > div {
-  background: #faf8f3 !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: Hairline underline tabs */
-.wp-block-tabs > div:first-child {
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-text-muted) !important;
-  font-family: var(--wjs-nav-font-family) !important;
-  font-weight: 600 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  border-bottom: 2px solid transparent !important;
-  transition: color 0.2s ease, border-color 0.2s ease !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: var(--wjs-color-primary) !important;
-  border-bottom-color: var(--wjs-color-primary) !important;
-  outline: none !important;
-}
-
-.wp-block-tabs > div:last-child {
-  background: var(--wjs-bg-surface) !important;
-  border: var(--wjs-hairline) !important;
-  border-top: none !important;
-}
-
-/* Video: Framed print plate */
-.wp-block-video-embed {
-  border: 1px solid var(--wjs-color-text-main) !important;
-  box-shadow: var(--wjs-shadow-raised) !important;
-}
-
-/* Audio: Minimal paper player */
-.wp-block-audio-player {
-  background: var(--wjs-bg-surface) !important;
-  border: var(--wjs-hairline) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
-}
-
-/* Pricing: Flat paper cards */
-.wp-block-pricing > div {
-  background: var(--wjs-bg-surface) !important;
-  border: var(--wjs-hairline) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
-}
-
-.wp-block-pricing > div h3 {
-  font-family: var(--wjs-font-heading) !important;
-  letter-spacing: 0.005em;
-}
-
-/* Highlighted plan: terracotta block, no layout-shifting transform */
-.wp-block-pricing > div[style*="scale(1.05)"] {
-  background: var(--wjs-color-primary) !important;
-  color: #faf8f3 !important;
-  transform: none !important;
-  border: 1px solid var(--wjs-color-primary-dark) !important;
-  box-shadow: var(--wjs-shadow-raised) !important;
-}
-
-.wp-block-pricing > div[style*="scale(1.05)"] h3 {
-  color: #faf8f3 !important;
-}
-
-/* Testimonial: Pull-quote with terracotta margin rule */
-.wp-block-testimonial {
-  background: var(--wjs-bg-surface) !important;
-  border: var(--wjs-hairline) !important;
-  border-left: 4px solid var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
-  font-family: var(--wjs-font-heading) !important;
-}
-
-.wp-block-testimonial > div:first-child {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* CTA Banner: Terracotta block */
-.wp-block-cta-banner {
-  background: var(--wjs-color-primary) !important;
-  border: none !important;
-  box-shadow: var(--wjs-shadow-raised) !important;
-}
-
-.wp-block-cta-banner h2 {
-  font-family: var(--wjs-font-heading) !important;
-  color: #faf8f3 !important;
-  border-top: none !important;
-  padding-top: 0 !important;
-  letter-spacing: 0.005em;
-}
-
-.wp-block-cta-banner a {
-  background: #faf8f3 !important;
-  color: var(--wjs-color-primary-dark) !important;
-  text-transform: uppercase;
-  letter-spacing: 0.14em;
-  font-family: var(--wjs-nav-font-family) !important;
-  font-weight: 600 !important;
-  transition: background-color 0.2s ease, color 0.2s ease !important;
-}
-
-.wp-block-cta-banner a:hover {
-  background: #211c17 !important;
-  color: #faf8f3 !important;
-}
-
-/* Posts Grid: Clean paper cards */
-.wp-block-posts-grid article {
-  background: var(--wjs-bg-surface) !important;
-  border: var(--wjs-hairline) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-raised) !important;
-}
-
-/* Category Posts: Editorial section headers */
-.wp-block-category-posts h3 {
-  font-family: var(--wjs-font-heading) !important;
-  font-weight: 600 !important;
-  letter-spacing: 0.005em;
-  border-bottom: 2px solid var(--wjs-color-primary);
-  padding-bottom: 8px;
-}
-
-.wp-block-category-posts li {
-  border-color: var(--wjs-border-subtle) !important;
-}
-
-.wp-block-category-posts li a {
-  font-weight: 500 !important;
-  transition: color 0.2s ease !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* Search: Hairline input + terracotta button */
-.wp-block-search input {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  color: var(--wjs-color-text-main) !important;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
-}
-
-.wp-block-search input:focus {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: 0 0 0 3px rgba(154, 51, 40, 0.18) !important;
-  outline: none !important;
-}
-
-.wp-block-search button {
-  background: var(--wjs-color-primary) !important;
-  color: #faf8f3 !important;
-  text-transform: uppercase;
-  letter-spacing: 0.1em;
-  font-family: var(--wjs-nav-font-family) !important;
-  font-weight: 600 !important;
-  transition: background-color 0.2s ease !important;
-}
-
-.wp-block-search button:hover {
-  background: var(--wjs-color-primary-dark) !important;
-}
-
 /* ===== Mobile (auto responsive pass) ===== */
 @media (max-width: 767.98px) {
 
@@ -485,8 +277,8 @@ footer .w-10:hover {
 
   /* Accordion titles / tab labels: uppercase + 0.08em tracking widens long
      labels; relax tracking and let them wrap instead of pushing width. */
-  .wp-block-accordion .accordion-item button,
-  .wp-block-tabs button {
+  .wp-block-accordion__header,
+  .wp-block-tabs__tab {
     letter-spacing: 0.04em;
     white-space: normal;
   }
@@ -494,10 +286,115 @@ footer .w-10:hover {
   /* CTA + search buttons: the framework's button base sets
      white-space: nowrap and the theme adds uppercase + wide tracking, so a
      long label can exceed 375px. Allow wrapping and ease the tracking. */
-  .wp-block-cta-banner a,
-  .wp-block-search button {
+  .wp-block-cta-banner__button,
+  .wp-block-search__button {
     letter-spacing: 0.08em;
     white-space: normal;
     overflow-wrap: break-word;
   }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: var(--wjs-bg-surface);
+  --wjs-card-border-color: var(--wjs-hairline);
+  --wjs-card-shadow: var(--wjs-shadow-soft);
+  --wjs-accordion-border-color: var(--wjs-hairline);
+  --wjs-accordion-bg: var(--wjs-bg-surface);
+  --wjs-accordion-shadow: var(--wjs-shadow-soft);
+  --wjs-accordion-header-bg: #faf8f3;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-header-family: var(--wjs-nav-font-family);
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-header-transform: uppercase;
+  --wjs-accordion-header-tracking: 0.08em;
+  --wjs-accordion-panel-bg: #faf8f3;
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 1px;
+  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
+  --wjs-tabs-color: var(--wjs-color-text-muted);
+  --wjs-tabs-family: var(--wjs-nav-font-family);
+  --wjs-tabs-weight: 600;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-tracking: 0.08em;
+  --wjs-tabs-border-width: 2px;
+  --wjs-tabs-border-color: transparent;
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-active-border-color: var(--wjs-color-primary);
+  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
+  --wjs-tabs-panel-border-color: transparent;
+  --wjs-tabs-panel-border-width: 0;
+  --wjs-video-border-width: 1px;
+  --wjs-video-border-color: var(--wjs-color-text-main);
+  --wjs-video-shadow: var(--wjs-shadow-raised);
+  --wjs-audio-bg: var(--wjs-bg-surface);
+  --wjs-audio-border-color: var(--wjs-hairline);
+  --wjs-audio-shadow: var(--wjs-shadow-soft);
+  --wjs-pricing-bg: var(--wjs-bg-surface);
+  --wjs-pricing-border-color: var(--wjs-hairline);
+  --wjs-pricing-shadow: var(--wjs-shadow-soft);
+  --wjs-pricing-name-family: var(--wjs-font-heading);
+  --wjs-pricing-name-tracking: 0.005em;
+  --wjs-pricing-highlight-bg: var(--wjs-color-primary);
+  --wjs-pricing-highlight-color: #faf8f3;
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-border-width: 1px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-primary-dark);
+  --wjs-pricing-highlight-shadow: var(--wjs-shadow-raised);
+  --wjs-pricing-highlight-name-color: #faf8f3;
+  --wjs-testimonial-bg: var(--wjs-bg-surface);
+  --wjs-testimonial-border-color: var(--wjs-color-primary);
+  --wjs-testimonial-border-width: 4px;
+  --wjs-testimonial-shadow: var(--wjs-shadow-soft);
+  --wjs-testimonial-family: var(--wjs-font-heading);
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-cta-bg: var(--wjs-color-primary);
+  --wjs-cta-border-width: 0;
+  --wjs-cta-border-color: transparent;
+  --wjs-cta-shadow: var(--wjs-shadow-raised);
+  --wjs-cta-title-family: var(--wjs-font-heading);
+  --wjs-cta-title-color: #faf8f3;
+  --wjs-cta-title-border-width: 0;
+  --wjs-cta-title-border-color: transparent;
+  --wjs-cta-title-pad: 0;
+  --wjs-cta-title-tracking: 0.005em;
+  --wjs-cta-button-bg: #faf8f3;
+  --wjs-cta-button-color: var(--wjs-color-primary-dark);
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.14em;
+  --wjs-cta-button-family: var(--wjs-nav-font-family);
+  --wjs-cta-button-weight: 600;
+  --wjs-cta-button-hover-bg: #211c17;
+  --wjs-cta-button-hover-color: #faf8f3;
+  --wjs-posts-bg: var(--wjs-bg-surface);
+  --wjs-posts-border-color: var(--wjs-hairline);
+  --wjs-posts-shadow: var(--wjs-shadow-soft);
+  --wjs-posts-hover-border-color: var(--wjs-color-primary);
+  --wjs-posts-hover-shadow: var(--wjs-shadow-raised);
+  --wjs-catposts-heading-family: var(--wjs-font-heading);
+  --wjs-catposts-heading-weight: 600;
+  --wjs-catposts-heading-tracking: 0.005em;
+  --wjs-catposts-heading-border-width: 2px;
+  --wjs-catposts-heading-border-color: var(--wjs-color-primary);
+  --wjs-catposts-heading-pad: 8px;
+  --wjs-catposts-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-link-weight: 500;
+  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
+  --wjs-search-input-bg: var(--wjs-bg-surface);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: var(--wjs-border-subtle);
+  --wjs-search-input-color: var(--wjs-color-text-main);
+  --wjs-search-focus-color: var(--wjs-color-primary);
+  --wjs-search-focus-ring: 0 0 0 3px rgba(154, 51, 40, 0.18);
+  --wjs-search-button-bg: var(--wjs-color-primary-dark);
+  --wjs-search-button-color: #faf8f3;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.1em;
+  --wjs-search-button-family: var(--wjs-nav-font-family);
+  --wjs-search-button-weight: 600;
 }

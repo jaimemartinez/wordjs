@@ -301,6 +301,33 @@ const MIGRATIONS: Migration[] = [
                 console.warn(`⚠️  [migration 0006] professional-mailbox derivation skipped (non-fatal — accounts stay DISABLED until an admin enables them): ${e && e.message}`);
             }
         }
+    },
+    {
+        // FORM SUBMISSIONS (Webflow "Forms" parity): a public form block on a page POSTs to
+        // /api/v1/forms/submit and each entry lands here; the admin lists/deletes them. `fields` is the
+        // submitted key→value map as JSON (bounded at the route: ≤30 fields, ≤64KB total — on MySQL the
+        // driver maps this column to LONGTEXT via LONG_TEXT_COLUMNS so the payload is never truncated
+        // at VARCHAR(255)). `page_id` is a soft reference to the posts row the form lives on (nullable —
+        // a form can exist outside any page, and a deleted page must not take its submissions with it).
+        // created_at follows the existing display-only convention (0002-0004).
+        id: '0007_create_form_submissions',
+        up: async (ctx: MigrationCtx) => {
+            const INT_PK = ctx.isPostgres ? 'SERIAL PRIMARY KEY' : 'INTEGER PRIMARY KEY AUTOINCREMENT';
+            const TS = ctx.isPostgres ? 'TIMESTAMP' : 'DATETIME';
+            await ctx.exec(
+                `CREATE TABLE IF NOT EXISTS form_submissions (` +
+                `id ${INT_PK}, ` +
+                `form_name TEXT NOT NULL DEFAULT '', ` +
+                `page_id INTEGER, ` +
+                `fields TEXT NOT NULL, ` +
+                `ip TEXT NOT NULL DEFAULT '', ` +
+                `user_agent TEXT NOT NULL DEFAULT '', ` +
+                `created_at ${TS} DEFAULT CURRENT_TIMESTAMP)`
+            );
+            // The admin viewer lists one form's submissions newest-first: (form_name, id) serves both
+            // the filter and the ORDER BY id DESC walk.
+            await ctx.exec('CREATE INDEX IF NOT EXISTS idx_form_submissions_name ON form_submissions (form_name, id)');
+        }
     }
 ];
 

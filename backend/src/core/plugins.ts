@@ -415,7 +415,7 @@ function validatePluginPermissions(slug: string, pluginPath: string, manifest: a
     // must be policed here. Dynamic import() in particular bypasses the CommonJS require proxy at
     // runtime (different module loader), so catching it statically is the primary defense; the worker's
     // ESM resolve hook is the runtime backstop.
-    const SENSITIVE_MODULES = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads', 'module', 'inspector', 'v8', 'repl'];
+    const SENSITIVE_MODULES = ['child_process', 'fs', 'fs/promises', 'http', 'https', 'net', 'dgram', 'dns', 'cluster', 'async_hooks', 'vm', 'worker_threads', 'module', 'inspector', 'v8', 'repl', 'sqlite', 'wasi'];
     // THEMES run functions.js IN-PROCESS on the host, where there is NO ESM import() resolve hook (unlike
     // the isolated worker), so a theme's import() of anything loads UNSCANNED module code = host RCE (#7/#8).
     const isThemeScan = /[\\/]themes[\\/]/.test(pluginPath);
@@ -1040,22 +1040,27 @@ async function activatePlugin(slug: string) {
 /**
  * Deactivate a plugin
  */
-async function deactivatePlugin(slug: string) {
+async function deactivatePlugin(slug: string, opts: { prune?: boolean } = {}) {
     if (!await isPluginActive(slug)) {
         return { success: true, message: 'Plugin not active' };
     }
 
-    // 1. Auto-Prune Dependencies
-    const plugins = scanPlugins();
-    const plugin = plugins.find(p => p.slug === slug);
-    if (plugin) {
-        const manifestPath = path.join(plugin.path, 'manifest.json');
-        if (fs.existsSync(manifestPath)) {
-            try {
-                const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
-                await prunePluginDependencies(slug, manifest);
-            } catch (e) {
-                console.error(`⚠️ Failed to process manifest for prune ${logSafe(slug)}: ${logSafe(e.message)}`);
+    // 1. Auto-Prune Dependencies — SKIPPED for an in-place update (`prune: false`). During an update the
+    // code is only moving aside for a moment and the new version reinstalls its deps immediately; a
+    // prune-then-reinstall round trip strands a plugin whose declared range no longer resolves (and the
+    // update's rollback can't rescue that). Normal deactivation still prunes (default).
+    if (opts.prune !== false) {
+        const plugins = scanPlugins();
+        const plugin = plugins.find(p => p.slug === slug);
+        if (plugin) {
+            const manifestPath = path.join(plugin.path, 'manifest.json');
+            if (fs.existsSync(manifestPath)) {
+                try {
+                    const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                    await prunePluginDependencies(slug, manifest);
+                } catch (e) {
+                    console.error(`⚠️ Failed to process manifest for prune ${logSafe(slug)}: ${logSafe(e.message)}`);
+                }
             }
         }
     }

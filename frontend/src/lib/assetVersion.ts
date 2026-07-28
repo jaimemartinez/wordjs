@@ -9,4 +9,4 @@
  * BUMP THIS on any release that changes wordjs-ui.css or a bundled theme's style.css (keep it in step
  * with the package version).
  */
-export const ASSET_VERSION = "1.5.4";
+export const ASSET_VERSION = "1.12.31";

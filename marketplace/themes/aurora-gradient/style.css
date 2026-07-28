@@ -18,6 +18,8 @@
 
   /* --- COLOR SEMANTICS --- */
   --wjs-bg-canvas: #0f0f1a;
+  /* the public header reads this; without it a dark theme paints a literal white bar */
+  --wjs-bg-surface-glass: rgba(15, 15, 26, 0.85);
   /* Deep Space */
   --wjs-bg-surface: rgba(255, 255, 255, 0.05);
 
@@ -222,19 +224,14 @@ header[class*='fixed'] {
   transform: translateY(-2px);
 }
 
-/* Cards: Glassmorphism with Gradient Border */
-.wp-block-card,
-article {
+/* Cards: Glassmorphism with Gradient Border */article {
   background: rgba(255, 255, 255, 0.03) !important;
   backdrop-filter: blur(10px);
   border: 1px solid rgba(255, 255, 255, 0.1) !important;
   border-radius: 16px !important;
   position: relative;
   overflow: hidden;
-}
-
-.wp-block-card::before,
-article::before {
+}article::before {
   content: '';
   position: absolute;
   top: 0;
@@ -275,172 +272,6 @@ footer .w-10 {
 footer .w-10:hover {
   box-shadow: 0 0 20px rgba(139, 92, 246, 0.4);
   transform: translateY(-2px);
-}
-
-/* =========================================
-   AURORA GRADIENT: NEW COMPONENT OVERRIDES
-   Mesh gradient / Space aesthetic
-   ========================================= */
-
-/* Accordion: Glass Aurora */
-.wp-block-accordion {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 16px !important;
-  backdrop-filter: blur(10px);
-}
-
-.wp-block-accordion .accordion-item button {
-  background: transparent !important;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-
-.wp-block-accordion .accordion-item button i {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: rgba(139, 92, 246, 0.05) !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: Glowing Tabs */
-.wp-block-tabs>div:first-child {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.1) !important;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-text-muted) !important;
-  border-radius: 8px !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: #ffffff !important;
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(236, 72, 153, 0.3)) !important;
-}
-
-.wp-block-tabs>div:last-child {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border-radius: 12px !important;
-}
-
-/* Video: Gradient Border */
-.wp-block-video-embed {
-  border-radius: 16px !important;
-  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
-  position: relative;
-}
-
-.wp-block-video-embed::before {
-  content: '';
-  position: absolute;
-  inset: -2px;
-  border-radius: 18px;
-  background: linear-gradient(135deg, #8b5cf6, #06b6d4, #ec4899);
-  z-index: -1;
-}
-
-/* Audio: Aurora Player */
-.wp-block-audio-player {
-  background: rgba(255, 255, 255, 0.05) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 16px !important;
-  backdrop-filter: blur(10px);
-}
-
-/* Pricing: Floating Aurora Cards */
-.wp-block-pricing>div {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 20px !important;
-  backdrop-filter: blur(10px);
-}
-
-.wp-block-pricing>div:hover {
-  border-color: rgba(139, 92, 246, 0.5) !important;
-  box-shadow: 0 20px 50px rgba(139, 92, 246, 0.2);
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.8), rgba(236, 72, 153, 0.8)) !important;
-  border: none !important;
-  box-shadow: 0 20px 60px rgba(139, 92, 246, 0.4);
-}
-
-/* Testimonial: Aurora Quote */
-.wp-block-testimonial {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 20px !important;
-  backdrop-filter: blur(10px);
-}
-
-.wp-block-testimonial>div:first-child {
-  background: linear-gradient(135deg, #8b5cf6, #ec4899);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-/* CTA Banner: Mesh Gradient */
-.wp-block-cta-banner {
-  background: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(6, 182, 212, 0.9), rgba(236, 72, 153, 0.9)) !important;
-  border-radius: 32px !important;
-  box-shadow: 0 30px 80px rgba(139, 92, 246, 0.4);
-}
-
-.wp-block-cta-banner a {
-  background: #ffffff !important;
-  color: #8b5cf6 !important;
-  border-radius: 50px !important;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
-}
-
-/* Posts Grid: Glass Cards */
-.wp-block-posts-grid article {
-  background: rgba(255, 255, 255, 0.03) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 16px !important;
-  backdrop-filter: blur(8px);
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: rgba(139, 92, 246, 0.5) !important;
-  transform: translateY(-4px);
-}
-
-/* Category Posts: Gradient Accents */
-.wp-block-category-posts h3 {
-  background: linear-gradient(135deg, #8b5cf6, #06b6d4);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-}
-
-.wp-block-category-posts li {
-  border-color: rgba(255, 255, 255, 0.1) !important;
-}
-
-/* Search: Aurora Input */
-.wp-block-search input {
-  background: rgba(255, 255, 255, 0.05) !important;
-  border: 1px solid rgba(255, 255, 255, 0.1) !important;
-  border-radius: 50px !important;
-  color: #ffffff !important;
-}
-
-.wp-block-search input:focus {
-  border-color: rgba(139, 92, 246, 0.5) !important;
-  box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
-}
-
-.wp-block-search button {
-  background: linear-gradient(135deg, #8b5cf6, #ec4899) !important;
-  color: #ffffff !important;
-  border-radius: 50px !important;
-  box-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
 }
 
 /* ===== Mobile (auto responsive pass) ===== */
@@ -492,7 +323,82 @@ footer .w-10:hover {
      (the theme styles it via [style*="scale(1.05)"]). In the single-column
      mobile stack a 105%-wide card forces horizontal scroll — a stylesheet
      !important beats the non-important inline style. */
-  .wp-block-pricing>div[style*="scale(1.05)"] {
-    transform: none !important;
+  .wp-block-pricing__plan--highlighted {
+    transform: none;
   }
+}
+
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: rgba(255, 255, 255, 0.03);
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-card-radius: 16px;
+  --wjs-accordion-bg: rgba(255, 255, 255, 0.03);
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-accordion-radius: 16px;
+  --wjs-accordion-header-bg: transparent;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-accordion-panel-bg: rgba(139, 92, 246, 0.05);
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 1px;
+  --wjs-tabs-list-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-tabs-color: var(--wjs-color-text-muted);
+  --wjs-tabs-radius: 8px;
+  --wjs-tabs-active-color: #ffffff;
+  --wjs-tabs-active-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.3), rgba(236, 72, 153, 0.3));
+  --wjs-tabs-panel-bg: rgba(255, 255, 255, 0.03);
+  --wjs-tabs-panel-radius: 12px;
+  --wjs-video-radius: 16px;
+  --wjs-video-shadow: 0 20px 60px rgba(139, 92, 246, 0.3);
+  --wjs-audio-bg: rgba(255, 255, 255, 0.05);
+  --wjs-audio-border-width: 1px;
+  --wjs-audio-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-audio-radius: 16px;
+  --wjs-pricing-bg: rgba(255, 255, 255, 0.03);
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-pricing-radius: 20px;
+  --wjs-pricing-hover-border-color: rgba(139, 92, 246, 0.5);
+  --wjs-pricing-hover-shadow: 0 20px 50px rgba(139, 92, 246, 0.2);
+  --wjs-pricing-highlight-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.8), rgba(236, 72, 153, 0.8));
+  --wjs-pricing-highlight-border-width: 0;
+  --wjs-pricing-highlight-border-color: transparent;
+  --wjs-pricing-highlight-shadow: 0 20px 60px rgba(139, 92, 246, 0.4);
+  --wjs-testimonial-bg: rgba(255, 255, 255, 0.03);
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-testimonial-radius: 20px;
+  --wjs-cta-bg: linear-gradient(135deg, rgba(139, 92, 246, 0.9), rgba(6, 182, 212, 0.9), rgba(236, 72, 153, 0.9));
+  --wjs-cta-radius: 32px;
+  --wjs-cta-shadow: 0 30px 80px rgba(139, 92, 246, 0.4);
+  --wjs-cta-button-bg: #ffffff;
+  --wjs-cta-button-color: #8b5cf6;
+  --wjs-cta-button-radius: 50px;
+  --wjs-cta-button-shadow: 0 10px 30px rgba(0, 0, 0, 0.2);
+  --wjs-posts-bg: rgba(255, 255, 255, 0.03);
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-posts-radius: 16px;
+  --wjs-posts-hover-border-color: rgba(139, 92, 246, 0.5);
+  --wjs-posts-hover-transform: translateY(-4px);
+  --wjs-catposts-heading-bg: linear-gradient(135deg, #8b5cf6, #06b6d4);
+  --wjs-catposts-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-search-input-bg: rgba(255, 255, 255, 0.05);
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: rgba(255, 255, 255, 0.1);
+  --wjs-search-input-radius: 50px;
+  --wjs-search-input-color: #ffffff;
+  --wjs-search-focus-color: rgba(139, 92, 246, 0.5);
+  --wjs-search-focus-ring: 0 0 20px rgba(139, 92, 246, 0.2);
+  --wjs-search-button-bg: linear-gradient(135deg, #8b5cf6, #ec4899);
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-radius: 50px;
+  --wjs-search-button-shadow: 0 4px 20px rgba(139, 92, 246, 0.4);
 }

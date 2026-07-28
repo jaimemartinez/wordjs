@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #111827;
+  --wjs-bg-surface: #1f2634;
+  --wjs-bg-surface-raised: #2b313f;
+  --wjs-color-primary: #ec4899;
+  --wjs-color-primary-dark: #db2777;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #db2777;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #fdf2f8;
+  --wjs-color-text-muted: #a39fa9;
+  --wjs-color-heading: #fdf2f8;
+  --wjs-color-link: #ec4899;
+  --wjs-color-link-hover: #db2777;
+  --wjs-border-subtle: #3b3f4d;
+  --wjs-outline: #6b6b76;
+  --wjs-outline-variant: #343946;
+  --wjs-focus-ring: #ec4899;
+}
+
 /* Theme: Prism Studio (Glassmorphism Aurora Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
 

@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import { getPostBySlug, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 
 interface RouteParams {
     slug: string;      // category segment
@@ -25,11 +26,13 @@ export async function generateMetadata({ params }: { params: Promise<RouteParams
 export default async function CategoryPostPage({ params }: { params: Promise<RouteParams> }) {
     const { slug, postSlug } = await params;
     const [post, settings, base] = await Promise.all([getPostBySlug(postSlug), getSettings(), resolveSiteBase()]);
-    if (!post) notFound();
+    if (!post) notFound();
+    // Real posts for the dynamic blocks, resolved server-side (see resolveDynamicBlocks).
+    const withBlocks = await withResolvedBlocks(post);
     return (
         <>
             <JsonLd data={buildPostJsonLd(post, base, settings?.blogname)} />
-            <PostContent post={post} settings={settings} category={slug} />
+            <PostContent post={withBlocks} settings={settings} category={slug} />
         </>
     );
 }

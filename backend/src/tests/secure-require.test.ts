@@ -444,7 +444,11 @@ console.log('\n🧩 Core-module policy + fs.promises + Router anchoring:');
         expect(typeof opt.getOption).toBe('function');
     });
     test('dbAsync scoping: plugin SQL on the users table is blocked (#dbscope)', () => {
-        expectThrows(() => runner.dbUsers(), 'dbAsync');
+        // The in-process config/database path now delegates to the same lexer-based guard as the RPC
+        // bridge (plugin-api.assertSqlAllowed), so a query touching the core `users` table is denied with
+        // the unified "core table … off-limits / not owned by this plugin" message (previously the weaker
+        // regex path said "dbAsync(users)"). Assert the block, not the exact legacy wording.
+        expectThrows(() => runner.dbUsers(), 'Plugin DB access denied');
     });
     test('fs.promises is proxied for plugins — escape outside dir rejects (#2)', async () => {
         let blocked = false;

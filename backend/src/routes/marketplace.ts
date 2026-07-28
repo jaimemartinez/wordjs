@@ -31,7 +31,8 @@ const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getOption, updateOption, deleteOption } = require('../core/options');
 const { getAllPlugins } = require('../core/plugins');
-const { installPluginFromZip } = require('./plugins');
+const { installPluginFromZip, runPluginUpdate } = require('./plugins');
+const pluginOrigins = require('../core/plugin-origins');
 
 const INDEX_FILE = 'marketplace-index.json';
 // The THEME catalog rides the SAME sources (an origin hosts both index files side by side).
@@ -173,14 +174,24 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
         const { merged, sources } = await getCatalog(refresh);
         const installed = await getAllPlugins();
         const bySlug = new Map<string, any>(installed.map((p: any) => [String(p.slug || p.id), p]));
+        const origins = await pluginOrigins.getAllOrigins();
         const annotated = merged.map((e: any) => {
             const local = bySlug.get(String(e.id));
+            const recorded = origins[String(e.id)] || null;
+            const updateAvailable = !!(local && local.version && e.version && String(local.version) !== String(e.version));
+            // `updatable` = an update can actually be applied in one click: installed, a newer version, AND
+            // this catalog entry's source MATCHES the source it was installed from. A plugin installed by
+            // upload or from another source shows the update but not the button (the UI explains why).
+            const updatable = !!(updateAvailable && recorded && recorded.source &&
+                pluginOrigins.normSource(recorded.source) === pluginOrigins.normSource(e.source));
             return {
                 ...e,
                 installed: !!local,
                 active: !!(local && local.active),
                 installedVersion: local ? local.version || null : null,
-                updateAvailable: !!(local && local.version && e.version && String(local.version) !== String(e.version)),
+                updateAvailable,
+                updatable,
+                installedFrom: recorded ? recorded.source : null,
             };
         });
         // `source`/`isLocal` are kept for back-compat (the primary source); `sources` carries per-source status.
@@ -198,7 +209,10 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
  *     summary: Download a catalog plugin and install it through the standard upload pipeline
  *     tags: [Plugins]
  */
-router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+// Install a catalog entry — or, when the plugin is already installed, UPDATE it in place (preserving its
+// data/, tables and grants; see routes/plugins.ts runPluginUpdate). Mounted on BOTH /install and /update
+// so any client works; the origin gate inside runPluginUpdate makes an update refuse a foreign source.
+const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) => {
     const id = String((req.body || {}).id || '').trim();
     if (!id) return res.status(400).json({ error: 'Falta el id del plugin.' });
 
@@ -240,6 +254,14 @@ router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request,
         return res.status(502).json({ error: `No se pudo descargar el plugin: ${e.message}` });
     }
 
+    // Integrity is MANDATORY for a REMOTE source: a plugin installs+runs arbitrary server-side code, so a
+    // third-party/compromised catalog that simply OMITS `sha256` must NOT yield an unverified install. Every
+    // official catalog entry ships a sha256 (verified in the generated index), so this is fail-closed with no
+    // regression. Local-dir sources are exempt: the bytes are read from an admin-controlled path already
+    // confined to the marketplace dir above.
+    if (!isLocal && !entry.sha256) {
+        return res.status(400).json({ error: 'El paquete remoto no incluye un hash de integridad (sha256) — instalación abortada.' });
+    }
     if (entry.sha256) {
         const digest = crypto.createHash('sha256').update(buf).digest('hex');
         if (digest !== String(entry.sha256).toLowerCase()) {
@@ -247,12 +269,27 @@ router.post('/install', authenticate, isAdmin, asyncHandler(async (req: Request,
         }
     }
 
-    // Hand off to the shared upload pipeline via a temp file (it owns cleanup of that file).
-    const tmpPath = path.join(os.tmpdir(), `wjs-mkt-${Date.now()}-${Math.random().toString(36).slice(2)}.zip`);
+    // Hand off to the shared upload pipeline via a temp file (the pipeline owns cleanup of that file).
+    // Unpredictable name (crypto): Date.now()+Math.random() is guessable, so a local attacker could
+    // pre-create/symlink the path (insecure-temp-file); mirror the theme installer's crypto naming.
+    const slug = String(entry.id);
+    const installedNow = (await getAllPlugins()).some((p: any) => String(p.slug || p.id) === slug);
+    const origin = { source: String(entry.source || ''), catalogId: slug, version: entry.version != null ? String(entry.version) : null };
+    const tmpPath = path.join(os.tmpdir(), `wjs-mkt-${crypto.randomBytes(12).toString('hex')}.zip`);
     fs.writeFileSync(tmpPath, buf);
+
+    if (installedNow) {
+        // In-place update (preserves data/tables/grants, gated to the install origin, fail-safe rollback).
+        const result = await runPluginUpdate(slug, tmpPath, origin);
+        return res.status(result.status).json(result.body);
+    }
+    // Fresh install — then record where it came from so future updates are bound to this source.
     const result = await installPluginFromZip(tmpPath, file);
-    res.status(result.status).json(result.body);
-}));
+    if (result.ok) { try { await pluginOrigins.setPluginOrigin(slug, origin); } catch { /* non-fatal */ } }
+    return res.status(result.status).json(result.body);
+});
+router.post('/install', authenticate, isAdmin, handleMarketplaceApply);
+router.post('/update', authenticate, isAdmin, handleMarketplaceApply);
 
 /**
  * @swagger
@@ -472,6 +509,12 @@ router.post('/themes/install', authenticate, isAdmin, asyncHandler(async (req: R
         return res.status(502).json({ error: `No se pudo descargar el tema: ${e.message}` });
     }
 
+    // Integrity is MANDATORY for a REMOTE theme source (same reasoning as the plugin installer: a theme's
+    // functions.js runs in-process). Official theme entries all ship a sha256, so this is fail-closed with
+    // no regression; local-dir sources (admin-controlled, confined above) are exempt.
+    if (!isLocal && !entry.sha256) {
+        return res.status(400).json({ error: 'El paquete remoto no incluye un hash de integridad (sha256) — instalación abortada.' });
+    }
     if (entry.sha256) {
         const digest = crypto.createHash('sha256').update(buf).digest('hex');
         if (digest !== String(entry.sha256).toLowerCase()) {

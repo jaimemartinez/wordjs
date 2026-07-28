@@ -7,14 +7,19 @@ import MediaPickerModal from "./MediaPickerModal";
 import ModernSelect from "./ModernSelect";
 import { categoriesApi, Category, apiGet } from "@/lib/api";
 import { t as translate, getStoredLanguage } from "@/lib/i18n";
+import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPickedMedia } from "@/lib/imageSrcset";
 
 
 // Plugin Puck Components
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
+import { blockVars, cx, unit } from "./puck/blockVars";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
+import { useEditorPosts } from "@/lib/useEditorPosts";
+import { formBlockFields, formBlockDefaults, FormBlockRender } from "./puck/FormBlock";
+import { symbolBlockFields, symbolBlockDefaults, makeSymbolRender } from "./puck/SymbolBlock";
 
 // Custom Category Field component
 const CategoryField = ({ value, onChange }: { value: string; onChange: (value: string) => void }) => {
@@ -694,8 +699,207 @@ export const RichTextEditor = React.memo(({ value, onChange, onSave, onCancel, t
 });
 RichTextEditor.displayName = 'RichTextEditor';
 
+/**
+ * Post date for the dynamic blocks.
+ *
+ * Deliberately NOT `toLocaleDateString`: that reads the runtime's locale and timezone, which differ
+ * between the server that renders the HTML and the browser that hydrates it — the classic source of
+ * a hydration mismatch on any date. A fixed `DD MMM YYYY` built from the UTC parts is identical in
+ * both places.
+ */
+const MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+const fmtPostDate = (raw: string): string => {
+    const d = new Date(String(raw).replace(" ", "T") + (/[Zz]|[+-]\d\d:?\d\d$/.test(raw) ? "" : "Z"));
+    if (isNaN(d.getTime())) return "";
+    return `${d.getUTCDate()} ${MESES_ES[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+};
 
-const baseConfig = {
+/** mm:ss, and a stable placeholder before metadata has loaded (SSR renders the placeholder). */
+const fmtTime = (s: number): string => {
+    if (!isFinite(s) || s < 0) return '--:--';
+    const m = Math.floor(s / 60);
+    return `${m}:${String(Math.floor(s % 60)).padStart(2, '0')}`;
+};
+
+/**
+ * The audio transport, drawn by US rather than by the browser.
+ *
+ * `<audio controls>` renders the browser's own chrome — a grey bar no stylesheet can reach — so a
+ * themed player is impossible while it is in charge. The <audio> element stays (it IS the media
+ * engine, and the fallback link for no-JS), but `controls` is off and every visible part is our own
+ * markup behind `--wjs-audio-*` tokens.
+ *
+ * ACCESSIBILITY is why the scrubber is a real `<input type="range">` and not a styled div: it brings
+ * keyboard seeking (arrows, Home/End, PageUp/Down) and correct screen-reader semantics for free.
+ * Hand-rolled slider divs are where most custom players quietly become unusable.
+ */
+const AudioTransport = ({ src, title }: { src: string; title: string }) => {
+    const ref = React.useRef<HTMLAudioElement | null>(null);
+    const bodyRef = React.useRef<HTMLDivElement | null>(null);
+    const labelRef = React.useRef<HTMLSpanElement | null>(null);
+    const [playing, setPlaying] = useState(false);
+    const [now, setNow] = useState(0);
+    const [total, setTotal] = useState(NaN);
+    // A marquee that slides a title which already fits is just noise. Measure the label against its
+    // column and only animate when it genuinely overflows — re-measured on resize, because the
+    // column is fluid.
+    const [scrolls, setScrolls] = useState(false);
+    React.useEffect(() => {
+        const body = bodyRef.current, label = labelRef.current;
+        if (!body || !label) return;
+        const measure = () => setScrolls(label.scrollWidth > body.clientWidth + 1);
+        measure();
+        if (typeof ResizeObserver === 'undefined') return;
+        const ro = new ResizeObserver(measure);
+        ro.observe(body);
+        return () => ro.disconnect();
+    }, [title]);
+
+    React.useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const onTime = () => setNow(el.currentTime);
+        const onMeta = () => setTotal(el.duration);
+        const onPlay = () => setPlaying(true);
+        const onPause = () => setPlaying(false);
+        const onEnd = () => { setPlaying(false); setNow(0); };
+        el.addEventListener('timeupdate', onTime);
+        el.addEventListener('loadedmetadata', onMeta);
+        el.addEventListener('durationchange', onMeta);
+        el.addEventListener('play', onPlay);
+        el.addEventListener('pause', onPause);
+        el.addEventListener('ended', onEnd);
+        if (el.readyState >= 1) onMeta();
+        return () => {
+            el.removeEventListener('timeupdate', onTime);
+            el.removeEventListener('loadedmetadata', onMeta);
+            el.removeEventListener('durationchange', onMeta);
+            el.removeEventListener('play', onPlay);
+            el.removeEventListener('pause', onPause);
+            el.removeEventListener('ended', onEnd);
+        };
+    }, [src]);
+
+    const toggle = () => {
+        const el = ref.current;
+        if (!el) return;
+        if (el.paused) el.play().catch(() => { /* autoplay policy — the user will press again */ });
+        else el.pause();
+    };
+    const seek = (v: number) => {
+        const el = ref.current;
+        if (el && isFinite(total)) { el.currentTime = v; setNow(v); }
+    };
+
+    const pct = isFinite(total) && total > 0 ? (now / total) * 100 : 0;
+
+    return (
+        <>
+            <button
+                type="button"
+                className="wp-block-audio-player__button"
+                onClick={toggle}
+                aria-label={playing ? 'Pausar' : 'Reproducir'}
+            >
+                <i className={cx('fa-solid', playing ? 'fa-pause' : 'fa-play')} aria-hidden="true"></i>
+            </button>
+            <div className="wp-block-audio-player__body" ref={bodyRef}>
+                {/* The label is duplicated so the marquee loops seamlessly; the copy exists only
+                    while it actually scrolls, and is aria-hidden so the name is announced once. */}
+                <div className="wp-block-audio-player__marquee" title={title}>
+                    <div className={cx('wp-block-audio-player__track', scrolls && 'is-scrolling')}>
+                        <span className="wp-block-audio-player__title" ref={labelRef}>{title}</span>
+                        {scrolls && <span className="wp-block-audio-player__title" aria-hidden="true">{title}</span>}
+                    </div>
+                </div>
+                <input
+                    type="range"
+                    className="wp-block-audio-player__scrub"
+                    min={0}
+                    max={isFinite(total) && total > 0 ? total : 0}
+                    step="any"
+                    value={now}
+                    onChange={(e) => seek(parseFloat(e.target.value))}
+                    aria-label="Posición de reproducción"
+                    aria-valuetext={`${fmtTime(now)} de ${fmtTime(total)}`}
+                    style={{ ['--wjs-audio-progress-pct' as any]: `${pct}%` }}
+                />
+                <div className="wp-block-audio-player__times">
+                    <span>{fmtTime(now)}</span>
+                    <span>{fmtTime(total)}</span>
+                </div>
+            </div>
+            {/* No `controls`: the transport above replaces it. Kept in the DOM as the media engine
+                and as the no-JS fallback. */}
+            <audio ref={ref} src={src} preload="metadata" className="wp-block-audio-player__engine">
+                <a href={src}>Descargar el audio</a>
+            </audio>
+        </>
+    );
+};
+
+/**
+ * A self-hosted video that shows a POSTER first and only reveals the player on demand.
+ *
+ * Two reasons, one shape. Visually it matches the reference, whose video block is a poster under a
+ * scrim with a play affordance and a duration chip. Practically, `preload="metadata"` fetches only
+ * the container header — a few KB, enough for the duration the chip shows — so a page with three
+ * videos costs three posters and three headers, not three multi-megabyte downloads.
+ *
+ * Once started, playback hands over to the browser's own controls: a full custom video transport
+ * (fullscreen, captions, PiP, volume, keyboard) is a much larger surface to get right than an audio
+ * scrubber, and the native one is already correct and accessible.
+ */
+const SelfHostedVideo = ({ src, poster, vars }: { src: string; poster: string; vars: React.CSSProperties }) => {
+    const ref = React.useRef<HTMLVideoElement | null>(null);
+    const [started, setStarted] = useState(false);
+    const [total, setTotal] = useState(NaN);
+
+    // The element is server-rendered, so `loadedmetadata` can fire BEFORE React hydrates and attaches
+    // its handler — the duration would then never arrive and the chip would never appear. Seed from
+    // the element on mount and keep a listener for the case where it has not loaded yet.
+    React.useEffect(() => {
+        const el = ref.current;
+        if (!el) return;
+        const onMeta = () => setTotal(el.duration);
+        if (el.readyState >= 1) onMeta();
+        el.addEventListener('loadedmetadata', onMeta);
+        return () => el.removeEventListener('loadedmetadata', onMeta);
+    }, [src]);
+
+    const start = () => {
+        setStarted(true);
+        const el = ref.current;
+        if (el) { el.play().catch(() => { /* the native controls are showing; they can press play */ }); }
+    };
+
+    return (
+        <div className={cx('wp-block-video-embed', started && 'is-playing')} style={vars}>
+            <video
+                ref={ref}
+                src={src}
+                poster={poster || undefined}
+                controls={started}
+                preload="metadata"
+                playsInline
+                onLoadedMetadata={(e) => setTotal(e.currentTarget.duration)}
+            />
+            {!started && (
+                <button type="button" className="wp-block-video-embed__cover" onClick={start} aria-label="Reproducir el vídeo">
+                    <span className="wp-block-video-embed__scrim" aria-hidden="true" />
+                    <span className="wp-block-video-embed__play" aria-hidden="true">
+                        <i className="fa-solid fa-play"></i>
+                    </span>
+                    {isFinite(total) && <span className="wp-block-video-embed__chip">{fmtTime(total)}</span>}
+                </button>
+            )}
+        </div>
+    );
+};
+
+// `: any` breaks the type-level self-reference introduced by the Symbol block's late-binding
+// getter (`() => baseConfig.components`) — the VALUE cycle is fine (resolved lazily at render).
+const baseConfig: any = {
     categories: {
         layout: translate('editor.category.layout', getStoredLanguage()),
         content: translate('editor.category.content', getStoredLanguage()),
@@ -717,6 +921,25 @@ const baseConfig = {
                         { label: "H3", value: "h3" },
                     ],
                 },
+                // Block-specific overrides. Left EMPTY they emit nothing, so the active theme's
+                // --wjs-heading-* values apply; set them and this one heading wins. Same pattern
+                // in every block below.
+                color: { type: "text", label: "Color del título (vacío = tema)" },
+                size: { type: "text", label: "Tamaño (p. ej. 48 o 3rem)" },
+                weight: {
+                    type: "select",
+                    label: "Grosor",
+                    options: [
+                        { label: "Del tema", value: "" },
+                        { label: "Normal", value: "400" },
+                        { label: "Media", value: "500" },
+                        { label: "Seminegrita", value: "600" },
+                        { label: "Negrita", value: "700" },
+                        { label: "Extranegrita", value: "800" },
+                        { label: "Black", value: "900" },
+                    ],
+                },
+                tracking: { type: "text", label: "Espaciado entre letras (p. ej. -1)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -729,24 +952,33 @@ const baseConfig = {
             defaultProps: {
                 title: "Heading",
                 level: "h2",
+                color: "",
+                size: "",
+                weight: "",
+                tracking: "",
                 elementId: "",
                 css: {}
             },
-            render: ({ title, level, elementId, css }: any) => {
+            render: ({ title, level, elementId, color, size, weight, tracking, css }: any) => {
                 const Tag = level as any;
                 return (
                     <Tag
                         id={elementId || undefined}
                         className={`wp-block-heading heading-${level}`}
                         style={{
-                            color: `var(--puck-heading-color, var(--wjs-color-text-heading, #000))`,
-                            fontFamily: 'var(--wjs-font-family, inherit)',
-                            paddingBottom: level === 'h1' ? '0' : '0.5rem',
-                            marginTop: '1.5rem',
-                            marginBottom: '1rem',
-                            fontWeight: `var(--wjs-${level}-weight, 700)`,
-                            fontSize: `var(--wjs-${level}-size)`,
-                            ...css
+                            ...blockVars('heading', {
+                                color,
+                                size: unit(size),
+                                // NOT `weight`: `--wjs-heading-weight` is already a FRAMEWORK token
+                                // (the theme's global heading weight, declared in wordjs-ui.css's
+                                // :root). Emitting the block's value under that name would make
+                                // `var(--wjs-heading-weight, var(--wjs-h2-weight))` resolve from
+                                // :root for every heading, so the per-level theme weights would
+                                // never apply. A distinct name keeps both seams working.
+                                'font-weight': weight,
+                                tracking: unit(tracking),
+                            }),
+                            ...css,
                         }}
                         suppressHydrationWarning
                         dangerouslySetInnerHTML={{ __html: sanitizeHTML(title || '') }}
@@ -758,6 +990,10 @@ const baseConfig = {
             label: translate('editor.block.text', getStoredLanguage()),
             category: "content",
             fields: {
+                color: { type: "text", label: "Color del texto (vacío = tema)" },
+                size: { type: "text", label: "Tamaño (p. ej. 18 o 1.125rem)" },
+                leading: { type: "text", label: "Interlineado (p. ej. 1.8)" },
+                measure: { type: "text", label: "Ancho de línea máx. (p. ej. 680)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -769,19 +1005,25 @@ const baseConfig = {
             },
             defaultProps: {
                 content: "Escribe aquí...",
+                color: "",
+                size: "",
+                leading: "",
+                measure: "",
                 elementId: "",
                 css: {}
             },
-            render: ({ content, elementId, css }: any) => (
+            render: ({ content, elementId, color, size, leading, measure, css }: any) => (
                 <div
                     id={elementId || undefined}
                     className="wp-block-text prose max-w-none"
                     style={{
-                        color: 'var(--wjs-color-text-main, var(--wjs-foreground, #374151))',
-                        lineHeight: 'var(--wjs-line-height-base, 1.6)',
-                        fontSize: 'var(--wjs-font-size-base, 1rem)',
-                        fontFamily: 'var(--wjs-font-family, inherit)',
-                        ...css
+                        ...blockVars('text', {
+                            color,
+                            size: unit(size),
+                            leading,
+                            measure: unit(measure),
+                        }),
+                        ...css,
                     }}
                     suppressHydrationWarning
                     dangerouslySetInnerHTML={{ __html: sanitizeHTML(content) }}
@@ -815,6 +1057,10 @@ const baseConfig = {
                                     isOpen={isModalOpen}
                                     onClose={() => setIsModalOpen(false)}
                                     onSelect={(item) => {
+                                        // Register the FULL MediaItem so resolveData (which runs right after
+                                        // this onChange dispatch) can persist srcSet/imgWidth/imgHeight from
+                                        // the real backend variants — see lib/imageSrcset.ts header.
+                                        rememberPickedMedia(item);
                                         // Store the RELATIVE sourceUrl, not guid (guid embeds the upload-time
                                         // host/IP and breaks when served from another origin).
                                         onChange(item.sourceUrl || item.guid);
@@ -826,6 +1072,18 @@ const baseConfig = {
                     }
                 },
                 alt: { type: "text", label: "Texto alternativo (SEO / accesibilidad)" },
+                radius: { type: "text", label: "Redondeo (p. ej. 16)" },
+                shadow: { type: "text", label: "Sombra CSS (vacío = tema)" },
+                width: { type: "text", label: "Ancho (p. ej. 480 o 60%)" },
+                fit: {
+                    type: "select",
+                    label: "Ajuste",
+                    options: [
+                        { label: "Del tema", value: "" },
+                        { label: "Cubrir", value: "cover" },
+                        { label: "Contener", value: "contain" },
+                    ],
+                },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -841,10 +1099,29 @@ const baseConfig = {
                 if (props.borderRadius) {
                     css.borderRadius = `${props.borderRadius}px`;
                 }
+                // Responsive images: when this src was just picked from the media
+                // library, build srcSet + intrinsic dims from the backend-reported
+                // variants (registry populated by the picker's onSelect — no network,
+                // no URL guessing). Legacy pages without srcSet pass through untouched.
+                let { srcSet, imgWidth, imgHeight } = props;
+                const picked = getPickedMedia(props.src);
+                if (picked) {
+                    srcSet = buildSrcSet(props.src, picked).srcSet;
+                    imgWidth = picked.width || undefined;
+                    imgHeight = picked.height || undefined;
+                } else if (srcSet && !srcSetBelongsTo(props.src, srcSet)) {
+                    // src was hand-edited to another URL — the stored variants would 404.
+                    srcSet = undefined;
+                    imgWidth = undefined;
+                    imgHeight = undefined;
+                }
                 return {
                     props: {
                         ...props,
                         css,
+                        srcSet,
+                        imgWidth,
+                        imgHeight,
                         // Clear legacy prop to avoid confusion (optional, but cleaner)
                         borderRadius: undefined
                     }
@@ -856,16 +1133,40 @@ const baseConfig = {
                 src: "/placeholder-image.svg",
                 alt: "",
                 borderRadius: 0,
+                radius: "",
+                shadow: "",
+                width: "",
+                fit: "",
                 elementId: "",
                 css: {}
             },
-            render: ({ src, alt, borderRadius, elementId, css }: any) => (
+            render: ({ src, alt, borderRadius, radius, shadow, width, fit, elementId, css, srcSet, imgWidth, imgHeight }: any) => (
                 <img
                     id={elementId || undefined}
                     src={src}
+                    // Responsive candidates built from real backend variants at pick
+                    // time (resolveData). `sizes` is derived from the CURRENT block
+                    // width so later width edits stay coherent. Legacy pages have no
+                    // srcSet and render exactly as before.
+                    srcSet={srcSet || undefined}
+                    sizes={srcSet ? sizesForWidth(width) : undefined}
+                    width={imgWidth || undefined}
+                    height={imgHeight || undefined}
+                    loading="lazy"
+                    decoding="async"
                     alt={alt}
-                    style={{ borderRadius: borderRadius ? `${borderRadius}px` : undefined, ...css }}
-                    className="max-w-full h-auto shadow-sm"
+                    style={{
+                        ...blockVars('image', {
+                            // `borderRadius` is the pre-contract prop kept by resolveData's migration;
+                            // the new `radius` field wins when both are present.
+                            radius: unit(radius) || (borderRadius ? `${borderRadius}px` : undefined),
+                            shadow,
+                            width: unit(width),
+                            fit,
+                        }),
+                        ...css,
+                    }}
+                    className="wp-block-image"
                 />
             )
         },
@@ -903,6 +1204,10 @@ const baseConfig = {
                 "col-0": { type: "slot" },
                 "col-1": { type: "slot" },
                 "col-2": { type: "slot" },
+                gap: { type: "text", label: "Separación (p. ej. 24)" },
+                minHeight: { type: "text", label: "Altura mínima (p. ej. 320)" },
+                bg: { type: "text", label: "Fondo (vacío = tema)" },
+                radius: { type: "text", label: "Redondeo (p. ej. 16)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -934,21 +1239,36 @@ const baseConfig = {
                 // Remove extra styles
                 columnStyles = columnStyles.slice(0, columnCount);
 
-                // Migration: Legacy container props -> css
+                // Migration, in the direction the contract needs: the legacy container props AND
+                // the inline `css` this block used to rewrite them into both become token FIELDS.
+                // `css.gap` / `css.minHeight` / `css.backgroundColor` / `css.borderRadius` are
+                // exactly what this contract removes — an inline style beats any stylesheet, so
+                // while they lived there no theme could restyle a Columns block at all.
                 const css = { ...props.css };
-                if (props.gap !== undefined) css.gap = `${props.gap}px`;
-                if (props.minHeight) css.minHeight = props.minHeight;
-                if (props.backgroundColor) css.backgroundColor = props.backgroundColor;
-                if (props.borderRadius) css.borderRadius = `${props.borderRadius}px`;
+                const pick = (v: any, fallback: any, ignore?: string) => {
+                    if (v !== undefined && v !== null && v !== "") return String(v);
+                    if (fallback === undefined || fallback === null || fallback === "") return "";
+                    return String(fallback) === ignore ? "" : String(fallback);
+                };
+                const gap = props.gap !== undefined ? props.gap : pick(undefined, css.gap);
+                const minHeight = pick(props.minHeight, css.minHeight, "auto");
+                const bg = pick(props.bg || props.backgroundColor, css.backgroundColor, "transparent");
+                const radius = pick(props.radius ?? props.borderRadius, css.borderRadius, "0px");
+                delete css.gap;
+                delete css.minHeight;
+                delete css.backgroundColor;
+                delete css.borderRadius;
 
                 return {
                     props: {
                         ...props,
                         columnStyles,
+                        gap,
+                        minHeight,
+                        bg,
+                        radius,
                         css,
-                        // Clear legacy props
-                        gap: undefined,
-                        minHeight: undefined,
+                        // Clear the pre-contract prop names now that their values live in fields.
                         backgroundColor: undefined,
                         borderRadius: undefined
                     }
@@ -957,77 +1277,61 @@ const baseConfig = {
             defaultProps: {
                 distribution: { columnCount: 2, widths: [50, 50] },
                 "col-2": [],
+                gap: "",
+                minHeight: "",
+                bg: "",
+                radius: "",
                 elementId: "",
-                css: {
-                    gap: '24px',
-                    minHeight: 'auto',
-                    backgroundColor: 'transparent',
-                    borderRadius: '0px'
-                }
+                css: {}
             },
-            render: ({ distribution, columnStyles, elementId, css, "col-0": Col0, "col-1": Col1, "col-2": Col2 }: any) => {
-                // ... same logic
+            render: ({ distribution, columnStyles, gap, minHeight, bg, radius, elementId, css, "col-0": Col0, "col-1": Col1, "col-2": Col2 }: any) => {
                 const Slots = [Col0, Col1, Col2];
-                // Convert percentages to grid template columns
                 const dist = distribution || { columnCount: 2, widths: [50, 50] };
                 const columnCount = dist.columnCount || 2;
                 const widths = dist.widths || [50, 50];
-                const gridTemplateColumns = widths.slice(0, columnCount).map((w: number) => `${w}%`).join(' ');
                 const styles = columnStyles || [];
 
-                // Stable, SSR-safe unique id for the responsive <style>. Math.random() produced a
-                // DIFFERENT id on the server vs the client, causing a hydration mismatch now that this
-                // content is server-rendered. React.useId() is guaranteed identical across both renders
-                // (colons stripped so it's a valid CSS class name).
-                const gridId = `columns-grid-${React.useId().replace(/[^a-zA-Z0-9_-]/g, '')}`;
-
+                // The mobile stack used to need a per-instance <style> tag (and a React.useId to keep
+                // its class name identical across SSR and hydration). The contract's own media query
+                // does it for every Columns block, so the injected stylesheet is gone.
                 return (
-                    <>
-                        {/* Responsive CSS - stack columns on mobile */}
-                        <style>{`
-                            @media (max-width: 768px) {
-                                .${gridId} {
-                                    grid-template-columns: 1fr !important;
-                                }
-                            }
-                        `}</style>
-                        <div
-                            id={elementId || undefined}
-                            className={gridId}
-                            style={{
-                                display: "grid",
-                                gridTemplateColumns: gridTemplateColumns,
-                                alignItems: "stretch",
-                                width: '100%',
-                                margin: 0,
-                                ...css // Apply migrated CSS
-                            }}
-                        >
-                            {Array.from({ length: columnCount }).map((_, i) => {
-                                const colStyle = styles[i] || {};
-                                const Slot = Slots[i];
-                                return (
-                                    <div
-                                        key={i}
-                                        className="flex flex-col"
-                                        style={{
-                                            height: "100%",
-                                            minHeight: "100px",
-                                            padding: colStyle.padding || '16px',
-                                            backgroundColor: colStyle.backgroundColor || 'transparent',
-                                            borderWidth: colStyle.borderWidth || '0px',
-                                            borderColor: colStyle.borderColor || 'var(--wjs-border-subtle, #e5e7eb)',
-                                            borderStyle: colStyle.borderWidth && colStyle.borderWidth !== '0px' ? 'solid' : 'none',
-                                            borderRadius: colStyle.borderRadius || '0px',
-                                            overflow: "visible"
-                                        }}
-                                    >
-                                        <Slot />
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    </>
+                    <div
+                        id={elementId || undefined}
+                        className="wp-block-columns"
+                        style={{
+                            ...blockVars('columns', {
+                                template: widths.slice(0, columnCount).map((w: number) => `${w}%`).join(' '),
+                                gap: unit(gap),
+                                'min-height': unit(minHeight),
+                                bg,
+                                radius: unit(radius),
+                            }),
+                            ...css,
+                        }}
+                    >
+                        {Array.from({ length: columnCount }).map((_, i) => {
+                            const colStyle = styles[i] || {};
+                            const Slot = Slots[i];
+                            const hasBorder = colStyle.borderWidth && colStyle.borderWidth !== '0px';
+                            return (
+                                <div
+                                    key={i}
+                                    className="wp-block-columns__col"
+                                    // Per-column overrides only: an untouched column emits nothing and
+                                    // inherits whatever the theme set for --wjs-col-*.
+                                    style={blockVars('col', {
+                                        pad: colStyle.padding,
+                                        bg: colStyle.backgroundColor !== 'transparent' ? colStyle.backgroundColor : undefined,
+                                        'border-width': hasBorder ? colStyle.borderWidth : undefined,
+                                        'border-color': hasBorder ? colStyle.borderColor : undefined,
+                                        radius: colStyle.borderRadius !== '0px' ? colStyle.borderRadius : undefined,
+                                    })}
+                                >
+                                    <Slot />
+                                </div>
+                            );
+                        })}
+                    </div>
                 );
             },
         },
@@ -1046,6 +1350,36 @@ const baseConfig = {
                         { label: "Accent", value: "accent" }
                     ]
                 },
+                bg: { type: "text", label: "Fondo (vacío = tema)" },
+                color: { type: "text", label: "Color del texto (vacío = tema)" },
+                borderColor: { type: "text", label: "Color del borde" },
+                radius: { type: "text", label: "Redondeo (p. ej. 24)" },
+                pad: { type: "text", label: "Relleno (p. ej. 40)" },
+                shadow: { type: "text", label: "Sombra CSS" },
+                iconSize: { type: "text", label: "Tamaño del icono (p. ej. 64)" },
+                iconBg: { type: "text", label: "Fondo del icono" },
+                iconColor: { type: "text", label: "Color del icono" },
+                titleSize: { type: "text", label: "Tamaño del título (p. ej. 28)" },
+                titleWeight: {
+                    type: "select",
+                    label: "Grosor del título",
+                    options: [
+                        { label: "Del tema", value: "" },
+                        { label: "Seminegrita", value: "600" },
+                        { label: "Negrita", value: "700" },
+                        { label: "Extranegrita", value: "800" },
+                        { label: "Black", value: "900" },
+                    ],
+                },
+                titleTransform: {
+                    type: "select",
+                    label: "Título en mayúsculas",
+                    options: [
+                        { label: "Del tema", value: "" },
+                        { label: "MAYÚSCULAS", value: "uppercase" },
+                        { label: "Normal", value: "none" },
+                    ],
+                },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1059,54 +1393,43 @@ const baseConfig = {
                 description: "This is a card description. You can use it to highlight features or services.",
                 icon: "fa-rocket",
                 theme: "light",
+                bg: "", color: "", borderColor: "", radius: "", pad: "", shadow: "",
+                iconSize: "", iconBg: "", iconColor: "",
+                titleSize: "", titleWeight: "", titleTransform: "",
                 css: {}
             },
-            render: ({ title, description, icon, theme, css }: any) => {
-                return (
-                    <div
-                        className={`wp-block-card card-theme-${theme} transition-all duration-300`}
-                        style={{
-                            backgroundColor: `var(--puck-card-${theme}-bg, var(--puck-card-bg, var(--wjs-bg-surface, #ffffff)))`,
-                            color: `var(--puck-card-${theme}-color, var(--puck-card-color, var(--wjs-color-text-main, #1a1a1a)))`,
-                            borderColor: `var(--puck-card-${theme}-border, var(--puck-card-border, var(--wjs-border-subtle, #e5e7eb)))`,
-                            borderRadius: `var(--puck-card-radius, var(--wjs-border-radius, 0px))`,
-                            padding: `var(--puck-card-padding, var(--wjs-space-md, 2rem))`,
-                            borderWidth: '1px',
-                            borderStyle: 'solid',
-                            ...css
-                        }}
-                    >
-                        {icon && (
-                            <div
-                                className="wp-block-card-icon flex items-center justify-center"
-                                style={{
-                                    width: '3.5rem',
-                                    height: '3.5rem',
-                                    borderRadius: `var(--puck-card-icon-radius, var(--wjs-border-radius, 0px))`,
-                                    marginBottom: '1.5rem',
-                                    fontSize: '1.5rem',
-                                    backgroundColor: `var(--puck-card-${theme}-icon-bg, var(--wjs-bg-surface-hover, rgba(0,0,0,0.05)))`,
-                                    color: `var(--puck-card-${theme}-icon-color, var(--wjs-color-primary, #3b82f6))`
-                                }}
-                            >
-                                <i className={`fa-solid ${icon}`}></i>
-                            </div>
-                        )}
-                        <h3
-                            className="wp-block-card-title mb-4 uppercase tracking-tight"
-                            style={{ fontSize: 'var(--wjs-h3-size, 1.5rem)', fontWeight: 'var(--wjs-h3-weight, 900)', lineHeight: '1.2' }}
-                        >
-                            {title}
-                        </h3>
-                        <p
-                            className="wp-block-card-description text-base leading-relaxed opacity-80"
-                            style={{ fontSize: 'var(--wjs-font-size-base, 1rem)' }}
-                        >
-                            {description}
-                        </p>
-                    </div>
-                );
-            }
+            render: ({ title, description, icon, theme, bg, color, borderColor, radius, pad, shadow, iconSize, iconBg, iconColor, titleSize, titleWeight, titleTransform, css }: any) => (
+                <div
+                    className={cx('wp-block-card', `card-theme-${theme}`)}
+                    style={{
+                        ...blockVars('card', {
+                            bg,
+                            color,
+                            'border-color': borderColor,
+                            radius: unit(radius),
+                            pad: unit(pad),
+                            shadow,
+                            'icon-size': unit(iconSize),
+                            'icon-bg': iconBg,
+                            'icon-color': iconColor,
+                            'title-size': unit(titleSize),
+                            'title-weight': titleWeight,
+                            'title-transform': titleTransform,
+                        }),
+                        ...css,
+                    }}
+                >
+                    {icon && (
+                        // Legacy class kept alongside the __ one so themes written against
+                        // `wp-block-card-icon` keep matching.
+                        <div className="wp-block-card__icon wp-block-card-icon">
+                            <i className={`fa-solid ${icon}`}></i>
+                        </div>
+                    )}
+                    <h3 className="wp-block-card__title wp-block-card-title">{title}</h3>
+                    <p className="wp-block-card__description wp-block-card-description">{description}</p>
+                </div>
+            )
         },
         Divider: {
             label: translate('editor.block.divider', getStoredLanguage()),
@@ -1120,6 +1443,10 @@ const baseConfig = {
                         { label: "Gradient", value: "gradient" }
                     ]
                 },
+                color: { type: "text", label: "Color (vacío = tema)" },
+                width: { type: "text", label: "Grosor (p. ej. 2)" },
+                length: { type: "text", label: "Ancho (p. ej. 120 o 40%)" },
+                gap: { type: "text", label: "Separación vertical (p. ej. 64)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1130,13 +1457,30 @@ const baseConfig = {
             },
             defaultProps: {
                 type: "solid",
-                css: { marginTop: '40px', marginBottom: '40px' }
+                color: "",
+                width: "",
+                length: "",
+                gap: "",
+                // No inline margins: the spacing default now lives in --wjs-divider-mt/-mb, so a
+                // theme can set the page's vertical rhythm. `gap` overrides it per block.
+                css: {}
             },
-            render: ({ type, css }: any) => {
+            render: ({ type, color, width, length, gap, css }: any) => {
+                const vars = {
+                    ...blockVars('divider', {
+                        color,
+                        width: unit(width),
+                        length: unit(length),
+                        mt: unit(gap),
+                        mb: unit(gap),
+                    }),
+                    ...css,
+                };
+                // A gradient rule needs a painted box, a line needs a border — different elements.
                 if (type === 'gradient') {
-                    return <div className="h-px w-full bg-gradient-to-r from-transparent via-gray-200 to-transparent" style={css} />;
+                    return <div className="wp-block-divider wp-block-divider--gradient" style={vars} />;
                 }
-                return <hr className={`w-full ${type === 'dashed' ? 'border-dashed' : 'border-solid'} border-gray-100`} style={css} />;
+                return <hr className={cx('wp-block-divider', `wp-block-divider--${type === 'dashed' ? 'dashed' : 'solid'}`)} style={vars} />;
             }
         },
         Button: {
@@ -1165,6 +1509,23 @@ const baseConfig = {
                         { label: "Right", value: "right" }
                     ]
                 },
+                bg: { type: "text", label: "Fondo (vacío = tema)" },
+                color: { type: "text", label: "Color del texto (vacío = tema)" },
+                radius: { type: "text", label: "Redondeo (p. ej. 999 para píldora)" },
+                padY: { type: "text", label: "Relleno vertical (p. ej. 14)" },
+                padX: { type: "text", label: "Relleno horizontal (p. ej. 32)" },
+                size: { type: "text", label: "Tamaño de letra (p. ej. 15)" },
+                weight: {
+                    type: "select",
+                    label: "Grosor",
+                    options: [
+                        { label: "Del tema", value: "" },
+                        { label: "Media", value: "500" },
+                        { label: "Seminegrita", value: "600" },
+                        { label: "Negrita", value: "700" },
+                        { label: "Extranegrita", value: "800" },
+                    ],
+                },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1178,48 +1539,50 @@ const baseConfig = {
                 href: "#",
                 variant: "primary",
                 align: "left",
+                bg: "",
+                color: "",
+                radius: "",
+                padY: "",
+                padX: "",
+                size: "",
+                weight: "",
                 css: {}
             },
-            render: ({ label, href, variant, align, css, puck }: any) => {
-                const alignments = {
-                    left: "text-left",
-                    center: "text-center",
-                    right: "text-right"
-                };
-
-                return (
-                    <div className={`wp-block-button my-4 ${alignments[align as keyof typeof alignments]}`}>
-                        <a
-                            href={href}
-                            className={`button-variant-${variant} transition-all duration-200`}
-                            // Swallow clicks ONLY inside the editor canvas (so selecting the block
-                            // doesn't navigate). On the public site this component hydrates too — an
-                            // unconditional preventDefault made every published button a dead link.
-                            onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                            style={{
-                                display: 'inline-block',
-                                textDecoration: 'none',
-                                fontWeight: 'var(--wjs-h3-weight, 600)',
-                                borderRadius: 'var(--puck-btn-radius, var(--wjs-border-radius, 0px))',
-                                padding: 'var(--wjs-space-sm, 0.8rem) var(--wjs-space-md, 2rem)',
-                                backgroundColor: `var(--puck-btn-${variant}-bg, var(--wjs-color-primary, #2563eb))`,
-                                color: `var(--puck-btn-${variant}-color, var(--wjs-color-primary-text, #ffffff))`,
-                                border: variant === 'outline'
-                                    ? `2px solid var(--puck-btn-outline-border, var(--wjs-color-primary, #2563eb))`
-                                    : 'none',
-                                ...css
-                            }}
-                        >
-                            {label}
-                        </a>
-                    </div>
-                );
-            }
+            render: ({ label, href, variant, align, bg, color, radius, padY, padX, size, weight, css, puck }: any) => (
+                <div
+                    className="wp-block-button"
+                    style={blockVars('button', { align })}
+                >
+                    <a
+                        href={href}
+                        className={cx('wp-block-button__link', `button-variant-${variant}`)}
+                        // Swallow clicks ONLY inside the editor canvas (so selecting the block
+                        // doesn't navigate). On the public site this component hydrates too — an
+                        // unconditional preventDefault made every published button a dead link.
+                        onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+                        style={{
+                            ...blockVars('button', {
+                                bg,
+                                color,
+                                radius: unit(radius),
+                                'pad-y': unit(padY),
+                                'pad-x': unit(padX),
+                                size: unit(size),
+                                weight,
+                            }),
+                            ...css,
+                        }}
+                    >
+                        {label}
+                    </a>
+                </div>
+            )
         },
         Spacer: {
             label: translate('editor.block.spacer', getStoredLanguage()),
             category: "layout",
             fields: {
+                height: { type: "text", label: "Altura (p. ej. 48 o 4rem)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1228,19 +1591,19 @@ const baseConfig = {
                     )
                 }
             },
-            resolveData: async ({ props }: any) => {
-                const css = { ...props.css };
-                // Migration: height -> css.height
-                if (props.height) {
-                    css.height = `${props.height}px`;
-                }
-                return { props: { ...props, css, height: undefined } };
-            },
+            // The old resolveData rewrote `height` into an INLINE css.height and blanked the prop —
+            // the exact move this contract undoes, since an inline height locks the theme out. It is
+            // gone: `unit()` accepts the legacy bare number (24 → "24px") so pre-contract data keeps
+            // rendering, and pages already rewritten still carry their css.height through `...css`.
             defaultProps: {
-                css: { height: '24px' }
+                height: "",
+                css: {}
             },
-            render: ({ css }: any) => (
-                <div style={css} />
+            render: ({ height, css }: any) => (
+                <div
+                    className="wp-block-spacer"
+                    style={{ ...blockVars('spacer', { height: unit(height) }), ...css }}
+                />
             )
         },
 
@@ -1263,6 +1626,8 @@ const baseConfig = {
                         { label: "Small (768px)", value: "768px" },
                     ]
                 },
+                pad: { type: "text", label: "Relleno (p. ej. 96 o 96px 24px)" },
+                bg: { type: "text", label: "Fondo (vacío = tema)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1273,20 +1638,21 @@ const baseConfig = {
             },
             defaultProps: {
                 maxWidth: "1280px",
-                css: {
-                    padding: "60px 20px",
-                    backgroundColor: "transparent"
-                }
+                pad: "",
+                bg: "",
+                // Padding/background moved out of inline css into --wjs-section-pad/-bg so a theme
+                // can own the page's vertical rhythm; `pad`/`bg` override it for one section.
+                css: {}
             },
-            render: ({ children: Children, maxWidth, css }: any) => (
+            render: ({ children: Children, maxWidth, pad, bg, css }: any) => (
                 <section
                     className="wp-block-section"
                     style={{
-                        width: "100%",
-                        ...css
+                        ...blockVars('section', { pad: unit(pad), bg, 'max-width': maxWidth }),
+                        ...css,
                     }}
                 >
-                    <div style={{ maxWidth, margin: "0 auto" }}>
+                    <div className="wp-block-section__inner">
                         <Children />
                     </div>
                 </section>
@@ -1310,6 +1676,25 @@ const baseConfig = {
                     ]
                 },
                 gap: { type: "text", label: "Gap (e.g. 20px)" },
+                columnsTablet: {
+                    type: "select",
+                    label: "Columnas en tablet",
+                    options: [
+                        { label: "Del tema (2)", value: "" },
+                        { label: "1", value: "1" },
+                        { label: "2", value: "2" },
+                        { label: "3", value: "3" },
+                    ]
+                },
+                columnsMobile: {
+                    type: "select",
+                    label: "Columnas en móvil",
+                    options: [
+                        { label: "Del tema (1)", value: "" },
+                        { label: "1", value: "1" },
+                        { label: "2", value: "2" },
+                    ]
+                },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1318,22 +1703,35 @@ const baseConfig = {
                     )
                 }
             },
+            // `gap` ships EMPTY on purpose. A default that is always present is emitted as an inline
+            // custom property on every new Grid, which outranks the theme's --wjs-grid-gap forever —
+            // the exact lock-out blockVars() exists to avoid. Empty means "whatever the theme says".
             defaultProps: {
                 columns: "3",
-                gap: "24px",
+                gap: "",
+                columnsTablet: "",
+                columnsMobile: "",
                 css: {}
             },
-            render: ({ children: Children, columns, gap, css }: any) => (
+            render: ({ children: Children, columns, gap, columnsTablet, columnsMobile, css }: any) => (
                 <div
                     className="wp-block-grid"
                     style={{
-                        display: "grid",
-                        gridTemplateColumns: `repeat(${columns}, 1fr)`,
-                        gap,
-                        ...css
+                        ...blockVars('grid', {
+                            columns,
+                            gap: unit(gap),
+                            'columns-tablet': columnsTablet,
+                            'columns-mobile': columnsMobile,
+                        }),
+                        ...css,
                     }}
                 >
-                    <Children />
+                    {/* The GRID lives on the slot's own wrapper, not on this div. Puck renders a
+                        slot inside a wrapper element of its own, so a grid declared out here would
+                        make that single wrapper the only grid item: every child stacked into track
+                        1 while the other tracks sat empty. Both the editor DropZone and the public
+                        SlotRender accept a className, so the layout goes where the children are. */}
+                    <Children className="wp-block-grid__items" />
                 </div>
             )
         },
@@ -1373,6 +1771,16 @@ const baseConfig = {
                         { label: "No", value: "nowrap" },
                     ]
                 },
+                direction: {
+                    type: "select",
+                    label: "Dirección",
+                    options: [
+                        { label: "Fila", value: "row" },
+                        { label: "Fila invertida", value: "row-reverse" },
+                        { label: "Columna", value: "column" },
+                        { label: "Columna invertida", value: "column-reverse" },
+                    ]
+                },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1381,27 +1789,33 @@ const baseConfig = {
                     )
                 }
             },
+            // `gap` empty for the same reason as Grid: a shipped default pins every new row and
+            // locks --wjs-flex-gap out of the cascade.
             defaultProps: {
                 justify: "flex-start",
                 align: "center",
-                gap: "16px",
+                gap: "",
                 wrap: "wrap",
+                direction: "row",
                 css: {}
             },
-            render: ({ children: Children, justify, align, gap, wrap, css }: any) => (
+            render: ({ children: Children, justify, align, gap, wrap, direction, css }: any) => (
                 <div
                     className="wp-block-flex-row"
                     style={{
-                        display: "flex",
-                        flexDirection: "row",
-                        justifyContent: justify,
-                        alignItems: align,
-                        gap,
-                        flexWrap: wrap,
-                        ...css
+                        ...blockVars('flex', {
+                            justify,
+                            align,
+                            gap: unit(gap),
+                            wrap,
+                            direction,
+                        }),
+                        ...css,
                     }}
                 >
-                    <Children />
+                    {/* Same reason as Grid: the flex row must be the slot's own wrapper, or all
+                        children become one flex item and justify/align/gap do nothing. */}
+                    <Children className="wp-block-flex-row__items" />
                 </div>
             )
         },
@@ -1418,6 +1832,15 @@ const baseConfig = {
                         content: { type: "textarea" }
                     }
                 },
+                bg: { type: "text", label: "Fondo (vacío = tema)" },
+                borderColor: { type: "text", label: "Color del borde" },
+                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                pad: { type: "text", label: "Relleno de la cabecera (p. ej. 16px 20px)" },
+                headerBg: { type: "text", label: "Fondo de la cabecera" },
+                headerColor: { type: "text", label: "Color de la cabecera" },
+                activeColor: { type: "text", label: "Color al abrir" },
+                panelBg: { type: "text", label: "Fondo del contenido" },
+                panelColor: { type: "text", label: "Color del contenido" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1431,41 +1854,47 @@ const baseConfig = {
                     { title: "Section 1", content: "Content for section 1" },
                     { title: "Section 2", content: "Content for section 2" },
                 ],
+                bg: "", borderColor: "", radius: "", pad: "",
+                headerBg: "", headerColor: "", activeColor: "", panelBg: "", panelColor: "",
                 css: {}
             },
-            render: ({ items, css }: any) => {
+            render: ({ items, bg, borderColor, radius, pad, headerBg, headerColor, activeColor, panelBg, panelColor, css }: any) => {
                 const [openIndex, setOpenIndex] = React.useState<number | null>(0);
                 return (
-                    <div className="wp-block-accordion" style={{ borderRadius: "8px", overflow: "hidden", border: "1px solid var(--wjs-border-subtle, #e5e7eb)", ...css }}>
-                        {items?.map((item: any, index: number) => (
-                            <div key={index} className="accordion-item" style={{ borderBottom: index < items.length - 1 ? "1px solid var(--wjs-border-subtle, #e5e7eb)" : "none" }}>
-                                <button
-                                    onClick={() => setOpenIndex(openIndex === index ? null : index)}
-                                    style={{
-                                        width: "100%",
-                                        padding: "16px 20px",
-                                        display: "flex",
-                                        justifyContent: "space-between",
-                                        alignItems: "center",
-                                        background: "var(--wjs-bg-surface, #fff)",
-                                        border: "none",
-                                        cursor: "pointer",
-                                        fontWeight: 600,
-                                        fontSize: "1rem",
-                                        color: "var(--wjs-color-text-main, #1a1a1a)",
-                                        textAlign: "left"
-                                    }}
-                                >
-                                    {item.title}
-                                    <i className={`fa-solid fa-chevron-down transition-transform ${openIndex === index ? "rotate-180" : ""}`} style={{ transition: "transform 0.2s" }}></i>
-                                </button>
-                                {openIndex === index && (
-                                    <div style={{ padding: "16px 20px", background: "var(--wjs-bg-canvas, #f9fafb)", color: "var(--wjs-color-text-muted, #6b7280)" }}>
-                                        {item.content}
-                                    </div>
-                                )}
-                            </div>
-                        ))}
+                    <div
+                        className="wp-block-accordion"
+                        style={{
+                            ...blockVars('accordion', {
+                                bg,
+                                'border-color': borderColor,
+                                radius: unit(radius),
+                                pad,
+                                'header-bg': headerBg,
+                                'header-color': headerColor,
+                                'active-color': activeColor,
+                                'panel-bg': panelBg,
+                                'panel-color': panelColor,
+                            }),
+                            ...css,
+                        }}
+                    >
+                        {items?.map((item: any, index: number) => {
+                            const open = openIndex === index;
+                            return (
+                                <div key={index} className={cx('wp-block-accordion__item', open && 'is-open')}>
+                                    <button
+                                        type="button"
+                                        className="wp-block-accordion__header"
+                                        aria-expanded={open}
+                                        onClick={() => setOpenIndex(open ? null : index)}
+                                    >
+                                        {item.title}
+                                        <i className="fa-solid fa-chevron-down wp-block-accordion__icon" aria-hidden="true"></i>
+                                    </button>
+                                    {open && <div className="wp-block-accordion__panel">{item.content}</div>}
+                                </div>
+                            );
+                        })}
                     </div>
                 );
             }
@@ -1483,6 +1912,14 @@ const baseConfig = {
                         content: { type: "textarea" }
                     }
                 },
+                color: { type: "text", label: "Color de las pestañas (vacío = tema)" },
+                activeColor: { type: "text", label: "Color de la pestaña activa" },
+                borderColor: { type: "text", label: "Color de la línea" },
+                borderWidth: { type: "text", label: "Grosor de la línea (p. ej. 2)" },
+                tabPad: { type: "text", label: "Relleno de la pestaña (p. ej. 12px 24px)" },
+                panelBg: { type: "text", label: "Fondo del panel" },
+                panelPad: { type: "text", label: "Relleno del panel (p. ej. 24)" },
+                panelRadius: { type: "text", label: "Redondeo del panel (p. ej. 12)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1497,34 +1934,44 @@ const baseConfig = {
                     { label: "Tab 2", content: "Content for Tab 2" },
                     { label: "Tab 3", content: "Content for Tab 3" },
                 ],
+                color: "", activeColor: "", borderColor: "", borderWidth: "", tabPad: "",
+                panelBg: "", panelPad: "", panelRadius: "",
                 css: {}
             },
-            render: ({ tabs, css }: any) => {
+            render: ({ tabs, color, activeColor, borderColor, borderWidth, tabPad, panelBg, panelPad, panelRadius, css }: any) => {
                 const [activeTab, setActiveTab] = React.useState(0);
                 return (
-                    <div className="wp-block-tabs" style={css}>
-                        <div style={{ display: "flex", borderBottom: "2px solid var(--wjs-border-subtle, #e5e7eb)", marginBottom: "20px" }}>
+                    <div
+                        className="wp-block-tabs"
+                        style={{
+                            ...blockVars('tabs', {
+                                color,
+                                'active-color': activeColor,
+                                'border-color': borderColor,
+                                'border-width': unit(borderWidth),
+                                'tab-pad': tabPad,
+                                'panel-bg': panelBg,
+                                'panel-pad': unit(panelPad),
+                                'panel-radius': unit(panelRadius),
+                            }),
+                            ...css,
+                        }}
+                    >
+                        <div className="wp-block-tabs__list" role="tablist">
                             {tabs?.map((tab: any, index: number) => (
                                 <button
                                     key={index}
+                                    type="button"
+                                    role="tab"
+                                    aria-selected={activeTab === index}
+                                    className={cx('wp-block-tabs__tab', activeTab === index && 'is-active')}
                                     onClick={() => setActiveTab(index)}
-                                    style={{
-                                        padding: "12px 24px",
-                                        border: "none",
-                                        background: "transparent",
-                                        cursor: "pointer",
-                                        fontWeight: activeTab === index ? 600 : 400,
-                                        color: activeTab === index ? "var(--wjs-color-primary, #2563eb)" : "var(--wjs-color-text-muted, #6b7280)",
-                                        borderBottom: activeTab === index ? "2px solid var(--wjs-color-primary, #2563eb)" : "2px solid transparent",
-                                        marginBottom: "-2px",
-                                        transition: "all 0.2s"
-                                    }}
                                 >
                                     {tab.label}
                                 </button>
                             ))}
                         </div>
-                        <div style={{ padding: "20px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "8px" }}>
+                        <div className="wp-block-tabs__panel" role="tabpanel">
                             {tabs?.[activeTab]?.content}
                         </div>
                     </div>
@@ -1540,7 +1987,8 @@ const baseConfig = {
             label: translate('editor.block.videoEmbed', getStoredLanguage()),
             category: "content",
             fields: {
-                url: { type: "text", label: "Video URL (YouTube, Vimeo, or direct)" },
+                url: { type: "text", label: "Video URL (YouTube, Vimeo, o un archivo propio: /public/media/x.mp4)" },
+                poster: { type: "text", label: "Póster (solo archivos propios)" },
                 aspectRatio: {
                     type: "select",
                     label: "Aspect Ratio",
@@ -1550,6 +1998,8 @@ const baseConfig = {
                         { label: "1:1", value: "100%" },
                     ]
                 },
+                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                bg: { type: "text", label: "Fondo mientras carga (vacío = tema)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1558,12 +2008,38 @@ const baseConfig = {
                     )
                 }
             },
+            // The radius/overflow that used to be forced through inline `css` now live in
+            // --wjs-video-radius, so a theme can round (or square off) every video at once.
             defaultProps: {
                 url: "https://www.youtube.com/embed/dQw4w9WgXcQ",
+                poster: "",
                 aspectRatio: "56.25%",
-                css: { borderRadius: "12px", overflow: "hidden" }
+                radius: "",
+                bg: "",
+                css: {}
             },
-            render: ({ url, aspectRatio, css }: any) => {
+            render: ({ url, poster, aspectRatio, radius, bg, css }: any) => {
+                const vars = {
+                    ...blockVars('video', { aspect: aspectRatio, radius: unit(radius), bg }),
+                    ...css,
+                };
+
+                // A file served by THIS site plays inline in a real <video>, with no third party in
+                // the request path at all. Restricted to a root-relative path: that is same-origin by
+                // construction and safe to evaluate during SSR, where there is no window.location to
+                // compare an absolute URL against. '//host/x' is protocol-relative (i.e. remote) and
+                // is deliberately excluded.
+                const isSelfHosted = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
+                if (isSelfHosted) {
+                    return (
+                        <SelfHostedVideo
+                            src={url}
+                            poster={poster && poster.startsWith('/') && !poster.startsWith('//') ? poster : ''}
+                            vars={vars}
+                        />
+                    );
+                }
+
                 // Convert regular YouTube URLs to embed format
                 let embedUrl = url;
                 let isYouTube = false;
@@ -1605,29 +2081,21 @@ const baseConfig = {
                 // Show placeholder if no URL or the URL is not a trusted embed
                 if (!url || !isAllowedEmbed) {
                     return (
-                        <div className="wp-block-video-embed" style={{
-                            position: "relative",
-                            paddingBottom: aspectRatio,
-                            height: 0,
-                            background: "var(--wjs-bg-surface, #f3f4f6)",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            ...css
-                        }}>
-                            <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%, -50%)", textAlign: "center", color: "var(--wjs-color-text-muted, #9ca3af)" }}>
-                                <i className="fa-solid fa-video" style={{ fontSize: "2rem", marginBottom: "8px" }}></i>
-                                <p style={{ margin: 0 }}>{url ? "Unsupported video URL (use YouTube or Vimeo)" : "Enter a video URL"}</p>
+                        <div className="wp-block-video-embed" style={vars}>
+                            <div className="wp-block-video-embed__placeholder">
+                                <div>
+                                    <i className="fa-solid fa-video" aria-hidden="true"></i>
+                                    <p>{url ? "Unsupported video URL (use YouTube or Vimeo)" : "Enter a video URL"}</p>
+                                </div>
                             </div>
                         </div>
                     );
                 }
 
                 return (
-                    <div className="wp-block-video-embed" style={{ position: "relative", paddingBottom: aspectRatio, height: 0, ...css }}>
+                    <div className="wp-block-video-embed" style={vars}>
                         <iframe
                             src={embedUrl}
-                            style={{ position: "absolute", top: 0, left: 0, width: "100%", height: "100%", border: "none" }}
                             sandbox="allow-scripts allow-same-origin allow-presentation"
                             allowFullScreen
                             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -1645,6 +2113,13 @@ const baseConfig = {
             fields: {
                 src: { type: "text", label: "Audio URL" },
                 title: { type: "text", label: "Track Title" },
+                bg: { type: "text", label: "Fondo (vacío = tema)" },
+                borderColor: { type: "text", label: "Color del borde" },
+                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                pad: { type: "text", label: "Relleno (p. ej. 24)" },
+                iconSize: { type: "text", label: "Tamaño del icono (p. ej. 48)" },
+                iconBg: { type: "text", label: "Fondo del icono" },
+                iconColor: { type: "text", label: "Color del icono" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1656,21 +2131,27 @@ const baseConfig = {
             defaultProps: {
                 src: "",
                 title: "Audio Track",
+                bg: "", borderColor: "", radius: "", pad: "",
+                iconSize: "", iconBg: "", iconColor: "",
                 css: {}
             },
-            render: ({ src, title, css }: any) => (
-                <div className="wp-block-audio-player" style={{ padding: "20px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "12px", border: "1px solid var(--wjs-border-subtle, #e5e7eb)", ...css }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-                        <div style={{ width: "48px", height: "48px", borderRadius: "8px", background: "var(--wjs-color-primary, #2563eb)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff" }}>
-                            <i className="fa-solid fa-music"></i>
-                        </div>
-                        <div style={{ flex: 1 }}>
-                            <div style={{ fontWeight: 600, marginBottom: "8px", color: "var(--wjs-color-text-main, #1a1a1a)" }}>{title}</div>
-                            <audio controls style={{ width: "100%" }} src={src}>
-                                Your browser does not support the audio element.
-                            </audio>
-                        </div>
-                    </div>
+            render: ({ src, title, bg, borderColor, radius, pad, iconSize, iconBg, iconColor, css }: any) => (
+                <div
+                    className="wp-block-audio-player"
+                    style={{
+                        ...blockVars('audio', {
+                            bg,
+                            'border-color': borderColor,
+                            radius: unit(radius),
+                            pad: unit(pad),
+                            'icon-size': unit(iconSize),
+                            'icon-bg': iconBg,
+                            'icon-color': iconColor,
+                        }),
+                        ...css,
+                    }}
+                >
+                    <AudioTransport src={src} title={title} />
                 </div>
             )
         },
@@ -1696,6 +2177,13 @@ const baseConfig = {
                         buttonLink: { type: "text" }
                     }
                 },
+                accent: { type: "text", label: "Color de acento (plan destacado)" },
+                bg: { type: "text", label: "Fondo de los planes" },
+                pad: { type: "text", label: "Relleno (p. ej. 48)" },
+                radius: { type: "text", label: "Redondeo (p. ej. 24)" },
+                gap: { type: "text", label: "Separación (p. ej. 32)" },
+                priceSize: { type: "text", label: "Tamaño del precio (p. ej. 56)" },
+                highlightScale: { type: "text", label: "Escala del destacado (p. ej. 1.08; 1 = sin escalar)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1710,43 +2198,51 @@ const baseConfig = {
                     { name: "Pro", price: "$29", period: "/month", features: "Everything in Basic\nFeature 4\nFeature 5\nPriority Support", highlighted: "true", buttonText: "Get Started", buttonLink: "#" },
                     { name: "Enterprise", price: "$99", period: "/month", features: "Everything in Pro\nCustom Features\nDedicated Support\nSLA", highlighted: "false", buttonText: "Contact Us", buttonLink: "#" },
                 ],
+                accent: "", bg: "", pad: "", radius: "", gap: "", priceSize: "", highlightScale: "",
                 css: {}
             },
-            render: ({ plans, css }: any) => (
-                <div className="wp-block-pricing" style={{ display: "grid", gridTemplateColumns: `repeat(${plans?.length || 3}, 1fr)`, gap: "24px", ...css }}>
+            render: ({ plans, accent, bg, pad, radius, gap, priceSize, highlightScale, css, puck }: any) => (
+                <div
+                    className="wp-block-pricing"
+                    style={{
+                        ...blockVars('pricing', {
+                            columns: plans?.length || 3,
+                            gap: unit(gap),
+                            accent,
+                            bg,
+                            pad: unit(pad),
+                            radius: unit(radius),
+                            'price-size': unit(priceSize),
+                            'highlight-scale': highlightScale,
+                        }),
+                        ...css,
+                    }}
+                >
                     {plans?.map((plan: any, index: number) => (
                         <div
                             key={index}
-                            style={{
-                                padding: "32px",
-                                borderRadius: "16px",
-                                border: plan.highlighted === "true" ? "2px solid var(--wjs-color-primary, #2563eb)" : "1px solid var(--wjs-border-subtle, #e5e7eb)",
-                                background: plan.highlighted === "true" ? "var(--wjs-color-primary, #2563eb)" : "var(--wjs-bg-surface, #fff)",
-                                color: plan.highlighted === "true" ? "#fff" : "var(--wjs-color-text-main, #1a1a1a)",
-                                transform: plan.highlighted === "true" ? "scale(1.05)" : "none",
-                                boxShadow: plan.highlighted === "true" ? "0 20px 40px rgba(0,0,0,0.15)" : "none",
-                                textAlign: "center"
-                            }}
+                            className={cx('wp-block-pricing__plan', plan.highlighted === "true" && 'wp-block-pricing__plan--highlighted')}
                         >
-                            <h3 style={{ fontSize: "1.25rem", fontWeight: 600, marginBottom: "8px" }}>{plan.name}</h3>
-                            <div style={{ fontSize: "3rem", fontWeight: 800, marginBottom: "4px" }}>{plan.price}<span style={{ fontSize: "1rem", fontWeight: 400, opacity: 0.7 }}>{plan.period}</span></div>
-                            <ul style={{ listStyle: "none", padding: 0, margin: "24px 0", textAlign: "left" }}>
+                            <h3 className="wp-block-pricing__name">{plan.name}</h3>
+                            <div className="wp-block-pricing__price">
+                                {plan.price}
+                                <span className="wp-block-pricing__period">{plan.period}</span>
+                            </div>
+                            <ul className="wp-block-pricing__features">
                                 {plan.features?.split("\n").map((feature: string, i: number) => (
-                                    <li key={i} style={{ padding: "8px 0", display: "flex", alignItems: "center", gap: "8px" }}>
-                                        <i className="fa-solid fa-check" style={{ color: plan.highlighted === "true" ? "#fff" : "var(--wjs-color-primary, #2563eb)" }}></i>
+                                    <li key={i} className="wp-block-pricing__feature">
+                                        <i className="fa-solid fa-check"></i>
                                         {feature}
                                     </li>
                                 ))}
                             </ul>
-                            <a href={plan.buttonLink} style={{
-                                display: "block",
-                                padding: "12px 24px",
-                                borderRadius: "8px",
-                                background: plan.highlighted === "true" ? "#fff" : "var(--wjs-color-primary, #2563eb)",
-                                color: plan.highlighted === "true" ? "var(--wjs-color-primary, #2563eb)" : "#fff",
-                                textDecoration: "none",
-                                fontWeight: 600
-                            }}>{plan.buttonText}</a>
+                            <a
+                                href={plan.buttonLink}
+                                className="wp-block-pricing__button"
+                                onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+                            >
+                                {plan.buttonText}
+                            </a>
                         </div>
                     ))}
                 </div>
@@ -1761,6 +2257,12 @@ const baseConfig = {
                 author: { type: "text", label: "Author Name" },
                 role: { type: "text", label: "Role / Company" },
                 avatar: { type: "text", label: "Avatar URL" },
+                bg: { type: "text", label: "Fondo (vacío = tema)" },
+                pad: { type: "text", label: "Relleno (p. ej. 48)" },
+                radius: { type: "text", label: "Redondeo (p. ej. 24)" },
+                quoteSize: { type: "text", label: "Tamaño de la cita (p. ej. 24)" },
+                accent: { type: "text", label: "Color de acento (comillas y avatar)" },
+                avatarSize: { type: "text", label: "Tamaño del avatar (p. ej. 72)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1774,25 +2276,40 @@ const baseConfig = {
                 author: "Jane Doe",
                 role: "CEO, Acme Inc.",
                 avatar: "",
+                bg: "", pad: "", radius: "", quoteSize: "", accent: "", avatarSize: "",
                 css: {}
             },
-            render: ({ quote, author, role, avatar, css }: any) => (
-                <div className="wp-block-testimonial" style={{ padding: "32px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "16px", border: "1px solid var(--wjs-border-subtle, #e5e7eb)", ...css }}>
-                    <div style={{ fontSize: "3rem", color: "var(--wjs-color-primary, #2563eb)", marginBottom: "16px", lineHeight: 1 }}>&quot;</div>
-                    <p style={{ fontSize: "1.25rem", fontStyle: "italic", color: "var(--wjs-color-text-main, #1a1a1a)", marginBottom: "24px", lineHeight: 1.6 }}>{quote}</p>
-                    <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
+            render: ({ quote, author, role, avatar, bg, pad, radius, quoteSize, accent, avatarSize, css }: any) => (
+                <div
+                    className="wp-block-testimonial"
+                    style={{
+                        ...blockVars('testimonial', {
+                            bg,
+                            pad: unit(pad),
+                            radius: unit(radius),
+                            'quote-size': unit(quoteSize),
+                            'mark-color': accent,
+                            'avatar-bg': accent,
+                            'avatar-size': unit(avatarSize),
+                        }),
+                        ...css,
+                    }}
+                >
+                    <div className="wp-block-testimonial__mark" aria-hidden="true">&quot;</div>
+                    <p className="wp-block-testimonial__quote">{quote}</p>
+                    <div className="wp-block-testimonial__person">
                         {avatar ? (
-                            <img src={avatar} alt={author} style={{ width: "56px", height: "56px", borderRadius: "50%", objectFit: "cover" }} />
+                            <img src={avatar} alt={author} className="wp-block-testimonial__avatar" />
                         ) : (
                             // Initials fallback — the old default pointed at i.pravatar.cc (external
                             // request + random stranger's face on every fresh testimonial).
-                            <div aria-hidden style={{ width: "56px", height: "56px", borderRadius: "50%", background: "var(--wjs-color-primary, #2563eb)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: "1.25rem" }}>
+                            <div aria-hidden className="wp-block-testimonial__avatar wp-block-testimonial__avatar--initials">
                                 {(author || "?").trim().charAt(0).toUpperCase()}
                             </div>
                         )}
                         <div>
-                            <div style={{ fontWeight: 600, color: "var(--wjs-color-text-main, #1a1a1a)" }}>{author}</div>
-                            <div style={{ fontSize: "0.875rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>{role}</div>
+                            <div className="wp-block-testimonial__author">{author}</div>
+                            <div className="wp-block-testimonial__role">{role}</div>
                         </div>
                     </div>
                 </div>
@@ -1820,6 +2337,13 @@ const baseConfig = {
                         { label: "Gradient", value: "gradient" },
                     ]
                 },
+                bg: { type: "text", label: "Fondo o degradado (vacío = variante)" },
+                color: { type: "text", label: "Color del texto" },
+                pad: { type: "text", label: "Relleno (p. ej. 80px 40px)" },
+                radius: { type: "text", label: "Redondeo (p. ej. 32)" },
+                titleSize: { type: "text", label: "Tamaño del título (p. ej. 48)" },
+                buttonBg: { type: "text", label: "Fondo del botón" },
+                buttonColor: { type: "text", label: "Color del botón" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1834,39 +2358,36 @@ const baseConfig = {
                 buttonText: "Get Started Free",
                 buttonLink: "#",
                 variant: "gradient",
+                bg: "", color: "", pad: "", radius: "", titleSize: "", buttonBg: "", buttonColor: "",
                 css: {}
             },
-            render: ({ title, subtitle, buttonText, buttonLink, variant, css }: any) => {
-                const backgrounds: any = {
-                    primary: "var(--wjs-color-primary, #2563eb)",
-                    dark: "#1a1a2e",
-                    gradient: "linear-gradient(135deg, #667eea 0%, #764ba2 100%)"
-                };
-                return (
-                    <div className="wp-block-cta-banner" style={{
-                        padding: "60px 40px",
-                        borderRadius: "24px",
-                        background: backgrounds[variant] || backgrounds.gradient,
-                        color: "#fff",
-                        textAlign: "center",
-                        ...css
-                    }}>
-                        <h2 style={{ fontSize: "2.5rem", fontWeight: 800, marginBottom: "12px" }}>{title}</h2>
-                        <p style={{ fontSize: "1.25rem", opacity: 0.9, marginBottom: "32px" }}>{subtitle}</p>
-                        <a href={buttonLink} style={{
-                            display: "inline-block",
-                            padding: "16px 32px",
-                            background: "#fff",
-                            color: variant === "dark" ? "#1a1a2e" : "var(--wjs-color-primary, #2563eb)",
-                            borderRadius: "12px",
-                            textDecoration: "none",
-                            fontWeight: 700,
-                            fontSize: "1.1rem",
-                            boxShadow: "0 4px 14px rgba(0,0,0,0.2)"
-                        }}>{buttonText}</a>
-                    </div>
-                );
-            }
+            render: ({ title, subtitle, buttonText, buttonLink, variant, bg, color, pad, radius, titleSize, buttonBg, buttonColor, css, puck }: any) => (
+                <div
+                    className={cx('wp-block-cta-banner', `cta-variant-${variant || 'gradient'}`)}
+                    style={{
+                        ...blockVars('cta', {
+                            bg,
+                            color,
+                            pad: unit(pad),
+                            radius: unit(radius),
+                            'title-size': unit(titleSize),
+                            'button-bg': buttonBg,
+                            'button-color': buttonColor,
+                        }),
+                        ...css,
+                    }}
+                >
+                    <h2 className="wp-block-cta-banner__title">{title}</h2>
+                    <p className="wp-block-cta-banner__subtitle">{subtitle}</p>
+                    <a
+                        href={buttonLink}
+                        className="wp-block-cta-banner__button"
+                        onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+                    >
+                        {buttonText}
+                    </a>
+                </div>
+            )
         },
 
         // ==========================================
@@ -1887,6 +2408,12 @@ const baseConfig = {
                         { label: "4", value: "4" },
                     ]
                 },
+                gap: { type: "text", label: "Separación (p. ej. 24)" },
+                bg: { type: "text", label: "Fondo de las tarjetas (vacío = tema)" },
+                borderColor: { type: "text", label: "Color del borde" },
+                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                pad: { type: "text", label: "Relleno (p. ej. 24)" },
+                thumbHeight: { type: "text", label: "Alto de la miniatura (p. ej. 160)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1898,34 +2425,80 @@ const baseConfig = {
             defaultProps: {
                 count: 6,
                 columns: "3",
+                gap: "", bg: "", borderColor: "", radius: "", pad: "", thumbHeight: "",
                 css: {}
             },
-            render: ({ count, columns, css }: any) => {
-                // Placeholder for dynamic content - in production, this would fetch real posts
-                const placeholderPosts = Array.from({ length: count }, (_, i) => ({
-                    title: `Post Title ${i + 1}`,
-                    excerpt: "This is a brief excerpt from the post content...",
-                    date: "Jan 15, 2024"
-                }));
+            render: ({ count, columns, gap, bg, borderColor, radius, pad, thumbHeight, css, resolvedPosts, puck }: any) => {
+                // REAL posts everywhere: injected server-side by resolveDynamicBlocks on the public
+                // site, fetched client-side by useEditorPosts inside the editor canvas (same mapper,
+                // shared in lib/resolvedPost.ts). The empty state below is now only ever true.
+                const editing = !!puck?.isEditing;
+                const posts: any[] = useEditorPosts(editing, resolvedPosts, undefined, count);
+
+                if (!posts.length) {
+                    return (
+                        <div className="wp-block-posts-grid__empty" style={css}>
+                            {editing
+                                ? "Aquí se listarán tus entradas publicadas. Aún no hay ninguna."
+                                : "No hay entradas publicadas todavía."}
+                        </div>
+                    );
+                }
 
                 return (
-                    <div className="wp-block-posts-grid" style={{ display: "grid", gridTemplateColumns: `repeat(${columns}, 1fr)`, gap: "24px", ...css }}>
-                        {placeholderPosts.map((post, index) => (
-                            <article key={index} style={{
-                                padding: "24px",
-                                background: "var(--wjs-bg-surface, #fff)",
-                                borderRadius: "12px",
-                                border: "1px solid var(--wjs-border-subtle, #e5e7eb)"
-                            }}>
-                                <div style={{ height: "160px", background: "linear-gradient(135deg, #e0e7ff 0%, #c7d2fe 100%)", borderRadius: "8px", marginBottom: "16px" }}></div>
-                                <div style={{ fontSize: "0.75rem", color: "var(--wjs-color-text-muted, #6b7280)", marginBottom: "8px", textTransform: "uppercase", letterSpacing: "0.05em" }}>{post.date}</div>
-                                <h3 style={{ fontSize: "1.125rem", fontWeight: 600, marginBottom: "8px", color: "var(--wjs-color-text-main, #1a1a1a)" }}>{post.title}</h3>
-                                <p style={{ fontSize: "0.875rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>{post.excerpt}</p>
+                    <div
+                        className="wp-block-posts-grid"
+                        style={{
+                            ...blockVars('posts', {
+                                columns,
+                                gap: unit(gap),
+                                bg,
+                                'border-color': borderColor,
+                                radius: unit(radius),
+                                pad: unit(pad),
+                                'thumb-height': unit(thumbHeight),
+                            }),
+                            ...css,
+                        }}
+                    >
+                        {posts.map((post) => (
+                            <article key={post.id} className="wp-block-posts-grid__card">
+                                <div
+                                    className="wp-block-posts-grid__thumb"
+                                    aria-hidden="true"
+                                    style={post.image ? { backgroundImage: `url(${post.image})` } : undefined}
+                                ></div>
+                                {post.date && <div className="wp-block-posts-grid__date">{fmtPostDate(post.date)}</div>}
+                                <h3 className="wp-block-posts-grid__title">
+                                    <a href={post.href} onClick={editing ? (e: React.MouseEvent) => e.preventDefault() : undefined}>{post.title}</a>
+                                </h3>
+                                {post.excerpt && <p className="wp-block-posts-grid__excerpt">{post.excerpt}</p>}
                             </article>
                         ))}
                     </div>
                 );
             }
+        },
+
+        Form: {
+            // Real forms with stored submissions (backend /api/v1/forms) — Webflow parity. All the
+            // block's UI lives in puck/FormBlock.tsx; this entry only registers it.
+            label: "Formulario",
+            category: "content",
+            fields: { ...formBlockFields },
+            defaultProps: { ...formBlockDefaults },
+            render: (props: any) => <FormBlockRender {...props} />,
+        },
+
+        Symbol: {
+            // Synced reusable block groups ("editas uno, cambian todos") — puck/SymbolBlock.tsx.
+            // The render's nested config binds to baseConfig.components LAZILY: by first render
+            // withSharedBlockFields (bottom of this file) has already wrapped the map.
+            label: "Símbolo",
+            category: "content",
+            fields: { ...symbolBlockFields },
+            defaultProps: { ...symbolBlockDefaults },
+            render: makeSymbolRender(() => (baseConfig as any).components),
         },
 
         CategoryPosts: {
@@ -1942,6 +2515,22 @@ const baseConfig = {
                         { label: "Grid", value: "grid" },
                     ]
                 },
+                columns: {
+                    type: "select",
+                    label: "Columnas (rejilla)",
+                    options: [
+                        { label: "Del tema (2)", value: "" },
+                        { label: "1", value: "1" },
+                        { label: "2", value: "2" },
+                        { label: "3", value: "3" },
+                    ]
+                },
+                gap: { type: "text", label: "Separación (p. ej. 20)" },
+                bg: { type: "text", label: "Fondo de las tarjetas (vacío = tema)" },
+                borderColor: { type: "text", label: "Color de las líneas" },
+                radius: { type: "text", label: "Redondeo (p. ej. 12)" },
+                linkColor: { type: "text", label: "Color de los enlaces" },
+                headingColor: { type: "text", label: "Color del título" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -1954,21 +2543,60 @@ const baseConfig = {
                 categorySlug: "news",
                 count: 5,
                 layout: "list",
+                columns: "", gap: "", bg: "", borderColor: "", radius: "", linkColor: "", headingColor: "",
                 css: {}
             },
-            render: ({ categorySlug, count, layout, css }: any) => {
-                const placeholderPosts = Array.from({ length: count }, (_, i) => ({
-                    title: `${categorySlug} Post ${i + 1}`,
-                    excerpt: "Brief description of the post content...",
-                }));
+            render: ({ categorySlug, count, layout, columns, gap, bg, borderColor, radius, linkColor, headingColor, css, resolvedPosts, resolvedFiltered, puck }: any) => {
+                // Same contract as PostsGrid: real posts from the server resolver on the public
+                // site, from useEditorPosts (client fetch, same mapper) inside the editor canvas.
+                const editing = !!puck?.isEditing;
+                const posts: any[] = useEditorPosts(editing, resolvedPosts, categorySlug, count);
+
+                const vars = {
+                    ...blockVars('catposts', {
+                        columns,
+                        gap: unit(gap),
+                        bg,
+                        'border-color': borderColor,
+                        radius: unit(radius),
+                        'link-color': linkColor,
+                        'heading-color': headingColor,
+                    }),
+                    ...css,
+                };
+
+                const heading = (
+                    <h3 className="wp-block-category-posts__heading">
+                        <i className="fa-solid fa-folder" aria-hidden="true"></i> {categorySlug}
+                        {/* Say it out loud when the category matched nothing and this is really "latest
+                            posts" — silently showing unrelated entries under a category name is worse
+                            than showing none. */}
+                        {editing && resolvedFiltered === false && (
+                            <span className="wp-block-category-posts__note"> · sin entradas en esta categoría, mostrando las últimas</span>
+                        )}
+                    </h3>
+                );
+
+                if (!posts.length) {
+                    return (
+                        <div className="wp-block-category-posts" style={vars}>
+                            {heading}
+                            <p className="wp-block-category-posts__empty">
+                                {editing ? "Aún no hay entradas publicadas para mostrar aquí." : "No hay entradas en esta categoría."}
+                            </p>
+                        </div>
+                    );
+                }
 
                 if (layout === "grid") {
                     return (
-                        <div className="wp-block-category-posts" style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "20px", ...css }}>
-                            {placeholderPosts.map((post, index) => (
-                                <div key={index} style={{ padding: "20px", background: "var(--wjs-bg-surface, #fff)", borderRadius: "8px", border: "1px solid var(--wjs-border-subtle, #e5e7eb)" }}>
-                                    <h4 style={{ fontWeight: 600, marginBottom: "8px" }}>{post.title}</h4>
-                                    <p style={{ fontSize: "0.875rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>{post.excerpt}</p>
+                        <div className="wp-block-category-posts wp-block-category-posts--grid" style={vars}>
+                            {posts.map((post) => (
+                                <div key={post.id} className="wp-block-category-posts__card">
+                                    <h4 className="wp-block-category-posts__card-title">
+                                        <a href={post.href} onClick={editing ? (e: React.MouseEvent) => e.preventDefault() : undefined}>{post.title}</a>
+                                    </h4>
+                                    {post.excerpt && <p className="wp-block-category-posts__excerpt">{post.excerpt}</p>}
                                 </div>
                             ))}
                         </div>
@@ -1976,14 +2604,18 @@ const baseConfig = {
                 }
 
                 return (
-                    <div className="wp-block-category-posts" style={css}>
-                        <h3 style={{ fontSize: "1.25rem", fontWeight: 700, marginBottom: "20px", textTransform: "capitalize", color: "var(--wjs-color-text-main, #1a1a1a)" }}>
-                            <i className="fa-solid fa-folder mr-2"></i> {categorySlug}
-                        </h3>
-                        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-                            {placeholderPosts.map((post, index) => (
-                                <li key={index} style={{ padding: "16px 0", borderBottom: "1px solid var(--wjs-border-subtle, #e5e7eb)" }}>
-                                    <a href="#" style={{ fontWeight: 500, color: "var(--wjs-color-text-main, #1a1a1a)", textDecoration: "none" }}>{post.title}</a>
+                    <div className="wp-block-category-posts" style={vars}>
+                        {heading}
+                        <ul className="wp-block-category-posts__list">
+                            {posts.map((post) => (
+                                <li key={post.id} className="wp-block-category-posts__item">
+                                    <a
+                                        href={post.href}
+                                        className="wp-block-category-posts__link"
+                                        onClick={editing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+                                    >
+                                        {post.title}
+                                    </a>
                                 </li>
                             ))}
                         </ul>
@@ -2018,6 +2650,12 @@ const baseConfig = {
                         { label: "Full Width", value: "100%" },
                     ]
                 },
+                inputBg: { type: "text", label: "Fondo del campo (vacío = tema)" },
+                inputBorderColor: { type: "text", label: "Color del borde del campo" },
+                inputRadius: { type: "text", label: "Redondeo del campo (p. ej. 8)" },
+                buttonBg: { type: "text", label: "Fondo del botón" },
+                buttonColor: { type: "text", label: "Color del botón" },
+                buttonRadius: { type: "text", label: "Redondeo del botón (p. ej. 8)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -2032,9 +2670,11 @@ const baseConfig = {
                 searchPage: "/search",
                 align: "flex-start",
                 width: "500px",
+                inputBg: "", inputBorderColor: "", inputRadius: "",
+                buttonBg: "", buttonColor: "", buttonRadius: "",
                 css: {}
             },
-            render: ({ placeholder, buttonText, searchPage, align, width, css }: any) => {
+            render: ({ placeholder, buttonText, searchPage, align, width, inputBg, inputBorderColor, inputRadius, buttonBg, buttonColor, buttonRadius, css }: any) => {
                 const [query, setQuery] = React.useState("");
 
                 const handleSubmit = (e: React.FormEvent) => {
@@ -2056,36 +2696,32 @@ const baseConfig = {
                 };
 
                 return (
-                    <div style={{ display: "flex", justifyContent: align || "flex-start", width: "100%" }}>
-                        <form className="wp-block-search" style={{ display: "flex", gap: "8px", maxWidth: width || "500px", width: "100%", ...css }} onSubmit={handleSubmit}>
+                    <div
+                        className="wp-block-search-wrap"
+                        style={{
+                            ...blockVars('search', {
+                                align,
+                                width,
+                                'input-bg': inputBg,
+                                'input-border-color': inputBorderColor,
+                                'input-radius': unit(inputRadius),
+                                'button-bg': buttonBg,
+                                'button-color': buttonColor,
+                                'button-radius': unit(buttonRadius),
+                            }),
+                            ...css,
+                        }}
+                    >
+                        <form className="wp-block-search" onSubmit={handleSubmit}>
                             <input
                                 type="search"
+                                className="wp-block-search__input"
                                 placeholder={placeholder}
                                 value={query}
                                 onChange={(e) => setQuery(e.target.value)}
-                                style={{
-                                    flex: 1,
-                                    padding: "12px 16px",
-                                    border: "1px solid var(--wjs-border-subtle, #e5e7eb)",
-                                    borderRadius: "8px",
-                                    fontSize: "1rem",
-                                    background: "var(--wjs-bg-surface, #fff)",
-                                    color: "var(--wjs-color-text-main, #1a1a1a)"
-                                }}
                             />
-                            <button type="submit" style={{
-                                padding: "12px 20px",
-                                background: "var(--wjs-color-primary, #2563eb)",
-                                color: "#fff",
-                                border: "none",
-                                borderRadius: "8px",
-                                cursor: "pointer",
-                                fontWeight: 600,
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "8px"
-                            }}>
-                                <i className="fa-solid fa-search"></i>
+                            <button type="submit" className="wp-block-search__button">
+                                <i className="fa-solid fa-search" aria-hidden="true"></i>
                                 {buttonText && <span>{buttonText}</span>}
                             </button>
                         </form>
@@ -2183,6 +2819,26 @@ const baseConfig = {
                         }
                     }
                 },
+                overlayColor: { type: "text", label: "Color de la capa (vacío = negro)" },
+                gradientFrom: { type: "text", label: "Degradado — desde (sin imagen)" },
+                gradientTo: { type: "text", label: "Degradado — hasta" },
+                gradientAngle: { type: "text", label: "Degradado — ángulo (p. ej. 135)" },
+                titleSize: { type: "text", label: "Tamaño del titular (p. ej. 72)" },
+                titleWeight: {
+                    type: "select",
+                    label: "Grosor del titular",
+                    options: [
+                        { label: "Del tema", value: "" },
+                        { label: "Negrita", value: "700" },
+                        { label: "Extranegrita", value: "800" },
+                        { label: "Black", value: "900" },
+                    ],
+                },
+                titleTracking: { type: "text", label: "Espaciado del titular (p. ej. -2)" },
+                subtitleSize: { type: "text", label: "Tamaño del subtítulo (p. ej. 22)" },
+                color: { type: "text", label: "Color del texto (vacío = blanco)" },
+                pad: { type: "text", label: "Relleno (p. ej. 96 o 96px 24px)" },
+                measure: { type: "text", label: "Ancho del contenido (p. ej. 900)" },
                 elementId: { type: "text", label: "ID / Ancla (opcional)" },
                 css: {
                     type: "custom",
@@ -2197,61 +2853,58 @@ const baseConfig = {
                 subtitle: "Explica en una frase el valor de tu sitio. Cambia la imagen, la altura y la capa oscura desde el panel.",
                 bgImage: "",
                 overlay: "0.5",
+                overlayColor: "",
                 height: "60vh",
                 align: "center",
                 buttons: [{ label: "Empezar", href: "#", variant: "primary" }],
+                gradientFrom: "", gradientTo: "", gradientAngle: "",
+                titleSize: "", titleWeight: "", titleTracking: "", subtitleSize: "",
+                color: "", pad: "", measure: "",
                 elementId: "",
                 css: {}
             },
-            render: ({ title, subtitle, bgImage, overlay, height, align, buttons, elementId, css, puck }: any) => {
+            render: ({ title, subtitle, bgImage, overlay, overlayColor, height, align, buttons, gradientFrom, gradientTo, gradientAngle, titleSize, titleWeight, titleTracking, subtitleSize, color, pad, measure, elementId, css, puck }: any) => {
                 const dim = parseFloat(overlay || "0") || 0;
-                const hasImage = !!bgImage;
                 const textAlign = align === "center" ? "center" : "left";
                 return (
                     <section
                         id={elementId || undefined}
                         className="wp-block-hero"
                         style={{
-                            position: "relative",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: align || "center",
-                            minHeight: height || "60vh",
-                            padding: "48px 24px",
-                            backgroundImage: hasImage ? `url(${bgImage})` : undefined,
-                            backgroundSize: "cover",
-                            backgroundPosition: "center",
-                            background: hasImage ? undefined : "linear-gradient(135deg, var(--wjs-color-primary, #2563eb), #111827)",
-                            borderRadius: "var(--wjs-border-radius, 0px)",
-                            overflow: "hidden",
-                            ...css
+                            ...blockVars('hero', {
+                                'bg-image': bgImage ? `url(${bgImage})` : undefined,
+                                'gradient-from': gradientFrom,
+                                'gradient-to': gradientTo,
+                                'gradient-angle': gradientAngle ? `${gradientAngle}deg` : undefined,
+                                height,
+                                pad: unit(pad),
+                                justify: align,
+                                'text-align': textAlign,
+                                'actions-justify': textAlign === "center" ? "center" : "flex-start",
+                                measure: unit(measure),
+                                color,
+                                overlay: dim > 0 ? dim : undefined,
+                                'overlay-color': overlayColor,
+                                'title-size': unit(titleSize),
+                                'title-weight': titleWeight,
+                                'title-tracking': unit(titleTracking),
+                                'subtitle-size': unit(subtitleSize),
+                            }),
+                            ...css,
                         }}
                     >
-                        {dim > 0 && (
-                            <div style={{ position: "absolute", inset: 0, background: `rgba(0,0,0,${dim})` }} />
-                        )}
-                        <div style={{ position: "relative", maxWidth: "760px", textAlign: textAlign as any, color: "#fff" }}>
-                            <h1 style={{ fontSize: "clamp(2rem, 5vw, 3.5rem)", fontWeight: 800, lineHeight: 1.1, marginBottom: "1rem", fontFamily: "var(--wjs-font-family, inherit)", textShadow: "0 2px 12px rgba(0,0,0,.35)" }}>{title}</h1>
-                            {subtitle && (
-                                <p style={{ fontSize: "1.25rem", opacity: 0.92, marginBottom: "1.75rem", lineHeight: 1.55, textShadow: "0 1px 8px rgba(0,0,0,.35)" }}>{subtitle}</p>
-                            )}
+                        {dim > 0 && <div className="wp-block-hero__overlay" aria-hidden="true" />}
+                        <div className="wp-block-hero__inner">
+                            <h1 className="wp-block-hero__title">{title}</h1>
+                            {subtitle && <p className="wp-block-hero__subtitle">{subtitle}</p>}
                             {buttons?.length > 0 && (
-                                <div style={{ display: "flex", gap: "12px", flexWrap: "wrap", justifyContent: textAlign === "center" ? "center" : "flex-start" }}>
+                                <div className="wp-block-hero__actions">
                                     {buttons.map((b: any, i: number) => (
                                         <a
                                             key={i}
                                             href={b.href || "#"}
+                                            className={cx('wp-block-hero__button', b.variant === "outline" && 'wp-block-hero__button--outline')}
                                             onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                                            style={{
-                                                display: "inline-block",
-                                                padding: "0.85rem 2rem",
-                                                fontWeight: 700,
-                                                textDecoration: "none",
-                                                borderRadius: "var(--puck-btn-radius, var(--wjs-border-radius, 8px))",
-                                                background: b.variant === "outline" ? "transparent" : "var(--wjs-color-primary, #2563eb)",
-                                                color: "#fff",
-                                                border: b.variant === "outline" ? "2px solid rgba(255,255,255,.85)" : "none",
-                                            }}
                                         >
                                             {b.label}
                                         </a>
@@ -2278,6 +2931,18 @@ const baseConfig = {
                         { label: "Grande centrada", value: "large" },
                     ]
                 },
+                accent: { type: "text", label: "Color de acento (barra / comillas)" },
+                size: { type: "text", label: "Tamaño del texto (p. ej. 24)" },
+                color: { type: "text", label: "Color del texto" },
+                quoteStyle: {
+                    type: "select",
+                    label: "Cursiva",
+                    options: [
+                        { label: "Del tema (cursiva)", value: "" },
+                        { label: "Cursiva", value: "italic" },
+                        { label: "Normal", value: "normal" },
+                    ]
+                },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -2290,23 +2955,33 @@ const baseConfig = {
                 text: "El mejor momento para plantar un árbol fue hace veinte años. El segundo mejor momento es ahora.",
                 cite: "Proverbio",
                 style: "bar",
+                accent: "", size: "", color: "", quoteStyle: "",
                 css: {}
             },
-            render: ({ text, cite, style, css }: any) => {
+            render: ({ text, cite, style, accent, size, color, quoteStyle, css }: any) => {
+                const vars = {
+                    ...blockVars('quote', {
+                        accent,
+                        size: unit(size),
+                        color,
+                        style: quoteStyle,
+                    }),
+                    ...css,
+                };
                 if (style === "large") {
                     return (
-                        <figure className="wp-block-quote" style={{ textAlign: "center", padding: "24px 12px", margin: 0, ...css }}>
-                            <i className="fa-solid fa-quote-left" style={{ fontSize: "1.75rem", color: "var(--wjs-color-primary, #2563eb)", marginBottom: "12px" }}></i>
-                            <blockquote style={{ margin: 0, border: 0, padding: 0, fontSize: "1.6rem", lineHeight: 1.45, fontWeight: 500, fontStyle: "italic", color: "var(--wjs-color-text-heading, #111827)" }}>{text}</blockquote>
-                            {cite && <figcaption style={{ marginTop: "16px", fontSize: ".95rem", color: "var(--wjs-color-text-muted, #6b7280)" }}>— {cite}</figcaption>}
+                        <figure className="wp-block-quote wp-block-quote--large" style={vars}>
+                            <i className="fa-solid fa-quote-left wp-block-quote__mark" aria-hidden="true"></i>
+                            <blockquote className="wp-block-quote__body">{text}</blockquote>
+                            {cite && <figcaption className="wp-block-quote__cite">— {cite}</figcaption>}
                         </figure>
                     );
                 }
                 return (
-                    <figure className="wp-block-quote" style={{ margin: 0, ...css }}>
-                        <blockquote style={{ margin: 0, padding: "8px 0 8px 20px", borderLeft: "4px solid var(--wjs-color-primary, #2563eb)", fontSize: "1.15rem", lineHeight: 1.6, fontStyle: "italic", color: "var(--wjs-color-text-main, #374151)" }}>
+                    <figure className="wp-block-quote wp-block-quote--bar" style={vars}>
+                        <blockquote className="wp-block-quote__body">
                             {text}
-                            {cite && <footer style={{ marginTop: "10px", fontSize: ".9rem", fontStyle: "normal", color: "var(--wjs-color-text-muted, #6b7280)" }}>— {cite}</footer>}
+                            {cite && <footer className="wp-block-quote__cite">— {cite}</footer>}
                         </blockquote>
                     </figure>
                 );
@@ -2333,6 +3008,7 @@ const baseConfig = {
                         { label: "No", value: "false" },
                     ]
                 },
+                stripeBg: { type: "text", label: "Color de las filas alternas" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -2348,16 +3024,20 @@ const baseConfig = {
                     { cells: "Pro | 29 € | Prioritario" },
                 ],
                 striped: "true",
+                stripeBg: "",
                 css: {}
             },
-            render: ({ header, rows, striped, css }: any) => {
+            render: ({ header, rows, striped, stripeBg, css }: any) => {
                 const split = (s: string) => String(s || "").split("|").map((c) => c.trim());
                 const head = split(header);
                 const cols = head.length;
                 return (
-                    <div className="wp-block-table" style={{ overflowX: "auto", ...css }}>
+                    <div
+                        className={cx('wp-block-table', striped === "true" && 'wp-block-table--striped')}
+                        style={{ ...blockVars('table', { 'stripe-bg': stripeBg }), ...css }}
+                    >
                         {/* Bare <table> — the WordJS UI framework styles it with theme tokens. */}
-                        <table style={{ width: "100%" }}>
+                        <table className="wp-block-table__table">
                             <thead>
                                 <tr>
                                     {head.map((h, i) => <th key={i}>{h}</th>)}
@@ -2367,7 +3047,7 @@ const baseConfig = {
                                 {(rows || []).map((r: any, ri: number) => {
                                     const cells = split(r?.cells);
                                     return (
-                                        <tr key={ri} style={striped === "true" && ri % 2 === 1 ? { background: "var(--wjs-bg-canvas, #f9fafb)" } : undefined}>
+                                        <tr key={ri}>
                                             {Array.from({ length: cols }).map((_, ci) => <td key={ci}>{cells[ci] ?? ""}</td>)}
                                         </tr>
                                     );
@@ -2401,6 +3081,10 @@ const baseConfig = {
                         { label: "3", value: "3" },
                     ]
                 },
+                gap: { type: "text", label: "Separación (p. ej. 40)" },
+                iconSize: { type: "text", label: "Tamaño del icono (p. ej. 56)" },
+                iconBg: { type: "text", label: "Fondo del icono" },
+                iconColor: { type: "text", label: "Color del icono" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -2416,18 +3100,31 @@ const baseConfig = {
                     { icon: "fa-heart", title: "Cuidado", text: "Describe una ventaja clave en una frase." },
                 ],
                 columns: "3",
+                gap: "", iconSize: "", iconBg: "", iconColor: "",
                 css: {}
             },
-            render: ({ items, columns, css }: any) => (
-                <div className="wp-block-icon-list" style={{ display: "grid", gridTemplateColumns: `repeat(${parseInt(columns || "3", 10)}, 1fr)`, gap: "24px", ...css }}>
+            render: ({ items, columns, gap, iconSize, iconBg, iconColor, css }: any) => (
+                <div
+                    className="wp-block-icon-list"
+                    style={{
+                        ...blockVars('icon-list', {
+                            columns: parseInt(columns || "3", 10),
+                            gap: unit(gap),
+                            'icon-size': unit(iconSize),
+                            'icon-bg': iconBg,
+                            'icon-color': iconColor,
+                        }),
+                        ...css,
+                    }}
+                >
                     {(items || []).map((it: any, i: number) => (
-                        <div key={i} style={{ display: "flex", gap: "14px", alignItems: "flex-start" }}>
-                            <span style={{ width: "42px", height: "42px", borderRadius: "var(--wjs-border-radius, 10px)", background: "color-mix(in srgb, var(--wjs-color-primary, #2563eb) 12%, transparent)", color: "var(--wjs-color-primary, #2563eb)", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+                        <div key={i} className="wp-block-icon-list__item">
+                            <span className="wp-block-icon-list__icon">
                                 <i className={`fa-solid ${it.icon || "fa-check"}`}></i>
                             </span>
                             <span>
-                                <span style={{ display: "block", fontWeight: 700, color: "var(--wjs-color-text-heading, #111827)", marginBottom: "4px" }}>{it.title}</span>
-                                {it.text && <span style={{ display: "block", fontSize: ".95rem", lineHeight: 1.55, color: "var(--wjs-color-text-muted, #6b7280)" }}>{it.text}</span>}
+                                <span className="wp-block-icon-list__title">{it.title}</span>
+                                {it.text && <span className="wp-block-icon-list__text">{it.text}</span>}
                             </span>
                         </div>
                     ))}
@@ -2469,6 +3166,12 @@ const baseConfig = {
                         { label: "Derecha", value: "flex-end" },
                     ]
                 },
+                size: { type: "text", label: "Tamaño (p. ej. 52)" },
+                radius: { type: "text", label: "Redondeo (p. ej. 12; vacío = círculo)" },
+                bg: { type: "text", label: "Fondo" },
+                color: { type: "text", label: "Color del icono" },
+                hoverBg: { type: "text", label: "Fondo al pasar el ratón" },
+                gap: { type: "text", label: "Separación (p. ej. 16)" },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -2484,10 +3187,25 @@ const baseConfig = {
                     { network: "x-twitter", url: "#" },
                 ],
                 align: "flex-start",
+                size: "", radius: "", bg: "", color: "", hoverBg: "", gap: "",
                 css: {}
             },
-            render: ({ items, align, css, puck }: any) => (
-                <div className="wp-block-social-links" style={{ display: "flex", gap: "10px", justifyContent: align || "flex-start", ...css }}>
+            render: ({ items, align, size, radius, bg, color, hoverBg, gap, css, puck }: any) => (
+                <div
+                    className="wp-block-social-links"
+                    style={{
+                        ...blockVars('social', {
+                            justify: align,
+                            size: unit(size),
+                            radius: unit(radius),
+                            bg,
+                            color,
+                            'hover-bg': hoverBg,
+                            gap: unit(gap),
+                        }),
+                        ...css,
+                    }}
+                >
                     {(items || []).map((it: any, i: number) => (
                         <a
                             key={i}
@@ -2495,20 +3213,8 @@ const baseConfig = {
                             target="_blank"
                             rel="noopener noreferrer"
                             aria-label={it.network}
+                            className="wp-block-social-links__link"
                             onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                            style={{
-                                width: "42px",
-                                height: "42px",
-                                borderRadius: "50%",
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                background: "var(--wjs-bg-surface, #fff)",
-                                border: "1px solid var(--wjs-border-subtle, #e5e7eb)",
-                                color: "var(--wjs-color-text-main, #374151)",
-                                textDecoration: "none",
-                                fontSize: "1.05rem",
-                            }}
                         >
                             <i className={`fa-brands fa-${it.network || "link"}`}></i>
                         </a>
@@ -2529,6 +3235,19 @@ const baseConfig = {
                         label: { type: "text", label: "Etiqueta" }
                     }
                 },
+                gap: { type: "text", label: "Separación (p. ej. 40)" },
+                valueSize: { type: "text", label: "Tamaño de la cifra (p. ej. 56)" },
+                valueColor: { type: "text", label: "Color de la cifra" },
+                labelColor: { type: "text", label: "Color de la etiqueta" },
+                labelTransform: {
+                    type: "select",
+                    label: "Etiqueta en mayúsculas",
+                    options: [
+                        { label: "Del tema", value: "" },
+                        { label: "MAYÚSCULAS", value: "uppercase" },
+                        { label: "Normal", value: "none" },
+                    ]
+                },
                 css: {
                     type: "custom",
                     label: "Estilos CSS",
@@ -2543,14 +3262,28 @@ const baseConfig = {
                     { value: "98%", label: "Satisfacción" },
                     { value: "24/7", label: "Soporte" },
                 ],
+                gap: "", valueSize: "", valueColor: "", labelColor: "", labelTransform: "",
                 css: {}
             },
-            render: ({ items, css }: any) => (
-                <div className="wp-block-stats" style={{ display: "grid", gridTemplateColumns: `repeat(${(items || []).length || 1}, 1fr)`, gap: "24px", textAlign: "center", ...css }}>
+            render: ({ items, gap, valueSize, valueColor, labelColor, labelTransform, css }: any) => (
+                <div
+                    className="wp-block-stats"
+                    style={{
+                        ...blockVars('stats', {
+                            columns: (items || []).length || 1,
+                            gap: unit(gap),
+                            'value-size': unit(valueSize),
+                            'value-color': valueColor,
+                            'label-color': labelColor,
+                            'label-transform': labelTransform,
+                        }),
+                        ...css,
+                    }}
+                >
                     {(items || []).map((it: any, i: number) => (
-                        <div key={i}>
-                            <div style={{ fontSize: "clamp(1.8rem, 4vw, 3rem)", fontWeight: 800, color: "var(--wjs-color-primary, #2563eb)", lineHeight: 1.1 }}>{it.value}</div>
-                            <div style={{ marginTop: "6px", fontSize: ".95rem", textTransform: "uppercase", letterSpacing: ".06em", color: "var(--wjs-color-text-muted, #6b7280)" }}>{it.label}</div>
+                        <div key={i} className="wp-block-stats__item">
+                            <div className="wp-block-stats__value">{it.value}</div>
+                            <div className="wp-block-stats__label">{it.label}</div>
                         </div>
                     ))}
                 </div>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { AuthProvider, useAuth } from "@/contexts/AuthContext";
 import Sidebar from "@/components/Sidebar";
@@ -13,6 +13,7 @@ import { initPlugins } from "@/lib/plugins";
 function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
     const { user, isLoading, logout, can, refreshUser } = useAuth();
     const router = useRouter();
+    const pathname = usePathname();
     const [sidebarOpen, setSidebarOpen] = useState(false);
     const [isCollapsed, setIsCollapsed] = useState(false);
 
@@ -98,6 +99,14 @@ function DashboardLayoutContent({ children }: { children: React.ReactNode }) {
                 </div>
             </div>
         );
+    }
+
+    // The Puck editor routes render a FULLSCREEN workspace (fixed inset-0; its own rail + breadcrumb
+    // replace the admin chrome, Gutenberg-style). Skip the admin shell there: rendering it is wasted
+    // work, and the Sidebar (z-5002) would sit ON TOP of the editor. All auth/MFA gates above still
+    // ran; the contexts wrap this component, so children keep every provider.
+    if (/^\/admin\/(pages|posts)\/[^/]+$/.test(pathname ?? "")) {
+        return <>{children}</>;
     }
 
     // Nudge: required-role user still inside the grace window — a slim persistent bar with the deadline.

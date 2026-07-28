@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0b0f19;
+  --wjs-bg-surface: #1a1d27;
+  --wjs-bg-surface-raised: #262932;
+  --wjs-color-primary: #94a3b8;
+  --wjs-color-primary-dark: #64748b;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #64748b;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f1f5f9;
+  --wjs-color-text-muted: #9a9ea4;
+  --wjs-color-heading: #f1f5f9;
+  --wjs-color-link: #94a3b8;
+  --wjs-color-link-hover: #64748b;
+  --wjs-border-subtle: #343841;
+  --wjs-outline: #62666e;
+  --wjs-outline-variant: #2e323b;
+  --wjs-focus-ring: #94a3b8;
+}
+
 /* Theme: Chronos Watches (Obsidian Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@300;400;600&display=swap');
 

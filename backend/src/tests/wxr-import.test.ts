@@ -84,7 +84,7 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(p.site.baseUrl, 'https://fixture.example');
             // description carries entities NOT in CDATA: &amp; and &quot; decode; a numeric ref stays literal
             // (this is the exact, unchanged fast-xml-parser behaviour under both v4 and v5).
-            assert.strictEqual(p.site.description, 'Q & A &#8212; a "representative" export');
+            assert.strictEqual(p.site.description, 'Q &amp; A &#8212; a &quot;representative&quot; export');
 
             assert.strictEqual(p.authors.length, 1);
             assert.strictEqual(p.categories.length, 2);

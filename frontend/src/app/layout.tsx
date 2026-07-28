@@ -8,7 +8,11 @@ import { AnalyticsTracker } from '@/components/AnalyticsTracker';
 import { getSettings, getFonts } from "@/lib/server-api";
 import { buildFontFaceCss } from "@/lib/fontFaceCss";
 
-const inter = Inter({ subsets: ["latin"] });
+// `variable` exposes the real (hashed) family through --font-inter. next/font registers the face
+// as "__Inter_<hash>", never the literal "Inter" — so any stylesheet that says font-family: "Inter"
+// (the Puck editor chrome via --puck-font-family) silently fell back to system-ui. Referencing
+// var(--font-inter) resolves to the loaded webfont.
+const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export async function generateMetadata(): Promise<Metadata> {
     // Use the shared server data layer (mono/split-aware base URL + request-deduped) instead of a
@@ -80,7 +84,7 @@ export default async function RootLayout({
                     <style id="wjs-server-fonts" dangerouslySetInnerHTML={{ __html: fontFaceCss }} />
                 )}
             </head>
-            <body className={inter.className} suppressHydrationWarning>
+            <body className={`${inter.className} ${inter.variable}`} suppressHydrationWarning>
                 <ModalProvider>
                     <SystemFontsLoader />
                     {/* AnalyticsTracker uses useSearchParams → must be Suspense-wrapped to not
