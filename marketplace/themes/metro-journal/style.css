@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0f0f0f;
+  --wjs-bg-surface: #1d1d1d;
+  --wjs-bg-surface-raised: #292929;
+  --wjs-color-primary: #ef4444;
+  --wjs-color-primary-dark: #b91c1c;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #b91c1c;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ffffff;
+  --wjs-color-text-muted: #a4a4a4;
+  --wjs-color-heading: #ffffff;
+  --wjs-color-link: #ef4444;
+  --wjs-color-link-hover: #b91c1c;
+  --wjs-border-subtle: #3a3a3a;
+  --wjs-outline: #6a6a6a;
+  --wjs-outline-variant: #333333;
+  --wjs-focus-ring: #ef4444;
+}
+
 /* Theme: Metro Journal (Brutalist Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Public+Sans:wght@400;700&display=swap');
 

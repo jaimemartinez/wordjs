@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #0f172a;
+  --wjs-bg-surface: #1d2537;
+  --wjs-bg-surface-raised: #293141;
+  --wjs-color-primary: #1e3a8a;
+  --wjs-color-primary-dark: #1d4ed8;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #1d4ed8;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #eff6ff;
+  --wjs-color-text-muted: #9aa1ae;
+  --wjs-color-heading: #eff6ff;
+  --wjs-color-link: #1e3a8a;
+  --wjs-color-link-hover: #1d4ed8;
+  --wjs-border-subtle: #373f50;
+  --wjs-outline: #646c7b;
+  --wjs-outline-variant: #31384a;
+  --wjs-focus-ring: #1e3a8a;
+}
+
 /* Theme: Vanguard Consulting (Editorial Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
 

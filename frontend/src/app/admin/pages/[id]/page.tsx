@@ -36,7 +36,10 @@ export default function PageEditorPage() {
 
     const [title, setTitle] = useState("");
     const [slug, setSlug] = useState("");
-    const [content, setContent] = useState("");
+    // The serialized HTML body is REF, not state: it is regenerated on every canvas change (i.e. on
+    // every keystroke) and is only ever read inside handleSubmit — never during render. As state it
+    // re-rendered the whole editor on each letter typed.
+    const contentRef = useRef("");
     const [initialPuckData, setInitialPuckData] = useState<Data | null>(null);
     const puckDataRef = useRef<Data>({ content: [], root: {} }); // For saving without causing re-renders
     const [status, setStatus] = useState("draft");
@@ -111,7 +114,7 @@ export default function PageEditorPage() {
             const page = await postsApi.get(pageId!);
             setTitle(page.title);
             setSlug(page.slug);
-            setContent(page.content);
+            contentRef.current = page.content;
             setStatus(page.status);
 
             // Load Puck data from meta if available
@@ -168,7 +171,9 @@ export default function PageEditorPage() {
     // Cleared once the user builds real blocks, after which the normal block→HTML path takes over.
     const legacyHtmlRef = useRef<string | null>(null);
 
-    const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }) => {
+    // Returns whether the save actually landed, so the editor chrome can distinguish success from
+    // failure (saved-state pill, autosave backoff) instead of assuming every attempt succeeded.
+    const handleSubmit = async (e?: React.FormEvent | { autosave?: boolean }): Promise<boolean> => {
         const isAutosave = !!(e && "autosave" in e && e.autosave);
         if (e && "preventDefault" in e) e.preventDefault();
         setSaving(true);
@@ -178,7 +183,7 @@ export default function PageEditorPage() {
         if (unhydratedSaveBlocked({ isNew, loaded })) {
             if (!isAutosave) await alert(trStr("No se pudo cargar el contenido; el guardado está deshabilitado para no sobrescribir la página.", language));
             setSaving(false);
-            return;
+            return false;
         }
 
         try {
@@ -195,13 +200,13 @@ export default function PageEditorPage() {
                 // A background save must never pop a modal — just wait for a title.
                 if (!isAutosave) await alert(t('page.edit.titleRequired'));
                 setSaving(false);
-                return;
+                return false;
             }
 
             const pageData = {
                 title: finalTitle,
                 slug: finalSlug,
-                content,
+                content: contentRef.current,
                 status,
                 type: "page",
                 meta: {
@@ -231,11 +236,13 @@ export default function PageEditorPage() {
             }
             // Stay in editor - no redirect
             setIsDirty(false); // Reset dirty state after successful save
+            return true;
         } catch (error: any) {
             console.error("Failed to save page:", error);
             if (!isAutosave) {
                 await alert(`${t('page.edit.saveFailed')}: ${error.message || t('page.edit.unknownError')}`);
             }
+            return false;
         } finally {
             setSaving(false);
         }
@@ -324,7 +331,7 @@ export default function PageEditorPage() {
                             html += props.html || '';
                         }
                     });
-                    setContent(html);
+                    contentRef.current = html;
                     }
                 }}
             />

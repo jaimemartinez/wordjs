@@ -4,6 +4,57 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.12] - 2026-07-28
+
+### Security — plugin sandbox hardening
+- **A plugin could escape the sandbox to host RCE via `node:sqlite`.** The runtime module blocklists are
+  keyed by name, and `node:sqlite` (unflagged since Node ~22.13) was not on them. Its `DatabaseSync` is
+  C++-backed, so it never routes through the `fs`/`require` proxies or `io-guard`: a plugin could open and
+  write **arbitrary files** by native code (reading the core credential DB — `users.user_pass`, stored
+  option secrets — and writing host payloads) and, via `new DatabaseSync(path, { allowExtension: true })`
+  → `enableLoadExtension(true)` → `loadExtension(dll)`, load a native addon (`process.dlopen` is blocked,
+  but SQLite's extension loader is a separate native path) for full host code execution. `sqlite` is now
+  blocked for plugins in both the CommonJS require guard and the isolate's ESM `import()` resolve hook.
+- **The same escape class via `node:wasi`.** `new WASI({ preopens: { '/': hostDir } })` maps a host
+  directory into a WASM instance whose native `path_open`/`fd_read`/`fd_write` bypass the filesystem
+  guard; a plugin bundling a small `.wasm` could read/write host files. `wasi` is now blocked too.
+- **The in-process `config/database` SQL guard diverged from the RPC bridge guard.** In-process plugins
+  and every theme's `functions.js` reached a weaker, regex-based guard that `SELECT … FROM/**/users`,
+  `FROM"users"` and `FROM(users)` evaded — and which applied no cross-plugin prefix restriction, so it
+  could read any other plugin's tables. It now delegates to the same lexer-based `assertSqlAllowed` used by
+  the bridge (comment/quote/dollar/bracket denial, catalog and file-function denial, single-statement
+  enforcement, and the positive `wjp_<slug>_` prefix allowlist).
+- **`process.report.getReport()` could leak the host environment to an in-process plugin/theme.**
+  `writeReport()` had a runtime block but `getReport()`/`getReportSync()` did not, and the report includes
+  `environmentVariables` — the full host `process.env` (secrets) for code running in the host process. All
+  three report methods are now blocked in plugin context (core and the scrubbed isolate are unaffected).
+
+### Security — supply chain
+- **Marketplace integrity verification was optional.** Installs verified a package's SHA-256 only when the
+  catalog entry carried one, so a remote source that simply omitted the field installed unverified
+  server-side code. SHA-256 is now **mandatory for remote plugin and theme installs** (fail-closed); every
+  official catalog entry already ships one, so this is a no-op for the default catalog.
+
+### Added — editor & content
+- Gutenberg-style block editor refinements continuing #274: an appearance/animation field system, reusable
+  **Symbol** blocks, a **Form** block with server-side submissions, responsive image `srcset`, and dynamic
+  block resolution on the public site.
+- **Plugin provenance & one-click updates.** Each installed plugin is bound to the catalog source it came
+  from (`plugin_origins`), gating updates so a second admin-added source cannot take over an installed
+  plugin (with its approved grants and preserved data). `plugin_origins` is a protected option, off-limits
+  to plugin SQL.
+
+### Changed — themes & UI
+- Marketplace theme catalog resync and a refreshed editor UI (Stitch design system) across the admin chrome
+  and the shared `wordjs-ui` block-style framework.
+
+## [1.12.11] - 2026-07-23
+
+### Changed — editor
+- **Gutenberg-style editor chrome with a reliable canvas contract (#274).** The block overlay and action
+  bar are portaled out of the editor iframe to a parent layer, so they are immune to the page's own CSS;
+  the canvas persists its layout contract, and tall pages scroll correctly inside the editor frame.
+
 ## [1.12.10] - 2026-07-23
 
 ### Fixed — admin UI

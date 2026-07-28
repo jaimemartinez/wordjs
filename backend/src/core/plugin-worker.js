@@ -139,7 +139,12 @@ try {
     const esmBlocked = new Set([
         'child_process', 'fs', 'fs/promises', 'net', 'tls', 'dgram', 'http', 'https', 'http2',
         'dns', 'dns/promises', 'worker_threads', 'vm', 'module', 'inspector', 'repl', 'test',
-        'trace_events', 'cluster', 'async_hooks', 'v8'
+        'trace_events', 'cluster', 'async_hooks', 'v8',
+        // node:sqlite — DatabaseSync opens/creates arbitrary files via native code (bypasses the fs guard)
+        // and loadExtension() maps native addons (host RCE). node:wasi — WASI preopens map host dirs into a
+        // WASM instance whose native fd_read/fd_write/path_open bypass the fs guard. Keep in sync with
+        // BLOCKED_PLUGIN_MODULES.
+        'sqlite', 'wasi'
     ]);
     // A network-granted plugin may import() the TCP/HTTP modules (net/tls/http/https/http2) —
     // installChildNetGuard locks net.Socket.prototype.connect, the single chokepoint every TCP path funnels

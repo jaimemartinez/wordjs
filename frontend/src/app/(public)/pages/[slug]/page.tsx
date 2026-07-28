@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import PostContent from "@/components/public/PostContent";
 import JsonLd from "@/components/public/JsonLd";
 import { getPostBySlug, getPostById, getSettings, buildPostMetadata, buildPostJsonLd, resolveSiteBase } from "@/lib/server-api";
+import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import type { Post } from "@/lib/api";
 
 interface RouteParams {
@@ -32,10 +33,14 @@ export default async function SinglePage({ params }: { params: Promise<RoutePara
     const { slug } = await params;
     const [page, settings, base] = await Promise.all([loadPage(slug), getSettings(), resolveSiteBase()]);
     if (!page) notFound();
+    // Dynamic blocks (PostsGrid / CategoryPosts) are given their real posts HERE, on the server, so
+    // the entries are in the SSR HTML for crawlers and no-JS visitors — not fetched, and certainly
+    // not invented, in the browser.
+    const withBlocks = await withResolvedBlocks(page);
     return (
         <>
             <JsonLd data={buildPostJsonLd(page, base, settings?.blogname)} />
-            <PostContent post={page} settings={settings} />
+            <PostContent post={withBlocks} settings={settings} />
         </>
     );
 }

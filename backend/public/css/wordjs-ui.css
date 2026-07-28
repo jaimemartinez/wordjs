@@ -862,3 +862,1632 @@ a.list-group-item:hover, .list-group-item-action:hover { background-color: var(-
 @keyframes wjs-anim-fade-left { from { opacity: 0; transform: translateX(-32px); } to { opacity: 1; transform: none; } }
 @keyframes wjs-anim-fade-right { from { opacity: 0; transform: translateX(32px); } to { opacity: 1; transform: none; } }
 @keyframes wjs-anim-zoom { from { opacity: 0; transform: scale(0.92); } to { opacity: 1; transform: none; } }
+
+/* ============================================== VISUAL-EDITOR BLOCK CONTRACT ==
+ * Every Puck block's look, expressed once, here, as `var(--wjs-<block>-<prop>, <base>)`.
+ *
+ * WHY THIS EXISTS. Blocks used to carry their looks as INLINE styles. An inline style beats any
+ * stylesheet, so the only way a theme could restyle a block was `!important` on every declaration
+ * (the bundled themes carried ~100 each). Moving the values here — behind per-block custom
+ * properties — turns a block into something a theme can actually skin, with no `!important`
+ * anywhere. `frontend/src/components/puck/blockVars.ts` is the emitting half of this contract.
+ *
+ * THE CASCADE, in the order people expect:
+ *   1. What the AUTHOR set on this one block  → inline `--wjs-hero-title-size` on that element
+ *   2. What the THEME wants                   → `:root { --wjs-hero-title-size: … }` in style.css
+ *   3. The block's own base                   → the second argument of `var()` below
+ *
+ * `blockVars` OMITS empty values rather than emitting `""`, so an author who chose nothing leaves
+ * rule 2 in charge. That is the whole trick: an always-present inline variable would pin the block
+ * to its default forever and lock the theme out again.
+ *
+ * A BASE IS NEVER A RAW VALUE WHEN A GLOBAL TOKEN EXISTS. Bases below read `--wjs-bg-surface`,
+ * `--wjs-color-primary`, `--wjs-radius-lg`, … so a theme that only declares the ~20 global palette
+ * tokens already restyles all 28 blocks coherently, and only reaches for a `--wjs-<block>-*`
+ * override when it wants that ONE block to differ.
+ *
+ * NAMING. Block token = `--wjs-` + the blockVars prefix + `-` + the key. The prefixes are:
+ *   heading text image card divider button spacer section grid flex columns accordion tabs video
+ *   audio pricing testimonial cta posts catposts search hero quote table icon-list social stats
+ * Extra tokens appear here that no field emits (e.g. `--wjs-card-desc-color`) — those are
+ * theme-only seams: nothing in the editor sets them, a theme may.
+ * ========================================================================================== */
+
+/* ---------------------------------------------------------------- SHARED SCALE - */
+/* The block contract needs a compact spacing/elevation ramp and a couple of Material-style
+ * pairs that the framework did not name yet. All are aliases of tokens declared above, so a
+ * theme that overrides only the canonical token still flows through; a theme that wants the
+ * ramp itself can redeclare these. */
+:root {
+  /* Compact spacing scale used by block padding/gaps */
+  --wjs-xs: 4px;
+  --wjs-sm: 8px;
+  --wjs-md: 16px;
+  --wjs-lg: 24px;
+  --wjs-xl: 48px;
+  --wjs-2xl: 80px;
+
+  /* Small type sizes (eyebrows, captions, table cells) */
+  --wjs-label: 11px;
+  --wjs-small: 13px;
+
+  /* Surface ramp beyond canvas/surface/muted, for blocks that stack two levels of elevation */
+  --wjs-bg-surface-raised: var(--wjs-bg-surface);
+  --wjs-surface-highest: var(--wjs-bg-muted);
+  --wjs-surface-lowest: var(--wjs-bg-canvas);
+
+  /* Outlines: `--wjs-outline` is a VISIBLE line, `--wjs-border-subtle` a hairline */
+  --wjs-outline: var(--wjs-border-subtle);
+  --wjs-outline-variant: var(--wjs-border-subtle);
+  /* Top inner highlight that makes a surface read as raised on dark themes; `none` on light */
+  --wjs-inset-highlight: none;
+
+  /* The accent pair: a solid fill + the text colour guaranteed to be legible on it */
+  --wjs-primary-fixed: var(--wjs-color-primary);
+  --wjs-color-on-accent: var(--wjs-color-on-primary);
+  --wjs-color-on-accent-strong: var(--wjs-color-on-primary);
+
+  /* Chrome surfaces the public layout reads. The header renders
+   * bg-[var(--wjs-bg-surface-glass, white)]; with nothing declaring it, every DARK theme painted a
+   * literal white bar with its own light text on it. Base equals the old fallback exactly. */
+  --wjs-bg-surface-glass: var(--wjs-bg-surface);
+
+  /* Elevation aliases (Material-style step numbers) */
+  --wjs-shadow-2: var(--wjs-shadow);
+  --wjs-shadow-3: var(--wjs-shadow-lg);
+
+  /* Per-level heading tracking — display type usually wants negative tracking, body does not */
+  --wjs-h1-tracking: normal;
+  --wjs-h2-tracking: normal;
+  --wjs-h3-tracking: normal;
+}
+
+/* ------------------------------------------------------------------- HEADING - */
+.wp-block-heading {
+  margin: 0 0 var(--wjs-heading-mb, 0.5em);
+  font-family: var(--wjs-heading-family, var(--wjs-font-family-heading));
+  line-height: var(--wjs-heading-leading, var(--wjs-heading-line-height));
+  text-transform: var(--wjs-heading-transform, none);
+  border-bottom: var(--wjs-heading-border-width, 0) solid var(--wjs-heading-border-color, var(--wjs-border-subtle));
+  padding: var(--wjs-heading-pad, 0);
+  background: var(--wjs-heading-bg, transparent);
+  color: var(--wjs-heading-color, var(--wjs-color-heading));
+}
+/* Per level, so an unstyled H2 keeps the theme's H2 size instead of collapsing to 1em. The
+ * block's own `--wjs-heading-size` wins when the author set one; otherwise the theme's --wjs-hN. */
+h1.wp-block-heading {
+  color: var(--wjs-heading-color, var(--wjs-h1-color, var(--wjs-color-heading)));
+  line-height: var(--wjs-heading-leading, var(--wjs-h1-leading, var(--wjs-heading-line-height)));
+  font-size: var(--wjs-heading-size, var(--wjs-h1));
+  font-weight: var(--wjs-heading-font-weight, var(--wjs-h1-weight));
+  letter-spacing: var(--wjs-heading-tracking, var(--wjs-h1-tracking));
+}
+h2.wp-block-heading {
+  color: var(--wjs-heading-color, var(--wjs-h2-color, var(--wjs-color-heading)));
+  line-height: var(--wjs-heading-leading, var(--wjs-h2-leading, var(--wjs-heading-line-height)));
+  font-size: var(--wjs-heading-size, var(--wjs-h2));
+  font-weight: var(--wjs-heading-font-weight, var(--wjs-h2-weight));
+  letter-spacing: var(--wjs-heading-tracking, var(--wjs-h2-tracking));
+}
+h3.wp-block-heading {
+  color: var(--wjs-heading-color, var(--wjs-h3-color, var(--wjs-color-heading)));
+  line-height: var(--wjs-heading-leading, var(--wjs-h3-leading, var(--wjs-heading-line-height)));
+  font-size: var(--wjs-heading-size, var(--wjs-h3));
+  font-weight: var(--wjs-heading-font-weight, var(--wjs-h3-weight));
+  letter-spacing: var(--wjs-heading-tracking, var(--wjs-h3-tracking));
+}
+h4.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h4)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h4-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
+h5.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h5)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h5-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
+h6.wp-block-heading { font-size: var(--wjs-heading-size, var(--wjs-h6)); font-weight: var(--wjs-heading-font-weight, var(--wjs-h6-weight)); letter-spacing: var(--wjs-heading-tracking, normal); }
+
+/* ---------------------------------------------------------------------- TEXT - */
+.wp-block-text {
+  color: var(--wjs-text-color, var(--wjs-color-text-main));
+  font-size: var(--wjs-text-size, var(--wjs-font-size-base));
+  line-height: var(--wjs-text-leading, var(--wjs-line-height-base));
+  /* A measure caps the line length for readability; unset = fill the container */
+  max-width: var(--wjs-text-measure, none);
+}
+/* The block owns its outer rhythm; the rich-text's first/last child must not add to it. */
+.wp-block-text > :first-child { margin-top: 0; }
+.wp-block-text > :last-child { margin-bottom: 0; }
+
+/* --------------------------------------------------------------------- IMAGE - */
+.wp-block-image {
+  display: block;
+  width: var(--wjs-image-width, auto);
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--wjs-image-radius, 0);
+  box-shadow: var(--wjs-image-shadow, none);
+  object-fit: var(--wjs-image-fit, cover);
+}
+
+/* ---------------------------------------------------------------------- CARD - */
+.wp-block-card {
+  display: flex;
+  flex-direction: column;
+  padding: var(--wjs-card-pad, var(--wjs-xl));
+  background: var(--wjs-card-bg, var(--wjs-bg-surface));
+  color: var(--wjs-card-color, var(--wjs-color-text-main));
+  border: var(--wjs-card-border-width, 1px) solid var(--wjs-card-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-card-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-card-shadow, var(--wjs-inset-highlight));
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+/* Lift on hover is opt-in: `none` by default so a card that should sit still, sits still. */
+.wp-block-card:hover {
+  background: var(--wjs-card-hover-bg, var(--wjs-card-bg, var(--wjs-bg-surface)));
+  transform: var(--wjs-card-hover-transform, none);
+  border-color: var(--wjs-card-hover-border-color, var(--wjs-card-border-color, var(--wjs-border-subtle)));
+  box-shadow: var(--wjs-card-hover-shadow, var(--wjs-card-shadow, var(--wjs-inset-highlight)));
+}
+.wp-block-card__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--wjs-card-icon-size, 48px);
+  height: var(--wjs-card-icon-size, 48px);
+  margin-bottom: var(--wjs-md);
+  border-radius: var(--wjs-card-icon-radius, var(--wjs-radius));
+  background: var(--wjs-card-icon-bg, var(--wjs-surface-highest));
+  color: var(--wjs-card-icon-color, var(--wjs-color-primary));
+  /* Glyph scales with the tile so one field resizes both */
+  font-size: var(--wjs-card-icon-glyph, calc(var(--wjs-card-icon-size, 48px) * 0.45));
+}
+.wp-block-card__title {
+  margin: 0 0 var(--wjs-sm);
+  font-family: var(--wjs-font-family-heading);
+  font-size: var(--wjs-card-title-size, var(--wjs-h4));
+  font-weight: var(--wjs-card-title-weight, 700);
+  line-height: var(--wjs-card-title-leading, 1.25);
+  letter-spacing: var(--wjs-card-title-tracking, var(--wjs-h3-tracking));
+  text-transform: var(--wjs-card-title-transform, none);
+  color: var(--wjs-card-title-color, inherit);
+}
+.wp-block-card__description {
+  margin: 0;
+  font-family: var(--wjs-card-desc-family, inherit);
+  font-size: var(--wjs-card-desc-size, inherit);
+  line-height: var(--wjs-card-desc-leading, inherit);
+  color: var(--wjs-card-desc-color, var(--wjs-color-text-muted));
+}
+/* Variants set the block's OWN tokens, so an inline author choice still outranks them, and a
+ * theme retunes a variant through its `--wjs-card-<variant>-*` seam rather than a new rule. */
+.wp-block-card.card-theme-dark {
+  --wjs-card-bg: var(--wjs-card-dark-bg, var(--wjs-color-dark));
+  --wjs-card-color: var(--wjs-card-dark-color, var(--wjs-color-on-dark));
+  /* The variant must also re-point the TITLE token: themes set `--wjs-card-title-color` to their
+   * ink at :root, which otherwise pierces this remap and paints ink-on-ink on the dark surface. */
+  --wjs-card-title-color: var(--wjs-card-dark-title-color, var(--wjs-card-dark-color, var(--wjs-color-on-dark)));
+  --wjs-card-desc-color: var(--wjs-card-dark-desc-color, color-mix(in srgb, var(--wjs-card-dark-color, var(--wjs-color-on-dark, #fff)) 72%, transparent));
+  --wjs-card-border-color: var(--wjs-card-dark-border-color, transparent);
+  --wjs-card-icon-bg: var(--wjs-card-dark-icon-bg, rgba(255, 255, 255, 0.1));
+  --wjs-card-icon-color: var(--wjs-card-dark-icon-color, #fff);
+}
+.wp-block-card.card-theme-accent {
+  --wjs-card-bg: var(--wjs-card-accent-bg, var(--wjs-color-accent));
+  --wjs-card-color: var(--wjs-card-accent-color, var(--wjs-color-on-accent));
+  --wjs-card-title-color: var(--wjs-card-accent-title-color, var(--wjs-card-accent-color, var(--wjs-color-on-accent)));
+  --wjs-card-desc-color: var(--wjs-card-accent-desc-color, color-mix(in srgb, var(--wjs-card-accent-color, var(--wjs-color-on-accent, #fff)) 80%, transparent));
+  --wjs-card-border-color: var(--wjs-card-accent-border-color, transparent);
+  --wjs-card-icon-bg: var(--wjs-card-accent-icon-bg, rgba(255, 255, 255, 0.18));
+  --wjs-card-icon-color: var(--wjs-card-accent-icon-color, #fff);
+}
+
+/* ------------------------------------------------------------------- DIVIDER - */
+.wp-block-divider {
+  /* The vertical rhythm lives in tokens so a theme owns the page's spacing, not the block. */
+  margin: var(--wjs-divider-mt, var(--wjs-xl)) auto var(--wjs-divider-mb, var(--wjs-xl));
+  width: var(--wjs-divider-length, 100%);
+  max-width: 100%;
+  border: 0;
+  opacity: 1;
+}
+.wp-block-divider--solid { border-top: var(--wjs-divider-width, 1px) solid var(--wjs-divider-color, var(--wjs-border-subtle)); }
+.wp-block-divider--dashed { border-top: var(--wjs-divider-width, 1px) dashed var(--wjs-divider-color, var(--wjs-border-subtle)); }
+/* A gradient needs a painted box, not a border — hence the separate element in the renderer. */
+.wp-block-divider--gradient {
+  height: var(--wjs-divider-width, 2px);
+  background: var(--wjs-divider-gradient, linear-gradient(90deg, transparent, var(--wjs-divider-color, var(--wjs-color-primary)), transparent));
+}
+
+/* -------------------------------------------------------------------- BUTTON - */
+/* `align` is text-align on the wrapper: `justify-content: left|right` is legal Box-Alignment but
+ * flexbox ignores those two keywords in most engines, which silently broke left/right. */
+.wp-block-button { text-align: var(--wjs-button-align, left); }
+.wp-block-button__link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--wjs-sm);
+  padding: var(--wjs-button-pad-y, 12px) var(--wjs-button-pad-x, 20px);
+  font-family: var(--wjs-button-family, var(--wjs-font-family-base));
+  font-size: var(--wjs-button-size, 15px);
+  font-weight: var(--wjs-button-weight, 700);
+  line-height: var(--wjs-button-leading, 1);
+  text-transform: var(--wjs-button-transform, none);
+  letter-spacing: var(--wjs-button-tracking, normal);
+  text-decoration: none;
+  border: var(--wjs-button-border-width, 1px) solid var(--wjs-button-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-button-radius, var(--wjs-radius));
+  background: var(--wjs-button-bg, var(--wjs-color-primary));
+  color: var(--wjs-button-color, var(--wjs-color-on-primary));
+  box-shadow: var(--wjs-button-shadow, var(--wjs-shadow-2));
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+/* `a:hover` in the reboot recolours links; restate the token so a button keeps its own colour. */
+.wp-block-button__link:hover {
+  background: var(--wjs-button-hover-bg, var(--wjs-button-bg, var(--wjs-color-primary)));
+  color: var(--wjs-button-hover-color, var(--wjs-button-color, var(--wjs-color-on-primary)));
+  box-shadow: var(--wjs-button-hover-shadow, var(--wjs-button-shadow, var(--wjs-shadow-2)));
+  filter: brightness(1.08);
+  transform: var(--wjs-button-hover-transform, scale(1.03));
+}
+.wp-block-button__link:active { transform: scale(0.96); }
+/* Variants get DEDICATED seams first: without them a theme's primary `--wjs-button-bg/color`
+ * bleeds into every variant (secondary ≡ primary; outline inherits on-primary text, invisible
+ * on light canvases). The old chain stays as fallback so pre-seam themes keep their look. */
+.wp-block-button__link.button-variant-secondary {
+  background: var(--wjs-button-secondary-bg, var(--wjs-button-bg, var(--wjs-color-secondary)));
+  color: var(--wjs-button-secondary-color, var(--wjs-button-color, var(--wjs-color-on-secondary)));
+}
+.wp-block-button__link.button-variant-secondary:hover { color: var(--wjs-button-secondary-color, var(--wjs-button-color, var(--wjs-color-on-secondary))); }
+.wp-block-button__link.button-variant-outline {
+  background: var(--wjs-button-outline-bg, transparent);
+  border-color: var(--wjs-button-outline-border-color, var(--wjs-button-border-color, var(--wjs-outline)));
+  color: var(--wjs-button-outline-color, var(--wjs-color-text-main));
+  box-shadow: none;
+}
+.wp-block-button__link.button-variant-outline:hover {
+  background: var(--wjs-button-outline-hover-bg, rgba(127, 127, 127, 0.12));
+  color: var(--wjs-button-outline-color, var(--wjs-color-text-main));
+  filter: none;
+}
+
+/* -------------------------------------------------------------------- SPACER - */
+.wp-block-spacer { width: 100%; height: var(--wjs-spacer-height, var(--wjs-lg)); }
+
+/* ------------------------------------------------------------------- SECTION - */
+.wp-block-section {
+  width: 100%;
+  padding: var(--wjs-section-pad, var(--wjs-2xl) var(--wjs-lg));
+  background: var(--wjs-section-bg, transparent);
+  color: var(--wjs-section-color, inherit);
+}
+.wp-block-section__inner {
+  width: 100%;
+  max-width: var(--wjs-section-max-width, var(--wjs-container-max));
+  margin-inline: auto;
+}
+
+/* ---------------------------------------------------------------------- GRID - */
+/* The outer element only carries tokens. The GRID lives on "__items", the wrapper Puck puts around
+ * a slot's children: declared on the outer element instead, that single wrapper became the only
+ * grid item, so every child stacked into track 1 and the remaining tracks rendered empty. */
+.wp-block-grid__items {
+  display: grid;
+  gap: var(--wjs-grid-gap, var(--wjs-md));
+  grid-template-columns: repeat(var(--wjs-grid-columns, 3), minmax(0, 1fr));
+}
+.wp-block-grid__items > * { min-width: 0; }
+@media (max-width: 1023.98px) { .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-tablet, 2), minmax(0, 1fr)); } }
+@media (max-width: 767.98px) { .wp-block-grid__items { grid-template-columns: repeat(var(--wjs-grid-columns-mobile, 1), minmax(0, 1fr)); } }
+
+/* ------------------------------------------------------------------ FLEX ROW - */
+.wp-block-flex-row__items {
+  display: flex;
+  flex-direction: var(--wjs-flex-direction, row);
+  justify-content: var(--wjs-flex-justify, flex-start);
+  align-items: var(--wjs-flex-align, center);
+  gap: var(--wjs-flex-gap, var(--wjs-md));
+  flex-wrap: var(--wjs-flex-wrap, wrap);
+}
+.wp-block-flex-row__items > * { min-width: 0; }
+
+/* ------------------------------------------------------------------- COLUMNS - */
+.wp-block-columns {
+  display: grid;
+  width: 100%;
+  align-items: stretch;
+  gap: var(--wjs-columns-gap, var(--wjs-lg));
+  grid-template-columns: var(--wjs-columns-template, repeat(2, minmax(0, 1fr)));
+  min-height: var(--wjs-columns-min-height, auto);
+  background: var(--wjs-columns-bg, transparent);
+  border-radius: var(--wjs-columns-radius, 0);
+}
+/* Each column carries its own `--wjs-col-*` set inline (the editor's per-column style panel). */
+.wp-block-columns__col {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: var(--wjs-col-min-height, 100px);
+  padding: var(--wjs-col-pad, var(--wjs-md));
+  background: var(--wjs-col-bg, transparent);
+  border: var(--wjs-col-border-width, 0) solid var(--wjs-col-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-col-radius, 0);
+}
+@media (max-width: 767.98px) { .wp-block-columns { grid-template-columns: 1fr; } }
+
+/* ----------------------------------------------------------------- ACCORDION - */
+/* Two shapes, one contract. DEFAULT: a single joined panel, items divided by a hairline. The other
+ * is a STACK OF CARDS — each item its own surface with its own border and radius, separated by a
+ * gap. A theme picks the second by giving the container a flex direction + gap, zeroing the
+ * separator, and giving the item a box. Every base below is what it already rendered. */
+.wp-block-accordion {
+  display: var(--wjs-accordion-display, block);
+  flex-direction: column;
+  gap: var(--wjs-accordion-item-gap, 0);
+  /* `visible` lets a themed open item cast a glow past the container edge. */
+  overflow: var(--wjs-accordion-overflow, hidden);
+  padding: var(--wjs-accordion-inset, 0);
+  background: var(--wjs-accordion-bg, var(--wjs-bg-surface));
+  border: var(--wjs-accordion-border-width, 1px) solid var(--wjs-accordion-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-accordion-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-accordion-shadow, none);
+}
+.wp-block-accordion__item {
+  overflow: hidden;
+  background: var(--wjs-accordion-item-bg, transparent);
+  border: var(--wjs-accordion-item-border-width, 0) solid var(--wjs-accordion-item-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-accordion-item-radius, 0);
+  transition: border-color var(--wjs-transition), background var(--wjs-transition), box-shadow var(--wjs-transition);
+}
+.wp-block-accordion__item:hover {
+  border-color: var(--wjs-accordion-item-hover-border-color, var(--wjs-accordion-item-border-color, var(--wjs-border-subtle)));
+}
+.wp-block-accordion__item.is-open {
+  background: var(--wjs-accordion-active-bg, var(--wjs-accordion-item-bg, transparent));
+  border-color: var(--wjs-accordion-active-border-color, var(--wjs-accordion-item-border-color, var(--wjs-border-subtle)));
+  box-shadow: var(--wjs-accordion-active-shadow, none);
+}
+/* The divider between items. Chained through `--wjs-accordion-border-width` so the 12 themes that
+ * only ever set THAT keep their hairline; a card stack sets the separator to 0 on its own. */
+.wp-block-accordion__item + .wp-block-accordion__item {
+  border-top: var(--wjs-accordion-separator-width, var(--wjs-accordion-border-width, 1px)) solid var(--wjs-accordion-separator-color, var(--wjs-accordion-border-color, var(--wjs-border-subtle)));
+}
+.wp-block-accordion__header {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--wjs-md);
+  padding: var(--wjs-accordion-pad, var(--wjs-md) var(--wjs-lg));
+  font-family: var(--wjs-accordion-header-family, inherit);
+  font-size: var(--wjs-accordion-header-size, 1rem);
+  font-weight: var(--wjs-accordion-header-weight, 600);
+  text-transform: var(--wjs-accordion-header-transform, none);
+  letter-spacing: var(--wjs-accordion-header-tracking, normal);
+  border-radius: var(--wjs-accordion-header-radius, 0);
+  box-shadow: var(--wjs-accordion-header-shadow, none);
+  text-align: left;
+  background: var(--wjs-accordion-header-bg, transparent);
+  color: var(--wjs-accordion-header-color, var(--wjs-color-text-main));
+  border: 0;
+  border-bottom: var(--wjs-accordion-header-border-width, 0) solid var(--wjs-accordion-header-border-color, var(--wjs-border-subtle));
+  cursor: pointer;
+  transition: background var(--wjs-transition), color var(--wjs-transition);
+}
+.wp-block-accordion__header:hover { background: var(--wjs-accordion-header-hover-bg, var(--wjs-bg-muted)); }
+.wp-block-accordion__icon { flex: none; color: var(--wjs-accordion-icon-color, inherit); transition: transform 0.2s ease; }
+.wp-block-accordion__item.is-open .wp-block-accordion__icon { transform: rotate(180deg); }
+.wp-block-accordion__item.is-open .wp-block-accordion__header { color: var(--wjs-accordion-active-color, var(--wjs-color-primary)); }
+.wp-block-accordion__panel {
+  padding: var(--wjs-accordion-panel-pad, var(--wjs-md) var(--wjs-lg));
+  font-family: var(--wjs-accordion-panel-family, inherit);
+  background: var(--wjs-accordion-panel-bg, var(--wjs-bg-muted));
+  color: var(--wjs-accordion-panel-color, var(--wjs-color-text-muted));
+}
+
+/* ---------------------------------------------------------------------- TABS - */
+.wp-block-tabs { display: block; }
+/* The list is either an underlined rule (default) or a filled "pill" bar — a theme picks by
+ * setting `--wjs-tabs-list-bg`/`-radius`/`-pad` and zeroing the border width. */
+.wp-block-tabs__list {
+  display: flex;
+  flex-wrap: wrap;
+  /* Tabs are separated by a GAP in the reference, not by horizontal tab padding — the two look the
+   * same until a tab's label is short, when padding centres it and a gap does not. */
+  gap: var(--wjs-tabs-gap, 0);
+  margin-bottom: var(--wjs-tabs-list-gap, var(--wjs-lg));
+  padding: var(--wjs-tabs-list-pad, 0);
+  background: var(--wjs-tabs-list-bg, transparent);
+  border-bottom: var(--wjs-tabs-list-border-width, var(--wjs-tabs-border-width, 2px)) solid var(--wjs-tabs-list-border-color, var(--wjs-tabs-border-color, var(--wjs-border-subtle)));
+  border-radius: var(--wjs-tabs-list-radius, 0);
+}
+.wp-block-tabs__tab {
+  padding: var(--wjs-tabs-tab-pad, 12px 24px);
+  /* Pull the tab's own underline over the list's, so the active tab "cuts" the rule. */
+  margin-bottom: calc(var(--wjs-tabs-border-width, 2px) * -1);
+  font-family: var(--wjs-tabs-family, inherit);
+  font-size: var(--wjs-tabs-size, inherit);
+  font-weight: var(--wjs-tabs-weight, 500);
+  text-transform: var(--wjs-tabs-transform, none);
+  letter-spacing: var(--wjs-tabs-tracking, normal);
+  background: transparent;
+  color: var(--wjs-tabs-color, var(--wjs-color-text-muted));
+  border: 0;
+  border-bottom: var(--wjs-tabs-border-width, 2px) solid transparent;
+  border-radius: var(--wjs-tabs-radius, 0);
+  cursor: pointer;
+  transition: color var(--wjs-transition), border-color var(--wjs-transition), background var(--wjs-transition);
+}
+.wp-block-tabs__tab:hover { color: var(--wjs-tabs-active-color, var(--wjs-color-primary)); }
+.wp-block-tabs__tab.is-active {
+  font-weight: var(--wjs-tabs-active-weight, 700);
+  color: var(--wjs-tabs-active-color, var(--wjs-color-primary));
+  background: var(--wjs-tabs-active-bg, transparent);
+  box-shadow: var(--wjs-tabs-active-shadow, none);
+  border-bottom-width: var(--wjs-tabs-active-border-width, var(--wjs-tabs-border-width, 2px));
+  border-bottom-color: var(--wjs-tabs-active-border-color, var(--wjs-tabs-active-color, var(--wjs-color-primary)));
+}
+.wp-block-tabs__panel {
+  padding: var(--wjs-tabs-panel-pad, var(--wjs-lg));
+  background: var(--wjs-tabs-panel-bg, var(--wjs-bg-surface));
+  border-top: var(--wjs-tabs-panel-border-width, 0) solid var(--wjs-tabs-panel-border-color, var(--wjs-border-subtle));
+  color: var(--wjs-tabs-panel-color, inherit);
+  border-radius: var(--wjs-tabs-panel-radius, var(--wjs-radius));
+}
+
+/* --------------------------------------------------------------- VIDEO EMBED - */
+.wp-block-video-embed {
+  position: relative;
+  width: 100%;
+  height: 0;
+  padding-bottom: var(--wjs-video-aspect, 56.25%);
+  overflow: hidden;
+  background: var(--wjs-video-bg, var(--wjs-bg-muted));
+  border: var(--wjs-video-border-width, 0) solid var(--wjs-video-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-video-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-video-shadow, none);
+}
+.wp-block-video-embed iframe,
+.wp-block-video-embed video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+.wp-block-video-embed__placeholder {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: var(--wjs-video-placeholder-color, var(--wjs-color-text-muted));
+}
+.wp-block-video-embed__placeholder i { font-size: 2rem; margin-bottom: var(--wjs-sm); }
+
+/* The poster cover: a real <button> filling the frame, so the whole poster is one keyboard-
+ * reachable target rather than a div with a click handler. It unmounts once playback starts. */
+.wp-block-video-embed__cover {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
+}
+.wp-block-video-embed__scrim {
+  position: absolute;
+  inset: 0;
+  background: var(--wjs-video-scrim, rgba(0, 0, 0, 0.4));
+  transition: background var(--wjs-transition);
+}
+.wp-block-video-embed__cover:hover .wp-block-video-embed__scrim {
+  background: var(--wjs-video-scrim-hover, var(--wjs-video-scrim, rgba(0, 0, 0, 0.25)));
+}
+.wp-block-video-embed__play {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--wjs-video-play-size, 72px);
+  height: var(--wjs-video-play-size, 72px);
+  font-size: calc(var(--wjs-video-play-size, 72px) * 0.32);
+  border-radius: var(--wjs-video-play-radius, 50%);
+  background: var(--wjs-video-play-bg, rgba(255, 255, 255, 0.92));
+  color: var(--wjs-video-play-color, var(--wjs-color-text-main));
+  box-shadow: var(--wjs-video-play-shadow, var(--wjs-shadow-2));
+  transition: transform 0.15s ease, background var(--wjs-transition);
+}
+/* Nudge right: a play triangle is optically off-centre in a circle when centred geometrically. */
+.wp-block-video-embed__play i { transform: translateX(6%); }
+.wp-block-video-embed__cover:hover .wp-block-video-embed__play { transform: scale(1.06); }
+.wp-block-video-embed__cover:focus-visible {
+  outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
+  outline-offset: calc(var(--wjs-block-focus-offset, 2px) * -1);
+}
+.wp-block-video-embed__chip {
+  position: absolute;
+  right: var(--wjs-md);
+  bottom: var(--wjs-md);
+  padding: var(--wjs-video-chip-pad, 2px 8px);
+  font-family: var(--wjs-video-chip-family, inherit);
+  font-size: var(--wjs-video-chip-size, var(--wjs-label));
+  border-radius: var(--wjs-video-chip-radius, var(--wjs-radius-sm));
+  background: var(--wjs-video-chip-bg, rgba(0, 0, 0, 0.65));
+  color: var(--wjs-video-chip-color, #fff);
+}
+.wp-block-video-embed__placeholder p { margin: 0; }
+
+/* --------------------------------------------------------------- AUDIO PLAYER - */
+/* The transport is OURS, not the browser's. `<audio controls>` paints chrome no stylesheet can
+ * reach, so the element is kept as the media engine only (see .__engine) and every visible part
+ * below is real markup behind --wjs-audio-* tokens. */
+.wp-block-audio-player {
+  display: flex;
+  align-items: center;
+  gap: var(--wjs-md);
+  padding: var(--wjs-audio-pad, var(--wjs-lg));
+  background: var(--wjs-audio-bg, var(--wjs-bg-surface));
+  border: var(--wjs-audio-border-width, 1px) solid var(--wjs-audio-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-audio-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-audio-shadow, none);
+}
+
+/* Play / pause. Sized off the same token the old icon tile used, so a theme that already set
+ * --wjs-audio-icon-* keeps its geometry. */
+.wp-block-audio-player__button {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--wjs-audio-icon-size, 48px);
+  height: var(--wjs-audio-icon-size, 48px);
+  padding: 0;
+  font-size: var(--wjs-audio-icon-glyph, calc(var(--wjs-audio-icon-size, 48px) * 0.45));
+  border-radius: var(--wjs-audio-icon-radius, var(--wjs-radius));
+  background: var(--wjs-audio-icon-bg, var(--wjs-color-primary));
+  color: var(--wjs-audio-icon-color, var(--wjs-color-on-primary));
+  border: var(--wjs-audio-icon-border-width, 0) solid var(--wjs-audio-icon-border-color, var(--wjs-border-subtle));
+  box-shadow: var(--wjs-audio-icon-shadow, none);
+  cursor: pointer;
+  transition: transform 0.15s ease, filter 0.2s ease;
+}
+.wp-block-audio-player__button:hover { transform: scale(1.05); filter: brightness(1.06); }
+.wp-block-audio-player__button:active { transform: scale(0.96); }
+
+.wp-block-audio-player__body { flex: 1; min-width: 0; }
+
+/* Marquee: the label is rendered twice and the pair slides exactly half its width, so the loop has
+ * no seam. Motion is opt-in per theme AND disabled outright under prefers-reduced-motion. */
+/* TWO elements on purpose. The marquee CLIPS (it is exactly as wide as the column and hides
+ * the overflow); the track INSIDE it is as wide as its content and is the thing that moves. Doing
+ * both jobs on one element makes it grow past the player, and then there is nothing left to clip
+ * against — the title spills out of the pill. */
+.wp-block-audio-player__marquee {
+  width: 100%;
+  margin-bottom: var(--wjs-xs);
+  overflow: hidden;
+}
+.wp-block-audio-player__track {
+  display: flex;
+  gap: var(--wjs-audio-marquee-gap, var(--wjs-xl));
+  min-width: 0;
+}
+.wp-block-audio-player__track.is-scrolling { width: max-content; }
+/* Not scrolling: the single label must ellipsize rather than push the column wider. */
+.wp-block-audio-player__track:not(.is-scrolling) .wp-block-audio-player__title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.wp-block-audio-player__title {
+  flex: none;
+  font-family: var(--wjs-audio-title-family, inherit);
+  font-size: var(--wjs-audio-title-size, inherit);
+  font-weight: var(--wjs-audio-title-weight, 600);
+  text-transform: var(--wjs-audio-title-transform, none);
+  letter-spacing: var(--wjs-audio-title-tracking, normal);
+  white-space: nowrap;
+  color: var(--wjs-audio-title-color, var(--wjs-color-text-main));
+}
+@media screen and (prefers-reduced-motion: no-preference) {
+  .wp-block-audio-player__track.is-scrolling {
+    animation: wjs-audio-marquee var(--wjs-audio-marquee-duration, 0s) linear infinite;
+  }
+}
+@keyframes wjs-audio-marquee {
+  from { transform: translateX(0); }
+  to { transform: translateX(calc(-50% - var(--wjs-audio-marquee-gap, var(--wjs-xl)) / 2)); }
+}
+
+/* Scrubber. A real range input: keyboard seeking and screen-reader semantics come for free, which
+ * is exactly what hand-rolled slider divs throw away. The fill is a gradient stop driven by the
+ * --wjs-audio-progress-pct the component writes on each frame. */
+.wp-block-audio-player__scrub {
+  -webkit-appearance: none;
+  appearance: none;
+  display: block;
+  width: 100%;
+  height: var(--wjs-audio-track-height, 4px);
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.wp-block-audio-player__scrub::-webkit-slider-runnable-track {
+  height: var(--wjs-audio-track-height, 4px);
+  border-radius: var(--wjs-audio-track-radius, 999px);
+  background: linear-gradient(
+    to right,
+    var(--wjs-audio-progress-bg, var(--wjs-color-primary)) 0 var(--wjs-audio-progress-pct, 0%),
+    var(--wjs-audio-track-bg, var(--wjs-surface-highest)) var(--wjs-audio-progress-pct, 0%) 100%
+  );
+  box-shadow: var(--wjs-audio-progress-shadow, none);
+}
+.wp-block-audio-player__scrub::-moz-range-track {
+  height: var(--wjs-audio-track-height, 4px);
+  border-radius: var(--wjs-audio-track-radius, 999px);
+  background: linear-gradient(
+    to right,
+    var(--wjs-audio-progress-bg, var(--wjs-color-primary)) 0 var(--wjs-audio-progress-pct, 0%),
+    var(--wjs-audio-track-bg, var(--wjs-surface-highest)) var(--wjs-audio-progress-pct, 0%) 100%
+  );
+  box-shadow: var(--wjs-audio-progress-shadow, none);
+}
+/* The handle is hidden by default (the reference shows a bare bar) but stays a real, focusable
+ * target; it appears on hover and whenever the control has keyboard focus. */
+.wp-block-audio-player__scrub::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: var(--wjs-audio-thumb-size, 12px);
+  height: var(--wjs-audio-thumb-size, 12px);
+  margin-top: calc((var(--wjs-audio-track-height, 4px) - var(--wjs-audio-thumb-size, 12px)) / 2);
+  border: 0;
+  border-radius: 50%;
+  background: var(--wjs-audio-thumb-bg, var(--wjs-audio-progress-bg, var(--wjs-color-primary)));
+  opacity: var(--wjs-audio-thumb-opacity, 0);
+  transition: opacity var(--wjs-transition);
+}
+.wp-block-audio-player__scrub::-moz-range-thumb {
+  width: var(--wjs-audio-thumb-size, 12px);
+  height: var(--wjs-audio-thumb-size, 12px);
+  border: 0;
+  border-radius: 50%;
+  background: var(--wjs-audio-thumb-bg, var(--wjs-audio-progress-bg, var(--wjs-color-primary)));
+  opacity: var(--wjs-audio-thumb-opacity, 0);
+  transition: opacity var(--wjs-transition);
+}
+.wp-block-audio-player__scrub:hover::-webkit-slider-thumb,
+.wp-block-audio-player__scrub:focus-visible::-webkit-slider-thumb { opacity: 1; }
+.wp-block-audio-player__scrub:hover::-moz-range-thumb,
+.wp-block-audio-player__scrub:focus-visible::-moz-range-thumb { opacity: 1; }
+.wp-block-audio-player__scrub:focus-visible {
+  outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
+  outline-offset: var(--wjs-block-focus-offset, 4px);
+}
+
+.wp-block-audio-player__times {
+  display: flex;
+  justify-content: space-between;
+  margin-top: var(--wjs-xs);
+  font-family: var(--wjs-audio-time-family, inherit);
+  font-size: var(--wjs-audio-time-size, var(--wjs-small));
+  color: var(--wjs-audio-time-color, var(--wjs-color-text-muted));
+}
+
+/* The engine. Present for the media API and as the no-JS download link; never shown, because its
+ * own controls are the thing this block exists to replace. */
+.wp-block-audio-player__engine { display: none; }
+
+/* ------------------------------------------------------------- PRICING TABLE - */
+.wp-block-pricing {
+  display: grid;
+  align-items: stretch;
+  gap: var(--wjs-pricing-gap, var(--wjs-lg));
+  grid-template-columns: repeat(var(--wjs-pricing-columns, 3), minmax(0, 1fr));
+}
+.wp-block-pricing__plan {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  padding: var(--wjs-pricing-pad, var(--wjs-xl));
+  background: var(--wjs-pricing-bg, var(--wjs-bg-surface));
+  border: var(--wjs-pricing-border-width, 1px) solid var(--wjs-pricing-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-pricing-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-pricing-shadow, var(--wjs-inset-highlight));
+  transition: transform 0.3s ease, box-shadow 0.3s ease, border-color 0.3s ease;
+}
+.wp-block-pricing__plan:hover {
+  border-color: var(--wjs-pricing-hover-border-color, var(--wjs-pricing-border-color, var(--wjs-border-subtle)));
+  transform: var(--wjs-pricing-hover-transform, translateY(-8px));
+  box-shadow: var(--wjs-pricing-hover-shadow, var(--wjs-pricing-shadow, var(--wjs-inset-highlight)));
+}
+.wp-block-pricing__plan--highlighted {
+  background: var(--wjs-pricing-highlight-bg, var(--wjs-bg-surface-raised));
+  border: var(--wjs-pricing-highlight-border-width, 2px) solid var(--wjs-pricing-highlight-border-color, var(--wjs-pricing-accent, var(--wjs-color-primary)));
+  box-shadow: var(--wjs-pricing-highlight-shadow, var(--wjs-shadow-3));
+  color: var(--wjs-pricing-highlight-color, inherit);
+  transform: scale(var(--wjs-pricing-highlight-scale, 1.02));
+  /* The featured plan brightens its own copy by RETUNING the plan tokens, so a theme adjusts it
+   * through `--wjs-pricing-highlight-*` instead of writing a second set of rules. */
+  --wjs-pricing-name-color: var(--wjs-pricing-highlight-name-color, var(--wjs-primary-fixed));
+  --wjs-pricing-feature-color: var(--wjs-pricing-highlight-feature-color, var(--wjs-color-text-main));
+  /* Price/period need the same seam: a theme that re-tints the featured plan (dark/primary bg)
+   * has no other way to keep them readable — its base price token would pierce this variant. */
+  --wjs-pricing-price-color: var(--wjs-pricing-highlight-price-color, var(--wjs-pricing-highlight-color, var(--wjs-color-heading)));
+  --wjs-pricing-period-color: var(--wjs-pricing-highlight-period-color, var(--wjs-pricing-highlight-color, var(--wjs-color-text-muted)));
+}
+.wp-block-pricing__plan--highlighted:hover {
+  transform: scale(var(--wjs-pricing-highlight-scale, 1.02)) translateY(-6px);
+  box-shadow: var(--wjs-pricing-highlight-hover-shadow, var(--wjs-pricing-highlight-shadow, var(--wjs-shadow-3)));
+}
+.wp-block-pricing__name {
+  margin: 0 0 var(--wjs-sm);
+  font-family: var(--wjs-pricing-name-family, inherit);
+  font-size: var(--wjs-pricing-name-size, var(--wjs-h5));
+  font-weight: var(--wjs-pricing-name-weight, 700);
+  line-height: var(--wjs-pricing-name-leading, 1.2);
+  text-transform: var(--wjs-pricing-name-transform, none);
+  letter-spacing: var(--wjs-pricing-name-tracking, normal);
+  color: var(--wjs-pricing-name-color, var(--wjs-color-text-main));
+}
+.wp-block-pricing__price {
+  margin-bottom: var(--wjs-lg);
+  font-family: var(--wjs-pricing-price-family, var(--wjs-font-family-heading));
+  font-size: var(--wjs-pricing-price-size, 40px);
+  font-weight: var(--wjs-pricing-price-weight, 800);
+  line-height: 1;
+  letter-spacing: var(--wjs-pricing-price-tracking, var(--wjs-h1-tracking));
+  color: var(--wjs-pricing-price-color, var(--wjs-color-heading));
+}
+.wp-block-pricing__period {
+  margin-left: var(--wjs-xs);
+  font-size: var(--wjs-pricing-period-size, var(--wjs-small));
+  font-weight: 500;
+  color: var(--wjs-pricing-period-color, var(--wjs-color-text-muted));
+}
+.wp-block-pricing__features {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: var(--wjs-md);
+  margin: 0 0 var(--wjs-xl);
+  padding: 0;
+  list-style: none;
+}
+.wp-block-pricing__feature {
+  display: flex;
+  align-items: center;
+  gap: var(--wjs-md);
+  margin: 0;
+  font-size: var(--wjs-pricing-feature-size, var(--wjs-small));
+  color: var(--wjs-pricing-feature-color, var(--wjs-color-text-muted));
+}
+.wp-block-pricing__feature i { flex: none; font-size: 18px; color: var(--wjs-pricing-accent, var(--wjs-color-primary)); }
+.wp-block-pricing__button {
+  display: block;
+  margin-top: auto;
+  padding: var(--wjs-pricing-button-pad, 12px 20px);
+  text-align: center;
+  text-decoration: none;
+  font-weight: var(--wjs-pricing-button-weight, 700);
+  background: var(--wjs-pricing-button-bg, var(--wjs-surface-highest));
+  color: var(--wjs-pricing-button-color, var(--wjs-color-primary));
+  border: 1px solid var(--wjs-pricing-button-border-color, var(--wjs-outline-variant));
+  border-radius: var(--wjs-pricing-button-radius, var(--wjs-radius));
+  transition: filter 0.2s ease, transform 0.15s ease;
+}
+.wp-block-pricing__button:hover {
+  background: var(--wjs-pricing-button-hover-bg, var(--wjs-pricing-button-bg, var(--wjs-surface-highest)));
+  color: var(--wjs-pricing-button-color, var(--wjs-color-primary));
+  filter: brightness(1.08);
+}
+/* The highlighted plan's CTA is the page's primary action — it takes the accent fill. */
+.wp-block-pricing__plan--highlighted .wp-block-pricing__button {
+  background: var(--wjs-pricing-highlight-button-bg, var(--wjs-pricing-accent, var(--wjs-color-primary)));
+  color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary));
+  border-color: transparent;
+  box-shadow: var(--wjs-pricing-highlight-button-shadow, none);
+}
+.wp-block-pricing__plan--highlighted .wp-block-pricing__button:hover {
+  background: var(--wjs-pricing-highlight-button-bg, var(--wjs-pricing-accent, var(--wjs-color-primary)));
+  color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary));
+}
+.wp-block-pricing__plan--highlighted .wp-block-pricing__button:hover { color: var(--wjs-pricing-button-on-accent, var(--wjs-color-on-primary)); }
+@media (max-width: 767.98px) {
+  .wp-block-pricing { grid-template-columns: 1fr; }
+  .wp-block-pricing__plan--highlighted { transform: none; }
+  .wp-block-pricing__plan--highlighted:hover { transform: translateY(-6px); }
+}
+
+/* --------------------------------------------------------------- TESTIMONIAL - */
+.wp-block-testimonial {
+  position: relative;
+  padding: var(--wjs-testimonial-pad, var(--wjs-xl));
+  font-family: var(--wjs-testimonial-family, inherit);
+  background: var(--wjs-testimonial-bg, var(--wjs-bg-surface));
+  border: var(--wjs-testimonial-border-width, 1px) solid var(--wjs-testimonial-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-testimonial-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-testimonial-shadow, var(--wjs-shadow-2));
+}
+.wp-block-testimonial__mark {
+  position: absolute;
+  top: 12px;
+  right: 24px;
+  font-family: var(--wjs-testimonial-mark-family, var(--wjs-font-family-heading));
+  font-size: var(--wjs-testimonial-mark-size, 64px);
+  font-weight: var(--wjs-testimonial-mark-weight, inherit);
+  line-height: 1;
+  color: var(--wjs-testimonial-mark-color, var(--wjs-color-primary));
+  opacity: var(--wjs-testimonial-mark-opacity, 0.1);
+  pointer-events: none;
+}
+.wp-block-testimonial__quote {
+  position: relative;
+  z-index: 1;
+  margin: 0 0 var(--wjs-xl);
+  font-family: var(--wjs-testimonial-quote-family, inherit);
+  font-size: var(--wjs-testimonial-quote-size, var(--wjs-h5));
+  font-style: var(--wjs-testimonial-quote-style, italic);
+  line-height: 1.6;
+  color: var(--wjs-testimonial-quote-color, var(--wjs-color-text-main));
+}
+.wp-block-testimonial__person { display: flex; align-items: center; gap: var(--wjs-md); }
+.wp-block-testimonial__avatar {
+  flex: none;
+  width: var(--wjs-testimonial-avatar-size, 48px);
+  height: var(--wjs-testimonial-avatar-size, 48px);
+  border-radius: var(--wjs-testimonial-avatar-radius, 50%);
+  object-fit: cover;
+}
+.wp-block-testimonial__avatar--initials {
+  display: grid;
+  place-items: center;
+  background: var(--wjs-testimonial-avatar-bg, var(--wjs-color-primary));
+  color: var(--wjs-testimonial-avatar-color, var(--wjs-color-on-primary));
+  font-weight: 700;
+  font-size: calc(var(--wjs-testimonial-avatar-size, 48px) * 0.4);
+}
+.wp-block-testimonial__author {
+  font-family: var(--wjs-testimonial-author-family, inherit);
+  font-weight: var(--wjs-testimonial-author-weight, 700);
+  color: var(--wjs-testimonial-author-color, var(--wjs-color-text-main));
+}
+.wp-block-testimonial__role {
+  font-family: var(--wjs-testimonial-role-family, inherit);
+  font-size: var(--wjs-testimonial-role-size, var(--wjs-small));
+  font-weight: var(--wjs-testimonial-role-weight, inherit);
+  text-transform: var(--wjs-testimonial-role-transform, none);
+  letter-spacing: var(--wjs-testimonial-role-tracking, normal);
+  color: var(--wjs-testimonial-role-color, var(--wjs-color-text-muted));
+}
+
+/* ---------------------------------------------------------------- CTA BANNER - */
+.wp-block-cta-banner {
+  /* Layout is a token too: `block` gives the centred stack, `flex` turns the same three children
+   * into a banner row (the flex properties below are inert while display is block). */
+  display: var(--wjs-cta-display, block);
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: var(--wjs-cta-justify, center);
+  column-gap: var(--wjs-cta-gap, var(--wjs-xl));
+  padding: var(--wjs-cta-pad, var(--wjs-2xl) var(--wjs-xl));
+  text-align: var(--wjs-cta-text-align, center);
+  border: var(--wjs-cta-border-width, 0) solid var(--wjs-cta-border-color, var(--wjs-border-subtle));
+  backdrop-filter: var(--wjs-cta-backdrop, none);
+  -webkit-backdrop-filter: var(--wjs-cta-backdrop, none);
+  border-radius: var(--wjs-cta-radius, var(--wjs-radius-lg));
+  /* `--wjs-cta-bg` is the author's override; the variant sets `--wjs-cta-variant-bg` below. */
+  background: var(--wjs-cta-bg, var(--wjs-cta-variant-bg, var(--wjs-color-primary)));
+  color: var(--wjs-cta-color, var(--wjs-color-on-primary));
+  box-shadow: var(--wjs-cta-shadow, none);
+}
+/* Each variant carries its OWN legible text colour: one shared `--wjs-cta-color` cannot be right
+ * on both an accent fill and a near-black one. The author's inline value still outranks all three. */
+.wp-block-cta-banner.cta-variant-primary {
+  --wjs-cta-variant-bg: var(--wjs-cta-primary-bg, var(--wjs-color-primary));
+  color: var(--wjs-cta-color, var(--wjs-cta-primary-color, var(--wjs-color-on-primary)));
+}
+.wp-block-cta-banner.cta-variant-dark {
+  --wjs-cta-variant-bg: var(--wjs-cta-dark-bg, var(--wjs-color-dark));
+  color: var(--wjs-cta-color, var(--wjs-cta-dark-color, var(--wjs-color-on-dark)));
+}
+.wp-block-cta-banner.cta-variant-gradient {
+  --wjs-cta-variant-bg: var(--wjs-cta-gradient, linear-gradient(135deg, var(--wjs-color-primary), var(--wjs-color-accent)));
+  color: var(--wjs-cta-color, var(--wjs-cta-gradient-color, var(--wjs-color-on-primary)));
+}
+.wp-block-cta-banner__title {
+  order: var(--wjs-cta-title-order, 0);
+  flex: var(--wjs-cta-title-flex, 0 1 auto);
+  margin: var(--wjs-cta-title-margin, 0 0 var(--wjs-md));
+  padding-top: var(--wjs-cta-title-pad, 0);
+  border-top: var(--wjs-cta-title-border-width, 0) solid var(--wjs-cta-title-border-color, var(--wjs-border-subtle));
+  font-family: var(--wjs-cta-title-family, var(--wjs-font-family-heading));
+  font-size: var(--wjs-cta-title-size, var(--wjs-h2));
+  font-weight: var(--wjs-cta-title-weight, 800);
+  line-height: var(--wjs-cta-title-leading, 1.15);
+  letter-spacing: var(--wjs-cta-title-tracking, var(--wjs-h2-tracking));
+  text-transform: var(--wjs-cta-title-transform, none);
+  color: var(--wjs-cta-title-color, inherit);
+}
+.wp-block-cta-banner__subtitle {
+  order: var(--wjs-cta-subtitle-order, 0);
+  flex: var(--wjs-cta-subtitle-flex, 0 1 auto);
+  margin: var(--wjs-cta-subtitle-margin, 0 auto var(--wjs-xl));
+  max-width: var(--wjs-cta-measure, 46rem);
+  font-size: var(--wjs-cta-subtitle-size, var(--wjs-h6));
+  color: inherit;
+  opacity: var(--wjs-cta-subtitle-opacity, 0.85);
+}
+.wp-block-cta-banner__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  order: var(--wjs-cta-button-order, 0);
+  margin-left: var(--wjs-cta-button-ml, 0);
+  gap: var(--wjs-sm);
+  padding: var(--wjs-cta-button-pad, 14px 28px);
+  font-family: var(--wjs-cta-button-family, inherit);
+  font-size: var(--wjs-cta-button-size, inherit);
+  font-weight: var(--wjs-cta-button-weight, 700);
+  text-transform: var(--wjs-cta-button-transform, none);
+  letter-spacing: var(--wjs-cta-button-tracking, normal);
+  text-decoration: none;
+  background: var(--wjs-cta-button-bg, var(--wjs-bg-surface));
+  color: var(--wjs-cta-button-color, var(--wjs-color-primary));
+  border: var(--wjs-cta-button-border-width, 0) solid var(--wjs-cta-button-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-cta-button-radius, var(--wjs-radius));
+  box-shadow: var(--wjs-cta-button-shadow, var(--wjs-shadow-2));
+  transition: transform 0.15s ease, filter 0.2s ease;
+}
+.wp-block-cta-banner__button:hover {
+  background: var(--wjs-cta-button-hover-bg, var(--wjs-cta-button-bg, var(--wjs-bg-surface)));
+  color: var(--wjs-cta-button-hover-color, var(--wjs-cta-button-color, var(--wjs-color-primary)));
+  box-shadow: var(--wjs-cta-button-hover-shadow, var(--wjs-cta-button-shadow, var(--wjs-shadow-2)));
+  transform: scale(1.03);
+  filter: brightness(1.05);
+}
+
+/* ---------------------------------------------------------------- POSTS GRID - */
+.wp-block-posts-grid {
+  display: grid;
+  gap: var(--wjs-posts-gap, var(--wjs-lg));
+  grid-template-columns: repeat(var(--wjs-posts-columns, 3), minmax(0, 1fr));
+}
+.wp-block-posts-grid__card {
+  padding: var(--wjs-posts-pad, var(--wjs-lg));
+  font-family: var(--wjs-posts-family, inherit);
+  background: var(--wjs-posts-bg, var(--wjs-bg-surface));
+  border: var(--wjs-posts-border-width, 1px) solid var(--wjs-posts-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-posts-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-posts-shadow, none);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.wp-block-posts-grid__card:hover {
+  transform: var(--wjs-posts-hover-transform, none);
+  border-color: var(--wjs-posts-hover-border-color, var(--wjs-posts-border-color, var(--wjs-border-subtle)));
+  box-shadow: var(--wjs-posts-hover-shadow, var(--wjs-posts-shadow, none));
+}
+.wp-block-posts-grid__thumb {
+  height: var(--wjs-posts-thumb-height, 160px);
+  margin-bottom: var(--wjs-md);
+  border-radius: var(--wjs-posts-thumb-radius, var(--wjs-radius));
+  background: var(--wjs-posts-thumb-bg, linear-gradient(135deg, var(--wjs-bg-muted), var(--wjs-surface-highest)));
+  background-size: cover;
+  background-position: center;
+}
+.wp-block-posts-grid__date {
+  margin-bottom: var(--wjs-sm);
+  font-size: var(--wjs-label);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--wjs-posts-date-color, var(--wjs-color-text-muted));
+}
+.wp-block-posts-grid__title {
+  margin: 0 0 var(--wjs-sm);
+  font-size: var(--wjs-posts-title-size, var(--wjs-h6));
+  font-weight: var(--wjs-posts-title-weight, 600);
+  color: var(--wjs-posts-title-color, var(--wjs-color-text-main));
+}
+.wp-block-posts-grid__excerpt { margin: 0; font-size: var(--wjs-small); color: var(--wjs-posts-excerpt-color, var(--wjs-color-text-muted)); }
+@media (max-width: 767.98px) { .wp-block-posts-grid { grid-template-columns: 1fr; } }
+
+/* Honest empty states. These blocks list real published entries; when there are none they say so
+ * instead of inventing rows — which is exactly what they used to do. */
+.wp-block-posts-grid__empty,
+.wp-block-category-posts__empty {
+  margin: 0;
+  padding: var(--wjs-lg);
+  text-align: center;
+  font-size: var(--wjs-small);
+  color: var(--wjs-color-text-muted);
+  background: var(--wjs-posts-bg, var(--wjs-bg-surface));
+  border: var(--wjs-posts-border-width, 1px) dashed var(--wjs-posts-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-posts-radius, var(--wjs-radius-lg));
+}
+.wp-block-category-posts__note {
+  font-size: var(--wjs-label);
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--wjs-color-text-muted);
+}
+/* Post titles are links now that they point at real entries. */
+.wp-block-posts-grid__title a,
+.wp-block-category-posts__card-title a { color: inherit; text-decoration: none; }
+.wp-block-posts-grid__title a:hover,
+.wp-block-category-posts__card-title a:hover { color: var(--wjs-catposts-link-hover-color, var(--wjs-color-primary)); }
+
+/* ------------------------------------------------------------ CATEGORY POSTS - */
+.wp-block-category-posts__heading {
+  margin: 0 0 var(--wjs-lg);
+  padding-bottom: var(--wjs-catposts-heading-pad, 0);
+  font-family: var(--wjs-catposts-heading-family, inherit);
+  font-size: var(--wjs-catposts-heading-size, var(--wjs-h5));
+  font-weight: var(--wjs-catposts-heading-weight, 700);
+  text-transform: var(--wjs-catposts-heading-transform, capitalize);
+  letter-spacing: var(--wjs-catposts-heading-tracking, normal);
+  background: var(--wjs-catposts-heading-bg, transparent);
+  border-bottom: var(--wjs-catposts-heading-border-width, 0) solid var(--wjs-catposts-heading-border-color, var(--wjs-border-subtle));
+  color: var(--wjs-catposts-heading-color, var(--wjs-color-text-main));
+}
+.wp-block-category-posts__list { margin: 0; padding: 0; list-style: none; }
+.wp-block-category-posts__item {
+  margin: 0;
+  padding: var(--wjs-catposts-item-pad, var(--wjs-md) 0);
+  border-bottom: var(--wjs-catposts-border-width, 1px) solid var(--wjs-catposts-border-color, var(--wjs-border-subtle));
+}
+.wp-block-category-posts__item:last-child { border-bottom: 0; }
+.wp-block-category-posts__link {
+  font-family: var(--wjs-catposts-link-family, inherit);
+  font-size: var(--wjs-catposts-link-size, inherit);
+  font-weight: var(--wjs-catposts-link-weight, 500);
+  color: var(--wjs-catposts-link-color, var(--wjs-color-text-main));
+  text-decoration: none;
+}
+.wp-block-category-posts__link:hover { color: var(--wjs-catposts-link-hover-color, var(--wjs-color-primary)); }
+.wp-block-category-posts--grid {
+  display: grid;
+  gap: var(--wjs-catposts-gap, var(--wjs-lg));
+  grid-template-columns: repeat(var(--wjs-catposts-columns, 2), minmax(0, 1fr));
+}
+.wp-block-category-posts__card {
+  padding: var(--wjs-catposts-pad, var(--wjs-lg));
+  background: var(--wjs-catposts-bg, var(--wjs-bg-surface));
+  border: var(--wjs-catposts-border-width, 1px) solid var(--wjs-catposts-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-catposts-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-catposts-shadow, none);
+}
+.wp-block-category-posts__card-title { margin: 0 0 var(--wjs-sm); font-weight: 600; color: var(--wjs-catposts-heading-color, var(--wjs-color-text-main)); }
+.wp-block-category-posts__excerpt { margin: 0; font-size: var(--wjs-small); color: var(--wjs-color-text-muted); }
+@media (max-width: 767.98px) { .wp-block-category-posts--grid { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- SEARCH BAR - */
+.wp-block-search-wrap { display: flex; width: 100%; justify-content: var(--wjs-search-align, flex-start); }
+.wp-block-search {
+  display: flex;
+  gap: var(--wjs-sm);
+  width: 100%;
+  max-width: var(--wjs-search-width, 500px);
+}
+.wp-block-search__input {
+  flex: 1;
+  min-width: 0;
+  padding: var(--wjs-search-input-pad, 12px 16px);
+  font-family: var(--wjs-search-input-family, inherit);
+  font-size: var(--wjs-search-input-size, 1rem);
+  font-weight: var(--wjs-search-input-weight, inherit);
+  background: var(--wjs-search-input-bg, var(--wjs-bg-surface));
+  color: var(--wjs-search-input-color, var(--wjs-color-text-main));
+  border: var(--wjs-search-input-border-width, 1px) solid var(--wjs-search-input-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-search-input-radius, var(--wjs-radius));
+  box-shadow: var(--wjs-search-input-shadow, none);
+}
+.wp-block-search__input::placeholder { color: var(--wjs-search-placeholder-color, var(--wjs-color-text-muted)); }
+.wp-block-search__input:focus {
+  outline: none;
+  border-color: var(--wjs-search-focus-color, var(--wjs-color-primary));
+  box-shadow: var(--wjs-search-focus-ring, 0 0 0 3px var(--wjs-focus-ring));
+}
+.wp-block-search__button {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--wjs-sm);
+  padding: var(--wjs-search-button-pad, 12px 20px);
+  font-family: var(--wjs-search-button-family, inherit);
+  font-weight: var(--wjs-search-button-weight, 600);
+  text-transform: var(--wjs-search-button-transform, none);
+  letter-spacing: var(--wjs-search-button-tracking, normal);
+  background: var(--wjs-search-button-bg, var(--wjs-color-primary));
+  color: var(--wjs-search-button-color, var(--wjs-color-on-primary));
+  border: var(--wjs-search-button-border-width, 0) solid var(--wjs-search-button-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-search-button-radius, var(--wjs-radius));
+  box-shadow: var(--wjs-search-button-shadow, none);
+  cursor: pointer;
+  transition: filter var(--wjs-transition);
+}
+.wp-block-search__button:hover { filter: brightness(1.08); }
+
+/* ---------------------------------------------------------------------- HERO - */
+.wp-block-hero {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: var(--wjs-hero-justify, center);
+  min-height: var(--wjs-hero-height, 60vh);
+  padding: var(--wjs-hero-pad, var(--wjs-2xl) var(--wjs-lg));
+  overflow: hidden;
+  text-align: var(--wjs-hero-text-align, center);
+  color: var(--wjs-hero-color, #fff);
+  /* A hero can be a full-bleed band (the default: no frame) or a framed "luminous" card. */
+  border: var(--wjs-hero-border-width, 0) solid var(--wjs-hero-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-hero-radius, 0);
+  box-shadow: var(--wjs-hero-shadow, none);
+  background-color: var(--wjs-hero-bg, var(--wjs-bg-muted));
+  /* An uploaded image wins; with none, the gradient pair paints the surface. */
+  background-image: var(--wjs-hero-bg-image, var(--wjs-hero-gradient, linear-gradient(var(--wjs-hero-gradient-angle, 135deg), var(--wjs-hero-gradient-from, var(--wjs-bg-muted)), var(--wjs-hero-gradient-to, var(--wjs-bg-canvas)))));
+  background-size: cover;
+  background-position: center;
+}
+.wp-block-hero__overlay {
+  position: absolute;
+  inset: 0;
+  background: var(--wjs-hero-overlay-color, #000);
+  opacity: var(--wjs-hero-overlay, 0);
+  pointer-events: none;
+}
+.wp-block-hero__inner { position: relative; z-index: 1; width: 100%; max-width: var(--wjs-hero-measure, 56rem); }
+.wp-block-hero__title {
+  margin: 0 0 var(--wjs-md);
+  font-family: var(--wjs-font-family-heading);
+  font-size: var(--wjs-hero-title-size, var(--wjs-h1));
+  font-weight: var(--wjs-hero-title-weight, 800);
+  line-height: 1.1;
+  letter-spacing: var(--wjs-hero-title-tracking, var(--wjs-h1-tracking));
+  color: var(--wjs-hero-title-color, inherit);
+}
+.wp-block-hero__subtitle {
+  margin: 0 0 var(--wjs-lg);
+  font-size: var(--wjs-hero-subtitle-size, var(--wjs-h6));
+  line-height: 1.6;
+  color: var(--wjs-hero-subtitle-color, inherit);
+  opacity: var(--wjs-hero-subtitle-opacity, 0.9);
+}
+.wp-block-hero__actions { display: flex; flex-wrap: wrap; gap: var(--wjs-md); justify-content: var(--wjs-hero-actions-justify, center); }
+.wp-block-hero__button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--wjs-sm);
+  padding: var(--wjs-hero-button-pad, 12px 20px);
+  font-size: var(--wjs-hero-button-size, 15px);
+  font-weight: var(--wjs-hero-button-weight, 700);
+  line-height: var(--wjs-hero-button-leading, 1);
+  text-decoration: none;
+  background: var(--wjs-hero-button-bg, var(--wjs-color-primary));
+  color: var(--wjs-hero-button-color, var(--wjs-color-on-primary));
+  border: 1px solid transparent;
+  border-radius: var(--wjs-hero-button-radius, var(--wjs-radius));
+  box-shadow: var(--wjs-shadow-2);
+  transition: transform 0.15s ease, filter 0.2s ease, background 0.2s ease;
+}
+.wp-block-hero__button:hover { filter: brightness(1.08); transform: scale(1.03); color: var(--wjs-hero-button-color, var(--wjs-color-on-primary)); }
+.wp-block-hero__button--outline {
+  background: var(--wjs-hero-button-outline-bg, transparent);
+  border-color: var(--wjs-hero-button-outline-border, var(--wjs-outline));
+  color: var(--wjs-hero-button-outline-color, #fff);
+  box-shadow: none;
+}
+.wp-block-hero__button--outline:hover {
+  background: var(--wjs-hero-button-outline-hover-bg, rgba(255, 255, 255, 0.08));
+  color: var(--wjs-hero-button-outline-color, #fff);
+  filter: none;
+}
+
+/* --------------------------------------------------------------------- QUOTE - */
+.wp-block-quote {
+  margin: 0 0 var(--wjs-lg);
+  font-family: var(--wjs-quote-family, inherit);
+  font-weight: var(--wjs-quote-weight, inherit);
+  letter-spacing: var(--wjs-quote-tracking, inherit);
+  font-size: var(--wjs-quote-size, var(--wjs-h5));
+  font-style: var(--wjs-quote-style, italic);
+  color: var(--wjs-quote-color, var(--wjs-color-text-main));
+}
+/* The reboot styles bare <blockquote> (bar + padding + size); inside the block the FIGURE owns
+ * the frame, so the inner blockquote resets to plain text. */
+.wp-block-quote__body { margin: 0; padding: 0; border: 0; font: inherit; color: inherit; }
+.wp-block-quote__cite {
+  display: block;
+  margin-top: var(--wjs-md);
+  font-size: var(--wjs-quote-cite-size, var(--wjs-small));
+  font-style: normal;
+  color: var(--wjs-quote-cite-color, var(--wjs-color-text-muted));
+}
+.wp-block-quote--bar {
+  padding-left: var(--wjs-lg);
+  border-left: var(--wjs-quote-bar-width, 4px) solid var(--wjs-quote-accent, var(--wjs-color-primary));
+}
+.wp-block-quote--large { padding: var(--wjs-xl) var(--wjs-lg); text-align: center; }
+.wp-block-quote--large .wp-block-quote__mark {
+  display: block;
+  margin-bottom: var(--wjs-md);
+  font-size: var(--wjs-quote-mark-size, 40px);
+  color: var(--wjs-quote-accent, var(--wjs-color-primary));
+  opacity: var(--wjs-quote-mark-opacity, 0.5);
+}
+
+/* --------------------------------------------------------------------- TABLE - */
+.wp-block-table { width: 100%; overflow-x: auto; }
+.wp-block-table__table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: var(--wjs-table-size, var(--wjs-small));
+}
+.wp-block-table__table th {
+  padding: var(--wjs-table-cell-pad, var(--wjs-sm) var(--wjs-md));
+  font-family: var(--wjs-table-head-family, inherit);
+  font-size: var(--wjs-table-head-size, inherit);
+  text-transform: var(--wjs-table-head-transform, none);
+  letter-spacing: var(--wjs-table-head-tracking, normal);
+  font-weight: var(--wjs-table-head-weight, 600);
+  color: var(--wjs-table-head-color, var(--wjs-color-text-muted));
+  background: var(--wjs-table-head-bg, transparent);
+  border-bottom: var(--wjs-table-border-width, 1px) solid var(--wjs-table-border-color, var(--wjs-border-subtle));
+}
+.wp-block-table__table td {
+  padding: var(--wjs-table-cell-pad, var(--wjs-sm) var(--wjs-md));
+  color: var(--wjs-table-color, inherit);
+  border-bottom: var(--wjs-table-border-width, 1px) solid var(--wjs-table-border-color, var(--wjs-border-subtle));
+}
+.wp-block-table--striped tbody tr:nth-child(odd) { background: var(--wjs-table-stripe-bg, var(--wjs-bg-muted)); }
+
+/* ----------------------------------------------------------------- ICON LIST - */
+.wp-block-icon-list {
+  display: grid;
+  gap: var(--wjs-icon-list-gap, var(--wjs-lg));
+  grid-template-columns: repeat(var(--wjs-icon-list-columns, 3), minmax(0, 1fr));
+}
+.wp-block-icon-list__item { display: flex; align-items: flex-start; gap: var(--wjs-md); min-width: 0; }
+.wp-block-icon-list__icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: var(--wjs-icon-list-icon-size, 48px);
+  height: var(--wjs-icon-list-icon-size, 48px);
+  border-radius: var(--wjs-icon-list-icon-radius, var(--wjs-radius));
+  background: var(--wjs-icon-list-icon-bg, var(--wjs-surface-highest));
+  color: var(--wjs-icon-list-icon-color, var(--wjs-color-primary));
+  font-size: var(--wjs-icon-list-icon-glyph, calc(var(--wjs-icon-list-icon-size, 48px) * 0.42));
+}
+.wp-block-icon-list__title {
+  display: block;
+  margin-bottom: var(--wjs-xs);
+  font-size: var(--wjs-icon-list-title-size, inherit);
+  font-weight: var(--wjs-icon-list-title-weight, 700);
+  color: var(--wjs-icon-list-title-color, var(--wjs-color-text-main));
+}
+.wp-block-icon-list__text {
+  display: block;
+  font-size: var(--wjs-icon-list-text-size, var(--wjs-small));
+  color: var(--wjs-icon-list-text-color, var(--wjs-color-text-muted));
+}
+@media (max-width: 767.98px) { .wp-block-icon-list { grid-template-columns: 1fr; } }
+
+/* -------------------------------------------------------------- SOCIAL LINKS - */
+.wp-block-social-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--wjs-social-gap, var(--wjs-md));
+  justify-content: var(--wjs-social-justify, flex-start);
+}
+.wp-block-social-links__link {
+  display: grid;
+  place-items: center;
+  width: var(--wjs-social-size, 44px);
+  height: var(--wjs-social-size, 44px);
+  font-size: calc(var(--wjs-social-size, 44px) * 0.42);
+  text-decoration: none;
+  border-radius: var(--wjs-social-radius, 50%);
+  background: var(--wjs-social-bg, var(--wjs-surface-highest));
+  color: var(--wjs-social-color, var(--wjs-color-text-main));
+  transition: background var(--wjs-transition), color var(--wjs-transition), transform 0.15s ease;
+}
+.wp-block-social-links__link:hover {
+  background: var(--wjs-social-hover-bg, var(--wjs-color-primary));
+  color: var(--wjs-social-hover-color, var(--wjs-color-on-primary));
+  transform: translateY(-2px);
+}
+
+/* --------------------------------------------------------------------- STATS - */
+.wp-block-stats {
+  display: grid;
+  gap: var(--wjs-stats-gap, var(--wjs-lg));
+  grid-template-columns: repeat(var(--wjs-stats-columns, 3), minmax(0, 1fr));
+}
+.wp-block-stats__item {
+  padding: var(--wjs-stats-pad, var(--wjs-xl));
+  text-align: var(--wjs-stats-align, center);
+  background: var(--wjs-stats-bg, var(--wjs-bg-surface));
+  border: var(--wjs-stats-border-width, 1px) solid var(--wjs-stats-border-color, var(--wjs-border-subtle));
+  border-radius: var(--wjs-stats-radius, var(--wjs-radius-lg));
+  box-shadow: var(--wjs-stats-shadow, none);
+}
+.wp-block-stats__value {
+  margin-bottom: var(--wjs-xs);
+  font-family: var(--wjs-stats-value-family, var(--wjs-font-family-heading));
+  font-size: var(--wjs-stats-value-size, 48px);
+  font-weight: var(--wjs-stats-value-weight, 800);
+  line-height: var(--wjs-stats-value-leading, 1.1);
+  letter-spacing: var(--wjs-stats-value-tracking, var(--wjs-h1-tracking));
+  color: var(--wjs-stats-value-color, var(--wjs-primary-fixed));
+}
+.wp-block-stats__label {
+  font-family: var(--wjs-stats-label-family, inherit);
+  font-size: var(--wjs-stats-label-size, var(--wjs-small));
+  font-weight: var(--wjs-stats-label-weight, inherit);
+  line-height: var(--wjs-stats-label-leading, 1);
+  text-transform: var(--wjs-stats-label-transform, uppercase);
+  letter-spacing: var(--wjs-stats-label-tracking, 0.08em);
+  color: var(--wjs-stats-label-color, var(--wjs-color-text-muted));
+}
+@media (max-width: 767.98px) { .wp-block-stats { grid-template-columns: 1fr; } }
+
+/* ---------------------------------------------------------------- HTML EMBED - */
+.wp-block-html-embed { color: var(--wjs-html-color, inherit); }
+.wp-block-html-embed > :first-child { margin-top: 0; }
+.wp-block-html-embed > :last-child { margin-bottom: 0; }
+
+/* ---------------------------------------------------------------- FOCUS RING - */
+/* Keyboard focus for every control a block renders, in one place. :focus-visible means a mouse
+ * click never paints it — only keyboard/AT navigation does. */
+.wp-block-accordion__header:focus-visible,
+.wp-block-tabs__tab:focus-visible,
+.wp-block-search__button:focus-visible,
+.wp-block-button__link:focus-visible,
+.wp-block-hero__button:focus-visible,
+.wp-block-pricing__button:focus-visible,
+.wp-block-cta-banner__button:focus-visible,
+.wp-block-social-links__link:focus-visible {
+  outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
+  outline-offset: var(--wjs-block-focus-offset, 2px);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * FORM BLOCK (.wjs-form) — Webflow-parity forms with stored submissions.
+ * Same token contract as the .wp-block-* family, with INHERITANCE: every knob
+ * is var(--wjs-form-<prop>, <theme sources…>, base) — the fallback chain reads
+ * the SEARCH-BLOCK input family, the BUTTON family and the CARD surfaces each
+ * theme already defines, so all themes style forms in their own palette with
+ * zero per-theme work; --wjs-form-* remains the explicit override hook.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+.wjs-form {
+  display: grid;
+  gap: var(--wjs-form-gap, 14px);
+  max-width: var(--wjs-form-max-width, 560px);
+  font-family: var(--wjs-form-family, var(--wjs-font-family-base, inherit));
+}
+.wjs-form-field {
+  display: grid;
+  gap: var(--wjs-form-field-gap, 6px);
+}
+.wjs-form-field--checkbox {
+  display: flex;
+  align-items: center;
+  gap: var(--wjs-form-field-gap, 8px);
+}
+.wjs-form-label {
+  font-size: var(--wjs-form-label-size, 0.875rem);
+  font-weight: var(--wjs-form-label-weight, 600);
+  color: var(--wjs-form-label-color, var(--wjs-color-heading, inherit));
+}
+.wjs-form-required {
+  color: var(--wjs-form-required-color, #dc2626);
+}
+.wjs-form-input,
+.wjs-form-textarea,
+.wjs-form-select {
+  width: 100%;
+  font: inherit;
+  font-size: var(--wjs-form-input-size, var(--wjs-search-input-size, 1rem));
+  color: var(--wjs-form-input-color, var(--wjs-search-input-color, var(--wjs-color-text-main, inherit)));
+  background: var(--wjs-form-input-bg, var(--wjs-search-input-bg, var(--wjs-bg-surface, var(--wjs-card-bg, #fff))));
+  border: var(--wjs-form-input-border,
+    var(--wjs-search-input-border-width, 1px) solid
+    var(--wjs-form-input-border-color, var(--wjs-search-input-border-color, var(--wjs-border-subtle, var(--wjs-outline-variant, rgba(0, 0, 0, 0.18))))));
+  border-radius: var(--wjs-form-input-radius, var(--wjs-search-input-radius, 8px));
+  padding: var(--wjs-form-input-pad, var(--wjs-search-input-pad, 10px 12px));
+  box-shadow: var(--wjs-form-input-shadow, var(--wjs-search-input-shadow, none));
+}
+.wjs-form-input::placeholder,
+.wjs-form-textarea::placeholder {
+  color: var(--wjs-form-placeholder-color, var(--wjs-search-placeholder-color, inherit));
+  opacity: var(--wjs-form-placeholder-opacity, 0.6);
+}
+.wjs-form-textarea {
+  min-height: var(--wjs-form-textarea-height, 120px);
+  resize: vertical;
+}
+.wjs-form-input:focus-visible,
+.wjs-form-textarea:focus-visible,
+.wjs-form-select:focus-visible {
+  outline: var(--wjs-block-focus-outline, 2px solid var(--wjs-color-primary));
+  outline-offset: var(--wjs-block-focus-offset, 2px);
+}
+.wjs-form-input[aria-invalid="true"],
+.wjs-form-textarea[aria-invalid="true"] {
+  border-color: var(--wjs-form-invalid-color, #dc2626);
+}
+.wjs-form-checkbox {
+  width: var(--wjs-form-checkbox-size, 18px);
+  height: var(--wjs-form-checkbox-size, 18px);
+  accent-color: var(--wjs-form-accent, var(--wjs-color-primary));
+}
+.wjs-form-submit {
+  justify-self: start;
+  font: inherit;
+  font-size: var(--wjs-form-submit-size, 1rem);
+  font-weight: var(--wjs-form-submit-weight, var(--wjs-button-weight, 600));
+  font-family: var(--wjs-form-submit-family, var(--wjs-button-family, inherit));
+  color: var(--wjs-form-submit-color, var(--wjs-button-color, var(--wjs-color-on-primary, #fff)));
+  background: var(--wjs-form-submit-bg, var(--wjs-button-bg, var(--wjs-color-primary, #2563eb)));
+  border: var(--wjs-form-submit-border,
+    var(--wjs-button-border-width, 0) solid var(--wjs-button-border-color, transparent));
+  border-radius: var(--wjs-form-submit-radius, var(--wjs-button-radius, 9999px));
+  padding: var(--wjs-form-submit-pad, var(--wjs-button-pad-y, 12px) var(--wjs-button-pad-x, 28px));
+  box-shadow: var(--wjs-form-submit-shadow, var(--wjs-button-shadow, none));
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.wjs-form-submit:hover {
+  opacity: var(--wjs-form-submit-hover-opacity, 0.9);
+  background: var(--wjs-form-submit-hover-bg, var(--wjs-button-hover-bg, var(--wjs-form-submit-bg, var(--wjs-button-bg, var(--wjs-color-primary, #2563eb)))));
+  color: var(--wjs-form-submit-hover-color, var(--wjs-button-hover-color, var(--wjs-form-submit-color, var(--wjs-button-color, #fff))));
+}
+.wjs-form-submit:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+.wjs-form-status {
+  font-size: var(--wjs-form-status-size, 0.9rem);
+  min-height: 1.2em;
+  margin: 0;
+}
+.wjs-form-status[data-status="success"] {
+  color: var(--wjs-form-success-color, #15803d);
+}
+.wjs-form-status[data-status="error"] {
+  color: var(--wjs-form-error-color, #dc2626);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * RESPONSIVE OVERRIDES (--wjs-r-*) — per-breakpoint Appearance values.
+ * The JS side (AppearanceField.appearanceToStyle) resolves the CASCADE and
+ * emits, inline on the block: the physical declarations as var() refs plus
+ * --wjs-r-<prop> (desktop), --wjs-r-<prop>-tb (tb ?? desktop) and
+ * --wjs-r-<prop>-mb (mo ?? tb ?? desktop). These media rules only RE-POINT
+ * the base var to the precomputed bucket. !important is load-bearing: the
+ * base var lives in the style ATTRIBUTE, which outranks any normal stylesheet
+ * declaration — an important author rule is the one thing that beats it.
+ * Nothing else writes --wjs-r-*, so no theme collision is possible.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 1023.98px) {
+  .wjs-resp {
+    --wjs-r-padY: var(--wjs-r-padY-tb) !important;
+    --wjs-r-padX: var(--wjs-r-padX-tb) !important;
+    --wjs-r-mt: var(--wjs-r-mt-tb) !important;
+    --wjs-r-mb: var(--wjs-r-mb-tb) !important;
+    --wjs-r-maxWidth: var(--wjs-r-maxWidth-tb) !important;
+    --wjs-r-minHeight: var(--wjs-r-minHeight-tb) !important;
+    --wjs-r-fontSize: var(--wjs-r-fontSize-tb) !important;
+    --wjs-r-lineHeight: var(--wjs-r-lineHeight-tb) !important;
+    --wjs-r-letterSpacing: var(--wjs-r-letterSpacing-tb) !important;
+    --wjs-r-align: var(--wjs-r-align-tb) !important;
+    --wjs-r-radius: var(--wjs-r-radius-tb) !important;
+  }
+}
+@media (max-width: 767.98px) {
+  .wjs-resp {
+    --wjs-r-padY: var(--wjs-r-padY-mb) !important;
+    --wjs-r-padX: var(--wjs-r-padX-mb) !important;
+    --wjs-r-mt: var(--wjs-r-mt-mb) !important;
+    --wjs-r-mb: var(--wjs-r-mb-mb) !important;
+    --wjs-r-maxWidth: var(--wjs-r-maxWidth-mb) !important;
+    --wjs-r-minHeight: var(--wjs-r-minHeight-mb) !important;
+    --wjs-r-fontSize: var(--wjs-r-fontSize-mb) !important;
+    --wjs-r-lineHeight: var(--wjs-r-lineHeight-mb) !important;
+    --wjs-r-letterSpacing: var(--wjs-r-letterSpacing-mb) !important;
+    --wjs-r-align: var(--wjs-r-align-mb) !important;
+    --wjs-r-radius: var(--wjs-r-radius-mb) !important;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+ * SCROLL-DRIVEN INTERACTIONS (.wjs-scroll) — CSS scroll-timeline effects.
+ * Progress follows the element's own journey through the viewport (forwards
+ * AND backwards), no JS, no observer. Fully progressive: browsers without
+ * animation-timeline simply skip the whole @supports block. Intensity comes
+ * as a DISCRETE class (wjs-scroll-amt-10…100, steps of ten) because the
+ * shared wrapper only applies className for this field; each step pins
+ * --wjs-scroll-amt and the keyframes calc() from it.
+ *
+ * Coexistence with the ENTRANCE animation (same element): both families use
+ * `animation`, and both animate transform, so a combined comma-list would
+ * drop the entrance's translate anyway (last name wins per property) and 7
+ * of the 12 entrance types ship without keyframes. Decision: when a scroll
+ * effect is set, it WINS — the 0,3,0 rules below re-assert the scroll
+ * animation over the entrance's 0,2,0 rules once the block reaches its
+ * data-wjs-anim="in" state, and the armed (pre-entrance) state is forced
+ * visible so scroll blocks can never sit at opacity 0.
+ * ═══════════════════════════════════════════════════════════════════════════ */
+@supports (animation-timeline: view()) {
+  .wjs-scroll {
+    animation-name: none;
+    animation-duration: 1ms; /* dummy — the view() timeline drives progress */
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+    animation-fill-mode: both;
+  }
+  .wjs-scroll-parallax { animation-name: wjs-scroll-parallax; }
+  .wjs-scroll-fade { animation-name: wjs-scroll-fade; }
+  .wjs-scroll-scale { animation-name: wjs-scroll-scale; }
+  .wjs-scroll-rotate { animation-name: wjs-scroll-rotate; }
+
+  /* Scroll WINS over the entrance animation once the block is "in", and the
+     armed (opacity-0) pre-entrance state never hides a scroll block. */
+  .wjs-anim.wjs-scroll[data-wjs-anim="armed"] { opacity: 1; }
+  .wjs-anim.wjs-scroll-parallax[data-wjs-anim="in"] {
+    animation-name: wjs-scroll-parallax;
+    animation-duration: 1ms;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+    animation-fill-mode: both;
+  }
+  .wjs-anim.wjs-scroll-fade[data-wjs-anim="in"] {
+    animation-name: wjs-scroll-fade;
+    animation-duration: 1ms;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+    animation-fill-mode: both;
+  }
+  .wjs-anim.wjs-scroll-scale[data-wjs-anim="in"] {
+    animation-name: wjs-scroll-scale;
+    animation-duration: 1ms;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+    animation-fill-mode: both;
+  }
+  .wjs-anim.wjs-scroll-rotate[data-wjs-anim="in"] {
+    animation-name: wjs-scroll-rotate;
+    animation-duration: 1ms;
+    animation-timeline: view();
+    animation-range: cover 0% cover 100%;
+    animation-fill-mode: both;
+  }
+
+  .wjs-scroll-amt-10 { --wjs-scroll-amt: 10; }
+  .wjs-scroll-amt-20 { --wjs-scroll-amt: 20; }
+  .wjs-scroll-amt-30 { --wjs-scroll-amt: 30; }
+  .wjs-scroll-amt-40 { --wjs-scroll-amt: 40; }
+  .wjs-scroll-amt-50 { --wjs-scroll-amt: 50; }
+  .wjs-scroll-amt-60 { --wjs-scroll-amt: 60; }
+  .wjs-scroll-amt-70 { --wjs-scroll-amt: 70; }
+  .wjs-scroll-amt-80 { --wjs-scroll-amt: 80; }
+  .wjs-scroll-amt-90 { --wjs-scroll-amt: 90; }
+  .wjs-scroll-amt-100 { --wjs-scroll-amt: 100; }
+
+  @keyframes wjs-scroll-parallax {
+    from { transform: translateY(calc(var(--wjs-scroll-amt, 30) * 1px)); }
+    to { transform: translateY(calc(var(--wjs-scroll-amt, 30) * -1px)); }
+  }
+  @keyframes wjs-scroll-fade {
+    0% { opacity: calc(1 - var(--wjs-scroll-amt, 30) / 100); }
+    35% { opacity: 1; }
+    65% { opacity: 1; }
+    100% { opacity: calc(1 - var(--wjs-scroll-amt, 30) / 100); }
+  }
+  @keyframes wjs-scroll-scale {
+    0% { transform: scale(calc(1 - var(--wjs-scroll-amt, 30) / 400)); }
+    50% { transform: scale(1); }
+    100% { transform: scale(calc(1 - var(--wjs-scroll-amt, 30) / 400)); }
+  }
+  @keyframes wjs-scroll-rotate {
+    from { transform: rotate(calc(var(--wjs-scroll-amt, 30) * -0.06deg)); }
+    to { transform: rotate(calc(var(--wjs-scroll-amt, 30) * 0.06deg)); }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .wjs-scroll,
+  .wjs-anim.wjs-scroll[data-wjs-anim="in"] {
+    animation: none !important;
+  }
+}

@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #022319;
+  --wjs-bg-surface: #113027;
+  --wjs-bg-surface-raised: #1e3b32;
+  --wjs-color-primary: #34d399;
+  --wjs-color-primary-dark: #059669;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #059669;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #d1fae5;
+  --wjs-color-text-muted: #82a897;
+  --wjs-color-heading: #d1fae5;
+  --wjs-color-link: #34d399;
+  --wjs-color-link-hover: #059669;
+  --wjs-border-subtle: #274a3e;
+  --wjs-outline: #517567;
+  --wjs-outline-variant: #214338;
+  --wjs-focus-ring: #34d399;
+}
+
 /* Theme: Botanica Organics (Organic Pastel Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap');
 

@@ -1,0 +1,381 @@
+@import url('https://fonts.googleapis.com/css2?family=Domine:wght@400;600;700&family=Montserrat:wght@400;500;600&display=swap');
+
+/* =========================================
+   THEME: AMBER WORKSHOP (Craft Terracota)
+   Concept: Artisan pottery studio. Warm cream canvas,
+   terracotta #9a401f primary + amber #8a5100 secondary,
+   kraft-paper cards with grain texture, Domine serif
+   headlines + Montserrat body, dashed hairlines and
+   stamped inputs.
+   Converted from the Stitch "Terracota Viva" design.
+   ========================================= */
+
+:root {
+  /* --- CANONICAL COLORS (from tailwind.config + markup) --- */
+  --wjs-color-primary: #9a401f;
+  /* Terracotta (design "primary") */
+  --wjs-color-primary-dark: #7e2c0c;
+  /* Deep terracotta (design on-primary-fixed-variant) */
+  --wjs-color-secondary: #8a5100;
+  /* Amber brown (design "secondary" — hover of buttons) */
+  --wjs-color-secondary-dark: #693c00;
+  /* Design on-secondary-fixed-variant */
+  --wjs-color-accent: #feb15d;
+  /* Amber (design secondary-container) */
+  --wjs-color-success: #4f7a3f;
+  --wjs-color-danger: #ba1a1a;
+  /* Design "error" */
+  --wjs-color-warning: #c98a2b;
+  --wjs-color-info: #4a7a86;
+  --wjs-color-light: #fcf9f4;
+  /* Design surface-bright */
+  --wjs-color-dark: #3d2b1f;
+  /* Umber (design shadow/border ink) */
+
+  /* --- ON-COLORS (max-contrast text per luminance) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-accent: #2c1600;
+  /* Dark ink on bright amber (design on-secondary-fixed) */
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #1c1c19;
+  --wjs-color-on-dark: #ffffff;
+
+  /* --- SURFACES / TEXT / BORDERS --- */
+  --wjs-bg-canvas: #fcf9f4;
+  /* Toasted cream (design surface-bright) */
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #f0ede8;
+  /* Design surface-container */
+  --wjs-bg-surface-glass: rgba(252, 249, 244, 0.95);
+  /* Nav bar: surface-bright/95 + subtle blur */
+  --wjs-bg-footer: #f0ede8;
+  /* Measured footer panel (warm sand) */
+  --wjs-color-text-footer-main: #1c1c19;
+  --wjs-color-text-footer-dim: #56423c;
+  --wjs-color-text-main: #1c1c19;
+  --wjs-color-text-muted: #56423c;
+  /* Design on-surface-variant */
+  --wjs-color-heading: #1c1c19;
+  --wjs-color-link: #9a401f;
+  --wjs-color-link-hover: #8a5100;
+  /* Design hovers shift terracotta → amber */
+  --wjs-border-subtle: #dcc1b8;
+  /* Design outline-variant (the dashed hairline color) */
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(154, 64, 31, 0.3);
+
+  /* --- TYPOGRAPHY (Domine serif / Montserrat) --- */
+  --wjs-font-family-base: 'Montserrat', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Domine', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.5;
+  /* Measured body 16px/24px */
+  --wjs-heading-weight: 700;
+  --wjs-heading-line-height: 1.2;
+  --wjs-h1: 4rem;
+  /* Measured display 64px desktop (framework caps mobile at 2.25rem) */
+  --wjs-h1-leading: 1.125;
+  /* Measured 64px/72px */
+  --wjs-h2: 2.25rem;
+  /* section display 36-40px */
+  --wjs-h3: 1.5rem;
+  /* headline-md 24px */
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.125rem;
+  --wjs-h6: 1rem;
+  --wjs-h1-tracking: -0.02em;
+
+  /* --- SHAPE / SHADOW (warm umber shadows) --- */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 0.25rem;
+  --wjs-radius: 0.5rem;
+  /* rounded-lg buttons/inputs */
+  --wjs-radius-md: 0.75rem;
+  /* rounded-xl cards */
+  --wjs-radius-lg: 1rem;
+  --wjs-radius-pill: 9999px;
+  --wjs-shadow-sm: 0 1px 3px rgba(61, 43, 31, 0.06);
+  --wjs-shadow: 0px 4px 20px rgba(61, 43, 31, 0.08);
+  /* Design nav/card shadow */
+  --wjs-shadow-md: 0px 8px 30px rgba(61, 43, 31, 0.12);
+  /* Design highlighted-plan shadow */
+  --wjs-shadow-lg: 0px 16px 40px rgba(61, 43, 31, 0.16);
+
+  /* ── BLOCK TOKENS (derived from the design markup) ─────────────── */
+
+  /* Buttons — design .btn-primary: bg-primary px-6 py-3 rounded-lg
+     border border-primary-container, hover → amber secondary */
+  --wjs-button-bg: #9a401f;
+  --wjs-button-color: #ffffff;
+  --wjs-button-family: 'Montserrat', system-ui, sans-serif;
+  --wjs-button-size: 0.875rem;
+  --wjs-button-weight: 600;
+  --wjs-button-tracking: 0.05em;
+  --wjs-button-radius: 0.5rem;
+  --wjs-button-pad-x: 24px;
+  --wjs-button-pad-y: 12px;
+  --wjs-button-border-width: 1px;
+  --wjs-button-border-color: #ba5735;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-bg: #8a5100;
+  --wjs-button-hover-color: #ffffff;
+  --wjs-button-hover-shadow: none;
+  --wjs-button-hover-transform: none;
+
+  /* Cards — design .card-kraft: kraft paper #E6D5C3, rounded-xl,
+     grain texture, white icon circle, lift on hover */
+  --wjs-card-bg: #e6d5c3;
+  --wjs-card-border-width: 0;
+  --wjs-card-border-color: transparent;
+  --wjs-card-radius: 0.75rem;
+  --wjs-card-pad: 2rem;
+  --wjs-card-shadow: 0px 4px 20px rgba(61, 43, 31, 0.04);
+  --wjs-card-title-color: #1c1c19;
+  --wjs-card-title-size: 1.5rem;
+  --wjs-card-title-weight: 600;
+  --wjs-card-desc-color: #56423c;
+  --wjs-card-icon-bg: #fcf9f4;
+  /* Measured: cream icon circle, not pure white */
+  --wjs-card-icon-color: #9a401f;
+  --wjs-card-icon-radius: 9999px;
+  --wjs-card-hover-shadow: 0px 8px 30px rgba(61, 43, 31, 0.12);
+  --wjs-card-hover-transform: translateY(-4px);
+
+  /* Hero — centered, cream veil over imagery, serif display */
+  --wjs-hero-bg: #fcf9f4;
+  --wjs-hero-gradient: linear-gradient(180deg, rgba(252, 249, 244, 0.8), rgba(252, 249, 244, 0.95));
+  --wjs-hero-color: #1c1c19;
+  --wjs-hero-text-align: center;
+  --wjs-hero-actions-justify: center;
+  --wjs-hero-title-color: #1c1c19;
+  --wjs-hero-title-size: 4rem;
+  --wjs-hero-title-weight: 700;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: #56423c;
+  --wjs-hero-subtitle-size: 1.125rem;
+  --wjs-hero-subtitle-opacity: 1;
+  --wjs-hero-radius: 0;
+  --wjs-hero-button-bg: #9a401f;
+  --wjs-hero-button-color: #ffffff;
+  --wjs-hero-button-radius: 0.5rem;
+  --wjs-hero-button-pad: 12px 24px;
+  --wjs-hero-button-size: 0.875rem;
+  --wjs-hero-button-weight: 600;
+  --wjs-hero-button-outline-bg: #fcf9f4;
+  --wjs-hero-button-outline-border: #9a401f;
+  --wjs-hero-button-outline-color: #9a401f;
+  --wjs-hero-button-outline-hover-bg: rgba(186, 87, 53, 0.15);
+
+  /* Pricing — cream plans with soft umber shadow; highlighted plan
+     is kraft with a 2px terracotta border (design "Intermedio") */
+  --wjs-pricing-accent: #9a401f;
+  --wjs-pricing-bg: #fcf9f4;
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: #dcdad5;
+  --wjs-pricing-radius: 0.75rem;
+  --wjs-pricing-pad: 2rem;
+  /* Measured plan padding 32px (framework default is 48px) */
+  --wjs-pricing-shadow: 0px 4px 20px rgba(61, 43, 31, 0.04);
+  --wjs-pricing-name-family: 'Domine', Georgia, serif;
+  --wjs-pricing-name-color: #1c1c19;
+  --wjs-pricing-price-family: 'Domine', Georgia, serif;
+  --wjs-pricing-price-color: #9a401f;
+  --wjs-pricing-price-weight: 400;
+  /* Measured: Domine regular price, not the framework's 800 */
+  --wjs-pricing-period-color: #56423c;
+  --wjs-pricing-feature-color: #56423c;
+  --wjs-pricing-button-bg: transparent;
+  --wjs-pricing-button-color: #9a401f;
+  --wjs-pricing-button-border-color: #9a401f;
+  --wjs-pricing-button-radius: 0.5rem;
+  --wjs-pricing-button-weight: 600;
+  --wjs-pricing-highlight-bg: #e6d5c3;
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-border-color: #9a401f;
+  --wjs-pricing-highlight-shadow: 0px 8px 30px rgba(61, 43, 31, 0.12);
+  --wjs-pricing-highlight-name-color: #1c1c19;
+  --wjs-pricing-highlight-feature-color: #56423c;
+  --wjs-pricing-highlight-button-bg: #9a401f;
+  --wjs-pricing-button-on-accent: #ffffff;
+
+  /* Testimonial — serif italic quote framed by amber hairlines */
+  --wjs-testimonial-bg: #fcf9f4;
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-border-color: #feb15d;
+  --wjs-testimonial-radius: 0.75rem;
+  --wjs-testimonial-shadow: none;
+  --wjs-testimonial-quote-family: 'Domine', Georgia, serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-color: #1c1c19;
+  --wjs-testimonial-quote-size: 1.5rem;
+  --wjs-testimonial-mark-color: #8a5100;
+  --wjs-testimonial-mark-opacity: 0.9;
+  --wjs-testimonial-author-color: #6e5749;
+  --wjs-testimonial-role-color: #6e5749;
+  --wjs-testimonial-role-transform: uppercase;
+  --wjs-testimonial-role-tracking: 0.08em;
+
+  /* Blockquote */
+  --wjs-quote-accent: #8a5100;
+  --wjs-quote-family: 'Domine', Georgia, serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-color: #1c1c19;
+  --wjs-quote-cite-color: #6e5749;
+
+  /* Search — inheritance source for inputs: design .input-stamped
+     (surface bg, umber border, inset shadow, rounded-lg) */
+  --wjs-search-input-bg: #fcf9f4;
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: rgba(61, 43, 31, 0.2);
+  --wjs-search-input-radius: 0.5rem;
+  --wjs-search-input-pad: 12px 16px;
+  --wjs-search-input-color: #1c1c19;
+  --wjs-search-input-shadow: inset 0 2px 4px rgba(61, 43, 31, 0.05);
+  --wjs-search-placeholder-color: #89726b;
+  --wjs-search-focus-color: #9a401f;
+  --wjs-search-focus-ring: 0 0 0 1px #9a401f;
+  --wjs-search-button-bg: #9a401f;
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-radius: 0.5rem;
+  --wjs-search-button-weight: 600;
+  --wjs-search-button-tracking: 0.05em;
+
+  /* Forms — stamped labels (uppercase Montserrat label-sm) */
+  --wjs-form-label-color: #56423c;
+  --wjs-form-label-size: 0.75rem;
+  --wjs-form-label-weight: 500;
+
+  /* Accordion — kraft headers over cream panels */
+  --wjs-accordion-bg: #fcf9f4;
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: #dcc1b8;
+  --wjs-accordion-radius: 0.5rem;
+  --wjs-accordion-header-bg: #e6d5c3;
+  --wjs-accordion-header-color: #1c1c19;
+  --wjs-accordion-header-family: 'Domine', Georgia, serif;
+  --wjs-accordion-header-weight: 600;
+  --wjs-accordion-icon-color: #9a401f;
+  --wjs-accordion-panel-bg: #fcf9f4;
+  --wjs-accordion-panel-color: #56423c;
+
+  /* Posts grid — cream cards, terracotta hover edge */
+  --wjs-posts-bg: #fcf9f4;
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: #dcc1b8;
+  --wjs-posts-radius: 0.75rem;
+  --wjs-posts-shadow: 0px 4px 20px rgba(61, 43, 31, 0.04);
+  --wjs-posts-hover-border-color: #9a401f;
+  --wjs-posts-hover-shadow: 0px 8px 30px rgba(61, 43, 31, 0.12);
+  --wjs-posts-title-color: #1c1c19;
+
+  /* CTA banner — terracotta slab, serif title, cream button */
+  --wjs-cta-bg: #9a401f;
+  --wjs-cta-radius: 0.75rem;
+  --wjs-cta-title-family: 'Domine', Georgia, serif;
+  --wjs-cta-title-color: #fffbff;
+  --wjs-cta-button-bg: #fcf9f4;
+  --wjs-cta-button-color: #7e2c0c;
+  --wjs-cta-button-radius: 0.5rem;
+  --wjs-cta-button-weight: 600;
+}
+
+/* =========================================
+   SITE CHROME (no !important)
+   ========================================= */
+
+/* Header: warm cream bar (bg via --wjs-bg-surface-glass) */
+header {
+  border-bottom: 1px solid rgba(61, 43, 31, 0.06);
+}
+
+.wjs-header-logo span {
+  font-family: 'Domine', Georgia, serif;
+  font-weight: 700;
+  color: #9a401f;
+  letter-spacing: -0.01em;
+}
+
+.wjs-header-nav a {
+  font-family: 'Montserrat', system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  color: #56423c;
+  transition: color 0.3s ease;
+}
+
+.wjs-header-nav a:hover {
+  color: #8a5100;
+}
+
+/* Footer: warm sand panel with dashed top hairline */
+footer {
+  border-top-style: dashed;
+  border-top-left-radius: 0.75rem;
+  border-top-right-radius: 0.75rem;
+}
+
+footer h3 {
+  font-family: 'Domine', Georgia, serif;
+  font-weight: 600;
+}
+
+footer h4 {
+  font-family: 'Montserrat', system-ui, sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+}
+
+footer a {
+  transition: color 0.2s ease, transform 0.2s ease;
+}
+
+/* ===== Mobile fit ===== */
+@media (max-width: 767.98px) {
+
+  .wjs-header-logo span {
+    font-size: 1.125rem;
+  }
+
+  /* Long menu labels wrap inside the drawer */
+  .wjs-header-nav a {
+    white-space: normal;
+  }
+
+  /* Uppercase stamped labels stay inside a 375px column */
+  .wjs-form-label {
+    letter-spacing: 0.08em;
+  }
+}
+
+/* =========================================
+   DISTINCTIVE RULES (craft signature)
+   ========================================= */
+
+/* Icon circles carry the design's hairline shadow (measured shadow-sm) */
+.wp-block-card__icon {
+  box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+}
+
+/* Kraft grain: the design's feTurbulence noise on kraft surfaces */
+.wp-block-card,
+.wp-block-pricing__plan--highlighted {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.08'/%3E%3C/svg%3E");
+}
+
+/* Dashed hairline framing the testimonial band (design border-y dashed) */
+.wp-block-testimonial {
+  border-style: dashed;
+}
+
+/* Stamped uppercase form labels (design label-sm tracking-widest) */
+.wjs-form-label {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+}

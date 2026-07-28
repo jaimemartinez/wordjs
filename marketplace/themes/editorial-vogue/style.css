@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #17080c;
+  --wjs-bg-surface: #25171b;
+  --wjs-bg-surface-raised: #312327;
+  --wjs-color-primary: #fb7185;
+  --wjs-color-primary-dark: #e11d48;
+  --wjs-color-on-primary: #111111;
+  --wjs-color-accent: #e11d48;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ffe4e6;
+  --wjs-color-text-muted: #a79093;
+  --wjs-color-heading: #ffe4e6;
+  --wjs-color-link: #fb7185;
+  --wjs-color-link-hover: #e11d48;
+  --wjs-border-subtle: #413033;
+  --wjs-outline: #6f5c5f;
+  --wjs-outline-variant: #3a292d;
+  --wjs-focus-ring: #fb7185;
+}
+
 /* Theme: Editorial Vogue (Editorial Luxury Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,800;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap');
 

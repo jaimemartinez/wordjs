@@ -182,18 +182,13 @@ h3 {
   color: var(--wjs-color-text-main) !important;
 }
 
-/* Cards: rounded surface with neo-pop solid-offset shadow */
-.wp-block-card,
-article {
+/* Cards: rounded surface with neo-pop solid-offset shadow */article {
   background: var(--wjs-bg-surface) !important;
   border: 2px solid var(--wjs-color-text-main) !important;
   border-radius: var(--wjs-radius-lg) !important;
   box-shadow: var(--wjs-shadow-pop) !important;
   transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
-}
-
-.wp-block-card:hover,
-article:hover {
+}article:hover {
   border-color: var(--wjs-color-primary) !important;
   box-shadow: var(--wjs-shadow-pop-pink) !important;
 }
@@ -236,237 +231,118 @@ footer .w-10:hover {
   color: #ffffff !important;
 }
 
-/* =========================================
-   POP STUDIO: COMPONENT OVERRIDES
-   ========================================= */
-
-/* Accordion: chunky bordered panel */
-.wp-block-accordion {
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-radius: var(--wjs-radius-md) !important;
-  box-shadow: var(--wjs-shadow-pop) !important;
-  overflow: hidden !important;
-}
-
-.wp-block-accordion .accordion-item button {
-  background: var(--wjs-bg-surface) !important;
-  color: var(--wjs-color-text-main) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.01em;
-  transition: color 0.18s ease, background-color 0.18s ease !important;
-}
-
-.wp-block-accordion .accordion-item button:hover {
-  color: var(--wjs-color-primary) !important;
-  background: #fdf2f8 !important;
-}
-
-.wp-block-accordion .accordion-item button:focus-visible {
-  outline: 3px solid var(--wjs-color-secondary) !important;
-  outline-offset: -3px;
-}
-
-.wp-block-accordion .accordion-item>div {
-  background: #fafafa !important;
-  color: var(--wjs-color-text-muted) !important;
-}
-
-/* Tabs: pill-style underline tabs */
-.wp-block-tabs>div:first-child {
-  border-bottom: 2px solid var(--wjs-color-text-main) !important;
-}
-
-.wp-block-tabs button {
-  color: var(--wjs-color-text-main) !important;
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 700 !important;
-  letter-spacing: -0.01em;
-  border-radius: var(--wjs-radius-sm) var(--wjs-radius-sm) 0 0 !important;
-  transition: color 0.18s ease, background-color 0.18s ease !important;
-}
-
-.wp-block-tabs button:hover,
-.wp-block-tabs button:focus {
-  color: var(--wjs-color-primary) !important;
-}
-
-.wp-block-tabs button:focus-visible {
-  outline: 3px solid var(--wjs-color-secondary) !important;
-  outline-offset: 2px;
-}
-
-.wp-block-tabs>div:last-child {
-  background: var(--wjs-bg-surface) !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-top: none !important;
-  border-radius: 0 0 var(--wjs-radius-md) var(--wjs-radius-md) !important;
-}
-
-/* Video: rounded chunky frame */
-.wp-block-video-embed {
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-pop) !important;
-  overflow: hidden !important;
-}
-
-/* Audio: rounded player */
-.wp-block-audio-player {
-  background: var(--wjs-bg-surface) !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-radius: var(--wjs-radius-md) !important;
-  box-shadow: var(--wjs-shadow-pop) !important;
-}
-
-/* Pricing: rounded neo-pop cards */
-.wp-block-pricing>div {
-  background: var(--wjs-bg-surface) !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-pop) !important;
-  transition: box-shadow 0.2s ease !important;
-}
-
-.wp-block-pricing>div:hover {
-  box-shadow: var(--wjs-shadow-pop-cyan) !important;
-}
-
-.wp-block-pricing>div h3 {
-  letter-spacing: -0.02em;
-}
-
-/* Highlighted pricing card: hot pink, no layout-shifting scale */
-.wp-block-pricing>div[style*="scale(1.05)"] {
-  background: var(--wjs-color-primary) !important;
-  color: #ffffff !important;
-  transform: none !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  box-shadow: var(--wjs-shadow-pop) !important;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"] h3 {
-  color: #ffffff !important;
-}
-
-.wp-block-pricing>div[style*="scale(1.05)"]:hover {
-  box-shadow: 4px 4px 0 0 var(--wjs-color-secondary) !important;
-}
-
-/* Testimonial: rounded card with cyan accent bar */
-.wp-block-testimonial {
-  background: var(--wjs-bg-surface) !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-left: 8px solid var(--wjs-color-secondary) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-soft) !important;
-}
-
-.wp-block-testimonial>div:first-child {
-  color: var(--wjs-color-primary) !important;
-}
-
-/* CTA Banner: vibrant pink block */
-.wp-block-cta-banner {
-  background: var(--wjs-color-primary) !important;
-  border: none !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-soft-lg) !important;
-}
-
-.wp-block-cta-banner h2 {
-  color: #ffffff !important;
-  letter-spacing: -0.02em;
-}
-
-.wp-block-cta-banner a {
-  background: var(--wjs-color-text-main) !important;
-  color: #ffffff !important;
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.01em;
-  border-radius: var(--wjs-radius-pill) !important;
-  transition: background-color 0.18s ease, box-shadow 0.18s ease !important;
-}
-
-.wp-block-cta-banner a:hover {
-  background: var(--wjs-color-secondary) !important;
-  box-shadow: 0 8px 20px -6px rgba(0, 0, 0, 0.35) !important;
-}
-
-/* Posts Grid: rounded neo-pop cards */
-.wp-block-posts-grid article {
-  background: var(--wjs-bg-surface) !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-radius: var(--wjs-radius-lg) !important;
-  box-shadow: var(--wjs-shadow-pop) !important;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease !important;
-}
-
-.wp-block-posts-grid article:hover {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: var(--wjs-shadow-pop-pink) !important;
-}
-
-/* Category Posts: bold headline with pink rule */
-.wp-block-category-posts h3 {
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 900 !important;
-  letter-spacing: -0.02em;
-  border-bottom: 3px solid var(--wjs-color-primary);
-  padding-bottom: 8px;
-}
-
-.wp-block-category-posts li {
-  border-color: var(--wjs-border-subtle) !important;
-}
-
-.wp-block-category-posts li a {
-  font-weight: 600 !important;
-  color: var(--wjs-color-text-main) !important;
-  transition: color 0.18s ease !important;
-}
-
-.wp-block-category-posts li a:hover {
-  color: var(--wjs-color-secondary) !important;
-}
-
-/* Search: rounded pill input + pink button */
-.wp-block-search input {
-  background: var(--wjs-bg-surface) !important;
-  border: 2px solid var(--wjs-color-text-main) !important;
-  border-radius: var(--wjs-radius-pill) !important;
-  color: var(--wjs-color-text-main) !important;
-  transition: border-color 0.18s ease, box-shadow 0.18s ease !important;
-}
-
-.wp-block-search input::placeholder {
-  color: var(--wjs-color-text-muted) !important;
-}
-
-.wp-block-search input:focus {
-  border-color: var(--wjs-color-primary) !important;
-  box-shadow: 0 0 0 4px rgba(236, 72, 153, 0.22) !important;
-  outline: none !important;
-}
-
-.wp-block-search button {
-  background: var(--wjs-color-primary) !important;
-  color: #ffffff !important;
-  font-family: var(--wjs-font-family-heading) !important;
-  font-weight: 700 !important;
-  letter-spacing: 0.01em;
-  border-radius: var(--wjs-radius-pill) !important;
-  transition: background-color 0.18s ease, box-shadow 0.18s ease !important;
-}
-
-.wp-block-search button:hover {
-  background: var(--wjs-color-primary-dark) !important;
-  box-shadow: 0 8px 18px -6px rgba(219, 39, 119, 0.5) !important;
-}
-
-.wp-block-search button:focus-visible {
-  outline: 3px solid var(--wjs-color-secondary) !important;
-  outline-offset: 2px;
+/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
+ * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
+ * a theme owns only the VALUES, so a single block can still override any of them.
+ * ════════════════════════════════════════════════════════════════════════════════════ */
+:root {
+  --wjs-card-bg: var(--wjs-bg-surface);
+  --wjs-card-border-width: 2px;
+  --wjs-card-border-color: var(--wjs-color-text-main);
+  --wjs-card-radius: var(--wjs-radius-lg);
+  --wjs-card-shadow: var(--wjs-shadow-pop);
+  --wjs-card-hover-border-color: var(--wjs-color-primary);
+  --wjs-card-hover-shadow: var(--wjs-shadow-pop-pink);
+  --wjs-accordion-border-width: 2px;
+  --wjs-accordion-border-color: var(--wjs-color-text-main);
+  --wjs-accordion-radius: var(--wjs-radius-md);
+  --wjs-accordion-shadow: var(--wjs-shadow-pop);
+  --wjs-accordion-header-bg: #fdf2f8;
+  --wjs-accordion-header-color: var(--wjs-color-primary);
+  --wjs-accordion-header-border-width: 1px;
+  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
+  --wjs-accordion-header-family: var(--wjs-font-family-heading);
+  --wjs-accordion-header-weight: 700;
+  --wjs-accordion-header-tracking: -0.01em;
+  --wjs-accordion-panel-bg: #fafafa;
+  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
+  --wjs-tabs-list-border-width: 2px;
+  --wjs-tabs-list-border-color: var(--wjs-color-text-main);
+  --wjs-tabs-color: var(--wjs-color-text-main);
+  --wjs-tabs-family: var(--wjs-font-family-heading);
+  --wjs-tabs-weight: 700;
+  --wjs-tabs-tracking: -0.01em;
+  --wjs-tabs-radius: var(--wjs-radius-sm) var(--wjs-radius-sm) 0 0;
+  --wjs-tabs-active-color: var(--wjs-color-primary);
+  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
+  --wjs-tabs-panel-border-width: 0;
+  --wjs-tabs-panel-border-color: transparent;
+  --wjs-tabs-panel-radius: 0 0 var(--wjs-radius-md) var(--wjs-radius-md);
+  --wjs-video-border-width: 2px;
+  --wjs-video-border-color: var(--wjs-color-text-main);
+  --wjs-video-radius: var(--wjs-radius-lg);
+  --wjs-video-shadow: var(--wjs-shadow-pop);
+  --wjs-audio-bg: var(--wjs-bg-surface);
+  --wjs-audio-border-width: 2px;
+  --wjs-audio-border-color: var(--wjs-color-text-main);
+  --wjs-audio-radius: var(--wjs-radius-md);
+  --wjs-audio-shadow: var(--wjs-shadow-pop);
+  --wjs-pricing-bg: var(--wjs-bg-surface);
+  --wjs-pricing-border-width: 2px;
+  --wjs-pricing-border-color: var(--wjs-color-text-main);
+  --wjs-pricing-radius: var(--wjs-radius-lg);
+  --wjs-pricing-shadow: var(--wjs-shadow-pop);
+  --wjs-pricing-hover-shadow: var(--wjs-shadow-pop-cyan);
+  --wjs-pricing-name-tracking: -0.02em;
+  --wjs-pricing-highlight-bg: var(--wjs-color-primary);
+  --wjs-pricing-highlight-color: #ffffff;
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-border-width: 2px;
+  --wjs-pricing-highlight-border-color: var(--wjs-color-text-main);
+  --wjs-pricing-highlight-shadow: var(--wjs-shadow-pop);
+  --wjs-pricing-highlight-name-color: #ffffff;
+  --wjs-pricing-highlight-hover-shadow: 4px 4px 0 0 var(--wjs-color-secondary);
+  --wjs-testimonial-bg: var(--wjs-bg-surface);
+  --wjs-testimonial-border-width: 8px;
+  --wjs-testimonial-border-color: var(--wjs-color-secondary);
+  --wjs-testimonial-radius: var(--wjs-radius-lg);
+  --wjs-testimonial-shadow: var(--wjs-shadow-soft);
+  --wjs-testimonial-mark-color: var(--wjs-color-primary);
+  --wjs-cta-bg: var(--wjs-color-primary);
+  --wjs-cta-border-width: 0;
+  --wjs-cta-border-color: transparent;
+  --wjs-cta-radius: var(--wjs-radius-lg);
+  --wjs-cta-shadow: var(--wjs-shadow-soft-lg);
+  --wjs-cta-title-color: #ffffff;
+  --wjs-cta-title-tracking: -0.02em;
+  --wjs-cta-button-bg: var(--wjs-color-text-main);
+  --wjs-cta-button-color: #ffffff;
+  --wjs-cta-button-family: var(--wjs-font-family-heading);
+  --wjs-cta-button-weight: 700;
+  --wjs-cta-button-tracking: 0.01em;
+  --wjs-cta-button-radius: var(--wjs-radius-pill);
+  --wjs-cta-button-hover-bg: var(--wjs-color-secondary);
+  --wjs-cta-button-hover-shadow: 0 8px 20px -6px rgba(0, 0, 0, 0.35);
+  --wjs-posts-bg: var(--wjs-bg-surface);
+  --wjs-posts-border-width: 2px;
+  --wjs-posts-border-color: var(--wjs-color-text-main);
+  --wjs-posts-radius: var(--wjs-radius-lg);
+  --wjs-posts-shadow: var(--wjs-shadow-pop);
+  --wjs-posts-hover-border-color: var(--wjs-color-primary);
+  --wjs-posts-hover-shadow: var(--wjs-shadow-pop-pink);
+  --wjs-catposts-heading-family: var(--wjs-font-family-heading);
+  --wjs-catposts-heading-weight: 900;
+  --wjs-catposts-heading-tracking: -0.02em;
+  --wjs-catposts-heading-border-width: 3px;
+  --wjs-catposts-heading-border-color: var(--wjs-color-primary);
+  --wjs-catposts-heading-pad: 8px;
+  --wjs-catposts-border-color: var(--wjs-border-subtle);
+  --wjs-catposts-link-weight: 600;
+  --wjs-catposts-link-color: var(--wjs-color-text-main);
+  --wjs-catposts-link-hover-color: var(--wjs-color-secondary);
+  --wjs-search-input-bg: var(--wjs-bg-surface);
+  --wjs-search-input-border-width: 2px;
+  --wjs-search-input-border-color: var(--wjs-color-text-main);
+  --wjs-search-input-radius: var(--wjs-radius-pill);
+  --wjs-search-input-color: var(--wjs-color-text-main);
+  --wjs-search-placeholder-color: var(--wjs-color-text-muted);
+  --wjs-search-focus-color: var(--wjs-color-primary);
+  --wjs-search-focus-ring: 0 0 0 4px rgba(236, 72, 153, 0.22);
+  --wjs-search-button-bg: var(--wjs-color-primary-dark);
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-family: var(--wjs-font-family-heading);
+  --wjs-search-button-weight: 700;
+  --wjs-search-button-tracking: 0.01em;
+  --wjs-search-button-radius: var(--wjs-radius-pill);
+  --wjs-search-button-shadow: 0 8px 18px -6px rgba(219, 39, 119, 0.5);
 }

@@ -1,3 +1,27 @@
+/* ── WordJS token contract — canonical palette ─────────────────────────────
+ * Derived from this theme's own generator colors (create-40-themes.js). These
+ * aliases are what wordjs-ui.css block defaults (forms, search, cards…) read;
+ * the theme's original rules below still own its distinctive look. */
+:root {
+  --wjs-bg-canvas: #140902;
+  --wjs-bg-surface: #221811;
+  --wjs-bg-surface-raised: #2e241e;
+  --wjs-color-primary: #f97316;
+  --wjs-color-primary-dark: #ea580c;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #ea580c;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #ffedd5;
+  --wjs-color-text-muted: #a69685;
+  --wjs-color-heading: #ffedd5;
+  --wjs-color-link: #f97316;
+  --wjs-color-link-hover: #ea580c;
+  --wjs-border-subtle: #3e3228;
+  --wjs-outline: #6d6052;
+  --wjs-outline-variant: #372b22;
+  --wjs-focus-ring: #f97316;
+}
+
 /* Theme: Sole Vault (Brutalist Archetype) */
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@700&family=Public+Sans:wght@400;700&display=swap');
 

@@ -1,0 +1,453 @@
+@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..900;1,6..96,400..900&family=DM+Sans:ital,opsz,wght@0,9..40,100..1000;1,9..40,100..1000&display=swap');
+
+/* =========================================
+   THEME: PEARL BOUTIQUE (Lujo Perla Claro)
+   Concept: High-end atelier. Pearl-white canvas with
+   iridescent rose gradients, Bodoni Moda serif at
+   weight 400, DM Sans light body, rose-brown #7b5455
+   actions, 0.2em uppercase micro-labels, hairline
+   underline inputs, ambient rose shadows, tiny radii.
+   Converted from the Stitch "Perla" design.
+   ========================================= */
+
+:root {
+  /* --- CANONICAL COLORS (from tailwind.config + markup) --- */
+  --wjs-color-primary: #7b5455;
+  /* Rose brown — every CTA in the design (its "tertiary") */
+  --wjs-color-primary-dark: #613d3e;
+  /* Design on-tertiary-fixed-variant */
+  --wjs-color-secondary: #665c5e;
+  /* Warm gray (design "secondary") */
+  --wjs-color-secondary-dark: #4e4446;
+  /* Design on-secondary-fixed-variant */
+  --wjs-color-accent: #ecbaba;
+  /* Powder rose (design tertiary-fixed-dim) */
+  --wjs-color-success: #4f7a5f;
+  --wjs-color-danger: #ba1a1a;
+  /* Design "error" */
+  --wjs-color-warning: #c9a24b;
+  --wjs-color-info: #6c7f8a;
+  --wjs-color-light: #fff8f7;
+  /* Design surface */
+  --wjs-color-dark: #342f2f;
+  /* Design inverse-surface */
+
+  /* --- ON-COLORS (max-contrast text per luminance) --- */
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-color-on-accent: #2f1314;
+  /* Ink on powder rose (design on-tertiary-fixed) */
+  --wjs-color-on-success: #ffffff;
+  --wjs-color-on-danger: #ffffff;
+  --wjs-color-on-warning: #161616;
+  --wjs-color-on-info: #ffffff;
+  --wjs-color-on-light: #1e1b1b;
+  --wjs-color-on-dark: #ffffff;
+
+  /* --- SURFACES / TEXT / BORDERS --- */
+  --wjs-bg-canvas: #fff8f7;
+  /* Pearl (design surface/background) */
+  --wjs-bg-surface: #ffffff;
+  --wjs-bg-muted: #f5eceb;
+  /* Design surface-container */
+  --wjs-bg-surface-glass: rgba(255, 248, 247, 0.6);
+  /* Nav: bg-surface/60 + blur-xl (measured: rgba(255,248,247,0.6), blur 24px) */
+  --wjs-color-text-main: #1e1b1b;
+  --wjs-color-text-muted: #665c5e;
+  --wjs-color-heading: #1e1b1b;
+  --wjs-color-link: #7b5455;
+  --wjs-color-link-hover: #613d3e;
+  --wjs-border-subtle: #e9e0e0;
+  /* Design surface-variant hairlines */
+  --wjs-border-width: 1px;
+  --wjs-focus-ring: rgba(123, 84, 85, 0.25);
+
+  /* --- TYPOGRAPHY (Bodoni Moda / DM Sans light) --- */
+  --wjs-font-family-base: 'DM Sans', system-ui, -apple-system, sans-serif;
+  --wjs-font-family-heading: 'Bodoni Moda', 'Didot', Georgia, serif;
+  --wjs-font-family-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
+  --wjs-font-size-base: 1rem;
+  --wjs-line-height-base: 1.5;
+  /* measured body: 24px/16px */
+  --wjs-heading-weight: 300;
+  /* measured h1: Bodoni 300 — lighter than book weight */
+  --wjs-heading-line-height: 1.1;
+  /* measured h1: 70.4px/64px */
+  --wjs-h1: 4rem;
+  /* display-lg 64px */
+  --wjs-h2: 2.5rem;
+  /* headline-lg 40px */
+  --wjs-h3: 1.5rem;
+  /* headline-md 24px */
+  --wjs-h4: 1.25rem;
+  --wjs-h5: 1.125rem;
+  --wjs-h6: 1rem;
+  --wjs-h1-tracking: -0.02em;
+
+  /* --- SHAPE / SHADOW (tiny radii, ambient rose shadows) --- */
+  --wjs-spacer: 1rem;
+  --wjs-radius-sm: 0.125rem;
+  --wjs-radius: 0.125rem;
+  /* Design rounded-DEFAULT = 2px on every CTA */
+  --wjs-radius-md: 0.25rem;
+  --wjs-radius-lg: 0.5rem;
+  /* Design rounded-xl cards = 8px */
+  --wjs-radius-pill: 0.75rem;
+  /* Even "full" is only 12px in this design */
+  --wjs-shadow-sm: 0 4px 20px -8px rgba(226, 177, 177, 0.12);
+  --wjs-shadow: 0 10px 40px -10px rgba(226, 177, 177, 0.15);
+  /* Design .ambient-shadow */
+  --wjs-shadow-md: 0 16px 50px -12px rgba(226, 177, 177, 0.22);
+  --wjs-shadow-lg: 0 24px 70px -16px rgba(226, 177, 177, 0.3);
+
+  /* ── BLOCK TOKENS (derived from the design markup) ─────────────── */
+
+  /* Buttons — rose slab, 12px caps with 0.2em tracking, px-10 py-4,
+     square corners (measured: no border-radius), hover lightens */
+  --wjs-button-bg: #7b5455;
+  --wjs-button-color: #ffffff;
+  --wjs-button-family: 'DM Sans', system-ui, sans-serif;
+  --wjs-button-size: 0.75rem;
+  --wjs-button-weight: 500;
+  --wjs-button-transform: uppercase;
+  --wjs-button-tracking: 0.2em;
+  --wjs-button-leading: 1.2;
+  --wjs-button-radius: 0;
+  --wjs-button-pad-x: 40px;
+  --wjs-button-pad-y: 16px;
+  --wjs-button-border-width: 0;
+  --wjs-button-border-color: transparent;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-bg: #8a6162;
+  --wjs-button-hover-color: #ffffff;
+  --wjs-button-hover-shadow: none;
+  --wjs-button-hover-transform: none;
+  /* Secondary / outline variants = the design's hairline ghost button */
+  --wjs-button-secondary-bg: transparent;
+  --wjs-button-secondary-color: #7b5455;
+  --wjs-button-outline-bg: transparent;
+  --wjs-button-outline-color: #7b5455;
+  --wjs-button-outline-border-color: rgba(123, 84, 85, 0.3);
+  --wjs-button-outline-hover-bg: #e9e0e0;
+
+  /* Cards — blush panels, ambient shadow, rose icon medallion,
+     gentle 8px lift on hover */
+  --wjs-card-bg: #fbf2f1;
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: transparent;
+  --wjs-card-radius: 0.5rem;
+  --wjs-card-pad: 2rem;
+  --wjs-card-shadow: 0 10px 40px -10px rgba(226, 177, 177, 0.15);
+  --wjs-card-title-color: #1e1b1b;
+  --wjs-card-title-size: 1.5rem;
+  --wjs-card-title-weight: 400;
+  --wjs-card-title-leading: 1.3;
+  /* measured: 31.2px/24px */
+  --wjs-card-desc-color: #434847;
+  --wjs-card-desc-leading: 1.6;
+  /* measured: 25.6px/16px */
+  --wjs-card-icon-bg: #eedfe1;
+  --wjs-card-icon-color: #7b5455;
+  --wjs-card-icon-radius: 0.75rem;
+  /* measured: 12px, not a full circle */
+  --wjs-card-hover-border-color: rgba(123, 84, 85, 0.1);
+  --wjs-card-hover-shadow: 0 16px 50px -12px rgba(226, 177, 177, 0.22);
+  --wjs-card-hover-transform: translateY(-8px);
+
+  /* Hero — iridescent pearl gradient, left aligned, Bodoni display */
+  --wjs-hero-bg: #fff8f7;
+  --wjs-hero-gradient: linear-gradient(135deg, #fff8f7 0%, #fdfcfb 50%, #eedfe1 100%);
+  --wjs-hero-color: #1e1b1b;
+  --wjs-hero-text-align: left;
+  --wjs-hero-actions-justify: flex-start;
+  --wjs-hero-title-color: #1e1b1b;
+  --wjs-hero-title-size: 4rem;
+  --wjs-hero-title-weight: 300;
+  --wjs-hero-title-tracking: -0.02em;
+  --wjs-hero-subtitle-color: #434847;
+  --wjs-hero-subtitle-size: 1.125rem;
+  --wjs-hero-subtitle-opacity: 1;
+  --wjs-hero-radius: 0;
+  --wjs-hero-button-bg: #7b5455;
+  --wjs-hero-button-color: #ffffff;
+  --wjs-hero-button-radius: 0;
+  --wjs-hero-button-pad: 16px 40px;
+  --wjs-hero-button-size: 0.75rem;
+  --wjs-hero-button-weight: 500;
+  --wjs-hero-button-leading: 1.2;
+  /* measured: 14.4px/12px */
+  --wjs-hero-button-outline-bg: transparent;
+  --wjs-hero-button-outline-border: rgba(123, 84, 85, 0.3);
+  --wjs-hero-button-outline-color: #7b5455;
+  --wjs-hero-button-outline-hover-bg: #e9e0e0;
+
+  /* Pricing — pearl plans with hairline borders; highlighted plan is
+     the rose-quartz panel (design "Premium") */
+  --wjs-pricing-accent: #7b5455;
+  --wjs-pricing-bg: #fff8f7;
+  --wjs-pricing-border-width: 1px;
+  --wjs-pricing-border-color: #e9e0e0;
+  --wjs-pricing-radius: 0.5rem;
+  --wjs-pricing-shadow: none;
+  --wjs-pricing-hover-shadow: 0 10px 40px -10px rgba(226, 177, 177, 0.15);
+  --wjs-pricing-name-family: 'Bodoni Moda', Georgia, serif;
+  --wjs-pricing-name-weight: 400;
+  --wjs-pricing-name-color: #1e1b1b;
+  --wjs-pricing-price-family: 'Bodoni Moda', Georgia, serif;
+  --wjs-pricing-price-weight: 400;
+  --wjs-pricing-price-color: #7b5455;
+  --wjs-pricing-period-color: #665c5e;
+  --wjs-pricing-feature-color: #434847;
+  --wjs-pricing-button-bg: transparent;
+  --wjs-pricing-button-color: #7b5455;
+  --wjs-pricing-button-border-color: rgba(123, 84, 85, 0.3);
+  --wjs-pricing-button-radius: 0;
+  --wjs-pricing-button-weight: 500;
+  --wjs-pricing-highlight-bg: #eedfe1;
+  --wjs-pricing-highlight-border-width: 0;
+  --wjs-pricing-highlight-border-color: transparent;
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-shadow: 0 10px 40px -10px rgba(226, 177, 177, 0.25);
+  --wjs-pricing-highlight-name-color: #613d3e;
+  --wjs-pricing-highlight-feature-color: #613d3e;
+  --wjs-pricing-highlight-button-bg: #7b5455;
+  --wjs-pricing-button-on-accent: #ffffff;
+
+  /* Testimonial — rose-quartz slab with dotted texture, Bodoni quote */
+  --wjs-testimonial-bg: #eedfe1;
+  --wjs-testimonial-border-width: 0;
+  --wjs-testimonial-border-color: transparent;
+  --wjs-testimonial-radius: 0.5rem;
+  --wjs-testimonial-shadow: none;
+  --wjs-testimonial-quote-family: 'Bodoni Moda', Georgia, serif;
+  --wjs-testimonial-quote-style: normal;
+  --wjs-testimonial-quote-color: #613d3e;
+  --wjs-testimonial-quote-size: 1.75rem;
+  --wjs-testimonial-mark-color: #7b5455;
+  --wjs-testimonial-mark-opacity: 0.5;
+  --wjs-testimonial-author-color: #613d3e;
+  --wjs-testimonial-role-color: #7b5455;
+  --wjs-testimonial-role-transform: uppercase;
+  --wjs-testimonial-role-tracking: 0.2em;
+  --wjs-testimonial-role-size: 0.75rem;
+
+  /* Blockquote */
+  --wjs-quote-accent: #7b5455;
+  --wjs-quote-family: 'Bodoni Moda', Georgia, serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-color: #613d3e;
+  --wjs-quote-cite-color: #7b5455;
+
+  /* Search — inheritance source for inputs: the design's hairline
+     UNDERLINE fields (transparent bg, rose/30 bottom rule) */
+  --wjs-search-input-bg: transparent;
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-input-border-color: rgba(123, 84, 85, 0.3);
+  --wjs-search-input-radius: 0;
+  --wjs-search-input-pad: 8px 0;
+  /* measured: 8px 0 */
+  --wjs-search-input-color: #1e1b1b;
+  --wjs-search-input-shadow: none;
+  --wjs-search-placeholder-color: #747877;
+  --wjs-search-focus-color: #7b5455;
+  --wjs-search-focus-ring: none;
+  --wjs-search-button-bg: #7b5455;
+  --wjs-search-button-color: #ffffff;
+  --wjs-search-button-radius: 0;
+  --wjs-search-button-pad: 16px 48px;
+  /* measured submit: 16px 48px */
+  --wjs-search-button-family: 'DM Sans', system-ui, sans-serif;
+  --wjs-search-button-weight: 500;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.2em;
+
+  /* Forms — atelier micro-labels; submit mirrors the measured caps CTA */
+  --wjs-form-label-color: #434847;
+  --wjs-form-label-size: 0.75rem;
+  --wjs-form-label-weight: 500;
+  --wjs-form-submit-size: 0.75rem;
+  --wjs-form-submit-pad: 16px 48px;
+
+  /* Accordion — pearl panels, serif headers */
+  --wjs-accordion-bg: #fff8f7;
+  --wjs-accordion-border-width: 1px;
+  --wjs-accordion-border-color: #e9e0e0;
+  --wjs-accordion-radius: 0.25rem;
+  --wjs-accordion-header-bg: transparent;
+  --wjs-accordion-header-color: #1e1b1b;
+  --wjs-accordion-header-family: 'Bodoni Moda', Georgia, serif;
+  --wjs-accordion-header-weight: 400;
+  --wjs-accordion-header-size: 1.25rem;
+  --wjs-accordion-icon-color: #7b5455;
+  --wjs-accordion-panel-bg: transparent;
+  --wjs-accordion-panel-color: #434847;
+
+  /* Posts grid — blush cards, serif titles, rose dates */
+  --wjs-posts-bg: #fbf2f1;
+  --wjs-posts-border-width: 1px;
+  --wjs-posts-border-color: transparent;
+  --wjs-posts-radius: 0.5rem;
+  --wjs-posts-shadow: 0 4px 20px -8px rgba(226, 177, 177, 0.12);
+  --wjs-posts-hover-shadow: 0 10px 40px -10px rgba(226, 177, 177, 0.15);
+  --wjs-posts-title-color: #1e1b1b;
+  --wjs-posts-title-weight: 500;
+  --wjs-posts-date-color: #7b5455;
+  --wjs-posts-excerpt-color: #434847;
+
+  /* CTA banner — rose-quartz panel, Bodoni title, rose button */
+  --wjs-cta-bg: #eedfe1;
+  --wjs-cta-color: #613d3e;
+  --wjs-cta-radius: 0.5rem;
+  --wjs-cta-title-family: 'Bodoni Moda', Georgia, serif;
+  --wjs-cta-title-color: #613d3e;
+  --wjs-cta-title-weight: 400;
+  --wjs-cta-button-bg: #7b5455;
+  --wjs-cta-button-color: #ffffff;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.2em;
+  --wjs-cta-button-weight: 500;
+  --wjs-cta-button-radius: 0;
+
+  /* --- FOOTER / NAV CONFIG (consumed by the public chrome) ---
+     Measured footer: white panel, ink headings, warm-gray links */
+  --wjs-bg-footer: #ffffff;
+  --wjs-color-text-footer-main: #1e1b1b;
+  --wjs-color-text-footer-dim: #6c6264;
+  --wjs-bg-surface-hover: #eedfe1;
+}
+
+/* =========================================
+   SITE CHROME (no !important)
+   ========================================= */
+
+/* Header: pearl glass veil (bg via --wjs-bg-surface-glass).
+   Measured: NO border-bottom — just the component's own shadow-sm — and a
+   deeper blur-xl. [class] lifts specificity over the chrome's blur utility. */
+header[class] {
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+}
+
+.wjs-header-logo span {
+  font-family: 'Bodoni Moda', Georgia, serif;
+  font-weight: 500;
+  font-size: 1.75rem;
+  letter-spacing: -0.02em;
+  color: #5e5e5e;
+}
+
+.wjs-header-nav a {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 1rem;
+  font-weight: 400;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #5e5e5e;
+  padding-bottom: 4px;
+  border-bottom: 1px solid rgba(94, 94, 94, 0.3);
+  transition: color 0.3s ease;
+}
+
+.wjs-header-nav a:hover {
+  color: #1e1b1b;
+}
+
+/* Footer: white gallery panel, serif brand, micro-caps headings.
+   Measured hairline: blush #eedfe1 (the chrome's border utility needs [class]). */
+footer[class] {
+  border-top-color: #eedfe1;
+}
+
+footer h3 {
+  font-family: 'Bodoni Moda', Georgia, serif;
+  font-weight: 500;
+  color: #5e5e5e;
+}
+
+footer h4 {
+  font-family: 'DM Sans', system-ui, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  color: #1e1b1b;
+}
+
+footer a {
+  transition: color 0.3s ease;
+}
+
+/* ===== Mobile fit ===== */
+@media (max-width: 767.98px) {
+
+  .wjs-header-logo span {
+    font-size: 1.375rem;
+  }
+
+  /* 0.2em-tracked caps must wrap, never widen the viewport */
+  .wjs-header-nav a {
+    letter-spacing: 0.12em;
+    white-space: normal;
+  }
+
+  .wp-block-cta-banner__button,
+  .wp-block-search__button,
+  .wp-block-pricing__button {
+    letter-spacing: 0.12em;
+    white-space: normal;
+    max-width: 100%;
+  }
+}
+
+/* =========================================
+   DISTINCTIVE RULES (atelier signature)
+   ========================================= */
+
+/* (Body voice: measured DM Sans 400, normal tracking — the old 300/0.02em
+   "airy" rule was not in the design and was removed.) */
+
+/* Hairline UNDERLINE inputs — the design's fields have no box */
+.wp-block-search__input,
+.wjs-form-input,
+.wjs-form-textarea,
+.wjs-form-select {
+  border-top: 0;
+  border-left: 0;
+  border-right: 0;
+  border-radius: 0;
+}
+
+/* Micro-caps labels and CTA voice (no tokens exist for these) */
+.wjs-form-label {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+}
+
+.wp-block-hero__button,
+.wp-block-pricing__button {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 0.75rem;
+}
+
+/* Measured CTAs cast no shadow (the framework's default elevation is turned off) */
+.wp-block-hero__button {
+  box-shadow: none;
+}
+
+/* Search submit shares the measured caps voice: 12px/1.2, no token for size */
+.wp-block-search__button {
+  font-size: 0.75rem;
+  line-height: 1.2;
+}
+
+/* Outline buttons need a visible hairline: the base border-width token is 0 */
+.wp-block-button__link.button-variant-outline {
+  border-width: 1px;
+}
+
+/* Rose dot texture on the testimonial slab (design radial pattern) */
+.wp-block-testimonial {
+  background-image: radial-gradient(rgba(123, 84, 85, 0.18) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
