@@ -644,16 +644,48 @@ async function initialize() {
         const userCount = await User.count();
 
         if (userCount === 0) {
-            console.log('👤 Creating default admin user...');
+            // A site that reaches this point is already reachable (in split/separate it is published
+            // through the gateway), so the bootstrap administrator must NOT have a guessable password.
+            // This used to hardcode admin/admin123 and print it as a suggestion — on an enrolled cluster
+            // node, which skipped the wizard, that shipped a live site with known credentials.
+            // The password is random, written 0600 next to the install token, and printed once.
+            const nodeCrypto = require('crypto');
+            const nodeFs = require('fs');
+            const nodePath = require('path');
+            // base64url of 24 bytes: no shell-hostile characters, ~192 bits.
+            const password = nodeCrypto.randomBytes(24).toString('base64url');
+
+            console.log('👤 No users found — creating the bootstrap administrator...');
             await User.create({
                 username: 'admin',
                 email: 'admin@example.com',
-                password: 'admin123',
+                password,
                 displayName: 'Administrator',
                 role: 'administrator'
             });
-            console.log('   Default admin created: admin / admin123');
-            console.log('   ⚠️  Please change the default password!');
+
+            const dataDir = nodePath.resolve(__dirname, '../data');
+            const pwFile = nodePath.join(dataDir, 'initial-admin-password');
+            let stored = '';
+            try {
+                if (!nodeFs.existsSync(dataDir)) nodeFs.mkdirSync(dataDir, { recursive: true });
+                nodeFs.writeFileSync(pwFile, `${password}\n`, { mode: 0o600 });
+                stored = `\n   (also written to ${pwFile}, mode 0600 — delete it once you have signed in)`;
+            } catch (e: any) {
+                // Never block boot on this: the password is printed above either way.
+                stored = `\n   (could not write ${pwFile}: ${e && e.message} — copy the password from this log)`;
+            }
+            console.log('');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('🔑 Bootstrap administrator created — this is shown ONCE:');
+            console.log('');
+            console.log(`      user:     admin`);
+            console.log(`      password: ${password}`);
+            console.log(`${stored}`);
+            console.log('');
+            console.log('   ⚠️  Sign in and change it. Anyone who can read this log can use it.');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('');
         }
 
         // Create default category if none exist
@@ -798,18 +830,32 @@ async function initialize() {
             const gatewayInternalPort = config.gatewayInternalPort || 3100;
             const gatewayPort = config.gatewayPort || 3000;
 
-            // Certs for calling Gateway (Client mTLS)
-            let clientOpts = {};
-
-            if (fs.existsSync(keyPath) && fs.existsSync(certPath) && fs.existsSync(caPath)) {
-                console.log('   🛂 mTLS: Using client certificates for Gateway registration...');
+            // Certs for calling Gateway (Client mTLS).
+            //
+            // Re-read on EVERY attempt, not once at boot. On a fresh split install all three services
+            // start before the wizard has issued any certificate; reading once left clientOpts empty for
+            // the life of the process, so the retry loop kept POSTing /register in the clear to the
+            // PUBLIC port (which has no such route → 404) and the backend never registered even after
+            // setup wrote its identity to disk.
+            let clientOpts: Record<string, any> = {};
+            let announcedMtls = false;
+            const refreshClientOpts = () => {
+                if (!(fs.existsSync(keyPath) && fs.existsSync(certPath) && fs.existsSync(caPath))) {
+                    clientOpts = {};
+                    return;
+                }
+                if (!announcedMtls) {
+                    console.log('   🛂 mTLS: Using client certificates for Gateway registration...');
+                    announcedMtls = true;
+                }
                 clientOpts = {
                     key: fs.readFileSync(keyPath),
                     cert: fs.readFileSync(certPath),
                     ca: fs.readFileSync(caPath),
                     rejectUnauthorized: true
                 };
-            }
+            };
+            refreshClientOpts();
 
             const services = [
                 {
@@ -916,6 +962,7 @@ async function initialize() {
 
             // Attempt registration with retry logic
             const registerAll = async () => {
+                refreshClientOpts(); // certs may have been issued since the last attempt (see above)
                 let preferredProto = (config.gatewaySsl && config.gatewaySsl.enabled) ? 'https' : 'http';
                 let fallbackProto = preferredProto === 'https' ? 'http' : 'https';
                 let allSuccess = true;
@@ -962,8 +1009,13 @@ async function initialize() {
         console.log(`   GET    ${config.api.prefix}/plugins`);
         console.log(`   GET    ${config.api.prefix}/themes`);
         console.log('');
-        console.log(`🎨 Admin Panel: ${config.site.frontendUrl}/admin`);
-        console.log(`🏠 Public Site: ${config.site.frontendUrl}`);
+        // `config.site` is {url,name,description} — it has no frontendUrl, so this printed a literal
+        // "undefined/admin" on every split/separate boot. The public origin lives at the top level.
+        const publicUrl = config.frontendUrl || config.siteUrl || config.site?.url;
+        if (publicUrl) {
+            console.log(`🎨 Admin Panel: ${publicUrl}/admin`);
+            console.log(`🏠 Public Site: ${publicUrl}`);
+        }
         console.log('');
     });
     }

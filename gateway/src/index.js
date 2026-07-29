@@ -196,8 +196,15 @@ if (cluster.isPrimary) {
         logger.info(`[Gateway] Primary ${process.pid} is running. Spawning ${maxWorkers} workers...`);
         for (let i = 0; i < maxWorkers; i++) cluster.fork();
 
-        startInternalServer();
-        startEnrollServer();
+        // The control-plane listeners need the cluster mTLS material, which on a FRESH split install does
+        // not exist yet: gateway, backend and frontend all start together and the certs are only issued
+        // when the operator finishes the wizard. Starting once at boot meant the gateway stayed without
+        // an internal listener forever, the backend could never register, and every route 404'd until
+        // someone restarted the process by hand. Poll until the certs land, then start.
+        waitForClusterCertsThen(() => {
+            startInternalServer();
+            startEnrollServer();
+        });
         maybeStartAcmeHttpListener();
     })();
 
@@ -375,6 +382,36 @@ if (cluster.isPrimary) {
             restartGateway();
         }
     });
+
+    /**
+     * Run `start` as soon as the gateway's own mTLS identity exists, checking every few seconds.
+     *
+     * Runs immediately when the certs are already there (an installed site, or `cluster.js init`), so
+     * this only costs anything on a not-yet-installed instance. It gives up after ~30 min so a
+     * misconfigured box doesn't poll forever.
+     */
+    function waitForClusterCertsThen(start) {
+        const required = ['cluster-ca.crt', 'gateway-internal.key', 'gateway-internal.crt']
+            .map((f) => path.join(CERTS_DIR, f));
+        const ready = () => required.every((p) => fs.existsSync(p));
+
+        if (ready()) return start();
+
+        logger.warn('[Gateway] cluster mTLS identity not present yet — the control plane will start as soon as setup issues it.');
+        const EVERY_MS = 3000;
+        const DEADLINE = Date.now() + 30 * 60 * 1000;
+        const timer = setInterval(() => {
+            if (ready()) {
+                clearInterval(timer);
+                logger.info('[Gateway] cluster mTLS identity detected — starting the control plane.');
+                start();
+            } else if (Date.now() > DEADLINE) {
+                clearInterval(timer);
+                logger.warn('[Gateway] still no cluster mTLS identity after 30 min — giving up. Finish setup, or run: node scripts/cluster.js init');
+            }
+        }, EVERY_MS);
+        timer.unref?.();
+    }
 
     function startInternalServer() {
         const MTLS_CA = path.join(CERTS_DIR, 'cluster-ca.crt');
@@ -816,6 +853,55 @@ if (cluster.isPrimary) {
         return null;
     };
 
+    /**
+     * Pre-install bootstrap route to the services on THIS machine.
+     *
+     * Split mode starts gateway + backend + frontend together on a box that has never been set up. With
+     * no cluster identity issued, the mTLS control plane cannot start, so neither service can register,
+     * so the registry is empty and EVERY route 404s — including the install wizard the operator needs in
+     * order to create those very certificates. That deadlock made a fresh split install impossible.
+     *
+     * It only ever points at 127.0.0.1 on THIS host (no remote surface), and only engages while the
+     * service that owns the route has not registered even once. So on a healthy cluster — including a
+     * dedicated separate-mode gateway whose peers live on other machines — an unknown path still 404s
+     * as before; this never becomes a blanket "proxy everything to localhost".
+     */
+    const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics'];
+    const BOOTSTRAP_PORT = { backend: config.backendPort || 4000, frontend: config.frontendPort || 3001 };
+    // Each peer picks HTTPS-with-mTLS or plain HTTP ONCE, at its own startup, from whether its identity
+    // is on disk. In split mode all three start together, so the same look taken HERE, at gateway
+    // startup, matches what they chose. Deciding per request instead would be wrong for exactly the
+    // window this bootstrap exists to cover: the installer writes the certificates while the peers are
+    // already running as plain HTTP, and a request sent as TLS into that socket dies with ECONNRESET.
+    const IDENTITY = {
+        backend: path.resolve(__dirname, '../../backend/certs/backend.crt'),
+        frontend: path.resolve(__dirname, '../../frontend/certs/frontend.crt')
+    };
+    const bootScheme = {
+        backend: fs.existsSync(IDENTITY.backend) ? 'https' : 'http',
+        frontend: fs.existsSync(IDENTITY.frontend) ? 'https' : 'http'
+    };
+    const bootstrapUrl = (service) => `${bootScheme[service]}://127.0.0.1:${BOOTSTRAP_PORT[service]}`;
+    // …and if that snapshot is ever wrong (peers started at different times), flip on the first
+    // connection-level failure so the next request lands instead of failing forever.
+    const flipScheme = (target) => {
+        for (const service of Object.keys(bootScheme)) {
+            if (target === bootstrapUrl(service)) {
+                bootScheme[service] = bootScheme[service] === 'https' ? 'http' : 'https';
+                logger.warn(`[Gateway] bootstrap target for ${service} spoke the other protocol — retrying as ${bootScheme[service]}`);
+                return true;
+            }
+        }
+        return false;
+    };
+    const bootstrapTarget = (url) => {
+        const service = BACKEND_PREFIXES.some((p) => url.startsWith(p)) ? 'backend' : 'frontend';
+        for (const group of workerRegistry.values()) {
+            if (group.name === service && group.targets && group.targets.size > 0) return null;
+        }
+        return bootstrapUrl(service);
+    };
+
     // Liveness probe — answered by the gateway itself (edge is up), independent of any backend.
     // /readyz is intentionally NOT handled here so it proxies through to the backend's deep check.
     app.get('/healthz', (req, res) => {
@@ -846,7 +932,7 @@ if (cluster.isPrimary) {
         // mTLS listener is a separate app and is reached only by trusted, cert-authenticated peers.)
         req.headers['x-forwarded-host'] = req.headers['host'] || '';
         delete req.headers['x-forwarded-server'];
-        const target = getTarget(req.url);
+        const target = getTarget(req.url) || bootstrapTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
             const isSSE = (req.headers['accept'] || '').includes('text/event-stream');
@@ -866,6 +952,12 @@ if (cluster.isPrimary) {
                     if (isSSE && (code === 'ECONNRESET' || code === 'EPIPE')) return;
 
                     logger.error(`[Gateway] Proxy Error [${target}] [${code}]: ${err.message}`);
+                    // A bootstrap target that answered with the other protocol (plain request into a
+                    // TLS socket, or the reverse) fails at the connection level. Flip the remembered
+                    // scheme so the next request reaches it instead of failing forever.
+                    if (code === 'ECONNRESET' || code === 'EPROTO' || /wrong version number/i.test(err.message || '')) {
+                        flipScheme(target);
+                    }
                     if (code === 'ECONNREFUSED') {
                         res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.', target });
                     } else {
