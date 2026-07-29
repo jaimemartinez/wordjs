@@ -48,7 +48,10 @@ jobs:
       # install prod deps, boot the monolith in plain HTTP, and require /healthz to answer (it is
       # registered ABOVE the install guard, so a booting bundle returns 200 even before setup; a
       # crash-on-boot bundle never answers). If it can't boot, the job fails and nothing is published.
-      - name: Smoke-boot the compiled bundle (fail the release if it can't boot)
+      # Deploy the artifact we are about to publish, in EVERY mode it claims to support. This used to
+      # boot only the monolith, which is how v1.12.12 was published with split mode unable to install at
+      # all. See scripts/smoke-deploy.sh for what each leg asserts and why.
+      - name: Deploy the compiled bundle in every mode (fail the release if any mode is broken)
         run: |
           set -uo pipefail
           work="$(mktemp -d)"
@@ -60,20 +63,7 @@ jobs:
           app="$(dirname "$pkg")"
           echo "app root: $app"
           ( cd "$app" && npm run release:install ) || { echo "::error::release:install failed in the extracted bundle"; exit 1; }
-          ( cd "$app" && WORDJS_HTTP=1 npm run start:mono ) > "$work/mono.log" 2>&1 &
-          pid=$!
-          ok=0
-          for i in $(seq 1 60); do
-            if curl -fsS http://localhost:3000/healthz >/dev/null 2>&1; then ok=1; echo "healthz answered after ~$((i*2))s"; break; fi
-            kill -0 "$pid" 2>/dev/null || { echo "::error::monolith process exited during boot"; break; }
-            sleep 2
-          done
-          kill "$pid" 2>/dev/null || true
-          if [ "$ok" != 1 ]; then
-            echo "==== monolith boot log ===="; cat "$work/mono.log" 2>/dev/null || true
-            echo "::error::the compiled bundle did NOT serve /healthz — refusing to publish an unbootable release"; exit 1
-          fi
-          echo "✅ compiled bundle boots and serves /healthz"
+          bash "$GITHUB_WORKSPACE/scripts/smoke-deploy.sh" "$app"
 
       # Marketplace plugins ship as SEPARATE release assets (one zip per plugin + the catalog
       # index), never inside the core bundle — installs happen from the admin Marketplace tab.

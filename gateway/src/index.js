@@ -866,16 +866,40 @@ if (cluster.isPrimary) {
      * dedicated separate-mode gateway whose peers live on other machines — an unknown path still 404s
      * as before; this never becomes a blanket "proxy everything to localhost".
      */
-    const BOOTSTRAP_BACKEND = `http://127.0.0.1:${config.backendPort || 4000}`;
-    const BOOTSTRAP_FRONTEND = `http://127.0.0.1:${config.frontendPort || 3001}`;
     const BACKEND_PREFIXES = ['/api', '/uploads', '/themes', '/plugins', '/.well-known', '/healthz', '/readyz', '/metrics'];
+    const BOOTSTRAP_PORT = { backend: config.backendPort || 4000, frontend: config.frontendPort || 3001 };
+    // Each peer picks HTTPS-with-mTLS or plain HTTP ONCE, at its own startup, from whether its identity
+    // is on disk. In split mode all three start together, so the same look taken HERE, at gateway
+    // startup, matches what they chose. Deciding per request instead would be wrong for exactly the
+    // window this bootstrap exists to cover: the installer writes the certificates while the peers are
+    // already running as plain HTTP, and a request sent as TLS into that socket dies with ECONNRESET.
+    const IDENTITY = {
+        backend: path.resolve(__dirname, '../../backend/certs/backend.crt'),
+        frontend: path.resolve(__dirname, '../../frontend/certs/frontend.crt')
+    };
+    const bootScheme = {
+        backend: fs.existsSync(IDENTITY.backend) ? 'https' : 'http',
+        frontend: fs.existsSync(IDENTITY.frontend) ? 'https' : 'http'
+    };
+    const bootstrapUrl = (service) => `${bootScheme[service]}://127.0.0.1:${BOOTSTRAP_PORT[service]}`;
+    // …and if that snapshot is ever wrong (peers started at different times), flip on the first
+    // connection-level failure so the next request lands instead of failing forever.
+    const flipScheme = (target) => {
+        for (const service of Object.keys(bootScheme)) {
+            if (target === bootstrapUrl(service)) {
+                bootScheme[service] = bootScheme[service] === 'https' ? 'http' : 'https';
+                logger.warn(`[Gateway] bootstrap target for ${service} spoke the other protocol — retrying as ${bootScheme[service]}`);
+                return true;
+            }
+        }
+        return false;
+    };
     const bootstrapTarget = (url) => {
-        const wantsBackend = BACKEND_PREFIXES.some((p) => url.startsWith(p));
-        const service = wantsBackend ? 'backend' : 'frontend';
+        const service = BACKEND_PREFIXES.some((p) => url.startsWith(p)) ? 'backend' : 'frontend';
         for (const group of workerRegistry.values()) {
             if (group.name === service && group.targets && group.targets.size > 0) return null;
         }
-        return wantsBackend ? BOOTSTRAP_BACKEND : BOOTSTRAP_FRONTEND;
+        return bootstrapUrl(service);
     };
 
     // Liveness probe — answered by the gateway itself (edge is up), independent of any backend.
@@ -928,6 +952,12 @@ if (cluster.isPrimary) {
                     if (isSSE && (code === 'ECONNRESET' || code === 'EPIPE')) return;
 
                     logger.error(`[Gateway] Proxy Error [${target}] [${code}]: ${err.message}`);
+                    // A bootstrap target that answered with the other protocol (plain request into a
+                    // TLS socket, or the reverse) fails at the connection level. Flip the remembered
+                    // scheme so the next request reaches it instead of failing forever.
+                    if (code === 'ECONNRESET' || code === 'EPROTO' || /wrong version number/i.test(err.message || '')) {
+                        flipScheme(target);
+                    }
                     if (code === 'ECONNREFUSED') {
                         res.status(502).json({ error: 'Service Unavailable', message: 'The upstream service is starting or down.', target });
                     } else {
