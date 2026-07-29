@@ -4,6 +4,62 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.12.13] - 2026-07-28
+
+Everything here was found by installing the **published 1.12.12 bundle** on a real machine in all three
+deploy modes. Nothing in it is reachable from the monolith, which is the only mode the release gate
+booted — so the last item closes the hole that let the rest ship.
+
+### Security
+- **A node joined to a cluster came up with a default administrator.** `isInstalled()` meant "a
+  `wordjs-config.json` exists", and `scripts/node-join.js` writes exactly that file to carry the gateway
+  wiring onto a brand-new node. The node therefore reported itself installed, the setup wizard never ran,
+  and the CMS bootstrap seeded `admin` / `admin123` on a backend already published through the gateway —
+  logging in with those credentials through the public origin returned 200 with the `administrator` role.
+  Install state now keys off a marker only the installer writes (`installedAt`, or `dbDriver` for sites
+  that predate it), so an enrolled node correctly asks for the wizard. An unreadable config reports
+  *installed*, so a parse error can never reopen the installer on a live site.
+- **The bootstrap administrator no longer has a guessable password.** For the paths that still create
+  one, it is now a random `base64url(24)`, written `0600` to `backend/data/initial-admin-password` and
+  printed once, instead of a hardcoded `admin123` suggested in the log.
+
+### Fixed
+- **Split mode could not be installed at all.** The installer generates the cluster certificates and then
+  calls the distribution step directly, which read an unset `genCertsDir` — after having emptied
+  `backend/certs`. It threw, the installer logged a warning and still answered `{"success":true}`, and no
+  certificate survived anywhere. The gateway then never started its control plane, no service could
+  register, and every route 404'd — including the install wizard needed to create those certificates.
+  Distribution now reads from wherever the certificates actually are and never empties the directory it
+  is about to read; the gateway waits for the cluster identity to appear instead of giving up at boot,
+  and answers on a loopback-only bootstrap route while the service owning a route has never registered.
+- **The backend never noticed certificates issued after it started.** It read its client certificates
+  once at boot, so a freshly installed instance kept retrying registration in the clear against a port
+  with no such route. They are re-read on every attempt.
+- **Server-side rendering could not reach an installed split backend.** SSR resolved to
+  `http://localhost:4000` while the backend serves HTTPS with mTLS enforced, so every server-side fetch
+  failed silently: public pages rendered default settings and content pages 404'd, while client-side
+  calls through the gateway worked. SSR now goes through the gateway when the backend holds certificates.
+- **The default theme hid the page title behind the header.** `.container` set the `padding`
+  *shorthand*, which reset the layout's top and bottom padding to zero and left the fixed header sitting
+  on top of every page's `<h1>`. It now sets `padding-inline`.
+- **Starter cards rendered white on white.** The theme forced `.wp-block-card`'s background with
+  `!important` but left the block's paired text colours alone, so an accent card lost its background and
+  kept its light text. The card is styled through `--wjs-card-*` tokens instead.
+- **A setting the installer was not given stored the text "undefined".** Options serialised with
+  `String(value)`, so a headless install left `blogdescription` as the literal word, which rendered into
+  `<title>`, `og:title` and `twitter:title`. Absent values now store empty, guarded at the writer.
+- The backend boot banner printed `undefined/admin` for the admin URL in split and separate mode.
+
+### CI
+- **The release gate now deploys every mode, not just the monolith.** `scripts/smoke-deploy.sh` replaces
+  the inline smoke step in both the PR and release workflows (one script, so they cannot drift) and
+  drives the compiled bundle the way an operator does: the monolith must boot *and* be the thing
+  answering `/healthz`; split must expose the wizard through the gateway before install, complete the
+  install through the gateway, leave all three services holding certificates, render real settings, keep
+  doing so after a restart onto HTTPS+mTLS, and refuse `admin/admin123`; an enrollment-shaped config must
+  enter setup mode and seed no administrator. Verified to fail on each of the defects above and to pass
+  once they are fixed.
+
 ## [1.12.12] - 2026-07-28
 
 ### Security — plugin sandbox hardening

@@ -1,6 +1,6 @@
 {
     "name": "wordjs-gateway",
-    "version": "1.12.12",
+    "version": "1.12.13",
     "license": "MIT",
     "engines": {
         "node": ">=20.9.0"
