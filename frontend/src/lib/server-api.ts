@@ -46,6 +46,19 @@ function resolveServerBase(): string {
             // (typically the gateway's public origin, whose cert is issued from the cluster CA the
             // frontend trusts via NODE_EXTRA_CA_CERTS). Same effect as the env, but config-file driven.
             if (cfg.internalApiUrl) return String(cfg.internalApiUrl).replace(/\/+$/, '');
+
+            // LOCAL SPLIT: once the install has issued cluster certs, the backend serves HTTPS with
+            // `rejectUnauthorized: true` (backend/src/index.ts), so it will not answer the plain-HTTP
+            // fallback below and every SSR fetch silently returned null — the public site rendered
+            // default settings and content pages 404'd, while client-side calls through the gateway
+            // worked. Go through the gateway instead: it is the front door, it already terminates the
+            // mTLS hop to the backend, and its cert chains to the cluster CA the frontend trusts.
+            const backendCert = path.resolve(path.dirname(configPath), 'certs', 'backend.crt');
+            if (fs.existsSync(backendCert)) {
+                const front = String(cfg.gatewayUrl || cfg.siteUrl || '').replace(/\/+$/, '');
+                if (front) return `${front}/api/v1`;
+            }
+
             if (cfg.port) backendPort = cfg.port;
         }
     } catch {

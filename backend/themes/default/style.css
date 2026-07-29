@@ -96,6 +96,14 @@
   --wjs-shadow: 0 6px 20px -6px rgba(79, 70, 229, 0.15), 0 2px 6px rgba(15, 23, 42, 0.05);
   --wjs-shadow-md: 0 14px 34px -10px rgba(79, 70, 229, 0.22);
   --wjs-shadow-lg: 0 28px 60px -18px rgba(79, 70, 229, 0.30);
+
+  /* --- CARD BLOCK --- keeps this theme's depth and hover lift through the token contract instead of a
+     rule that would override whatever colour the author gave an individual card. */
+  --wjs-card-radius: var(--wjs-radius-lg);
+  --wjs-card-shadow: var(--wjs-shadow-sm);
+  --wjs-card-hover-transform: translateY(-3px);
+  --wjs-card-hover-shadow: var(--wjs-shadow-md);
+  --wjs-card-hover-border-color: rgba(79, 70, 229, 0.35);
 }
 
 /* ============================ BASE ============================ */
@@ -169,16 +177,24 @@ header {
 .wjs-header-nav a:hover::after { width: 100%; }
 
 /* ============================ CONTENT ============================ */
-.container { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+/* Gutters only — NEVER the `padding` shorthand. The public layout puts `pt-24 pb-10` on this same
+   element to clear the fixed header; a shorthand here resets those to 0 (equal specificity, and the
+   theme sheet loads after the app CSS), which left the page title rendering underneath the header. */
+.container { max-width: 1100px; margin: 0 auto; padding-inline: 24px; }
 
-article, .wp-block-card {
+/* `article` only. This used to include `.wp-block-card`, and the `!important` background overrode the
+   card's own --wjs-card-bg while leaving the block's paired text colours alone — an accent card became
+   white with white text, so its icon and description vanished. The card's surface, border, radius and
+   hover already come from the token contract in wordjs-ui.css, which falls back to this theme's
+   --wjs-bg-surface / --wjs-border-subtle anyway. */
+article {
   background: var(--wjs-bg-surface) !important;
   border: 1px solid var(--wjs-border-subtle) !important;
   border-radius: var(--wjs-radius-lg) !important;
   box-shadow: var(--wjs-shadow-sm);
   transition: transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
 }
-article:hover, .wp-block-card:hover {
+article:hover {
   transform: translateY(-3px);
   border-color: rgba(79, 70, 229, 0.35) !important;
   box-shadow: var(--wjs-shadow-md);
