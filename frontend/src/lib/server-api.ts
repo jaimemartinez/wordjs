@@ -331,11 +331,17 @@ export const resolveSiteBase = cache(async (): Promise<string> => {
         const host = h.get('x-forwarded-host') || h.get('host');
         const proto = h.get('x-forwarded-proto') || 'https';
         if (host) {
-            const reqHostname = host.split(':')[0].toLowerCase();
-            const allowed = configured?.hostname.toLowerCase();
-            if (!allowed || reqHostname === allowed) {
-                try { base = new URL(`${proto}://${host}`); } catch { /* keep configured */ }
-            }
+            try {
+                const reqUrl = new URL(`${proto}://${host}`);
+                const allowed = configured?.hostname.toLowerCase();
+                // Compare the WHATWG-parsed hostname, NOT host.split(':')[0]: the naive split reads the
+                // userinfo of `localhost:1@evil.example` as host:port and returns 'localhost', while the
+                // URL parser (and base.origin below) resolve it to 'evil.example' — that differential let
+                // a crafted Host header pass the allowlist yet poison the canonical/og/JSON-LD origin.
+                if (!allowed || reqUrl.hostname.toLowerCase() === allowed) {
+                    base = reqUrl;
+                }
+            } catch { /* malformed host — keep configured */ }
         }
     } catch { /* not in a request scope */ }
     return (base ? base.origin : 'http://localhost:3000');

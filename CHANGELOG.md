@@ -4,6 +4,36 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.13.3] - 2026-07-31
+
+Found by an adversarial red-team pass over the **published 1.13.2 bundle** running in the lab — a fan-out
+that invented novel attack classes beyond the standard families. Three issues, each fixed and re-verified
+live where reachable.
+
+### Security
+- **A Host-header parser differential poisoned the SSR canonical / OpenGraph / JSON-LD base and slipped
+  past the migration guard.** The request-host allowlist compared `host.split(':')[0]`, but the base URL
+  was then built with `new URL()`. For a crafted `Host: <configured>:1@evil.example` the two parsers
+  disagree — the naive split reads the userinfo as `host:port` and returns the configured hostname (so the
+  allowlist passes), while `new URL()` resolves the true host to `evil.example`. Every server-rendered
+  page's canonical/og:url/JSON-LD then anchored to the attacker's origin, and the API migration guard let
+  the crafted host through. Both sides now derive the hostname with the WHATWG URL parser — the same one
+  that builds the base — so the allowlist and the URL builder can no longer disagree. (backend migration
+  guard in `index.ts`; frontend `metadataBase` and `resolveSiteBase`.)
+- **The plugin-marketplace catalog/zip fetch was a host-side SSRF.** Unlike the webhook dispatcher and the
+  plugin egress guard, the marketplace download ran through Node's global `fetch()` — invisible to the
+  egress-guard's module hooks — with `redirect: 'follow'` and a source validator that whitelisted
+  `http://localhost` and checked only the *scheme* for https. An admin-set source could therefore reach any
+  loopback / RFC1918 / link-local target (a blind port-scan oracle via the catalog error body), and a
+  public https source could 302-redirect to `169.254.169.254` cloud metadata. The fetch now uses the native
+  http/https client through `assertUrlAllowed` + `validatingLookup` (rejecting internal targets and pinning
+  the resolved IP against DNS rebinding), follows redirects manually while re-validating every hop, and
+  permits `http://localhost` only outside production.
+- **`PUT /users/me` (and `/users/:id`) was an authenticated account-existence oracle.** Setting the primary
+  email to one already registered threw `Email already in use`, surfaced as a 500 — distinct from the 200 a
+  free address returned. It now returns a uniform 400 whose code and message are identical to a malformed
+  address, matching the anti-enumeration posture of registration and password reset.
+
 ## [1.12.13] - 2026-07-28
 
 Everything here was found by installing the **published 1.12.12 bundle** on a real machine in all three

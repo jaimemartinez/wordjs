@@ -480,13 +480,18 @@ app.use((req: Request, res: Response, next: NextFunction) => {
             // of the ENTIRE API on every request (login succeeded, the next call 409'd → the UI
             // bounced to /migration). Hostnames still catch a genuine domain change, which is the
             // only situation migration should trigger.
-            const hostnameOf = (v: string): string =>
-                String(v || '')
-                    .replace(/^https?:\/\//, '')
-                    .replace(/\/.*$/, '')
-                    .split(':')[0]
-                    .toLowerCase()
-                    .trim();
+            // Parse the hostname with the WHATWG URL parser (the same one every base-URL builder uses)
+            // rather than a naive .split(':')[0]. SEC: a value like `localhost:1@evil.example` makes the
+            // naive split return 'localhost' (it reads the userinfo as host:port) while new URL() returns
+            // 'evil.example' — a parser differential that let a crafted Host header slip past this guard
+            // AND poison the SSR canonical/og:url base. Parsing consistently closes the gap (the crafted
+            // host now resolves to its true hostname and correctly trips the mismatch).
+            const hostnameOf = (v: string): string => {
+                let s = String(v || '').trim();
+                if (!s) return '';
+                if (!/^https?:\/\//i.test(s)) s = 'http://' + s;
+                try { return new URL(s).hostname.toLowerCase(); } catch { return ''; }
+            };
             const configuredHost = hostnameOf(currentConfig.siteUrl);
             const detectedHost = hostnameOf(rawHostHeader);
 

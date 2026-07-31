@@ -246,4 +246,39 @@ describe('API HTTP layer', () => {
         assert.strictEqual(locked.status, 429, 'account must be locked after 10 distributed failures');
         assert.strictEqual(locked.body.code, 'rest_account_locked');
     });
+
+    // F3 (v1.13.3 security): PUT /users/me must NOT be an authenticated account-existence oracle.
+    // Claiming an email already registered to ANOTHER account previously threw 'Email already in use'
+    // surfaced as a 500 (distinct from the 200 a free address returned) — a working enumeration oracle.
+    // The fix returns a uniform 400 whose code/message is identical to a malformed address, so a
+    // registered address is indistinguishable from an invalid one.
+    it('PUT /users/me with a taken email returns a uniform 400 (not a 500 existence oracle)', async () => {
+        const dbAsync = database.getDbAsync();
+        await dbAsync.run(
+            `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
+            ['enum-victim', 'x', 'enum-victim@example.com', 'Victim']
+        );
+        await dbAsync.run(
+            `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
+            ['enum-claimer', 'x', 'enum-claimer@example.com', 'Claimer']
+        );
+        const row = await dbAsync.get(`SELECT * FROM users WHERE user_login = ?`, ['enum-claimer']);
+        const claimerId = row.ID || row.id;
+        const token = jwt.sign({ userId: claimerId, username: 'enum-claimer' }, SECRET, { algorithm: 'HS256', expiresIn: '2h' });
+
+        const taken = await request(app)
+            .put('/api/v1/users/me')
+            .set('Authorization', `Bearer ${token}`)
+            .send({ email: 'enum-victim@example.com' });
+        assert.strictEqual(taken.status, 400, `a taken email must be 400, got ${taken.status}`);
+        assert.strictEqual(taken.body.code, 'rest_invalid_email');
+
+        const malformed = await request(app)
+            .put('/api/v1/users/me')
+            .set('Authorization', `Bearer ${token}`)
+            .send({ email: 'not-an-email' });
+        assert.strictEqual(malformed.status, 400);
+        assert.strictEqual(malformed.body.code, taken.body.code, 'taken vs malformed must share a code');
+        assert.strictEqual(malformed.body.message, taken.body.message, 'taken vs malformed must share a message (no reason leak)');
+    });
 });

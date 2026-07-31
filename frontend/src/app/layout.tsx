@@ -50,11 +50,18 @@ export async function generateMetadata(): Promise<Metadata> {
         // Allowlist = the configured site hostname (compared case-insensitively, port-stripped).
         // Only when no site URL is configured do we fall back to the raw request host.
         if (host) {
-            const reqHostname = host.split(":")[0].toLowerCase();
-            const allowedHostname = configuredBase?.hostname.toLowerCase();
-            if (!allowedHostname || reqHostname === allowedHostname) {
-                try { base = new URL(`${proto}://${host}`); } catch { /* keep configured base */ }
-            }
+            try {
+                // Parse the host with the WHATWG URL parser, NOT host.split(":")[0]: for a crafted
+                // `localhost:1@evil.example` the naive split reads the userinfo as host:port and yields
+                // 'localhost' (matching the allowlist) while new URL()/base.origin resolve it to
+                // 'evil.example' — the parser gap that poisoned metadataBase. Comparing the parsed
+                // hostname closes it.
+                const reqUrl = new URL(`${proto}://${host}`);
+                const allowedHostname = configuredBase?.hostname.toLowerCase();
+                if (!allowedHostname || reqUrl.hostname.toLowerCase() === allowedHostname) {
+                    base = reqUrl;
+                }
+            } catch { /* malformed host — keep configured base */ }
         }
     } catch { /* not in a request scope — keep the configured base */ }
     if (base) meta.metadataBase = base;
