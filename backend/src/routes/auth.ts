@@ -37,6 +37,18 @@ const LOGIN_LOCK_MS = 15 * 60 * 1000;
 const _loginFails = new Map(); // key -> { count, firstFailAt, lockedUntil }
 const _loginKey = (u: any) => String(u || '').trim().toLowerCase();
 
+// SECURITY (audit MEDIUM — AUTH-A3 lockout bypass by concurrency): the account lock is armed by
+// recordLoginFail only AFTER count>=LOGIN_MAX_FAILS, and isLoginLocked reads that armed flag, but the
+// bcrypt compare between the two yields the event loop — so K near-simultaneous guesses for one account
+// all pass isLoginLocked before any of them arms the lock, evaluating far more than 10 guesses per
+// window (the per-(IP+account) throttle doesn't help against the distributed-IP threat this backstop
+// exists for). Fix: cap the number of CONCURRENT in-flight authentications per account. This is additive
+// (the failure counter/lock semantics are unchanged); it just bounds how many guesses can straddle the
+// check→arm window to a small constant, so the lock still fires after ~LOGIN_MAX_FAILS + this cap.
+const MAX_LOGIN_INFLIGHT = 3;
+const _inflightMem = new Map(); // key -> { n, ts }
+const _inflightRedisKey = (key: string) => `wjlock:inflight:${key}`;
+
 // Resolve a submitted identifier (username OR email) to the account's canonical user_login, so the
 // per-account lockout counter can't be DOUBLED by alternating the two forms — both authenticate the same
 // account yet keyed two distinct buckets before (audit LOW). Falls back to the raw identifier when no
@@ -117,6 +129,45 @@ async function clearLoginFails(u: any) {
         }
     }
     _loginFails.delete(key);
+}
+
+// Atomically reserve one in-flight authentication slot for this account BEFORE the bcrypt compare.
+// Returns false when the account already has MAX_LOGIN_INFLIGHT authentications in flight — the caller
+// must then reject WITHOUT running bcrypt. A short TTL (Redis) / timestamp (mem) is the safety net so a
+// crashed request can't leak a slot permanently. Fail-open on a store hiccup (never hard-block login).
+async function beginLoginAttempt(u: any): Promise<boolean> {
+    const key = _loginKey(u);
+    const client = _lockStore();
+    if (client) {
+        try {
+            const k = _inflightRedisKey(key);
+            const n = await client.incr(k);
+            await client.expire(k, 30);
+            if (n > MAX_LOGIN_INFLIGHT) { try { await client.decr(k); } catch { /* ignore */ } return false; }
+            return true;
+        } catch { /* Redis hiccup → mem */ }
+    }
+    const now = Date.now();
+    let e = _inflightMem.get(key);
+    if (!e || (now - e.ts) > 30000) e = { n: 0, ts: now }; // stale entry → reset (crash-leak safety)
+    if (e.n >= MAX_LOGIN_INFLIGHT) { _inflightMem.set(key, e); return false; }
+    e.n++; e.ts = now; _inflightMem.set(key, e);
+    return true;
+}
+
+async function endLoginAttempt(u: any): Promise<void> {
+    const key = _loginKey(u);
+    const client = _lockStore();
+    if (client) {
+        try {
+            const k = _inflightRedisKey(key);
+            const n = await client.decr(k);
+            if (n < 0) { try { await client.set(k, '0'); } catch { /* ignore */ } }
+            return;
+        } catch { /* Redis hiccup → mem */ }
+    }
+    const e = _inflightMem.get(key);
+    if (e) { e.n = Math.max(0, e.n - 1); _inflightMem.set(key, e); }
 }
 
 // Cookie configuration for secure HttpOnly tokens
@@ -316,6 +367,17 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
         });
     }
 
+    // Concurrency backstop for the check→arm race above: cap simultaneous in-flight authentications for
+    // this account so a burst of parallel guesses can't all clear isLoginLocked before the lock arms.
+    if (!(await beginLoginAttempt(lockId))) {
+        res.set('Retry-After', '1');
+        return res.status(429).json({
+            code: 'rest_login_throttled',
+            message: 'Too many simultaneous login attempts for this account. Try again in a moment.',
+            data: { status: 429 }
+        });
+    }
+
     try {
         const user = await User.authenticate(username, password);
         await clearLoginFails(lockId);
@@ -341,6 +403,9 @@ router.post('/login', asyncHandler(async (req: any, res: Response) => {
             message: 'Invalid username or password.',
             data: { status: 401 }
         });
+    } finally {
+        // Release the in-flight slot whether we succeeded, failed, or threw — never leak a slot.
+        await endLoginAttempt(lockId);
     }
 }));
 
@@ -679,14 +744,26 @@ router.post('/mfa', asyncHandler(async (req: any, res: Response) => {
     if (await isLoginLocked(lockKey)) {
         return res.status(429).json({ code: 'rest_account_locked', message: 'Account temporarily locked due to too many failed attempts. Try again later.', data: { status: 429 } });
     }
-    if (!(await mfa.verifyLoginCode(user.id, code))) {
-        await recordLoginFail(lockKey);
-        return res.status(401).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 401 } });
+    // Same concurrency backstop as /login (audit AUTH-A3): isLoginLocked is check-then-arm and
+    // mfa.verifyLoginCode yields the event loop (DB reads), so a burst of parallel guesses for one account
+    // would all clear the lock before recordLoginFail arms it — brute-forcing the 6-digit TOTP and
+    // defeating 2FA. Cap concurrent in-flight verifications for this 'mfa:' bucket; release in finally.
+    if (!(await beginLoginAttempt(lockKey))) {
+        res.set('Retry-After', '1');
+        return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts for this account. Try again in a moment.', data: { status: 429 } });
     }
-    await clearLoginFails(lockKey);
-    const token = generateToken(user);
-    res.cookie('wordjs_token', token, COOKIE_OPTIONS);
-    res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
+    try {
+        if (!(await mfa.verifyLoginCode(user.id, code))) {
+            await recordLoginFail(lockKey);
+            return res.status(401).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 401 } });
+        }
+        await clearLoginFails(lockKey);
+        const token = generateToken(user);
+        res.cookie('wordjs_token', token, COOKIE_OPTIONS);
+        res.json({ user: user.toJSON(), mfa: await mfa.evaluate(user) });
+    } finally {
+        await endLoginAttempt(lockKey);
+    }
 }));
 
 /** GET /auth/mfa/status — is MFA on for the current user + how many backup codes remain. */
@@ -707,13 +784,19 @@ router.post('/mfa/setup', authenticate, sessionOnly, asyncHandler(async (req: an
 router.post('/mfa/enable', authenticate, sessionOnly, asyncHandler(async (req: any, res: Response) => {
     const lk = 'mfa:' + req.user.userLogin;
     if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
-    const result = await mfa.completeEnroll(req.user.id, (req.body || {}).code);
-    if (!result.ok) {
-        await recordLoginFail(lk);
-        return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid code. Check your device clock and try again.', data: { status: 400 } });
+    // Concurrency backstop (AUTH-A3 class): completeEnroll yields the event loop, so cap parallel guesses.
+    if (!(await beginLoginAttempt(lk))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+    try {
+        const result = await mfa.completeEnroll(req.user.id, (req.body || {}).code);
+        if (!result.ok) {
+            await recordLoginFail(lk);
+            return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid code. Check your device clock and try again.', data: { status: 400 } });
+        }
+        await clearLoginFails(lk);
+        res.json({ enabled: true, backupCodes: result.backupCodes, message: 'Save these backup codes now — they will not be shown again.' });
+    } finally {
+        await endLoginAttempt(lk);
     }
-    await clearLoginFails(lk);
-    res.json({ enabled: true, backupCodes: result.backupCodes, message: 'Save these backup codes now — they will not be shown again.' });
 }));
 
 /** POST /auth/mfa/disable — turn MFA off (requires a current TOTP or backup code). */
@@ -721,13 +804,19 @@ router.post('/mfa/disable', authenticate, sessionOnly, asyncHandler(async (req: 
     if (!(await mfa.isEnabled(req.user.id))) return res.json({ disabled: true });
     const lk = 'mfa:' + req.user.userLogin;
     if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
-    if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
-        await recordLoginFail(lk);
-        return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+    // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to turn MFA OFF.
+    if (!(await beginLoginAttempt(lk))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+    try {
+        if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
+            await recordLoginFail(lk);
+            return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+        }
+        await clearLoginFails(lk);
+        await mfa.disable(req.user.id);
+        res.json({ disabled: true });
+    } finally {
+        await endLoginAttempt(lk);
     }
-    await clearLoginFails(lk);
-    await mfa.disable(req.user.id);
-    res.json({ disabled: true });
 }));
 
 /** POST /auth/mfa/backup-codes — regenerate backup codes (requires a current code); returns them once. */
@@ -737,12 +826,19 @@ router.post('/mfa/backup-codes', authenticate, sessionOnly, asyncHandler(async (
     }
     const lk = 'mfa:' + req.user.userLogin;
     if (await isLoginLocked(lk)) return res.status(429).json({ code: 'rest_account_locked', message: 'Too many attempts. Try again later.', data: { status: 429 } });
-    if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
-        await recordLoginFail(lk);
-        return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+    // Concurrency backstop (AUTH-A3 class): a hijacked session must not brute-force the code to regenerate
+    // backup codes (which would grant persistent 2FA access).
+    if (!(await beginLoginAttempt(lk))) return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+    try {
+        if (!(await mfa.verifyLoginCode(req.user.id, (req.body || {}).code))) {
+            await recordLoginFail(lk);
+            return res.status(400).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 400 } });
+        }
+        await clearLoginFails(lk);
+        res.json({ backupCodes: await mfa.regenerateBackupCodes(req.user.id), message: 'Save these backup codes now — they replace your previous set.' });
+    } finally {
+        await endLoginAttempt(lk);
     }
-    await clearLoginFails(lk);
-    res.json({ backupCodes: await mfa.regenerateBackupCodes(req.user.id), message: 'Save these backup codes now — they replace your previous set.' });
 }));
 
 // ─── Admin-enforced MFA-by-role policy ─────────────────────────────────────────────────────────────
@@ -776,3 +872,9 @@ module.exports.isLoginLocked = isLoginLocked;
 module.exports.recordLoginFail = recordLoginFail;
 module.exports.clearLoginFails = clearLoginFails;
 module.exports.resolveLockIdentifier = resolveLockIdentifier;
+// Shared so every OTHER credential/second-factor endpoint that check-then-arms the same per-account
+// lockout (POST /auth/mfa, POST /setup/migrate, DELETE /plugins/:slug) gets the SAME concurrency backstop
+// — otherwise a burst of parallel guesses clears the lock check before it arms, bypassing the per-account
+// cap on that endpoint exactly as it did on /login before MAX_LOGIN_INFLIGHT (audit AUTH-A3, class fix).
+module.exports.beginLoginAttempt = beginLoginAttempt;
+module.exports.endLoginAttempt = endLoginAttempt;

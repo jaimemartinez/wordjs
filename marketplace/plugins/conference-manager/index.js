@@ -360,13 +360,15 @@ exports.init = async function (wordjs) {
     }
 
     /**
-     * 6-digit access code. The sandbox's static validator blocks `globalThis`/crypto access and the
-     * db bridge exposes no RNG, so webcrypto is unreachable here — brute force is instead bounded by
-     * the per-location login throttle below (LOGIN_MAX attempts per window), which is the real
-     * defense for a short numeric code regardless of the RNG.
+     * 6-digit access code that gates a location's portal (SELECT ... WHERE id = ? AND code = ?). The
+     * "webcrypto is unreachable / the db bridge exposes no RNG" note was FALSE: the host CSPRNG is
+     * bridged as `wordjs.crypto.randomInt` (vendor-marketplace/event-tickets already use it). It matters
+     * because Math.random is V8 xorshift128+ whose state is reconstructable from observed codes — a
+     * predicted code defeats the per-location throttle that is the only OTHER defense for a short numeric
+     * secret. Async (RPC to the host); randomInt is uniform in [lo, hi).
      */
-    function genAccessCode() {
-        return String(Math.floor(100000 + Math.random() * 900000));
+    async function genAccessCode() {
+        return String(await wordjs.crypto.randomInt(100000, 1000000)); // uniform 6-digit CSPRNG
     }
 
     // In-process portal-login throttle (single child process → in-memory is sufficient). Per
@@ -384,6 +386,24 @@ exports.init = async function (wordjs) {
         else rec.count++;
     };
     const clearLoginFailures = (locationId) => loginAttempts.delete(String(locationId));
+
+    // Concurrency backstop (audit AUTH-A3 class): loginThrottled above is check-then-arm and the code
+    // check straddles awaited db.get calls (event-loop yields), so a BURST of parallel guesses for one
+    // location would all clear loginThrottled before noteLoginFailure arms the counter — evaluating far
+    // more than LOGIN_MAX guesses per window. Cap the number of CONCURRENT in-flight code verifications
+    // per location; the counter is per single child process so an in-memory Map is the whole cluster view.
+    const LOGIN_MAX_INFLIGHT = 3;
+    const loginInflight = new Map(); // location_id -> count
+    const beginLoginAttempt = (locationId) => {
+        const k = String(locationId), n = loginInflight.get(k) || 0;
+        if (n >= LOGIN_MAX_INFLIGHT) return false;
+        loginInflight.set(k, n + 1);
+        return true;
+    };
+    const endLoginAttempt = (locationId) => {
+        const k = String(locationId), n = (loginInflight.get(k) || 0) - 1;
+        if (n <= 0) loginInflight.delete(k); else loginInflight.set(k, n);
+    };
 
     // Serialize the auto-assigner: it loads occupancy into memory then writes in a loop, so two
     // concurrent runs (or a run racing a manual assign) would double-book. Chain them instead.
@@ -868,7 +888,7 @@ exports.init = async function (wordjs) {
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         if (!String(name || '').trim()) return res.status(400).json({ error: 'El nombre de la localidad es obligatorio.' });
 
-        const code = genAccessCode();
+        const code = await genAccessCode();
         try {
             const result = await db.run(
                 `INSERT INTO ${T.locations} (conference_id, name, code, responsible_name, responsible_phone) VALUES (?, ?, ?, ?, ?)`,
@@ -893,7 +913,7 @@ exports.init = async function (wordjs) {
             if (responsible_name !== undefined) { sets.push('responsible_name = ?'); params.push(responsible_name || null); }
             if (responsible_phone !== undefined) { sets.push('responsible_phone = ?'); params.push(responsible_phone || null); }
             let newCode = null;
-            if (rotate_code) { newCode = genAccessCode(); sets.push('code = ?'); params.push(newCode); }
+            if (rotate_code) { newCode = await genAccessCode(); sets.push('code = ?'); params.push(newCode); }
             if (sets.length) {
                 params.push(req.params.id);
                 await db.run(`UPDATE ${T.locations} SET ${sets.join(', ')} WHERE id = ?`, params);
@@ -1505,10 +1525,15 @@ exports.init = async function (wordjs) {
             // code (attacker forges base64(id:guess:far-future) and reads the 200-vs-401). Apply the SAME
             // per-location throttle as /portal/login; a wrong code here counts as a failed attempt.
             if (loginThrottled(id)) return null;
-            const location = await db.get(`SELECT * FROM ${T.locations} WHERE id = ? AND code = ?`, [id, code]);
-            if (!location) { noteLoginFailure(id); return null; }
-            clearLoginFailures(id); // a valid token resets this location's failure counter
-            return location;
+            // Concurrency backstop (AUTH-A3 class): cap concurrent in-flight guesses per location so a
+            // burst of forged tokens can't clear the throttle before noteLoginFailure arms it.
+            if (!beginLoginAttempt(id)) return null;
+            try {
+                const location = await db.get(`SELECT * FROM ${T.locations} WHERE id = ? AND code = ?`, [id, code]);
+                if (!location) { noteLoginFailure(id); return null; }
+                clearLoginFailures(id); // a valid token resets this location's failure counter
+                return location;
+            } finally { endLoginAttempt(id); }
         } catch (e) {
             return null;
         }
@@ -1560,10 +1585,16 @@ exports.init = async function (wordjs) {
         if (!Number.isInteger(location_id) || location_id <= 0) {
             return res.status(400).json({ error: 'Localidad inválida.' });
         }
+        let acquired = false;
         try {
             // Rate limit before touching the DB — bounds brute force of the 6-digit code per location.
             if (loginThrottled(location_id)) {
                 return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' });
+            }
+            // Concurrency backstop (audit AUTH-A3 class): cap concurrent in-flight guesses per location so a
+            // parallel burst can't clear the throttle before noteLoginFailure arms it. Released in finally.
+            if (!(acquired = beginLoginAttempt(location_id))) {
+                return res.status(429).json({ error: 'Demasiados intentos simultáneos. Inténtalo de nuevo en un momento.' });
             }
             const location = await db.get(`SELECT * FROM ${T.locations} WHERE id = ?`, [location_id]);
             if (!location) { noteLoginFailure(location_id); return res.status(404).json({ error: 'Location not found' }); }
@@ -1596,6 +1627,7 @@ exports.init = async function (wordjs) {
 
             res.json({ success: true, token, location: { id: location.id, name: location.name, responsible_name: location.responsible_name, conference_id: location.conference_id } });
         } catch (e) { res.status(500).json({ error: e.message }); }
+        finally { if (acquired) endLoginAttempt(location_id); }
     });
 
     // 4. Get Current Location Info

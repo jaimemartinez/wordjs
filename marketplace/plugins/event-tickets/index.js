@@ -16,9 +16,9 @@
  * conditional UPDATE (sold = sold + qty WHERE sold + qty <= capacity); a failed claim rolls back
  * the claims made earlier in the same order.
  *
- * Randomness: the sandbox blocks every crypto API, so tokens/codes come from Math.random loops.
- * That is acceptable because (a) order tokens are 32 chars over a 36-char alphabet (enumeration
- * is infeasible) and (b) check-in codes are backed by rate-limited, admin-only verification.
+ * Randomness: tokens/codes come from the host CSPRNG (wordjs.crypto.randomToken), NOT Math.random —
+ * order tokens are 32 chars and check-in codes are backed by rate-limited, admin-only verification;
+ * a CSPRNG (not a reconstructable PRNG) is what makes one buyer's token non-derivable from others'.
  */
 
 exports.metadata = {

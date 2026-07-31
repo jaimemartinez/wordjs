@@ -473,19 +473,31 @@ router.post('/migrate', async (req: any, res: Response) => {
         if (await auth.isLoginLocked(lockKey)) {
             return res.status(429).json({ error: 'Too many failed attempts. Try again later.' });
         }
+        // Concurrency backstop (audit AUTH-A3 class, mirrors /login and /auth/mfa): isLoginLocked above is
+        // check-then-arm and User.authenticate (bcrypt) yields the event loop, so a parallel burst of guesses
+        // would all clear the lock before recordLoginFail arms it — re-opening the distributed admin-password
+        // oracle this dedicated throttle (Finding #26) exists to close. Cap concurrent in-flight guesses for
+        // the 'migrate:' bucket; the slot is held only across the credential check, released in finally.
+        if (!(await auth.beginLoginAttempt(lockKey))) {
+            return res.status(429).json({ error: 'Too many simultaneous attempts. Try again in a moment.' });
+        }
         const User = require('../models/User');
         let user: any = null;
-        try { user = await User.authenticate(username, password); } catch { user = null; }
+        try {
+            try { user = await User.authenticate(username, password); } catch { user = null; }
 
-        // UNIFORM response for BOTH wrong password (user === null) and correct-password-non-admin (#26): same
-        // status + body so neither is distinguishable from the other — only a correct administrator credential
-        // proceeds past this point. recordLoginFail (Finding #14) increments the DEDICATED 'migrate:' bucket
-        // only — never the interactive-login lock — so it throttles this oracle without the #25 DoS.
-        if (!user || user.getRole() !== 'administrator') {
-            await auth.recordLoginFail(lockKey);
-            return res.status(401).json({ error: 'Invalid credentials' });
+            // UNIFORM response for BOTH wrong password (user === null) and correct-password-non-admin (#26): same
+            // status + body so neither is distinguishable from the other — only a correct administrator credential
+            // proceeds past this point. recordLoginFail (Finding #14) increments the DEDICATED 'migrate:' bucket
+            // only — never the interactive-login lock — so it throttles this oracle without the #25 DoS.
+            if (!user || user.getRole() !== 'administrator') {
+                await auth.recordLoginFail(lockKey);
+                return res.status(401).json({ error: 'Invalid credentials' });
+            }
+            await auth.clearLoginFails(lockKey);
+        } finally {
+            await auth.endLoginAttempt(lockKey);
         }
-        await auth.clearLoginFails(lockKey);
 
         // Fix: Trust upstream Gateway protocol
         const protocol = req.get('x-forwarded-proto') || req.protocol;

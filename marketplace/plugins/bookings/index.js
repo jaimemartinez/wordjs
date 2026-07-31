@@ -15,8 +15,8 @@
  * v1 limits by design: one staff calendar (no multi-employee), slot length = service duration,
  * no payments (price is informative only, stored as INTEGER CENTS).
  *
- * Sandbox notes: no crypto API exists in the child — tokens come from a Math.random loop and the
- * real defense is the in-memory rate cap on the public endpoints. All tables live under the
+ * Sandbox notes: tokens come from the host CSPRNG (wordjs.crypto.randomToken), NOT Math.random — the
+ * in-memory rate cap on the public endpoints is defense-in-depth, not the sole defense. All tables live under the
  * plugin's own prefix (db.tablePrefix) so they pass the host's default-deny SQL check.
  */
 
@@ -103,13 +103,16 @@ exports.init = async function (wordjs) {
         return d;
     };
 
-    /** No crypto in the sandbox — Math.random token; brute force is bounded by the rate caps. */
-    const genToken = () => {
-        const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-        let out = '';
-        for (let i = 0; i < 32; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
-        return out;
-    };
+    /**
+     * SECURITY (audit HIGH): the public token is the SOLE gate on viewing/cancelling a booking, so it
+     * MUST be unguessable. The old "no crypto in the sandbox" premise was FALSE — the host CSPRNG is
+     * bridged as `wordjs.crypto.randomToken` (event-tickets/online-store already use it). Math.random is
+     * V8 xorshift128+ whose state is reconstructable from a few observed tokens (one legitimate booking
+     * returns its own token), letting an attacker predict every OTHER customer's token and read/cancel
+     * their reservations — the rate caps bound brute force but NOT prediction. randomToken(16) is 32 hex
+     * chars, which satisfies TOKEN_RE (/^[a-z0-9]{32}$/). Async (RPC to the host).
+     */
+    const genToken = async () => wordjs.crypto.randomToken(16);
 
     /** Read + normalize the plugin config from options (never trust the stored shape). */
     const getConfig = async () => {
@@ -354,7 +357,7 @@ exports.init = async function (wordjs) {
 
             // RACE-SAFE claim: no transactions in the sandbox — a single INSERT ... SELECT ...
             // WHERE NOT EXISTS is atomic per statement. changes === 0 → someone won the race.
-            const token = genToken();
+            const token = await genToken();
             const result = await db.run(
                 `INSERT INTO ${T.bookings}
                     (service_id, date, time, customer_name, customer_email, customer_phone, notes, status, token)

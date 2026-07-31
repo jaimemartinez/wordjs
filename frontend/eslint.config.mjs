@@ -1,6 +1,13 @@
 import { defineConfig, globalIgnores } from "eslint/config";
 import nextVitals from "eslint-config-next/core-web-vitals";
 import nextTs from "eslint-config-next/typescript";
+// eslint-config-next 16 no longer registers the react-hooks plugin itself (react-hooks v7 ships its own
+// flat config), so the rule-level overrides below reference a plugin no preset provides → eslint aborts
+// with "could not find plugin 'react-hooks'". Register it explicitly so the linter runs and the
+// react-hooks/* warnings below are actually evaluated. `react` is externalized the same way (next 16 no
+// longer registers it); `jsx-a11y`/`@next/next`/`@typescript-eslint` are still provided by the presets.
+import reactHooks from "eslint-plugin-react-hooks";
+import react from "eslint-plugin-react";
 
 const eslintConfig = defineConfig([
   ...nextVitals,
@@ -21,6 +28,7 @@ const eslintConfig = defineConfig([
   // blocked on stylistic debt. NOTE: the react-hooks/* warnings (esp. rules-of-hooks) flag
   // real correctness concerns worth a dedicated cleanup — they are warnings, not ignored.
   {
+    plugins: { "react-hooks": reactHooks, react },
     rules: {
       "@typescript-eslint/no-explicit-any": "off",
       "@typescript-eslint/no-require-imports": "off",
@@ -37,7 +45,8 @@ const eslintConfig = defineConfig([
       "@next/next/no-assign-module-variable": "warn",
       "@next/next/no-img-element": "warn",
       "@next/next/no-css-tags": "warn",
-      "jsx-a11y/alt-text": "warn",
+      // jsx-a11y is registered by the next preset under a files-scoped object this global override can't
+      // reference; eslint-config-next already defaults jsx-a11y/alt-text to "warn", so no override needed.
       "prefer-const": "warn",
     },
   },

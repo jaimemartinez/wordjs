@@ -9,9 +9,9 @@
  * Money rules: every amount is stored as INTEGER CENTS. Totals are ALWAYS recomputed
  * server-side from the line items on save — client-sent totals are never trusted.
  *
- * The public lookup uses a random 32-char token (Math.random loop — no crypto API exists in
- * the sandbox; the in-memory failed-lookup throttle below is the real brute-force defense,
- * and the 62^32 token space makes guessing infeasible anyway).
+ * The public lookup uses a random 32-char token from the host CSPRNG (wordjs.crypto.randomToken),
+ * NOT a Math.random loop; the in-memory failed-lookup throttle below is defense-in-depth, and a
+ * CSPRNG (not a reconstructable PRNG) is what keeps one client's token non-derivable from others'.
  */
 
 exports.metadata = {
@@ -83,11 +83,17 @@ exports.init = async function (wordjs) {
 
     // ---- helpers ---------------------------------------------------------------------------------
 
-    /** 32-char public lookup token. See the header note on RNG constraints. */
-    function genToken() {
-        let t = '';
-        for (let i = 0; i < 32; i++) t += TOKEN_CHARS.charAt(Math.floor(Math.random() * TOKEN_CHARS.length));
-        return t;
+    /**
+     * SECURITY (audit HIGH): the public token is the ONLY gate on /public/view, which returns a
+     * client's full financial PII (name, email, address, tax id, billed amounts). Math.random is V8
+     * xorshift128+ whose internal state is reconstructable from a single observed 32-char token, so an
+     * attacker with one legitimate invoice link can predict every other invoice's token and harvest
+     * their PII — and the throttle only counts 404s, so correctly-predicted tokens are never limited.
+     * The host CSPRNG is bridged as `wordjs.crypto.randomToken` (the "no crypto API" header note is
+     * false); randomToken(16) = 32 hex chars, a subset of TOKEN_CHARS. Async (RPC to the host).
+     */
+    async function genToken() {
+        return wordjs.crypto.randomToken(16);
     }
 
     const invoiceNumber = (id) => 'INV-' + String(id).padStart(4, '0');
@@ -251,7 +257,7 @@ exports.init = async function (wordjs) {
 
             // CREATE — insert first, then derive the number from the row's OWN id (== MAX(id)+1 at
             // insert time), which stays unique even if two admins create invoices concurrently.
-            const token = genToken();
+            const token = await genToken();
             const result = await db.run(
                 `INSERT INTO ${T.invoices}
                     (number, token, client_name, client_email, client_address, client_tax_id, items,

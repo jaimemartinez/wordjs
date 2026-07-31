@@ -8,6 +8,9 @@ yarn.lock
 .env
 .env.local
 .env.*
+
+# Local Claude MCP config — holds a personal Stitch (Google) API key; never commit
+.claude/mcp.json
 **/.env
 **/.env.local
 **/.env.*

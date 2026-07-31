@@ -12,8 +12,8 @@
  * Sandbox notes:
  *  - All tables live under the plugin prefix (db.tablePrefix) so they pass the host's default-deny
  *    SQL scoping. Schema is created idempotently with the FULL column set (ALTER is blocked).
- *  - No crypto API is reachable in the sandbox: access codes come from Math.random and the real
- *    defense is the per-vendor login throttle below (bounded attempts per rolling window).
+ *  - Access codes come from the host CSPRNG (wordjs.crypto.randomInt), NOT Math.random; the per-vendor
+ *    login throttle below (bounded attempts per rolling window) is defense-in-depth for the short code.
  *  - Money is stored as INTEGER CENTS (price_cents); clients render cents/100 with the configured
  *    currency symbol (a plain setting in the plugin's own table, not a secret).
  *  - Mail is best-effort: approval/inquiry emails are wrapped in try/catch and the operation
@@ -215,6 +215,22 @@ exports.init = async function (wordjs) {
     };
     const clearLoginFailures = (vendorId) => loginAttempts.delete(String(vendorId));
 
+    // Concurrency backstop (audit AUTH-A3 class): loginThrottled is check-then-arm and the code check
+    // straddles awaited db.get calls, so a BURST of parallel guesses for one vendor would all clear the
+    // throttle before noteLoginFailure arms it. Cap concurrent in-flight code verifications per vendor.
+    const LOGIN_MAX_INFLIGHT = 3;
+    const loginInflight = new Map(); // vendor_id -> count
+    const beginLoginAttempt = (vendorId) => {
+        const k = String(vendorId), n = loginInflight.get(k) || 0;
+        if (n >= LOGIN_MAX_INFLIGHT) return false;
+        loginInflight.set(k, n + 1);
+        return true;
+    };
+    const endLoginAttempt = (vendorId) => {
+        const k = String(vendorId), n = (loginInflight.get(k) || 0) - 1;
+        if (n <= 0) loginInflight.delete(k); else loginInflight.set(k, n);
+    };
+
     // ---- portal auth (copy of the conference-manager pattern) ------------------------------------
     // Session = base64 `id:code:expiry`. The host NAMESPACES any cookie the plugin sets — the value
     // is stored under the namespaced cookie name below — and forwards the `x-portal-token` header
@@ -238,13 +254,18 @@ exports.init = async function (wordjs) {
             // Throttle the token path too — it was an unthrottled brute-force oracle for the 6-digit code
             // (attacker forges base64(id:guess:far-future) and reads 200-vs-401) (audit MEDIUM).
             if (loginThrottled(id)) return null;
-            const vendor = await db.get(
-                `SELECT * FROM ${T.vendors} WHERE id = ? AND access_code = ? AND status = 'approved'`,
-                [id, code]
-            );
-            if (!vendor) { noteLoginFailure(id); return null; }
-            clearLoginFailures(id);
-            return vendor;
+            // Concurrency backstop (AUTH-A3 class): cap concurrent in-flight guesses per vendor so a burst
+            // of forged tokens can't clear the throttle before noteLoginFailure arms it.
+            if (!beginLoginAttempt(id)) return null;
+            try {
+                const vendor = await db.get(
+                    `SELECT * FROM ${T.vendors} WHERE id = ? AND access_code = ? AND status = 'approved'`,
+                    [id, code]
+                );
+                if (!vendor) { noteLoginFailure(id); return null; }
+                clearLoginFailures(id);
+                return vendor;
+            } finally { endLoginAttempt(id); }
         } catch (e) {
             return null;
         }
@@ -406,10 +427,16 @@ exports.init = async function (wordjs) {
         // Validate the id BEFORE it can become a throttle-map key (bounds attacker-chosen keys).
         const vendorId = parseId(body.vendor_id);
         const code = String(body.code == null ? '' : body.code).trim();
+        let acquired = false;
         try {
             if (!vendorId) return res.status(400).json({ error: 'Tienda inválida.' });
             if (loginThrottled(vendorId)) {
                 return res.status(429).json({ error: 'Demasiados intentos. Espera unos minutos e inténtalo de nuevo.' });
+            }
+            // Concurrency backstop (audit AUTH-A3 class): cap concurrent in-flight guesses per vendor so a
+            // parallel burst can't clear the throttle before noteLoginFailure arms it. Released in finally.
+            if (!(acquired = beginLoginAttempt(vendorId))) {
+                return res.status(429).json({ error: 'Demasiados intentos simultáneos. Inténtalo de nuevo en un momento.' });
             }
             const vendor = await db.get(`SELECT * FROM ${T.vendors} WHERE id = ?`, [vendorId]);
             if (!vendor) { noteLoginFailure(vendorId); return res.status(404).json({ error: 'Tienda no encontrada.' }); }
@@ -434,6 +461,7 @@ exports.init = async function (wordjs) {
             });
             res.json({ success: true, token, vendor: vendorSafe(vendor) });
         } catch (e) { res.status(500).json({ error: e.message }); }
+        finally { if (acquired) endLoginAttempt(vendorId); }
     });
 
     http.route('get', '/portal/me', async (req, res) => {
