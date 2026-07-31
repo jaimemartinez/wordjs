@@ -14,8 +14,8 @@
  *     the admin marks it paid in the dashboard, which resets the expiry and auto-emails the link.
  *   - Stripe checkout is deliberately OUT of v1 scope (future work) to keep this plugin tight.
  *
- * Sandbox constraints honored here: tokens via Math.random (no crypto API in the sandbox —
- * rate limiting is the real defense), no transactions (single-statement counters), CSV export
+ * Sandbox constraints honored here: tokens via the host CSPRNG (wordjs.crypto.randomToken), NOT
+ * Math.random — rate limiting is defense-in-depth; no transactions (single-statement counters), CSV export
  * returned as res.json({csv}) because the isolate JSON-encodes string bodies.
  */
 
@@ -112,16 +112,17 @@ exports.init = async function (wordjs) {
     // ---- helpers ----------------------------------------------------------------------------------
 
     /**
-     * 32-char alphanumeric download token. The sandbox's static validator blocks every path to a
-     * CSPRNG (no crypto, no globalThis), so Math.random is the only RNG available. The keyspace
-     * (62^32) plus the in-memory rate limits below make online guessing impractical — that
-     * throttling, not RNG quality, is the operative defense here.
+     * SECURITY (audit HIGH): the download token is the SOLE gate on /public/download, which returns a
+     * paid product's file_url and consumes a download use. The old note claimed "no path to a CSPRNG in
+     * the sandbox" — that is FALSE: the host CSPRNG is bridged as `wordjs.crypto.randomToken` (used by
+     * event-tickets/online-store). It matters because Math.random is V8 xorshift128+ whose state is
+     * reconstructable from a few observed tokens — and POST /public/order returns the caller's own token
+     * for ANY order (paid or not), so an attacker harvests tokens, predicts paying customers' tokens and
+     * claims their downloads. The keyspace/throttle stop blind guessing, NOT prediction. randomToken(16)
+     * = 32 hex chars, which satisfies TOKEN_RE (/^[A-Za-z0-9]{32}$/). Async (RPC to the host).
      */
-    function genToken() {
-        const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-        let out = '';
-        for (let i = 0; i < 32; i++) out += chars.charAt(Math.floor(Math.random() * chars.length));
-        return out;
+    async function genToken() {
+        return wordjs.crypto.randomToken(16);
     }
 
     // In-memory rolling-window rate limiter (single child process; req has no IP in the sandbox,
@@ -341,7 +342,7 @@ exports.init = async function (wordjs) {
             if (!product) return res.status(404).json({ error: 'Producto no encontrado.' });
 
             const cfg = await getConfig();
-            const token = genToken();
+            const token = await genToken();
             const pagePath = pagePathOf(body.page_url);
             const expiresAt = new Date(Date.now() + cfg.linkDays * DAY_MS).toISOString();
             const free = (Number(product.price_cents) || 0) === 0;

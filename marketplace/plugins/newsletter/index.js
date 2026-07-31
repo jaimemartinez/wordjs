@@ -80,16 +80,14 @@ exports.init = async function (wordjs) {
     const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
     /**
-     * 32-char [a-z0-9] token. The sandbox exposes no crypto API (globals are blocked by the static
-     * validator), so Math.random is the only RNG. Fine for confirm/unsubscribe links: the actions
-     * they gate are low-value and the subscribe endpoint is rate limited.
+     * 32-hex-char token for the confirm/unsubscribe links. The "no crypto API in the sandbox" note was
+     * FALSE — the host CSPRNG is bridged as `wordjs.crypto.randomToken` (many plugins use it). The gated
+     * actions are low-value (double opt-in confirm / unsubscribe) and the read path is an exact token
+     * match, but Math.random is V8 xorshift128+ (predictable), so a CSPRNG token is the correct default.
+     * Async (RPC to the host).
      */
-    function genToken() {
-        let t = '';
-        while (t.length < 32) {
-            t += Math.random().toString(36).slice(2);
-        }
-        return t.slice(0, 32);
+    async function genToken() {
+        return wordjs.crypto.randomToken(16); // 32 hex chars
     }
 
     /** Escape a value for interpolation into email HTML. */
@@ -171,7 +169,7 @@ exports.init = async function (wordjs) {
                 return res.json({ success: true, message: 'Si el correo es válido, revisa tu bandeja para confirmar la suscripción.' });
             }
 
-            const token = genToken();
+            const token = await genToken();
             if (existing) {
                 // Re-subscribe / retry: regenerate the token, go back to pending, refresh metadata.
                 await db.run(

@@ -9,6 +9,9 @@
 const { getEffectivePlugin, hasPermission } = require('./plugin-context');
 const originalFs = require('fs');
 const originalChildProcess = require('child_process');
+// Real os captured at LOAD time (before the require hook installs), so the os scrub below can read the
+// genuine module without re-entering the proxy — a plugin-context require('os') routes back here.
+const originalOs = require('os');
 const path = require('path');
 // Loaded EAGERLY here (at module init, before any plugin is on the stack / before installSecureRequire
 // patches require) so egress-guard captures the REAL net/tls/dns/... modules, not our proxies. It hands
@@ -381,7 +384,12 @@ const originalRequire = Module.prototype.require;
 // into a WASM instance, whose wasiImport (path_open/fd_read/fd_write/...) performs NATIVE filesystem I/O
 // that never touches the fs proxy or io-guard — a plugin bundles a small .wasm and reads/writes any host
 // file. No permission gates the preopen. Plugins have no legitimate WASI use; block it.
-const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8', 'sqlite', 'wasi'];
+// 'diagnostics_channel' subscribes to the host's INTERNAL channels. An in-process plugin or theme runs
+// inside the host process, so `dc.subscribe('http.client.request.created', …)` hands it every outbound
+// request the host makes — path and headers, i.e. the Authorization bearer of any API the site talks to.
+// Demonstrated, not theoretical. It needs no fs, no socket and no blocked module, so nothing else in the
+// sandbox sees it coming. Plugins observe the system through the hook API, never through Node internals.
+const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8', 'sqlite', 'wasi', 'diagnostics_channel'];
 
 // Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
 // (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and
@@ -402,6 +410,65 @@ function createBlockedModuleProxy(pluginSlug: any, norm: any) {
     });
 }
 
+// A scrubbed `os` for plugins. `os` is not a capability — it grants no fs/network/process access — so it
+// was handed over raw. But its RECON surface undermines the sandbox's own SSRF defense: the egress guard
+// blocks a network-granted plugin from reaching 169.254.169.254 / RFC1918 / loopback precisely so it
+// cannot talk to internal hosts, and then `os.networkInterfaces()` hands an UNGRANTED plugin the full
+// internal-IP map for free (exfiltrable over any channel, and a ready target list the moment it is ever
+// granted network). `userInfo()`/`hostname()`/`homedir()` likewise leak the service account and host
+// identity. So the recon methods are neutralised while everything a plugin legitimately branches on
+// (platform/arch/cpus/memory/tmpdir/…) passes straight through to the real module.
+// The scrubbed replacements for os's recon methods. Shared by the require() facade and the isolate's
+// import()-covering singleton patch, so both paths return identical values.
+function osScrubMap() {
+    const neutralHome = (() => { try { return originalOs.tmpdir(); } catch { return '/tmp'; } })();
+    return {
+        // Internal network topology — the SSRF target map. Return only loopback, never the real NICs.
+        networkInterfaces: () => ({ lo: [{ address: '127.0.0.1', netmask: '255.0.0.0', family: 'IPv4', mac: '00:00:00:00:00:00', internal: true, cidr: '127.0.0.1/8' }] }),
+        // Service account identity. Neutral, non-identifying values.
+        userInfo: () => ({ username: 'sandbox', uid: -1, gid: -1, shell: null, homedir: neutralHome }),
+        hostname: () => 'sandbox',
+        homedir: () => neutralHome,
+        // Re-nicing arbitrary host pids is process control, not information — deny outright.
+        setPriority: () => { throw createSecurityError(getEffectivePlugin(), 'os.setPriority', 'host process control is not permitted in the plugin sandbox'); },
+    } as Record<string, any>;
+}
+
+let _secureOs: any;
+function createSecureOs() {
+    if (_secureOs) return _secureOs;
+    const scrub = osScrubMap();
+    // A Proxy so future os additions pass through by default (benign info like platform/arch/cpus/mem),
+    // and only the explicitly-scrubbed recon methods are replaced. Read-only: writes are ignored.
+    _secureOs = new Proxy(originalOs, {
+        get(t, p) { return Object.prototype.hasOwnProperty.call(scrub, p) ? scrub[p as string] : (t as any)[p]; },
+        set() { return true; },
+        defineProperty() { return true; },
+    });
+    return _secureOs;
+}
+
+/**
+ * Patch the recon methods on the SHARED os module object, in place. `require('os')` is covered by the
+ * facade above, but a plugin can `import('os')` — which resolves to this singleton, not the facade. In
+ * the isolate the worker calls this once (untrusted code is all that runs after bootstrap), so both
+ * module paths and any pre-captured reference return the scrubbed values. Idempotent. NEVER call this on
+ * the host main thread — core legitimately reads the real interfaces/hostname.
+ */
+function installOsSandboxScrub() {
+    const realOs: any = originalOs;
+    if (realOs.__wjs_os_scrubbed__) return;
+    const scrub = osScrubMap();
+    // Plain assignment (keeps the property writable/configurable). Freezing it would violate the
+    // createSecureOs Proxy's get invariant (a Proxy over a non-configurable/non-writable prop must
+    // return that exact value). Freezing buys nothing anyway: the real method is dropped from the only
+    // reachable os reference, so a plugin overwriting the scrubbed one still cannot recover the truth.
+    for (const k of Object.keys(scrub)) {
+        try { realOs[k] = scrub[k]; } catch { /* frozen upstream — ignore */ }
+    }
+    try { Object.defineProperty(realOs, '__wjs_os_scrubbed__', { value: true, enumerable: false }); } catch { /* */ }
+}
+
 function secureModuleFor(id: any) {
     // Normalize the 'node:' prefix, then match on the FIRST PATH SEGMENT so SUBMODULES of a blocked
     // builtin are caught too — e.g. require('inspector/promises') (its Session.connectToMainThread() is
@@ -410,12 +477,13 @@ function secureModuleFor(id: any) {
     const base = norm.split('/')[0];
     const isNet = NETWORK_MODULES.has(norm) || NETWORK_MODULES.has(base);
     const isBlocked = BLOCKED_PLUGIN_MODULES.includes(norm) || BLOCKED_PLUGIN_MODULES.includes(base);
-    if (base !== 'fs' && base !== 'child_process' && !isBlocked && !isNet) return undefined;
+    if (base !== 'fs' && base !== 'child_process' && base !== 'os' && !isBlocked && !isNet) return undefined;
     const pluginSlug = getEffectivePlugin();
     if (!pluginSlug) return undefined;
     if (norm === 'fs/promises') return createSecureFsPromises();
     if (base === 'fs') return secureFs;
     if (base === 'child_process') return secureChildProcess;
+    if (base === 'os') return createSecureOs();
     if (isNet) {
         // Raw sockets are allowed ONLY when an admin granted the Network permission. Inside the isolate
         // the grant comes from the bootstrap (cfg → __WORDJS_PLUGIN_NETWORK__) because the DB/config
@@ -669,7 +737,7 @@ function installSecureRequire() {
 
     // 3. Block raw native bindings for plugins. process.binding('fs')/('spawn_sync') and
     //    _linkedBinding hand out unproxied syscalls, escaping the require-based guards entirely.
-    //    (dlopen is intentionally NOT blocked — legitimate native addons load through it.)
+    //    (dlopen IS blocked too — see 3b. The note that once said otherwise predated that block.)
     for (const m of ['binding', '_linkedBinding']) {
         const orig = (process as any)[m];
         if (typeof orig === 'function') {
@@ -716,7 +784,23 @@ function installSecureRequire() {
     // 3d. Host-lifecycle / privilege process methods. process.kill/abort can crash the WHOLE host
     //     process from a worker (workers share the host PID), and chdir/umask/setuid/setgid change host
     //     process state — DoS / containment bypass. Throw for any plugin context.
-    const PROC_BLOCKED = ['kill', 'abort', 'exit', 'chdir', 'umask', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups', 'initgroups', '_kill'];
+    //
+    //     `process` is a GLOBAL: it never passes through require / Module._load / the ESM loader /
+    //     getBuiltinModule, so the module denylist cannot see it and every entry below is a
+    //     hand-written patch. That is why new Node releases keep adding reachable surface here —
+    //     getBuiltinModule (22.3) and execve (24) both arrived that way. src/tests/
+    //     sandbox-process-surface.test.ts enumerates the object and fails on anything unclassified,
+    //     so the next one surfaces at a Node bump instead of in an incident.
+    //
+    //     execve REPLACES the running process image with another executable. In-process plugins and
+    //       themes run inside the host, so it is a straight host takeover; inside the isolate it
+    //       discards every JS-level guard in a single call while keeping the inherited IPC channel.
+    //     _debugProcess(pid) signals a process to START ITS INSPECTOR — the `inspector` module is on
+    //       the require denylist, but this is a separate native path that never touches it.
+    //     loadEnvFile reads a file in C++ (never reaching io-guard) and merges it into process.env,
+    //       mutating the environment the rest of the host trusts.
+    const PROC_BLOCKED = ['kill', 'abort', 'exit', 'chdir', 'umask', 'setuid', 'setgid', 'seteuid', 'setegid', 'setgroups', 'initgroups', '_kill',
+        'execve', '_debugProcess', '_debugEnd', 'loadEnvFile'];
     for (const m of PROC_BLOCKED) {
         const orig = (process as any)[m];
         if (typeof orig === 'function') {
@@ -1058,7 +1142,10 @@ module.exports = {
     installSecureRequire,
     createSecureFs,
     createSecureChildProcess,
+    // Isolate-only: scrub the os singleton so import('os') is covered like require('os'). Never on host.
+    installOsSandboxScrub,
     // Export for testing
     secureFs,
-    secureChildProcess
+    secureChildProcess,
+    createSecureOs
 };
