@@ -173,7 +173,8 @@ router.post('/acme-config', async (req: Request, res: Response) => {
 
         // Validate only when enabling — disabling should always succeed.
         if (enabled) {
-            if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(email))) {
+            const acmeEmail = String(email || '');  // single var so the length cap is the regex's barrier
+            if (!email || acmeEmail.length > 254 || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(acmeEmail)) {
                 return res.status(400).json({ error: 'A valid ACME account email is required to enable auto-renewal.' });
             }
             if (domList.length === 0) {

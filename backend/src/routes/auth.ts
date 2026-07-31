@@ -19,7 +19,7 @@ const mfa = require('../core/mfa');
 // against distributed attacks on a single account); a login is refused if either trips.
 const loginThrottle = require('../core/login-throttle');
 // The ONE self-service email-write rule (shared with routes/users.ts) — see core/mailbox.ts.
-const { refuseSelfServiceEmailChange } = require('../core/mailbox');
+const { refuseSelfServiceEmailChange, isValidAddress } = require('../core/mailbox');
 
 // Per-account login lockout: the per-IP rate limiter is defeated by a botnet/proxy pool targeting a
 // single account, and there was no account-level throttle. Lock an account for a cooldown after N
@@ -238,9 +238,8 @@ router.post('/register', asyncHandler(async (req: any, res: Response) => {
         });
     }
 
-    // Validate email format
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
+    // Validate email format — shared, length-capped validator (ReDoS-safe on unbounded input)
+    if (!isValidAddress(email)) {
         return res.status(400).json({
             code: 'rest_invalid_param',
             message: 'Invalid email format.',
