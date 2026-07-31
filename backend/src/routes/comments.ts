@@ -13,8 +13,8 @@ const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { stripTags, escUrl } = require('../core/formatting');
 
-// Permissive but bounded email shape check (matches the User model's update() validator).
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// Shared, length-capped email validator (the one shape rule) — guards against ReDoS on unbounded input.
+const { isValidAddress } = require('../core/mailbox');
 
 /**
  * Validate a guest-supplied author URL: only http/https are permitted, and the value must be a
@@ -271,7 +271,7 @@ router.post('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
             });
         }
         email = String(email).trim();
-        if (!EMAIL_RE.test(email)) {
+        if (!isValidAddress(email)) {
             return res.status(400).json({
                 code: 'rest_invalid_param',
                 message: 'A valid author email is required.',

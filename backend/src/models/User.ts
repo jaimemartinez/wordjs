@@ -274,7 +274,10 @@ class User {
             // Validate + enforce uniqueness on update (create already does this; update did not, so a
             // user could set their email to collide with another account → identity confusion/takeover).
             const email = String(data.email).trim();
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Invalid email format');
+            // Length cap BEFORE the regex: the pattern is polynomial (quadratic backtracking), so an
+            // unbounded value is a ReDoS. 254 = RFC 5321 max — no real address is rejected. Model-level
+            // backstop so every caller (routes + importers) is protected regardless of upstream checks.
+            if (email.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error('Invalid email format');
             // Canonicalize (full-Unicode lowercase + NFC) so confusable-case variants collide and we
             // store/compare the same form everywhere; the unique index then holds for non-ASCII too.
             const normalizedEmail = normalizeEmail(email);
