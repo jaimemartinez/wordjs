@@ -325,6 +325,23 @@ router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => 
     const emailRefusal = await refuseSelfServiceEmailChange(req.user, email);
     if (emailRefusal) return res.status(403).json(emailRefusal);
 
+    // Validate the primary email UP FRONT and return a uniform 400 for both a malformed address and one
+    // already taken by another account. Previously User.update() threw 'Email already in use' surfaced as
+    // a 500, which (unlike the anti-enumeration posture everywhere else) was an authenticated
+    // account-existence oracle: a distinct 500 for a registered address vs 200 for a free one. The single
+    // generic message here does not reveal WHY the address is unusable.
+    if (email !== undefined && email !== null && String(email).trim() !== '') {
+        const normalized = String(email).trim().toLowerCase();
+        let usable = isValidAddress(normalized);
+        if (usable) {
+            const existing = await User.findByEmail(normalized);
+            if (existing && existing.id !== req.user.id) usable = false;
+        }
+        if (!usable) {
+            return res.status(400).json({ code: 'rest_invalid_email', message: "This email address can't be used.", data: { status: 400 } });
+        }
+    }
+
     const updateData: any = { email, displayName, password, url };
     if (personalEmail !== undefined) updateData.meta = { personal_email: String(personalEmail).trim().toLowerCase() };
     // NOTE: `professionalMailbox` is deliberately NOT read from the body here. It is the admin-owned
@@ -384,6 +401,21 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     const personalEmail = req.body.personalEmail;
 
     const updateData: any = { email, displayName, password, url };
+
+    // Uniform 400 for a malformed or already-taken primary email (target = the account being edited),
+    // instead of the model's 500 'Email already in use'. Same anti-enumeration reasoning as PUT /me: a
+    // distinct 500-vs-200 was an authenticated account-existence oracle. One generic message, no reason leak.
+    if (email !== undefined && email !== null && String(email).trim() !== '') {
+        const normalized = String(email).trim().toLowerCase();
+        let usable = isValidAddress(normalized);
+        if (usable) {
+            const existing = await User.findByEmail(normalized);
+            if (existing && existing.id !== userId) usable = false;
+        }
+        if (!usable) {
+            return res.status(400).json({ code: 'rest_invalid_email', message: "This email address can't be used.", data: { status: 400 } });
+        }
+    }
 
     // SECURITY (ACTIVE CORPORATE MAILBOX). This route also serves SELF-edits — `isOwn` skips the
     // `edit_users` check above — so both the grant and the address it names must be re-gated on the

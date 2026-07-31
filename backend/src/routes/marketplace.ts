@@ -26,6 +26,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
+const http = require('http');
+const config = require('../config/app');
+const egress = require('../core/egress-guard');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -93,23 +97,79 @@ async function resolveSources(): Promise<{ url: string; isLocal: boolean }[]> {
     return [{ url: DEFAULT_REMOTE, isLocal: false }];
 }
 
-/** Only https (or localhost http for dev) — the fetch runs from the HOST, so keep it boring. */
-function assertSaneRemote(url: string) {
+const FETCH_TIMEOUT_MS = 15000;
+const MAX_REDIRECTS = 5;
+
+/**
+ * Validate a marketplace source URL. The fetch runs from the HOST process (NOT a sandboxed plugin), and
+ * Node's global fetch() bypasses the egress-guard's module hooks — so this sink must guard SSRF itself
+ * (SEC: an admin-set source pointing at an internal/loopback/metadata target was a host-side SSRF, incl.
+ * a blind port-scan oracle via the catalog error body). Only https is accepted in production; http on
+ * localhost is a DEV-ONLY convenience — in production an internal/loopback target is exactly the SSRF we
+ * refuse. Returns whether the URL is the explicit dev-loopback exception (which then skips the
+ * internal-target guard, mirroring core/webhooks.ts' allowPrivateTargets test seam).
+ */
+function assertSaneRemote(url: string): { devLoopback: boolean } {
     let u: any;
     try { u = new URL(url); } catch { throw new Error('URL de marketplace inválida.'); }
     const isLoopback = u.hostname === 'localhost' || u.hostname === '127.0.0.1' || u.hostname === '::1';
-    if (u.protocol !== 'https:' && !(u.protocol === 'http:' && isLoopback)) {
+    const devLoopback = u.protocol === 'http:' && isLoopback && config.nodeEnv !== 'production';
+    if (u.protocol !== 'https:' && !devLoopback) {
         throw new Error('La fuente del marketplace debe ser https:// (o http://localhost en desarrollo).');
     }
+    return { devLoopback };
 }
 
-async function fetchRemote(url: string, maxBytes: number): Promise<Buffer> {
-    assertSaneRemote(url);
-    const res = await fetch(url, { redirect: 'follow', headers: { 'user-agent': 'WordJS-Marketplace' } });
-    if (!res.ok) throw new Error(`HTTP ${res.status} al descargar ${new URL(url).pathname}`);
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length > maxBytes) throw new Error('El archivo descargado excede el tamaño máximo permitido.');
-    return buf;
+/**
+ * SSRF-safe host-side download. Mirrors core/webhooks.ts: assertUrlAllowed rejects internal/private/
+ * metadata targets (IP-literal AND hostnames that resolve to one, fail-closed), and validatingLookup
+ * pins the resolved IP so a hostname cannot rebind to an internal address between the check and the
+ * connect. Redirects are followed MANUALLY, re-running the FULL guard on every hop, so a public https
+ * source cannot 302 to 169.254.169.254 / a loopback host — while the default GitHub release URL, which
+ * legitimately redirects to the asset host, still works. Uses the native http/https client (not global
+ * fetch, whose undici socket layer is invisible to the egress guard).
+ */
+async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Buffer> {
+    const { devLoopback } = assertSaneRemote(url);
+    const u = new URL(url);
+    if (!devLoopback) await egress.assertUrlAllowed(u.href); // throws on an internal/blocked target
+    const lib = u.protocol === 'https:' ? https : http;
+    return await new Promise<Buffer>((resolve, reject) => {
+        const opts: any = {
+            method: 'GET',
+            hostname: u.hostname,
+            port: u.port || (u.protocol === 'https:' ? 443 : 80),
+            path: (u.pathname || '/') + (u.search || ''),
+            timeout: FETCH_TIMEOUT_MS,
+            headers: { 'user-agent': 'WordJS-Marketplace' },
+        };
+        if (!devLoopback) opts.lookup = egress.validatingLookup; // pin the validated IP (no DNS rebinding)
+        const req = lib.request(opts, (res: any) => {
+            const status = res.statusCode || 0;
+            // Follow redirects MANUALLY so the next hop is re-validated BEFORE we connect to it.
+            if (status >= 300 && status < 400 && res.headers.location) {
+                res.destroy();
+                if (_hops >= MAX_REDIRECTS) return reject(new Error('Demasiadas redirecciones.'));
+                let next: string;
+                try { next = new URL(res.headers.location, u).href; } catch { return reject(new Error('Redirección inválida.')); }
+                resolve(fetchRemote(next, maxBytes, _hops + 1));
+                return;
+            }
+            if (status < 200 || status >= 300) { res.destroy(); return reject(new Error(`HTTP ${status} al descargar ${u.pathname}`)); }
+            const chunks: Buffer[] = [];
+            let total = 0;
+            res.on('data', (c: Buffer) => {
+                total += c.length;
+                if (total > maxBytes) { res.destroy(); reject(new Error('El archivo descargado excede el tamaño máximo permitido.')); return; }
+                chunks.push(c);
+            });
+            res.on('end', () => resolve(Buffer.concat(chunks)));
+            res.on('error', reject);
+        });
+        req.on('error', reject);
+        req.on('timeout', () => req.destroy(new Error('Tiempo de espera de descarga agotado.')));
+        req.end();
+    });
 }
 
 async function loadCatalog(source: string, isLocal: boolean, indexFile: string = INDEX_FILE): Promise<any[]> {
