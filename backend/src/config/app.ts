@@ -336,6 +336,14 @@ const config: AppConfig = {
         // host, else it's skipped and the plugin keeps the JS network neuter). Network-GRANTED plugins are never
         // net-unshared (their sockets must work). Surfaced on admin GET /health/details as sandboxNetnsState.
         unshareNetwork: fileConfig.sandbox?.unshareNetwork !== false,
+        // EVERY PLATFORM (this is the only OS-level confinement Windows and macOS get): launch each
+        // isolated plugin under Node's own permission model, which is enforced in C++ below JavaScript.
+        // Filesystem reads are scoped to the app root and writes to the same zones io-guard permits, and
+        // child_process / worker_threads / native addons / WASI are simply never granted. DEFAULT-ON and
+        // probe-gated: the flag name moved between Node versions and a build can accept it without
+        // enforcing it, so a child must actually be refused a read before it activates. Surfaced on
+        // admin GET /health/details as sandboxPermissionState.
+        usePermissionModel: fileConfig.sandbox?.usePermissionModel !== false,
         // FAIL-CLOSED switch (opt-in, default off): when true, an isolated plugin REFUSES to launch unless
         // kernel hardening is actually ACTIVE on this host — instead of silently degrading to the JS-guards-
         // only fork where bwrap / unprivileged-userns is missing (the "looks secure but isn't" gap). Off by

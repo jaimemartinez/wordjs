@@ -118,6 +118,38 @@ const sanitizeEmailHtml = (html: string): string => {
     }
 };
 
+// SECURITY (audit HIGH — stored XSS): inbound email HTML is ATTACKER-CONTROLLED (anyone on the internet
+// can send mail; a catch-all lands unrouted mail in the ADMIN's mailbox) and was injected straight into
+// the live admin document via dangerouslySetInnerHTML. The hand-rolled sanitizeEmailHtml above CANNOT be
+// made safe: it parses with DOMParser (scripting-DISABLED), where <noscript>…</noscript> is parsed as
+// markup, but React re-parses the serialized output in the live scripting-ENABLED DOM where <noscript>
+// is raw text — so `<noscript><p title="</noscript><img src=x onerror=…>">` smuggles a live <img> whose
+// onerror fires with no click, running JS in the CMS admin origin (session/token theft, admin actions).
+// This is the standard scripting-flag mutation-XSS class and no attribute-strip loop closes it.
+//
+// FIX: render the body inside a SANDBOXED IFRAME with NO `allow-scripts` and NO `allow-same-origin`. Even
+// fully-unsanitized adversarial HTML then cannot execute script or reach the admin session/DOM/cookies —
+// this is how production webmail renders untrusted mail. sanitizeEmailHtml is kept as belt-and-suspenders.
+const EmailBodyFrame = ({ html }: { html: string }) => {
+    const srcDoc = '<!doctype html><html><head><meta charset="utf-8"><base target="_blank">'
+        + '<meta name="referrer" content="no-referrer">'
+        + '<style>html,body{margin:0}body{font-family:ui-sans-serif,system-ui,sans-serif;color:#475569;line-height:1.7;word-break:break-word;padding:2px}'
+        + 'img{max-width:100%;height:auto}a{color:#2563eb}table{max-width:100%}</style></head><body>'
+        + sanitizeEmailHtml(html) + '</body></html>';
+    return (
+        <iframe
+            title="Email content"
+            // No allow-scripts and no allow-same-origin: the frame runs in a null origin with scripting
+            // OFF, so nothing in the email can execute or touch the parent. allow-popups(+escape) only
+            // lets a user-clicked link open as a normal external tab.
+            sandbox="allow-popups allow-popups-to-escape-sandbox"
+            srcDoc={srcDoc}
+            className="w-full"
+            style={{ width: '100%', minHeight: 240, height: '60vh', maxHeight: '72vh', border: 0, background: 'transparent' }}
+        />
+    );
+};
+
 // Rotating palette for newly-created labels.
 const LABEL_COLORS = ['#7c3aed', '#2563eb', '#059669', '#d97706', '#dc2626', '#db2777', '#0891b2', '#65a30d'];
 
@@ -1664,7 +1696,7 @@ export default function MailServerAdmin() {
 
                                                         <div className="prose prose-slate prose-sm max-w-none text-slate-600 leading-7 rounded-2xl bg-[#f8fafc] p-8 border border-slate-100 group-hover:border-slate-200 group-hover:shadow-sm transition-all overflow-x-auto break-words [&_img]:max-w-full [&_img]:h-auto [&_a]:break-all [&_table]:max-w-full">
                                                             {msg.body_html ? (
-                                                                <div dangerouslySetInnerHTML={{ __html: sanitizeEmailHtml(msg.body_html) }} />
+                                                                <EmailBodyFrame html={msg.body_html} />
                                                             ) : (
                                                                 <div className="whitespace-pre-wrap font-sans break-words">{msg.body_text || <span className="text-slate-400 italic">(No content)</span>}</div>
                                                             )}

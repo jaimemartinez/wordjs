@@ -21,10 +21,12 @@ class SystemHealth {
     static checkSandbox() {
         let hardening = 'unknown';
         let netns = 'unknown';
+        let permission = 'unknown';
         try {
             const iso = require('./plugin-isolate');
             hardening = iso.getSandboxHardeningState();
             if (typeof iso.getSandboxNetnsState === 'function') netns = iso.getSandboxNetnsState();
+            if (typeof iso.getPermissionModelState === 'function') permission = iso.getPermissionModelState();
         } catch { /* isolate module unavailable */ }
         const requireHardening = !!(config.sandbox && config.sandbox.requireHardening);
         const status =
@@ -35,7 +37,14 @@ class SystemHealth {
         // netns is a SEPARATE kernel backstop for NON-network plugins (bwrap --unshare-net): 'active' = they
         // get an empty net namespace; 'degraded' = base hardening active but this host restricts CLONE_NEWNET
         // (non-network plugins keep the JS network neuter only). It never gates plugin launch.
-        const out: any = { status, hardening, netns, requireHardening };
+        // `permission` is the only OS-level confinement that is NOT Linux-only, so on Windows/macOS it is
+        // the difference between "process separation plus JS guards" and an actual kernel-enforced boundary.
+        // Report it next to the Linux-only states rather than folding it into `status`: a host can be
+        // NOT_HARDENED (no bwrap) and still have capability confinement, and that distinction is the whole
+        // point of having it.
+        const out: any = { status, hardening, netns, permission, requireHardening };
+        if (permission === 'unsupported') out.permissionNote = 'this Node does not enforce a permission model — isolated plugins rely on process separation + the JS guards for capability confinement (upgrade Node to add an OS-enforced floor)';
+        else if (permission === 'disabled') out.permissionNote = 'capability confinement is OFF (sandbox.usePermissionModel=false)';
         if (hardening === 'degraded') out.note = 'kernel hardening is ENABLED but unavailable on this host — isolated plugins run WITHOUT the OS backstop (install bubblewrap + unprivileged userns, or set sandbox.requireHardening=true to fail closed)';
         else if (hardening === 'unknown') out.note = 'no isolated plugin has activated yet (the hardening probe runs on first load)';
         else if (hardening === 'active' && netns === 'degraded') out.note = 'kernel hardening ACTIVE, but network-namespace isolation (--unshare-net) is unavailable on this host (CLONE_NEWNET restricted or old bwrap) — non-network plugins keep the JS network neuter without the kernel netns backstop';

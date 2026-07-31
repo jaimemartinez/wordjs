@@ -155,6 +155,26 @@ const UNGRANTED_INIT = `
       catch { return true; }
     })();
     out.rce = (() => { try { require('child_process').execSync('echo pwned'); return false; } catch { return true; } })();
+
+    // Surface reached WITHOUT the module loader. \`process\` is a global, so the denylist never sees it;
+    // each of these is an individually patched method. A probe here must distinguish "the sandbox
+    // refused" from "this Node/OS does not have it" — otherwise it passes for the wrong reason on a
+    // platform where the API simply is not implemented, which is no evidence at all.
+    const SEC = /not permitted|blocked|sandbox|Security/i;
+    const blkProc = (name, exploit) => {
+      if (typeof process[name] !== 'function') return 'absent';
+      try { exploit(); return false; } catch (e) { return SEC.test(String(e && e.message)) ? true : 'other:' + String(e && e.message).slice(0, 60); }
+    };
+    // Replaces the process image with another executable — discards every JS-level guard in one call.
+    out.execve = blkProc('execve', () => process.execve('/bin/true', ['/bin/true'], {}));
+    // Signals a process to start its inspector; a native path the blocked \`inspector\` module never sees.
+    out.debugProcess = blkProc('_debugProcess', () => process._debugProcess(process.pid));
+    // Reads a file in C++ (never reaching io-guard) and merges it into process.env.
+    out.loadEnvFile = blkProc('loadEnvFile', () => process.loadEnvFile('/nonexistent-wordjs-probe.env'));
+    // Subscribing to the host's internal channels yields its outbound requests, headers included.
+    out.diagnostics_channel = blk('diagnostics_channel', m => m.subscribe('http.client.request.created', () => {}));
+    out.node_diagnostics_channel = blk('node:diagnostics_channel', m => m.subscribe('http.client.request.created', () => {}));
+
     res.json(out);
   });
 
@@ -402,7 +422,22 @@ describe('sandbox escape — module system (ungranted fixture, real fork)', () =
     test('CJS require() of every dangerous builtin cannot INVOKE its capability (no RCE / raw sockets / codegen)', async () => {
         const r = await probe(UNGRANTED, 'require');
         allTrue(r, ['child_process', 'node_child_process', 'worker_threads', 'vm', 'net', 'dgram',
-            'binding', 'dlopen', 'getBuiltinModule', 'rce']);
+            'binding', 'dlopen', 'getBuiltinModule', 'rce',
+            'diagnostics_channel', 'node_diagnostics_channel']);
+    });
+    test('host-reaching process methods are refused BY THE SANDBOX (not merely absent)', async () => {
+        const r = await probe(UNGRANTED, 'require');
+        for (const k of ['execve', 'debugProcess', 'loadEnvFile']) {
+            // 'absent' = this Node/OS does not implement it, which is safe but proves nothing; anything
+            // starting with 'other:' means it threw for an unrelated reason and the guard never ran.
+            assert.ok(r[k] === true || r[k] === 'absent',
+                `process.${k} was not refused by the sandbox — got ${JSON.stringify(r[k])}`);
+        }
+        // On a POSIX CI runner these MUST be genuinely guarded, not absent.
+        if (process.platform === 'linux') {
+            assert.strictEqual(r.execve, true, 'process.execve must be sandbox-blocked on Linux');
+            assert.strictEqual(r.loadEnvFile, true, 'process.loadEnvFile must be sandbox-blocked');
+        }
     });
     test('ESM dynamic import() cannot produce a WORKING exploit (RCE / forbidden read / socket / thread)', async () => {
         const r = await probe(UNGRANTED, 'esm', `?benign=${encodeURIComponent(benignOutOfZone)}`);

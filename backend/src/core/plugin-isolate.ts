@@ -726,6 +726,70 @@ function getSandboxHardeningState() { return sandboxHardeningState; }
 let netnsHardeningSupported = false;
 let sandboxNetnsState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
 function getSandboxNetnsState() { return sandboxNetnsState; }
+// --- CROSS-PLATFORM capability confinement (Node's own permission model) -------------------------
+// Everything above this line that confines a plugin at the OS level is LINUX-ONLY: bwrap, seccomp,
+// namespaces, uid-drop, cgroups. On Windows and macOS the child had process separation and the JS
+// guards, and nothing else — so any bypass of a JS guard was the whole user account. That asymmetry is
+// what this closes.
+//
+// Node's permission model is enforced in C++, BELOW JavaScript, with the same flags on every platform.
+// It is not a monkey-patch: there is no API to re-grant from inside the process, so a plugin that
+// defeats a JS guard still meets it. Measured against the escapes this codebase has actually shipped,
+// it independently denies `node:wasi` preopens, `process.loadEnvFile`, `process.binding`, addon
+// loading and child_process — none of which it knows by name, which is the property the by-name
+// denylists cannot have.
+//
+// It is a SECOND FLOOR, not a replacement, and the gaps are specific and measured on this Node:
+//   · node:sqlite still opens files through it (its C++ fs access is not gated — verified: fs.write
+//     is DENIED while DatabaseSync creates the file). Stays blocked by BLOCKED_PLUGIN_MODULES.
+//   · diagnostics_channel is not an fs/net/process capability at all. Same — blocked by name.
+//   · --allow-net is not enforced in every build that accepts it, so the JS egress guard remains the
+//     authority on outbound traffic.
+// Which is exactly why the JS layer stays: each floor covers what the other misses.
+let permissionModelState: 'unknown' | 'unsupported' | 'disabled' | 'active' | 'degraded' = 'unknown';
+function getPermissionModelState() { return permissionModelState; }
+let permissionProbe: Promise<string | null> | undefined;
+/**
+ * Resolve the flag this Node accepts for its permission model, or null when unavailable.
+ *
+ * PROBED, never assumed: the flag was `--experimental-permission` (Node 20/22) before it became
+ * `--permission` (23.5+), and a build can accept a flag without enforcing it. So the probe spawns a
+ * real child and only reports success when a read OUTSIDE the granted path is actually refused —
+ * anything less would report confinement that is not there, the "looks secure but isn't" state.
+ */
+function probePermissionModel(): Promise<string | null> {
+    if (permissionProbe) return permissionProbe;
+    permissionProbe = (async () => {
+        let enabled = true;
+        try { const s = require('../config/app').sandbox; if (s && s.usePermissionModel === false) enabled = false; } catch { /* config unavailable → keep default-on */ }
+        if (!enabled) { permissionModelState = 'disabled'; return null; }
+        // Deny a read of a path we do NOT grant, and require the child to report it as refused.
+        const probeSrc = 'try{require("fs").readFileSync(process.execPath);console.log("OPEN")}' +
+            'catch(e){console.log(e&&e.code==="ERR_ACCESS_DENIED"?"DENIED":"OTHER")}';
+        for (const flag of ['--permission', '--experimental-permission']) {
+            const verdict = await new Promise<string>((resolve) => {
+                try {
+                    const p = spawn(process.execPath, [flag, `--allow-fs-read=${__dirname}`, '-e', probeSrc],
+                        { stdio: ['ignore', 'pipe', 'ignore'] });
+                    let out = '';
+                    p.stdout.on('data', (d: any) => { out += String(d); });
+                    p.on('error', () => resolve('ERROR'));
+                    p.on('close', () => resolve(out.trim()));
+                    setTimeout(() => { try { p.kill('SIGKILL'); } catch { /* gone */ } resolve('TIMEOUT'); }, 8000).unref?.();
+                } catch { resolve('ERROR'); }
+            });
+            if (verdict === 'DENIED') {
+                permissionModelState = 'active';
+                console.log(`[Sandbox] capability confinement ACTIVE on ${process.platform} (Node permission model via ${flag}: filesystem scoped to the plugin's own zones, child_process/worker_threads/native addons/WASI denied below JS).`);
+                return flag;
+            }
+        }
+        permissionModelState = 'unsupported';
+        return null;
+    })();
+    return permissionProbe;
+}
+
 let hardenProbe: Promise<boolean> | undefined;
 function probeKernelHardening(): Promise<boolean> {
     if (hardenProbe) return hardenProbe;
@@ -934,6 +998,10 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         }
     }
     const jobCapOk = await probeJobObjectCap();     // preventive memory cap on Windows (Job Object); false elsewhere
+    // Cross-platform capability confinement. Unlike everything above it, this one is NOT Linux-only —
+    // it is the layer that gives Windows and macOS an OS-enforced boundary at all. null ⇒ unavailable
+    // on this Node (or opted out) and the launch below is byte-identical to before.
+    const permFlag = await probePermissionModel();
     return new Promise((resolve, reject) => {
         // In dev we run via ts-node and the worker must too (core is .ts); compiled, no flag needed.
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
@@ -993,6 +1061,24 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             path.join(APP_ROOT, 'uploads'), path.join(APP_ROOT, 'data'), path.join(APP_ROOT, 'logs'),
             path.join(APP_ROOT, 'os-tmp'), path.join(APP_ROOT, 'themes'),
         ];
+        // Hand the SAME policy to Node's permission model that bwrap gets, so the confinement no longer
+        // depends on the operating system: read is scoped to the app root (the child must still resolve
+        // its worker, node_modules and the plugin's own code), and write is scoped to exactly the zones
+        // io-guard already permits — so this is behaviour-neutral for a well-behaved plugin and a hard
+        // wall for one that is not. child_process / worker_threads / native addons / WASI are simply not
+        // granted, which denies them in C++ rather than through a JS proxy that has to be kept in sync.
+        //
+        // NOT under ts-node: dev compiles TypeScript in-process and needs broader access than a
+        // production child does. Same carve-out as blockCodeGen above, and for the same reason — the
+        // production path is the one that has to be tight.
+        if (permFlag && !__filename.endsWith('.ts')) {
+            execArgv.push(permFlag, `--allow-fs-read=${APP_ROOT}`);
+            for (const dir of sandboxWritable) execArgv.push(`--allow-fs-write=${dir}`);
+            // Only a network-GRANTED plugin gets the network capability. Not every build that accepts
+            // this flag enforces it yet, so the JS egress guard stays the authority on where traffic may
+            // actually go — this narrows the surface, it does not replace that guard.
+            if (netGranted) execArgv.push('--allow-net');
+        }
         // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
         // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
         // after the child is spawned (the child kept its own dup).
@@ -1419,6 +1505,26 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                     console.warn(`[Isolate ${logSafe(slug)}] rejected route registration with invalid method '${logSafe(routeMethod)}'.`);
                     return;
                 }
+                // SECURITY (host DoS): `routePath` is attacker-controlled — a malicious child sends any
+                // string — and it is concatenated into the Express route pattern below, which Express 4
+                // compiles with path-to-regexp 0.1.x. That compiler passes a `:param(<regex>)` custom
+                // regex THROUGH into the router's matcher, so a plugin can inject a catastrophic-
+                // backtracking pattern (e.g. `/:p((a+)+b)`): one unauthenticated GET to
+                // `/api/v1/plugin/<slug>/aaaa…!` then pins the SHARED host event loop for tens of seconds
+                // (measured: 32 chars → 22 s), a full-site DoS from an unprivileged sandboxed plugin.
+                // Plugins only ever need static segments, `:params` and a `*` wildcard — never a custom
+                // regex — so allow exactly that charset and reject everything that could inject regex
+                // structure (parens/quantifiers/anchors/classes). This kills the whole ReDoS class at the
+                // door rather than trying to detect evil regexes.
+                const routePath = String(msg.routePath == null ? '' : msg.routePath);
+                if (routePath.length > 200 ||
+                    !/^\/[A-Za-z0-9_./:*-]*$/.test(routePath) ||   // static + :param + * only, no regex metachars
+                    routePath.includes('::') ||                    // malformed param
+                    (routePath.match(/\*/g) || []).length > 2 ||   // cap wildcards (bounds (.*) polynomial blowup)
+                    routePath.includes('..')) {                    // no traversal-looking segments
+                    console.warn(`[Isolate ${logSafe(slug)}] rejected route registration with unsafe path '${logSafe(routePath.slice(0, 80))}'.`);
+                    return;
+                }
                 // Mount an Express route owned by the host; run the real auth middleware, then forward
                 // a serialized request to the isolate and write back its response descriptor.
                 const { getApp } = require('./appRegistry');
@@ -1548,7 +1654,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 const m = routeMethod; // validated against the HTTP-verb allowlist above
                 // ALL plugins are namespaced under /api/v1/plugin/<slug> (no route hijack). No trust tier
                 // exists to opt into an absolute path — every plugin's routes are confined to its namespace.
-                const full = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${msg.routePath}`;
+                const full = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}${routePath}`;
                 // Register WITHOUT the plugin's ALS context. appRegistry patches the app/Router route
                 // methods to wrap EVERY handler registered while a plugin is the effective plugin, so an
                 // IN-PROCESS plugin's own handler re-enters its sandbox on each request. But for an
@@ -1845,6 +1951,7 @@ module.exports = {
     getLivePids, awaitIsolateStopped, awaitIsolateSettled,
     getIsolateStatus, getAllIsolateStatuses,
     assignProcessToJobObject, probeJobObjectCap, getSandboxHardeningState, getSandboxNetnsState,
+    getPermissionModelState, probePermissionModel,
     __bwrapProfile: bwrapProfile,
     // Diagnostic: is this slug marked as an INTENTIONAL stop, i.e. is there a pending child exit that
     // must not be supervised as a crash? The mark is consumed by that exit, so a mark with no child

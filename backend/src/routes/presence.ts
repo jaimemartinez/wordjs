@@ -15,6 +15,7 @@
 const express = require('express');
 const router = express.Router();
 const { authenticate } = require('../middleware/auth');
+const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 
 const TTL_MS = 25_000;
@@ -29,7 +30,13 @@ function sweep(room: Map<string, { name: string; ts: number }>) {
 
 // Heartbeat (default) or { action: "leave" }. Always answers with the OTHER active editors, so the
 // client needs a single call per tick.
-router.post('/:postId', authenticate, asyncHandler(async (req: any, res: any) => {
+// SECURITY (audit LOW — IDOR/recon): editing-presence returns the id + display name + live activity of
+// the OTHER users editing a post. This is collaboration state that belongs to people who can EDIT posts,
+// so gate it on `edit_posts` — otherwise any authenticated account (incl. a self-registered subscriber)
+// could POST /presence/:postId across post ids and enumerate which admins/editors are editing what right
+// now, harvesting their user ids and display names across a horizontal boundary the caller can't
+// otherwise cross (GET /users needs list_users; GET /users/:id 403s a low-priv caller viewing another).
+router.post('/:postId', authenticate, can('edit_posts'), asyncHandler(async (req: any, res: any) => {
     const postId = parseInt(req.params.postId, 10);
     if (!Number.isFinite(postId) || postId <= 0) {
         return res.status(400).json({ error: 'invalid post id' });
