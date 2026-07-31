@@ -1296,12 +1296,20 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res
     if (await auth.isLoginLocked(lockId)) {
         return res.status(429).json({ message: 'Too many failed attempts. Try again later.' });
     }
+    // Concurrency backstop (audit AUTH-A3 class): isLoginLocked is check-then-arm and bcrypt yields, so a
+    // hijacked session firing parallel guesses would clear the lock before it arms. Cap concurrent in-flight
+    // password checks for this account; release the slot in finally.
+    if (!(await auth.beginLoginAttempt(lockId))) {
+        return res.status(429).json({ message: 'Too many simultaneous attempts. Try again in a moment.' });
+    }
     try {
         await User.authenticate(req.user.userLogin, password);
         await auth.clearLoginFails(lockId);
     } catch (error) {
         await auth.recordLoginFail(lockId);
         return res.status(403).json({ message: 'Invalid password' });
+    } finally {
+        await auth.endLoginAttempt(lockId);
     }
 
     // 1. Check if active (Async)

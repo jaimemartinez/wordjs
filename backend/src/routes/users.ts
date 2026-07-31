@@ -300,8 +300,15 @@ router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => 
         if (await auth.isLoginLocked(lockId)) {
             return res.status(429).json({ code: 'rest_account_locked', message: 'Too many failed attempts. Try again later.', data: { status: 429 } });
         }
+        // Concurrency backstop (audit AUTH-A3 class): isLoginLocked is check-then-arm and bcrypt yields, so a
+        // hijacked session firing parallel guesses would clear the lock before it arms. Cap concurrent in-flight
+        // sudo re-auths for this account; release in finally.
+        if (!(await auth.beginLoginAttempt(lockId))) {
+            return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+        }
         try { await User.authenticate(req.user.userLogin, String(currentPassword || '')); await auth.clearLoginFails(lockId); }
         catch { await auth.recordLoginFail(lockId); return res.status(403).json({ code: 'rest_bad_current_password', message: 'Current password is incorrect.', data: { status: 403 } }); }
+        finally { await auth.endLoginAttempt(lockId); }
     }
 
     // Optional personal/recovery email (coexists with the primary email; used for password recovery).

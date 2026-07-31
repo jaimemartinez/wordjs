@@ -121,7 +121,13 @@ if (!netAllowed) {
 // escape the worker can't freely touch fs/child_process), then run the plugin in its context.
 try {
     require(path.join(coreDir, 'io-guard'));
-    require(path.join(coreDir, 'secure-require')).installSecureRequire();
+    const sr = require(path.join(coreDir, 'secure-require'));
+    sr.installSecureRequire();
+    // Neutralise os's recon surface (networkInterfaces / userInfo / hostname / homedir) on the shared
+    // singleton, so BOTH require('os') and import('os') hand the plugin scrubbed values. The worker runs
+    // only this one untrusted plugin, so an unconditional scrub after bootstrap is correct here (never
+    // done on the host main thread, where core reads the real interfaces).
+    if (typeof sr.installOsSandboxScrub === 'function') sr.installOsSandboxScrub();
 } catch (e) {
     // FAIL CLOSED: if the in-isolate guards can't install, do NOT run the plugin with only the heap
     // boundary — a missing guard re-opens fs/child_process/network from inside the worker. Abort.
@@ -142,9 +148,11 @@ try {
         'trace_events', 'cluster', 'async_hooks', 'v8',
         // node:sqlite — DatabaseSync opens/creates arbitrary files via native code (bypasses the fs guard)
         // and loadExtension() maps native addons (host RCE). node:wasi — WASI preopens map host dirs into a
-        // WASM instance whose native fd_read/fd_write/path_open bypass the fs guard. Keep in sync with
+        // WASM instance whose native fd_read/fd_write/path_open bypass the fs guard.
+        // node:diagnostics_channel — subscribing to the host's internal channels yields every outbound
+        // request it makes, headers included (the Authorization bearer). Keep in sync with
         // BLOCKED_PLUGIN_MODULES.
-        'sqlite', 'wasi'
+        'sqlite', 'wasi', 'diagnostics_channel'
     ]);
     // A network-granted plugin may import() the TCP/HTTP modules (net/tls/http/https/http2) —
     // installChildNetGuard locks net.Socket.prototype.connect, the single chokepoint every TCP path funnels

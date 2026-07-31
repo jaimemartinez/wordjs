@@ -127,15 +127,13 @@ exports.init = async function (wordjs) {
         .filter((n) => Number.isFinite(n) && n >= 1 && n <= 1000000)
         .slice(0, 8);
 
-    // Random 32-char lookup token. No CSPRNG exists in the sandbox (the static validator blocks
-    // every path to webcrypto); brute force is bounded by the rate caps below, and the token only
-    // gates a donation's OWN status — never other donors' data.
-    const TOKEN_CHARS = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-    const genToken = () => {
-        let out = '';
-        for (let i = 0; i < 32; i++) out += TOKEN_CHARS[Math.floor(Math.random() * TOKEN_CHARS.length)];
-        return out;
-    };
+    // SECURITY (audit HIGH class): the token gates a donation's status lookup. The "no CSPRNG in the
+    // sandbox" note is FALSE — the host CSPRNG is bridged as `wordjs.crypto.randomToken` (event-tickets/
+    // online-store use it). Math.random is V8 xorshift128+ whose state is reconstructable from observed
+    // tokens, so a predicted token crosses the per-donation boundary to read another donor's record; the
+    // rate caps bound blind brute force but not prediction. randomToken(16) = 32 hex chars, accepted by
+    // the lookup's token check. Async (RPC to the host).
+    const genToken = async () => wordjs.crypto.randomToken(16);
 
     /**
      * Recompute a campaign's denormalized raised_cents from PAID donations in one statement —
@@ -350,7 +348,7 @@ exports.init = async function (wordjs) {
             return res.status(400).json({ error: 'El pago con tarjeta no está disponible — usa las instrucciones de pago manual.' });
         }
 
-        const token = genToken();
+        const token = await genToken();
         const insert = await db.run(
             `INSERT INTO ${T.donations} (campaign_id, token, donor_name, donor_email, amount_cents, message, is_anonymous, payment_method, payment_status)
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`,
