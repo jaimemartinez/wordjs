@@ -13,7 +13,7 @@ const { can, isAdmin, ownerOrCan } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { getRoles } = require('../core/roles');
 // ACTIVE CORPORATE MAILBOX: the admin-owned grant + the one self-service email-write rule.
-const { refuseSelfServiceEmailChange, EMAIL_FORMAT_RE, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
+const { refuseSelfServiceEmailChange, isValidAddress, mailboxFlagValue, hasProfessionalMailbox } = require('../core/mailbox');
 
 /**
  * @swagger
@@ -183,12 +183,12 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
     // The PRIMARY email must be a real address. User.create enforces the same rule (it is the model-level
     // backstop for the importers and self-registration), but reaching it here would surface as a raw 500;
     // answer the API's own 400 shape instead. One rule, expressed once — EMAIL_FORMAT_RE from core/mailbox.
-    if (!EMAIL_FORMAT_RE.test(String(email).trim().normalize('NFC').toLowerCase())) {
+    if (!isValidAddress(email)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid email format.', data: { status: 400 } });
     }
 
     // Optional personal/recovery email (coexists with the primary email; used for password recovery).
-    if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(personalEmail).trim())) {
+    if (personalEmail && !isValidAddress(personalEmail)) {
         return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
     }
 
@@ -312,7 +312,7 @@ router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => 
     }
 
     // Optional personal/recovery email (coexists with the primary email; used for password recovery).
-    if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(personalEmail).trim())) {
+    if (personalEmail && !isValidAddress(personalEmail)) {
         return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
     }
 
@@ -422,7 +422,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     // Optional personal/recovery email (coexists with the primary/professional email). Stored as meta;
     // update() forwards updateData.meta.personal_email via updateMeta.
     if (personalEmail !== undefined) {
-        if (personalEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(personalEmail).trim())) {
+        if (personalEmail && !isValidAddress(personalEmail)) {
             return res.status(400).json({ code: 'rest_invalid_personal_email', message: 'Personal email format is invalid.', data: { status: 400 } });
         }
         updateData.meta = { personal_email: String(personalEmail).trim().toLowerCase() };

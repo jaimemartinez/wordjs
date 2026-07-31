@@ -56,16 +56,24 @@ function normalizeAddress(email: any): string {
     return String(email == null ? '' : email).trim().normalize('NFC').toLowerCase();
 }
 
+// Length cap applied BEFORE EMAIL_FORMAT_RE runs. The pattern is polynomial (quadratic backtracking on a
+// long run with no '@'), so testing it against an unbounded, attacker-controlled value is a ReDoS that
+// pins the single-threaded event loop for minutes (CodeQL js/polynomial-redos, reachable unauthenticated
+// via POST /register and guest comments). 254 = RFC 5321 max address length: no real address is rejected,
+// and the cost is bounded at 254². Every email-format check in the codebase routes through here.
+const MAX_EMAIL_LEN = 254;
+
 /** The domain part of a well-formed address, or '' for anything that is not one. */
 function domainOfAddress(email: any): string {
     const s = normalizeAddress(email);
-    if (!EMAIL_FORMAT_RE.test(s)) return '';
+    if (s.length > MAX_EMAIL_LEN || !EMAIL_FORMAT_RE.test(s)) return '';
     return s.slice(s.indexOf('@') + 1); // exactly one '@' — indexOf === lastIndexOf
 }
 
 /** True when `email` is a syntactically valid address (the one shape rule, exposed for validators). */
 function isValidAddress(email: any): boolean {
-    return EMAIL_FORMAT_RE.test(normalizeAddress(email));
+    const s = normalizeAddress(email);
+    return s.length <= MAX_EMAIL_LEN && EMAIL_FORMAT_RE.test(s);
 }
 
 /**
