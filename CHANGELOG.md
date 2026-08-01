@@ -4,6 +4,45 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.13.4] - 2026-07-31
+
+A second adversarial red-team pass (a fresh fan-out of exotic attack classes plus a hands-on plugin-sandbox
+escape battery) over the running v1.13.3 lab deployment. The sandbox held on every one of ~40 escape
+vectors across all five layers; these six findings are everything else that surfaced, each fixed and
+re-verified live.
+
+### Security
+- **Comment API leaked commenter PII (email + IP) to anonymous callers.** `Comment.toJSON()` emitted
+  `authorEmail` and `authorIp` with no gating, and the public `GET /comments` / `GET /comments/:id`
+  (optionalAuth) returned them for every approved comment — so anyone could harvest the real email and IP
+  of every commenter, administrators included, silently negating the `settings.ts` control that strips
+  `admin_email` from public `/settings`. `toJSON(canModerate)` now omits both fields unless the caller
+  holds `moderate_comments`.
+- **Unbounded SSE connections were a denial-of-service.** `notificationService.addClient()` added every
+  `/notifications/stream` to an unbounded set with no per-user or global cap, and each stream pins a socket
+  plus a 5s keepalive timer — so one low-privilege account could open thousands of streams to exhaust file
+  descriptors, timers and memory on the single shared process. A per-user cap (8) and a global cap (1000)
+  now refuse and close excess streams.
+- **`--allow-net` broke every network-capable isolated plugin in production.** The isolate launcher pushed
+  `--allow-net` for a network-granted plugin, but Node's permission model has no such flag — the child
+  aborted on startup with `bad option: --allow-net` (exit 9), so a plugin needing network (mail, Stripe,
+  etc.) could not activate under the compiled/permission-model path. The invalid flag is removed; the JS
+  egress guard remains — as it always was — the sole authority on a plugin's outbound traffic.
+- **A self-service profile URL could store a `javascript:` scheme (second-order XSS).** `PUT /users/me`
+  wrote `user_url` verbatim (no scheme check, unlike the guest-comment and admin-edit paths), and the
+  logged-in comment path then copied it to a comment's `authorUrl` without `safeAuthorUrl`, reaching an
+  `<a href>` in the moderation UI and public post page. `User.update()` now stores only http(s) absolute
+  URLs, and the logged-in comment path applies `safeAuthorUrl` — both doors now match the guest door.
+- **A plugin-activation race could corrupt the shared dependency tree.** The dependency conflict-check and
+  the `npm install --save` into the app root ran outside the active-plugins lock, so two concurrent
+  activations of mutually-incompatible non-bundled plugins each passed the conflict check and ran
+  concurrent installs. Activations are now serialized end-to-end so the second cannot start until the first
+  has committed to `active_plugins`.
+- **The font upload was weaker than the media pipeline.** It accepted a file when *either* a font MIME *or*
+  a font extension matched (so a `.html`/`.svg` with a `font/ttf` MIME slipped through) and kept the
+  client's original name (allowing overwrite of existing/system fonts). It now gates on the font extension
+  alone, stores under a random-suffixed font-only name, and returns a clean 400 on rejection.
+
 ## [1.13.3] - 2026-07-31
 
 Found by an adversarial red-team pass over the **published 1.13.2 bundle** running in the lab — a fan-out

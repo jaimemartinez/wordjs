@@ -82,14 +82,18 @@ class Comment {
     /**
      * Convert to JSON
      */
-    toJSON() {
-        return {
+    // `canModerate` gates the commenter's PRIVATE fields (email + IP). The public read routes
+    // (GET /comments, GET /comments/:id) run under optionalAuth and serve approved comments to anyone,
+    // so emitting authorEmail/authorIp unconditionally leaked the email + IP of every approved commenter
+    // — including administrators/editors — to anonymous callers (harvestable PII; also silently negated
+    // the settings.ts control that strips admin_email from public /settings). Only a caller that can
+    // moderate comments (the admin moderation UI) receives them.
+    toJSON(canModerate = false) {
+        const json: any = {
             id: this.commentId,
             postId: this.commentPostId,
             author: this.commentAuthor,
-            authorEmail: this.commentAuthorEmail,
             authorUrl: this.commentAuthorUrl,
-            authorIp: this.commentAuthorIp,
             date: this.commentDate,
             dateGmt: this.commentDateGmt,
             content: this.commentContent,
@@ -99,6 +103,11 @@ class Comment {
             userId: this.userId,
             authorAvatarUrl: this.getAvatarUrl()
         };
+        if (canModerate) {
+            json.authorEmail = this.commentAuthorEmail;
+            json.authorIp = this.commentAuthorIp;
+        }
+        return json;
     }
 
     /**

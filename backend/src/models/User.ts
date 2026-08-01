@@ -286,7 +286,18 @@ class User {
             updates.push('user_email = ?'); values.push(normalizedEmail);
         }
         if (data.displayName) { updates.push('display_name = ?'); values.push(data.displayName); }
-        if (data.url !== undefined) { updates.push('user_url = ?'); values.push(data.url); }
+        if (data.url !== undefined) {
+            // SECURITY: user_url is later rendered as a clickable link (profile + comment-author href in
+            // the admin moderation UI and the public post page). Persist ONLY an http(s) absolute URL so a
+            // self-service `PUT /users/me {url:"javascript:..."}` (or data:/mailto:) can never become a
+            // stored XSS payload reaching an href sink. Anything else (bad scheme / not absolute) clears it.
+            let safeUrl = '';
+            const rawUrl = String(data.url).trim();
+            if (rawUrl) {
+                try { const proto = new URL(rawUrl).protocol; if (proto === 'http:' || proto === 'https:') safeUrl = rawUrl; } catch { /* invalid → cleared */ }
+            }
+            updates.push('user_url = ?'); values.push(safeUrl);
+        }
         if (data.password) {
             const hashedPassword = await bcrypt.hash(data.password, SALT_ROUNDS);
             updates.push('user_pass = ?');

@@ -281,4 +281,44 @@ describe('API HTTP layer', () => {
         assert.strictEqual(malformed.body.code, taken.body.code, 'taken vs malformed must share a code');
         assert.strictEqual(malformed.body.message, taken.body.message, 'taken vs malformed must share a message (no reason leak)');
     });
+
+    // v1.13.4 security: GET /comments must NOT leak commenter PII (authorEmail + authorIp) to an
+    // unauthenticated / non-moderator caller. toJSON(canModerate) gates those fields.
+    it('GET /comments does not expose authorEmail/authorIp to anonymous callers', async () => {
+        const Comment = require('../models/Comment');
+        await Comment.create({
+            postId: 7777, author: 'Admin', authorEmail: 'private-admin@secret.test',
+            authorUrl: '', authorIp: '10.9.8.7', content: 'hello', status: '1'
+        });
+        const anon = await request(app).get('/api/v1/comments?post=7777');
+        assert.strictEqual(anon.status, 200);
+        assert.ok(Array.isArray(anon.body) && anon.body.length >= 1, 'expected the approved comment');
+        const c = anon.body[0];
+        assert.strictEqual(c.authorEmail, undefined, 'authorEmail must NOT be exposed to anon');
+        assert.strictEqual(c.authorIp, undefined, 'authorIp must NOT be exposed to anon');
+        assert.strictEqual(c.author, 'Admin', 'public fields (author) still present');
+    });
+
+    // v1.13.4 security: a self-service profile URL must be http(s)-only — a javascript:/data: scheme
+    // is rejected (stored empty) so it can never reach the comment-author href sink (second-order XSS).
+    it('PUT /users/me rejects a javascript: profile URL and keeps a valid http URL', async () => {
+        const dbAsync = database.getDbAsync();
+        await dbAsync.run(
+            `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
+            ['url-tester', 'x', 'url-tester@example.com', 'UrlTester']
+        );
+        const row = await dbAsync.get(`SELECT * FROM users WHERE user_login = ?`, ['url-tester']);
+        const uid = row.ID || row.id;
+        const token = jwt.sign({ userId: uid, username: 'url-tester' }, SECRET, { algorithm: 'HS256', expiresIn: '2h' });
+
+        await request(app).put('/api/v1/users/me').set('Authorization', `Bearer ${token}`)
+            .send({ url: 'javascript:alert(document.domain)' });
+        const bad = await dbAsync.get(`SELECT user_url FROM users WHERE user_login = ?`, ['url-tester']);
+        assert.strictEqual(bad.user_url, '', 'javascript: URL must be rejected (stored empty)');
+
+        await request(app).put('/api/v1/users/me').set('Authorization', `Bearer ${token}`)
+            .send({ url: 'https://example.com/me' });
+        const good = await dbAsync.get(`SELECT user_url FROM users WHERE user_login = ?`, ['url-tester']);
+        assert.strictEqual(good.user_url, 'https://example.com/me', 'a valid http(s) URL is preserved');
+    });
 });

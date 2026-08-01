@@ -1074,10 +1074,13 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         if (permFlag && !__filename.endsWith('.ts')) {
             execArgv.push(permFlag, `--allow-fs-read=${APP_ROOT}`);
             for (const dir of sandboxWritable) execArgv.push(`--allow-fs-write=${dir}`);
-            // Only a network-GRANTED plugin gets the network capability. Not every build that accepts
-            // this flag enforces it yet, so the JS egress guard stays the authority on where traffic may
-            // actually go — this narrows the surface, it does not replace that guard.
-            if (netGranted) execArgv.push('--allow-net');
+            // NOTE: Node's permission model has NO `--allow-net` flag (never has — the tokens are
+            // fs-read/fs-write/child-process/worker/wasi/addons). Passing it aborted the child on startup
+            // with `bad option: --allow-net` (exit 9), so a network-GRANTED isolated plugin could not
+            // activate in production at all. The JS egress guard is — and always was — the sole authority
+            // on where a plugin's traffic may go; a network plugin simply does not get --unshare-net
+            // (handled where bwrap args are built) and stays bounded by that guard. `netGranted` is
+            // consumed there, not here — there is nothing valid to add to execArgv for it.
         }
         // seccomp denylist fd: opened per spawn, placed at child fd 4, referenced by `--seccomp 4`. If the
         // BPF isn't available (unsupported arch / write failed) hardening proceeds without seccomp; closed
