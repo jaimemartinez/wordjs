@@ -4,6 +4,32 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.13.7] - 2026-08-01
+
+Makes the v1.13.6 runtime code-generation block actually take effect, and reconciles the entire
+documentation set against the shipped code.
+
+### Security
+- **Runtime code generation (`eval` / `new Function(string)`) is now genuinely blocked by default in
+  the plugin worker.** v1.13.6 flipped the isolate's local default to on, but `config/app.ts`
+  normalized `sandbox.blockCodeGen` with `=== true`, so on any stock install (config present, key
+  unset) the value resolved to `false` — which the isolate reads as an explicit opt-out, leaving
+  `--disallow-code-generation-from-strings` **off** on every normal boot (the v1.13.6 hardening was
+  effectively inert). The normalization is now `!== false`, so the two layers agree: unset → **on**,
+  `false` → off (deliberate opt-out for a trusted plugin whose deps need runtime codegen), `true` →
+  on. Still force-disabled under `ts-node` (dev needs codegen to compile TS); only the compiled
+  production worker applies the V8 flag.
+
+### Documentation
+- **Reconciled the whole documentation set against the shipped code, and redesigned the README.**
+  Corrects accumulated drift across 20+ docs: the marketplace ships **31 plugins / 64 themes** (was
+  28 / 12–13); plugin isolation is **`child_process`-only** (no live `worker_threads` fallback); the
+  install wizard offers **four** database engines (SQLite native/legacy, PostgreSQL, MySQL/MariaDB);
+  Linux kernel hardening is **default-on / opt-out**; `create-wordjs` is at the current release; plus
+  assorted endpoint, config-key, CI, and cross-link fixes. The README is rewritten to be shorter and
+  accessible to non-technical readers (plain-language intro, a new banner, feature cards, collapsible
+  deep-dives). Internal working docs moved out of the user-facing tree to `docs/internal/`.
+
 ## [1.13.6] - 2026-08-01
 
 Hardening of the plugin sandbox after a white-box guard audit + live escape attempts. A malicious plugin

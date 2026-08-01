@@ -27,8 +27,8 @@ npm run install:all        # installs root + gateway + backend + frontend + setu
 npm run dev:mono           # → https://localhost:3000
 ```
 
-The first run serves a one-time install wizard at the printed URL — pick SQLite (zero config) or
-PostgreSQL and create your admin account. The dev server uses a **self-signed localhost certificate**,
+The first run serves a one-time install wizard at the printed URL — pick a database —
+SQLite (zero config), PostgreSQL, MySQL/MariaDB, or a legacy WASM SQLite — and create your admin account. The dev server uses a **self-signed localhost certificate**,
 so your browser will warn once; that's expected.
 
 **Or run the three services split** (gateway + backend + frontend), useful when you're working on one
@@ -68,7 +68,7 @@ cd gateway && npm test
 CI also runs a few gates that usually don't need a local equivalent: `npm audit` (blocks
 high/critical prod vulns in each service), a license check (`license-checker --production`, blocks
 AGPL/SSPL), backend **integration tests** (`npm run test:integration`, against real Postgres + Redis
-service containers), and a **marketplace catalog freshness** check — if you touch anything under
+service containers), and a **marketplace catalog integrity** check — if you touch anything under
 `marketplace/plugins/`, rebuild the catalog with `npm run build:marketplace` from the repo root so it
 stays consistent. `marketplace/dist/` is a **gitignored build output** (not committed) that the
 release workflow republishes as GitHub Release assets — don't try to commit it.
@@ -86,7 +86,7 @@ A few conventions keep the project coherent and reviewable:
   - **Themes** style the site through their own `style.css` targeting the existing `.wjs-*` hooks and
     `--wjs-*` tokens — copy an existing theme (e.g. `default/` or `midnight-luxury/`) for the pattern.
   - **Plugins** add functionality through their `manifest.json` (routes, hooks, `puckComponents`) —
-    copy a bundled example like `card-gallery` or `hello-world`.
+    copy a bundled example like `hello-world` or `test-schema`.
   - If you find yourself editing `backend/src/core/*` to change how one site looks or behaves, that's
     usually a sign it belongs in a theme or plugin instead.
 - **A fix must not regress working behavior.** Include a test or a clear reproduction, and check that

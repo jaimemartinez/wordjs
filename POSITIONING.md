@@ -27,8 +27,9 @@ defense-in-depth *inside* that process. We still don't oversell — the remainin
   (`child_process.fork`, `plugin-isolate.ts` + `plugin-worker.js`) — its own heap, event loop
   and memory cap, so a crash, OOM, or heap escape is contained to the child *by the kernel*,
   never the host. The legacy in-process execution path was **removed** — `loadActivePlugins` /
-  `activatePlugin` reject non-isolated plugins. Cross-platform, no native deps. (A
-  `worker_threads` transport remains as a fallback; the same guards run in either.)
+  `activatePlugin` reject non-isolated plugins. Cross-platform, no native deps. (`worker_threads`
+  was the earlier transport; the shipped code uses `child_process.fork` **only** — a
+  Worker-API-shaped adapter wraps `child.send` / `child.kill`, so the same guards run either way.)
 - The plugin reaches core **only** through the injected `wordjs` bridge (`plugin-api.ts`),
   RPC'd to the host and **permission-checked on the host side**, in the plugin's context. The
   host's heap — secrets, DB handle, other plugins — is never passed into the isolate
@@ -178,7 +179,7 @@ The sandbox + AST scanner are the *enabling technology* for a marketplace where 
 install" is a verifiable claim**, not a vibe.
 
 **The marketplace *mechanism* now ships in OSS** (no longer a proposal): a curated catalog of
-**28 first-party plugins** (`marketplace/plugins/`) and **12 first-party themes** (`marketplace/themes/`),
+**31 first-party plugins** (`marketplace/plugins/`) and **64 first-party themes** (`marketplace/themes/`),
 both built into catalog + zips by
 `backend/scripts/build-marketplace.js` into `marketplace/dist/` (separate plugin and theme indexes,
 a gitignored build output published
@@ -272,7 +273,7 @@ enlarges the trust surface:
 
 | Risk / gap | Why it matters | What we do about it |
 |---|---|---|
-| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **28 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem. | First-party seeding is done (28 catalog plugins across commerce / marketing / content / SEO); next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
+| **Ecosystem from zero** | The marketplace pitch needs plugins; the built-in marketplace now ships **31 first-party plugins**, but there are still **no third-party authors**. A safe marketplace without a community is still a thin ecosystem. | First-party seeding is done (31 catalog plugins across commerce / marketing / content / SEO); next: a paid early-developer program; lead with *internal / agency* private marketplaces (don't need scale to be valuable). |
 | **Kernel-surface hardening gap** | Plugins run in a separate OS process (host-crash / heap-escape closed), and an on-by-default Linux layer (bubblewrap) drops uid + caps and adds no-new-privs / namespaces / read-only-fs / a **seccomp syscall denylist**. The child's syscall surface is now shrunk by construction (not just JS guards). A skeptical security buyer will probe this. | Default-on (opt-out) deprivileging + seccomp layer shipped (Linux); a default-on preventive Windows Job Object memory cap shipped (the Win32 cgroup analog); remaining: an independent audit; message §2 honestly; never claim "unbreakable." |
 | **No independent audit** | Self-asserted security doesn't sell to the exact segment we target. Several internal red-team passes ≠ external sign-off. | Commission a third-party pentest / audit of the sandbox; publish results + a public threat model. Make "independently audited" a marketing milestone. |
 | **AST scanner is pattern-based** | A static scanner can be evaded; it's a filter, not a proof. Over-reliance in the badge claim is a liability. | Position the scanner as *one layer*; the runtime bridge + default-deny capability grants are the real boundary. Keep fail-closed; expand coverage; treat scan-clean as necessary-not-sufficient for the badge. |
@@ -288,7 +289,7 @@ The sandbox is **genuinely differentiated and genuinely implemented** — isolat
 for *every* plugin, a permission-checked bridge, admin-granted default-deny capabilities (no
 trust tier, no bypass), a fail-closed AST scanner, and network / secret / core-table lockdown.
 We win by being honest about the remaining kernel-level hardening while building on the
-marketplace mechanism that now ships (a curated, sha256-verified catalog of 28 first-party
+marketplace mechanism that now ships (a curated, sha256-verified catalog of 31 first-party
 plugins installed through the hardened pipeline) and the hosted offering that turn "your plugins
 can't compromise your site" into the product. The work to get there is **a third-party
 ecosystem (review pipeline + badge), an external audit, the kernel-level hardening on

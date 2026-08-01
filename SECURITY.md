@@ -72,10 +72,10 @@ Our team is committed to addressing security issues promptly.
 
 ## 📝 Supported Versions
 
-WordJS is pre-production; only the latest `main` and the current `1.12.x` release line are supported. There is no LTS line yet.
+WordJS is pre-production; only the latest `main` and the current `1.13.x` release line are supported. There is no LTS line yet.
 
 | Version   | Supported | Notes                                              |
 | :-------- | :-------- | :------------------------------------------------- |
 | `main`    | ✅         | Latest development line (the only one patched)     |
-| `1.12.x`  | ✅         | Current release line (latest tag `v1.12.13`)       |
-| < `1.12`  | ⚠️        | Best-effort; upgrade to `1.12.x` or latest `main`  |
+| `1.13.x`  | ✅         | Current release line (latest tag `v1.13.6`)        |
+| < `1.13`  | ⚠️        | Best-effort; upgrade to `1.13.x` or latest `main`  |
