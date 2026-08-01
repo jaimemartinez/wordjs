@@ -79,9 +79,11 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     const limit = Math.min(parseInt(per_page, 10) || 10, 100);
     const offset = (Math.max(parseInt(page, 10) || 1, 1) - 1) * limit;
 
-    // Only admins can see non-approved comments
+    // Only comment moderators can see non-approved comments AND the private commenter PII (email/IP
+    // are gated in toJSON(canModerate) below).
+    const canModerate = !!(req.user && req.user.can('moderate_comments'));
     let commentStatus = status;
-    if (!req.user || !req.user.can('moderate_comments')) {
+    if (!canModerate) {
         commentStatus = '1';
     }
 
@@ -113,7 +115,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     res.set('X-WP-Total', total);
     res.set('X-WP-TotalPages', totalPages);
 
-    res.json(comments.map((comment: any) => comment.toJSON()));
+    res.json(comments.map((comment: any) => comment.toJSON(canModerate)));
 }));
 
 /**
@@ -156,7 +158,7 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: any, res: any) => {
         }
     }
 
-    res.json(comment.toJSON());
+    res.json(comment.toJSON(!!(req.user && req.user.can('moderate_comments'))));
 }));
 
 /**
@@ -247,7 +249,11 @@ router.post('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
     if (req.user) {
         author = req.user.displayName;
         email = req.user.userEmail;
-        url = req.user.userUrl;
+        // SECURITY: a logged-in user's stored profile URL is also rendered as a clickable comment-author
+        // link (admin moderation UI + public post page), so hold it to the SAME http(s)-only rule the
+        // guest branch applies — otherwise a self-service `javascript:`/`data:` profile URL (see the
+        // profile-update guard in models/User.ts) would reach that href sink verbatim (second-order XSS).
+        url = safeAuthorUrl(req.user.userUrl);
         userId = req.user.id;
     } else {
         // Require name and email for guests
@@ -315,7 +321,7 @@ router.post('/', optionalAuth, asyncHandler(async (req: any, res: any) => {
         agent: req.get('User-Agent') || ''
     });
 
-    res.status(201).json(comment.toJSON());
+    res.status(201).json(comment.toJSON(!!(req.user && req.user.can('moderate_comments'))));
 }));
 
 /**
@@ -388,7 +394,7 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: 
         status
     });
 
-    res.json(updated.toJSON());
+    res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
 
 /**
@@ -429,7 +435,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
     await Comment.delete(commentId, force);
 
     if (force) {
-        res.json({ deleted: true, previous: comment.toJSON() });
+        res.json({ deleted: true, previous: comment.toJSON(true) });
     } else {
         const fresh = await Comment.findById(commentId);
         if (!fresh) {
@@ -439,7 +445,7 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
                 data: { status: 404 }
             });
         }
-        res.json(fresh.toJSON());
+        res.json(fresh.toJSON(true)); // moderation route — moderator sees full PII
     }
 }));
 
@@ -459,7 +465,7 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
         });
     }
 
-    res.json(updated.toJSON());
+    res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
 
 /**
@@ -478,7 +484,7 @@ router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(as
         });
     }
 
-    res.json(updated.toJSON());
+    res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
 }));
 
 module.exports = router;
