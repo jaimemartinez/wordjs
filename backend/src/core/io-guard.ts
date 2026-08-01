@@ -173,7 +173,11 @@ function isPathSafe(targetPath: string, isWrite = false) {
     // getEffectivePlugin() returns the slug while the host driver opens data/wordjs.db. That file lives
     // in the data/ safe zone (allowed below); a plugin still can't reach it raw (its bridge fs.read is
     // confined to its own dir). Blocking it on the host would wrongly break every plugin's DB access.
-    const g: any = (typeof global !== 'undefined') ? global : {};
+    // Read the isolation marker off `globalThis` (unreassignable per spec), NOT the writable `global`
+    // identifier: a plugin doing `global = {}` would otherwise make __WORDJS_ISOLATED__ read undefined and
+    // SKIP this DB-file block, and since data/ is an allowed write-zone below, the raw core DB (every
+    // credential + secret-named option) would then be readable. globalThis defeats that reassignment.
+    const g: any = (typeof globalThis !== 'undefined') ? globalThis : {};
     if (g.__WORDJS_ISOLATED__) {
         if (/\.(db|sqlite|sqlite3)(-wal|-shm|-journal)?$/i.test(filename)) {
             throttledWarn(`${pluginSlug}:db-file`, `[Security Block] Plugin '${pluginSlug}' tried to access a database file: ${resolved}`);

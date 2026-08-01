@@ -488,9 +488,11 @@ function secureModuleFor(id: any) {
         // Raw sockets are allowed ONLY when an admin granted the Network permission. Inside the isolate
         // the grant comes from the bootstrap (cfg → __WORDJS_PLUGIN_NETWORK__) because the DB/config
         // isn't reachable there; on the main thread, fall back to plugin-permissions.
-        const isolated = (typeof global !== 'undefined' && (global as any).__WORDJS_ISOLATED__);
+        // Read via `globalThis` (unreassignable per spec), NOT the writable `global` identifier — a plugin
+        // doing `global = {}` must not be able to swap the isolation marker (see plugin-context.ts).
+        const isolated = (typeof globalThis !== 'undefined' && (globalThis as any).__WORDJS_ISOLATED__);
         let netGranted = false;
-        if (isolated) netGranted = !!(global as any).__WORDJS_PLUGIN_NETWORK__;
+        if (isolated) netGranted = !!(globalThis as any).__WORDJS_PLUGIN_NETWORK__;
         else { try { netGranted = require('./plugin-permissions').isNetworkGranted(pluginSlug); } catch { netGranted = false; } }
         if (netGranted) {
             // Network is granted — but confine egress to PUBLIC destinations (block loopback / private /
@@ -681,6 +683,22 @@ function guardPluginRequirePath(request: any, mod: any): void {
     try { real = originalFs.realpathSync(resolved); } catch { /* not yet on disk — check lexical form */ }
     if (isUnderNonRequirableDir(resolved) || isUnderNonRequirableDir(real)) {
         throw createSecurityError(slug, `require('${request}')`, 'loading code from a writable data directory (uploads/data/os-tmp/logs) is not permitted');
+    }
+    // A plugin's own dist/client/frontend are BROWSER-bundle dirs that getFiles() SKIPS at install
+    // (plugins.ts), so code there is NEVER AST-scanned. They stay writable (build output), but a plugin
+    // could ship an un-vetted payload (an eval helper, or raw process.binding('fs')) in e.g. dist/h.js and
+    // `require('./dist/h.js')` to run it in the backend worker — the confirmed scanner-evasion primitive.
+    // A plugin has no legitimate reason to require its browser bundles server-side, so refuse it, mirroring
+    // the scanner's skip so the two cannot diverge. (Themes are fully scanned, so they are exempt.)
+    if (!isTheme) {
+        for (const base of [REAL_PLUGINS_DIR, PLUGINS_DIR]) {
+            const p = real.startsWith(base + path.sep) ? real : (resolved.startsWith(base + path.sep) ? resolved : null);
+            if (!p) continue;
+            const seg = path.relative(base, p).split(path.sep); // [<slug>, <subdir>, ...]
+            if (seg.length >= 2 && ['dist', 'client', 'frontend'].includes(seg[1].toLowerCase())) {
+                throw createSecurityError(slug, `require('${request}')`, "loading code from a plugin's browser-bundle dir (dist/client/frontend) is not permitted — that code is not security-scanned");
+            }
+        }
     }
     // Node runs a file of ANY (or no) extension as JavaScript via the default '.js' compiler, so a plugin
     // could write JS to '<owndir>/payload.log' (a DATA extension the executable-write block doesn't match)
