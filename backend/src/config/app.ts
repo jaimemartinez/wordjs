@@ -151,7 +151,7 @@ const crypto = require('crypto');
 // isolated plugin worker (global.__WORDJS_ISOLATED__) — that file is outside the worker's sandbox
 // and the worker never needs these host secrets (it reaches config via the bridge). This avoids
 // the noisy (but already-harmless) EACCES blocks config/app would otherwise trigger at worker boot.
-if (!(global as any).__WORDJS_ISOLATED__) {
+if (!(globalThis as any).__WORDJS_ISOLATED__) {
     try {
         if (fs.existsSync(configPath)) {
             const rawData = fs.readFileSync(configPath, 'utf8');

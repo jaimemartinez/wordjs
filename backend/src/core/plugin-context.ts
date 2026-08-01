@@ -122,7 +122,13 @@ function getEffectivePlugin(): string | null {
     // (setImmediate / queueMicrotask / Promise.then, or one whose stack was deliberately stripped) —
     // is STILL the worker's plugin and must stay sandboxed, never fall through to unguarded "core"
     // access. On the MAIN thread, null genuinely means core, so we keep returning null there.
-    const g: any = (typeof global !== 'undefined') ? global : {};
+    // Read the isolation markers off `globalThis`, NOT the free identifier `global`: `global` is a
+    // WRITABLE+CONFIGURABLE property of the global object, so a plugin doing `global = {}` (a bare
+    // identifier assignment no scanner visitor flags) would swap what this reads and make the markers come
+    // back `undefined` — collapsing this fail-closed backstop to `return null` (host context) and handing
+    // the plugin the RAW fs. `globalThis` is non-writable/non-configurable per spec (unreassignable) and the
+    // two markers are locked on it, so this reference cannot be defeated the same way.
+    const g: any = (typeof globalThis !== 'undefined') ? globalThis : {};
     if (g.__WORDJS_ISOLATED__ && typeof g.__WORDJS_PLUGIN_SLUG__ === 'string') {
         return g.__WORDJS_PLUGIN_SLUG__;
     }
