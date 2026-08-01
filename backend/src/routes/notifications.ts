@@ -23,7 +23,12 @@ router.get('/stream', authenticateAllowQuery, (req: any, res: any) => {
     // Send initial keep-alive
     res.write('retry: 10000\n\n');
 
-    notificationService.addClient(res, req.user.id);
+    // addClient returns false when the per-user / global SSE cap is hit; it has already closed the
+    // response, so bail before arming the keepalive timer (otherwise a refused flood would still pin a
+    // 5s interval per attempt — defeating the cap).
+    if (!notificationService.addClient(res, req.user.id)) {
+        return;
+    }
 
     // Keep connection alive (Ping every 5s to prevent proxy timeouts)
     const keepAlive = setInterval(() => {
