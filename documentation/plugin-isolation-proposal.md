@@ -160,7 +160,7 @@
 > | ~~db-migration~~ | **moved to core (de-pluginized)** | was DB infrastructure, not a feature plugin (runs schema migrations at boot, around the DB lifecycle). Backend → `src/core/db-admin/` (wired in at boot, routes still `/api/v1/db-migration/*`); admin UI → native frontend route `frontend/src/app/admin/db-migration/page.tsx` reached via a permanent **core** Sidebar item (`/admin/db-migration`), NOT a toggleable plugin. Removed from `plugins/` and all generated registries. |
 >
 > (The table above is the inventory at the time the model was finalized. Every plugin added since —
-> the bundled `youtube-videos` (granted `network` for its YouTube RSS/Data-API fetches) and all 25
+> `youtube-videos` (granted `network` for its YouTube RSS/Data-API fetches) and the other 30
 > marketplace plugins (`marketplace/plugins/`, installed sha256-verified through the same zip
 > pipeline) — follows the same isolated-only model; there is no other tier for them to be in.)
 >
@@ -203,9 +203,9 @@
 > the plugin's own dir; the table-scoped DB confines SQL). A *novel* Node global or native
 > binding that reaches the disk/network without going through those proxies would be an escape **of the
 > userspace policy** (it could not escape the process or its memory cap). By-construction, OS-enforced
-> confinement now ships as an **opt-in** Linux layer (bubblewrap: dropped uid + capabilities + no-new-privs
+> confinement now ships as a **default-on** Linux layer (bubblewrap: dropped uid + capabilities + no-new-privs
 > + PID/IPC/UTS namespaces + read-only fs + a seccomp syscall denylist; `sandbox.useKernelHardening`,
-> default-off, probe-gated — see the status banner). The Windows preventive memory cap (Job Object) is
+> default-on/opt-out, probe-gated — see the status banner). The Windows preventive memory cap (Job Object) is
 > now **shipped** (layer (d) above), so the resident budget is kernel-enforced on Linux (cgroup) AND
 > Windows (Job Object). An independent security audit is recommended before relying on this for
 > genuinely hostile multi-tenant input.
@@ -218,9 +218,9 @@ entry point or a missed monkey-patch could reopen RCE. The proposal argued for a
 where raw Node capabilities are unreachable. What shipped is that hard boundary for **all** plugins:
 first via `worker_threads` (heap-isolated), then — because a worker shares the host heap/rss and an
 off-heap OOM in it cannot be capped without taking the host down — moved to **`child_process.fork`** for
-true OS-level process isolation (a `worker_threads` transport remains only as a fallback). See the
+true OS-level process isolation (every shipped launch path forks a `child_process`; the `worker_threads`-compat branch in `plugin-worker.js` is dormant and never launched). See the
 status banner above for the as-built details and the residual-risk note for where the OS-process
-boundary stops (syscall confinement now ships via the opt-in bubblewrap + seccomp layer; see the banner).
+boundary stops (syscall confinement now ships via the default-on bubblewrap + seccomp layer; see the banner).
 
 ---
 
@@ -269,8 +269,8 @@ architecture below is the same — only the isolate primitive differs.
 > and works on any platform, and over `worker_threads` because a separate process gives true OS-level
 > crash/OOM/resource isolation (the host always survives) where a worker shared the host heap/rss. The
 > **OS-sandbox layer** of the gold standard (dropped uid + dropped capabilities + no-new-privs + namespaces
-> + a seccomp syscall denylist) now ships as an **opt-in** Linux layer (bubblewrap, `sandbox.useKernelHardening`,
-> default-off, probe-gated); the Landlock LSM is intentionally omitted (the read-only mount namespace covers
+> + a seccomp syscall denylist) now ships as a **default-on** Linux layer (bubblewrap, `sandbox.useKernelHardening`,
+> default-on/opt-out, probe-gated); the Landlock LSM is intentionally omitted (the read-only mount namespace covers
 > its fs-confinement goal, and it would need a native dep). The kernel resource
 > limits ARE in place today: an OPT-IN cgroup v2 `memory.max` (Linux, `systemd-run --user
 > --scope`), a default-on preventive **Windows Job Object** memory cap, and a loose `RLIMIT_AS` virtual
@@ -294,7 +294,7 @@ is enforced server-side against the plugin's manifest permissions — the isolat
 └────────┼───────────────────────────────────────────────────────────────────┘
          │   inject async fns: options.*, db.query, hooks.*, http.route,
          │   fs.read/write (plugin-scoped), mail.send, notify, adminMenu.add
-┌────────▼─── isolate (child_process OS process; worker_threads = fallback) ──┐
+┌────────▼─── isolate (child_process OS process; no worker_threads launch) ───┐
 │  plugin code — Node JS reaching core ONLY via `wordjs.*`; raw fs/net/      │
 │  child_process/worker_threads proxied or denied by the in-child guards     │
 └────────────────────────────────────────────────────────────────────────────┘
@@ -380,7 +380,7 @@ The phased migration the proposal laid out has all landed; for the record:
 3. ✅ Added the isolate runner (`src/core/plugin-isolate.ts` + `plugin-worker.js`), first on
    `worker_threads` (chosen over `isolated-vm` for zero native deps / cross-platform), then **moved to
    `child_process.fork`** for true OS-process isolation (the host always survives a child crash/OOM); the
-   transport-agnostic `plugin-worker.js` keeps `worker_threads` only as a fallback transport.
+   transport-agnostic `plugin-worker.js` retains a dormant `worker_threads`-compat branch that no shipped launch path exercises.
 4. ✅ **Flipped past the default to mandatory**: there is no longer a non-isolated path.
    `loadActivePlugins`/`activatePlugin` **reject** any plugin that doesn't declare `"isolated": true`;
    `deactivatePlugin` terminates the worker. The AST scanner runs at activate **and on every boot**.
@@ -393,10 +393,10 @@ The phased migration the proposal laid out has all landed; for the record:
 | Primitive | Capability boundary | Crash/DoS isolation | Perf cost | Complexity |
 |---|---|---|---|---|
 | `vm` | ❌ none | partial | low | low |
-| `worker_threads` (was shipped, now fallback) | ❌ (full Node in worker; shares host heap/rss) | ✅ crash, ⚠️ off-heap OOM can take the host down | medium (IPC + clone) | medium |
+| `worker_threads` (was shipped, now replaced) | ❌ (full Node in worker; shares host heap/rss) | ✅ crash, ⚠️ off-heap OOM can take the host down | medium (IPC + clone) | medium |
 | **`child_process.fork` (shipped)** | ❌ (full Node in child) but separate OS process: own heap/rss/pid, host always survives | ✅✅ (separate process + layered mem caps: cgroup/RLIMIT_AS/RSS-poll) | higher (process + IPC) | medium-high |
 | **`isolated-vm`** | ✅ (no bindings) | ✅ (mem/cpu caps) | medium | medium-high (async API rewrite, native build) |
-| **child-process + OS sandbox (seccomp/uid)** | ✅✅ (OS-enforced syscalls) | ✅✅ | higher (process + IPC) | high (= shipped child-process + **opt-in** bwrap kernel layer, Linux) |
+| **child-process + OS sandbox (seccomp/uid)** | ✅✅ (OS-enforced syscalls) | ✅✅ | higher (process + IPC) | high (= shipped child-process + **default-on** bwrap kernel layer, Linux) |
 
 **Decision (as built):** shipped the **bridge API + `child_process.fork` (separate OS process)** for
 **all** plugins. The proposal leaned toward `isolated-vm`; a process was chosen instead because it has
@@ -404,8 +404,8 @@ The phased migration the proposal laid out has all landed; for the record:
 giving **true OS-level crash/OOM/resource isolation** — a worker_threads version shipped first but was
 replaced because a worker shares the host heap/rss and an off-heap OOM in it can't be capped without
 crashing the host. The **OS-sandbox layer** that makes capability denial by-construction — dropped uid +
-dropped capabilities + no-new-privs + PID/IPC/UTS namespaces + a seccomp syscall denylist — now ships as an
-**opt-in** Linux layer (bubblewrap, `sandbox.useKernelHardening`, default-off, probe-gated) on top of the
+dropped capabilities + no-new-privs + PID/IPC/UTS namespaces + a seccomp syscall denylist — now ships as a
+**default-on** Linux layer (bubblewrap, `sandbox.useKernelHardening`, default-on/opt-out, probe-gated) on top of the
 in-child guards (secure-require module proxies + the `fetch`/`WebSocket`/`EventSource` global trap), without
 changing the bridge. The Landlock LSM is intentionally omitted (the read-only mount namespace covers its
 fs-confinement goal, and it would need a native dep); a preventive Windows memory cap (Job Object) is now
@@ -420,13 +420,13 @@ shipped (default-on, probe-gated). Kernel resource limits in place today: OPT-IN
   consequences of what was deliberately granted. It does not sandbox the frontend bundle (plugin React
   components are build-time assets, bundled and reviewed as before); it does not replace code review of
   first-party plugins (activating them grants their declared caps, so review them as you would any code you ship); and a separate
-  OS process gains an **opt-in** bubblewrap layer (dropped uid + capabilities + `no-new-privs` +
+  OS process gains a **default-on** bubblewrap layer (dropped uid + capabilities + `no-new-privs` +
   PID/IPC/UTS namespaces + read-only fs + a **`seccomp` syscall denylist**; `sandbox.useKernelHardening`,
-  Linux, default-off, probe-gated). The `Landlock` LSM is not used (the read-only mount namespace already
+  Linux, default-on/opt-out, probe-gated). The `Landlock` LSM is not used (the read-only mount namespace already
   provides its fs-confinement goal, and the LSM needs a native dep).
 - **Net:** moves plugin security from "we blocked every trick we found" (soft, enumerated)
   toward "core capabilities are reached only through a permission-checked bridge, the plugin runs in a
   separate OS process (own heap/rss, host survives any crash/OOM, layered memory caps), and raw fs/net are
-  proxied/trapped in the child, with an opt-in bubblewrap deprivileging layer (dropped uid/caps/
+  proxied/trapped in the child, with a default-on bubblewrap deprivileging layer (dropped uid/caps/
   no-new-privs/namespaces/read-only-fs + a `seccomp` syscall denylist)" — a hard process boundary plus
   guarded capabilities and a by-construction-shrunk syscall surface.

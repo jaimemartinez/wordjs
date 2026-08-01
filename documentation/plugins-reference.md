@@ -216,11 +216,11 @@ feed (latest 15 videos); add a YouTube Data API v3 key for the full upload histo
 ## 10. Plugin Marketplace 🛒
 
 Beyond the plugins above, WordJS ships a **Marketplace** of first-party plugins distributed
-**outside** the core build (the Mail Server, Conference Manager, and YouTube Videos sections above are
-themselves marketplace plugins — only Photo Carousel, Card Gallery, Video Gallery, Hello World, and
+**outside** the core build (the Photo Carousel, Card Gallery, Video Gallery, Mail Server, Conference
+Manager, and YouTube Videos sections above are themselves marketplace plugins — only Hello World and
 Test Schema are bundled with core):
 
-*   **Sources:** `marketplace/plugins/<slug>/` in the repo (28 plugins, listed below).
+*   **Sources:** `marketplace/plugins/<slug>/` in the repo (31 plugins, listed below).
 *   **Catalog build:** `npm run build:marketplace` (`backend/scripts/build-marketplace.js`) packs each
     plugin into `marketplace/dist/<slug>-<version>.zip` and emits `marketplace/dist/marketplace-index.json`
     (id, version, description, category, file, **sha256**). `marketplace/dist/` is a **build output and is
@@ -248,7 +248,7 @@ Test Schema are bundled with core):
 *   **Sandbox:** marketplace plugins are ordinary plugins — `"isolated": true`, bridge-only,
     default-deny grants, AST-scanned. Nothing about the marketplace bypasses the sandbox.
 
-### Catalog (28 plugins)
+### Catalog (31 plugins)
 
 | Slug | What it does | Key requested capabilities |
 | --- | --- | --- |
@@ -256,6 +256,7 @@ Test Schema are bundled with core):
 | `auctions` | Auction listings with bidding, anti-snipe extension, live polling, winner reporting | `database` r/w, routes, admin menu, `email:admin` |
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Puck block with optional BreadcrumbList JSON-LD | — (frontend-only) |
+| `card-gallery` | Event/promo cards in a zigzag or grid layout via the CardGalleryPuck block | `settings` r/w, `database` write |
 | `conference-manager` | Conference inscriptions/registration, hotel & room auto-assignment, per-inscription payments, attendee portal, reports + CSV export | `database` r/w, routes, admin menu |
 | `contact-forms` | Form builder with Puck embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
@@ -271,6 +272,7 @@ Test Schema are bundled with core):
 | `newsletter` | Subscriptions (double opt-in when mail is configured), subscriber CSV, HTML campaigns with unsubscribe links | `database` r/w, routes, admin menu, `email:admin` |
 | `notification-bar` | Slim site-wide announcement bar with CTA, dismissal versioning, schedule window | `settings` r/w, routes, admin menu, `assets:write` |
 | `online-store` | Product catalog + cart + checkout with server-side price validation, coupons, orders admin, optional Stripe | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `network` |
+| `photo-carousel` | Image carousels for Hero sections / content sliders via the PhotoCarousel Puck block + `[carousel]` shortcode | `settings` r/w, `database` write |
 | `polls` | WP-Polls-style polls with a voting + animated-results Puck block | `database` r/w, routes, admin menu |
 | `popup-builder` | Site-wide popups with triggers (delay/scroll/exit intent), frequency capping, view/click stats | `database` r/w, routes, admin menu, `assets:write` |
 | `related-posts` | Automatic per-post related articles via the core public REST API (YARPP parity) | — (frontend-only) |
@@ -279,6 +281,7 @@ Test Schema are bundled with core):
 | `table-of-contents` | Automatic nested TOC from page H2/H3 with anchors, smooth scroll, active highlighting | — (frontend-only) |
 | `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Puck block | `database` r/w, `settings` r/w, routes, admin menu |
 | `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |
+| `video-gallery` | YouTube video carousels via the VideoGalleryPuck block + `[vgallery]` shortcode | `settings` r/w, `database` write |
 | `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Puck carousel block | `settings` r/w, `database` r/w, `network` |
 
 *(“routes” = `express:register_route`; “admin menu” = `admin_menu:register`. Every capability is

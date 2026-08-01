@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 340" role="img" aria-label="WordJS — the CMS where a plugin can't take over your site" font-family="'Segoe UI', Helvetica, Arial, sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1e1b4b"/>
+      <stop offset="0.55" stop-color="#4338ca"/>
+      <stop offset="1" stop-color="#7c3aed"/>
+    </linearGradient>
+    <linearGradient id="sheen" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.10"/>
+      <stop offset="0.5" stop-color="#ffffff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="shield" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e0e7ff"/>
+    </linearGradient>
+  </defs>
+
+  <!-- panel -->
+  <rect x="0" y="0" width="1200" height="340" rx="28" fill="url(#bg)"/>
+  <rect x="0" y="0" width="1200" height="340" rx="28" fill="url(#sheen)"/>
+
+  <!-- faint "contained plugins" chips, top-right -->
+  <g opacity="0.16" fill="none" stroke="#ffffff" stroke-width="3">
+    <rect x="920" y="46" width="70" height="70" rx="14"/>
+    <rect x="1010" y="86" width="70" height="70" rx="14"/>
+    <rect x="965" y="150" width="70" height="70" rx="14"/>
+  </g>
+  <g opacity="0.22" fill="#ffffff">
+    <circle cx="955" cy="81" r="7"/><circle cx="1045" cy="121" r="7"/><circle cx="1000" cy="185" r="7"/>
+  </g>
+
+  <!-- shield with keyhole (the "sandbox" motif) -->
+  <g transform="translate(96,86)">
+    <path d="M84 0 L160 26 C160 96 150 150 84 176 C18 150 8 96 8 26 Z" fill="url(#shield)"/>
+    <path d="M84 0 L160 26 C160 96 150 150 84 176 C18 150 8 96 8 26 Z" fill="none" stroke="#c7d2fe" stroke-width="2"/>
+    <circle cx="84" cy="74" r="20" fill="#4338ca"/>
+    <rect x="79" y="86" width="10" height="30" rx="5" fill="#4338ca"/>
+    <path d="M56 108 L112 108" stroke="#ffffff" stroke-width="7" stroke-linecap="round" opacity="0.0"/>
+    <path d="M64 118 l14 14 l30 -34" fill="none" stroke="#22c55e" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+
+  <!-- wordmark + taglines -->
+  <text x="320" y="150" font-size="92" font-weight="800" letter-spacing="-1" fill="#ffffff">Word<tspan fill="#a5b4fc">JS</tspan></text>
+  <text x="324" y="210" font-size="33" font-weight="700" fill="#e0e7ff">The CMS where a plugin can&#8217;t take over your site.</text>
+  <text x="324" y="252" font-size="20" font-weight="500" fill="#c7bce8">Open-source&#160;&#160;&#183;&#160;&#160;JavaScript-native&#160;&#160;&#183;&#160;&#160;Every plugin sandboxed by the OS&#160;&#160;&#183;&#160;&#160;No PHP</text>
+
+  <!-- accent underline -->
+  <rect x="324" y="270" width="120" height="5" rx="2.5" fill="#a5b4fc"/>
+</svg>

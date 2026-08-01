@@ -355,7 +355,7 @@ A Prometheus scrape endpoint is served at the **root path** `GET /metrics` (`bac
 | `GET`  | `/metrics` | Scrape token | Prometheus text-format metrics for this node |
 
 *   **Disabled by default:** the endpoint returns **`404`** unless a scrape token is configured at `config.metrics.token` (in `wordjs-config.json`) or via the `METRICS_TOKEN` env var. With no token, metrics are never exposed.
-*   **Auth:** scrape with `Authorization: Bearer <token>` (or `?token=<token>`); a missing/incorrect token returns `401` (constant-time compare). It is mounted at root level — CSRF-free and not rate-limited.
+*   **Auth:** scrape with `Authorization: Bearer <token>` (**header-only** — a `?token=` query param is **not** accepted, to keep the long-lived secret out of access logs / history); a missing/incorrect token returns `401` (constant-time compare). It is mounted at root level — CSRF-free and not rate-limited.
 *   **Routing:** exposed publicly through the gateway (in the backend's advertised route list) and in monolith mode (`BACKEND_PREFIXES`). Never reachable without the token regardless of mode.
 
 ### 6.9 WordPress Import (WXR) 📥

@@ -68,7 +68,6 @@ If you want to avoid dependency conflicts entirely, you can **bundle** your plug
 | ----------------------- | --------------------------------------------------------- |
 | **Explicit Flag**       | Add `"bundled": true` to `manifest.json`                  |
 | **Own `node_modules/`** | Run `npm install` inside your plugin folder               |
-| **Own bundle file**     | Ship a `dist/*.bundle.js`                                 |
 
 **Example: manifest.json for a bundled plugin:**
 ```json
@@ -613,7 +612,7 @@ Your block then appears in the editor's component list and renders both in the e
 
 ### 13.4 Theming with `--wjs-*` tokens
 
-Blocks render inside the public site **and** the editor iframe — both load `wordjs-ui.css` plus the active theme's token block. Style your block against the tokens **with static fallbacks** so it follows any theme automatically (this is the pattern the bundled `card-gallery` / `photo-carousel` blocks use, via an embedded `<style dangerouslySetInnerHTML>` — zero build step):
+Blocks render inside the public site **and** the editor iframe — both load `wordjs-ui.css` plus the active theme's token block. Style your block against the tokens **with static fallbacks** so it follows any theme automatically (this is the pattern the first-party `card-gallery` / `photo-carousel` blocks use, via an embedded `<style dangerouslySetInnerHTML>` — zero build step):
 
 ```css
 .my-block {

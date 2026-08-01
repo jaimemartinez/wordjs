@@ -36,7 +36,7 @@ The database layer is a driver-abstraction over SQLite, PostgreSQL, and MySQL/Ma
 
 ### Driver interface & conformance
 *   All drivers implement a common interface — `connect / get / all / run / exec / transaction / close` — defined in `backend/src/drivers/interface.ts`.
-*   A conformance test (`backend/src/tests/driver-conformance.test.ts`) exercises the **async-interface** drivers it has descriptor blocks for (`sqlite-native` + `postgres`) against the same contract, each skipping gracefully when its backend isn't reachable; the sync `sqlite-legacy` (sql.js) fallback is intentionally out of scope. **Adding a new database = implement the interface + add a conformance block.**
+*   A conformance test (`backend/src/tests/driver-conformance.test.ts`) exercises the **async-interface** drivers it has descriptor blocks for (`sqlite-native` + `postgres` + `mysql`) against the same contract, each skipping gracefully when its backend isn't reachable (in CI with `WORDJS_CI_DB=1` an unreachable driver is a hard failure instead); the sync `sqlite-legacy` (sql.js) fallback is intentionally out of scope. **Adding a new database = implement the interface + add a conformance block.**
 
 ---
 
@@ -141,7 +141,7 @@ Loads any plugin marked `"isolated": true` in its manifest into a **separate OS 
 Monkey-patches `fs` inside the isolated child so plugin code is confined to its own dir plus a few safe zones. A plugin **cannot**:
 
 *   rewrite its own `manifest.json` (a permission-escalation primitive), read the raw DB files or secret-named files;
-*   **create/rename/copy a file into an executable code extension** — `EXECUTABLE_CODE_EXT` covers `.js/.cjs/.mjs/.jsx/.ts/.tsx/.node/.wasm` (kills write-`.txt`-then-rename-`.js` scanner evasion). Data files (`.json`/`.txt`/images) stay writable.
+*   **create/rename/copy a file into an executable code extension** — `EXECUTABLE_CODE_EXT` covers `.js/.cjs/.mjs/.jsx/.ts/.cts/.mts/.tsx/.node/.wasm` (kills write-`.txt`-then-rename-`.js` scanner evasion). Data files (`.json`/`.txt`/images) stay writable.
 *   **Copy/link ends are both checked:** `copyFile`/`copyFileSync`/`cp`/`link`/`linkSync`/`symlink` validate **source-read AND dest-write**, closing the copy-the-DB / hard-link-a-secret exfiltration hole.
 *   **Per-plugin disk-write quota:** raw `writeFile`/`appendFile`/`createWriteStream` growth is capped (a single-write byte cap plus `PLUGIN_GROW_QUOTA` = 512 MB of append/stream growth per rolling window per plugin), surfaced as a normal stream error rather than silently filling the disk.
 
@@ -166,7 +166,7 @@ One-click install of first-party plugins **and themes** distributed **outside** 
 *   **Endpoints** (all `authenticate` + `isAdmin`): `GET /api/v1/marketplace/catalog` returns the merged catalog annotated with installed/active/`updateAvailable` state + a per-source status array (5-minute in-memory cache keyed by the source set, `?refresh=1` busts it); `POST /api/v1/marketplace/install` takes a catalog `id` and installs from the exact source that entry was listed under; `GET`/`PUT /api/v1/marketplace/sources` read/replace the admin source list (each URL must pass the same https/localhost check; capped at 12).
 *   **Install hardening:** the catalog `file` name must match a strict `SAFE_FILE_RE` (no path smuggling from a hostile catalog; local reads are additionally resolved-path-confined to the dist dir), the download is size-capped (**10 MB**, mirroring the upload route's multer cap), and the bytes are **sha256-verified** against the catalog entry before install.
 *   **Shared pipeline:** the verified zip is written to a temp file and handed to `installPluginFromZip()` from `routes/plugins.ts` — the exact pipeline manual uploads use (zip-bomb budget via `zip-guard`, Zip Slip/slug validation, squat refusal, manifest + AST scan) — so the marketplace adds no new install surface beyond the catalog fetch. Installed plugins land inactive with **default-deny** grants (§4a).
-*   **Themes ride the same mechanism:** the builder also packs `marketplace/themes/<slug>/` → `marketplace/dist/theme-<slug>-<version>.zip` + `marketplace/dist/marketplace-themes-index.json` (12 first-party themes ship today). A parallel set of admin endpoints serves a theme catalog — `GET /api/v1/marketplace/themes/catalog`, `POST /api/v1/marketplace/themes/install`, and `GET`/`PUT /api/v1/marketplace/themes/sources` — resolved by `resolveThemeSources()` against an **independent** `marketplace_theme_sources` option (`THEMES_INDEX_FILE = marketplace-themes-index.json`), so themes can point at a different origin than plugins. Verified theme zips install through `installThemeFromZip()` (`core/themes.ts`), the same hardened zip-guard/slug-validation pipeline.
+*   **Themes ride the same mechanism:** the builder also packs `marketplace/themes/<slug>/` → `marketplace/dist/theme-<slug>-<version>.zip` + `marketplace/dist/marketplace-themes-index.json` (64 first-party themes ship today). A parallel set of admin endpoints serves a theme catalog — `GET /api/v1/marketplace/themes/catalog`, `POST /api/v1/marketplace/themes/install`, and `GET`/`PUT /api/v1/marketplace/themes/sources` — resolved by `resolveThemeSources()` against an **independent** `marketplace_theme_sources` option (`THEMES_INDEX_FILE = marketplace-themes-index.json`), so themes can point at a different origin than plugins. Verified theme zips install through `installThemeFromZip()` (`core/themes.ts`), the same hardened zip-guard/slug-validation pipeline.
 
 ---
 
@@ -241,7 +241,7 @@ These WordPress-style core services back most CMS configuration.
 *   **Multi-node safe:** `runCron()` executes inside `distLock.runAsLeader('wordjs:cron', …)` (see Distributed Lock) so only one node in a cluster fires due events per tick.
 
 ### Distributed Lock (`backend/src/core/dist-lock.ts`)
-*   A DB-backed leader lease (works on SQLite or Postgres) so cluster-wide singleton work runs on exactly one node. `runAsLeader(name, { ttlMs, renewMs }, fn)` acquires `name`, heartbeats to renew the lease while `fn` runs, and releases on completion; if the holder dies, the lease expires within `ttlMs` and another node can take over. Also exposes `tryAcquire / renew / release / acquireBlocking`.
+*   A DB-backed leader lease (a `wordjs_locks` table + atomic compare-and-set, used to coordinate N backend replicas that share ONE **Postgres** database) so cluster-wide singleton work runs on exactly one node. On single-host SQLite there is no cross-process contention, so every operation is a **no-op that "succeeds"** — single-node behavior is unchanged. `runAsLeader(name, { ttlMs, renewMs }, fn)` acquires `name`, heartbeats to renew the lease while `fn` runs, and releases on completion; if the holder dies, the lease expires within `ttlMs` and another node can take over. Also exposes `tryAcquire / renew / release / acquireBlocking`.
 
 ### Notifications
 
