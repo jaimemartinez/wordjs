@@ -4,7 +4,36 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
-## [1.13.5] - 2026-08-01
+## [1.13.6] - 2026-08-01
+
+Hardening of the plugin sandbox after a white-box guard audit + live escape attempts. A malicious plugin
+could not exfiltrate anything in testing (the runtime guards held through ~70 black-box payloads and every
+live escape attempt), but the audit surfaced a real weakening of the *static* layer and a latent flaw in
+the fail-closed backstop. All three are closed and re-verified live.
+
+### Security
+- **The install-time AST scanner could be bypassed via the plugin's `dist/` directory.** The scanner skips
+  a plugin's `dist/`, `client/` and `frontend/` folders (browser bundles that trip the source scan), on the
+  assumption those never run in the backend worker — but a plugin could `require('./dist/x.js')` at runtime
+  and execute un-vetted code there (an `eval` payload, or raw `process.binding('fs')`). The secure-require
+  worker guard now refuses to load code from a plugin's `dist`/`client`/`frontend` (mirroring the scanner's
+  skip so the two cannot diverge); a plugin has no legitimate reason to require its browser bundles
+  server-side. Live-confirmed: `require('./dist/x.js')` now blocks with *"loading code from a plugin's
+  browser-bundle dir is not permitted"*.
+- **Runtime code generation (`eval` / `new Function(string)`) is now blocked by default in the plugin
+  worker.** It was opt-in (`config.sandbox.blockCodeGen`); combined with the `dist/` gap above, a plugin
+  could run engine-level `eval` the scanner never saw. The V8 `--disallow-code-generation-from-strings`
+  flag is now on by default for the isolate, with an explicit opt-out for a trusted plugin whose deps
+  genuinely need it. Verified not to break the worker (plugins still activate).
+- **The isolation backstop read a reassignable global.** `getEffectivePlugin()`'s fail-closed
+  backstop — and the io-guard DB-file block, secure-require's network check, and config/app's secret-load
+  gate — read the isolation marker off the free identifier `global`, which is a writable property of the
+  global object. A plugin doing a bare `global = {}` (flagged by no scanner visitor) could swap it and make
+  the marker read `undefined`, collapsing the backstop to "host context" and handing the plugin the raw fs.
+  All readers now use `globalThis` (unreassignable per spec) with the locked markers, so the reassignment
+  cannot defeat them. Adds a regression test.
+
+
 
 A deep zero-day hunt — ten agents each taking a high-complexity subsystem (SQL-guard, egress-guard, the
 plugin↔host RPC bridge, gateway/cluster PKI, the auth state machine, novel XSS, supply-chain, crypto/ACME,
