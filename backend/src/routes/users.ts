@@ -281,35 +281,47 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: any, res: Respo
  */
 // NOTE: must be declared BEFORE '/:id' — Express matches in order and '/:id' would otherwise
 // capture the literal path 'me' (parseInt('me') → NaN → "Invalid user ID"). Mirrors GET /me / GET /:id.
+// Shared sudo re-authentication for a SELF password change. Changing your OWN password requires your
+// CURRENT password — defends against a hijacked session / CSRF / same-origin XSS silently resetting it
+// (User.update stamps token_valid_after, revoking all sessions + API tokens). Applied to BOTH self-service
+// password doors — PUT /me AND the isOwn branch of PUT /:id — via ONE helper so they cannot drift; the
+// /:id self-edit sibling used to skip this entirely, turning a transient session compromise into a
+// persistent takeover with victim lockout. Returns true if it already sent a response (caller must return),
+// false to proceed. Gated with the SAME per-account lockout + inflight cap as /auth/login so the current
+// password can't be brute-forced through this oracle (audit #26 / AUTH-A3).
+async function requireSelfPasswordReauth(req: any, res: any, password: any, currentPassword: any): Promise<boolean> {
+    if (!password) return false;
+    if (String(password).length < 8) {
+        res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
+        return true;
+    }
+    const auth = require('./auth');
+    const lockId = await auth.resolveLockIdentifier(req.user.userLogin);
+    if (await auth.isLoginLocked(lockId)) {
+        res.status(429).json({ code: 'rest_account_locked', message: 'Too many failed attempts. Try again later.', data: { status: 429 } });
+        return true;
+    }
+    if (!(await auth.beginLoginAttempt(lockId))) {
+        res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
+        return true;
+    }
+    try {
+        await User.authenticate(req.user.userLogin, String(currentPassword || ''));
+        await auth.clearLoginFails(lockId);
+        return false;
+    } catch {
+        await auth.recordLoginFail(lockId);
+        res.status(403).json({ code: 'rest_bad_current_password', message: 'Current password is incorrect.', data: { status: 403 } });
+        return true;
+    } finally {
+        await auth.endLoginAttempt(lockId);
+    }
+}
+
 router.put('/me', authenticate, asyncHandler(async (req: any, res: Response) => {
     const { email, displayName, password, url, personalEmail, currentPassword } = req.body;
 
-    // Changing your OWN password requires your CURRENT password — defends against a hijacked session /
-    // CSRF silently resetting it. User.update() stamps token_valid_after (revoking all sessions), so a
-    // caller who doesn't know the current password must never reach that.
-    if (password) {
-        if (String(password).length < 8) {
-            return res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
-        }
-        // Gate this sudo re-auth with the SAME shared per-account lockout as /auth/login — otherwise a
-        // hijacked session brute-forces the current password unthrottled (only the loose apiLimiter applies)
-        // (audit #26 — unthrottled password oracle). This path is authenticated/session-scoped, so RECORDING
-        // failures here correctly throttles the oracle without the unauthenticated-DoS of #25.
-        const auth = require('./auth');
-        const lockId = await auth.resolveLockIdentifier(req.user.userLogin);
-        if (await auth.isLoginLocked(lockId)) {
-            return res.status(429).json({ code: 'rest_account_locked', message: 'Too many failed attempts. Try again later.', data: { status: 429 } });
-        }
-        // Concurrency backstop (audit AUTH-A3 class): isLoginLocked is check-then-arm and bcrypt yields, so a
-        // hijacked session firing parallel guesses would clear the lock before it arms. Cap concurrent in-flight
-        // sudo re-auths for this account; release in finally.
-        if (!(await auth.beginLoginAttempt(lockId))) {
-            return res.status(429).json({ code: 'rest_login_throttled', message: 'Too many simultaneous attempts. Try again in a moment.', data: { status: 429 } });
-        }
-        try { await User.authenticate(req.user.userLogin, String(currentPassword || '')); await auth.clearLoginFails(lockId); }
-        catch { await auth.recordLoginFail(lockId); return res.status(403).json({ code: 'rest_bad_current_password', message: 'Current password is incorrect.', data: { status: 403 } }); }
-        finally { await auth.endLoginAttempt(lockId); }
-    }
+    if (await requireSelfPasswordReauth(req, res, password, currentPassword)) return;
 
     // Optional personal/recovery email (coexists with the primary email; used for password recovery).
     if (personalEmail && !isValidAddress(personalEmail)) {
@@ -399,6 +411,14 @@ router.put('/:id', authenticate, asyncHandler(async (req: any, res: Response) =>
     const { email, displayName, password, url } = req.body;
     let role = req.body.role;
     const personalEmail = req.body.personalEmail;
+
+    // SECURITY: this route ALSO serves SELF-edits (isOwn skips the edit_users gate above), and it reaches
+    // the same password sink as PUT /me. Changing your OWN password therefore requires your CURRENT
+    // password here too — the sudo re-auth was on /me but not on this self-edit sibling, so a hijacked
+    // session / same-origin XSS could silently reset the victim's password via /users/:ownId and take the
+    // account over persistently. An `edit_users` delegate resetting ANOTHER user's password is unaffected
+    // (isOwn is false → admin reset, as before).
+    if (isOwn && await requireSelfPasswordReauth(req, res, password, req.body.currentPassword)) return;
 
     const updateData: any = { email, displayName, password, url };
 
