@@ -32,13 +32,13 @@ Run from `backend/`.
 
 ## 2. One-Command Site Bootstrap (`npx create-wordjs`)
 
-The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.10.0`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
+The **published npm package** `create-wordjs` (source in `packages/create-wordjs/`, MIT; its version is kept in lockstep with the release tag by the release workflow — currently `v1.13.6`) bootstraps a complete WordJS site from nothing with a single command — no clone, no build, no TypeScript compilation on your machine:
 
 ```bash
 npx create-wordjs@latest my-site
 ```
 
-It (1) looks up the **latest pre-compiled release ZIP** from GitHub (`jaimemartinez/wordjs`, following the release-asset redirect), (2) extracts it into `my-site/` and installs the runtime dependencies (`npm run release:install` in the extracted bundle), then (3) mints a one-time install token and starts the monolith (`npm run start:mono`), printing a clickable `https://localhost:3000/install?token=…` URL — the browser install wizard takes over (pick SQLite / PostgreSQL, create the admin).
+It (1) looks up the **latest pre-compiled release ZIP** from GitHub (`jaimemartinez/wordjs`, following the release-asset redirect), (2) extracts it into `my-site/` and installs the runtime dependencies (`npm run release:install` in the extracted bundle), then (3) mints a one-time install token and starts the monolith (`npm run start:mono`), printing a clickable `https://localhost:3000/install?token=…` URL — the browser install wizard takes over (pick a database — SQLite, PostgreSQL, or MySQL/MariaDB — and create the admin).
 
 The token is passed to the backend via the `WORDJS_INSTALL_TOKEN` env var (24 random bytes = 48 hex chars; the backend accepts it because it is ≥ 16 chars — see § 1). A fresh release bundle ships **without** `gateway/gateway-config.json` (secrets are never bundled), so the CLI seeds a minimal `{ "ssl": true }` there to enable **self-signed HTTPS** on `:3000` (never overwriting an existing config); pass `--http` to serve plain HTTP (`WORDJS_HTTP=1`) instead. Plain Node, no TypeScript — the only runtime dependency is `adm-zip`. Requires **Node ≥ 20.9** and refuses to run into a non-empty target directory.
 

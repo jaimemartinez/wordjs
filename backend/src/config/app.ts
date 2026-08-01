@@ -375,11 +375,12 @@ const config: AppConfig = {
         // V8 hard block on RUNTIME code generation (eval / new Function(string)) via
         // --disallow-code-generation-from-strings, layered under the install-time AST scanner (which only
         // sees STATICALLY-visible eval/Function, not code assembled at runtime or inside an unscanned
-        // dependency). OPT-IN (default off): some plugin deps legitimately use Function() (e.g. template
-        // engines), and it is force-disabled under ts-node regardless (dev needs codegen to compile TS), so
-        // it only bites a COMPILED prod worker. Enable once you've confirmed your plugins' deps don't rely
-        // on runtime codegen. (Consumed in core/plugin-isolate.ts; previously read there but undeclared here.)
-        blockCodeGen: fileConfig.sandbox?.blockCodeGen === true,
+        // dependency). DEFAULT-ON (opt-out): set sandbox.blockCodeGen:false only for a trusted plugin whose
+        // deps genuinely need runtime Function()/eval (e.g. some template engines). Force-disabled under
+        // ts-node regardless (dev needs codegen to compile TS), so it only bites a COMPILED prod worker.
+        // (Consumed in core/plugin-isolate.ts, whose local default is likewise on; normalizing with `!== false`
+        // makes the two agree — an unset config previously collapsed the isolate's default-on back to off.)
+        blockCodeGen: fileConfig.sandbox?.blockCodeGen !== false,
     }
 };
 

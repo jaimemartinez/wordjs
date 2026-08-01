@@ -14,8 +14,8 @@ WordJS implements a "Defense in Depth" security model for its plugin ecosystem, 
 > (mandatory for all plugins) runs in a **separate OS process** (`child_process.fork`,
 > `backend/src/core/plugin-isolate.ts` forks `plugin-worker.js`) — its own heap, event loop, and OS
 > memory cap, so a crash, OOM, or heap escape is contained to the child and never reaches the host (a
-> `worker_threads` Worker, by contrast, shared the host heap/rss; that transport remains only as a legacy
-> fallback). The plugin reaches core ONLY through the permission-checked `wordjs` **capability bridge**,
+> `worker_threads` Worker, by contrast, shared the host heap/rss; worker_threads was the earlier transport and no longer ships — every launch
+> path is now a separate OS process). The plugin reaches core ONLY through the permission-checked `wordjs` **capability bridge**,
 > RPC'd over the IPC channel (structured-clone, `serialization: 'advanced'`) — it never touches the
 > host's raw `fs` / `child_process` / `dbAsync` / secrets. The AST scanner (§1.1) and the runtime guards
 > (§1.2) run **inside the child** as *belt-and-suspenders* around that boundary. **There is no "trusted"
@@ -376,7 +376,7 @@ The gateway uses **Helmet.js** for the API/proxy layer, and the **Next frontend*
 > every browser-facing response by the Next frontend (`next.config.ts`). It is correct that the **gateway**
 > does not emit a CSP (`helmet({ contentSecurityPolicy: false })`, `gateway/src/index.js`) — that is the
 > API/proxy layer, not the user-facing app. The policy is `default-src 'self'` with `frame-ancestors
-> 'none'`, `object-src 'none'`, and `base-uri 'self'` — its real value is **clickjacking / structural**.
+> 'self'`, `object-src 'none'`, and `base-uri 'self'` — its real value is **clickjacking / structural**.
 > `script-src` intentionally keeps `'unsafe-inline' 'unsafe-eval' blob: https:` (Next.js bootstrap, Puck
 > `eval`/`Function`, plugin bundles via `import(URL.createObjectURL(blob))`, theme assets in the Puck
 > `srcdoc` iframe), so for your threat model do **not** treat the CSP as an XSS backstop — the XSS control
