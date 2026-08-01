@@ -4,6 +4,44 @@ All notable changes to WordJS are documented here. This project follows
 [Semantic Versioning](https://semver.org/). Each release is published as a pre-compiled bundle
 on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
+## [1.13.5] - 2026-08-01
+
+A deep zero-day hunt — ten agents each taking a high-complexity subsystem (SQL-guard, egress-guard, the
+plugin↔host RPC bridge, gateway/cluster PKI, the auth state machine, novel XSS, supply-chain, crypto/ACME,
+install/migration, authz chains). Seven subsystems came back genuinely hardened; these are the real
+findings.
+
+### Security
+- **A self-edit could reset its own password without the current password (sudo re-auth bypass).**
+  `PUT /users/me` requires the current password before changing it — a deliberate control against a hijacked
+  session / same-origin XSS silently resetting the credential (the change also stamps `token_valid_after`,
+  logging the victim out). The sibling `PUT /users/:id` self-edit branch (`isOwn`) reached the same password
+  sink with **no** current-password check, so `PUT /users/:ownId {password}` bypassed the guard entirely —
+  upgrading a transient session compromise into persistent account (or admin) takeover with victim lockout.
+  Live-confirmed: `/me` → 403, `/:ownId` → 200. The re-auth is now a shared helper applied to **both** doors
+  so they cannot drift; an `edit_users` admin resetting *another* user's password is unaffected.
+- **The backend's mTLS did not verify it was talking to the gateway (split/separate mode).** The backend
+  enforced `rejectUnauthorized` — the peer must present a cert chaining to the cluster CA — but never checked
+  the peer's CN, so **any** cluster identity (e.g. a compromised frontend node's `CN=frontend` cert) could
+  open a direct connection to the backend API, bypassing the gateway edge and forging `X-Forwarded-For` /
+  `X-Forwarded-Host` to defeat the per-IP login throttle, CSRF same-origin and the migration guard (all of
+  which trust the gateway to pin those headers). The backend now pins the peer CN to `{gateway,
+  gateway-internal}` at the TLS layer, mirroring the gateway's own CN allow-lists; the gateway's
+  `gateway-internal` client cert is the only legitimate peer, so nothing breaks.
+- **Defense-in-depth hardening.** The plugin SQL-guard now denies `VACUUM` (a `VACUUM INTO '<file>'` produced
+  no table token and slipped the prefix allowlist, though only a since-removed in-process path could reach
+  it); `admin_notices` joins the protected-option denylist (so a plugin with an admin-granted `settings:write`
+  cannot stash admin-context HTML there); and backend `sanitize-html` moves to `^2.17.5` to clear a latent
+  `javascript:`-URI advisory (no reachable sink in any current config).
+
+### Notes
+- The hunt's other two candidates did **not** result in changes: a reported SPF DNS-lookup amplification in
+  the mail-server plugin was a **false positive** against a stale on-disk copy — the shipped
+  `marketplace/plugins/mail-server` evaluator already enforces the RFC 7208 §4.6.4 lookup budget and handles
+  `redirect=`. Three exotic IPv6 egress-classifier gaps (Teredo `2001::/32`, RFC 8215 NAT64 `64:ff9b:1::/48`)
+  are non-exploitable (unreachable on any normal host) and were left to avoid regressing the security-critical
+  IP classifier for no live benefit.
+
 ## [1.13.4] - 2026-07-31
 
 A second adversarial red-team pass (a fresh fan-out of exotic attack classes plus a hands-on plugin-sandbox

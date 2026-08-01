@@ -321,4 +321,29 @@ describe('API HTTP layer', () => {
         const good = await dbAsync.get(`SELECT user_url FROM users WHERE user_login = ?`, ['url-tester']);
         assert.strictEqual(good.user_url, 'https://example.com/me', 'a valid http(s) URL is preserved');
     });
+
+    // v1.13.5 security: the sudo re-auth on PUT /users/me (own password change requires the CURRENT
+    // password) must ALSO apply to the self-edit branch of PUT /users/:id — otherwise a hijacked session
+    // silently resets the password via /users/:ownId (the guarded route and its sibling must not diverge).
+    it('PUT /users/:ownId with a password but no currentPassword is rejected (sudo re-auth on the sibling)', async () => {
+        const dbAsync = database.getDbAsync();
+        await dbAsync.run(
+            `INSERT INTO users (user_login, user_pass, user_email, display_name) VALUES (?, ?, ?, ?)`,
+            ['reauth-tester', 'x', 'reauth-tester@example.com', 'ReauthTester']
+        );
+        const row = await dbAsync.get(`SELECT * FROM users WHERE user_login = ?`, ['reauth-tester']);
+        const uid = row.ID || row.id;
+        const token = jwt.sign({ userId: uid, username: 'reauth-tester' }, SECRET, { algorithm: 'HS256', expiresIn: '2h' });
+
+        // /me already enforces it (regression anchor):
+        const meRes = await request(app).put('/api/v1/users/me').set('Authorization', `Bearer ${token}`)
+            .send({ password: 'brand-new-pass-123' });
+        assert.strictEqual(meRes.status, 403, 'PUT /me self password change without currentPassword must 403');
+
+        // the previously-unguarded sibling must now behave identically:
+        const idRes = await request(app).put(`/api/v1/users/${uid}`).set('Authorization', `Bearer ${token}`)
+            .send({ password: 'brand-new-pass-123' });
+        assert.strictEqual(idRes.status, 403, 'PUT /users/:ownId self password change without currentPassword must 403 (was 200 — the bypass)');
+        assert.strictEqual(idRes.body.code, 'rest_bad_current_password');
+    });
 });

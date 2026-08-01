@@ -805,6 +805,27 @@ async function initialize() {
             rejectUnauthorized: true // ENFORCE mTLS: Only allow certs signed by our CA
         };
         server = https.createServer(httpsOptions, app);
+        // SECURITY: mTLS proves the peer holds a CLUSTER-CA-signed cert, but rejectUnauthorized alone does
+        // NOT prove it is the GATEWAY. The backend API is only ever meant to be reached THROUGH the gateway
+        // (which connects with its gateway-internal client cert). Without a CN gate, a lower-trust cluster
+        // member — e.g. a compromised frontend node holding CN=frontend, or a self-enrolled attacker — could
+        // open a DIRECT connection to backend:PORT and bypass the entire gateway edge, forging
+        // X-Forwarded-For / X-Forwarded-Host to defeat the per-IP login throttle, CSRF same-origin and the
+        // migration guard (all of which trust the gateway to pin those headers). Pin the peer identity to the
+        // gateway, mirroring the gateway's own CN allow-lists (proxy-config createUpstreamAgent /
+        // requireIdentity). Enforced at the TLS layer so a rogue peer is dropped before any HTTP is parsed.
+        const ALLOWED_PEER_CNS = new Set(['gateway-internal', 'gateway']);
+        server.on('secureConnection', (tlsSocket: any) => {
+            let cn: any;
+            try {
+                const cert = tlsSocket.getPeerCertificate && tlsSocket.getPeerCertificate();
+                cn = cert && cert.subject ? cert.subject.CN : undefined;
+            } catch { cn = undefined; }
+            if (!ALLOWED_PEER_CNS.has(String(cn))) {
+                console.warn(`🛡️  mTLS: rejected direct peer CN='${cn}' — only the gateway may address the backend.`);
+                try { tlsSocket.destroy(); } catch { /* already gone */ }
+            }
+        });
     } else {
         const http = require('http');
         server = http.createServer(app);
