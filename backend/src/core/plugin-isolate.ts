@@ -1007,13 +1007,16 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // Pass ONLY the ts-node register flag — forwarding all of process.execArgv trips Worker's
         // execArgv allowlist.
         const execArgv = __filename.endsWith('.ts') ? ['-r', 'ts-node/register'] : [];
-        // OPT-IN V8 hard block on runtime code generation (eval / new Function(string)). The AST scanner
-        // catches eval/Function statically at install, but cannot stop a runtime-constructed
-        // eval-equivalent or downloaded-then-eval'd code; this closes that at the engine level. OFF by
-        // default (some plugin deps legitimately use Function()), and NEVER under ts-node (dev needs
-        // codegen to compile TS). Enable via config.sandbox.blockCodeGen for maximum hardening.
-        let blockCodeGen = false;
-        try { const s = require('../config/app').sandbox; blockCodeGen = !!(s && s.blockCodeGen); } catch { /* config unavailable */ }
+        // DEFAULT-ON V8 hard block on runtime code generation (eval / new Function(string)) in the plugin
+        // worker. The AST scanner catches eval/Function statically at install, but it does NOT scan the
+        // plugin's dist/ (browser-bundle dir) — a plugin that require()s ./dist/x.js (now blocked at the
+        // worker require boundary, but belt-and-suspenders) could ship an eval-constructed, un-vetted
+        // payload there. Blocking codegen at the ENGINE level closes that class regardless of where the
+        // code lives. On by default; an operator can opt OUT with config.sandbox.blockCodeGen === false
+        // (e.g. for a trusted plugin whose deps genuinely need Function()). NEVER under ts-node (dev needs
+        // codegen to compile TS).
+        let blockCodeGen = true;
+        try { const s = require('../config/app').sandbox; if (s && s.blockCodeGen === false) blockCodeGen = false; } catch { /* config unavailable → keep default-on */ }
         if (!__filename.endsWith('.ts') && blockCodeGen) execArgv.push('--disallow-code-generation-from-strings');
         // Pass an explicit, secret-free env ALLOWLIST instead of inheriting the full host environment:
         // the worker reaches config/secrets only via the RPC bridge, so app secrets in env
