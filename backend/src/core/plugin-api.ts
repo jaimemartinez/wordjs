@@ -59,6 +59,9 @@ const PROTECTED_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privateke
 const PROTECTED_OPTION_NAMES = new Set([
     'wordjs_user_roles', 'user_roles', 'roles', 'active_plugins', 'default_role',
     'users_can_register', 'admin_email', 'siteurl', 'site_url', 'home',
+    // 'admin_notices' is rendered in the admin dashboard; a plugin holding an admin-granted settings:write
+    // could otherwise stash HTML there for an admin-context stored XSS. Off-limits to plugins.
+    'admin_notices',
     // 'trusted_plugins' drives the trust system — writing it self-promotes a plugin to the privileged
     // tier on next boot (full sandbox escape). Off-limits to untrusted plugins.
     'trusted_plugins', 'trusted_plugin', 'trustedsystemplugins',
@@ -269,8 +272,12 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     const { toks, cleaned } = lexSql(raw);
     const lower = cleaned.trim();
 
-    if (/\battach\b/.test(lower) || /\bdetach\b/.test(lower) || /\bpragma\b/.test(lower)) {
-        throw new Error(`🛡️ Plugin DB access denied: ATTACH/DETACH/PRAGMA are not permitted.`);
+    // VACUUM has no `(` and its target is a string literal (blanked by lexSql), so it produces zero table
+    // tokens and slips past the prefix allowlist — but `VACUUM INTO '<file>'` writes a full copy of the DB
+    // to an attacker-named path. No plugin has a legitimate use for it, so deny the verb outright alongside
+    // ATTACH/DETACH/PRAGMA.
+    if (/\battach\b/.test(lower) || /\bdetach\b/.test(lower) || /\bpragma\b/.test(lower) || /\bvacuum\b/.test(lower)) {
+        throw new Error(`🛡️ Plugin DB access denied: ATTACH/DETACH/PRAGMA/VACUUM are not permitted.`);
     }
     if (/\bsqlite_(master|schema|temp_master|temp_schema)\b/.test(lower) ||
         /\binformation_schema\b/.test(lower) || /\bpg_catalog\b/.test(lower)) {
