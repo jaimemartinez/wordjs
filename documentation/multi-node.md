@@ -117,7 +117,7 @@ deadlocks the cluster.
 ## TLS / ACME (one gateway)
 
 The gateway terminates TLS. The cron leader runs ACME renewal and pushes the renewed certificate to the
-gateway over the internal mTLS channel; the gateway hot-reloads it. For HTTP-01 validation to succeed,
+gateway over the internal mTLS channel; the gateway loads it by restarting its workers. For HTTP-01 validation to succeed,
 the challenge must be reachable on port 80 — either:
 
 - set `acme.http01Port: 80` so the gateway serves `/.well-known/acme-challenge/` (from the shared

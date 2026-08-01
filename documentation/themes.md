@@ -55,7 +55,9 @@ themes/
 
 ## Available Themes
 
-There are **13 shipped themes**:
+WordJS offers **64 first-party themes**. Only **default** (WordJS) ships bundled in
+`backend/themes/`; the rest install on demand through the **theme marketplace** (see *Installing a
+Theme* below). A representative selection:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
@@ -73,7 +75,7 @@ There are **13 shipped themes**:
 | **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 
-> **`--wjs-` variable adoption.** All 13 themes ship the full `--wjs-*` token set documented below (dozens
+> **`--wjs-` variable adoption.** All first-party themes ship the full `--wjs-*` token set documented below (dozens
 > of declarations each — e.g. `carbon-terminal` has 71, `default` 70 — including the `--wjs-color-on-*`
 > contrast set). The **default** theme's `:root` is entirely `--wjs-*` (no older bare `--primary`/`--text`
 > aliases remain). Copy any theme as a starting point.
@@ -112,7 +114,7 @@ stays legible against that theme's palette.
   chrome built with utility/Tailwind classes keeps winning; in practice the framework styles raw
   content HTML and offers opt-in classes wherever it's loaded.
 
-**Responsive out of the box (v1.5.4).** All 13 first-party themes are browser-verified at mobile, tablet
+**Responsive out of the box (v1.5.4).** First-party themes are browser-verified at mobile, tablet
 and desktop widths. The framework contributes the shared guards: below `768px` it caps the
 visual-editor heading sizes through the `--wjs-h{1..6}-size` aliases (`min(var(--wjs-hN), cap)`, so a
 theme whose scale is already smaller wins), and at **every** width it contains wide content — tables
@@ -124,13 +126,13 @@ rules). When a theme hides or rearranges header pieces such as `.wjs-header-acti
 **scoped to the intended breakpoint/selector** — an unscoped `display: none` there also kills the
 mobile nav toggle.
 
-All 13 first-party themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
+All first-party themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
 class reference, see [`documentation/theming.md`](./theming.md).
 
 ## Theme integration with the live site
 
 The active theme drives the **entire** live (Next.js) site — not just raw content — through four seams,
-all of which default to today's look so the 13 existing themes render unchanged:
+all of which default to today's look so the existing themes render unchanged:
 
 1. **Token-driven chrome.** The fixed React chrome consumes `--wjs-*` tokens instead of hardcoded
    colors: the header/nav/burger (`Header.tsx`), the footer (`Footer.tsx`), the post/page meta and
@@ -154,7 +156,7 @@ all of which default to today's look so the 13 existing themes render unchanged:
    `parseThemeMetadata()`/`switchTheme()` surface it into the `active_theme_layout` option (in
    `PUBLIC_SETTINGS`), and the SSR public layout (`app/(public)/layout.tsx`) honors it — `containerWidth`
    caps the main column, `sidebar: true` switches content/archive pages to two columns with `sidebar-1`.
-   Omitting the block (all 13 shipped themes) keeps the current single-column, default-width layout.
+   Omitting the block (as every first-party theme does today) keeps the current single-column, default-width layout.
 
 ### Theme customizer (live `--wjs-*` overrides)
 
@@ -308,7 +310,7 @@ Add a `screenshot.png` (400x300px recommended) for the theme picker.
 ## Installing a Theme
 
 Building a theme by hand isn't the only way to add one. The **`default`** theme ships bundled in
-`backend/themes/`; the other twelve first-party themes listed above under *Available Themes* are
+`backend/themes/`; the other 63 first-party themes are
 distributed through the **theme marketplace** and installed on demand. WordJS ships two admin-only
 install paths — both land the theme in the same `backend/themes/{slug}/` layout described above.
 
