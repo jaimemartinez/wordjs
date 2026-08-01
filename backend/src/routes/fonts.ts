@@ -28,6 +28,11 @@ const PROTECTED_FONTS = [
     'raleway', 'kanit', 'ptserif'
 ];
 
+// The font-extension allowlist is the SOLE accept signal: font MIME types are inconsistent across
+// browsers/OSes, so a declared font MIME must NOT on its own wave a file through — otherwise a `.html`/
+// `.svg` sent with a `font/ttf` MIME slipped past the old OR-logic and was written under /uploads/fonts.
+const FONT_EXTS = ['.ttf', '.otf', '.woff', '.woff2', '.eot'];
+
 // Ensure fonts directory exists
 if (!fs.existsSync(fontsDir)) {
     fs.mkdirSync(fontsDir, { recursive: true });
@@ -39,32 +44,25 @@ const storage = multer.diskStorage({
         cb(null, fontsDir);
     },
     filename: (req: any, file: any, cb: any) => {
-        // Keep original name but sanitize it slightly to prevent path traversal
-        const name = path.basename(file.originalname).replace(/[^a-zA-Z0-9.\-_ ]/g, '');
-        cb(null, name);
+        // Derive a SAFE stored name: sanitized base + random suffix + a font-only extension. The random
+        // suffix stops an upload from OVERWRITING an existing/system font (a deterministic name let a
+        // malicious admin clobber Roboto etc.), and forcing a font extension (fileFilter already rejects
+        // non-font extensions) means a `.html`/`.svg` can never be written under /uploads/fonts.
+        const rawExt = path.extname(file.originalname).toLowerCase();
+        const ext = FONT_EXTS.includes(rawExt) ? rawExt : '.ttf';
+        const base = path.basename(file.originalname, path.extname(file.originalname))
+            .replace(/[^a-zA-Z0-9\-_ ]/g, '').trim().slice(0, 60) || 'font';
+        const suffix = require('crypto').randomBytes(6).toString('hex');
+        cb(null, `${base}-${suffix}${ext}`);
     }
 });
 
-// File filter for fonts
+// File filter for fonts — extension-only gate (see FONT_EXTS note). AND-ing an unreliable MIME would
+// reject legit fonts that browsers label application/octet-stream; gating on the extension alone still
+// blocks the non-font types (html/svg/png) that made the OR-logic a stored-content risk.
 const fileFilter = (req: any, file: any, cb: any) => {
-    const allowedMimeTypes = [
-        'font/ttf',
-        'font/otf',
-        'font/woff',
-        'font/woff2',
-        'application/x-font-ttf',
-        'application/x-font-otf',
-        'application/x-font-woff',
-        'application/font-woff',
-        'application/font-woff2',
-        'application/vnd.ms-fontobject'
-    ];
-
-    // Also check extensions because MIME types can be unreliable for fonts
-    const allowedExtensions = ['.ttf', '.otf', '.woff', '.woff2', '.eot'];
     const ext = path.extname(file.originalname).toLowerCase();
-
-    if (allowedMimeTypes.includes(file.mimetype) || allowedExtensions.includes(ext)) {
+    if (FONT_EXTS.includes(ext)) {
         cb(null, true);
     } else {
         cb(new Error('Invalid font file type. Allowed: ttf, otf, woff, woff2, eot'), false);
@@ -78,6 +76,17 @@ const upload = multer({
         fileSize: 10 * 1024 * 1024 // 10MB limit
     }
 });
+
+// Wrap multer so a rejected upload (non-font extension via fileFilter, or the size limit) returns a
+// clean 400 instead of bubbling to the generic error handler as a 500.
+function uploadFontSingle(req: any, res: any, next: any) {
+    upload.single('file')(req, res, (err: any) => {
+        if (err) {
+            return res.status(400).json({ error: err.message || 'Invalid font upload.' });
+        }
+        next();
+    });
+}
 
 /**
  * GET /fonts
@@ -178,7 +187,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
  * POST /fonts
  * Upload a new font
  */
-router.post('/', authenticate, can('manage_options'), upload.single('file'), asyncHandler(async (req: any, res: Response) => {
+router.post('/', authenticate, can('manage_options'), uploadFontSingle, asyncHandler(async (req: any, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }

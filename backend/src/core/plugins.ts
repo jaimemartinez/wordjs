@@ -931,10 +931,30 @@ function fixMiddlewareOrder() {
     }
 }
 
+// Serializes plugin ACTIVATIONS end-to-end. The dependency conflict-check reads active_plugins and the
+// `npm install --save` mutates the shared ROOT_DIR tree, but active_plugins is only written at the very
+// end (after the isolate loads). Without serialization, two concurrent activations of mutually-incompatible
+// non-bundled plugins each pass the conflict check (neither committed yet) AND run concurrent npm installs —
+// bypassing the compat invariant and corrupting root package.json/node_modules. Chaining every activation so
+// B cannot start until A has committed to active_plugins closes both races. Activation is an admin action,
+// not a hot path, so full serialization is acceptable.
+let _pluginActivationChain: Promise<any> = Promise.resolve();
+async function activatePlugin(slug: string) {
+    const prev = _pluginActivationChain;
+    let release!: () => void;
+    _pluginActivationChain = new Promise<void>((r) => { release = r; });
+    await prev.catch(() => { /* a prior failed activation must not block the next */ });
+    try {
+        return await _activatePluginUnlocked(slug);
+    } finally {
+        release();
+    }
+}
+
 /**
  * Activate a plugin
  */
-async function activatePlugin(slug: string) {
+async function _activatePluginUnlocked(slug: string) {
     const plugins = scanPlugins();
     const plugin = plugins.find(p => p.slug === slug);
 

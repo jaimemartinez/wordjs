@@ -16,6 +16,10 @@ class NotificationService {
     transports: Map<string, { handler: Function; pluginSlug: string | null }>;
     clients: Set<any>;
 
+    // SSE concurrency caps (DoS backstop — see addClient).
+    static readonly MAX_CLIENTS_PER_USER = 8;
+    static readonly MAX_TOTAL_CLIENTS = 1000;
+
     constructor() {
         this.transports = new Map();
         this.clients = new Set();
@@ -102,6 +106,19 @@ class NotificationService {
      * Register a web client (for SSE)
      */
     addClient(res: any, userId: any) {
+        // DoS backstop: cap concurrent SSE streams per user AND globally. Each stream pins a socket plus a
+        // keepalive setInterval and lives in this.clients until close, with no prior limit — so a single
+        // low-priv account could open thousands of streams to exhaust FDs/timers/memory on the one shared
+        // process. Refuse (and close) a connection past the cap instead of tracking it. Returns false so
+        // the caller can stop; existing streams are untouched so legitimate reconnects still work.
+        let perUser = 0;
+        for (const c of this.clients) { if (c._wordjs_user_id === userId) perUser++; }
+        if (this.clients.size >= NotificationService.MAX_TOTAL_CLIENTS || perUser >= NotificationService.MAX_CLIENTS_PER_USER) {
+            console.warn(`[SSE] ⛔ Stream refused for user ${userId} (per-user ${perUser}/${NotificationService.MAX_CLIENTS_PER_USER}, total ${this.clients.size}/${NotificationService.MAX_TOTAL_CLIENTS})`);
+            try { res.write(`event: error\ndata: ${JSON.stringify({ error: 'too_many_streams' })}\n\n`); } catch { /* best-effort */ }
+            try { res.end(); } catch { /* best-effort */ }
+            return false;
+        }
         res._wordjs_user_id = userId;
         this.clients.add(res);
         console.log(`[SSE] 🔌 Client Connected. User: ${userId}. Total Active Clients: ${this.clients.size}`);
@@ -111,6 +128,7 @@ class NotificationService {
         res.on('close', () => {
             this.removeClient(userId, res);
         });
+        return true;
     }
 
     /**
