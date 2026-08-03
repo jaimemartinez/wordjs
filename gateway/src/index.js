@@ -925,6 +925,12 @@ if (cluster.isPrimary) {
     });
 
     app.use((req, res) => {
+        // Hardening (audit F-09): answer TRACE/TRACK at the edge with 405 instead of proxying them upstream.
+        // TRACE echoes the request (a Cross-Site-Tracing primitive) and no WordJS route needs it.
+        if (req.method === 'TRACE' || req.method === 'TRACK') {
+            res.setHeader('Allow', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
+            return res.status(405).send('Method Not Allowed');
+        }
         // SECURITY (CSRF / host-trust): the client must NOT control X-Forwarded-Host. http-proxy's
         // xfwd keeps a client-supplied value (`clientXFH || host`), and the backend trusts XFH for
         // its CSRF same-origin check and the migration guard. Pin XFH to the REAL client-facing Host
