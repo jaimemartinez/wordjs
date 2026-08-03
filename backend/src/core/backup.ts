@@ -270,30 +270,64 @@ async function restoreBackup(filename: string) {
     const contentJson = contentEntry.getData().toString('utf8');
     const data = JSON.parse(contentJson);
 
-    // CRITICAL: For non-file-based drivers (like Postgres) OR for exact restoration,
-    // we should effectively WIPE the database before importing if we want to match valid state.
-    // For SQLite, the zip extraction might have already replaced the .db file physically.
-    // If it did, 'importSite' is technically redundant but harmless (merge).
-    // If we want to support "System State" for Postgres, we must Wipe then Import.
-
-    const { getDbType, clearDatabase } = require('../config/database');
+    const dbModule = require('../config/database');
+    const { getDbType, clearDatabase } = dbModule;
     const dbType = getDbType();
+    const isSqlite = dbType.driver === 'sqlite-native' || dbType.driver === 'sqlite-legacy';
 
-    if (dbType.driver !== 'sqlite-native' && dbType.driver !== 'sqlite-legacy') {
-        // e.g. Postgres. Zip extraction didn't touch the DB. 
-        // We must wipe it to ensure "deleted" items during backup window disappear.
-        console.log(`🧹 Non-file driver detected (${dbType.driver}). Wiping database for clean restore...`);
-        await clearDatabase();
+    // 3a. PHYSICAL restore (SQLite). createBackup() ships a COMPLETE snapshot as database/wordjs.db to
+    //     carry the tables the logical export omits (analytics, notifications, plugin tables,
+    //     schema_migrations). Previously restore IGNORED it (database/ was never extracted) and did a
+    //     logical MERGE, which (a) never removed rows deleted since the backup and (b) never restored those
+    //     out-of-scope tables — so the snapshot was dead weight (audit F-03). Restore it authoritatively:
+    //     close the DB (releases the file lock), drop stale WAL/SHM sidecars so an old WAL can't overlay the
+    //     restored file, atomically replace the .db at the SAME path createBackup read, then reopen. Any
+    //     failure falls back to the logical path below, so a restore never leaves the DB half-swapped.
+    const physEntry = isSqlite ? zip.getEntry('database/wordjs.db') : null;
+    let physicalRestored = false;
+    if (physEntry) {
+        const dbFile = path.resolve(
+            config.dbPath || (dbType.driver === 'sqlite-native' ? './data/wordjs-native.db' : './data/wordjs.db')
+        );
+        try {
+            const snapshot = physEntry.getData();
+            await dbModule.closeDatabase();
+            for (const sidecar of [dbFile + '-wal', dbFile + '-shm']) {
+                try { if (fs.existsSync(sidecar)) fs.unlinkSync(sidecar); } catch { /* best-effort */ }
+            }
+            fs.mkdirSync(path.dirname(dbFile), { recursive: true });
+            // temp sibling + rename ⇒ no half-written .db if the write is interrupted.
+            const tmp = dbFile + '.restore-tmp';
+            fs.writeFileSync(tmp, snapshot);
+            fs.renameSync(tmp, dbFile);
+            await dbModule.init();               // reopen driver + async connection against the restored file
+            await dbModule.initializeDatabase(); // re-run migrations (idempotent) + analytics + divergence guard
+            physicalRestored = true;
+            console.log('   ✓ Physical database snapshot restored (all tables).');
+        } catch (e: any) {
+            console.warn('   ⚠️ Physical DB restore failed — falling back to logical import:', e && e.message);
+            try { await dbModule.init(); } catch { /* ensure the DB is open again for the fallback below */ }
+            physicalRestored = false;
+        }
     }
 
-    // Run import
-    const results = await importSite(data, {
-        updateExisting: true, // Overwrite existing content
-        importUsers: true
-    });
+    // 3b. Logical restore (Postgres, older backups with no physical snapshot, or a failed physical swap).
+    //     WIPE first so rows deleted since the backup actually disappear — this previously ran for non-file
+    //     drivers ONLY, so a SQLite logical restore was a merge that resurrected deleted content (audit
+    //     F-03, defect #1). importSite then repopulates the logical tables.
+    if (!physicalRestored) {
+        console.log(`🧹 Logical restore: wiping content tables (${dbType.driver}) before import...`);
+        await clearDatabase();
+        const results = await importSite(data, {
+            updateExisting: true, // Overwrite existing content
+            importUsers: true
+        });
+        console.log('✅ Restore complete (logical import)');
+        return results;
+    }
 
-    console.log('✅ Restore complete');
-    return results;
+    console.log('✅ Restore complete (physical snapshot)');
+    return { physical: true, driver: dbType.driver };
 }
 
 module.exports = {

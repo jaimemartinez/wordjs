@@ -50,6 +50,10 @@ Object.defineProperty(global, '__WORDJS_PLUGIN_NETWORK__', { value: !!cfg.networ
 // Per-plugin egress allowlist (host-resolved at spawn). Immutable so a plugin can't widen its own egress.
 // Empty ⇒ allow-all-public (unchanged); non-empty ⇒ egress-guard default-denies unlisted hosts.
 Object.defineProperty(global, '__WORDJS_PLUGIN_ALLOWED_HOSTS__', { value: Object.freeze(Array.isArray(cfg.allowedHosts) ? cfg.allowedHosts.slice() : []), writable: false, configurable: false, enumerable: false });
+// Fail-CLOSED egress signal from the host (audit F-06): the per-plugin egress policy could not be loaded,
+// so this network-granted plugin must reach NO public host (private/loopback already blocked) until it
+// reloads. Immutable so a plugin can't clear it.
+Object.defineProperty(global, '__WORDJS_PLUGIN_EGRESS_DENY_ALL__', { value: !!cfg.egressDenyAll, writable: false, configurable: false, enumerable: false });
 const netAllowed = !!global.__WORDJS_PLUGIN_NETWORK__;
 if (!netAllowed) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
@@ -67,9 +71,13 @@ if (!netAllowed) {
     // FAIL CLOSED: if it can't load, block the network globals entirely rather than leave them unfiltered.
     try {
         const eg = require(path.join(coreDir, 'egress-guard'));
-        // Install this plugin's egress allowlist BEFORE the connect/dgram guards so the very first outbound
-        // connection is already policy-checked. Empty list ⇒ no-op (allow-all-public), so no regression.
-        try { eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__); } catch { /* best-effort */ }
+        // Install this plugin's egress policy BEFORE the connect/dgram guards so the very first outbound
+        // connection is already policy-checked. Deny-all (fail-closed, F-06) WINS over the allowlist; an
+        // empty allowlist ⇒ no-op (allow-all-public), so no regression for plugins without a configured list.
+        try {
+            if (global.__WORDJS_PLUGIN_EGRESS_DENY_ALL__) eg.setDenyAllEgress();
+            else eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__);
+        } catch { /* best-effort */ }
         // PRIMARY enforcement: patch net.Socket.prototype.connect so EVERY outbound TCP connection in
         // this child is validated AT THE REAL CONNECT against the resolved IP — covers raw net/tls,
         // http/https (incl. custom agent/createConnection), the net.Stream alias, prototype-chain

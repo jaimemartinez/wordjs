@@ -18,6 +18,10 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_WORDJS_VERSION: wordjsVersion,
   },
+  // Don't advertise the framework: Next.js emits `X-Powered-By: Next.js` by default, which the gateway
+  // proxies straight through (helmet on the gateway only strips its OWN Express header). Removing it at
+  // the source drops the version-fingerprint header in every deploy mode (audit F-09).
+  poweredByHeader: false,
   turbopack: {
     // We must include the parent directory as root because we import from ../plugins
     root: require('path').resolve(__dirname, '..'),
@@ -73,6 +77,10 @@ const nextConfig: NextConfig = {
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
+          // Deny powerful device features WordJS core never uses + opt out of the Topics API (audit F-09).
+          // Deliberately does NOT restrict `payment` (Stripe Elements in the online-store plugin uses the
+          // Payment Request API for Apple/Google Pay) so this stays regression-free for bundled plugins.
+          { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=(), browsing-topics=()' },
         ],
       },
       {

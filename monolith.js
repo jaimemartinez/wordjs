@@ -182,6 +182,12 @@ async function main() {
     const helmetMw = helmet({ contentSecurityPolicy: false });
     const compressionMw = compression({ filter: shouldCompress });
     const dispatch = (req, res) => {
+        // Hardening (audit F-09): answer TRACE/TRACK with 405 instead of letting Next handle it as a page
+        // (a Cross-Site-Tracing primitive; no WordJS route needs it). Gateway parity — see gateway/src/index.js.
+        if (req.method === 'TRACE' || req.method === 'TRACK') {
+            res.writeHead(405, { 'Allow': 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS' });
+            return res.end('Method Not Allowed');
+        }
         // Liveness probe — answer directly so it works even if the backend app is wedged (gateway parity).
         if ((req.url || '/').split('?')[0] === '/healthz') {
             res.writeHead(200, { 'Content-Type': 'application/json' });

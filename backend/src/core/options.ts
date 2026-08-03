@@ -13,6 +13,12 @@ const cache = require('./cache');
 // reach here (bridge/RPC only), and core code invoked on behalf of a normal plugin has a plugin (not
 // 'theme:') context. Applied to EVERY option writer (update/add/delete) so none is a write-side escalation
 // path (#9). (Post theme-isolation this is largely defense-in-depth — themes no longer run in-process.)
+// Option NAMES whose VALUES are secrets (JWT/DKIM keys, API tokens, passwords, salts, certificates, …).
+// Reused to (a) block theme writes and (b) REDACT the value carried by the reactive `updated_option`
+// hook (see updateOption) so a zero-permission isolated plugin that subscribes to that hook can't observe
+// a secret it is forbidden to read via options.get (audit F-02). Kept as a single source of truth.
+const SECRET_OPTION_NAME_RE = /secret|passw|priv[_-]?key|privatekey|\bkey\b|[_-]key\b|token|jwt|credential|encryption|dkim|\bsalt\b|api[_-]?key|signing|certificate/;
+
 function assertThemeOptionWritable(name: string): void {
     const eff = require('./plugin-context').getEffectivePlugin();
     if (eff && String(eff).startsWith('theme:')) {
@@ -20,7 +26,7 @@ function assertThemeOptionWritable(name: string): void {
         // marketplace_(sources|theme_sources) included: letting a theme rewrite the CATALOG source
         // lists would be a supply-chain primitive (point installs at a hostile origin).
         const PROTECTED_NAME = /^(wordjs_user_roles|user_roles|roles|active_plugins|default_role|users_can_register|plugin_grants|plugin_egress_hosts|plugin_origins|cron|plugin_strikes|plugin_health|trusted_plugins?|trustedsystemplugins|template|stylesheet|active_theme_layout|active_theme_mods|theme_mods|siteurl|site_url|home|admin_email|marketplace_(sources?|theme_sources|url|catalog_url))$/;
-        if (PROTECTED_NAME.test(n) || /secret|passw|priv[_-]?key|privatekey|\bkey\b|[_-]key\b|token|jwt|credential|encryption|dkim|\bsalt\b|api[_-]?key|signing|certificate/.test(n)) {
+        if (PROTECTED_NAME.test(n) || SECRET_OPTION_NAME_RE.test(n)) {
             throw new Error(`🛡️ Option '${name}' is not writable from theme context.`);
         }
     }
@@ -109,8 +115,13 @@ async function updateOption(name: string, value: any, autoload = 'yes') {
             cache.setEnabled(value);
         }
 
-        // Trigger reactive hooks
-        await doAction('updated_option', name, value);
+        // Trigger reactive hooks. The reactive `updated_option` hook fans out to isolated plugins through
+        // the hook shim, so a plugin with NO permissions could subscribe and observe the RAW value of
+        // EVERY option — including secret-named ones it may not read via options.get (audit F-02). Redact
+        // secret values at the source. The only in-core listener (cron) reacts to backup_* names, never a
+        // secret, and the cross-node cache signal above carries the NAME only, so this is transparent.
+        const hookValue = SECRET_OPTION_NAME_RE.test(String(name).toLowerCase()) ? '[redacted]' : value;
+        await doAction('updated_option', name, hookValue);
 
         return true;
     });

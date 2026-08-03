@@ -153,6 +153,13 @@ function blockErr(target: string, host?: string): Error {
 // the plugin's own process), not a containment boundary against arbitrary malicious code — see the netns
 // follow-up. Enforced at the authoritative connect chokepoints, never by editing isBlockedIp.
 let allowedHosts: string[] | null = null;
+// Fail-CLOSED deny-all (audit F-06): set by the child bootstrap when the host could not load this plugin's
+// egress policy. It WINS over the allowlist — every public host is denied (private/loopback are already
+// blocked below) until a valid policy is installed. This is a THIRD state, distinct from
+// `allowedHosts === null` (no policy configured ⇒ allow-all-public) so a transient DB failure fails closed
+// instead of silently widening a network-granted plugin to the whole internet.
+let denyAllEgress = false;
+export function setDenyAllEgress(): void { denyAllEgress = true; }
 export function setAllowedHosts(list: any): void {
     if (!Array.isArray(list)) { allowedHosts = null; return; }
     // Normalize each entry to a bare host: lowercase, trim, strip a leading '*.'/'.' and a trailing dot.
@@ -171,6 +178,7 @@ function canonIp(s: string): string | null {
     return null;
 }
 export function isHostAllowed(host: string | undefined): boolean {
+    if (denyAllEgress) return false;              // fail-closed: egress policy unavailable → deny every host
     if (!allowedHosts) return true;               // no allowlist configured → unchanged behavior
     if (!host) return false;                      // default-deny a no-host / default-localhost target
     // Strip [] brackets (URL.hostname keeps them for IPv6) + trailing dot so URL-derived hosts compare

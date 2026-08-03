@@ -159,6 +159,14 @@ async function removeGrants(slug: string): Promise<void> {
     }
 }
 
+// Distinguishes "policy loaded successfully" from "load failed / not yet loaded" (audit F-06). A DB/options
+// failure while reading plugin_egress_hosts must NOT silently widen a network-granted plugin from its
+// configured host set to allow-all-public: when this is false, the spawn path (plugin-isolate) ships a
+// deny-all egress signal so the plugin reaches ZERO public hosts (private/loopback are blocked regardless)
+// — fail CLOSED — instead of the whole internet. A genuinely-empty policy ({}) is a SUCCESSFUL load and
+// keeps today's allow-all-public behavior, so no regression for plugins that never configured a list.
+let egressPolicyLoaded = false;
+
 /** Load the persisted per-plugin egress allowlists into memory. Call once at boot, after the DB is up. */
 async function loadEgressHosts(): Promise<void> {
     try {
@@ -177,10 +185,15 @@ async function loadEgressHosts(): Promise<void> {
                 egressHosts.set(String(slug), clean);
             }
         }
+        egressPolicyLoaded = true; // populated cleanly (an empty {} is a valid, successfully-loaded policy)
     } catch (e: any) {
-        console.warn('[PluginPermissions] Failed to load plugin_egress_hosts option:', e && e.message);
+        egressPolicyLoaded = false; // fail CLOSED: spawn path denies egress for network plugins until reloaded
+        console.warn('[PluginPermissions] Failed to load plugin_egress_hosts option (egress fails CLOSED for network-granted plugins until reloaded):', e && e.message);
     }
 }
+
+/** True once loadEgressHosts() has populated the policy without error. False ⇒ spawn path fails egress CLOSED. */
+function isEgressPolicyLoaded(): boolean { return egressPolicyLoaded; }
 
 /** The egress allowlist for a plugin (for the admin API and the spawn-time childCfg). Empty = allow-all. */
 function getEgressAllowlist(slug: string): string[] {
@@ -214,4 +227,4 @@ function _setGrantsInMemory(slug: string, tokens: string[]): void {
     grants.set(slug, new Set((tokens || []).map(t => String(t).toLowerCase().trim()).filter(Boolean)));
 }
 
-module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory, loadEgressHosts, getEgressAllowlist, setEgressAllowlist };
+module.exports = { loadGrants, isGranted, isNetworkGranted, getGrants, setGrants, removeGrants, backfillActive, NETWORK_TOKEN, _setGrantsInMemory, loadEgressHosts, isEgressPolicyLoaded, getEgressAllowlist, setEgressAllowlist };

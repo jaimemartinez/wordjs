@@ -452,6 +452,21 @@ function cgroupResourceProps(): string[] {
     if (cpu > 0) props.push('-p', `CPUQuota=${cpu}%`);
     return props;
 }
+// The `systemd-run --user` CLIENT needs the session-bus vars (XDG_RUNTIME_DIR, DBUS_SESSION_BUS_ADDRESS) to
+// reach the per-user systemd manager — but workerEnv (the secret-free allowlist the plugin runs under)
+// deliberately omits them. Before this fix the PROBE (which inherits the FULL env) passed while the REAL
+// launch, spawned with env:workerEnv, died with "Failed to connect to bus: No medium found" (audit F-04).
+// Fix: give the CLIENT the bus vars, then strip them back off INSIDE the scope with `env -u …` so the
+// plugin process's env stays EXACTLY workerEnv. Shared by the probe and the real launch so both exercise
+// the identical command shape (the #192 probe/launch-parity lesson: a probe that doesn't mirror the launch
+// green-lights a config that then fails to start).
+const CGROUP_CLIENT_BUS_VARS = ['XDG_RUNTIME_DIR', 'DBUS_SESSION_BUS_ADDRESS'];
+const SCOPE_ENV_STRIP = ['env', ...CGROUP_CLIENT_BUS_VARS.flatMap((v) => ['-u', v])];
+function cgroupClientEnv(base: Record<string, string>): Record<string, string> {
+    const e: Record<string, string> = { ...base };
+    for (const k of CGROUP_CLIENT_BUS_VARS) { const v = process.env[k]; if (v !== undefined) e[k] = v; }
+    return e;
+}
 function probeCgroupCap(): Promise<boolean> {
     if (cgroupProbe) return cgroupProbe;
     cgroupProbe = (async () => {
@@ -475,8 +490,11 @@ function probeCgroupCap(): Promise<boolean> {
             const overall = setTimeout(() => finish(false), 20000);
             if ((overall as any).unref) (overall as any).unref();
             try {
+                // Mirror the real launch's command shape: the SCOPE_ENV_STRIP prefix strips the bus vars for
+                // the grandchild (so the probe also validates that `env` exec layer works on this host), while
+                // the probe's inherited full env still lets the systemd-run CLIENT reach the user bus.
                 proc = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', unit,
-                    ...props, '--', process.execPath, '-e', src],
+                    ...props, '--', ...SCOPE_ENV_STRIP, process.execPath, '-e', src],
                     { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 18000 });
             } catch { clearTimeout(overall); return res(false); }
             proc.on('message', (m: any) => {
@@ -898,6 +916,33 @@ function isNetworkGrantedFor(slug: string): boolean {
 function getEgressAllowlistFor(slug: string): string[] {
     try { const l = require('./plugin-permissions').getEgressAllowlist(slug); return Array.isArray(l) ? l : []; } catch { return []; }
 }
+// Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
+// permissions module can't be required at all), the spawn path below fails egress CLOSED for a
+// network-granted plugin instead of the historic allow-all-public (audit F-06).
+function egressPolicyLoaded(): boolean {
+    try { return require('./plugin-permissions').isEgressPolicyLoaded() === true; } catch { return false; }
+}
+// Linux teardown backstop (audit F-05): the DESCENDANTS of rootPid, enumerated by walking
+// /proc/<pid>/task/<pid>/children. On the kernel-hardened-but-non-cgroup launch path, child.pid is the
+// OUTER bwrap and the real node runs as a grandchild; if the outer is killed mid-bootstrap the grandchild
+// can reparent to init before bwrap's (non-retroactive) --die-with-parent PDEATHSIG is installed and
+// survive as an orphan the outer-pid livePids registry reports as gone. Callers must enumerate BEFORE
+// killing the outer — a reparented pid is no longer reachable from our /proc subtree. Pid-reuse-safe: it
+// only ever walks DOWN from a pid we own. Best-effort; never throws. Returns descendants (root excluded).
+function procSubtreePids(rootPid: number): number[] {
+    if (process.platform !== 'linux' || !rootPid) return [];
+    const fsmod = require('fs');
+    const childrenOf = (pid: number): number[] => {
+        try { return String(fsmod.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8')).trim().split(/\s+/).filter(Boolean).map(Number); } catch { return []; }
+    };
+    const out: number[] = []; const stack = [rootPid]; const seen = new Set<number>([rootPid]);
+    let guard = 0;
+    while (stack.length && guard++ < 10000) {
+        const pid = stack.pop() as number;
+        for (const k of childrenOf(pid)) { if (k && !seen.has(k)) { seen.add(k); out.push(k); stack.push(k); } }
+    }
+    return out;
+}
 
 // Hooks whose filter return value is emitted as RAW, UNESCAPED HTML into every server-rendered page
 // (theme-engine wraps wordjs_head/wordjs_footer in a Handlebars SafeString). A plugin shimming one of
@@ -1034,7 +1079,12 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         const netGranted = isNetworkGrantedFor(slug);
         // allowedHosts only matters for a network-granted plugin (a non-network plugin has no egress at all);
         // pushed into cfg so the child installs it as its egress-guard allowlist. Empty ⇒ allow-all-public.
-        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: netGranted ? getEgressAllowlistFor(slug) : [] });
+        // Egress fail-CLOSED (audit F-06): if the egress policy could not be loaded (DB/options failure), a
+        // network-granted plugin must NOT fall back to allow-all-public — signal deny-all so the child reaches
+        // ZERO public hosts (private/loopback stay blocked) until the policy reloads. A successfully-loaded but
+        // empty policy keeps the intended allow-all-public behavior (no regression).
+        const egressDenyAll = netGranted && !egressPolicyLoaded();
+        const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll });
         const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
         // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
         // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -1110,10 +1160,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // direct child of systemd-run, inheriting the IPC fd (probe-verified); child.pid is systemd-run
             // and the kernel is the cap, so the /proc poll is skipped below.
             cgroupUnit = `wjp-${slug.replace('theme:', 'theme-').replace(/[^A-Za-z0-9]+/g, '-').toLowerCase()}-${process.pid}-${++cgroupSeq}.scope`;
+            // F-04: give the systemd-run CLIENT the session-bus vars (cgroupClientEnv) so `--user` connects
+            // to the per-user manager, then SCOPE_ENV_STRIP (`env -u …`) removes them again inside the scope
+            // so the plugin process's env is exactly workerEnv (bus vars never leak to the plugin).
             child = spawn('systemd-run', ['--user', '--scope', '--quiet', '--collect', '--unit', cgroupUnit,
                 ...cgroupResourceProps(), '--',
+                ...SCOPE_ENV_STRIP,
                 ...bwrapPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
-                { stdio: childStdio, serialization: 'advanced', env: workerEnv });
+                { stdio: childStdio, serialization: 'advanced', env: cgroupClientEnv(workerEnv) });
         } else if (capKb) {
             // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
             // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
@@ -1169,10 +1223,29 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         const worker: any = {
             postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
             terminate: () => {
+                // F-05: on the kernel-hardened, NON-cgroup path child.pid is the OUTER bwrap and node runs as
+                // a grandchild; enumerate the subtree BEFORE the SIGKILL below, because once the outer dies a
+                // grandchild reparented mid-bootstrap is no longer reachable via our /proc children walk.
+                // cgroup mode kills the whole scope (fully covered); plain fork => child.pid IS the process;
+                // non-Linux => no-op — so every path except hardened-Linux-non-cgroup is byte-identical.
+                const hardenedOrphanRisk = !cgroupUnit && hardened && process.platform === 'linux' && !!child.pid;
+                const subtree = hardenedOrphanRisk ? procSubtreePids(child.pid) : [];
                 try { child.kill('SIGKILL'); } catch { /* already gone */ }
                 // cgroup mode: child.pid is systemd-run; also kill the SCOPE so the node grandchild can't
                 // outlive it (scopes are manager-tracked, not tied to systemd-run's lifetime).
                 if (cgroupUnit) { try { spawn('systemctl', ['--user', 'kill', '--signal=SIGKILL', cgroupUnit], { stdio: 'ignore' }); } catch { /* */ } }
+                else if (hardenedOrphanRisk) {
+                    for (const pid of subtree) { try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ } }
+                    // A grandchild bwrap forks in the tiny window after enumeration may be attached only
+                    // briefly; re-sweep the (lingering) subtree a couple of times, unref'd so it never holds
+                    // the loop open. The cgroup path is the complete fix; this narrows the non-cgroup race.
+                    let sweeps = 0;
+                    const t = setInterval(() => {
+                        for (const pid of procSubtreePids(child.pid)) { try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ } }
+                        if (++sweeps >= 3) clearInterval(t);
+                    }, 50);
+                    if (t.unref) t.unref();
+                }
             },
             on: child.on.bind(child),
             _child: child,
