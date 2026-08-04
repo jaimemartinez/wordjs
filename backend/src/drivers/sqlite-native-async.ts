@@ -32,8 +32,15 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         try {
             console.log(`🔌 SQLite Native Async: Connecting to ${this.dbPath}...`);
             this.db = new Database(this.dbPath);
-            // Enable WAL mode for better concurrency
+            // Enable WAL mode for better concurrency. Every query in the app runs on THIS connection,
+            // so the perf pragmas must live here (the sync driver configuring its own connection does
+            // nothing for these models). NORMAL is the documented pairing for WAL: fsync on checkpoint
+            // instead of per-commit — a crash can lose the last transactions but cannot corrupt.
             this.db.pragma('journal_mode = WAL');
+            this.db.pragma('synchronous = NORMAL');
+            this.db.pragma('cache_size = -64000');      // 64 MB page cache
+            this.db.pragma('mmap_size = 268435456');    // 256 MB mmap window
+            this.db.pragma('temp_store = MEMORY');
             console.log('✅ SQLite Native Async: Connected.');
         } catch (err) {
             console.error('❌ SQLite Native Async: Connection failed:', err.message);
@@ -41,10 +48,37 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         }
     }
 
+    // Prepared-statement LRU: parse+plan once per SQL string instead of on every call (~100
+    // prepares per cold page). DDL invalidates everything — a statement compiled against an old
+    // schema must never run against the new one.
+    _stmtCache: Map<string, any> = new Map();
+    static _STMT_CACHE_MAX = 200;
+    _prepare(sql: string) {
+        let stmt = this._stmtCache.get(sql);
+        if (stmt) {
+            // refresh LRU position
+            this._stmtCache.delete(sql);
+            this._stmtCache.set(sql, stmt);
+            return stmt;
+        }
+        stmt = this.db.prepare(sql);
+        if (/^\s*(CREATE|ALTER|DROP|VACUUM|REINDEX|ATTACH|DETACH)\b/i.test(sql)) {
+            // schema-changing statement: run uncached and drop everything compiled so far
+            this._stmtCache.clear();
+            return stmt;
+        }
+        this._stmtCache.set(sql, stmt);
+        if (this._stmtCache.size > SqliteNativeAsyncDriver._STMT_CACHE_MAX) {
+            const oldest = this._stmtCache.keys().next().value;
+            if (oldest !== undefined) this._stmtCache.delete(oldest);
+        }
+        return stmt;
+    }
+
     async get(sql: string, params: any[] = []) {
         return new Promise((resolve, reject) => {
             try {
-                const stmt = this.db.prepare(sql);
+                const stmt = this._prepare(sql);
                 const row = stmt.get(...params);
                 resolve(row);
             } catch (err) {
@@ -56,7 +90,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     async all(sql: string, params: any[] = []) {
         return new Promise((resolve, reject) => {
             try {
-                const stmt = this.db.prepare(sql);
+                const stmt = this._prepare(sql);
                 const rows = stmt.all(...params);
                 resolve(rows);
             } catch (err) {
@@ -68,7 +102,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     async run(sql: string, params: any[] = []) {
         return new Promise((resolve, reject) => {
             try {
-                const stmt = this.db.prepare(sql);
+                const stmt = this._prepare(sql);
                 const info = stmt.run(...params);
                 resolve({ lastID: info.lastInsertRowid, changes: info.changes });
             } catch (err) {
@@ -81,6 +115,8 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
         return new Promise<void>((resolve, reject) => {
             try {
                 this.db.exec(sql);
+                // exec is the raw multi-statement path (migrations, DDL): cached plans may be stale
+                this._stmtCache.clear();
                 resolve();
             } catch (err) {
                 reject(err);
@@ -132,7 +168,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
                 const info = this.db.prepare(sql).run(...params);
                 return { lastID: info.lastInsertRowid, changes: info.changes };
             },
-            exec: async (sql: string) => { this.db.exec(sql); }
+            exec: async (sql: string) => { this.db.exec(sql); this._stmtCache.clear(); }
         };
 
         this.db.exec('BEGIN');
@@ -199,6 +235,7 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
 
     async close() {
         if (this.db) {
+            this._stmtCache.clear();
             this.db.close();
             this.db = null;
             console.log('🔌 SQLite Native Async: Closed.');

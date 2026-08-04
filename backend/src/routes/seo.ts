@@ -39,12 +39,18 @@ router.get('/sitemap.xml', async (req: Request, res: Response) => {
         // Get site URL
         const siteUrl = await getOption('siteurl', `${req.protocol}://${req.get('host')}`);
 
-        // Get all published posts and pages
-        const posts = await Post.findAll({
-            type: ['post', 'page'],
-            status: 'publish',
-            limit: 10000 // Get all reasonably
-        });
+        // Only the columns the sitemap prints — findAll dragged up to 10 000 FULL rows
+        // (post_content included) through the model layer to emit slug + lastmod.
+        const { dbAsync } = require('../config/database');
+        const rows = await dbAsync.all(
+            "SELECT post_name, post_type, post_status, post_modified, post_date FROM posts " +
+            "WHERE post_type IN ('post', 'page') AND post_status = 'publish' " +
+            "ORDER BY post_date DESC LIMIT 10000"
+        );
+        const posts = rows.map((r: any) => ({
+            postName: r.post_name, postType: r.post_type, postStatus: r.post_status,
+            postModified: r.post_modified, postDate: r.post_date,
+        }));
 
         const xml = await generateSitemap(posts, { siteUrl });
 

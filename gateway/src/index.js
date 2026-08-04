@@ -25,7 +25,7 @@ require('winston-daily-rotate-file');
 const fs = require('fs');
 const path = require('path');
 
-const { createProxyServer, createUpstreamAgent } = require('./proxy-config');
+const { createProxyServer, createUpstreamAgent, httpKeepAliveAgent } = require('./proxy-config');
 const clusterCa = require('./cluster-ca');
 
 // mTLS cluster-cert directory. SEPARATE mode: `scripts/cluster.js init` writes the gateway's certs to
@@ -946,7 +946,7 @@ if (cluster.isPrimary) {
             logger.debug(`[Gateway] Proxying ${req.method} ${req.url} to ${target}`);
             proxy.web(req, res, {
                 target,
-                agent: isHttps ? proxyAgent : null,
+                agent: isHttps ? proxyAgent : httpKeepAliveAgent,
                 secure: false,
                 // Increase timeout for SSE (1 hour)
                 timeout: isSSE ? 3600000 : 60000,
@@ -1029,11 +1029,16 @@ if (cluster.isPrimary) {
         server = app.listen(FINAL_PORT, () => logger.info(`[Gateway] Worker ${process.pid} on ${FINAL_PORT} (HTTP)`));
     }
 
+    // Outlive any fronting proxy's idle timeout (nginx default 60s): with Node's 5s default the
+    // server races the proxy's socket reuse and drops requests mid-flight.
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
+
     server.on('upgrade', (req, socket, head) => {
         const target = getTarget(req.url);
         if (target) {
             const isHttps = target.startsWith('https:');
-            proxy.ws(req, socket, head, { target, agent: isHttps ? proxyAgent : null, secure: false }, (err) => {
+            proxy.ws(req, socket, head, { target, agent: isHttps ? proxyAgent : httpKeepAliveAgent, secure: false }, (err) => {
                 // Skip benign client-close noise (ECONNRESET/EPIPE), like the HTTP/SSE path; guard err deref.
                 if (err && err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
                     logger.error(`[Gateway] WebSocket Error [${target}]: ${err && err.message}`);

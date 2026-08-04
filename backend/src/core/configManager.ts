@@ -3,21 +3,52 @@ const path = require('path');
 
 const CONFIG_FILE = path.resolve('wordjs-config.json');
 
+// The install/migration guard consults this file on EVERY non-static request; without a cache that
+// is 2–3 blocking syscalls + a JSON.parse serialized on the event loop per request. Cache the RAW
+// read outcome and revalidate cheaply: saveConfig() (the only in-process writer) invalidates
+// immediately, and a 1-syscall mtime check every CONFIG_TTL_MS catches external writers (the setup
+// wizard on another process, scripts/node-join.js). Semantics of getConfig/isInstalled — including
+// the fail-closed corrupt→installed behavior — are built on top and unchanged.
+const CONFIG_TTL_MS = 2000;
+let _cfgCache: { exists: boolean; parsed: any; parseError: boolean; mtimeMs: number; checkedAt: number } | null = null;
+
+function invalidateConfigCache() { _cfgCache = null; }
+
+function readConfigFile() {
+    const now = Date.now();
+    if (_cfgCache && now - _cfgCache.checkedAt < CONFIG_TTL_MS) return _cfgCache;
+    let st = null;
+    try { st = fs.statSync(CONFIG_FILE); } catch { /* missing */ }
+    if (!st) {
+        _cfgCache = { exists: false, parsed: null, parseError: false, mtimeMs: 0, checkedAt: now };
+        return _cfgCache;
+    }
+    if (_cfgCache && _cfgCache.exists && _cfgCache.mtimeMs === st.mtimeMs) {
+        _cfgCache.checkedAt = now;
+        return _cfgCache;
+    }
+    let parsed = null, parseError = false;
+    try {
+        parsed = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+    } catch (e) {
+        parseError = true;
+    }
+    _cfgCache = { exists: true, parsed, parseError, mtimeMs: st.mtimeMs, checkedAt: now };
+    return _cfgCache;
+}
+
 /**
  * Get the stored configuration
  * @returns {Object|null} The configuration object or null if not found
  */
 function getConfig() {
-    if (!fs.existsSync(CONFIG_FILE)) {
+    const f = readConfigFile();
+    if (!f.exists) return null;
+    if (f.parseError) {
+        console.error('Failed to read config file: unreadable or malformed JSON');
         return null;
     }
-    try {
-        const data = fs.readFileSync(CONFIG_FILE, 'utf8');
-        return JSON.parse(data);
-    } catch (e) {
-        console.error('Failed to read config file:', e);
-        return null;
-    }
+    return f.parsed;
 }
 
 /**
@@ -30,6 +61,7 @@ function saveConfig(config: any) {
         const current = getConfig() || {};
         const newConfig = { ...current, ...config, updatedAt: new Date().toISOString() };
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(newConfig, null, 2));
+        invalidateConfigCache();
         // Refresh the in-memory runtime config (siteUrl → CSRF/CORS allowed-origins, etc.) so a persisted
         // change takes effect WITHOUT a process restart. Otherwise a just-completed setup keeps its
         // boot-time siteUrl and every POST from the configured origin is CSRF-blocked until restart.
@@ -64,14 +96,12 @@ function isInstalledConfig(cfg: any) {
 }
 
 function isInstalled() {
-    if (!fs.existsSync(CONFIG_FILE)) return false;
-    try {
-        return isInstalledConfig(JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8')));
-    } catch (e) {
-        // Unreadable/corrupt config → report INSTALLED. Fail closed: a parse error must never reopen the
-        // installer on a live site.
-        return true;
-    }
+    const f = readConfigFile();
+    if (!f.exists) return false;
+    // Unreadable/corrupt config → report INSTALLED. Fail closed: a parse error must never reopen the
+    // installer on a live site.
+    if (f.parseError) return true;
+    return isInstalledConfig(f.parsed);
 }
 
 module.exports = {
@@ -79,5 +109,6 @@ module.exports = {
     saveConfig,
     isInstalled,
     isInstalledConfig,
+    invalidateConfigCache,
     CONFIG_FILE
 };

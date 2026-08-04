@@ -77,6 +77,12 @@ export async function register() {
                 routes: ['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']
             });
 
+            // exponential backoff: quick retries while the gateway is coming up, 5s steady-state
+            let attemptN = 0;
+            const retry = () => {
+                attemptN++;
+                setTimeout(attempt, Math.min(5000, [250, 1000, 2000][attemptN - 1] ?? 5000));
+            };
             const attempt = () => {
                 const useMtls = Object.keys(clientOpts).length > 0;
                 const targetPort = useMtls ? gatewayInternalPort : gatewayPort;
@@ -97,12 +103,12 @@ export async function register() {
                     if (res.statusCode === 200) {
                         // console.log('✅ Frontend registered with Gateway via ' + (useMtls ? 'mTLS' : 'HTTP'));
                     } else {
-                        setTimeout(attempt, 5000);
+                        retry();
                     }
                 });
 
                 gatewayReq.on('error', () => {
-                    setTimeout(attempt, 5000);
+                    retry();
                 });
 
                 gatewayReq.write(data);

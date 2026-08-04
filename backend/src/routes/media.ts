@@ -439,8 +439,11 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
         try {
             const image = sharp(req.file.path, { limitInputPixels: MAX_SHARP_INPUT_PIXELS });
             const metadata = await image.metadata();
-            width = metadata.width;
-            height = metadata.height;
+            // EXIF-oriented intrinsic dimensions: orientations 5–8 are 90°-rotated, so the pixels
+            // display transposed. Storing the raw values put a phone photo's width/height backwards.
+            const exifTransposed = (metadata.orientation || 1) >= 5;
+            width = exifTransposed ? metadata.height : metadata.width;
+            height = exifTransposed ? metadata.width : metadata.height;
 
             // Get target sizes from DB
             const thumbW = await getOption('thumbnail_size_w', 150);
@@ -460,19 +463,20 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
             const ext = path.extname(req.file.path);
             const baseName = path.basename(req.file.path, ext);
 
-            for (const s of sizeDefinitions) {
+            // ONE decode for every derivative (clone() shares the decoded pipeline; the old loop
+            // re-decoded the file per size), auto-oriented with .rotate() — without it EXIF-rotated
+            // phone photos produced sideways thumbnails. Encodes run in parallel.
+            const oriented = image.rotate();
+            await Promise.all(sizeDefinitions.map(async (s) => {
                 // Skip if original is smaller than target
-                if (width <= s.w && height <= s.h && s.name !== 'thumbnail') continue;
+                if (width <= s.w && height <= s.h && s.name !== 'thumbnail') return;
 
                 const sizeFilename = `${baseName}-${s.w}x${s.h}${ext}`;
                 const sizePath = path.join(dir, sizeFilename);
 
-                let resizeOp = sharp(req.file.path, { limitInputPixels: MAX_SHARP_INPUT_PIXELS });
-                if (s.crop) {
-                    resizeOp = resizeOp.resize(s.w, s.h, { fit: 'cover' });
-                } else {
-                    resizeOp = resizeOp.resize(s.w, s.h, { fit: 'inside', withoutEnlargement: true });
-                }
+                const resizeOp = s.crop
+                    ? oriented.clone().resize(s.w, s.h, { fit: 'cover' })
+                    : oriented.clone().resize(s.w, s.h, { fit: 'inside', withoutEnlargement: true });
 
                 const info = await resizeOp.toFile(sizePath);
 
@@ -483,7 +487,7 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
                     mimeType: req.file.mimetype,
                     filesize: info.size
                 };
-            }
+            }));
         } catch (err) {
             console.error("Image processing failed:", err);
         }
