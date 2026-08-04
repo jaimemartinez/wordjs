@@ -67,6 +67,34 @@ function resolveServerBase(): string {
     return `http://localhost:${backendPort}/api/v1`;
 }
 
+// Configured public origin (wordjs-config.json siteUrl), module-cached with a short TTL (a siteUrl
+// migration must not require a frontend restart). Forwarding THIS host to the backend satisfies its
+// host-based guards by construction — the configured siteUrl is exactly what they compare against —
+// and keeps public renders free of request-header reads, which is the difference between a route
+// Next can serve from the Full-Route Cache and one it must re-render per request.
+let _pubHost: { value: { host: string; proto: string } | null; at: number } | null = null;
+function configuredPublicHost(): { host: string; proto: string } | null {
+    if (_pubHost && Date.now() - _pubHost.at < 10_000) return _pubHost.value;
+    let value: { host: string; proto: string } | null = null;
+    try {
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const path = require('path');
+        // eslint-disable-next-line @typescript-eslint/no-var-requires
+        const fs = require('fs');
+        let configPath = path.resolve(process.cwd(), 'wordjs-config.json');
+        if (!fs.existsSync(configPath)) configPath = path.resolve(process.cwd(), '../backend/wordjs-config.json');
+        if (fs.existsSync(configPath)) {
+            const cfg = JSON.parse(fs.readFileSync(configPath, 'utf-8'));
+            if (cfg.siteUrl && /^https?:\/\//i.test(cfg.siteUrl)) {
+                const u = new URL(cfg.siteUrl);
+                value = { host: u.host, proto: u.protocol.replace(':', '') };
+            }
+        }
+    } catch { /* unreadable config — fall back to request headers below */ }
+    _pubHost = { value, at: Date.now() };
+    return value;
+}
+
 interface ServerFetchOptions {
     /**
      * Forward the inbound request cookies so the backend sees the logged-in user (authenticated SSR).
@@ -100,20 +128,29 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
     // public host and (e.g.) reject every SSR request with a 409 migration_required. The public
     // listener (gateway/monolith) already pins x-forwarded-host to the browser's Host, so we just
     // relay it one more hop to the backend.
-    try {
-        const { headers: nextHeaders } = await import('next/headers');
-        const inbound = await nextHeaders();
-        const host = inbound.get('x-forwarded-host') || inbound.get('host');
-        if (host) {
-            headers['x-forwarded-host'] = host;
-            headers['x-forwarded-proto'] = inbound.get('x-forwarded-proto') || 'https';
+    // PUBLIC reads: forward the CONFIGURED public origin — never touch request headers, so the
+    // route stays static/cacheable. Per-user reads (forwardCookies) and unconfigured installs are
+    // the only paths that still read the inbound request (they are no-store/dynamic by nature).
+    const pub = options.forwardCookies ? null : configuredPublicHost();
+    if (pub) {
+        headers['x-forwarded-host'] = pub.host;
+        headers['x-forwarded-proto'] = pub.proto;
+    } else {
+        try {
+            const { headers: nextHeaders } = await import('next/headers');
+            const inbound = await nextHeaders();
+            const host = inbound.get('x-forwarded-host') || inbound.get('host');
+            if (host) {
+                headers['x-forwarded-host'] = host;
+                headers['x-forwarded-proto'] = inbound.get('x-forwarded-proto') || 'https';
+            }
+            if (options.forwardCookies) {
+                const cookieHeader = inbound.get('cookie');
+                if (cookieHeader) headers['cookie'] = cookieHeader;
+            }
+        } catch {
+            /* not in a request scope (e.g. build prerender) — proceed without forwarded headers */
         }
-        if (options.forwardCookies) {
-            const cookieHeader = inbound.get('cookie');
-            if (cookieHeader) headers['cookie'] = cookieHeader;
-        }
-    } catch {
-        /* not in a request scope (e.g. build prerender) — proceed without forwarded headers */
     }
 
     // Per-user reads (cookie-forwarded) must NEVER be cached/shared → no-store. Public reads opt into
@@ -331,25 +368,25 @@ export const resolveSiteBase = cache(async (): Promise<string> => {
         try { configured = new URL(configuredUrl); } catch { /* malformed — ignore */ }
     }
     let base = configured;
-    try {
-        const { headers } = await import('next/headers');
-        const h = await headers();
-        const host = h.get('x-forwarded-host') || h.get('host');
-        const proto = h.get('x-forwarded-proto') || 'https';
-        if (host) {
-            try {
-                const reqUrl = new URL(`${proto}://${host}`);
-                const allowed = configured?.hostname.toLowerCase();
-                // Compare the WHATWG-parsed hostname, NOT host.split(':')[0]: the naive split reads the
-                // userinfo of `localhost:1@evil.example` as host:port and returns 'localhost', while the
-                // URL parser (and base.origin below) resolve it to 'evil.example' — that differential let
-                // a crafted Host header pass the allowlist yet poison the canonical/og/JSON-LD origin.
-                if (!allowed || reqUrl.hostname.toLowerCase() === allowed) {
-                    base = reqUrl;
-                }
-            } catch { /* malformed host — keep configured */ }
-        }
-    } catch { /* not in a request scope */ }
+    // The CONFIGURED siteurl is the canonical authority (the WordPress model). Only an install with
+    // no valid configured URL falls back to the request headers — reading headers() on configured
+    // sites made every public route dynamic, which forfeited the Full-Route Cache. The old
+    // same-hostname courtesy (honoring request port/proto) is intentionally gone: config wins.
+    if (!base) {
+        try {
+            const { headers } = await import('next/headers');
+            const h = await headers();
+            const host = h.get('x-forwarded-host') || h.get('host');
+            const proto = h.get('x-forwarded-proto') || 'https';
+            if (host) {
+                try {
+                    // WHATWG-parse the host (never host.split(':')[0]: the userinfo of
+                    // `localhost:1@evil.example` fools the naive split — see git history).
+                    base = new URL(`${proto}://${host}`);
+                } catch { /* malformed host */ }
+            }
+        } catch { /* not in a request scope */ }
+    }
     return (base ? base.origin : 'http://localhost:3000');
 });
 

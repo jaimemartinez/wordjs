@@ -593,7 +593,7 @@ interface PuckEditorProps {
     onCancel?: () => void;
     config?: Config;
     pageId?: number;
-    /** Slug of the post/page being edited — enables the "Preview" button (/slug?preview=1). */
+    /** Slug of the post/page being edited — enables the "Preview" button (/preview/slug). */
     previewSlug?: string;
     /** Breadcrumb root label (Spanish source string, translated via trStr) — "Entradas" for posts. */
     breadcrumbRoot?: string;
@@ -1008,11 +1008,12 @@ export default function PuckEditor({
     const activeConfig = passedConfig || puckConfig;
 
     // Preview the REAL live page (SSR, active theme) in a new tab. Saves first when there are
-    // unsaved changes so the preview reflects what's on screen; ?preview=1 makes the public route
-    // forward the admin cookie, so drafts render for the author while anonymous visitors still 404.
+    // unsaved changes so the preview reflects what's on screen; /preview/[slug] is the dedicated
+    // dynamic route that forwards the admin cookie, so drafts render for the author while anonymous
+    // visitors still 404 (and the public /[slug] route stays fully cacheable).
     const handlePreview = React.useCallback(async () => {
         try { if (hasChanges && onSave) await onSave(); } catch { /* preview anyway — user sees last saved state */ }
-        if (previewSlug) window.open(`/${previewSlug}?preview=1`, '_blank', 'noopener');
+        if (previewSlug) window.open(`/preview/${previewSlug}`, '_blank', 'noopener');
     }, [hasChanges, onSave, previewSlug]);
 
     // ---- Save status + autosave ----
