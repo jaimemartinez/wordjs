@@ -322,10 +322,14 @@ async function restoreBackup(filename: string) {
             updateExisting: true, // Overwrite existing content
             importUsers: true
         });
+        // The DB just time-traveled: every cached value (L1 included) describes the PRE-restore
+        // state and would be served for up to its TTL. Drop it all.
+        try { await require('./cache').flush(); } catch { /* cache flush is best-effort */ }
         console.log('✅ Restore complete (logical import)');
         return results;
     }
 
+    try { await require('./cache').flush(); } catch { /* cache flush is best-effort */ }
     console.log('✅ Restore complete (physical snapshot)');
     return { physical: true, driver: dbType.driver };
 }

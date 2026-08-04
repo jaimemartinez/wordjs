@@ -328,17 +328,46 @@ MenuItem.findById = async function (id) {
 };
 
 MenuItem.findByMenu = async function (menuId) {
+    // TWO queries total (was 1 + 3 per item — a 10-item header+footer cost 68 per SSR page):
+    // one row query with the same columns findById selects, one IN() for all the metas. The
+    // per-item menu_id lookup is definitionally the menuId we were asked for.
     const rows = await dbAsync.all(`
-    SELECT p.id
+    SELECT p.id, p.post_title as title, p.post_parent as parent, p.menu_order,
+           p.guid as url
     FROM posts p
     JOIN term_relationships tr ON p.id = tr.object_id
     JOIN term_taxonomy tt ON tr.term_taxonomy_id = tt.term_taxonomy_id
     WHERE tt.term_id = ? AND tt.taxonomy = 'nav_menu' AND p.post_type = 'nav_menu_item'
     ORDER BY p.menu_order
   `, [menuId]);
+    if (!rows.length) return [];
 
-    // Parallel fetch for items
-    return (await Promise.all(rows.map((row: any) => MenuItem.findById(row.id)))).filter(Boolean);
+    const ids = rows.map((r: any) => r.id);
+    const placeholders = ids.map(() => '?').join(',');
+    const metas = await dbAsync.all(
+        `SELECT post_id, meta_key, meta_value FROM post_meta WHERE post_id IN (${placeholders})`,
+        ids
+    );
+    const metaByPost: any = {};
+    for (const m of metas) {
+        (metaByPost[m.post_id] = metaByPost[m.post_id] || {})[m.meta_key] = m.meta_value;
+    }
+
+    return rows.map((row: any) => {
+        const metaMap = metaByPost[row.id] || {};
+        return new MenuItem({
+            id: row.id,
+            menu_id: menuId,
+            title: row.title,
+            url: metaMap._menu_item_url || row.url,
+            target: metaMap._menu_item_target || '_self',
+            type: metaMap._menu_item_type || 'custom',
+            object_id: parseInt(metaMap._menu_item_object_id) || 0,
+            parent: parseInt(metaMap._menu_item_menu_item_parent) || row.parent,
+            menu_order: row.menu_order,
+            classes: metaMap._menu_item_classes || ''
+        });
+    });
 };
 
 MenuItem.update = async function (id, data) {
