@@ -1019,7 +1019,10 @@ async function initialize() {
             setTimeout(registerAll, 1500);
         };
 
-        registerWithGateway();
+        // Monolith serves everything from one process/port — there is no gateway to register with.
+        // Without this guard the no-cert fallback targets gatewayPort's default (3000 = our own
+        // public port), and the retry loop POSTs /register at ourselves every 5s forever.
+        if (process.env.WORDJS_MODE !== 'mono') registerWithGateway();
 
         console.log('');
         console.log('📖 API Endpoints:');
