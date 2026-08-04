@@ -329,12 +329,23 @@ async function initializeSchema(db: any, isAsync = false) {
     // term_relationships: lookups by object_id and by term_taxonomy_id
     'CREATE INDEX IF NOT EXISTS idx_term_rel_object_id ON term_relationships (object_id)',
     'CREATE INDEX IF NOT EXISTS idx_term_rel_tt_id ON term_relationships (term_taxonomy_id)',
-    // term_taxonomy: filtered by taxonomy in getTerms/setTerms/updateTermCounts
+    // term_taxonomy: filtered by taxonomy in getTerms/setTerms/updateTermCounts, and joined by
+    // (term_id, taxonomy) when resolving a term's taxonomy row
     'CREATE INDEX IF NOT EXISTS idx_term_taxonomy_taxonomy ON term_taxonomy (taxonomy)',
+    'CREATE INDEX IF NOT EXISTS idx_term_taxonomy_term_tax ON term_taxonomy (term_id, taxonomy)',
+    // terms: slug lookups (category/tag archives) were full table scans
+    'CREATE INDEX IF NOT EXISTS idx_terms_slug ON terms (slug)',
     // posts: findAll filters by (post_status, post_type); findBySlug/generateUniqueSlug by post_name; children by post_parent
     'CREATE INDEX IF NOT EXISTS idx_posts_status_type ON posts (post_status, post_type)',
     'CREATE INDEX IF NOT EXISTS idx_posts_name ON posts (post_name)',
     'CREATE INDEX IF NOT EXISTS idx_posts_parent ON posts (post_parent)',
+    // the hottest public listing: WHERE post_type/post_status ORDER BY post_date — without the
+    // date column the sort happens on a temp b-tree for every page view
+    'CREATE INDEX IF NOT EXISTS idx_posts_type_status_date ON posts (post_type, post_status, post_date)',
+    // author archives / dashboards filter by author_id
+    'CREATE INDEX IF NOT EXISTS idx_posts_author ON posts (author_id)',
+    // meta lookups BY KEY across posts (featured images, plugin queries): key-first ordering
+    'CREATE INDEX IF NOT EXISTS idx_post_meta_key_post ON post_meta (meta_key, post_id)',
     // comments: typical lookup by (comment_post_id, comment_approved)
     'CREATE INDEX IF NOT EXISTS idx_comments_post_approved ON comments (comment_post_id, comment_approved)',
     // options: getOption/updateOption/addOption/deleteOption lookup by option_name; getAutoloadedOptions by autoload

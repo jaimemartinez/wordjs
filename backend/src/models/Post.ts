@@ -142,7 +142,9 @@ class Post {
      */
     async toJSON(includeContent = true) {
         // Use pre-loaded meta if hydrateRelations() ran; otherwise query per-post (identical result).
-        const meta = this._metaCache !== undefined ? this._metaCache : await Post.getAllMeta(this.id);
+        // Either way, keep it on the instance: getFeaturedImage() and later toJSON() calls on the
+        // same post re-consulted the DB for meta this call already fetched.
+        const meta = this._metaCache !== undefined ? this._metaCache : (this._metaCache = await Post.getAllMeta(this.id));
 
         const json: any = {
             id: this.id,

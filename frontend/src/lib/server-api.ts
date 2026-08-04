@@ -138,11 +138,17 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
  * /install wizard instead of rendering an empty broken page. Any other state (installed,
  * backend down, network error) returns false so pages degrade exactly as before.
  */
+// Module-level latch: once we have seen ANY non-503 answer the site is installed, and a live site
+// does not hot-uninstall — so stop paying a no-store settings fetch (≈20+ backend SELECTs) on every
+// page view forever after. While the answer is still "setup required" (or the backend is down) we
+// keep probing, so the install flow itself is unchanged.
+let _setupSettled = false;
 export const checkSetupRequired = cache(async (): Promise<boolean> => {
+    if (_setupSettled) return false;
     const base = resolveServerBase();
     try {
         const res = await fetch(`${base}/settings`, { cache: 'no-store' });
-        if (res.status !== 503) return false;
+        if (res.status !== 503) { _setupSettled = true; return false; }
         const body = await res.json().catch(() => null);
         return !!body && body.error === 'setup_required';
     } catch {

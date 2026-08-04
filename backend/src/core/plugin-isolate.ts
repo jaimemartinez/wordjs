@@ -1214,8 +1214,11 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // best-effort: the ~1–2 s assign latency is covered by the RSS poll exactly as before, and any
         // failure just leaves that poll as the only cap (zero regression). Only meaningful on win32
         // (jobCapOk is false elsewhere). The poll stays as a backstop for the brief assign window.
+        let jobCapApplied = false; // set only when the kernel Job Object cap is CONFIRMED on this child
         if (jobCapOk && process.platform === 'win32' && child.pid) {
-            assignProcessToJobObject(child.pid, RSS_BUDGET_BYTES).catch(() => { /* poll remains the cap */ });
+            assignProcessToJobObject(child.pid, RSS_BUDGET_BYTES)
+                .then((ok) => { jobCapApplied = ok; })
+                .catch(() => { /* poll remains the cap */ });
         }
         // Forward + rate-limit the child's piped stdout/stderr (see IPC_STDIO above).
         attachLogLimiter(slug, child);
@@ -1292,8 +1295,14 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             // macOS). Heavier (spawns a query), so poll less often and never overlap queries. Best-effort
             // — an unparsed result just skips that tick (falls back to process separation), never throws.
             let busy = false;
+            let tick = 0;
             rssPoll = setInterval(() => {
                 if (busy || !child.pid) return;
+                // Once the kernel Job Object cap is confirmed (win32), enforcement is preventive and
+                // this poll is telemetry only — spawn the query 1 tick in 10 instead of every tick
+                // (with 5 plugins the per-second tasklist spawns cost ~25% of a core at idle). Until
+                // that confirmation (and always on macOS) the poll stays the enforcement backstop.
+                if (jobCapApplied && (tick++ % 10) !== 0) return;
                 busy = true;
                 let proc: any;
                 try {
@@ -1754,8 +1763,18 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 if (registrationRejected(registeredShortcodes, MAX_SHORTCODES, 'shortcodes')) return;
                 // Register a shortcode shim that forwards {attrs,content,tag} to the isolate and
                 // resolves its HTML asynchronously (works with doShortcodeAsync).
-                const shim = (attrs: any, content: any, tag: any) =>
-                    invokeShortcode(msg.scId, { attrs, content, tag });
+                // Cap at 2s like hook callbacks: shortcodes run inside PUBLIC post reads, so without
+                // this a hung worker held every reader of that post for the full 30s RPC timeout.
+                // On timeout the tag renders as empty (same as an unknown shortcode) — never a hang.
+                const shim = (attrs: any, content: any, tag: any) => {
+                    let timer: any;
+                    const capped = new Promise((resolve) => {
+                        timer = setTimeout(() => resolve(''), 2000);
+                        if (timer && timer.unref) timer.unref();
+                    });
+                    return Promise.race([invokeShortcode(msg.scId, { attrs, content, tag }), capped])
+                        .finally(() => clearTimeout(timer));
+                };
                 registeredShortcodes.push(msg.tag);
                 runWithContext(slug, () => addShortcode(msg.tag, shim));
             } else if (msg.kind === 'shortcode-reply') {

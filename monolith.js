@@ -221,6 +221,10 @@ async function main() {
         if (upgrade && !isBackendPath(req.url)) return upgrade(req, socket, head);
         socket.destroy();
     });
+    // Outlive any fronting proxy's idle timeout (nginx default 60s): with Node's 5s default the
+    // server races the proxy's socket reuse and drops requests mid-flight.
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
     server.listen(PUBLIC_PORT, () => {
         console.log('');
         console.log(`✅ WordJS MONOLITH (${dev ? 'dev' : 'prod'}) — one process on ${proto}://localhost:${PUBLIC_PORT}`);

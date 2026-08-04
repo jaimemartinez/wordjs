@@ -322,8 +322,18 @@ function pluginManifestPath(folder: string): string | null {
     const p = path.resolve(root, folder, 'manifest.json');
     return p.startsWith(root + path.sep) ? p : null;
 }
+// NEGATIVE cache: a segment that resolved to nothing costs a readdir + a manifest parse of EVERY
+// plugin — and unknown segments are exactly what bot crawls generate. Short TTL so a just-installed
+// plugin's slug still resolves within seconds; size-capped so random-segment spam can't grow it.
+const adminSlugMissCache = new Map<string, number>();
+const SLUG_MISS_TTL_MS = 10_000;
 function resolveAdminSlugFolder(seg: string): string | null {
     if (!/^[a-zA-Z0-9_-]+$/.test(seg)) return null;                        // reject traversal / odd names
+    const missUntil = adminSlugMissCache.get(seg);
+    if (missUntil !== undefined) {
+        if (missUntil > Date.now()) return null;
+        adminSlugMissCache.delete(seg);
+    }
     const direct = pluginManifestPath(seg);
     if (direct && fs.existsSync(direct)) return seg;                       // already a folder
     const cached = adminSlugFolderCache.get(seg);
@@ -343,6 +353,8 @@ function resolveAdminSlugFolder(seg: string): string | null {
             if (m?.frontend?.adminPage?.slug === seg) { adminSlugFolderCache.set(seg, folder); return folder; }
         } catch { /* unreadable/invalid manifest → skip */ }
     }
+    if (adminSlugMissCache.size > 500) adminSlugMissCache.clear();
+    adminSlugMissCache.set(seg, Date.now() + SLUG_MISS_TTL_MS);
     return null;
 }
 app.use('/plugins', (req: any, _res: any, next: any) => {
@@ -836,6 +848,10 @@ async function initialize() {
     // binding ::1 leaves the gateway's IPv4 proxy unable to connect — every proxied route then 404s (the
     // local-split gateway bug). Explicit IPs (0.0.0.0 in separate mode, a LAN IP) pass through unchanged.
     const bindHost = (config.host === 'localhost' || config.host === '::1') ? '127.0.0.1' : config.host;
+    // Outlive any fronting proxy's idle timeout (nginx default 60s; gateway keep-alive agents): with
+    // Node's 5s default the server races the proxy's socket reuse and drops requests mid-flight.
+    server.keepAliveTimeout = 65000;
+    server.headersTimeout = 66000;
     server.listen(config.port, bindHost, () => {
         console.log('');
         console.log(`✅ WordJS Backend is running via ${serverProtocol.toUpperCase()}!`);
@@ -1008,15 +1024,19 @@ async function initialize() {
                 }
 
                 if (!allSuccess) {
-                    setTimeout(registerAll, 5000); // Retry in 5s
+                    // exponential backoff: quick retries while the gateway is coming up, 5s steady-state
+                    _regAttempt++;
+                    setTimeout(registerAll, Math.min(5000, [250, 1000, 2000][_regAttempt - 1] ?? 5000));
                 } else {
                     console.log('🏁 All services successfully registered with Gateway.');
                     await syncFromGateway();
                 }
             };
 
-            // Initial registration attempt
-            setTimeout(registerAll, 1500);
+            // First attempt immediately — the fixed 1.5s pause meant "backend up, site 404" on
+            // every split boot even when the gateway was already listening.
+            let _regAttempt = 0;
+            registerAll();
         };
 
         // Monolith serves everything from one process/port — there is no gateway to register with.

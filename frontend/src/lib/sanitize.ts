@@ -17,6 +17,12 @@ import DOMPurify from 'dompurify';
 declare const __non_webpack_require__: ((id: string) => any) | undefined;
 let _sanitizeHtmlLib: any = null;
 function loadSanitizeHtml(): any {
+    // The browser NEVER uses sanitize-html (every caller is inside a `typeof window === 'undefined'`
+    // branch; the client path is DOMPurify). This guard states that to the bundler: `typeof window`
+    // is a compile-time constant in Next builds, so the client chunk drops this whole body — without
+    // it, the bare require below shipped sanitize-html + htmlparser2 (~90 KB gz) to every visitor as
+    // dead weight. Server behavior (all three fallbacks, in order) is byte-identical.
+    if (typeof window !== 'undefined') return null;
     if (_sanitizeHtmlLib) return _sanitizeHtmlLib;
     try { if (typeof __non_webpack_require__ === 'function') return (_sanitizeHtmlLib = __non_webpack_require__('sanitize-html')); } catch { /* try next */ }
     try { return (_sanitizeHtmlLib = (eval('require') as NodeRequire)('sanitize-html')); } catch { /* try next */ }

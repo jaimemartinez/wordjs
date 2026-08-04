@@ -133,8 +133,18 @@ async function backupCount(userId: number): Promise<number> {
 // ─── Admin-enforced MFA-by-role policy ─────────────────────────────────────────────────────────────
 // An admin can require specific roles to have 2FA. A subject user gets a grace window to enroll, then is
 // hard-blocked (by mfaComplianceGate) from everything except the enrollment flow. The policy is a single
-// JSON option so it invalidates cross-node for free (never module-cache it — see options.ts pub/sub).
+// JSON option. mfaComplianceGate consults it on EVERY API request, so it carries a small bounded
+// cache: setPolicy() and the local `updated_option` hook invalidate instantly in-process, and the
+// 10s TTL bounds staleness on OTHER nodes (a policy toggle is an admin action whose grace windows
+// are measured in DAYS — seconds of propagation are immaterial, per-request SELECTs are not).
 const POLICY_OPTION = 'mfa_policy';
+const POLICY_TTL_MS = 10_000;
+let _policyCache: { value: { requiredRoles: string[]; graceDays: number; enforcedAt: number | null }; at: number } | null = null;
+try {
+    require('./hooks').addAction('updated_option', async (name: any) => {
+        if (name === POLICY_OPTION) _policyCache = null;
+    });
+} catch { /* hooks unavailable in isolated unit tests */ }
 const DEFAULT_POLICY = { requiredRoles: [] as string[], graceDays: 0, enforcedAt: null as number | null };
 // Cap the grace window (~10 years) so a fat-fingered huge value can't silently turn enforcement into a
 // permanent no-op (adversarial review #5).
@@ -146,6 +156,7 @@ function clampGraceDays(v: any): number {
 
 /** Read the enforcement policy, always fully-shaped + validated (getOption may return a partial/legacy row). */
 async function getPolicy(): Promise<{ requiredRoles: string[]; graceDays: number; enforcedAt: number | null }> {
+    if (_policyCache && Date.now() - _policyCache.at < POLICY_TTL_MS) return _policyCache.value;
     const p = await getOption(POLICY_OPTION, DEFAULT_POLICY);
     const requiredRoles = Array.isArray(p && p.requiredRoles)
         ? [...new Set(p.requiredRoles.map((r: any) => String(r)))] as string[]
@@ -153,7 +164,9 @@ async function getPolicy(): Promise<{ requiredRoles: string[]; graceDays: number
     const graceDays = clampGraceDays(p && p.graceDays);
     const enforcedAtNum = Number(p && p.enforcedAt);
     const enforcedAt = p && p.enforcedAt != null && Number.isFinite(enforcedAtNum) ? enforcedAtNum : null;
-    return { requiredRoles, graceDays, enforcedAt };
+    const value = { requiredRoles, graceDays, enforcedAt };
+    _policyCache = { value, at: Date.now() };
+    return value;
 }
 
 /**
@@ -176,6 +189,7 @@ async function setPolicy(input: any): Promise<{ requiredRoles: string[]; graceDa
 
     const policy = { requiredRoles, graceDays, enforcedAt };
     await updateOption(POLICY_OPTION, policy);
+    _policyCache = { value: policy, at: Date.now() };  // write-through: this node enforces instantly
     return policy;
 }
 
