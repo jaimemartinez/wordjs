@@ -49,7 +49,9 @@ const gwConfig = readJson(path.join(GATEWAY, 'gateway-config.json'));
 const PUBLIC_PORT = Number(process.env.PORT) || appConfig.gatewayPort || gwConfig.gatewayPort || 3000;
 // Internal loopback HTTP port the frontend's SSR fetches hit (avoids self-signed TLS verification
 // server-side). Reuses the backend's configured port, which is NOT bound in embedded mode.
-const LOOPBACK_PORT = appConfig.port || 4000;
+// WORDJS_LOOPBACK_PORT: run a second monolith beside a dev one (parallel worktrees, prod
+// validation on another port) without fighting over the fixed backend loopback.
+const LOOPBACK_PORT = Number(process.env.WORDJS_LOOPBACK_PORT) || appConfig.port || 4000;
 
 process.env.WORDJS_MONO_ORIGIN = `http://127.0.0.1:${LOOPBACK_PORT}`;
 process.env.PORT = String(PUBLIC_PORT);
@@ -68,6 +70,9 @@ const compression = require('compression');
 const BACKEND_PREFIXES = ['/api', '/public', '/uploads', '/themes', '/plugins', '/.well-known', '/health', '/readyz', '/metrics'];
 const isBackendPath = (url) => {
     const u = (url || '/').split('?')[0];
+    // /api/revalidate is a NEXT route (the on-demand cache-purge receiver, authenticated by shared
+    // secret) — the one /api path that must NOT be dispatched to the backend.
+    if (u === '/api/revalidate') return false;
     return BACKEND_PREFIXES.some((p) => u === p || u.startsWith(p + '/'));
 };
 
