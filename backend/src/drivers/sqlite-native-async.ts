@@ -54,6 +54,8 @@ class SqliteNativeAsyncDriver extends DatabaseDriverInterface {
     _stmtCache: Map<string, any> = new Map();
     static _STMT_CACHE_MAX = 200;
     _prepare(sql: string) {
+        // perf harness: global query counter, read by the WORDJS_QUERY_STATS middleware (index.ts)
+        (globalThis as any).__wjsQueryCount = ((globalThis as any).__wjsQueryCount || 0) + 1;
         let stmt = this._stmtCache.get(sql);
         if (stmt) {
             // refresh LRU position
