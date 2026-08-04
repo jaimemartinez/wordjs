@@ -52,4 +52,9 @@ for (const t of targets) {
     });
 }
 console.table(results);
+if (results.some((r) => r.no2xx > 0)) {
+    console.log("AVISO: no2xx>0 en objetivos /api = el rate limiter (1000 req/15min) respondiendo 429 —");
+    console.log("esas filas miden el limiter, no la ruta. Para medir el API real: menos conexiones/duración,");
+    console.log("o sube el límite temporalmente en el entorno de bench.");
+}
 console.log("Guarda esta tabla junto al commit medido — es la línea base del antes/después.");

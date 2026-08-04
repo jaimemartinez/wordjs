@@ -45,6 +45,11 @@ function ensureSecret(): string | null {
 }
 
 function frontendOrigin(): string {
+    // Monolith serves Next itself on its public port (monolith.js exports it as PORT) — the
+    // config's frontendUrl is the SPLIT-mode frontend (3001) and would be a dead target here.
+    if (process.env.WORDJS_MODE === 'mono' && process.env.PORT) {
+        return `http://127.0.0.1:${process.env.PORT}`;
+    }
     const cfg = getConfig() || {};
     return String(cfg.frontendUrl || 'http://localhost:3000').replace(/\/+$/, '');
 }
