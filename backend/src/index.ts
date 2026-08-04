@@ -384,8 +384,20 @@ app.use('/public', express.static(path.resolve('./public'), {
 
 // Request logging in development
 if (config.nodeEnv === 'development') {
+    // WORDJS_QUERY_STATS=1: append the DB-query count each request consumed (perf harness — the
+    // driver increments a global counter). Approximate under concurrency; exact when benching one
+    // request at a time, which is how the per-endpoint budget is measured.
+    const queryStats = process.env.WORDJS_QUERY_STATS === '1';
     app.use((req: Request, res: Response, next: NextFunction) => {
-        console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+        if (queryStats) {
+            const start = (globalThis as any).__wjsQueryCount || 0;
+            res.on('finish', () => {
+                const n = ((globalThis as any).__wjsQueryCount || 0) - start;
+                console.log(`${new Date().toISOString()} ${req.method} ${req.path} → ${n} queries`);
+            });
+        } else {
+            console.log(`${new Date().toISOString()} ${req.method} ${req.path}`);
+        }
         next();
     });
 }
