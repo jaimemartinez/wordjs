@@ -207,6 +207,21 @@ class User {
     }
 
     static async findById(id: number) {
+        // Hot path: EVERY authenticated request resolves the user (gate + route auth). Cached with
+        // the same invalidation-complete model as options: update/delete/updateMeta/deleteMeta/
+        // compareAndSetMeta all del() this key, so role changes, session revocation
+        // (token_valid_after) and disables take effect on the very next request in-process; the L1
+        // multi-node bound is the same 30s the roles cache already accepts. user_pass is NEVER
+        // cached (the constructor doesn't carry it either).
+        const cache = require('../core/cache');
+        const cacheKey = `user:${id}`;
+        const cached = await cache.get(cacheKey);
+        if (cached && cached.v && cached.v.row) {
+            const user = new User(cached.v.row);
+            user._applyMeta(cached.v.meta || {});
+            return user;
+        }
+
         // Core user data
         const row = await dbAsync.get('SELECT * FROM users WHERE id = ?', [id]);
         if (!row) return null;
@@ -215,6 +230,10 @@ class User {
 
         // Fetch Meta
         await user.loadMeta();
+
+        const { user_pass, ...safeRow } = row;
+        void user_pass;
+        await cache.set(cacheKey, { v: { row: safeRow, meta: user.meta || {} } }, 60);
         return user;
     }
 
@@ -363,12 +382,17 @@ class User {
             }
         }
 
+        // Invalidate BEFORE the read-back: the direct `UPDATE users` column writes above don't go
+        // through updateMeta, and a stale cache entry here would make this findById return (and
+        // re-serve) the pre-update row.
+        await require('../core/cache').del(`user:${id}`);
         return await User.findById(id);
     }
 
     static async delete(id: number) {
         await dbAsync.run('DELETE FROM user_meta WHERE user_id = ?', [id]);
         await dbAsync.run('DELETE FROM users WHERE id = ?', [id]);
+        await require('../core/cache').del(`user:${id}`);
         return true;
     }
 
@@ -456,18 +480,23 @@ class User {
 
     // Meta Methods
 
+    // Single source for every meta-derived field (role, mailbox fact): loadMeta AND the findById
+    // cache rehydration both go through here, so the derivations can never drift apart.
+    _applyMeta(meta: { [key: string]: any }) {
+        this.meta = meta;
+        if (meta.role) this.role = meta.role;
+        // Materialize the ACTIVE CORPORATE MAILBOX fact ONCE, here, so every downstream projection
+        // (plugin bridge, isolate req.user, toJSON) reports the same answer without re-deriving it.
+        this.hasProfessionalMailbox = hasProfessionalMailbox(meta);
+    }
+
     async loadMeta() {
         const rows = await dbAsync.all('SELECT meta_key, meta_value FROM user_meta WHERE user_id = ?', [this.id]);
         const meta: { [key: string]: any } = {};
         rows.forEach((row: any) => {
             meta[row.meta_key] = row.meta_value;
         });
-        this.meta = meta;
-
-        if (meta.role) this.role = meta.role;
-        // Materialize the ACTIVE CORPORATE MAILBOX fact ONCE, here, so every downstream projection
-        // (plugin bridge, isolate req.user, toJSON) reports the same answer without re-deriving it.
-        this.hasProfessionalMailbox = hasProfessionalMailbox(meta);
+        this._applyMeta(meta);
     }
 
     static async getMeta(userId: number, key: string) {
@@ -485,10 +514,13 @@ class User {
         } else {
             await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)', [userId, key, String(value)]);
         }
+        // role / token_valid_after / mailbox live here — the cached user must die with every write
+        await require('../core/cache').del(`user:${userId}`);
     }
 
     static async deleteMeta(userId: number, key: string) {
         await dbAsync.run('DELETE FROM user_meta WHERE user_id = ? AND meta_key = ?', [userId, key]);
+        await require('../core/cache').del(`user:${userId}`);
         return true;
     }
 
@@ -502,7 +534,9 @@ class User {
         const result = await dbAsync.run(
             'UPDATE user_meta SET meta_value = ? WHERE user_id = ? AND meta_key = ? AND meta_value = ?',
             [String(next), userId, key, String(expected)]);
-        return !!(result && (result.changes > 0 || result.rowCount > 0));
+        const won = !!(result && (result.changes > 0 || result.rowCount > 0));
+        if (won) await require('../core/cache').del(`user:${userId}`);
+        return won;
     }
 
     toJSON() {
