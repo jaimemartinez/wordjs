@@ -41,23 +41,12 @@ export async function generateMetadata(): Promise<Metadata> {
         try { configuredBase = new URL(configuredUrl); } catch { /* ignore malformed URL */ }
     }
 
-    let base: URL | undefined = configuredBase;
-    // The CONFIGURED siteurl is the canonical authority; reading headers() here made EVERY route
-    // dynamic (no Full-Route Cache). Only an install with no configured URL falls back to the
-    // request host (parsed with the WHATWG parser, never host.split(':') — a crafted
-    // `localhost:1@evil.example` fools the naive split; see git history for the parser-gap fix).
-    if (!base) {
-        try {
-            const { headers } = await import("next/headers");
-            const h = await headers();
-            const host = h.get("x-forwarded-host") || h.get("host");
-            const proto = h.get("x-forwarded-proto") || "https";
-            if (host) {
-                try { base = new URL(`${proto}://${host}`); } catch { /* malformed host */ }
-            }
-        } catch { /* not in a request scope — keep the configured base */ }
-    }
-    if (base) meta.metadataBase = base;
+    // The CONFIGURED siteurl is the canonical authority, full stop. No request-header fallback:
+    // headers() during the runtime render of a prerendered route is a Next 16 hard error (500 —
+    // caught by the lab split gate on /about), and an unconfigured site is mid-install, where
+    // canonical/og URLs don't matter yet. Relative metadata resolves against the request origin
+    // anyway when metadataBase is absent.
+    if (configuredBase) meta.metadataBase = configuredBase;
     return meta;
 }
 
