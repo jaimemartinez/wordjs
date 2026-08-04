@@ -104,3 +104,6 @@ frontend/src/app/_backup/
 # releases/latest/download (the default marketplace_source). Regenerate for dev with `npm run build:marketplace`.
 cluster-tokens.json
 gateway/cluster-tokens.json
+# Stitch MCP config (contains API key — never commit)
+.mcp.json
+.claude/mcp.json
