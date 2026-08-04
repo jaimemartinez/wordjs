@@ -270,6 +270,13 @@ class Post {
         // Update GUID with actual post ID
         await dbAsync.run('UPDATE posts SET guid = ? WHERE id = ?', [`${config.site.url}/?p=${postId}`, postId]);
 
+        // A 404 for this slug may be negative-cached (findBySlug) — the new post must resolve on
+        // the very next read, not when the sentinel expires.
+        if (postName) {
+            await cache.del(`post:slug:${type}:${postName}`);
+            await cache.del(`post:slug:any:${postName}`);
+        }
+
         // Fire action hook
         await doAction('wp_insert_post', postId, data);
 
@@ -332,7 +339,10 @@ class Post {
         // 1. Try Cache
         const cacheKey = `post:slug:${type || 'any'}:${slug}`;
         const cached = await cache.get(cacheKey);
-        if (cached) return new Post(cached);
+        if (cached) {
+            if (cached.__miss) return null; // cached ABSENCE — a 404 crawl is no longer a DB workout
+            return new Post(cached);
+        }
 
         // 2. Database
         let sql = 'SELECT * FROM posts WHERE post_name = ?';
@@ -344,7 +354,12 @@ class Post {
         }
 
         const row = await dbAsync.get(sql, params);
-        if (!row) return null;
+        if (!row) {
+            // Negative cache, short TTL. create() dels this key, so a brand-new post with a
+            // previously-404 slug resolves on the very next read.
+            await cache.set(cacheKey, { __miss: 1 }, 10);
+            return null;
+        }
 
         const post = new Post(row);
 
