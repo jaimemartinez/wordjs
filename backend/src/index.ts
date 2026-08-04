@@ -616,6 +616,14 @@ async function initialize() {
     console.log('🚀 Starting WordJS...');
     console.log(`   Environment: ${config.nodeEnv}`);
 
+    // On-demand frontend cache purge. Registered UNCONDITIONALLY and FIRST: a fresh boot goes
+    // through the uninstalled branch and then installs IN-PROCESS, so the installer's option/post
+    // writes fire their hooks immediately — registering this inside the installed branch meant the
+    // very first install purged nothing and the public shell served DEFAULT settings until the ISR
+    // TTL (the CI split-leg red). Registration is passive; pre-install purge attempts no-op
+    // (no config → no secret → nothing sent).
+    require('./core/frontend-purge').initFrontendPurge();
+
     // Check Installation Status
     const { isInstalled } = require('./core/configManager');
 
@@ -825,10 +833,6 @@ async function initialize() {
         console.log('🎨 Initializing Theme Engine...');
         const themeEngine = require('./core/theme-engine');
         await themeEngine.init();
-
-        // On-demand frontend cache purge: content/settings hooks → debounced POST /api/revalidate.
-        // Publishing becomes instant on the public site instead of waiting out the 60s revalidate.
-        require('./core/frontend-purge').initFrontendPurge();
 
         // Fire init action
         await doAction('init');
