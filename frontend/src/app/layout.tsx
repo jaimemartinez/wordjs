@@ -42,28 +42,21 @@ export async function generateMetadata(): Promise<Metadata> {
     }
 
     let base: URL | undefined = configuredBase;
-    try {
-        const { headers } = await import("next/headers");
-        const h = await headers();
-        const host = h.get("x-forwarded-host") || h.get("host");
-        const proto = h.get("x-forwarded-proto") || "https";
-        // Allowlist = the configured site hostname (compared case-insensitively, port-stripped).
-        // Only when no site URL is configured do we fall back to the raw request host.
-        if (host) {
-            try {
-                // Parse the host with the WHATWG URL parser, NOT host.split(":")[0]: for a crafted
-                // `localhost:1@evil.example` the naive split reads the userinfo as host:port and yields
-                // 'localhost' (matching the allowlist) while new URL()/base.origin resolve it to
-                // 'evil.example' — the parser gap that poisoned metadataBase. Comparing the parsed
-                // hostname closes it.
-                const reqUrl = new URL(`${proto}://${host}`);
-                const allowedHostname = configuredBase?.hostname.toLowerCase();
-                if (!allowedHostname || reqUrl.hostname.toLowerCase() === allowedHostname) {
-                    base = reqUrl;
-                }
-            } catch { /* malformed host — keep configured base */ }
-        }
-    } catch { /* not in a request scope — keep the configured base */ }
+    // The CONFIGURED siteurl is the canonical authority; reading headers() here made EVERY route
+    // dynamic (no Full-Route Cache). Only an install with no configured URL falls back to the
+    // request host (parsed with the WHATWG parser, never host.split(':') — a crafted
+    // `localhost:1@evil.example` fools the naive split; see git history for the parser-gap fix).
+    if (!base) {
+        try {
+            const { headers } = await import("next/headers");
+            const h = await headers();
+            const host = h.get("x-forwarded-host") || h.get("host");
+            const proto = h.get("x-forwarded-proto") || "https";
+            if (host) {
+                try { base = new URL(`${proto}://${host}`); } catch { /* malformed host */ }
+            }
+        } catch { /* not in a request scope — keep the configured base */ }
+    }
     if (base) meta.metadataBase = base;
     return meta;
 }

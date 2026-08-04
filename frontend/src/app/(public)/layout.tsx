@@ -12,11 +12,6 @@ export default async function PublicLayout({
 }: {
     children: React.ReactNode;
 }) {
-    // Fresh install → send the visitor straight to the setup wizard instead of an empty broken
-    // page ("Service Temporarily Unavailable"). /install lives outside this (public) group, so
-    // this cannot loop. Backend-down and installed states return false and render as before.
-    if (await checkSetupRequired()) redirect("/install");
-
     // Fetch chrome data on the SERVER, in parallel, all cached (ISR) — so the Header/Footer render their
     // nav/logo in the initial HTML and each visitor's browser no longer re-fetches settings+menus on
     // hydration (a per-visit double-fetch that also delayed the chrome paint).
@@ -26,6 +21,14 @@ export default async function PublicLayout({
         getMenuByLocation('header').catch(() => null),
         getMenuByLocation('footer').catch(() => null),
     ]);
+
+    // Fresh install → send the visitor straight to the setup wizard instead of an empty broken
+    // page. Probed ONLY when settings came back empty: settings present ⟺ installed (the same
+    // endpoint answers 503 setup_required pre-install), and the probe's no-store fetch on every
+    // render was what forced the ENTIRE public tree dynamic (no Full-Route Cache). Skipped during
+    // the production build (no backend there): the static shell ISR-refreshes on first traffic.
+    // /install lives outside this (public) group, so this cannot loop.
+    if (!settings && process.env.NEXT_PHASE !== 'phase-production-build' && await checkSetupRequired()) redirect("/install");
     let layout: Record<string, unknown> = {};
     try { if (settings?.active_theme_layout) layout = JSON.parse(settings.active_theme_layout) || {}; } catch { /* ignore malformed */ }
     // Footer social links live in a JSON-encoded setting; parse here so the footer gets them via props.

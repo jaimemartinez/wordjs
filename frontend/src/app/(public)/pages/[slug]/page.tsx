@@ -6,6 +6,20 @@ import { getPostBySlug, getPostById, getSettings, buildPostMetadata, buildPostJs
 import { withResolvedBlocks } from "@/lib/resolveDynamicBlocks";
 import type { Post } from "@/lib/api";
 
+// Cacheable like /[slug]: no request-header reads, 60s revalidate + on-demand purge.
+export const revalidate = 60;
+
+// Prerender the published pages the build can see; the rest render on demand and ISR-cache.
+export async function generateStaticParams(): Promise<{ slug: string }[]> {
+    try {
+        const { getPosts } = await import("@/lib/server-api");
+        const pages = await getPosts("page", "publish");
+        return (pages || []).filter((p) => p.slug).slice(0, 50).map((p) => ({ slug: String(p.slug) }));
+    } catch {
+        return [];
+    }
+}
+
 interface RouteParams {
     slug: string;
 }

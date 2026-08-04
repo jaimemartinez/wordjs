@@ -4,8 +4,9 @@ import HomeContent from "@/components/public/HomeContent";
 import JsonLd from "@/components/public/JsonLd";
 import { getSettings, getPostById, getPosts, htmlToText, buildWebSiteJsonLd, resolveSiteBase } from "@/lib/server-api";
 
-// Homepage is dynamic: content is fetched server-side per request (no-store), so crawlers and first
-// paint get the real blog roll / static page, not an empty skeleton.
+// Server-rendered AND cached: the homepage serves from the Full-Route Cache (crawlers and first
+// paint still get the real blog roll / static page), revalidating every 60s + purged on publish.
+export const revalidate = 60;
 export async function generateMetadata(): Promise<Metadata> {
     const settings = await getSettings();
     const siteName = settings?.blogname || "WordJS";

@@ -6,7 +6,7 @@
  * Replaces the old fixed "first 10 items, no pager" lists with: real pagination (the backend
  * emits X-WP-Total headers via apiGetPaged), debounced search, status tabs (any is
  * privilege-scoped server-side), bulk selection + delete, and per-row View / Duplicate.
- * Drafts "View" opens the live-site draft preview (?preview=1) added with the preview feature.
+ * Drafts "View" opens the live-site draft preview (/preview/[slug], the dedicated dynamic route).
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -112,7 +112,7 @@ export default function ContentTable({ type, basePath, emptyIcon, emptyTitle, ne
         }
     };
 
-    const viewHref = (p: Post) => p.status === "publish" ? `/${p.slug || p.id}` : `/${p.slug || p.id}?preview=1`;
+    const viewHref = (p: Post) => p.status === "publish" ? `/${p.slug || p.id}` : `/preview/${p.slug || p.id}`;
 
     return (
         <div className="bg-white rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 overflow-hidden">

@@ -549,6 +549,31 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 const { mfaComplianceGate } = require('./middleware/auth');
 app.use(config.api.prefix, mfaComplianceGate);
 
+// Anonymous public JSON gets an edge-cacheable Cache-Control (a CDN/nginx finally has something
+// to hold; s-maxage is shared-cache-only so browsers are untouched). Applied at SEND time, and
+// only when everything is provably public: read method, allowlisted content prefix, no resolved
+// user, no credentials on the request, no Set-Cookie on the response, 2xx, and no header already
+// chosen by the route. Anything authenticated or personalized never gets it.
+const PUBLIC_CACHEABLE_RE = /^\/(settings|posts|menus|fonts|categories|tags|comments|plugins\/assets|seo)(\/|$)/;
+app.use(config.api.prefix, (req: Request, res: Response, next: NextFunction) => {
+    if ((req.method === 'GET' || req.method === 'HEAD') && PUBLIC_CACHEABLE_RE.test(req.path)) {
+        const origJson = res.json.bind(res);
+        (res as any).json = (data: any) => {
+            const credentialed = (req as any).user
+                || req.headers.authorization
+                || (req.headers.cookie || '').includes('wordjs_token');
+            if (!credentialed
+                && !res.getHeader('Set-Cookie')
+                && !res.getHeader('Cache-Control')
+                && res.statusCode >= 200 && res.statusCode < 300) {
+                res.setHeader('Cache-Control', 'public, s-maxage=60, stale-while-revalidate=300');
+            }
+            return origJson(data);
+        };
+    }
+    next();
+});
+
 // API routes
 app.use(config.api.prefix, routes);
 
@@ -792,6 +817,10 @@ async function initialize() {
         console.log('🎨 Initializing Theme Engine...');
         const themeEngine = require('./core/theme-engine');
         await themeEngine.init();
+
+        // On-demand frontend cache purge: content/settings hooks → debounced POST /api/revalidate.
+        // Publishing becomes instant on the public site instead of waiting out the 60s revalidate.
+        require('./core/frontend-purge').initFrontendPurge();
 
         // Fire init action
         await doAction('init');
