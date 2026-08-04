@@ -204,10 +204,19 @@ assert_serving() { # assert_serving <label> <logfile>
         || fail "[$when] the public home page is not 200 through the gateway" "$log"
     [ "$(code "$GW/about")" = 200 ] \
         || fail "[$when] a real content page 404'd — SSR cannot reach the backend, so every page falls back to defaults" "$log"
-    html="$(body "$GW/")"
+    # '/' is static + ISR now: right after an install the first hits serve the prerendered shell
+    # while the on-demand purge (debounced ~1.5s) and the revalidation render land. POLL for the
+    # name instead of asserting the first body — same lesson as the v1.12.12 theme-switch check.
+    # A missing/broken purge still fails here: the shell never converges inside the window.
+    html=""
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        html="$(body "$GW/")"
+        case "$html" in *"$SITE_NAME"*) break ;; esac
+        sleep 2
+    done
     case "$html" in
         *"$SITE_NAME"*) ;;
-        *) fail "[$when] the home page does not contain the site name — SSR served DEFAULT settings instead of the installed ones" "$log" ;;
+        *) fail "[$when] the home page does not contain the site name after 24s — the install purge/revalidation never landed and SSR is stuck on DEFAULT settings" "$log" ;;
     esac
     case "$html" in
         *'<title>'*undefined*'</title>'*)

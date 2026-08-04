@@ -128,14 +128,14 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
     // public host and (e.g.) reject every SSR request with a 409 migration_required. The public
     // listener (gateway/monolith) already pins x-forwarded-host to the browser's Host, so we just
     // relay it one more hop to the backend.
-    // PUBLIC reads: forward the CONFIGURED public origin — never touch request headers, so the
-    // route stays static/cacheable. Per-user reads (forwardCookies) and unconfigured installs are
-    // the only paths that still read the inbound request (they are no-store/dynamic by nature).
-    const pub = options.forwardCookies ? null : configuredPublicHost();
-    if (pub) {
-        headers['x-forwarded-host'] = pub.host;
-        headers['x-forwarded-proto'] = pub.proto;
-    } else {
+    // PUBLIC reads: forward the CONFIGURED public origin, or NOTHING. Never read the inbound
+    // request here — headers() during the runtime render of a prerendered route is a Next 16
+    // hard error ("Page changed from static to dynamic", seen as 500 /about on the lab split
+    // gate), and catching the bailout is unsupported. Unconfigured (mid-install) sends no host:
+    // the backend's guards don't require one until a siteUrl exists to compare against.
+    // Per-user reads (forwardCookies) are the one legitimate consumer of the request — their
+    // routes (/preview, admin SSR) are force-dynamic, where headers() is allowed.
+    if (options.forwardCookies) {
         try {
             const { headers: nextHeaders } = await import('next/headers');
             const inbound = await nextHeaders();
@@ -144,12 +144,16 @@ export async function serverFetch<T>(endpoint: string, options: ServerFetchOptio
                 headers['x-forwarded-host'] = host;
                 headers['x-forwarded-proto'] = inbound.get('x-forwarded-proto') || 'https';
             }
-            if (options.forwardCookies) {
-                const cookieHeader = inbound.get('cookie');
-                if (cookieHeader) headers['cookie'] = cookieHeader;
-            }
+            const cookieHeader = inbound.get('cookie');
+            if (cookieHeader) headers['cookie'] = cookieHeader;
         } catch {
             /* not in a request scope (e.g. build prerender) — proceed without forwarded headers */
+        }
+    } else {
+        const pub = configuredPublicHost();
+        if (pub) {
+            headers['x-forwarded-host'] = pub.host;
+            headers['x-forwarded-proto'] = pub.proto;
         }
     }
 
@@ -184,7 +188,10 @@ export const checkSetupRequired = cache(async (): Promise<boolean> => {
     if (_setupSettled) return false;
     const base = resolveServerBase();
     try {
-        const res = await fetch(`${base}/settings`, { cache: 'no-store' });
+        // revalidate:1, NOT no-store: a no-store fetch during the runtime render of a prerendered
+        // route is the same Next 16 static-to-dynamic hard error the lab gate caught. 1s of
+        // staleness on "is this installed yet?" is nothing; a 500 on a cached page is not.
+        const res = await fetch(`${base}/settings`, { next: { revalidate: 1 } });
         if (res.status !== 503) { _setupSettled = true; return false; }
         const body = await res.json().catch(() => null);
         return !!body && body.error === 'setup_required';
@@ -367,27 +374,11 @@ export const resolveSiteBase = cache(async (): Promise<string> => {
     if (configuredUrl && /^https?:\/\//i.test(configuredUrl)) {
         try { configured = new URL(configuredUrl); } catch { /* malformed — ignore */ }
     }
-    let base = configured;
-    // The CONFIGURED siteurl is the canonical authority (the WordPress model). Only an install with
-    // no valid configured URL falls back to the request headers — reading headers() on configured
-    // sites made every public route dynamic, which forfeited the Full-Route Cache. The old
-    // same-hostname courtesy (honoring request port/proto) is intentionally gone: config wins.
-    if (!base) {
-        try {
-            const { headers } = await import('next/headers');
-            const h = await headers();
-            const host = h.get('x-forwarded-host') || h.get('host');
-            const proto = h.get('x-forwarded-proto') || 'https';
-            if (host) {
-                try {
-                    // WHATWG-parse the host (never host.split(':')[0]: the userinfo of
-                    // `localhost:1@evil.example` fools the naive split — see git history).
-                    base = new URL(`${proto}://${host}`);
-                } catch { /* malformed host */ }
-            }
-        } catch { /* not in a request scope */ }
-    }
-    return (base ? base.origin : 'http://localhost:3000');
+    // The CONFIGURED siteurl is the canonical authority (the WordPress model), full stop. No
+    // request-header fallback: headers() during the runtime render of a prerendered route is a
+    // Next 16 hard error (500), and an unconfigured site is mid-install — its JSON-LD origin is
+    // irrelevant for the minutes until the wizard writes siteurl.
+    return (configured ? configured.origin : 'http://localhost:3000');
 });
 
 /** WebSite schema with a SearchAction pointing at the built-in /search route. */
