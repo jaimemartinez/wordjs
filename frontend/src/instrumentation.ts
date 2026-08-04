@@ -1,5 +1,9 @@
 
 export async function register() {
+    // Monolith mode: frontend and backend share one process/port and there is no gateway to
+    // register with. Without this guard the no-cert fallback targets gatewayPort's default
+    // (3000 = the monolith itself), and the retry loop POSTs /register at ourselves every 5s.
+    if (process.env.WORDJS_MODE === 'mono') return;
     if (process.env.NEXT_RUNTIME === 'nodejs') {
         const http = await import('http');
         const fs = await import('fs');
