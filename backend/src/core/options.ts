@@ -48,14 +48,23 @@ async function getOption(name: string, defaultValue: any = null) {
             // (cache.get returns null only on a genuine miss/disabled cache).
             const cacheKey = `option:${name}`;
             const cachedWrapper = await cache.get(cacheKey);
-            if (cachedWrapper !== null && typeof cachedWrapper === 'object' && 'v' in cachedWrapper) {
-                return cachedWrapper.v;
+            if (cachedWrapper !== null && typeof cachedWrapper === 'object') {
+                if ('v' in cachedWrapper) return cachedWrapper.v;
+                // Cached ABSENCE (`{m:1}`): the DB had no row moments ago. Each caller still applies
+                // its own defaultValue — only the miss is shared, never a default.
+                if (cachedWrapper.m === 1) return defaultValue;
             }
 
             // 2. Fallback to DB
             const row = await dbAsync.get('SELECT option_value FROM options WHERE option_name = ?', [name]);
 
-            if (!row) return defaultValue;
+            if (!row) {
+                // Negative cache, short TTL: repeated reads of absent options (probes, misconfigured
+                // callers, crawls) were a SELECT each. addOption/updateOption del() this key on the
+                // write path, so creation is visible immediately.
+                await cache.set(cacheKey, { m: 1 }, 10);
+                return defaultValue;
+            }
 
             // Try to parse JSON
             let finalValue;
@@ -172,6 +181,31 @@ async function deleteOption(name: string) {
 }
 
 /**
+ * Prime the option cache with every autoload row in ONE query (called once at boot). getOption
+ * then answers /settings and the other hot readers without touching the DB at all.
+ * Deserialization mirrors getOption's exactly (JSON.parse, raw string on failure) — never a
+ * separate re-implementation that could drift.
+ */
+async function preloadAutoloadedOptions(): Promise<number> {
+    try {
+        const rows = await dbAsync.all('SELECT option_name, option_value FROM options WHERE autoload = ?', ['yes']);
+        for (const row of rows) {
+            let finalValue;
+            try {
+                finalValue = JSON.parse(row.option_value);
+            } catch {
+                finalValue = row.option_value;
+            }
+            await cache.set(`option:${row.option_name}`, { v: finalValue });
+        }
+        return rows.length;
+    } catch (e: any) {
+        console.warn('[Options] autoload preload skipped:', e && e.message);
+        return 0;
+    }
+}
+
+/**
  * Get all autoloaded options
  */
 async function getAutoloadedOptions() {
@@ -265,6 +299,7 @@ module.exports = {
     addOption,
     deleteOption,
     getAutoloadedOptions,
+    preloadAutoloadedOptions,
     initDefaultOptions,
     initCacheSetting
 };

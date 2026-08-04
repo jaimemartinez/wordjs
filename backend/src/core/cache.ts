@@ -1,6 +1,17 @@
 /**
  * WordJS - Cache Engine
- * A Redis-backed object cache with automatic fallback to database.
+ *
+ * Two tiers:
+ *   L1 — in-process, always on. A default install (SQLite, no Redis) finally caches: without it
+ *        every getOption()/hot read was a SELECT. Values are stored SERIALIZED so a caller can
+ *        never mutate a cached object in place (the same deep-copy semantics Redis gives for free).
+ *        Coherence: del() is called at every single write point (e.g. updateOption) and also
+ *        broadcasts on 'wordjs:cache-del', so peer nodes drop their L1 too; when Redis is
+ *        configured (multi-node possible) L1 entries additionally self-expire within 30s as the
+ *        bound on any missed broadcast. Single-node keeps the caller's full TTL — in-process
+ *        invalidation is complete.
+ *   L2 — Redis, exactly as before: gated by config AND the admin's cache master switch
+ *        (setEnabled). isAvailable() keeps meaning "Redis tier operational".
  */
 
 const Redis = require('ioredis');
@@ -8,7 +19,28 @@ const config = require('../config/app');
 
 let redis: any = null;
 let redisAvailable = false;
-let enabledBySettings = false; // Master switch from DB settings
+let enabledBySettings = false; // Master switch from DB settings (governs the REDIS tier)
+
+// --- L1 (in-process) ------------------------------------------------------------------------------
+const L1_MAX_ENTRIES = 2000;
+const L1_REDIS_TTL_CAP_S = 30; // multi-node staleness bound when a broadcast is missed
+const l1 = new Map<string, { s: string; exp: number }>();
+
+function l1Get(key: string): string | null {
+    const e = l1.get(key);
+    if (!e) return null;
+    if (e.exp && e.exp < Date.now()) { l1.delete(key); return null; }
+    l1.delete(key); l1.set(key, e); // LRU refresh
+    return e.s;
+}
+function l1Set(key: string, serialized: string, ttlSeconds: number) {
+    l1.delete(key);
+    l1.set(key, { s: serialized, exp: ttlSeconds ? Date.now() + ttlSeconds * 1000 : 0 });
+    if (l1.size > L1_MAX_ENTRIES) {
+        const oldest = l1.keys().next().value;
+        if (oldest !== undefined) l1.delete(oldest);
+    }
+}
 
 /**
  * Update dynamic enablement state (called from options.js)
@@ -54,13 +86,20 @@ if (config.redis && config.redis.enabled !== false) {
 }
 
 /**
- * Get a value from cache
+ * Get a value from cache: L1 first (always on), then Redis (which repopulates L1).
  */
 async function get(key: string) {
+    const hit = l1Get(key);
+    if (hit !== null) {
+        try { return JSON.parse(hit); } catch { l1.delete(key); }
+    }
     if (!redisAvailable || !enabledBySettings) return null;
     try {
         const val = await redis.get(key);
         if (!val) return null;
+        // Redis is the shared truth in multi-node: front it briefly so a hot key skips the network
+        // round-trip, bounded by the cap (a peer's del broadcast usually clears it much sooner).
+        l1Set(key, val, L1_REDIS_TTL_CAP_S);
         return JSON.parse(val);
     } catch (e) {
         return null;
@@ -68,15 +107,14 @@ async function get(key: string) {
 }
 
 /**
- * Set a value in cache
+ * Set a value in cache (both tiers).
  */
 async function set(key: string, value: any, ttl = 3600) {
-    if (!redisAvailable || !enabledBySettings) return false;
     // getOption() serves `option:<name>` cache entries BEFORE the DB, so an in-process theme calling
     // require('core/cache').set('option:wordjs_user_roles', {v:{subscriber:{capabilities:['*']}}}) forges
     // the resolved value of any security-critical option = privilege escalation (#20). Core's own option
     // caching runs in a null context (getOption wraps its body in runWithContext(null)), so this only
-    // blocks plugin/theme code writing the reserved `option:` namespace.
+    // blocks plugin/theme code writing the reserved `option:` namespace. Guard sits BEFORE both tiers.
     try {
         if (String(key).startsWith('option:') && require('./plugin-context').getEffectivePlugin()) {
             throw new Error('🛡️ Writing the option cache namespace is not permitted from plugin/theme context.');
@@ -84,8 +122,18 @@ async function set(key: string, value: any, ttl = 3600) {
     } catch (e: any) {
         if (e && /not permitted/.test(String(e.message))) throw e; // re-throw our own denial; ignore require hiccups
     }
+    let serialized: string;
     try {
-        const serialized = JSON.stringify(value);
+        serialized = JSON.stringify(value);
+    } catch (e) {
+        return false;
+    }
+    // Multi-node (Redis configured): L1 is a short front, peers' del broadcasts + the cap keep it
+    // honest. Single-node: the caller's TTL stands — every write path calls del(), so in-process
+    // invalidation is complete.
+    l1Set(key, serialized, redisConfigured() ? Math.min(ttl || L1_REDIS_TTL_CAP_S, L1_REDIS_TTL_CAP_S) : (ttl || 0));
+    if (!redisAvailable || !enabledBySettings) return true;
+    try {
         if (ttl) {
             await redis.set(key, serialized, 'EX', ttl);
         } else {
@@ -98,10 +146,12 @@ async function set(key: string, value: any, ttl = 3600) {
 }
 
 /**
- * Delete a value from cache
+ * Delete a value from cache — L1 (this node), the peers' L1 (broadcast), and Redis.
  */
 async function del(key: string) {
-    if (!redisAvailable || !enabledBySettings) return false;
+    l1.delete(key);
+    if (redisConfigured()) publish('wordjs:cache-del', key).catch(() => { /* degraded — TTL cap bounds it */ });
+    if (!redisAvailable || !enabledBySettings) return true;
     try {
         await redis.del(key);
         return true;
@@ -114,7 +164,9 @@ async function del(key: string) {
  * Flush all cache (careful!)
  */
 async function flush() {
-    if (!redisAvailable || !enabledBySettings) return false;
+    l1.clear();
+    if (redisConfigured()) publish('wordjs:cache-del', '*').catch(() => { /* degraded */ });
+    if (!redisAvailable || !enabledBySettings) return true;
     try {
         await redis.flushdb();
         return true;
@@ -208,6 +260,15 @@ async function closeAll() {
     }
 }
 
+// Peer L1 invalidation: any node's del()/flush() lands here on every other node (and echoes on the
+// sender — an idempotent no-op). Only wired when Redis is configured; single-node in-process
+// invalidation is already complete via the direct l1.delete in del().
+if (redisConfigured()) {
+    subscribe('wordjs:cache-del', (key: string) => {
+        if (key === '*') l1.clear(); else l1.delete(key);
+    });
+}
+
 module.exports = {
     get,
     set,
@@ -215,6 +276,8 @@ module.exports = {
     flush,
     setEnabled,
     isAvailable: () => redisAvailable && enabledBySettings,
+    // test/introspection hooks for the L1 tier (not a public API)
+    _l1: { size: () => l1.size, clear: () => l1.clear() },
     // Multi-node primitives:
     publish,
     subscribe,

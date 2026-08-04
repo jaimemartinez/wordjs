@@ -646,6 +646,11 @@ async function initialize() {
         // (moved out of options.ts import-time to avoid a startup race).
         await require('./core/options').initCacheSetting();
 
+        // Prime the L1 option cache with every autoload row in one query — /settings and the other
+        // hot option readers then serve from memory instead of one SELECT per option per request.
+        const preloaded = await require('./core/options').preloadAutoloadedOptions();
+        if (preloaded) console.log(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+
         // Load the per-plugin permission grants (Android-style, default-deny). Then a one-time,
         // non-breaking backfill: grandfather the manifest-declared permissions of plugins that are
         // ALREADY ACTIVE (and have no grant record yet) so flipping to default-deny doesn't break a
