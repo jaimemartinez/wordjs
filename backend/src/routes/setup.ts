@@ -381,6 +381,15 @@ router.post('/install', async (req: any, res: Response) => {
                 }
             }
 
+            // The install just wrote settings, menus and starter content in bulk — purge the
+            // frontend caches explicitly (read-your-writes for the wizard), independent of the
+            // hook-driven purges that also fired along the way.
+            try {
+                require('../core/frontend-purge').purgeFrontend(
+                    ['settings', 'posts', 'menus', 'plugin-assets', 'fonts'], ['/']
+                );
+            } catch { /* best-effort — ISR TTL covers it */ }
+
             const { runCoreTests } = require('../core/plugin-test-runner');
             const testResults = await runCoreTests();
 
