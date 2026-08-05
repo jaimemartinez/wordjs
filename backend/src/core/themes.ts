@@ -196,7 +196,59 @@ async function getCurrentTheme() {
 async function getActiveTheme() {
   const currentSlug = await getCurrentTheme();
   const themes = scanThemes();
-  return themes.find(t => t.slug === currentSlug) || themes[0] || null;
+  // NO fallback to "whatever theme happens to be installed first". A missing active slug used to
+  // resolve to themes[0] — an arbitrary theme decided by directory enumeration order — so deleting or
+  // renaming the active theme silently promoted an unrelated one: the site rendered with a look nobody
+  // selected, and every derived answer (active_theme_version, the purge check, the SSR layout) agreed
+  // with each other while ALL of them disagreed with the `template` option. Resolve honestly or not at
+  // all; callers already handle null (getActiveThemeVersion returns '', the purge check is guarded).
+  return themes.find(t => t.slug === currentSlug) || null;
+}
+
+/** getOption may hand back a parsed OBJECT or the raw JSON STRING — normalize to the string form. */
+function serializeOptionValue(value: any): string {
+  if (value === null || value === undefined || value === '') return '';
+  return typeof value === 'string' ? value : JSON.stringify(value);
+}
+
+/**
+ * Republish the ACTIVE theme's manifest `layout` into the active_theme_layout option.
+ *
+ * switchTheme already writes this when the admin activates a theme, but the option then goes stale on
+ * any path that changes the layout WITHOUT a switch — a theme update, an edit to theme.json, or a
+ * restore. This is the boot-time reconciliation for those.
+ *
+ * IDEMPOTENT ON PURPOSE, and that is the whole difficulty: active_theme_layout is on the frontend-purge
+ * allowlist, so a needless write evicts the public cache on every boot. getOption can return either the
+ * parsed object or the JSON string depending on how the value was stored, and comparing those two
+ * representations naively always differs — which is exactly how a "no-op" sync becomes a purge storm.
+ * Compare in the serialized form, and write only on a real change.
+ *
+ * Returns the serialized layout ('' when there is no active theme, or it declares none).
+ */
+async function syncActiveThemeLayout(): Promise<string> {
+  const theme = await getActiveTheme();
+  const desired = theme && theme.layout ? JSON.stringify(theme.layout) : '';
+  const current = serializeOptionValue(await getOption('active_theme_layout', ''));
+  if (current !== desired) await updateOption('active_theme_layout', desired);
+  return desired;
+}
+
+/**
+ * The active theme as ONE runtime snapshot: the slug that renders, the manifest layout, and the live
+ * customizer token overrides. Callers that need all three (the SSR public layout, the customizer) were
+ * each re-deriving them from separate options and could observe a torn mix — a layout from one theme
+ * beside another's mods — mid-activation.
+ */
+async function getActiveThemeSnapshot(): Promise<{ slug: string; layout: any; mods: any }> {
+  const theme = await getActiveTheme();
+  const rawMods = await getOption('active_theme_mods', '');
+  let mods: any = {};
+  if (rawMods && typeof rawMods === 'object') mods = rawMods;
+  else if (typeof rawMods === 'string' && rawMods.trim()) {
+    try { mods = JSON.parse(rawMods); } catch { mods = {}; }
+  }
+  return { slug: theme ? theme.slug : '', layout: theme && theme.layout ? theme.layout : null, mods };
 }
 
 /**
@@ -1053,6 +1105,8 @@ module.exports = {
   getCurrentTheme,
   getActiveTheme,
   getActiveThemeVersion,
+  getActiveThemeSnapshot,
+  syncActiveThemeLayout,
   switchTheme,
   getAllThemes,
   renderTemplate,
