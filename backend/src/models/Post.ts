@@ -278,6 +278,7 @@ class Post {
         }
 
         // Fire action hook
+        Post._invalidateCounts();
         await doAction('wp_insert_post', postId, data);
 
         return await Post.findById(postId);
@@ -584,6 +585,14 @@ class Post {
      * Count posts
      * Equivalent to wp_count_posts()
      */
+    /**
+     * Generation stamp for cached COUNT(*) results. Bumped by every write that can change a count
+     * (create / update / delete), which retires every cached entry at once — the alternative would
+     * be enumerating cache keys built from arbitrary SQL + params.
+     */
+    static _countGen = 0;
+    static _invalidateCounts() { Post._countGen++; }
+
     static async count(options: any = {}) {
         // Reuse the exact same WHERE logic as findAll() so the two cannot drift.
         // Use bare columns (no alias) since this is a single-table COUNT(*).
@@ -595,7 +604,20 @@ class Post {
             sql += ' WHERE ' + conditions.join(' AND ');
         }
 
+        // Every paginated listing pays this COUNT(*) alongside its rows (it is the X-WP-Total
+        // header), and paging through a list or typing in a search box repeats it unchanged.
+        //
+        // A plain TTL cache would be WRONG here: publishing a post and immediately looking at the
+        // list must show the new total, not a number up to N seconds old. So the key carries a
+        // GENERATION that every post write bumps — a create/update/delete invalidates every cached
+        // count at once, and this node reads its own writes instantly. The TTL then only bounds the
+        // multi-node case, where another replica's write has not bumped this process's generation.
+        const cacheKey = `postcount:${Post._countGen}:${sql}|${JSON.stringify(params)}`;
+        const cached = await cache.get(cacheKey);
+        if (cached && typeof cached.n === 'number') return cached.n;
+
         const row = await dbAsync.get(sql, params);
+        await cache.set(cacheKey, { n: row.count }, 10);
         return row.count;
     }
 
@@ -678,6 +700,7 @@ class Post {
 
         // Fire action hook. Pass the PRIOR status (post was fetched pre-update) so listeners can detect a
         // real status transition (e.g. draft→publish, →trash) rather than re-firing on every re-save.
+        Post._invalidateCounts();
         await doAction('post_updated', id, data, post.postStatus);
 
         return await Post.findById(id);
@@ -710,6 +733,7 @@ class Post {
 
             // Pass the prior status so a listener can avoid re-emitting "deleted" when the post was
             // already trashed (the trash transition already signaled it).
+            Post._invalidateCounts();
             await doAction('deleted_post', id, post.postStatus);
 
             return result.changes > 0;
