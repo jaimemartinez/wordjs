@@ -644,6 +644,59 @@ export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: a
     );
 }
 
+export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, height, align, buttons, gradientFrom, gradientTo, gradientAngle, titleSize, titleWeight, titleTracking, subtitleSize, color, pad, measure, elementId, css, isEditing }: any) {
+    const dim = parseFloat(overlay || "0") || 0;
+    const textAlign = align === "center" ? "center" : "left";
+    return (
+        <section
+            id={elementId || undefined}
+            className="wp-block-hero"
+            style={{
+                ...blockVars('hero', {
+                    'bg-image': bgImage ? `url(${bgImage})` : undefined,
+                    'gradient-from': gradientFrom,
+                    'gradient-to': gradientTo,
+                    'gradient-angle': gradientAngle ? `${gradientAngle}deg` : undefined,
+                    height,
+                    pad: unit(pad),
+                    justify: align,
+                    'text-align': textAlign,
+                    'actions-justify': textAlign === "center" ? "center" : "flex-start",
+                    measure: unit(measure),
+                    color,
+                    overlay: dim > 0 ? dim : undefined,
+                    'overlay-color': overlayColor,
+                    'title-size': unit(titleSize),
+                    'title-weight': titleWeight,
+                    'title-tracking': unit(titleTracking),
+                    'subtitle-size': unit(subtitleSize),
+                }),
+                ...css,
+            }}
+        >
+            {dim > 0 && <div className="wp-block-hero__overlay" aria-hidden="true" />}
+            <div className="wp-block-hero__inner">
+                <h1 className="wp-block-hero__title">{title}</h1>
+                {subtitle && <p className="wp-block-hero__subtitle">{subtitle}</p>}
+                {buttons?.length > 0 && (
+                    <div className="wp-block-hero__actions">
+                        {buttons.map((b: any, i: number) => (
+                            <a
+                                key={i}
+                                href={b.href || "#"}
+                                className={cx('wp-block-hero__button', b.variant === "outline" && 'wp-block-hero__button--outline')}
+                                onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
+                            >
+                                {b.label}
+                            </a>
+                        ))}
+                    </div>
+                )}
+            </div>
+        </section>
+    );
+}
+
 export function SpacerBlock({ height, css }: any) {
     return (
         <div

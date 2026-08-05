@@ -14,7 +14,7 @@ import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPi
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
 import { blockVars, cx, unit } from "./puck/blockVars";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock } from "./content/blocks";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -2394,58 +2394,7 @@ const baseConfig: any = {
                 elementId: "",
                 css: {}
             },
-            render: ({ title, subtitle, bgImage, overlay, overlayColor, height, align, buttons, gradientFrom, gradientTo, gradientAngle, titleSize, titleWeight, titleTracking, subtitleSize, color, pad, measure, elementId, css, puck }: any) => {
-                const dim = parseFloat(overlay || "0") || 0;
-                const textAlign = align === "center" ? "center" : "left";
-                return (
-                    <section
-                        id={elementId || undefined}
-                        className="wp-block-hero"
-                        style={{
-                            ...blockVars('hero', {
-                                'bg-image': bgImage ? `url(${bgImage})` : undefined,
-                                'gradient-from': gradientFrom,
-                                'gradient-to': gradientTo,
-                                'gradient-angle': gradientAngle ? `${gradientAngle}deg` : undefined,
-                                height,
-                                pad: unit(pad),
-                                justify: align,
-                                'text-align': textAlign,
-                                'actions-justify': textAlign === "center" ? "center" : "flex-start",
-                                measure: unit(measure),
-                                color,
-                                overlay: dim > 0 ? dim : undefined,
-                                'overlay-color': overlayColor,
-                                'title-size': unit(titleSize),
-                                'title-weight': titleWeight,
-                                'title-tracking': unit(titleTracking),
-                                'subtitle-size': unit(subtitleSize),
-                            }),
-                            ...css,
-                        }}
-                    >
-                        {dim > 0 && <div className="wp-block-hero__overlay" aria-hidden="true" />}
-                        <div className="wp-block-hero__inner">
-                            <h1 className="wp-block-hero__title">{title}</h1>
-                            {subtitle && <p className="wp-block-hero__subtitle">{subtitle}</p>}
-                            {buttons?.length > 0 && (
-                                <div className="wp-block-hero__actions">
-                                    {buttons.map((b: any, i: number) => (
-                                        <a
-                                            key={i}
-                                            href={b.href || "#"}
-                                            className={cx('wp-block-hero__button', b.variant === "outline" && 'wp-block-hero__button--outline')}
-                                            onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                                        >
-                                            {b.label}
-                                        </a>
-                                    ))}
-                                </div>
-                            )}
-                        </div>
-                    </section>
-                );
-            }
+            render: ({ puck, ...props }: any) => <HeroBlock {...props} isEditing={puck?.isEditing} />
         },
 
         Quote: {
