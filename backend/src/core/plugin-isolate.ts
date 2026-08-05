@@ -963,7 +963,9 @@ const HOST_AUTH_COOKIE_RE = /^wordjs_token$|csrf|xsrf|session/i;
 // with the callHost('…') calls in plugin-worker.js.
 const ALLOWED_BRIDGE_METHODS = new Set([
     'options.get', 'options.set',
-    'db.all', 'db.get', 'db.run', 'db.createTable', 'db.getType',
+    // db.batch is the SAME capability as a loop of db.all/db.run — it re-validates every statement
+    // with the identical permission + SQL guard host-side and refuses DDL (see plugin-api.ts).
+    'db.all', 'db.get', 'db.run', 'db.batch', 'db.createTable', 'db.getType',
     'hooks.doAction',
     'fs.read', 'fs.write',
     'mail', 'notify',

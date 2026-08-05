@@ -546,6 +546,67 @@ function createPluginApi(slug: string) {
                 if (m) { recordTableCreator(m[1], slug); await iso.grantNewTable(slug, m[1]); }
                 return res;
             },
+            /**
+             * Run SEVERAL statements in ONE host round-trip.
+             *
+             * Purely a transport optimisation: every statement goes through the SAME permission
+             * check and the SAME SQL guard its single-statement counterpart would use, and executes
+             * through the same runScoped path — a plugin can do nothing here it could not do with a
+             * loop of db.all/get/run, it just stops paying an IPC round-trip per statement (a
+             * 20-query handler was ~5-12ms of pure messaging).
+             *
+             * DDL is deliberately NOT accepted: CREATE/ALTER/DROP carry ownership recording and a
+             * GRANT that must stay on the explicit single-statement path.
+             *
+             * NOT atomic. On Postgres/MySQL each statement runs on the plugin's own role connection
+             * (plugin-db-isolation.runScoped), so a host-side transaction could not span them —
+             * claiming atomicity here would be a lie that plugin authors would build on. Failure
+             * behaves exactly like the equivalent sequential calls: the statements before the
+             * failing one have applied.
+             */
+            async batch(statements: any) {
+                if (!Array.isArray(statements) || !statements.length) {
+                    throw new Error('db.batch expects a non-empty array of [sql, params] pairs.');
+                }
+                if (statements.length > 200) {
+                    throw new Error('db.batch accepts at most 200 statements per call.');
+                }
+                const iso = require('./plugin-db-isolation');
+                const READ_VERBS = ['select', 'with'];
+                const WRITE_VERBS = ['insert', 'update', 'delete', 'replace'];
+
+                // Validate EVERY statement BEFORE running any of them, so a batch with an illegal
+                // statement in the middle cannot half-apply the legal ones ahead of it.
+                const plan: { method: 'all' | 'run'; sql: string; params: any[] }[] = [];
+                for (const entry of statements) {
+                    const [sql, params = []] = Array.isArray(entry) ? entry : [entry, []];
+                    if (typeof sql !== 'string' || !sql.trim()) {
+                        throw new Error('db.batch: each entry must be [sql, params] with a non-empty sql string.');
+                    }
+                    if (!Array.isArray(params)) {
+                        throw new Error('db.batch: params must be an array.');
+                    }
+                    const isRead = /^\s*(?:select|with)\b/i.test(sql);
+                    if (isRead) {
+                        verifyPermission('database', 'read');
+                        assertSqlAllowed(sql, READ_VERBS, tablePrefix, slug);
+                        plan.push({ method: 'all', sql, params });
+                    } else {
+                        if (/^\s*(?:create|alter|drop)\b/i.test(sql)) {
+                            throw new Error('db.batch does not accept DDL (CREATE/ALTER/DROP) — use db.run or db.createTable so table ownership and grants are recorded.');
+                        }
+                        verifyPermission('database', 'write');
+                        assertSqlAllowed(sql, WRITE_VERBS, tablePrefix, slug);
+                        plan.push({ method: 'run', sql, params });
+                    }
+                }
+
+                const results: any[] = [];
+                for (const step of plan) {
+                    results.push(await iso.runScoped(slug, step.method, step.sql, step.params));
+                }
+                return results;
+            },
             // Create a table — ALWAYS under the plugin's own prefix (no trusted bypass), so it can't
             // create or shadow core / other plugins' tables.
             async createTable(name: string, columns: string[]) {
