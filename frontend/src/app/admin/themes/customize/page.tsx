@@ -71,6 +71,12 @@ const ALL_TOKENS: TokenDef[] = TOKEN_GROUPS.flatMap((g) => g.tokens);
 // Key/value sanitizer — mirror the server's contract: only --wjs-* keys, short values without CSS
 // control characters. Returns a clean object suitable for JSON.stringify into the settings key.
 const TOKEN_KEY_RE = /^--wjs-[a-z0-9-]+$/;
+// SECURITY mirror of ThemeTokenOverlay: `url(//attacker.example/x)` is a protocol-relative URL — no
+// `:` needed — so ban `//`, `url(` (any spacing/case) and backslash escapes outright. Keep this
+// helper byte-identical with components/public/ThemeTokenOverlay.tsx (pinned by test).
+function isForbiddenTokenValue(value: string): boolean {
+    return value.includes("//") || /url\s*\(/i.test(value) || value.includes("\\");
+}
 function sanitizeMods(input: Record<string, string>): Record<string, string> {
     const out: Record<string, string> = {};
     for (const [key, raw] of Object.entries(input)) {
@@ -79,6 +85,7 @@ function sanitizeMods(input: Record<string, string>): Record<string, string> {
         if (!value) continue; // drop empties (= no override for this token)
         if (value.length > 120) continue;
         if (/[;{}:<>]/.test(value)) continue;
+        if (isForbiddenTokenValue(value)) continue;
         out[key] = value;
     }
     return out;
