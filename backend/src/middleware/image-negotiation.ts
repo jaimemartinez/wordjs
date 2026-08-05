@@ -28,7 +28,21 @@ const RASTER = new Set(['.jpg', '.jpeg', '.png']);
 //   2. A global concurrency budget + a per-derivative in-flight lock stop parallel/duplicate transcodes from
 //      stacking sharp pipelines. Over budget → fail SAFE by serving the original untouched.
 const MAX_INPUT_PIXELS = 40_000_000; // ~40MP, far above any legitimate web image
-const MAX_CONCURRENT_TRANSCODES = 3;
+// limitInputPixels counts PIXELS, but the cost that OOMs a host is the DECODED buffer plus the
+// encoder's working set, and an AVIF encode costs far more than the buffer itself. Measured on this
+// repo's sharp/libvips, encoding one JPEG straight to AVIF at full resolution:
+//     6000x4000 (68.7MB decoded) -> 1120MB peak RSS, 18.3s
+//     3464x2309 (22.9MB decoded) ->  521MB peak RSS,  6.4s
+//     1920x1280 ( 7.0MB decoded) ->  336MB peak RSS,  2.4s
+// So a 24MP original — well under the 40MP pixel cap — cost 1.1GB and 18s of CPU for ONE anonymous
+// GET, and the concurrency budget multiplied that by three. Bound the DECODED SIZE instead and skip
+// negotiation above it: the original is then served untouched, so every client still gets identical
+// bytes and identical dimensions (resizing here instead would silently hand Chrome a different image
+// size than Safari for the SAME URL). This costs almost nothing in practice — the F5 width ladder
+// means the variants actually referenced by srcset are <=1920 wide, far below this budget; only the
+// full-size original skips negotiation.
+const MAX_DECODED_BYTES = 24 * 1024 * 1024; // ~8MP RGB
+const MAX_CONCURRENT_TRANSCODES = 2;
 let activeTranscodes = 0;
 // Module-scoped so the budget/lock are shared across ALL requests (and any factory instances).
 const inFlight = new Map<string, Promise<void>>(); // cachePath -> ongoing transcode
@@ -53,6 +67,14 @@ export function imageNegotiation(uploadsDir: string) {
         // genuinely prevents escaping the uploads root; anything else falls through to serve the original.
         let rel: string;
         try { rel = decodeURIComponent(req.path).replace(/\\/g, '/').replace(/^\/+/, ''); } catch { return next(); }
+        // CANONICALIZE before anything derives from it. path.join below collapses duplicate slashes but
+        // the cache key did not, so '/a/b.jpg', '/a//b.jpg' and '/a///b.jpg' resolved to the SAME file on
+        // disk under DIFFERENT keys: every one was a cache MISS that started a fresh full-resolution
+        // transcode. The slash count is unbounded, so a single publicly-linked image was an unlimited
+        // supply of cache misses for an anonymous client — the amplifier that turned the per-request cost
+        // measured above into a sustained one, and grew .derivatives without limit as a side effect.
+        // Normalizing here keys the cache on the same identity path.join resolves.
+        rel = path.posix.normalize(rel).replace(/^\/+/, '');
         if (rel.includes('..')) return next(); // reject traversal — the CodeQL-recognized path-injection barrier
         if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(rel)) return next(); // strict filename charset (defense-in-depth)
         const srcPath = path.join(root, rel);
@@ -99,6 +121,15 @@ export function imageNegotiation(uploadsDir: string) {
                 fs.mkdirSync(path.dirname(cachePath), { recursive: true });
                 const tmp = `${cachePath}.tmp-${process.pid}-${Date.now()}`;
                 const pipeline = sharp(srcPath, { failOn: 'none', limitInputPixels: MAX_INPUT_PIXELS });
+                // Bound the DECODED size before committing to an encode (see MAX_DECODED_BYTES). metadata()
+                // only parses the header, so this costs nothing next to the encode it may avoid. Over
+                // budget → throw, which the caller already handles by serving the original untouched.
+                const meta = await pipeline.metadata();
+                const decodedBytes = (meta.width || 0) * (meta.height || 0) * (meta.channels || 3)
+                    * (meta.depth === 'ushort' ? 2 : 1);
+                if (!meta.width || !meta.height || decodedBytes > MAX_DECODED_BYTES) {
+                    throw new Error(`image-negotiation: source too large to transcode (${decodedBytes} decoded bytes)`);
+                }
                 if (fmt === 'avif') await pipeline.avif({ quality: 50, effort: 4 }).toFile(tmp);
                 else await pipeline.webp({ quality: 78 }).toFile(tmp);
                 fs.renameSync(tmp, cachePath); // atomic publish (same fs)
