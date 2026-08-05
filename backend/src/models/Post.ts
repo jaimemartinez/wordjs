@@ -703,11 +703,15 @@ class Post {
     static async updateMeta(postId: any, key: string, value: any) {
         const serialized = typeof value === 'object' ? JSON.stringify(value) : String(value);
 
-        const existing = await dbAsync.get('SELECT meta_id FROM post_meta WHERE post_id = ? AND meta_key = ?', [postId, key]);
-
-        if (existing) {
-            await dbAsync.run('UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = ?', [serialized, postId, key]);
-        } else {
+        // UPDATE first and INSERT only when it matched nothing: the common case (a key that already
+        // exists — every re-save of a page's _puck_data) drops from SELECT+UPDATE to one statement.
+        // Deliberately NOT an ON CONFLICT upsert: that needs a UNIQUE index on
+        // (post_id, meta_key), which existing installs may not be able to create (legacy duplicate
+        // rows) — adding one would need a dedupe migration first. This keeps today's semantics
+        // exactly, including how duplicates behave (the UPDATE touches them all, as before).
+        const res = await dbAsync.run('UPDATE post_meta SET meta_value = ? WHERE post_id = ? AND meta_key = ?', [serialized, postId, key]);
+        const changed = res && (res.changes ?? res.rowCount ?? 0);
+        if (!changed) {
             await dbAsync.run('INSERT INTO post_meta (post_id, meta_key, meta_value) VALUES (?, ?, ?)', [postId, key, serialized]);
         }
 
@@ -893,54 +897,108 @@ class Post {
      * Set post terms
      * Equivalent to wp_set_post_terms()
      */
+    /**
+     * Attach a post's terms for one taxonomy.
+     *
+     * Cost, before: 1 DELETE + THREE queries per term (resolve term_taxonomy_id, probe for an
+     * existing relationship, insert) + a recount of EVERY term in the taxonomy. Saving a post with
+     * 5 categories was ~17 statements, each its own fsync on the default SQLite install.
+     *
+     * Now: one IN() resolves every term_taxonomy_id, one IN() reads the relationships that already
+     * exist, and the writes run inside ONE transaction (one fsync) — with the recount SCOPED to the
+     * term_taxonomy rows this call actually touched instead of the whole taxonomy.
+     */
     static async setTerms(postId: any, termIds: any, taxonomy: string, append = false) {
+        const ids = (Array.isArray(termIds) ? termIds : []).filter((t: any) => t !== undefined && t !== null);
+
+        // Resolve every requested term in ONE query (was one per term).
+        let rows: any[] = [];
+        if (ids.length) {
+            const ph = ids.map(() => '?').join(',');
+            rows = await dbAsync.all(
+                `SELECT term_taxonomy_id, term_id FROM term_taxonomy WHERE taxonomy = ? AND term_id IN (${ph})`,
+                [taxonomy, ...ids]
+            );
+        }
+        const ttIds: any[] = rows.map((r: any) => r.term_taxonomy_id);
+
+        // Which relationships already exist (only matters when appending — a non-append call deletes
+        // them first, so every insert below is new).
+        let existing = new Set<any>();
+        if (append && ttIds.length) {
+            const ph = ttIds.map(() => '?').join(',');
+            const have = await dbAsync.all(
+                `SELECT term_taxonomy_id FROM term_relationships WHERE object_id = ? AND term_taxonomy_id IN (${ph})`,
+                [postId, ...ttIds]
+            );
+            existing = new Set(have.map((r: any) => r.term_taxonomy_id));
+        }
+
+        // The rows whose count this call can change: the ones being attached, PLUS (on a replace)
+        // whatever the post was in before — otherwise a term the post just LEFT keeps a stale count.
+        const affected = new Set<any>(ttIds);
         if (!append) {
-            // Remove existing terms of this taxonomy
-            await dbAsync.run(`
-        DELETE FROM term_relationships 
-        WHERE object_id = ? 
-        AND term_taxonomy_id IN (
-          SELECT term_taxonomy_id FROM term_taxonomy WHERE taxonomy = ?
-        )
-      `, [postId, taxonomy]);
+            const prev = await dbAsync.all(`
+                SELECT tr.term_taxonomy_id FROM term_relationships tr
+                JOIN term_taxonomy tt ON tt.term_taxonomy_id = tr.term_taxonomy_id
+                WHERE tr.object_id = ? AND tt.taxonomy = ?
+            `, [postId, taxonomy]);
+            for (const r of prev) affected.add(r.term_taxonomy_id);
         }
 
-        // Add new terms
-        for (const termId of termIds) {
-            const tt = await dbAsync.get('SELECT term_taxonomy_id FROM term_taxonomy WHERE term_id = ? AND taxonomy = ?', [termId, taxonomy]);
-            if (tt) {
-                // INSERT OR IGNORE is SQLite specific. 
-                // Postgres equivalent is INSERT ... ON CONFLICT DO NOTHING
-                // To support both, we might check existence first or use generic syntax if adapter supports it?
-                // Or Adapter handles parsing "INSERT OR IGNORE" to PG equivalent?
-                // Our Postgres Driver heuristic was simple.
-
-                // Let's rely on Driver normalization OR conditional logic.
-                // Or simply: check existence.
-
-                // Better approach: Check if exists to avoid ON CONFLICT complexity without driver support
-                const exists = await dbAsync.get('SELECT 1 FROM term_relationships WHERE object_id = ? AND term_taxonomy_id = ?', [postId, tt.term_taxonomy_id]);
-                if (!exists) {
-                    await dbAsync.run('INSERT INTO term_relationships (object_id, term_taxonomy_id, term_order) VALUES (?, ?, 0)', [postId, tt.term_taxonomy_id]);
-                }
+        const writes = async (q: any) => {
+            if (!append) {
+                await q.run(`
+                    DELETE FROM term_relationships
+                    WHERE object_id = ?
+                    AND term_taxonomy_id IN (
+                      SELECT term_taxonomy_id FROM term_taxonomy WHERE taxonomy = ?
+                    )
+                `, [postId, taxonomy]);
             }
-        }
+            for (const ttId of ttIds) {
+                if (existing.has(ttId)) continue;
+                await q.run('INSERT INTO term_relationships (object_id, term_taxonomy_id, term_order) VALUES (?, ?, 0)', [postId, ttId]);
+            }
+            await Post.updateTermCounts(taxonomy, [...affected], q);
+        };
 
-        // Update term counts
-        await Post.updateTermCounts(taxonomy);
+        // One transaction ⇒ one fsync for the whole attachment. Drivers all implement transaction();
+        // the fallback keeps working on any that doesn't (behaviour identical, just not atomic).
+        if (typeof dbAsync.transaction === 'function') {
+            await dbAsync.transaction(writes);
+        } else {
+            await writes(dbAsync);
+        }
     }
 
     /**
-     * Update term counts
+     * Recompute term counts.
+     *
+     * `termTaxonomyIds` scopes the update to the rows a save actually touched — recounting an entire
+     * taxonomy (the old unconditional behaviour) rescans every relationship of every term on a site
+     * that may have thousands. Omit it to recount the whole taxonomy, which is what a bulk import or
+     * a repair pass wants. `q` lets a caller run this inside its own transaction.
      */
-    static async updateTermCounts(taxonomy: string) {
-        // Complex subquery update
-        // SQLite: UPDATE term_taxonomy SET count = (SELECT ...) WHERE taxonomy = ?
-        // Postgres: UPDATE term_taxonomy SET count = (SELECT ...) WHERE taxonomy = $1
-        // This standard SQL should work in both if logic is sound.
+    static async updateTermCounts(taxonomy: string, termTaxonomyIds?: any[], q: any = dbAsync) {
+        const scoped = Array.isArray(termTaxonomyIds) && termTaxonomyIds.length;
+        if (scoped) {
+            const ph = termTaxonomyIds!.map(() => '?').join(',');
+            await q.run(`
+      UPDATE term_taxonomy
+      SET count = (
+        SELECT COUNT(*) FROM term_relationships tr
+        JOIN posts p ON tr.object_id = p.id
+        WHERE tr.term_taxonomy_id = term_taxonomy.term_taxonomy_id
+        AND p.post_status = 'publish'
+      )
+      WHERE taxonomy = ? AND term_taxonomy_id IN (${ph})
+    `, [taxonomy, ...termTaxonomyIds!]);
+            return;
+        }
 
-        await dbAsync.run(`
-      UPDATE term_taxonomy 
+        await q.run(`
+      UPDATE term_taxonomy
       SET count = (
         SELECT COUNT(*) FROM term_relationships tr
         JOIN posts p ON tr.object_id = p.id
