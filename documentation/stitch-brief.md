@@ -25,36 +25,69 @@ After generating, `get_project` returns the RESOLVED palette under `namedColors`
 (`surface`, `on_surface`, `outline`, `primary`, `secondary`, `error`, and their containers).
 Map those verbatim — they are exact values, so nothing has to be eyeballed from a screenshot.
 
-## 2. Screen prompt
+## 2. What to ask Stitch for, and what not to
 
-> Generate ONE desktop screen, a single scrolling page, containing the following sections in
-> this exact order and nothing else. This is a component specimen sheet for a design system,
-> not a marketing page: every section must be present even if it would not appear on a real
-> home page, and no section may be added, merged, reordered or replaced.
->
-> - **Site header** — wordmark left, horizontal nav, one small outlined button at the right end. Show its parts: link.
-> - **Hero band** — display headline, one paragraph, a solid primary button and an outlined one side by side. Show its parts: actions, button, inner, overlay, subtitle, title.
-> - **Body copy and headings** — H1 through H4 in order, a paragraph, an inline link, and a pull quote with its citation. Show its parts: cite, mark.
-> - **Card grid** — three cards in a row: icon, title, description. Show its parts: description, icon, title, items.
-> - **Pricing row** — three tiers, the middle one visually featured. Show its parts: button, feature, features, name, period, plan, price.
-> - **Stats strip** — three figures with captions. Show its parts: item, label, value.
-> - **Testimonial** — quote, author name, role. Show its parts: author, avatar, mark, person, quote, role.
-> - **Accordion and tabs** — one open item and one closed; one selected tab and two idle. Show its parts: header, icon, item, panel, list, tab.
-> - **Form and search** — a text input in rest AND focus state, plus a submit button. Show its parts: button, input.
-> - **Call to action banner** — full-width band, headline, one button. Show its parts: button, subtitle, title.
-> - **Post list** — three post cards: image slot, date, title, excerpt. Show its parts: card, date, empty, excerpt, thumb, title, card-title, heading, item, link, note.
-> - **Site footer** — wordmark, three link columns, social icons, fine top border. Show its parts: link.
->
-> Rules:
-> - Show interaction states explicitly: every button and link appears twice, once at rest and
->   once hovered, labelled. The search input appears at rest and focused.
-> - Use flat fills and hairline borders. No drop shadows unless the brand genuinely uses them,
->   and then only one elevation level.
-> - One accent colour, used sparingly. Body copy stays on the neutral ink colour.
-> - No bespoke section: no carousels, no split-screen collages, no overlapping cards, no
->   diagonal dividers. The renderer owns the markup and cannot reproduce them.
-> - No sidebar in this screen; sidebars are a layout switch, listed below.
-> - Do not embed images beyond simple placeholder rectangles for the post cards.
+**The design system above is the deliverable.** It maps onto a theme field by field and its
+resolved palette is exact — a theme can be finished from it without a single screen.
+
+**Screens are reference, and they must be asked for in small pieces.** Measured here: asking
+for all twelve surfaces in one prompt returns a screen — long after the tool times out — that
+is missing about half of them (pricing, testimonial, accordion, tabs, search field, CTA band).
+Asking for four components returned four out of four. Stitch generates product screens, so a
+long inventory gets condensed into a plausible page while a short one is honoured literally.
+Generate the screens below ONE AT A TIME with the same design system id, and expect each call
+to outlive its timeout: poll `list_screens` afterwards instead of retrying.
+
+### Screen 1 — Chrome and hero
+
+> A landing top: slim header with a wordmark left, a horizontal nav and one small outlined button at the right end; below it a hero band with a display headline, one paragraph and two buttons side by side (one solid, one outlined).
+> Make these parts visible: link, actions, button, inner, overlay, subtitle, title.
+> Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
+> shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
+> collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
+> markup and cannot reproduce them.
+
+### Screen 2 — Editorial column
+
+> An article page: H1 through H4 in order, body paragraphs with one inline link, and a pull quote with its citation.
+> Make these parts visible: cite, mark.
+> Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
+> shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
+> collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
+> markup and cannot reproduce them.
+
+### Screen 3 — Cards, pricing and figures
+
+> A plans page: a row of three feature cards (icon, title, description), a pricing row of three tiers with the middle one featured, and a strip of three big figures with captions.
+> Make these parts visible: description, icon, title, items, button, feature, features, name, period, plan, price, item, label, value.
+> Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
+> shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
+> collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
+> markup and cannot reproduce them.
+
+### Screen 4 — Disclosure and forms
+
+> A support page: an FAQ accordion with one item open and one closed, a tab bar with one tab selected, a search field, and a single customer testimonial with author and role.
+> Make these parts visible: header, icon, item, panel, list, tab, button, input, author, avatar, mark, person, quote, role.
+> Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
+> shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
+> collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
+> markup and cannot reproduce them.
+
+### Screen 5 — Post list and footer
+
+> A blog index: three post cards (placeholder image, date, title, excerpt), a full-width call-to-action band with a headline and one button, and the site footer with a wordmark, three link columns and social icons.
+> Make these parts visible: card, date, empty, excerpt, thumb, title, card-title, heading, item, link, note, button, subtitle.
+> Show each button and link at rest and hovered. Flat fills, hairline borders, no drop
+> shadows, one accent used sparingly, body copy on the neutral ink colour. No carousels,
+> collages, overlapping cards or diagonal dividers, and no sidebar — the renderer owns the
+> markup and cannot reproduce them.
+
+### Do not ask for these
+
+`audio-player`, `video-embed`, `html-embed`, `divider`, `spacer`, `columns`, `flex-row`, `section`, `table`, `icon-list`, `image`, `search-wrap` — Stitch has no vocabulary for them, so the
+request is dropped and the rest of the screen drifts to fill the space. They inherit the
+framework defaults, already driven by the same tokens the design system supplies.
 
 ## 3. Structure the theme can switch on
 
