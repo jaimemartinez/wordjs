@@ -14,7 +14,7 @@ import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPi
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
 import { blockVars, cx, unit } from "./puck/blockVars";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock } from "./content/blocks";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -1967,52 +1967,7 @@ const baseConfig: any = {
                 accent: "", bg: "", pad: "", radius: "", gap: "", priceSize: "", highlightScale: "",
                 css: {}
             },
-            render: ({ plans, accent, bg, pad, radius, gap, priceSize, highlightScale, css, puck }: any) => (
-                <div
-                    className="wp-block-pricing"
-                    style={{
-                        ...blockVars('pricing', {
-                            columns: plans?.length || 3,
-                            gap: unit(gap),
-                            accent,
-                            bg,
-                            pad: unit(pad),
-                            radius: unit(radius),
-                            'price-size': unit(priceSize),
-                            'highlight-scale': highlightScale,
-                        }),
-                        ...css,
-                    }}
-                >
-                    {plans?.map((plan: any, index: number) => (
-                        <div
-                            key={index}
-                            className={cx('wp-block-pricing__plan', plan.highlighted === "true" && 'wp-block-pricing__plan--highlighted')}
-                        >
-                            <h3 className="wp-block-pricing__name">{plan.name}</h3>
-                            <div className="wp-block-pricing__price">
-                                {plan.price}
-                                <span className="wp-block-pricing__period">{plan.period}</span>
-                            </div>
-                            <ul className="wp-block-pricing__features">
-                                {plan.features?.split("\n").map((feature: string, i: number) => (
-                                    <li key={i} className="wp-block-pricing__feature">
-                                        <i className="fa-solid fa-check"></i>
-                                        {feature}
-                                    </li>
-                                ))}
-                            </ul>
-                            <a
-                                href={plan.buttonLink}
-                                className="wp-block-pricing__button"
-                                onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                            >
-                                {plan.buttonText}
-                            </a>
-                        </div>
-                    ))}
-                </div>
-            )
+            render: ({ puck, ...props }: any) => <PricingTableBlock {...props} isEditing={puck?.isEditing} />
         },
 
         Testimonial: {
@@ -2045,41 +2000,7 @@ const baseConfig: any = {
                 bg: "", pad: "", radius: "", quoteSize: "", accent: "", avatarSize: "",
                 css: {}
             },
-            render: ({ quote, author, role, avatar, bg, pad, radius, quoteSize, accent, avatarSize, css }: any) => (
-                <div
-                    className="wp-block-testimonial"
-                    style={{
-                        ...blockVars('testimonial', {
-                            bg,
-                            pad: unit(pad),
-                            radius: unit(radius),
-                            'quote-size': unit(quoteSize),
-                            'mark-color': accent,
-                            'avatar-bg': accent,
-                            'avatar-size': unit(avatarSize),
-                        }),
-                        ...css,
-                    }}
-                >
-                    <div className="wp-block-testimonial__mark" aria-hidden="true">&quot;</div>
-                    <p className="wp-block-testimonial__quote">{quote}</p>
-                    <div className="wp-block-testimonial__person">
-                        {avatar ? (
-                            <img src={avatar} alt={author} className="wp-block-testimonial__avatar" />
-                        ) : (
-                            // Initials fallback — the old default pointed at i.pravatar.cc (external
-                            // request + random stranger's face on every fresh testimonial).
-                            <div aria-hidden className="wp-block-testimonial__avatar wp-block-testimonial__avatar--initials">
-                                {(author || "?").trim().charAt(0).toUpperCase()}
-                            </div>
-                        )}
-                        <div>
-                            <div className="wp-block-testimonial__author">{author}</div>
-                            <div className="wp-block-testimonial__role">{role}</div>
-                        </div>
-                    </div>
-                </div>
-            )
+            render: (props: any) => <TestimonialBlock {...props} />
         },
 
         CTABanner: {
@@ -2127,33 +2048,7 @@ const baseConfig: any = {
                 bg: "", color: "", pad: "", radius: "", titleSize: "", buttonBg: "", buttonColor: "",
                 css: {}
             },
-            render: ({ title, subtitle, buttonText, buttonLink, variant, bg, color, pad, radius, titleSize, buttonBg, buttonColor, css, puck }: any) => (
-                <div
-                    className={cx('wp-block-cta-banner', `cta-variant-${variant || 'gradient'}`)}
-                    style={{
-                        ...blockVars('cta', {
-                            bg,
-                            color,
-                            pad: unit(pad),
-                            radius: unit(radius),
-                            'title-size': unit(titleSize),
-                            'button-bg': buttonBg,
-                            'button-color': buttonColor,
-                        }),
-                        ...css,
-                    }}
-                >
-                    <h2 className="wp-block-cta-banner__title">{title}</h2>
-                    <p className="wp-block-cta-banner__subtitle">{subtitle}</p>
-                    <a
-                        href={buttonLink}
-                        className="wp-block-cta-banner__button"
-                        onClick={puck?.isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}
-                    >
-                        {buttonText}
-                    </a>
-                </div>
-            )
+            render: ({ puck, ...props }: any) => <CTABannerBlock {...props} isEditing={puck?.isEditing} />
         },
 
         // ==========================================
