@@ -502,10 +502,25 @@ function writeCompiled(dir: string, blockCss: string): void {
   try { existing = fs.readFileSync(target, 'utf8'); } catch { /* new file */ }
   let next: string;
   if (existing !== null) {
-    const start = existing.indexOf(MARKER_START_PREFIX);
-    const endAt = existing.indexOf(MARKER_END);
-    if (start !== -1 && endAt !== -1 && endAt >= start) {
-      next = existing.slice(0, start) + blockCss + existing.slice(endAt + MARKER_END.length);
+    // Replace EVERY marked block, not just the first pair. Taking the first start and the first end
+    // leaves any later block untouched, and a stale one sitting AFTER the fresh one wins the cascade —
+    // the theme then renders from CSS the author already replaced. Duplicates collapse into one.
+    let rest = existing;
+    let out = '';
+    let replaced = false;
+    for (;;) {
+      const start = rest.indexOf(MARKER_START_PREFIX);
+      if (start === -1) break;
+      const endAt = rest.indexOf(MARKER_END, start);
+      // A start marker with no closing one is not a block: leave the remainder alone rather than
+      // guess where it ends (guessing would delete the author's CSS).
+      if (endAt === -1) break;
+      out += rest.slice(0, start) + (replaced ? '' : blockCss);
+      replaced = true;
+      rest = rest.slice(endAt + MARKER_END.length);
+    }
+    if (replaced) {
+      next = out + rest;
     } else {
       next = existing.length > 0 ? `${blockCss}\n\n${existing}` : `${blockCss}\n`;
     }
