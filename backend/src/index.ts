@@ -420,6 +420,11 @@ app.get('/health', async (req: Request, res: Response) => {
 // API rate limiter and CSRF, which are all scoped to config.api.prefix) so they are unauthenticated,
 // CSRF-free and never 503'd by the setup guard. Set true at the end of initialize().
 let appReady = false;
+// Plugin isolates are forked one at a time (CrashGuard must be able to attribute a boot crash to
+// ONE plugin), so with several plugins that phase dominates boot. The listener now opens BEFORE it
+// in non-embedded modes, which means core routes serve while plugins are still coming up — and a
+// request for a plugin route in that window must say "not yet", not "does not exist".
+let pluginsReady = false;
 
 // Liveness — the process is up and the event loop is responsive. Deliberately does NOT touch the DB.
 app.get('/healthz', (req: Request, res: Response) => {
@@ -549,6 +554,20 @@ app.use((req: Request, res: Response, next: NextFunction) => {
 // Admin-enforced MFA-by-role gate: blocks a past-grace, un-enrolled cookie session (of a policy-required
 // role) from everything but the enrollment/session allowlist. Mounted AFTER csrf + the setup gate and
 // BEFORE the routers; a no-op (one cached option read) when no role requires MFA.
+// A plugin route requested while the isolates are still forking gets an honest 503 + Retry-After
+// instead of a 404 that reads as "this endpoint does not exist" (and would be cached as such by a
+// CDN). Scoped to /plugin/* only: every core route is fully functional at this point.
+app.use(`${config.api.prefix}/plugin`, (req: Request, res: Response, next: NextFunction) => {
+    if (pluginsReady) return next();
+    res.setHeader('Retry-After', '5');
+    res.setHeader('Cache-Control', 'no-store');
+    return res.status(503).json({
+        code: 'plugins_starting',
+        message: 'Plugins are still starting. Retry in a moment.',
+        data: { status: 503 },
+    });
+});
+
 const { mfaComplianceGate } = require('./middleware/auth');
 app.use(config.api.prefix, mfaComplianceGate);
 
@@ -627,227 +646,13 @@ async function initialize() {
     // Check Installation Status
     const { isInstalled } = require('./core/configManager');
 
-    if (isInstalled()) {
-        // Initialize Database
-        console.log('📦 Initializing database...');
-        // The driver manager automatically loads the correct driver from config
-        const { init, initializeDatabase } = require('./config/database');
-        await init();
-
-        // --- Multi-node boot guard ---------------------------------------------------------------
-        // Serialize the schema-migration + default-seeding section across replicas so concurrent
-        // boots can't double-apply migrations or create duplicate admin/category/option rows. The
-        // lease is heartbeat-renewed so a slow migration is never preempted mid-seed; if we can't get
-        // the lock (another node is initializing the shared DB) we FAIL CLOSED so the supervisor
-        // retries rather than seeding concurrently. No-op (always held) on SQLite (single host).
-        const distLock = require('./core/dist-lock');
-        await distLock.ensureLockTable();
-        const bootLock = await distLock.acquireBlocking('wordjs:boot', { ttlMs: 60000, renewMs: 20000, timeoutMs: 300000 });
-        if (!bootLock.held) {
-            throw new Error('Boot lock not acquired (another node is initializing the shared database); restarting to retry.');
-        }
-
-        await initializeDatabase();
-
-        // Initialize default options
-        console.log('⚙️  Setting up default options...');
-        await initDefaultOptions(config);
-
-        // Initialize cache setting now that the DB and options are ready
-        // (moved out of options.ts import-time to avoid a startup race).
-        await require('./core/options').initCacheSetting();
-
-        // Prime the L1 option cache with every autoload row in one query — /settings and the other
-        // hot option readers then serve from memory instead of one SELECT per option per request.
-        const preloaded = await require('./core/options').preloadAutoloadedOptions();
-        if (preloaded) console.log(`⚡ Option cache primed: ${preloaded} autoloaded options`);
-
-        // Load the per-plugin permission grants (Android-style, default-deny). Then a one-time,
-        // non-breaking backfill: grandfather the manifest-declared permissions of plugins that are
-        // ALREADY ACTIVE (and have no grant record yet) so flipping to default-deny doesn't break a
-        // running site — new activations stay default-deny. Best-effort; never blocks boot.
-        try {
-            await require('./core/plugin-permissions').loadGrants();
-            await require('./core/plugin-permissions').loadEgressHosts();
-            const { getActivePlugins, getAllPlugins } = require('./core/plugins');
-            const active: string[] = await getActivePlugins();
-            const all: any[] = await getAllPlugins();
-            const entries = all
-                .filter((p: any) => active.includes(p.slug))
-                .map((p: any) => ({
-                    slug: p.slug,
-                    requested: Array.from(new Set((p.permissions || [])
-                        .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
-                        .filter(Boolean))) as string[],
-                }));
-            await require('./core/plugin-permissions').backfillActive(entries);
-        } catch (e: any) {
-            console.warn('[PluginPermissions] load/backfill skipped:', e && e.message);
-        }
-
-        // Initialize Analytics Table
-        await require('./models/Analytics').init();
-
-
-
-        // Register routes that were not in the initial index.js routes list if needed
-        // But better to add it to src/routes/index.js if possible, OR just here dynamically.
-        // Let's add it to src/routes/index.js instead for cleanliness?
-        // Actually, looking at src/routes/index.js (I haven't seen it yet), but usually it's better.
-        // However, I can inject it here.
-        app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
-
-        const { initPostTypes } = require('./core/post-types');
-        await initPostTypes();
-
-        // Sync roles to ensure capabilities are up to date
-        const { loadRoles, syncRoles } = require('./core/roles');
-        await loadRoles();
-        await syncRoles(config.roles);
-
-        // Initialize Core Admin Menus
-        const { initCoreMenus } = require('./core/adminMenu');
-        initCoreMenus();
-
-        // Create default admin user if no users exist
-        const User = require('./models/User');
-        const userCount = await User.count();
-
-        if (userCount === 0) {
-            // A site that reaches this point is already reachable (in split/separate it is published
-            // through the gateway), so the bootstrap administrator must NOT have a guessable password.
-            // This used to hardcode admin/admin123 and print it as a suggestion — on an enrolled cluster
-            // node, which skipped the wizard, that shipped a live site with known credentials.
-            // The password is random, written 0600 next to the install token, and printed once.
-            const nodeCrypto = require('crypto');
-            const nodeFs = require('fs');
-            const nodePath = require('path');
-            // base64url of 24 bytes: no shell-hostile characters, ~192 bits.
-            const password = nodeCrypto.randomBytes(24).toString('base64url');
-
-            console.log('👤 No users found — creating the bootstrap administrator...');
-            await User.create({
-                username: 'admin',
-                email: 'admin@example.com',
-                password,
-                displayName: 'Administrator',
-                role: 'administrator'
-            });
-
-            const dataDir = nodePath.resolve(__dirname, '../data');
-            const pwFile = nodePath.join(dataDir, 'initial-admin-password');
-            let stored = '';
-            try {
-                if (!nodeFs.existsSync(dataDir)) nodeFs.mkdirSync(dataDir, { recursive: true });
-                nodeFs.writeFileSync(pwFile, `${password}\n`, { mode: 0o600 });
-                stored = `\n   (also written to ${pwFile}, mode 0600 — delete it once you have signed in)`;
-            } catch (e: any) {
-                // Never block boot on this: the password is printed above either way.
-                stored = `\n   (could not write ${pwFile}: ${e && e.message} — copy the password from this log)`;
-            }
-            console.log('');
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('🔑 Bootstrap administrator created — this is shown ONCE:');
-            console.log('');
-            console.log(`      user:     admin`);
-            console.log(`      password: ${password}`);
-            console.log(`${stored}`);
-            console.log('');
-            console.log('   ⚠️  Sign in and change it. Anyone who can read this log can use it.');
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('');
-        }
-
-        // Create default category if none exist
-        const Term = require('./models/Term');
-        const categoryCount = await Term.count({ taxonomy: 'category' });
-
-        if (categoryCount === 0) {
-            console.log('📁 Creating default category...');
-            // Await so the insert completes INSIDE the boot-lock critical section (matching the awaited
-            // User.create above). On Postgres multi-node the boot lock serializes default seeding; if the
-            // lease were released (line below) before this insert committed, a second node could pass its
-            // own categoryCount check and create a duplicate 'Uncategorized' (no UNIQUE backstop). (DATA-03)
-            await Term.create({
-                name: 'Uncategorized',
-                taxonomy: 'category',
-                slug: 'uncategorized',
-                description: 'Default category'
-            });
-        }
-
-        // Create default theme if none exist
-        const { createDefaultTheme } = require('./core/themes');
-        createDefaultTheme();
-
-        // Seeding done — release the boot guard (stops the heartbeat + frees the lease) so waiting
-        // nodes proceed; the rest of init (plugins, cron) is per-node. On a throw before here the
-        // process exits, its heartbeat timer dies with it, and the lease expires within ~ttl.
-        await bootLock.release();
-
-        // Reconcile any plugin update that was killed mid-flight (old code stashed, new code not yet
-        // installed) BEFORE loading plugins — so a plugin is never loaded from a half-updated directory.
-        try {
-            const { recoverInterruptedPluginUpdates } = require('./routes/plugins');
-            await recoverInterruptedPluginUpdates();
-        } catch (e: any) {
-            console.warn('[boot] plugin-update recovery skipped:', e && e.message);
-        }
-
-        // Load active plugins
-        console.log('🔌 Loading plugins...');
-        const { loadActivePlugins } = require('./core/plugins');
-        await loadActivePlugins();
-
-        // DEV hot-reload: watch each active isolated plugin's dir and re-spawn its child process
-        // on change (re-runs the AST scan). Hard no-op outside development; guarded so a watcher
-        // failure can never break boot.
-        try {
-            const { startPluginDevWatch } = require('./core/plugin-dev-watch');
-            await startPluginDevWatch();
-        } catch (e: any) {
-            console.warn('[plugin-dev-watch] not started:', e && e.message);
-        }
-
-        // Start cron system
-        const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
-        await initDefaultCronEvents();
-        startCron();
-
-        // Multi-node coherence: refresh in-process caches (roles) on cross-node option changes, and
-        // join the cluster notification bus so SSE pushes reach clients on any node. No-op w/o Redis.
-        require('./core/coherence').initCoherence();
-        require('./core/notifications').initClusterBus();
-
-        // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
-        require('./core/webhooks').initWebhooks();
-
-        // Expose Cron API to Plugins via global.wordjs
-        global.wordjs = global.wordjs || {};
-        global.wordjs.scheduleEvent = scheduleEvent;
-        global.wordjs.scheduleSingleEvent = scheduleSingleEvent;
-        global.wordjs.unscheduleEvent = unscheduleEvent;
-        global.wordjs.nextScheduled = nextScheduled;
-
-        // Initialize Robust Theme Engine
-        console.log('🎨 Initializing Theme Engine...');
-        const themeEngine = require('./core/theme-engine');
-        await themeEngine.init();
-
-        // Fire init action
-        await doAction('init');
-    } else {
-        console.log('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
-        console.log('   Waiting for interactive installation via Frontend...');
-
-        // SECURITY: mint + print the one-time install token. The pre-install setup endpoints
-        // (/setup/install, /setup/test-db) require it, so a not-yet-installed instance can't be
-        // taken over by whoever reaches it first. Held in memory only; a fresh token is minted on
-        // each boot while the instance remains uninstalled.
-        require('./core/install-token').generateInstallToken();
-    }
-
-    // Register 404 and error handlers AFTER plugins (so plugin routes work)
+    // 404 + error handlers, then the LISTENER — both BEFORE plugins now, so core routes serve while
+    // the isolates are still forking (they fork one at a time; CrashGuard must be able to blame ONE
+    // plugin for a boot crash, so that phase cannot be parallelised). Plugin routes register later
+    // and would land BEHIND these two handlers, so loadActivePlugins is followed by
+    // fixMiddlewareOrder(), the same stack-reordering this codebase already uses for runtime
+    // activation. Requests for a plugin route in the window hit the /plugin/* 503 guard above.
+    // EMBEDDED (monolith) is unaffected: it owns the single listener and boots its own way.
     app.use(notFound);
     app.use(errorHandler);
 
@@ -1121,6 +926,235 @@ async function initialize() {
         console.log('');
     });
     }
+
+    if (isInstalled()) {
+        // Initialize Database
+        console.log('📦 Initializing database...');
+        // The driver manager automatically loads the correct driver from config
+        const { init, initializeDatabase } = require('./config/database');
+        await init();
+
+        // --- Multi-node boot guard ---------------------------------------------------------------
+        // Serialize the schema-migration + default-seeding section across replicas so concurrent
+        // boots can't double-apply migrations or create duplicate admin/category/option rows. The
+        // lease is heartbeat-renewed so a slow migration is never preempted mid-seed; if we can't get
+        // the lock (another node is initializing the shared DB) we FAIL CLOSED so the supervisor
+        // retries rather than seeding concurrently. No-op (always held) on SQLite (single host).
+        const distLock = require('./core/dist-lock');
+        await distLock.ensureLockTable();
+        const bootLock = await distLock.acquireBlocking('wordjs:boot', { ttlMs: 60000, renewMs: 20000, timeoutMs: 300000 });
+        if (!bootLock.held) {
+            throw new Error('Boot lock not acquired (another node is initializing the shared database); restarting to retry.');
+        }
+
+        await initializeDatabase();
+
+        // Initialize default options
+        console.log('⚙️  Setting up default options...');
+        await initDefaultOptions(config);
+
+        // Initialize cache setting now that the DB and options are ready
+        // (moved out of options.ts import-time to avoid a startup race).
+        await require('./core/options').initCacheSetting();
+
+        // Prime the L1 option cache with every autoload row in one query — /settings and the other
+        // hot option readers then serve from memory instead of one SELECT per option per request.
+        const preloaded = await require('./core/options').preloadAutoloadedOptions();
+        if (preloaded) console.log(`⚡ Option cache primed: ${preloaded} autoloaded options`);
+
+        // Load the per-plugin permission grants (Android-style, default-deny). Then a one-time,
+        // non-breaking backfill: grandfather the manifest-declared permissions of plugins that are
+        // ALREADY ACTIVE (and have no grant record yet) so flipping to default-deny doesn't break a
+        // running site — new activations stay default-deny. Best-effort; never blocks boot.
+        try {
+            await require('./core/plugin-permissions').loadGrants();
+            await require('./core/plugin-permissions').loadEgressHosts();
+            const { getActivePlugins, getAllPlugins } = require('./core/plugins');
+            const active: string[] = await getActivePlugins();
+            const all: any[] = await getAllPlugins();
+            const entries = all
+                .filter((p: any) => active.includes(p.slug))
+                .map((p: any) => ({
+                    slug: p.slug,
+                    requested: Array.from(new Set((p.permissions || [])
+                        .map((perm: any) => (perm && perm.scope) ? (perm.scope === 'network' ? 'network' : `${perm.scope}:${perm.access || 'read'}`) : null)
+                        .filter(Boolean))) as string[],
+                }));
+            await require('./core/plugin-permissions').backfillActive(entries);
+        } catch (e: any) {
+            console.warn('[PluginPermissions] load/backfill skipped:', e && e.message);
+        }
+
+        // Initialize Analytics Table
+        await require('./models/Analytics').init();
+
+
+
+        // Register routes that were not in the initial index.js routes list if needed
+        // But better to add it to src/routes/index.js if possible, OR just here dynamically.
+        // Let's add it to src/routes/index.js instead for cleanliness?
+        // Actually, looking at src/routes/index.js (I haven't seen it yet), but usually it's better.
+        // However, I can inject it here.
+        app.use(`${config.api.prefix}/backups`, require('./routes/backups'));
+
+        const { initPostTypes } = require('./core/post-types');
+        await initPostTypes();
+
+        // Sync roles to ensure capabilities are up to date
+        const { loadRoles, syncRoles } = require('./core/roles');
+        await loadRoles();
+        await syncRoles(config.roles);
+
+        // Initialize Core Admin Menus
+        const { initCoreMenus } = require('./core/adminMenu');
+        initCoreMenus();
+
+        // Create default admin user if no users exist
+        const User = require('./models/User');
+        const userCount = await User.count();
+
+        if (userCount === 0) {
+            // A site that reaches this point is already reachable (in split/separate it is published
+            // through the gateway), so the bootstrap administrator must NOT have a guessable password.
+            // This used to hardcode admin/admin123 and print it as a suggestion — on an enrolled cluster
+            // node, which skipped the wizard, that shipped a live site with known credentials.
+            // The password is random, written 0600 next to the install token, and printed once.
+            const nodeCrypto = require('crypto');
+            const nodeFs = require('fs');
+            const nodePath = require('path');
+            // base64url of 24 bytes: no shell-hostile characters, ~192 bits.
+            const password = nodeCrypto.randomBytes(24).toString('base64url');
+
+            console.log('👤 No users found — creating the bootstrap administrator...');
+            await User.create({
+                username: 'admin',
+                email: 'admin@example.com',
+                password,
+                displayName: 'Administrator',
+                role: 'administrator'
+            });
+
+            const dataDir = nodePath.resolve(__dirname, '../data');
+            const pwFile = nodePath.join(dataDir, 'initial-admin-password');
+            let stored = '';
+            try {
+                if (!nodeFs.existsSync(dataDir)) nodeFs.mkdirSync(dataDir, { recursive: true });
+                nodeFs.writeFileSync(pwFile, `${password}\n`, { mode: 0o600 });
+                stored = `\n   (also written to ${pwFile}, mode 0600 — delete it once you have signed in)`;
+            } catch (e: any) {
+                // Never block boot on this: the password is printed above either way.
+                stored = `\n   (could not write ${pwFile}: ${e && e.message} — copy the password from this log)`;
+            }
+            console.log('');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('🔑 Bootstrap administrator created — this is shown ONCE:');
+            console.log('');
+            console.log(`      user:     admin`);
+            console.log(`      password: ${password}`);
+            console.log(`${stored}`);
+            console.log('');
+            console.log('   ⚠️  Sign in and change it. Anyone who can read this log can use it.');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('');
+        }
+
+        // Create default category if none exist
+        const Term = require('./models/Term');
+        const categoryCount = await Term.count({ taxonomy: 'category' });
+
+        if (categoryCount === 0) {
+            console.log('📁 Creating default category...');
+            // Await so the insert completes INSIDE the boot-lock critical section (matching the awaited
+            // User.create above). On Postgres multi-node the boot lock serializes default seeding; if the
+            // lease were released (line below) before this insert committed, a second node could pass its
+            // own categoryCount check and create a duplicate 'Uncategorized' (no UNIQUE backstop). (DATA-03)
+            await Term.create({
+                name: 'Uncategorized',
+                taxonomy: 'category',
+                slug: 'uncategorized',
+                description: 'Default category'
+            });
+        }
+
+        // Create default theme if none exist
+        const { createDefaultTheme } = require('./core/themes');
+        createDefaultTheme();
+
+        // Seeding done — release the boot guard (stops the heartbeat + frees the lease) so waiting
+        // nodes proceed; the rest of init (plugins, cron) is per-node. On a throw before here the
+        // process exits, its heartbeat timer dies with it, and the lease expires within ~ttl.
+        await bootLock.release();
+
+        // Reconcile any plugin update that was killed mid-flight (old code stashed, new code not yet
+        // installed) BEFORE loading plugins — so a plugin is never loaded from a half-updated directory.
+        try {
+            const { recoverInterruptedPluginUpdates } = require('./routes/plugins');
+            await recoverInterruptedPluginUpdates();
+        } catch (e: any) {
+            console.warn('[boot] plugin-update recovery skipped:', e && e.message);
+        }
+
+
+        // Load active plugins
+        console.log('🔌 Loading plugins...');
+        const { loadActivePlugins } = require('./core/plugins');
+        await loadActivePlugins();
+        // Plugin routes registered above sit BEHIND the 404/error handlers (which are now installed
+        // before this point so the server could start listening early) — push those two back to the
+        // end of the stack, exactly as runtime activation already does.
+        try { require('./core/plugins').fixMiddlewareOrder(); } catch (e: any) {
+            console.warn('[boot] middleware reorder skipped:', e && e.message);
+        }
+        pluginsReady = true;
+
+        // DEV hot-reload: watch each active isolated plugin's dir and re-spawn its child process
+        // on change (re-runs the AST scan). Hard no-op outside development; guarded so a watcher
+        // failure can never break boot.
+        try {
+            const { startPluginDevWatch } = require('./core/plugin-dev-watch');
+            await startPluginDevWatch();
+        } catch (e: any) {
+            console.warn('[plugin-dev-watch] not started:', e && e.message);
+        }
+
+        // Start cron system
+        const { startCron, initDefaultCronEvents, scheduleEvent, scheduleSingleEvent, unscheduleEvent, nextScheduled } = require('./core/cron');
+        await initDefaultCronEvents();
+        startCron();
+
+        // Multi-node coherence: refresh in-process caches (roles) on cross-node option changes, and
+        // join the cluster notification bus so SSE pushes reach clients on any node. No-op w/o Redis.
+        require('./core/coherence').initCoherence();
+        require('./core/notifications').initClusterBus();
+
+        // Outgoing webhooks: subscribe the dispatcher to content hooks and start the delivery poller.
+        require('./core/webhooks').initWebhooks();
+
+        // Expose Cron API to Plugins via global.wordjs
+        global.wordjs = global.wordjs || {};
+        global.wordjs.scheduleEvent = scheduleEvent;
+        global.wordjs.scheduleSingleEvent = scheduleSingleEvent;
+        global.wordjs.unscheduleEvent = unscheduleEvent;
+        global.wordjs.nextScheduled = nextScheduled;
+
+        // Initialize Robust Theme Engine
+        console.log('🎨 Initializing Theme Engine...');
+        const themeEngine = require('./core/theme-engine');
+        await themeEngine.init();
+
+        // Fire init action
+        await doAction('init');
+    } else {
+        console.log('⚠️  WordJS is NOT installed. Starting in SETUP MODE.');
+        console.log('   Waiting for interactive installation via Frontend...');
+
+        // SECURITY: mint + print the one-time install token. The pre-install setup endpoints
+        // (/setup/install, /setup/test-db) require it, so a not-yet-installed instance can't be
+        // taken over by whoever reaches it first. Held in memory only; a fresh token is minted on
+        // each boot while the instance remains uninstalled.
+        require('./core/install-token').generateInstallToken();
+    }
+
 
     // Boot complete (DB + plugins + theme engine ready, or setup-mode). /readyz flips to ready.
     appReady = true;
