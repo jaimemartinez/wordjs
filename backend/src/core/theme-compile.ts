@@ -596,12 +596,24 @@ function writeCompiled(dir: string, blockCss: string): void {
   }
   const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
   fs.writeFileSync(tmp, next, 'utf8');
-  try {
-    fs.renameSync(tmp, target);
-  } catch (e) {
-    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
-    throw e;
+  // Windows refuses to replace a file another handle has open (EPERM/EBUSY) — an editor, a virus
+  // scanner or the static server reading style.css is enough, and it is transient. POSIX rename has
+  // no such failure, so this loop is a no-op there. Retry briefly, then surface the error: the write
+  // is atomic either way, so the theme is never left half-written.
+  let lastError: any = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      fs.renameSync(tmp, target);
+      return;
+    } catch (e: any) {
+      lastError = e;
+      if (e && e.code !== 'EPERM' && e.code !== 'EBUSY' && e.code !== 'EACCES') break;
+      const until = Date.now() + 40;
+      while (Date.now() < until) { /* the callers are synchronous; a short spin is the only wait available */ }
+    }
   }
+  try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+  throw lastError;
 }
 
 module.exports = { compileTheme, writeCompiled };
