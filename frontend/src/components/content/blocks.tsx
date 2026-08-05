@@ -697,6 +697,66 @@ export function HeroBlock({ title, subtitle, bgImage, overlay, overlayColor, hei
     );
 }
 
+// Shared post-date formatter for the dynamic blocks (also used by puckConfig's editor paths).
+export const MESES_ES = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+export const fmtPostDate = (raw: string): string => {
+    const d = new Date(String(raw).replace(" ", "T") + (/[Zz]|[+-]\d\d:?\d\d$/.test(raw) ? "" : "Z"));
+    if (isNaN(d.getTime())) return "";
+    return `${d.getUTCDate()} ${MESES_ES[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+};
+
+/**
+ * PostsGrid markup. `posts` arrives ALREADY RESOLVED: server-side via resolveDynamicBlocks on the
+ * public site; from the useEditorPosts hook (which stays in puckConfig — client) in the editor.
+ * The hook's public branch returns the injected list untouched, so passing it straight through
+ * here is the same derivation, not a re-implementation.
+ */
+export function PostsGridBlock({ posts, columns, gap, bg, borderColor, radius, pad, thumbHeight, css, isEditing }: any) {
+    const list: any[] = Array.isArray(posts) ? posts : [];
+    if (!list.length) {
+        return (
+            <div className="wp-block-posts-grid__empty" style={css}>
+                {isEditing
+                    ? "Aquí se listarán tus entradas publicadas. Aún no hay ninguna."
+                    : "No hay entradas publicadas todavía."}
+            </div>
+        );
+    }
+
+    return (
+        <div
+            className="wp-block-posts-grid"
+            style={{
+                ...blockVars('posts', {
+                    columns,
+                    gap: unit(gap),
+                    bg,
+                    'border-color': borderColor,
+                    radius: unit(radius),
+                    pad: unit(pad),
+                    'thumb-height': unit(thumbHeight),
+                }),
+                ...css,
+            }}
+        >
+            {list.map((post) => (
+                <article key={post.id} className="wp-block-posts-grid__card">
+                    <div
+                        className="wp-block-posts-grid__thumb"
+                        aria-hidden="true"
+                        style={post.image ? { backgroundImage: `url(${post.image})` } : undefined}
+                    ></div>
+                    {post.date && <div className="wp-block-posts-grid__date">{fmtPostDate(post.date)}</div>}
+                    <h3 className="wp-block-posts-grid__title">
+                        <a href={post.href} onClick={isEditing ? (e: React.MouseEvent) => e.preventDefault() : undefined}>{post.title}</a>
+                    </h3>
+                    {post.excerpt && <p className="wp-block-posts-grid__excerpt">{post.excerpt}</p>}
+                </article>
+            ))}
+        </div>
+    );
+}
+
 export function SpacerBlock({ height, css }: any) {
     return (
         <div

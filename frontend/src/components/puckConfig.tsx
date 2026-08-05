@@ -14,7 +14,7 @@ import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPi
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
 import { blockVars, cx, unit } from "./puck/blockVars";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock, HeroBlock, PostsGridBlock } from "./content/blocks";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -1959,55 +1959,14 @@ const baseConfig: any = {
                 gap: "", bg: "", borderColor: "", radius: "", pad: "", thumbHeight: "",
                 css: {}
             },
-            render: ({ count, columns, gap, bg, borderColor, radius, pad, thumbHeight, css, resolvedPosts, puck }: any) => {
+            render: ({ count, resolvedPosts, puck, ...props }: any) => {
                 // REAL posts everywhere: injected server-side by resolveDynamicBlocks on the public
                 // site, fetched client-side by useEditorPosts inside the editor canvas (same mapper,
-                // shared in lib/resolvedPost.ts). The empty state below is now only ever true.
+                // shared in lib/resolvedPost.ts). Markup lives in content/blocks.tsx (shared with
+                // the public server renderer, which passes resolvedPosts straight through).
                 const editing = !!puck?.isEditing;
                 const posts: any[] = useEditorPosts(editing, resolvedPosts, undefined, count);
-
-                if (!posts.length) {
-                    return (
-                        <div className="wp-block-posts-grid__empty" style={css}>
-                            {editing
-                                ? "Aquí se listarán tus entradas publicadas. Aún no hay ninguna."
-                                : "No hay entradas publicadas todavía."}
-                        </div>
-                    );
-                }
-
-                return (
-                    <div
-                        className="wp-block-posts-grid"
-                        style={{
-                            ...blockVars('posts', {
-                                columns,
-                                gap: unit(gap),
-                                bg,
-                                'border-color': borderColor,
-                                radius: unit(radius),
-                                pad: unit(pad),
-                                'thumb-height': unit(thumbHeight),
-                            }),
-                            ...css,
-                        }}
-                    >
-                        {posts.map((post) => (
-                            <article key={post.id} className="wp-block-posts-grid__card">
-                                <div
-                                    className="wp-block-posts-grid__thumb"
-                                    aria-hidden="true"
-                                    style={post.image ? { backgroundImage: `url(${post.image})` } : undefined}
-                                ></div>
-                                {post.date && <div className="wp-block-posts-grid__date">{fmtPostDate(post.date)}</div>}
-                                <h3 className="wp-block-posts-grid__title">
-                                    <a href={post.href} onClick={editing ? (e: React.MouseEvent) => e.preventDefault() : undefined}>{post.title}</a>
-                                </h3>
-                                {post.excerpt && <p className="wp-block-posts-grid__excerpt">{post.excerpt}</p>}
-                            </article>
-                        ))}
-                    </div>
-                );
+                return <PostsGridBlock {...props} posts={posts} isEditing={editing} />;
             }
         },
 
