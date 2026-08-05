@@ -34,7 +34,7 @@
   },
   "dependencies": {
     "@types/react": "^19.2.8",
-    "@types/react-dom": "^19.2.3",
+    "@types/react-dom": "^19.2.4",
     "axios": "^1.13.2",
     "better-sqlite3": "^12.6.0",
     "cluster": "^0.7.7",
