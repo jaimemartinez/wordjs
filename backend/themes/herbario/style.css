@@ -2,7 +2,7 @@
 :root {
   --wjs-bg-canvas: #fef9ef;
   --wjs-bg-surface: #ffffff;
-  --wjs-bg-surface-raised: #e7e3d9;
+  --wjs-bg-surface-raised: #efeae1;
   --wjs-color-primary: #2f5d50;
   --wjs-color-primary-dark: #154539;
   --wjs-color-on-primary: #ffffff;
@@ -14,8 +14,8 @@
   --wjs-color-link: #154539;
   --wjs-color-link-hover: #904c2f;
   --wjs-border-subtle: #c0c8c4;
-  --wjs-outline: #a4a39c;
-  --wjs-outline-variant: #d6d2c9;
+  --wjs-outline: #717975;
+  --wjs-outline-variant: #dcd8ce;
   --wjs-focus-ring: #2f5d50;
   --wjs-bg-muted: #f2ede3;
   --wjs-color-secondary: #b4694a;
@@ -66,6 +66,8 @@
   --wjs-hero-button-radius: 4px;
   --wjs-hero-button-outline-color: #2f5d50;
   --wjs-hero-button-outline-border: #2f5d50;
+  --wjs-hero-bg-image: none;
+  --wjs-2xl: 4.5rem;
   --wjs-hero-text-align: left;
   --wjs-pricing-border-width: 1px;
 }
