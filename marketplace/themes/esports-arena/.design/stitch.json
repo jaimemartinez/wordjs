@@ -1,0 +1,29 @@
+{
+  "name": "stitch/esports-arena",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#22d3ee",
+    "overridePrimaryColor": "#22d3ee",
+    "overrideSecondaryColor": "#f43f5e",
+    "overrideNeutralColor": "#080b14",
+    "headlineFont": "SPACE_GROTESK",
+    "headlineFontFamily": "Space Grotesk",
+    "bodyFont": "DM_SANS",
+    "bodyFontFamily": "DM Sans",
+    "labelFont": "DM_SANS",
+    "labelFontFamily": "DM Sans",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#080b14",
+      "surface": "#080b14",
+      "on_surface": "#f5f5f6",
+      "on_background": "#f5f5f6",
+      "primary": "#22d3ee",
+      "primary_container": "#22d3ee",
+      "on_primary": "#0b0b0b",
+      "secondary": "#f43f5e",
+      "secondary_container": "#f43f5e",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

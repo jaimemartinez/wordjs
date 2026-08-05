@@ -25,6 +25,9 @@
  */
 import fs from "node:fs";
 import path from "node:path";
+// The 44 catalogue themes carry their recipe alongside their design brief, so the intent and the
+// mechanics live in one place per theme instead of drifting apart across two files.
+import { BRIEFS } from "./catalogue-44-briefs.mjs";
 
 const argv = process.argv.slice(2);
 const DRY = argv.includes("--dry");
@@ -90,6 +93,10 @@ const RECIPES = {
     "cobalt-corporate": { corners: "soft", line: "hairline", depth: "whisper", pad: "roomy", label: "plain", ink: "primary" },
     "swiss-minimal": { corners: "square", line: "hairline", depth: "none", pad: "roomy", label: "plain", ink: "ink" },
 };
+
+for (const b of BRIEFS) {
+    if (!RECIPES[b.slug]) RECIPES[b.slug] = b.recipe;
+}
 
 const CORNERS = {
     square: { sm: "0", md: "0", lg: "0", pill: "0", icon: "0" },

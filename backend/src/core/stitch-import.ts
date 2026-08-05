@@ -135,14 +135,29 @@ const SERIF_FALLBACK = "Georgia, 'Times New Roman', serif";
 const MONO_FALLBACK = 'ui-monospace, SFMono-Regular, Menlo, monospace';
 
 /**
- * WORK_SANS → "Work Sans", EB_GARAMOND → "EB Garamond". Parts of one or two letters stay
- * uppercase, which is how Google names them (EB, PT, DM); the enum is preferred over
- * Stitch's own *FontFamily string because that one comes back title-cased ("Eb Garamond").
+ * WORK_SANS → "Work Sans", EB_GARAMOND → "EB Garamond". The enum is preferred over Stitch's own
+ * *FontFamily string because that one comes back title-cased ("Eb Garamond").
+ *
+ * Acronyms are recognised BY NAME. The rule used to be "parts of one or two letters stay uppercase",
+ * which is wrong in both directions: it mangles the three-letter one (IBM_PLEX_SANS became "Ibm Plex
+ * Sans", which Google Fonts answers 400 for) and it shouts the two-letter word (BE_VIETNAM_PRO became
+ * "BE Vietnam Pro"). Either way the theme imports a family that cannot be fetched and silently falls
+ * back to the system sans. A list of the acronyms that actually occur is shorter than the heuristic
+ * and cannot be wrong about a name that is not on it.
  */
+const FONT_ACRONYMS = new Set(['EB', 'DM', 'PT', 'IBM']);
+// Families whose real name has an interior capital the SCREAMING_CASE enum cannot express. Without
+// this, JETBRAINS_MONO imports as "Jetbrains Mono" — a family Google Fonts does not serve.
+const FONT_DISPLAY_NAMES: Record<string, string> = {
+  JETBRAINS_MONO: 'JetBrains Mono',
+  SOURCE_SERIF_4: 'Source Serif 4',
+  SOURCE_SANS_3: 'Source Sans 3',
+};
 function familyFromEnum(name: any): string | null {
   if (typeof name !== 'string' || !/^[A-Z][A-Z0-9_]*$/.test(name)) return null;
+  if (FONT_DISPLAY_NAMES[name]) return FONT_DISPLAY_NAMES[name];
   return name.split('_').filter(Boolean)
-    .map((p: string) => (p.length <= 2 ? p : p.charAt(0) + p.slice(1).toLowerCase()))
+    .map((p: string) => (FONT_ACRONYMS.has(p) ? p : p.charAt(0) + p.slice(1).toLowerCase()))
     .join(' ');
 }
 
@@ -308,7 +323,14 @@ function designToTheme(design: any, opts: StitchImportOpts = {}): StitchImportRe
   put('--wjs-color-text-main', colour('on_surface'), 'on_surface');
   put('--wjs-color-heading', colour('on_surface'), 'on_surface');
   put('--wjs-color-text-muted', colour('on_surface_variant'), 'on_surface_variant');
-  put('--wjs-color-link', colour('primary'), 'primary');
+  // A link is TEXT on the page, and `primary` is chosen as a FILL — the colour behind white letters.
+  // Taken raw it produced link text at 2.60:1 on nine of the sixty-four catalogue themes. Keep the
+  // hue, move the level until it clears AA. theme-verify applies the same function, so a theme whose
+  // brand colour needed adjusting still verifies as matching its design.
+  const { readableOn } = require('./theme-derive');
+  const linkBase = colour('primary');
+  const canvasHex = normalizeHex(dt.overrideNeutralColor) || colour('background');
+  put('--wjs-color-link', linkBase && canvasHex ? readableOn(linkBase, canvasHex) : linkBase, 'primary');
   put('--wjs-border-subtle', colour('outline_variant'), 'outline_variant');
   put('--wjs-card-border-color', colour('outline_variant'), 'outline_variant');
   put('--wjs-outline', colour('outline'), 'outline');

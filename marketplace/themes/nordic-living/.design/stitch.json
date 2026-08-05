@@ -1,0 +1,29 @@
+{
+  "name": "stitch/nordic-living",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#475569",
+    "overridePrimaryColor": "#475569",
+    "overrideSecondaryColor": "#78716c",
+    "overrideNeutralColor": "#f7f7f5",
+    "headlineFont": "METROPHOBIC",
+    "headlineFontFamily": "Metrophobic",
+    "bodyFont": "NUNITO_SANS",
+    "bodyFontFamily": "Nunito Sans",
+    "labelFont": "NUNITO_SANS",
+    "labelFontFamily": "Nunito Sans",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#f7f7f5",
+      "surface": "#f7f7f5",
+      "on_surface": "#141414",
+      "on_background": "#141414",
+      "primary": "#475569",
+      "primary_container": "#475569",
+      "on_primary": "#ffffff",
+      "secondary": "#78716c",
+      "secondary_container": "#78716c",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

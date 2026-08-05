@@ -1,0 +1,29 @@
+{
+  "name": "stitch/podcast-pulse",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#a3e635",
+    "overridePrimaryColor": "#a3e635",
+    "overrideSecondaryColor": "#22d3ee",
+    "overrideNeutralColor": "#12131a",
+    "headlineFont": "SPACE_GROTESK",
+    "headlineFontFamily": "Space Grotesk",
+    "bodyFont": "DM_SANS",
+    "bodyFontFamily": "DM Sans",
+    "labelFont": "DM_SANS",
+    "labelFontFamily": "DM Sans",
+    "roundness": "ROUND_TWELVE",
+    "namedColors": {
+      "background": "#12131a",
+      "surface": "#12131a",
+      "on_surface": "#f6f6f6",
+      "on_background": "#f6f6f6",
+      "primary": "#a3e635",
+      "primary_container": "#a3e635",
+      "on_primary": "#0b0b0b",
+      "secondary": "#22d3ee",
+      "secondary_container": "#22d3ee",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

@@ -1,6 +1,6 @@
 {
   "name": "Cobalt Corporate",
-  "version": "1.0.17",
+  "version": "1.0.22",
   "description": "SaaS corporativo: barra fija con botón de contacto, tarjetas redondeadas sobre lienzo azulado y pie de cuatro columnas con banda legal.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -33,7 +33,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#00327d",
     "--wjs-font-family-heading": "'Outfit', 'Segoe UI', system-ui, sans-serif",
     "--wjs-font-family-base": "'Public Sans', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "4px",
@@ -58,8 +57,8 @@
     "--wjs-h3": "1.375rem",
     "--wjs-hero-bg": "#f8f9ff",
     "--wjs-hero-gradient-angle": "160deg",
-    "--wjs-hero-gradient-from": "#ffffff",
-    "--wjs-hero-gradient-to": "#e8efff",
+    "--wjs-hero-gradient-from": "#f8f9ff",
+    "--wjs-hero-gradient-to": "#f8f9ff",
     "--wjs-hero-color": "#141414",
     "--wjs-hero-title-color": "#00327d",
     "--wjs-hero-subtitle-color": "#141414",
@@ -309,7 +308,16 @@
     "--wjs-color-text-footer-dim": "#94a1b5",
     "--wjs-footer-text-heading": "#ffffff",
     "--wjs-footer-text-body": "#94a1b5",
-    "--wjs-footer-text-hover": "#ffffff"
+    "--wjs-footer-text-hover": "#ffffff",
+    "--wjs-button-color": "#ffffff",
+    "--wjs-button-hover-color": "#ffffff",
+    "--wjs-tabs-active-color": "#ffffff",
+    "--wjs-form-submit-color": "#ffffff",
+    "--wjs-search-button-color": "#ffffff",
+    "--wjs-cta-button-color": "#ffffff",
+    "--wjs-pricing-button-color": "#ffffff",
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#00327d"
   },
   "styles": {
     "body": {

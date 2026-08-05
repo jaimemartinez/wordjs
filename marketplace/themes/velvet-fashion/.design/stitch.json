@@ -1,0 +1,29 @@
+{
+  "name": "stitch/velvet-fashion",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#e879f9",
+    "overridePrimaryColor": "#e879f9",
+    "overrideSecondaryColor": "#818cf8",
+    "overrideNeutralColor": "#0d0812",
+    "headlineFont": "SPACE_GROTESK",
+    "headlineFontFamily": "Space Grotesk",
+    "bodyFont": "EPILOGUE",
+    "bodyFontFamily": "Epilogue",
+    "labelFont": "EPILOGUE",
+    "labelFontFamily": "Epilogue",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#0d0812",
+      "surface": "#0d0812",
+      "on_surface": "#f5f5f6",
+      "on_background": "#f5f5f6",
+      "primary": "#e879f9",
+      "primary_container": "#e879f9",
+      "on_primary": "#0b0b0b",
+      "secondary": "#818cf8",
+      "secondary_container": "#818cf8",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

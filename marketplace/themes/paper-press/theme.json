@@ -1,9 +1,15 @@
 {
   "name": "Paper Press",
-  "version": "1.0.20",
+  "version": "1.0.25",
   "description": "Broadsheet clásico de periódico con serifas Bodoni, filetes de tinta, columnas y acento rojo editorial.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#930000",
+    "secondary": "#1f2937",
+    "bg": "#faf9f8",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "centered",
@@ -16,12 +22,6 @@
     },
     "containerWidth": "78rem"
   },
-  "seeds": {
-    "primary": "#930000",
-    "secondary": "#1f2937",
-    "bg": "#faf9f8",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#faf9f8",
     "--wjs-color-primary": "#930000",
@@ -32,7 +32,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#930000",
     "--wjs-font-family-heading": "'Bodoni Moda', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Source Serif 4', Georgia, 'Times New Roman', serif",
     "--wjs-radius": "4px",
@@ -286,7 +285,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#ffffff",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#930000"
   },
   "styles": {
     "body": {

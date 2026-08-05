@@ -1,0 +1,29 @@
+{
+  "name": "stitch/zenith-holdings",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#134e4a",
+    "overridePrimaryColor": "#134e4a",
+    "overrideSecondaryColor": "#0f766e",
+    "overrideNeutralColor": "#f8fafc",
+    "headlineFont": "LIBRE_CASLON_TEXT",
+    "headlineFontFamily": "Libre Caslon Text",
+    "bodyFont": "SOURCE_SANS_3",
+    "bodyFontFamily": "Source Sans 3",
+    "labelFont": "SOURCE_SANS_3",
+    "labelFontFamily": "Source Sans 3",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#f8fafc",
+      "surface": "#f8fafc",
+      "on_surface": "#141515",
+      "on_background": "#141515",
+      "primary": "#134e4a",
+      "primary_container": "#134e4a",
+      "on_primary": "#ffffff",
+      "secondary": "#0f766e",
+      "secondary_container": "#0f766e",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

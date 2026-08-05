@@ -1,0 +1,29 @@
+{
+  "name": "stitch/atelier-design",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#78350f",
+    "overridePrimaryColor": "#78350f",
+    "overrideSecondaryColor": "#1c1917",
+    "overrideNeutralColor": "#faf7f2",
+    "headlineFont": "EB_GARAMOND",
+    "headlineFontFamily": "EB Garamond",
+    "bodyFont": "SOURCE_SERIF_4",
+    "bodyFontFamily": "Source Serif 4",
+    "labelFont": "SOURCE_SERIF_4",
+    "labelFontFamily": "Source Serif 4",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#faf7f2",
+      "surface": "#faf7f2",
+      "on_surface": "#151414",
+      "on_background": "#151414",
+      "primary": "#78350f",
+      "primary_container": "#78350f",
+      "on_primary": "#ffffff",
+      "secondary": "#1c1917",
+      "secondary_container": "#1c1917",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

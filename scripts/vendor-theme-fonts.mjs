@@ -31,14 +31,20 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const slug = process.argv[2];
-const CHECK = process.argv.includes("--check");
+const argv = process.argv.slice(2);
+const CHECK = argv.includes("--check");
+// The catalogue lives in marketplace/themes and the installed themes in backend/themes; both need
+// vendoring, and the 43 catalogue themes that still @import Google Fonts are the reason this flag
+// exists — they were unreachable while the path was hardcoded.
+const rootIdx = argv.indexOf("--root");
+const ROOT = rootIdx >= 0 ? argv[rootIdx + 1] : "backend/themes";
+const slug = argv.filter((a, i) => !a.startsWith("--") && !(rootIdx >= 0 && i === rootIdx + 1))[0];
 if (!slug) {
-    console.error("usage: node scripts/vendor-theme-fonts.mjs <slug> [--check]");
+    console.error("usage: node scripts/vendor-theme-fonts.mjs <slug> [--check] [--root <dir>]");
     process.exit(2);
 }
 
-const themeDir = path.resolve("backend/themes", slug);
+const themeDir = path.resolve(ROOT, slug);
 const cssPath = path.join(themeDir, "style.css");
 if (!fs.existsSync(cssPath)) {
     console.error(`theme not found: ${cssPath}`);

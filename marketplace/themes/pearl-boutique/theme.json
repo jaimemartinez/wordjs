@@ -1,9 +1,15 @@
 {
   "name": "Pearl Boutique",
-  "version": "1.0.19",
+  "version": "1.0.24",
   "description": "Lujo perla claro con serif Bodoni, degradados rosados iridiscentes y micro-etiquetas en mayúsculas espaciadas.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#7b5455",
+    "secondary": "#c9a227",
+    "bg": "#fff8f7",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "centered",
@@ -15,12 +21,6 @@
     },
     "containerWidth": "64rem"
   },
-  "seeds": {
-    "primary": "#7b5455",
-    "secondary": "#c9a227",
-    "bg": "#fff8f7",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#fff8f7",
     "--wjs-color-primary": "#7b5455",
@@ -31,7 +31,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#7b5455",
     "--wjs-font-family-heading": "'Libre Caslon Text', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Questrial', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "4px",
@@ -294,7 +293,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#ffffff",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#7b5455"
   },
   "styles": {
     "body": {

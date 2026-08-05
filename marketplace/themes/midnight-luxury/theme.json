@@ -1,6 +1,6 @@
 {
   "name": "Midnight Luxury",
-  "version": "1.0.17",
+  "version": "1.0.22",
   "description": "Hotelería cinco estrellas: oro sobre medianoche, Playfair Display y una cabecera de cristal con reserva siempre a mano.",
   "author": "WordJS",
   "generator": "wordjs",
@@ -33,7 +33,6 @@
     "--wjs-color-on-secondary": "#0b0b0b",
     "--wjs-color-text-main": "#f5f5f4",
     "--wjs-color-heading": "#f5f5f4",
-    "--wjs-color-link": "#d4af37",
     "--wjs-font-family-heading": "'Playfair Display', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Montserrat', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "8px",
@@ -321,7 +320,8 @@
     "--wjs-search-button-color": "#0b0b0b",
     "--wjs-cta-button-color": "#0b0b0b",
     "--wjs-pricing-button-color": "#0b0b0b",
-    "--wjs-social-hover-color": "#0b0b0b"
+    "--wjs-social-hover-color": "#0b0b0b",
+    "--wjs-color-link": "#d4af37"
   },
   "styles": {
     "headings": {

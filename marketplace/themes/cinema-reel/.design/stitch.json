@@ -1,0 +1,29 @@
+{
+  "name": "stitch/cinema-reel",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#eab308",
+    "overridePrimaryColor": "#eab308",
+    "overrideSecondaryColor": "#dc2626",
+    "overrideNeutralColor": "#0a0a0b",
+    "headlineFont": "MONTSERRAT",
+    "headlineFontFamily": "Montserrat",
+    "bodyFont": "ARIMO",
+    "bodyFontFamily": "Arimo",
+    "labelFont": "ARIMO",
+    "labelFontFamily": "Arimo",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#0a0a0b",
+      "surface": "#0a0a0b",
+      "on_surface": "#f5f5f5",
+      "on_background": "#f5f5f5",
+      "primary": "#eab308",
+      "primary_container": "#eab308",
+      "on_primary": "#0b0b0b",
+      "secondary": "#dc2626",
+      "secondary_container": "#dc2626",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

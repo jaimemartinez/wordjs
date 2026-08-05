@@ -78,16 +78,31 @@ async function one(slug) {
 
     const meta = JSON.parse(fs.readFileSync(metaPath, "utf8"));
     const families = declaredFamilies(meta);
-    if (!families.length) return;
 
     if (CHECK) {
+        // The external-origin check runs on EVERY theme, before anything else. It used to sit behind
+        // the `families.length` early-return below, so the only themes it inspected were the ones
+        // that already declare font tokens — i.e. the ones already vendored. It printed a screen of
+        // ticks and exited 0 while 43 of the 64 catalogue themes carried a live Google Fonts import:
+        // a gate that could never fail on the bug it exists to catch.
+        const css = fs.readFileSync(cssPath, "utf8");
         const fontsCss = fs.existsSync(path.join(dir, "fonts.css"))
             ? fs.readFileSync(path.join(dir, "fonts.css"), "utf8") : "";
+        const EXTERNAL = /https?:\/\/(?!localhost)[^\s'")]+/g;
+        const offenders = [];
+        for (const [file, text] of [["style.css", css], ["fonts.css", fontsCss]]) {
+            for (const url of text.match(EXTERNAL) || []) offenders.push(`${file} → ${url.slice(0, 70)}`);
+        }
+        if (offenders.length) throw new Error(`references an external origin:\n      ${offenders.join("\n      ")}`);
+
+        if (!families.length) { console.log(`  ✓ ${slug}: no external origin`); return; }
         const missing = families.filter((f) => !fontsCss.includes(`font-family: '${f}'`));
         if (missing.length) throw new Error(`declares ${missing.join(", ")} but ships no face for it`);
-        console.log(`  ✓ ${slug}: ${families.length} famil${families.length === 1 ? "y" : "ies"} self-hosted`);
+        console.log(`  ✓ ${slug}: no external origin, ${families.length} famil${families.length === 1 ? "y" : "ies"} self-hosted`);
         return;
     }
+
+    if (!families.length) return;
 
     const fontsDir = path.join(dir, "fonts");
     fs.mkdirSync(fontsDir, { recursive: true });

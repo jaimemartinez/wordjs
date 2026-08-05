@@ -1,0 +1,29 @@
+{
+  "name": "stitch/artisan-craft",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#92400e",
+    "overridePrimaryColor": "#92400e",
+    "overrideSecondaryColor": "#3f6212",
+    "overrideNeutralColor": "#faf6ef",
+    "headlineFont": "DOMINE",
+    "headlineFontFamily": "Domine",
+    "bodyFont": "WORK_SANS",
+    "bodyFontFamily": "Work Sans",
+    "labelFont": "WORK_SANS",
+    "labelFontFamily": "Work Sans",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#faf6ef",
+      "surface": "#faf6ef",
+      "on_surface": "#151414",
+      "on_background": "#151414",
+      "primary": "#92400e",
+      "primary_container": "#92400e",
+      "on_primary": "#ffffff",
+      "secondary": "#3f6212",
+      "secondary_container": "#3f6212",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

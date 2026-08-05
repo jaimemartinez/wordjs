@@ -1,0 +1,29 @@
+{
+  "name": "stitch/prism-studio",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#4f46e5",
+    "overridePrimaryColor": "#4f46e5",
+    "overrideSecondaryColor": "#ec4899",
+    "overrideNeutralColor": "#fdfdff",
+    "headlineFont": "SPACE_GROTESK",
+    "headlineFontFamily": "Space Grotesk",
+    "bodyFont": "INTER",
+    "bodyFontFamily": "Inter",
+    "labelFont": "INTER",
+    "labelFontFamily": "Inter",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#fdfdff",
+      "surface": "#fdfdff",
+      "on_surface": "#151515",
+      "on_background": "#151515",
+      "primary": "#4f46e5",
+      "primary_container": "#4f46e5",
+      "on_primary": "#ffffff",
+      "secondary": "#ec4899",
+      "secondary_container": "#ec4899",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

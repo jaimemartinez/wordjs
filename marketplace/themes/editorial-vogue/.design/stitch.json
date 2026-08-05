@@ -1,0 +1,29 @@
+{
+  "name": "stitch/editorial-vogue",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#18181b",
+    "overridePrimaryColor": "#18181b",
+    "overrideSecondaryColor": "#be123c",
+    "overrideNeutralColor": "#fffdfd",
+    "headlineFont": "LIBRE_CASLON_TEXT",
+    "headlineFontFamily": "Libre Caslon Text",
+    "bodyFont": "MONTSERRAT",
+    "bodyFontFamily": "Montserrat",
+    "labelFont": "MONTSERRAT",
+    "labelFontFamily": "Montserrat",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#fffdfd",
+      "surface": "#fffdfd",
+      "on_surface": "#151515",
+      "on_background": "#151515",
+      "primary": "#18181b",
+      "primary_container": "#18181b",
+      "on_primary": "#ffffff",
+      "secondary": "#be123c",
+      "secondary_container": "#be123c",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

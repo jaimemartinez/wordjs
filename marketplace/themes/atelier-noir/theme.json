@@ -1,6 +1,6 @@
 {
   "name": "Atelier Noir",
-  "version": "1.0.18",
+  "version": "1.0.23",
   "description": "Alta costura en negro y crema con Bodoni Moda, acentos dorados y aristas afiladas sin radio.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
@@ -32,7 +32,6 @@
     "--wjs-color-on-secondary": "#0b0b0b",
     "--wjs-color-text-main": "#f5f5f4",
     "--wjs-color-heading": "#f5f5f4",
-    "--wjs-color-link": "#e9c349",
     "--wjs-font-family-heading": "'Bodoni Moda', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Hanken Grotesk', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "4px",
@@ -320,7 +319,8 @@
     "--wjs-search-button-color": "#0b0b0b",
     "--wjs-cta-button-color": "#0b0b0b",
     "--wjs-pricing-button-color": "#0b0b0b",
-    "--wjs-social-hover-color": "#0b0b0b"
+    "--wjs-social-hover-color": "#0b0b0b",
+    "--wjs-color-link": "#e9c349"
   },
   "styles": {
     "body": {

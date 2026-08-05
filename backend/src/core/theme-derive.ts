@@ -637,4 +637,7 @@ function archetypeCss(name: string, seeds: ThemeSeeds): string {
   return gen(seeds);
 }
 
-module.exports = { deriveTokens, archetypeCss, ARCHETYPE_NAMES, lum, onColor };
+// readableOn is exported because THREE places decide the link colour — this derivation, the Stitch
+// importer and the verifier that compares them — and they have to agree or a theme is told it does
+// not match the design it was built from.
+module.exports = { deriveTokens, archetypeCss, ARCHETYPE_NAMES, lum, onColor, contrast, readableOn };

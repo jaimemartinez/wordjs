@@ -1,0 +1,29 @@
+{
+  "name": "stitch/nexus-cloud",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#34d399",
+    "overridePrimaryColor": "#34d399",
+    "overrideSecondaryColor": "#2dd4bf",
+    "overrideNeutralColor": "#071a17",
+    "headlineFont": "LEXEND",
+    "headlineFontFamily": "Lexend",
+    "bodyFont": "PUBLIC_SANS",
+    "bodyFontFamily": "Public Sans",
+    "labelFont": "PUBLIC_SANS",
+    "labelFontFamily": "Public Sans",
+    "roundness": "ROUND_TWELVE",
+    "namedColors": {
+      "background": "#071a17",
+      "surface": "#071a17",
+      "on_surface": "#f5f6f6",
+      "on_background": "#f5f6f6",
+      "primary": "#34d399",
+      "primary_container": "#34d399",
+      "on_primary": "#0b0b0b",
+      "secondary": "#2dd4bf",
+      "secondary_container": "#2dd4bf",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

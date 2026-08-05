@@ -1,0 +1,29 @@
+{
+  "name": "stitch/metro-journal",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#1e3a8a",
+    "overridePrimaryColor": "#1e3a8a",
+    "overrideSecondaryColor": "#b91c1c",
+    "overrideNeutralColor": "#fbfbf9",
+    "headlineFont": "SOURCE_SERIF_4",
+    "headlineFontFamily": "Source Serif 4",
+    "bodyFont": "IBM_PLEX_SANS",
+    "bodyFontFamily": "IBM Plex Sans",
+    "labelFont": "IBM_PLEX_SANS",
+    "labelFontFamily": "IBM Plex Sans",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#fbfbf9",
+      "surface": "#fbfbf9",
+      "on_surface": "#151515",
+      "on_background": "#151515",
+      "primary": "#1e3a8a",
+      "primary_container": "#1e3a8a",
+      "on_primary": "#ffffff",
+      "secondary": "#b91c1c",
+      "secondary_container": "#b91c1c",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

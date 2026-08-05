@@ -1,0 +1,29 @@
+{
+  "name": "stitch/quantum-fintech",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#22d3ee",
+    "overridePrimaryColor": "#22d3ee",
+    "overrideSecondaryColor": "#6366f1",
+    "overrideNeutralColor": "#0b1120",
+    "headlineFont": "SORA",
+    "headlineFontFamily": "Sora",
+    "bodyFont": "IBM_PLEX_SANS",
+    "bodyFontFamily": "IBM Plex Sans",
+    "labelFont": "IBM_PLEX_SANS",
+    "labelFontFamily": "IBM Plex Sans",
+    "roundness": "ROUND_TWELVE",
+    "namedColors": {
+      "background": "#0b1120",
+      "surface": "#0b1120",
+      "on_surface": "#f5f5f6",
+      "on_background": "#f5f5f6",
+      "primary": "#22d3ee",
+      "primary_container": "#22d3ee",
+      "on_primary": "#0b0b0b",
+      "secondary": "#6366f1",
+      "secondary_container": "#6366f1",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

@@ -1,9 +1,15 @@
 {
   "name": "Amber Workshop",
-  "version": "1.0.19",
+  "version": "1.0.24",
   "description": "Taller artesanal en terracota y ámbar con tarjetas kraft texturizadas, serif Domine e hilos punteados.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
+  "seeds": {
+    "primary": "#9a401f",
+    "secondary": "#b8863b",
+    "bg": "#fcf9f4",
+    "text": "#141414"
+  },
   "layout": {
     "header": {
       "variant": "classic",
@@ -16,12 +22,6 @@
     },
     "containerWidth": "72rem"
   },
-  "seeds": {
-    "primary": "#9a401f",
-    "secondary": "#b8863b",
-    "bg": "#fcf9f4",
-    "text": "#141414"
-  },
   "tokens": {
     "--wjs-bg-canvas": "#fcf9f4",
     "--wjs-color-primary": "#9a401f",
@@ -32,7 +32,6 @@
     "--wjs-color-on-secondary": "#ffffff",
     "--wjs-color-text-main": "#141414",
     "--wjs-color-heading": "#141414",
-    "--wjs-color-link": "#9a401f",
     "--wjs-font-family-heading": "'Domine', Georgia, 'Times New Roman', serif",
     "--wjs-font-family-base": "'Work Sans', 'Segoe UI', system-ui, sans-serif",
     "--wjs-radius": "8px",
@@ -292,7 +291,8 @@
     "--wjs-search-button-color": "#ffffff",
     "--wjs-cta-button-color": "#ffffff",
     "--wjs-pricing-button-color": "#ffffff",
-    "--wjs-social-hover-color": "#ffffff"
+    "--wjs-social-hover-color": "#ffffff",
+    "--wjs-color-link": "#9a401f"
   },
   "styles": {
     "body": {
