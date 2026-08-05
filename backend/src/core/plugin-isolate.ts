@@ -1226,7 +1226,17 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         attachLogLimiter(slug, child);
         // Worker-like adapter so the rest of this module stays transport-agnostic (postMessage/on/terminate).
         const worker: any = {
-            postMessage: (m: any) => { try { child.send(m); } catch { /* child gone */ } },
+            // Reports whether the message could be handed to a LIVE child. This used to swallow the
+            // failure silently, which meant an RPC to a dead worker settled only on the 30s timeout —
+            // so any request that still reached a dead isolate (e.g. via a route the teardown missed)
+            // held a socket, a req/res pair and a timer for half a minute instead of failing at once.
+            // `connected` is the precise signal: child.send() also returns false under mere backpressure,
+            // where the message IS still queued, but the IPC channel goes unconnected only once the
+            // child is really gone.
+            postMessage: (m: any) => {
+                if (!child.connected) return false;
+                try { child.send(m); return true; } catch { return false; }
+            },
             terminate: () => {
                 // F-05: on the kernel-hardened, NON-cgroup path child.pid is the OUTER bwrap and node runs as
                 // a grandchild; enumerate the subtree BEFORE the SIGKILL below, because once the outer dies a
@@ -1405,7 +1415,13 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
             }, RPC_TIMEOUT_MS);
             if ((timer as any).unref) (timer as any).unref();
             map.set(id, { res, rej, timer });
-            worker.postMessage({ id, ...message });
+            // Fail FAST when the child is already gone: waiting out RPC_TIMEOUT_MS for a reply that can
+            // never arrive is what turns a stale registration into a socket-exhaustion lever.
+            if (worker.postMessage({ id, ...message }) === false) {
+                clearTimeout(timer);
+                map.delete(id);
+                rej(new Error(`Isolated plugin '${slug}' is not running`));
+            }
         });
         // Cap a single worker->host reply payload to protect the HOST heap (the worker is also
         // memory-capped on its own side, so this is the second bound). Cheap size check for string/
@@ -1456,7 +1472,7 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
         // Everything the plugin registers in host-side state, tracked so we can fully tear it
         // down on unload/reload — otherwise a stale route/hook/shortcode would RPC a dead worker.
         const registeredShortcodes: string[] = [];                                  // shortcode tags
-        const registeredRoutes: Array<{ m: string; full: string }> = [];            // mounted Express routes
+        const registeredRoutes: Array<{ m: string; full: string; handler: any }> = []; // mounted Express routes
         const registeredHooks: Array<{ hook: string; type: string; shim: Function }> = []; // hook/filter shims
         let providedMail = false;                                                   // did this plugin become the mail sender
         const invokeShortcode = (scId: string, payload: any) => rpcSend(pendingShortcode, { kind: 'invoke-shortcode', scId, ...payload });
@@ -1758,7 +1774,9 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 // appRegistry does not wrap this trusted host code. (No sandbox weakening: the child is
                 // unchanged, and callApi() at bridge time still runs in-context for permission checks.)
                 app[m](full, ...mw, finalHandler);
-                registeredRoutes.push({ m, full });
+                // Keep the HANDLER, not just the verb: teardown matches on handler identity because
+                // the verb is not reliably recoverable from the layer (see the teardown comment).
+                registeredRoutes.push({ m, full, handler: finalHandler });
             } else if (msg.kind === 'route-reply') {
                 rpcSettle(pendingRoute, msg, msg.response);
             } else if (msg.kind === 'register-shortcode') {
@@ -1824,10 +1842,20 @@ async function startIsolate(slug: string, entryFile: string, opts: { supervised?
                 const app = getApp();
                 const stack = app && app._router && app._router.stack;
                 if (Array.isArray(stack) && registeredRoutes.length) {
-                    for (const { m, full } of registeredRoutes) {
+                    for (const { full, handler } of registeredRoutes) {
                         for (let i = stack.length - 1; i >= 0; i--) {
                             const r = stack[i] && stack[i].route;
-                            if (r && r.path === full && r.methods && r.methods[m]) stack.splice(i, 1);
+                            // Match the HANDLER we mounted, never the registration verb. `app.all()`
+                            // is implemented by looping the HTTP method list, so route.methods ends up
+                            // with every concrete verb and NEVER a key named 'all' — keying the unmount
+                            // on the verb silently left every `all` route mounted after the worker died.
+                            // A request then reached a dead child, whose IPC send fails asynchronously,
+                            // so it hung for the full 30s RPC timeout instead of 404ing. Handler identity
+                            // is exact and immune to any future method aliasing.
+                            if (r && r.path === full && Array.isArray(r.stack)
+                                && r.stack.some((l: any) => l && l.handle === handler)) {
+                                stack.splice(i, 1);
+                            }
                         }
                     }
                 }

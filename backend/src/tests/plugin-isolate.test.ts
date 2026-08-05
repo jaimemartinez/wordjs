@@ -31,6 +31,9 @@ before(async () => {
         "exports.init = function (wordjs) {\n" +
         "  wordjs.hooks.addFilter('test_iso_filter', (v) => '[iso]' + v);\n" +
         "  wordjs.http.route('get', '/ping', (req, res) => res.status(200).json({ ok: true, echo: req.query.x || null }));\n" +
+        // 'all' is on the isolate's verb allowlist, and it is the verb whose teardown silently failed:
+        // app.all() never leaves a route.methods.all key, so the old verb-keyed unmount never matched.
+        "  wordjs.http.route('all', '/anyverb', (req, res) => res.status(200).json({ ok: true, verb: req.method }));\n" +
         "  wordjs.shortcodes.add('iso_sc', async (attrs) => '<b>' + (attrs.x || '') + '</b>');\n" +
         "  wordjs.http.route('get', '/netcheck', (req, res) => {\n" +
         "    let fetchBlocked = false; try { void fetch; } catch (e) { fetchBlocked = true; }\n" +
@@ -91,6 +94,12 @@ test('reloading an isolated plugin re-registers cleanly — no stale/duplicate r
     assert.strictEqual(await hooks.applyFilters('test_iso_filter', 'x'), '[iso]x');
 });
 
+test('an `all`-verb route is served like any other', async () => {
+    const r = await request(app).post(`/api/v1/plugin/${SLUG}/anyverb`);
+    assert.strictEqual(r.status, 200);
+    assert.deepStrictEqual(r.body, { ok: true, verb: 'POST' });
+});
+
 test('unloading an isolated plugin tears down its route AND hook (no dead-worker RPC left behind)', async () => {
     const full = `/api/v1/plugin/${SLUG}/ping`;
     unloadIsolatedPlugin(SLUG);
@@ -99,4 +108,17 @@ test('unloading an isolated plugin tears down its route AND hook (no dead-worker
     const r = await request(app).get(full);
     assert.strictEqual(r.status, 404, 'route must 404 after unload, not 502 from a dead worker');
     assert.strictEqual(await hooks.applyFilters('test_iso_filter', 'hello'), 'hello', 'hook shim must be removed');
+});
+
+// Regression: teardown keyed the unmount on the REGISTRATION verb, but Express implements app.all()
+// by looping the concrete HTTP methods, so route.methods has get/post/... and never a key named
+// 'all'. The layer of an unloaded plugin therefore survived, and a request to it reached a dead
+// worker whose IPC send fails asynchronously — so it hung for the full 30s RPC timeout instead of
+// 404ing. Anyone could hold sockets open on a plugin the admin had deliberately removed.
+test('unload also tears down an `all`-verb route (it must not outlive the worker)', async () => {
+    const full = `/api/v1/plugin/${SLUG}/anyverb`;
+    // (the previous test already unloaded the plugin — teardown is idempotent and covers every verb)
+    assert.strictEqual(countRouteLayers(full), 0, 'the `all` route layer must be removed on unload');
+    const r = await request(app).post(full);
+    assert.strictEqual(r.status, 404, 'an `all` route must 404 after unload, never hang on a dead worker');
 });
