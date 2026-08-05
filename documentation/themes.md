@@ -626,24 +626,38 @@ Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`
 the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the
 `active_theme_layout` option, clears any customizer overrides (`active_theme_mods`), and
 re-initializes the (legacy) theme engine. On the
-public site, `frontend/src/components/public/ThemeLoader.tsx` receives the active-theme slug resolved
-on the **server** (`app/(public)/layout.tsx` → `getSettings().theme`) as `initialSlug`, so the first
+public site, `frontend/src/components/public/ThemeLoader.tsx` receives the active-theme slug **and
+version** resolved on the **server** (`app/(public)/layout.tsx` → `getSettings()` → `template` +
+`active_theme_version`) as `initialSlug` / `initialThemeVersion`, so the first
 SSR paint already carries the right stylesheet. It renders
-`<link rel="stylesheet" href="/themes/{slug}/style.css?v={slug}-{ASSET_VERSION}">` (id
+`<link rel="stylesheet" href="/themes/{slug}/style.css?v={slug}-{themeVersion}-{ASSET_VERSION}">` (id
 `wjs-theme-stylesheet`) with a React 19 **`precedence`** attribute — required so React hoists the
 link into `<head>` and treats it as render-blocking; without it the page painted with fallback token
 values and only restyled once the CSS finished loading (a flash of unthemed content). The framework
 link (`wjs-ui-framework`) is declared in an earlier precedence group, so the theme's `:root` still
-cascades after it. The
-client effect only re-checks via `themesApi.list()` on `window` `focus` (and resolves the slug once
-if the server gave none, e.g. the editor preview), so switching the theme in one tab applies in an
-open public tab when you return to it; on such a runtime switch the loader also removes the previous
-theme's `<link>` (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
-otherwise stay applied alongside the new one). The `?v=` query string is the **theme slug** plus
-**`ASSET_VERSION`** (`frontend/src/lib/assetVersion.ts`, kept in step with the package version) — a
-deterministic value identical across SSR and hydration. Theme CSS and `wordjs-ui.css` are served with
-a long `Cache-Control` (~1 day), so `ASSET_VERSION` is bumped on any release that changes them,
-forcing browsers with a cached copy to refetch.
+cascades after it.
+
+**No per-visitor theme query.** The loader used to re-fetch `themesApi.list()` on every `window`
+`focus` — an unauthenticated request per visitor per focus, running a themes-dir scan on the server.
+It doesn't any more: switching or editing a theme purges the `settings` tag
+(`backend/src/core/frontend-purge.ts`), so the next navigation serves HTML with the new slug/version.
+An already-open public tab keeps the theme it was rendered with until it navigates. The only client
+resolve left is the Puck editor preview, which reuses the public shell without server props and reads
+`GET /api/v1/settings` **once** (cheap, cached, no fs). When the href does change at runtime the
+loader still removes the previous `<link>` — matched on the exact href, so a version-only change
+evicts it too (React treats `precedence` stylesheets as add-only, so the stale stylesheet would
+otherwise stay applied alongside the new one).
+
+The `?v=` query string is the **theme slug**, the theme's **`theme.json` version** and
+**`ASSET_VERSION`**, built by `themeStylesheetHref()` in `frontend/src/lib/assetVersion.ts` — a
+deterministic value identical across SSR and hydration (the version always comes from the server,
+never recomputed on the client). Theme CSS and `wordjs-ui.css` are served with a long `Cache-Control`
+(~1 day), so both parts matter: the theme version busts an **in-place theme edit**
+(`PUT /api/v1/themes/:slug` bumps the patch — a change no build can see), and `ASSET_VERSION` busts a
+**release** that changes `wordjs-ui.css`. `ASSET_VERSION` is no longer hand-maintained: it is the
+sha256 of `backend/public/css/wordjs-ui.css`, generated into the committed
+`frontend/src/lib/assetVersion.generated.ts` by `scripts/generate-asset-version.js` (run in the
+frontend `prebuild`, diff-gated in CI). Nothing to bump — edit the CSS and the token follows.
 
 ## Theme Previews in Admin
 

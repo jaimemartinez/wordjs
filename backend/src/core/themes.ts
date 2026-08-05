@@ -107,29 +107,61 @@ function parseThemeMetadata(themeDir: string, slug: string) {
 }
 
 /**
+ * Memoized theme scan.
+ *
+ * The scan is SYNCHRONOUS fs work: one readdir plus, per theme, a readFile of theme.json and up to
+ * three existsSync for the screenshot — ~200 blocking syscalls on a 40-theme install. It ran on every
+ * GET /api/v1/themes (public, unauthenticated, polled by the frontend's ThemeLoader on each tab focus)
+ * and on every read of the active theme, so it is cached.
+ *
+ * The TTL is only a backstop: every mutation THIS process performs drops the cache explicitly
+ * (switch/delete/install/createDefaultTheme here, the declarative write API + zip upload in
+ * routes/themes.ts), so anything done through the app is visible immediately.
+ * WORST CASE: a theme added/edited/removed on disk from OUTSIDE the app (scp, git pull, an editor,
+ * another node's filesystem) stays invisible for up to SCAN_TTL_MS — no code here observes that write.
+ */
+const SCAN_TTL_MS = 60_000;
+let scanCache: { at: number; records: any[] } | null = null;
+
+/** Drop the memoized scan. MUST be called by every path that writes inside THEMES_DIR. */
+function invalidateThemeScanCache() {
+  scanCache = null;
+}
+
+/**
  * Scan for installed themes
  */
 function scanThemes() {
-  ensureThemesDir();
-  const themes: Theme[] = [];
+  const now = Date.now();
+  let cached = scanCache;
+  if (!cached || now - cached.at >= SCAN_TTL_MS) {
+    ensureThemesDir();
+    const records: any[] = [];
 
-  const entries = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
+    const entries = fs.readdirSync(THEMES_DIR, { withFileTypes: true });
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
 
-    const themeDir = path.join(THEMES_DIR, entry.name);
-    const metadata = parseThemeMetadata(themeDir, entry.name);
+      const themeDir = path.join(THEMES_DIR, entry.name);
+      const metadata = parseThemeMetadata(themeDir, entry.name);
 
-    themes.push(new Theme({
-      ...metadata,
-      slug: entry.name,
-      path: themeDir,
-      templatePath: path.join(themeDir, 'templates')
-    }));
+      records.push({
+        ...metadata,
+        slug: entry.name,
+        path: themeDir,
+        templatePath: path.join(themeDir, 'templates')
+      });
+    }
+
+    cached = { at: now, records };
+    scanCache = cached;
   }
 
-  return themes;
+  // Fresh Theme instances per call, from the cached metadata: callers get exactly what they got
+  // before the memo existed (same class, same fields, nothing filtered) and no caller can corrupt
+  // another's copy by mutating the array or an instance.
+  return cached.records.map((record: any) => new Theme(record));
 }
 
 /**
@@ -146,6 +178,23 @@ async function getActiveTheme() {
   const currentSlug = await getCurrentTheme();
   const themes = scanThemes();
   return themes.find(t => t.slug === currentSlug) || themes[0] || null;
+}
+
+/**
+ * theme.json `version` of the theme that actually renders (same fallback chain as getActiveTheme).
+ *
+ * Served in the PUBLIC settings payload so the frontend can version the theme stylesheet URL: the
+ * build-time asset version cannot see an in-place theme edit, this can. Costs no fs (memoized scan)
+ * and no extra SQL (the `template` option is already cached). Never throws — a themes-dir hiccup
+ * must not 500 the public settings payload; the stylesheet URL just goes unversioned.
+ */
+async function getActiveThemeVersion() {
+  try {
+    const theme = await getActiveTheme();
+    return theme ? String(theme.version) : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
@@ -191,6 +240,11 @@ async function doSwitchTheme(slug: string) {
   await themeEngine.init();
 
   await doAction('switch_theme', slug, previousTheme);
+
+  // Activation is the moment everything downstream re-reads the active theme (getActiveThemeVersion
+  // → the public settings payload), and both theme-engine.init() and a switch_theme listener may
+  // have written inside THEMES_DIR by now — so this runs LAST, after those writes, not before them.
+  invalidateThemeScanCache();
 
   return { success: true, message: `Switched to theme ${theme.name}` };
 }
@@ -664,6 +718,10 @@ footer .w-10:hover {
       {{/each}}
 {{> footer}}`;
   fs.writeFileSync(path.join(defaultDir, 'templates', 'archive.html'), archiveTemplate);
+
+  // Unconditional: the scaffold writes on `force` AND whenever a file was missing (first boot),
+  // and a boot-time scan may already have observed the dir half-populated.
+  invalidateThemeScanCache();
 }
 
 /**
@@ -689,6 +747,7 @@ async function deleteTheme(slug: string) {
 
   // Recursive delete
   fs.rmSync(targetDir, { recursive: true, force: true });
+  invalidateThemeScanCache();
   return { success: true, message: `Theme ${theme.name} deleted successfully` };
 }
 
@@ -774,6 +833,9 @@ function installThemeFromDir(sourceDir: string, targetSlug: string, opts: { them
     // Never leave a half-copied theme behind.
     try { fs.rmSync(targetDir, { recursive: true, force: true }); } catch { /* best effort */ }
     throw e;
+  } finally {
+    // The dir existed, even if only briefly (rollback path) — no scan may answer from before it.
+    invalidateThemeScanCache();
   }
 
   return { slug: targetSlug, files: files.length };
@@ -866,11 +928,14 @@ async function installThemeFromZip(zipPath: any, slug: any): Promise<{ ok: boole
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, entry.getData());
     }
+    invalidateThemeScanCache();
     cleanup();
     return { ok: true, status: 200, body: { success: true, message: `Theme "${slug}" installed successfully`, slug } };
   } catch (error: any) {
     cleanup();
     try { const t = path.resolve(THEMES_DIR, String(slug)); if (fs.existsSync(t)) fs.rmSync(t, { recursive: true, force: true }); } catch { /* best-effort */ }
+    // Entries may already have landed before the throw (and the rollback above removed them).
+    invalidateThemeScanCache();
     return { ok: false, status: 500, body: { error: `Failed to install theme: ${error.message}` } };
   }
 }
@@ -878,8 +943,10 @@ async function installThemeFromZip(zipPath: any, slug: any): Promise<{ ok: boole
 module.exports = {
   Theme,
   scanThemes,
+  invalidateThemeScanCache,
   getCurrentTheme,
   getActiveTheme,
+  getActiveThemeVersion,
   switchTheme,
   getAllThemes,
   renderTemplate,

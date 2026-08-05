@@ -20,8 +20,11 @@ const {
     deleteTheme,
     createThemeZip,
     installThemeFromDir,
+    invalidateThemeScanCache,
+    getActiveTheme,
     THEMES_DIR
 } = require('../core/themes');
+const { purgeFrontend } = require('../core/frontend-purge');
 const { compileTheme, writeCompiled } = require('../core/theme-compile');
 const { analyzeTheme } = require('../core/theme-doctor');
 const { authenticate } = require('../middleware/auth');
@@ -183,6 +186,9 @@ router.post('/upload', authenticate, isAdmin, upload.single('theme'), asyncHandl
 
         // Extract zip
         zip.extractAllTo(THEMES_DIR, true);
+        // This route writes into THEMES_DIR without going through core/themes — drop the scan memo
+        // itself, or the theme just uploaded stays missing from GET /themes until the TTL expires.
+        invalidateThemeScanCache();
 
         // Clean up temp file
         fs.unlinkSync(zipPath);
@@ -413,6 +419,19 @@ router.put('/:slug', authenticate, isAdmin, asyncHandler(async (req: any, res: R
     // then the marked block. Both writes are tmp+rename; functions.js is NEVER touched.
     writeJsonAtomic(themeJsonPath, serialized);
     writeCompiled(themeDir, compiled.css);
+    // This rebuild edits a theme IN PLACE, behind core/themes' back: drop the scan memo (it still
+    // holds the pre-bump version) before anything can read the old one back.
+    invalidateThemeScanCache();
+
+    // The patch bump is what busts the cached stylesheet URL on the public pages, but the version is
+    // DERIVED from theme.json (no option row), so no updated_option hook fires here — purge
+    // explicitly, exactly like DELETE /api/v1/chrome/:part does. Only the ACTIVE theme is on a public
+    // page, so editing an inactive one must not evict the whole public cache. Resolved through
+    // getActiveTheme (not the raw `template` option) so this matches, case for case, the theme the
+    // settings payload derives active_theme_version from — including its fallback.
+    const active = await getActiveTheme();
+    if (active && active.slug === slug) purgeFrontend(['settings'], ['/']);
+
     res.json({ slug, version: next.version, diagnostics: compiled.diagnostics });
 }));
 

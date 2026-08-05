@@ -8,6 +8,7 @@ import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
 const { getOption, updateOption } = require('../core/options');
+const { getActiveThemeVersion } = require('../core/themes');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
@@ -86,6 +87,20 @@ const ALL_SETTINGS = [
 // site_chrome_* — see routes/chrome.ts). Writing them here would bypass that validation.
 const DEDICATED_WRITE_API = new Set(['site_chrome_header', 'site_chrome_footer']);
 
+// Public settings that are DERIVED, not stored. Computed per request from the memoized theme scan
+// (core/themes), so they add no SQL and no fs to the read path — and deliberately absent from
+// ALL_SETTINGS, because an option row for one of these could only ever drift from the theme on disk.
+const DERIVED_PUBLIC_SETTINGS: Record<string, () => Promise<any>> = {
+    // theme.json `version` of the ACTIVE theme. The frontend appends it to the theme stylesheet URL
+    // so an in-place theme edit (PUT /api/v1/themes/:slug bumps the patch) busts the browser/CDN
+    // copy — the build-time asset version cannot see that edit. That route purges the 'settings' tag.
+    active_theme_version: getActiveThemeVersion
+};
+
+const derivedSetting = (key: string) =>
+    // hasOwnProperty, not `in`: `constructor`/`toString` must not resolve through the prototype.
+    Object.prototype.hasOwnProperty.call(DERIVED_PUBLIC_SETTINGS, key) ? DERIVED_PUBLIC_SETTINGS[key] : null;
+
 /**
  * @swagger
  * /settings:
@@ -99,9 +114,14 @@ const DEDICATED_WRITE_API = new Set(['site_chrome_header', 'site_chrome_footer']
 router.get('/', asyncHandler(async (req: Request, res: Response) => {
     const settings: Record<string, any> = {};
 
-    await Promise.all(PUBLIC_SETTINGS.map(async (key) => {
-        settings[key] = await getOption(key);
-    }));
+    await Promise.all([
+        ...PUBLIC_SETTINGS.map(async (key) => {
+            settings[key] = await getOption(key);
+        }),
+        ...Object.entries(DERIVED_PUBLIC_SETTINGS).map(async ([key, compute]) => {
+            settings[key] = await compute();
+        })
+    ]);
 
     res.json(settings);
 }));
@@ -150,6 +170,11 @@ router.get('/all', authenticate, isAdmin, asyncHandler(async (req: Request, res:
  */
 router.get('/:key', asyncHandler(async (req: Request, res: Response) => {
     const { key } = req.params as { key: string };
+
+    const compute = derivedSetting(key);
+    if (compute) {
+        return res.json({ key, value: await compute() });
+    }
 
     // Check if it's a public setting
     if (!PUBLIC_SETTINGS.includes(key)) {

@@ -14,7 +14,7 @@ import { PATTERNS, insertPattern, regenIds } from "@/lib/puckPatterns";
 import InlineTiptap from "./InlineTiptap";
 import { hideClasses } from "./puck/VisibilityField";
 import { replayAnimations } from "./puck/AnimationField";
-import { ASSET_VERSION } from "@/lib/assetVersion";
+import { themeStylesheetHref, uiFrameworkHref } from "@/lib/assetVersion";
 import { blockVars, unit } from "./puck/blockVars";
 import { revisionsApi, Revision, themesApi } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
@@ -481,6 +481,7 @@ function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?
     React.useEffect(() => {
         let cancelled = false;
         let activeSlug: string | null = null;
+        let activeVersion = "";
         const ensureLink = (doc: Document, id: string, href: string): HTMLLinkElement => {
             let l = doc.getElementById(id) as HTMLLinkElement | null;
             if (!l) {
@@ -495,12 +496,13 @@ function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?
             const iframe = document.querySelector(".puck-container iframe") as HTMLIFrameElement | null;
             const doc = iframe?.contentDocument;
             if (!doc?.head || !activeSlug) return;
-            // Version-stamped exactly like the public site's ThemeLoader. Both files are served with a
-            // ~1-day Cache-Control, so without ?v= the canvas kept serving the PREVIOUS release's CSS
-            // for a day after an update — the editor would disagree with the live site about spacing,
-            // hover effects and animations, with nothing on screen to explain why.
-            const ui = ensureLink(doc, "wjs-ui-framework", `/public/css/wordjs-ui.css?v=${ASSET_VERSION}`);
-            const theme = ensureLink(doc, "wjs-theme-stylesheet", `/themes/${activeSlug}/style.css?v=${activeSlug}-${ASSET_VERSION}`);
+            // Version-stamped exactly like the public site's ThemeLoader (same helpers). Both files are
+            // served with a ~1-day Cache-Control, so without ?v= the canvas kept serving the PREVIOUS
+            // release's CSS for a day after an update — the editor would disagree with the live site
+            // about spacing, hover effects and animations, with nothing on screen to explain why. The
+            // theme's own version rides along so an in-place theme edit busts the canvas copy too.
+            const ui = ensureLink(doc, "wjs-ui-framework", uiFrameworkHref());
+            const theme = ensureLink(doc, "wjs-theme-stylesheet", themeStylesheetHref(activeSlug, activeVersion));
             // CASCADE CONTRACT: the framework's :root declares default values for the canonical
             // --wjs-* tokens, so the theme sheet must sit AFTER it or every theme renders half-default
             // in the canvas. AutoFrame document reloads clone links back in arbitrary positions (and
@@ -518,8 +520,10 @@ function PreviewFrame({ viewport, children }: { viewport: ViewportKey; children?
                 if (cancelled) return;
                 const active = list.find((t) => t.active) || list.find((t) => t.slug === "default");
                 const slug = active?.slug || "default";
-                if (slug !== activeSlug) {
+                const version = active?.version || "";
+                if (slug !== activeSlug || version !== activeVersion) {
                     activeSlug = slug;
+                    activeVersion = version;
                     inject();
                 }
             }).catch(() => {
