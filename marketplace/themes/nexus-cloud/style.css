@@ -23,5 +23,7 @@
   --wjs-focus-ring: #0ea5e9;
   --wjs-font-family-base: 'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace;
   --wjs-font-family-heading: 'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif;
+  --wjs-heading-transform: uppercase;
+  --wjs-heading-tracking: 2px;
 }
 /* @wjs-generated:end */

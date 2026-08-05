@@ -1,6 +1,6 @@
 {
   "name": "Monochrome Gallery",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "Minimalist black & white photography portfolio with high-contrast typography and fullscreen viewports.",
   "author": "WordJS Premium Studio",
   "category": "Portfolio",
@@ -20,6 +20,8 @@
   ],
   "tokens": {
     "--wjs-font-family-base": "'Public Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
-    "--wjs-font-family-heading": "'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif"
+    "--wjs-font-family-heading": "'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif",
+    "--wjs-heading-transform": "uppercase",
+    "--wjs-heading-tracking": "-1px"
   }
 }

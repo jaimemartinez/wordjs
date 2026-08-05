@@ -1,6 +1,6 @@
 {
   "name": "Vanguard Consulting",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "Executive advisory theme with serif headers, rich navy palette, and elegant testimonial carousels.",
   "author": "WordJS Premium Studio",
   "category": "Corporate",
@@ -20,6 +20,9 @@
   ],
   "tokens": {
     "--wjs-font-family-base": "'Lora', Georgia, 'Times New Roman', serif",
-    "--wjs-font-family-heading": "'Playfair Display', Didot, 'Bodoni MT', Georgia, serif"
+    "--wjs-font-family-heading": "'Playfair Display', Didot, 'Bodoni MT', Georgia, serif",
+    "--wjs-heading-tracking": "-0.01em",
+    "--wjs-heading-weight": "800",
+    "--wjs-heading-font-weight": "800"
   }
 }

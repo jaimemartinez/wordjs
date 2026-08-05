@@ -23,5 +23,7 @@
   --wjs-focus-ring: #ffffff;
   --wjs-font-family-base: 'Public Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   --wjs-font-family-heading: 'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif;
+  --wjs-heading-transform: uppercase;
+  --wjs-heading-tracking: -1px;
 }
 /* @wjs-generated:end */

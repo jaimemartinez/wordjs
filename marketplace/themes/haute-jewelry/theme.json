@@ -1,6 +1,6 @@
 {
   "name": "Haute Jewelry",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "Luxury jewelry & diamond studio with dark slate background, sparkling particle effects, and appointment drawer.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
@@ -20,6 +20,14 @@
   ],
   "tokens": {
     "--wjs-font-family-base": "'Montserrat', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
-    "--wjs-font-family-heading": "'Cinzel', 'Trajan Pro', 'Times New Roman', serif"
+    "--wjs-font-family-heading": "'Cinzel', 'Trajan Pro', 'Times New Roman', serif",
+    "--wjs-heading-transform": "uppercase",
+    "--wjs-heading-weight": "800",
+    "--wjs-heading-font-weight": "800"
+  },
+  "styles": {
+    "body": {
+      "letter-spacing": "0.5px"
+    }
   }
 }

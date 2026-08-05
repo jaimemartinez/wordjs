@@ -1,6 +1,6 @@
 {
   "name": "Crypto Chronicle",
-  "version": "1.0.6",
+  "version": "1.0.8",
   "description": "Web3, blockchain, and finance news portal with live market price ticker styling and multi-category tabs.",
   "author": "WordJS Premium Studio",
   "category": "Media",
@@ -20,6 +20,8 @@
   ],
   "tokens": {
     "--wjs-font-family-base": "'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace",
-    "--wjs-font-family-heading": "'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif"
+    "--wjs-font-family-heading": "'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif",
+    "--wjs-heading-transform": "uppercase",
+    "--wjs-heading-tracking": "2px"
   }
 }
