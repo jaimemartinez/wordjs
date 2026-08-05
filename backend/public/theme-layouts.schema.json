@@ -1,0 +1,64 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "WordJS theme.json layout block (v2)",
+  "description": "Structure config for the public shell. Every key is optional; an absent key (or an absent layout block) keeps the current default rendering exactly.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "header": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variant": {
+          "type": "string",
+          "enum": ["classic", "centered", "minimal"],
+          "description": "classic = current markup unchanged; centered = logo centered on top, nav in a row below; minimal = logo + hamburger only (nav always in the mobile panel). Default: classic."
+        },
+        "sticky": {
+          "type": "boolean",
+          "default": true,
+          "description": "false = static header in flow (no fixed positioning and no main offset). Default: true."
+        },
+        "transparent": {
+          "type": "boolean",
+          "default": false,
+          "description": "true = header without background over the start of the page until the first scroll (background returns with data-scrolled). Default: false."
+        }
+      }
+    },
+    "footer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "variant": {
+          "type": "string",
+          "enum": ["columns", "minimal"],
+          "description": "columns = current column grid; minimal = a single row: copyright + socials, no column grid. Default: columns."
+        },
+        "columns": {
+          "type": "integer",
+          "enum": [1, 2, 3, 4],
+          "default": 4,
+          "description": "Column count for the footer grid; only applies when variant is \"columns\". Default: 4."
+        }
+      }
+    },
+    "sidebar": {
+      "description": "true is equivalent to { \"position\": \"right\" } (back-compat with the existing boolean form).",
+      "oneOf": [
+        { "type": "boolean" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "position": { "type": "string", "enum": ["left", "right"] }
+          }
+        }
+      ]
+    },
+    "containerWidth": {
+      "type": "string",
+      "description": "CSS length capping the main column (existing key, kept as-is)."
+    }
+  }
+}

@@ -55,9 +55,9 @@ themes/
 
 ## Available Themes
 
-WordJS offers **64 first-party themes**. Only **default** (WordJS) ships bundled in
-`backend/themes/`; the rest install on demand through the **theme marketplace** (see *Installing a
-Theme* below). A representative selection:
+WordJS offers **65 first-party themes**. Only **default** (WordJS) ships bundled in
+`backend/themes/`; the other 64 (`marketplace/themes/`) install on demand through the **theme
+marketplace** (see *Installing a Theme* below). A representative selection:
 
 | Theme               | Aesthetic          | Key Features                                |
 | ------------------- | ------------------ | ------------------------------------------- |
@@ -75,10 +75,11 @@ Theme* below). A representative selection:
 | **sage-calm**       | Wellness           | Organic sage greens on soft cream           |
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 
-> **`--wjs-` variable adoption.** All first-party themes ship the full `--wjs-*` token set documented below (dozens
-> of declarations each — e.g. `carbon-terminal` has 71, `default` 70 — including the `--wjs-color-on-*`
-> contrast set). The **default** theme's `:root` is entirely `--wjs-*` (no older bare `--primary`/`--text`
-> aliases remain). Copy any theme as a starting point.
+> **`--wjs-` variable adoption.** All first-party themes ship the `--wjs-*` token set documented in
+> [`theming.md`](./theming.md) — from compact token-first themes (~20 declarations) up to heavily
+> parameterized ones (~270; e.g. `carbon-terminal` declares 172, the bundled `default` 75) —
+> including the `--wjs-color-on-*` contrast set. The **default** theme's `:root` is entirely
+> `--wjs-*` (no older bare `--primary`/`--text` aliases remain). Copy any theme as a starting point.
 
 ## The WordJS UI Framework
 
@@ -92,7 +93,8 @@ Beyond a theme's own `style.css`, WordJS ships **one shared, token-driven CSS fr
   (`.container`/`.row`/`.col-*`).
 - **A utility layer**: spacing, display, flexbox, text, colors, borders, sizing, and shadow helpers.
 
-Everything in the framework is driven by the same `--wjs-*` design tokens documented below, each with
+Everything in the framework is driven by the same `--wjs-*` design tokens (see the *CSS Variables
+Reference* below and the manifest `backend/public/theme-tokens.json`), each with
 a sensible fallback. Because the tokens are declared in each theme's **`style.css :root`** (not
 `theme.json`), a theme re-skins the entire framework — every element, component, and utility — just by
 overriding tokens. Per-variant `--wjs-color-on-*` tokens carry the max-contrast text color
@@ -126,8 +128,9 @@ rules). When a theme hides or rearranges header pieces such as `.wjs-header-acti
 **scoped to the intended breakpoint/selector** — an unscoped `display: none` there also kills the
 mobile nav toggle.
 
-All first-party themes ship a complete `--wjs-*` token set tuned to their palette. For the full token +
-class reference, see [`documentation/theming.md`](./theming.md).
+All first-party themes ship a `--wjs-*` token set tuned to their palette (see the adoption note
+above for the real per-theme declaration counts). For the full token + class reference, see
+[`documentation/theming.md`](./theming.md).
 
 ## Theme integration with the live site
 
@@ -157,6 +160,98 @@ all of which default to today's look so the existing themes render unchanged:
    `PUBLIC_SETTINGS`), and the SSR public layout (`app/(public)/layout.tsx`) honors it — `containerWidth`
    caps the main column, `sidebar: true` switches content/archive pages to two columns with `sidebar-1`.
    Omitting the block (as every first-party theme does today) keeps the current single-column, default-width layout.
+   The full v2 schema is documented in "Structure config (layout)" below.
+
+### Structure config (layout)
+
+`theme.json` may declare a `layout` block (schema v2 — machine-readable copy in
+`backend/public/theme-layouts.schema.json`). Every key is **optional**: omitting a key — or the
+whole block, as the default theme does — keeps the current design exactly.
+
+```json
+{
+  "layout": {
+    "header": { "variant": "centered", "sticky": true, "transparent": false },
+    "footer": { "variant": "minimal" },
+    "sidebar": { "position": "left" },
+    "containerWidth": "72rem"
+  }
+}
+```
+
+| Key | Values (default) | Meaning |
+| --- | --- | --- |
+| `header.variant` | `classic` \| `centered` \| `minimal` (`classic`) | `classic` = today's markup unchanged; `centered` = logo centered on top, nav in a row below; `minimal` = logo + hamburger only (nav always in the mobile panel). |
+| `header.sticky` | boolean (`true`) | `false` renders the header static in flow — no fixed positioning and no main offset. |
+| `header.transparent` | boolean (`false`) | `true` = no header background over the start of the page until the first scroll (`data-scrolled` restores it). |
+| `footer.variant` | `columns` \| `minimal` (`columns`) | `minimal` = a single row: copyright + socials, no column grid. |
+| `footer.columns` | `1`–`4` (`4`) | Footer grid column count; only applies to `variant: "columns"`. |
+| `sidebar` | boolean or `{ "position": "left" \| "right" }` | `true` ≡ `{ "position": "right" }` (back-compat with the existing boolean form). |
+| `containerWidth` | CSS length | Caps the main column (existing key, kept as-is). |
+
+The variants themselves are implemented by the platform chrome (`Header.tsx`/`Footer.tsx`/
+`PublicLayoutShell.tsx`) — a theme only *declares* them here; no markup or CSS ships in the theme,
+so every declared value renders consistently across themes. `node backend/cli/wordjs.js doctor theme <slug>`
+lints the block against the schema: unrecognized keys warn as `LAYOUT_UNKNOWN_KEY` (with a
+did-you-mean suggestion) and invalid enum/type values as `LAYOUT_INVALID_VALUE`.
+
+### Composable chrome (`chrome/*.json`)
+
+Beyond the layout *variants* above, a theme (or the site itself) can compose the header/footer
+from blocks. A composition is **Puck Data JSON** — `{ "root": { "props": {} }, "content": [ { "type", "props" } ] }` —
+validated on the backend by `core/chrome-validate.ts` (contract v1, the write authority) and
+rendered by the public SSR layout without mounting any editor runtime.
+
+**Effective chrome precedence** (header and footer resolve independently; any invalid/unreadable
+level falls through to the next — fail-closed, never a partial render):
+
+1. **Site composition** — options `site_chrome_header` / `site_chrome_footer` (JSON strings),
+   written only via `PUT /api/v1/chrome/:part` (admin; a 400 carries the validator's
+   `errors: [{ code, path, message }]`) and cleared via `DELETE /api/v1/chrome/:part`. Both
+   travel in the public `/api/v1/settings` payload.
+2. **Theme composition** — `chrome/header.json` / `chrome/footer.json` inside the active theme,
+   served statically at `/themes/<slug>/chrome/*.json`.
+3. **Layout variant** — `theme.json` `layout` (v2, previous section).
+4. **Default** — today's built-in chrome.
+
+**Block allowlist (closed)** — a type outside it invalidates the whole composition. Props marked
+`?` are optional; every block also accepts the editor's per-instance `id` string:
+
+| Block | Props |
+| --- | --- |
+| `ChromeLogo` | `size?: "sm" \| "md" \| "lg"` |
+| `ChromeSiteTitle` | `showTagline?: boolean` |
+| `ChromeNav` | `location: "header" \| "footer"`, `orientation: "horizontal" \| "vertical"` |
+| `ChromeSearch` | `placeholder?: string` |
+| `ChromeSocials` | `source: "settings"` |
+| `ChromeText` | `text: string` (plain text — always rendered escaped) |
+| `ChromeButton` | `label: string`, `href: string`, `variant: "primary" \| "ghost"` |
+| `ChromeSpacer` | `size: "sm" \| "md" \| "lg"` |
+| `ChromeRow` | `items` (slot: array of blocks), `align: "start" \| "center" \| "end" \| "between"`, `gap: "sm" \| "md" \| "lg"`, `wrap?: boolean` |
+
+**Budgets & security**: JSON ≤ **64KB**, ≤ **100 blocks**, nesting depth ≤ **3** (only via
+`ChromeRow.items`); `ChromeButton.href` must be site-relative (`/…`, never `//`) or `http(s)://`
+— `javascript:` and every other scheme are rejected. Blocks are presentational: data (menus,
+logo, socials) is resolved by the renderer from already-fetched settings, never fetched by a
+block. Styling rides the existing `.wjs-chrome-*` hook classes + `--wjs-*` tokens.
+
+Minimal `chrome/header.json`:
+
+```json
+{
+  "root": { "props": {} },
+  "content": [
+    { "type": "ChromeRow", "props": { "align": "between", "gap": "md", "items": [
+      { "type": "ChromeLogo", "props": { "size": "md" } },
+      { "type": "ChromeNav", "props": { "location": "header", "orientation": "horizontal" } }
+    ] } }
+  ]
+}
+```
+
+`node backend/cli/wordjs.js doctor theme <slug>` validates shipped compositions: contract
+violations are **errors** (`CHROME_INVALID`, with the offending block path); a file that cannot
+be read or parsed is a **warning** (`CHROME_UNREADABLE`).
 
 ### Theme customizer (live `--wjs-*` overrides)
 
@@ -170,20 +265,29 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 
 ## CSS Variables Reference
 
-### Core Color Variables
+The narrative reference (core tables, alias/editor-internal rules, per-block groups) lives in
+[`theming.md`](./theming.md); the **complete machine-readable contract** is
+`backend/public/theme-tokens.json`, regenerated from `wordjs-ui.css` with
+`node scripts/generate-token-manifest.js`. The manifest currently tracks **717 tokens** and
+**1664 `var()` uses** across 64 name groups — mostly per-block groups such as `cta` (55),
+`pricing` (49), `card` (40), `accordion` (38), `form` (37), `hero` (37), `audio` (34), `tabs` and
+`testimonial` (29 each), `search` (26), `button` (25).
+
+### Core variables (defaults as declared in `wordjs-ui.css`)
 
 ```css
 :root {
   /* Primary Brand Color */
   --wjs-color-primary: #2563eb;
-  --wjs-color-primary-dark: #1d4ed8;
+  --wjs-color-primary-dark: #1e40af;
 
   /* Background Colors */
   --wjs-bg-canvas: #ffffff;        /* Page background */
-  --wjs-bg-surface: #f9fafb;       /* Card/panel background */
+  --wjs-bg-surface: #ffffff;       /* Card/panel background */
+  --wjs-bg-muted: #f8f9fa;         /* Subtle fills: code, thead, inputs */
 
   /* Text Colors */
-  --wjs-color-text-main: #111827;  /* Main text */
+  --wjs-color-text-main: #1f2937;  /* Main text */
   --wjs-color-text-muted: #6b7280; /* Secondary text */
 
   /* Border */
@@ -191,77 +295,68 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 }
 ```
 
-### Navigation Variables
+### Chrome (header/footer) tokens
 
-```css
-:root {
-  --wjs-nav-font-family: 'Inter', sans-serif;
-  --wjs-nav-font-size: 0.875rem;
-  --wjs-nav-font-weight: 500;
-  --wjs-nav-text-transform: none;      /* or 'uppercase' */
-  --wjs-nav-letter-spacing: normal;    /* or '0.1em' */
-  
-  --wjs-nav-color: #6b7280;            /* Default link color */
-  --wjs-nav-color-hover: #111827;      /* Hover color */
-  --wjs-nav-transition: color 200ms ease;
-  
-  --wjs-logo-color: #111827;
-}
-```
+The React chrome reads the **canonical** tokens (`--wjs-bg-surface`, `--wjs-color-heading`,
+`--wjs-color-primary`, `--wjs-color-text-muted`, …) — there are no separate
+`--wjs-nav-*`/`--wjs-logo-*` tokens. Four tokens are consumed *only* by the React chrome (no CSS
+rule in `wordjs-ui.css` references them) and carry the `chrome-phantom` flag in the manifest:
+`--wjs-bg-footer`, `--wjs-color-text-footer-main`, `--wjs-color-text-footer-dim`,
+`--wjs-bg-surface-glass`. Themes may set them (footer surface/text, translucent header surface)
+even though a CSS-only audit would report them unused.
 
-### Footer Variables
+### Two token families a theme must NOT declare
 
-```css
-:root {
-  --wjs-footer-bg: #111827;
-  --wjs-footer-text-heading: #ffffff;
-  --wjs-footer-text-body: #9ca3af;
-  --wjs-footer-text-hover: #ffffff;
-  --wjs-footer-icon-bg: #1f2937;
-  --wjs-footer-icon-color: #ffffff;
-}
-```
-
-### Puck Component Variables
-
-```css
-:root {
-  /* Accordion */
-  --puck-accordion-bg: var(--wjs-bg-surface);
-  --puck-accordion-border: var(--wjs-border-subtle);
-  --puck-accordion-header-bg: var(--wjs-bg-surface);
-  
-  /* Tabs */
-  --puck-tabs-border: var(--wjs-border-subtle);
-  --puck-tabs-active-color: var(--wjs-color-primary);
-  
-  /* Pricing */
-  --puck-pricing-bg: var(--wjs-bg-surface);
-  --puck-pricing-highlight-bg: var(--wjs-color-primary);
-  
-  /* Search */
-  --puck-search-input-bg: var(--wjs-bg-surface);
-  --puck-search-input-border: var(--wjs-border-subtle);
-  --puck-search-btn-bg: var(--wjs-color-primary);
-}
-```
+- **The 21 alias tokens** (flagged `alias` in the manifest): `--wjs-h{1..6}-size`,
+  `--wjs-h{1..6}-weight`, `--wjs-font-family`, `--wjs-foreground`, `--wjs-color-text-heading`,
+  `--wjs-color-text-dim`, `--wjs-color-primary-text`, `--wjs-bg-surface-hover`,
+  `--wjs-border-radius`, `--wjs-space-md`, `--wjs-space-sm`. They remap the names used by the
+  visual-editor block renderer onto the canonical tokens — override the **canonical** token
+  (`--wjs-h1`, not `--wjs-h1-size`) and the alias follows automatically.
+- **The 22 `--wjs-r-*` tokens** (flagged `editor-internal`): the visual editor's per-instance
+  responsive channel (`--wjs-r-<prop>-{tb,mb}`), injected **inline** on each block by the editor.
+  Declaring one in a theme `:root` would silently override every block instance on every page.
 
 ## Creating a Custom Theme
 
-### 1. Create the Theme Folder
+### 1. Scaffold with the CLI
 
 ```bash
-mkdir backend/themes/my-custom-theme
+node backend/cli/wordjs.js create theme my-custom-theme
 ```
 
-### 2. Create style.css
+This creates `backend/themes/my-custom-theme/` from the CLI template
+(`backend/cli/templates/theme/`): a `style.css` whose `:root` is pre-filled with a 67-token
+`--wjs-*` contract, plus a `theme.json`. Restart the backend once so the theme is discovered, then
+activate it in **Admin → Themes**. (Creating the folder by hand still works — the CLI just writes
+the boilerplate for you.)
+
+Prefer generating instead of editing boilerplate? Pass the four seed colors
+(`--primary --secondary --bg --text`, optionally `--archetype`) and the CLI writes a
+**declarative `theme.json`** and compiles `style.css` from it — see
+[Declarative theming (`theme.json`)](#declarative-theming-themejson) below.
+
+At any point, lint your theme against the machine-readable contract with the doctor:
+
+```bash
+node backend/cli/wordjs.js doctor theme my-custom-theme
+```
+
+It flags unknown token names (with a closest-match suggestion), overrides of the 21 readonly
+aliases, missing `--wjs-color-on-*` contrast pairs, external `@import`s/`url()`s, and `:root`
+values that would not be portable to declarative tokens. Admins can also fetch the same report
+from `GET /api/v1/themes/:slug/doctor`.
+
+### 2. Edit style.css
 
 ```css
 /* =========================================
    THEME: My Custom Theme
    ========================================= */
 
-@import url('https://fonts.googleapis.com/css2?family=YourFont:wght@400;700&display=swap');
+/* Avoid external @import (Google Fonts etc.) — the doctor flags it (EXTERNAL_REF): it adds a
+   render-blocking third-party request on every page view. Ship font files with the theme (or use
+   the framework's font tokens) instead. */
 
 :root {
   /* Override variables here */
@@ -292,7 +387,7 @@ header {
 }
 ```
 
-### 3. Create theme.json (Optional)
+### 3. Edit theme.json (Optional)
 
 ```json
 {
@@ -307,10 +402,187 @@ header {
 
 Add a `screenshot.png` (400x300px recommended) for the theme picker.
 
+## Declarative theming (`theme.json`)
+
+Instead of hand-writing the whole `style.css`, a theme can describe itself **declaratively** in
+`theme.json` and have WordJS compile the CSS. The compiler is
+`backend/src/core/theme-compile.ts` (`compileTheme()`), driven by:
+
+```bash
+# create a theme from four seed colors (writes theme.json + compiled style.css + functions.js stub)
+node backend/cli/wordjs.js create theme neon-shop \
+  --primary "#7c3aed" --secondary "#0ea5e9" --bg "#0b1020" --text "#e5e7eb" \
+  --archetype cyber --name "Neon Shop"
+
+# after editing theme.json, recompile style.css in place
+node backend/cli/wordjs.js build theme neon-shop
+```
+
+Admins can do the same over the API: `POST /api/v1/themes` (create) and `PUT /api/v1/themes/:slug`
+(rebuild) in `backend/src/routes/themes.ts`, both `authenticate` + `isAdmin`.
+
+All declarative keys are **optional and additive** to the existing `name` / `version` /
+`description` / `author` / `layout` keys — a `theme.json` without them keeps working exactly as
+before.
+
+### `generator: "wordjs"`
+
+The writer's mark. Every **declarative** `theme.json` written by WordJS carries it (the CLI's
+seeded `create theme` and the API's `POST /api/v1/themes` both stamp it; the plain template
+scaffold does not). `PUT /api/v1/themes/:slug` refuses to rebuild themes that lack it, so
+hand-crafted themes can never be overwritten through the API. The `build theme` CLI command
+compiles any `theme.json` that has declarative keys.
+
+### `seeds` — four colors → the whole palette
+
+```json
+"seeds": { "primary": "#7c3aed", "secondary": "#0ea5e9", "bg": "#0b1020", "text": "#e5e7eb" }
+```
+
+Each seed must be a strict `#rrggbb` hex. `theme-derive.ts` (`deriveTokens()`) expands them into
+the 17-token canonical palette emitted into `:root` — the same derivation the first-party theme
+generator uses: `--wjs-bg-canvas`, `--wjs-bg-surface`, `--wjs-bg-surface-raised`,
+`--wjs-color-primary`, `--wjs-color-primary-dark`, `--wjs-color-on-primary`,
+`--wjs-color-accent`, `--wjs-color-on-accent`, `--wjs-color-text-main`,
+`--wjs-color-text-muted`, `--wjs-color-heading`, `--wjs-color-link`, `--wjs-color-link-hover`,
+`--wjs-border-subtle`, `--wjs-outline`, `--wjs-outline-variant`, `--wjs-focus-ring`.
+Surfaces mix toward white on dark canvases (luminance of `bg` < 0.35) and toward black on light
+ones; the `on-*` colors are picked for contrast against their base color.
+
+### `archetype` — personality preset
+
+```json
+"archetype": "cyber"
+```
+
+One of `cyber`, `brutalist`, `editorial`, `glassmorphism`, `organic`, `obsidian`. Appends the
+preset's CSS (interpolating your seeds) inside the generated block. Presets contain **no external
+`@import`** — font stacks lead with the intended family and fall back to system fonts; the
+compiler additionally strips any `@import` structurally. An unknown name is an error with a
+closest-match suggestion.
+
+### `tokens` — explicit token overrides
+
+```json
+"tokens": { "--wjs-hero-radius": "18px", "--wjs-button-weight": "700" }
+```
+
+A flat map. The name must exist in the token manifest (`backend/public/theme-tokens.json`,
+738 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
+even before the manifest learns them. Editor-internal `--wjs-r-*` tokens are rejected. Values
+follow the portable token rules: non-empty, ≤ 120 chars, charset `#a-zA-Z0-9 ,.%()/_'"-`
+(spaces allowed), no backslash, no `//`, no `url()`.
+
+### `styles` — nested element styling
+
+Top-level keys are **themable elements**: every entry of the manifest's `elements` registry
+(33 block elements — `hero`, `card`, `button`, `nav`, `footer`, `posts-grid`, … each with a
+`selector` and optional `children`) plus three globals: `body` (selector `body`), `headings`
+(`h1,h2,h3,h4,h5,h6`) and `links` (`a`). Inside an element you can nest:
+
+- **CSS properties** — `"background": "#0f172a"`, `"letter-spacing": "0.08em"`, …
+- **children** — one level, from the element's `children` in the manifest
+  (e.g. `hero` → `title`, `subtitle`, `button`, `actions`, `inner`, `overlay`)
+- **states** — `hover`, `focus`, `active`, `disabled` (cannot nest inside another state)
+- **breakpoints** — `mobile`, `tablet`, `desktop` (cannot nest inside states or other
+  breakpoints; states *can* nest inside breakpoints and children)
+
+The framework's breakpoints are fixed:
+
+| Key | Media query |
+| :-- | :-- |
+| `mobile` | `@media (max-width: 767.98px)` |
+| `tablet` | `@media (min-width: 768px) and (max-width: 1023.98px)` |
+| `desktop` | `@media (min-width: 1024px)` |
+
+#### Token-vs-declaration resolution
+
+For each property at the base level (not inside a state or breakpoint) the compiler builds
+token-name candidates — `--wjs-<element>-<child>-<prop>` then `--wjs-<element>-<prop>` — from the
+key **as written**. If a candidate exists in the manifest, the value is emitted as that **token**
+in `:root` (token value rules above). That is why the short manifest suffixes work as keys:
+`styles.hero.bg` → `--wjs-hero-bg`, `styles.hero.button.bg` → `--wjs-hero-button-bg`.
+
+Otherwise the key must be a **standard CSS property**, and the pair is emitted as a **declaration**
+on the element's mapped selector, validated with css-tree: the property must be known standard
+CSS, the value must parse *and* match the property's grammar, and the output is re-serialized
+from the parsed AST — the raw string from `theme.json` never reaches `style.css`, so
+`red;} body{...}`-style injection cannot survive. `url()` is allowed **only** for the theme's own
+assets (`/themes/<slug>/…`); `@import` and author-written selectors cannot be expressed at all.
+Inside states and breakpoints everything is a declaration — `styles.hero.button.hover.background`
+becomes `.wp-block-hero__button:hover { background: … }` even though a `bg` token exists for the
+base level.
+
+#### Caps
+
+- ≤ **2,000** compiled declarations in total (`:root` tokens count toward it)
+- declaration values ≤ **300** chars, token values ≤ **120** chars
+- `theme.json` ≤ **256 KB**
+
+### The generated block and manual CSS
+
+The compiled CSS lives in `style.css` between exact markers:
+
+```css
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme <slug> */
+...
+/* @wjs-generated:end */
+```
+
+Recompiling replaces **only** that block (or prepends it, with a warning, when `style.css` has no
+markers yet) — every byte outside the markers is preserved, so declarative theming and manual CSS
+coexist in the same file. `build theme` prints every diagnostic (errors and warnings carry a code,
+a `theme.json` path and, where possible, a closest-match suggestion) and **exits 1 without
+writing anything** if there are errors.
+
+### Example: minimal seeded theme
+
+```json
+{
+  "name": "Neon Shop",
+  "version": "1.0.0",
+  "description": "A dark neon storefront theme.",
+  "author": "You",
+  "generator": "wordjs",
+  "seeds": { "primary": "#7c3aed", "secondary": "#0ea5e9", "bg": "#0b1020", "text": "#e5e7eb" }
+}
+```
+
+### Example: tokens + nested styles with children, states and breakpoints
+
+```json
+{
+  "name": "Neon Shop",
+  "version": "1.0.0",
+  "generator": "wordjs",
+  "seeds": { "primary": "#7c3aed", "secondary": "#0ea5e9", "bg": "#0b1020", "text": "#e5e7eb" },
+  "archetype": "cyber",
+  "tokens": { "--wjs-hero-radius": "18px" },
+  "styles": {
+    "hero": {
+      "bg": "#11162a",
+      "button": {
+        "bg": "#7c3aed",
+        "letter-spacing": "0.08em",
+        "hover": { "background": "#0ea5e9", "transform": "translateY(-2px)" }
+      }
+    },
+    "body": {
+      "mobile": { "font-size": "15px" }
+    }
+  }
+}
+```
+
+Compiled, that emits `--wjs-hero-radius`, `--wjs-hero-bg` and `--wjs-hero-button-bg` as `:root`
+tokens; `letter-spacing` (no token candidate) as a declaration on `.wp-block-hero__button`; the
+`hover` block as `.wp-block-hero__button:hover { background: #0ea5e9; transform: translateY(-2px) }`;
+and the `body.mobile` block inside `@media (max-width: 767.98px)`.
+
 ## Installing a Theme
 
 Building a theme by hand isn't the only way to add one. The **`default`** theme ships bundled in
-`backend/themes/`; the other 63 first-party themes are
+`backend/themes/`; the other 64 first-party themes are
 distributed through the **theme marketplace** and installed on demand. WordJS ships two admin-only
 install paths — both land the theme in the same `backend/themes/{slug}/` layout described above.
 
@@ -323,6 +595,13 @@ first-party catalog and installs a theme in one click. The frontend `themesMarke
 unpack via `installThemeFromZip()`), both admin-gated. The catalog origin is admin-configurable and
 independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources` (backed by the
 `marketplace_theme_sources` option).
+
+> **The first-party catalog is declarative.** Every generated theme in `marketplace/themes/` now
+> ships the hybrid declarative format: a `theme.json` with `generator: "wordjs"` plus `seeds`/
+> `archetype`, and a `style.css` whose manual section (header + font `@import`s) sits above the
+> compiled `@wjs-generated` block. New marketplace themes must follow the same declarative
+> `theme.json` contract; hand-authored themes still work everywhere else, but the doctor flags
+> them with an informational `LEGACY_THEME` finding to encourage migration.
 
 ### From a ZIP upload
 
