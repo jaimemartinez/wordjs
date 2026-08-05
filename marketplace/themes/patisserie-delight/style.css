@@ -1,5 +1,6 @@
 /* Theme: Patisserie Delight (Organic Pastel Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;700&display=swap');
+
+@import url('fonts.css');
 
 /* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme patisserie-delight */
 :root {
@@ -15,82 +16,12 @@
   --wjs-color-text-muted: #a999a1;
   --wjs-color-heading: #fdf2f8;
   --wjs-color-link: #f472b6;
-  --wjs-color-link-hover: #db2777;
+  --wjs-color-link-hover: #de3882;
   --wjs-border-subtle: #47333d;
   --wjs-outline: #73626b;
   --wjs-outline-variant: #402c36;
   --wjs-focus-ring: #f472b6;
-}
-/* Archetype: Organic Pastel */
-:root {
-    --org-primary: #f472b6;
-    --org-secondary: #db2777;
-    --org-bg: #1f0914;
-    --org-text: #fdf2f8;
-}
-
-body {
-    background-color: var(--org-bg);
-    color: var(--org-text);
-    font-family: 'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif;
-    margin: 0;
-    line-height: 1.6;
-}
-
-.theme-container {
-    max-width: 1180px;
-    margin: 0 auto;
-    padding: 3rem 2rem;
-}
-
-.theme-hero {
-    background: var(--org-secondary);
-    border-radius: 36px;
-    padding: 5rem 3rem;
-    text-align: center;
-    margin-bottom: 3rem;
-}
-
-.theme-hero h1 {
-    font-size: 3.5rem;
-    color: var(--org-primary);
-}
-
-.theme-card-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-    gap: 2rem;
-}
-
-.theme-card {
-    background: rgba(255, 255, 255, 0.06);
-    border-radius: 28px;
-    padding: 2rem;
-    box-shadow: 0 10px 30px rgba(0,0,0,0.05);
-    transition: transform 0.3s ease;
-}
-
-.theme-card:hover {
-    transform: translateY(-4px);
-}
-
-.theme-badge {
-    background: var(--org-primary);
-    color: #fff;
-    border-radius: 20px;
-    padding: 4px 12px;
-    font-size: 0.8rem;
-    font-weight: 500;
-}
-
-button.theme-btn {
-    background: var(--org-primary);
-    color: #fff;
-    border: none;
-    border-radius: 24px;
-    padding: 12px 26px;
-    font-size: 1rem;
-    font-weight: 600;
-    cursor: pointer;
+  --wjs-font-family-base: 'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif;
+  --wjs-font-family-heading: 'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif;
 }
 /* @wjs-generated:end */

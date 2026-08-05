@@ -1,6 +1,6 @@
 {
   "name": "Editorial Vogue",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Luxury magazine theme with drop caps, multi-column editorial spreads, and quote highlights.",
   "author": "WordJS Premium Studio",
   "category": "Editorial",
@@ -17,5 +17,9 @@
     "editorial",
     "editorial",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Lora', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-heading": "'Playfair Display', Didot, 'Bodoni MT', Georgia, serif"
+  }
 }

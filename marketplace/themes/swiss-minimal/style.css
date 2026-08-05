@@ -311,9 +311,12 @@
   --wjs-footer-text-heading: #111111;
   --wjs-footer-text-body: #757575;
   --wjs-footer-text-hover: #111111;
+  --wjs-nav-font-size: 0.9375rem;
+  --wjs-nav-font-weight: 500;
+  --wjs-nav-letter-spacing: -0.01em;
 }
 body { line-height: 1.55 }
-.wjs-header-nav { gap: 2.5rem; font-size: 0.9375rem; font-weight: 500; letter-spacing: -0.01em }
+.wjs-header-nav { gap: 2.5rem }
 .wjs-header-logo { font-weight: 700; letter-spacing: -0.045em }
 footer { margin-top: 6rem; padding-top: 3rem; padding-bottom: 3rem; border-top-width: 1px; border-top-style: solid; border-top-color: #141414; font-size: 0.9375rem }
 .wp-block-hero__title { margin-bottom: 1.5rem }

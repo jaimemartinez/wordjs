@@ -1,6 +1,6 @@
 {
   "name": "Podcast Pulse",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Media & podcasting platform theme with embedded audio wave players, episode playlists, and transcripts.",
   "author": "WordJS Premium Studio",
   "category": "Media",
@@ -17,5 +17,9 @@
     "media",
     "glassmorphism",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+  }
 }

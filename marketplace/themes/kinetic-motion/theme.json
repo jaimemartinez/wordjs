@@ -1,6 +1,6 @@
 {
   "name": "Kinetic Motion",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Animator and video producer portfolio with dark cinematic tone, video reels, and custom play controls.",
   "author": "WordJS Premium Studio",
   "category": "Creative",
@@ -17,5 +17,9 @@
     "creative",
     "brutalist",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Public Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Space Grotesk', 'Arial Black', 'Segoe UI', Arial, sans-serif"
+  }
 }

@@ -1,6 +1,6 @@
 {
   "name": "Velvet Fashion",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "High-fashion lookbook theme with tall aspect ratios, subtle page slide transitions, and serif titles.",
   "author": "WordJS Premium Studio",
   "category": "Fashion",
@@ -17,5 +17,9 @@
     "fashion",
     "editorial",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Lora', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-heading": "'Playfair Display', Didot, 'Bodoni MT', Georgia, serif"
+  }
 }

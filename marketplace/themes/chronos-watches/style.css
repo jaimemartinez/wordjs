@@ -1,5 +1,6 @@
 /* Theme: Chronos Watches (Obsidian Luxury Archetype) */
-@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Montserrat:wght@300;400;600&display=swap');
+
+@import url('fonts.css');
 
 /* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme chronos-watches */
 :root {
@@ -15,94 +16,12 @@
   --wjs-color-text-muted: #9a9ea4;
   --wjs-color-heading: #f1f5f9;
   --wjs-color-link: #94a3b8;
-  --wjs-color-link-hover: #64748b;
+  --wjs-color-link-hover: #707f94;
   --wjs-border-subtle: #343841;
   --wjs-outline: #62666e;
   --wjs-outline-variant: #2e323b;
   --wjs-focus-ring: #94a3b8;
-}
-/* Archetype: Obsidian Luxury */
-:root {
-    --obs-primary: #94a3b8;
-    --obs-secondary: #64748b;
-    --obs-bg: #0b0f19;
-    --obs-text: #f1f5f9;
-}
-
-body {
-    background-color: var(--obs-bg);
-    color: var(--obs-text);
-    font-family: 'Montserrat', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
-    margin: 0;
-    letter-spacing: 0.5px;
-}
-
-h1, h2, h3 {
-    font-family: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
-    font-weight: 800;
-    color: var(--obs-primary);
-    text-transform: uppercase;
-}
-
-.theme-container {
-    max-width: 1200px;
-    margin: 0 auto;
-    padding: 4rem 2rem;
-}
-
-.theme-hero {
-    background: linear-gradient(180deg, #111111 0%, #050505 100%);
-    border: 1px solid var(--obs-primary);
-    border-radius: 4px;
-    padding: 6rem 2rem;
-    text-align: center;
-    margin-bottom: 4rem;
-}
-
-.theme-hero h1 {
-    font-size: 3.5rem;
-    letter-spacing: 4px;
-}
-
-.theme-card-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-    gap: 2.5rem;
-}
-
-.theme-card {
-    background: #0a0a0a;
-    border: 1px solid #222222;
-    padding: 2.5rem;
-    transition: all 0.4s ease;
-}
-
-.theme-card:hover {
-    border-color: var(--obs-primary);
-    box-shadow: 0 0 25px rgba(234, 179, 8, 0.15);
-}
-
-.theme-badge {
-    color: var(--obs-primary);
-    border-bottom: 1px solid var(--obs-primary);
-    font-size: 0.75rem;
-    letter-spacing: 2px;
-    text-transform: uppercase;
-}
-
-button.theme-btn {
-    background: linear-gradient(135deg, var(--obs-primary), var(--obs-secondary));
-    color: #000000;
-    border: none;
-    padding: 14px 32px;
-    font-family: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
-    font-weight: 800;
-    letter-spacing: 2px;
-    cursor: pointer;
-    transition: opacity 0.2s;
-}
-
-button.theme-btn:hover {
-    opacity: 0.9;
+  --wjs-font-family-base: 'Montserrat', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+  --wjs-font-family-heading: 'Cinzel', 'Trajan Pro', 'Times New Roman', serif;
 }
 /* @wjs-generated:end */

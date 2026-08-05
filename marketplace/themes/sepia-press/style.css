@@ -280,6 +280,10 @@
   --wjs-cta-button-color: #ffffff;
   --wjs-pricing-button-color: #ffffff;
   --wjs-social-hover-color: #ffffff;
+  --wjs-nav-font-family: 'Vollkorn', Georgia, 'Times New Roman', serif;
+  --wjs-nav-font-size: 1.02rem;
+  --wjs-nav-letter-spacing: 0.005em;
+  --wjs-nav-text-transform: none;
   --wjs-quote-size: 1.6rem;
   --wjs-quote-weight: 500;
   --wjs-quote-mark-size: 5rem;
@@ -288,7 +292,7 @@
 body { font-size: 17px; line-height: 1.72 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.012em; line-height: 1.22 }
 .wjs-header-logo { font-family: "Vollkorn",Georgia,"Times New Roman",serif; letter-spacing: -0.01em }
-.wjs-header-nav { font-family: "Vollkorn",Georgia,"Times New Roman",serif; font-size: 1.02rem; font-style: italic; letter-spacing: 0.005em; text-transform: none }
+.wjs-header-nav { font-style: italic }
 footer { font-size: 0.94rem; line-height: 1.7 }
 .wp-block-hero__title { line-height: 1.1; margin-bottom: 1.35rem }
 .wp-block-hero__subtitle { line-height: 1.72; max-width: 34rem }

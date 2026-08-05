@@ -9,12 +9,12 @@
   --wjs-color-primary-dark: #9a401f;
   --wjs-color-on-primary: #ffffff;
   --wjs-color-accent: #b8863b;
-  --wjs-color-on-accent: #ffffff;
+  --wjs-color-on-accent: #111111;
   --wjs-color-text-main: #141414;
   --wjs-color-text-muted: #6c6b69;
   --wjs-color-heading: #141414;
   --wjs-color-link: #9a401f;
-  --wjs-color-link-hover: #b8863b;
+  --wjs-color-link-hover: #8c662d;
   --wjs-border-subtle: #d2d0cc;
   --wjs-outline: #a4a29f;
   --wjs-outline-variant: #d9d7d2;
@@ -282,6 +282,10 @@
   --wjs-cta-button-color: #ffffff;
   --wjs-pricing-button-color: #ffffff;
   --wjs-social-hover-color: #ffffff;
+  --wjs-nav-font-size: 0.78rem;
+  --wjs-nav-font-weight: 700;
+  --wjs-nav-letter-spacing: 0.1em;
+  --wjs-nav-text-transform: uppercase;
   --wjs-quote-size: 1.3rem;
   --wjs-quote-weight: 700;
   --wjs-stats-label-weight: 700;
@@ -293,7 +297,6 @@
 body { font-size: 16px; line-height: 1.68 }
 h1,h2,h3,h4,h5,h6 { letter-spacing: -0.012em; line-height: 1.24; font-weight: 700 }
 .wjs-header-logo { font-family: "Domine",Georgia,"Times New Roman",serif; text-transform: uppercase; letter-spacing: 0.02em }
-.wjs-header-nav { font-size: 0.78rem; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase }
 footer { font-size: 0.92rem; line-height: 1.7 }
 .wp-block-hero__title { line-height: 1.1; margin-bottom: 1.2rem }
 .wp-block-hero__subtitle { line-height: 1.66; max-width: 40rem }

@@ -305,10 +305,13 @@
   --wjs-footer-text-heading: #ffffff;
   --wjs-footer-text-body: #949599;
   --wjs-footer-text-hover: #ffffff;
+  --wjs-nav-font-family: 'Inter', 'Segoe UI', system-ui, sans-serif;
+  --wjs-nav-font-size: 0.8125rem;
+  --wjs-nav-letter-spacing: -0.005em;
+  --wjs-nav-text-transform: none;
 }
 h1,h2,h3,h4,h5,h6 { font-weight: 800; letter-spacing: -0.035em }
 .wjs-header-logo { font-family: "Sora","Segoe UI",system-ui,sans-serif; letter-spacing: -0.035em; font-weight: 800 }
-.wjs-header-nav { font-family: "Inter","Segoe UI",system-ui,sans-serif; font-size: 0.8125rem; letter-spacing: -0.005em; text-transform: none }
 footer { font-size: 0.8125rem; letter-spacing: -0.005em; box-shadow: inset 0 1px 0 0#10203f; background-image: linear-gradient(180deg,#030a1f 0%,#01030c 60%) }
 .wp-block-hero__title { line-height: 0.9; text-wrap: balance }
 .wp-block-hero__subtitle { margin-top: 1.5rem; max-width: 44ch; margin-left: auto; margin-right: auto }

@@ -1,6 +1,6 @@
 {
   "name": "Hyperion AI",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "AI & Machine Learning theme with cyan/purple aurora glows, neural network background motifs, and prompt cards.",
   "author": "WordJS Premium Studio",
   "category": "Tech",
@@ -17,5 +17,9 @@
     "tech",
     "cyber",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace",
+    "--wjs-font-family-heading": "'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif"
+  }
 }

@@ -1,6 +1,6 @@
 {
   "name": "Synergy Workspace",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Clean, minimalist B2B SaaS theme with subtle border gradients and tabbed feature showcases.",
   "author": "WordJS Premium Studio",
   "category": "Corporate",
@@ -17,5 +17,9 @@
     "corporate",
     "glassmorphism",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Plus Jakarta Sans', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif"
+  }
 }

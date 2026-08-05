@@ -1,6 +1,6 @@
 {
   "name": "Artisan Craft",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Fine art & studio pottery theme featuring organic stone textures, warm earth tones, and story-driven layouts.",
   "author": "WordJS Premium Studio",
   "category": "Craft",
@@ -17,5 +17,9 @@
     "craft",
     "organic",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif",
+    "--wjs-font-family-heading": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif"
+  }
 }

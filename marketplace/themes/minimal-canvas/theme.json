@@ -1,6 +1,6 @@
 {
   "name": "Minimal Canvas",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Ultra-clean Scandinavian design portfolio with spacious white space and sharp micro-interactions.",
   "author": "WordJS Premium Studio",
   "category": "Portfolio",
@@ -17,5 +17,9 @@
     "portfolio",
     "organic",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif",
+    "--wjs-font-family-heading": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif"
+  }
 }

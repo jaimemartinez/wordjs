@@ -1,6 +1,6 @@
 {
   "name": "Esports Arena",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Gaming news & tournament portal with dark neon theme, team roster cards, and live stream embed containers.",
   "author": "WordJS Premium Studio",
   "category": "Media",
@@ -17,5 +17,9 @@
     "media",
     "cyber",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'JetBrains Mono', 'Cascadia Code', Consolas, Menlo, monospace",
+    "--wjs-font-family-heading": "'Chakra Petch', 'Bahnschrift', 'Trebuchet MS', 'Segoe UI', sans-serif"
+  }
 }

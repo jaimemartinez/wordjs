@@ -1,6 +1,6 @@
 {
   "name": "Nordic Living",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Minimalist Scandinavian home decor shop with natural wood tones, sticky cart drawer, and lookbooks.",
   "author": "WordJS Premium Studio",
   "category": "Commerce",
@@ -17,5 +17,9 @@
     "commerce",
     "organic",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif",
+    "--wjs-font-family-heading": "'Outfit', 'Century Gothic', 'Avenir Next', 'Segoe UI', sans-serif"
+  }
 }

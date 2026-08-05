@@ -1,6 +1,6 @@
 {
   "name": "Zenith Holdings",
-  "version": "1.0.2",
+  "version": "1.0.6",
   "description": "Ultra-luxury private equity theme with deep emerald green, warm cream, and gold accents.",
   "author": "WordJS Premium Studio",
   "category": "Finance",
@@ -17,5 +17,9 @@
     "finance",
     "obsidian",
     "responsive"
-  ]
+  ],
+  "tokens": {
+    "--wjs-font-family-base": "'Montserrat', 'Segoe UI', 'Helvetica Neue', Arial, sans-serif",
+    "--wjs-font-family-heading": "'Cinzel', 'Trajan Pro', 'Times New Roman', serif"
+  }
 }
