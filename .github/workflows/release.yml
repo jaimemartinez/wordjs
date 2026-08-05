@@ -95,14 +95,14 @@ jobs:
 
       # Always expose the build as a downloadable workflow artifact (useful for manual runs / debugging).
       - name: Upload workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wordjs-compiled-release
           path: release/wordjs-compiled-release.zip
           if-no-files-found: error
 
       - name: Upload marketplace artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: wordjs-marketplace
           path: marketplace/dist/
