@@ -22,28 +22,40 @@ export interface ChromeNavViewProps {
 export default function ChromeNav({ location, orientation, items }: ChromeNavViewProps) {
     const sorted = [...items].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
     const label = location === "header" ? "Primary" : "Footer";
+    // Most catalog themes style the header nav through .wjs-header-nav — the hook Header.tsx emits —
+    // so a composed header nav emits it TOO, or activating a composition un-styles those themes. A
+    // footer nav must not pick it up: those rules (order/width/justify !important) target the masthead.
+    const hook = location === "header" ? " wjs-header-nav" : "";
+    const links = sorted.map((item) => (
+        <Link key={item.id} href={item.url || "#"} className={LINK_CLASS[location]}>
+            {item.title}
+        </Link>
+    ));
 
     if (orientation === "vertical") {
         return (
-            <nav aria-label={label} className="wjs-chrome-nav wjs-chrome-nav-vertical flex flex-col gap-2">
-                {sorted.map((item) => (
-                    <Link key={item.id} href={item.url || "#"} className={LINK_CLASS[location]}>
-                        {item.title}
-                    </Link>
-                ))}
+            <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-vertical${hook} flex flex-col gap-2`}>
+                {links}
             </nav>
         );
     }
 
-    // Horizontal: desktop row + mobile hamburger island (hidden ≥ md by the island itself).
+    // Horizontal in the FOOTER: no hamburger — the drawer is a header affordance (Footer.tsx has none,
+    // and a portaled full-height drawer opening from the page bottom is not what a footer nav means).
+    // The row therefore has to stay visible at every width, so it wraps instead of hiding below md.
+    if (location === "footer") {
+        return (
+            <nav aria-label={label} className="wjs-chrome-nav wjs-chrome-nav-horizontal flex flex-wrap items-center gap-8">
+                {links}
+            </nav>
+        );
+    }
+
+    // Horizontal in the HEADER: desktop row + mobile hamburger island (hidden ≥ md by the island itself).
     return (
         <>
-            <nav aria-label={label} className="wjs-chrome-nav wjs-chrome-nav-horizontal hidden md:flex items-center gap-8">
-                {sorted.map((item) => (
-                    <Link key={item.id} href={item.url || "#"} className={LINK_CLASS[location]}>
-                        {item.title}
-                    </Link>
-                ))}
+            <nav aria-label={label} className={`wjs-chrome-nav wjs-chrome-nav-horizontal${hook} hidden md:flex items-center gap-8`}>
+                {links}
             </nav>
             <ChromeNavMobile items={sorted} />
         </>

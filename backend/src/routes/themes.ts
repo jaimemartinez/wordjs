@@ -483,6 +483,13 @@ router.post('/default', authenticate, isAdmin, asyncHandler(async (req: Request,
     // Admin explicitly asked to restore the default theme → force overwrite (unlike the boot-time
     // scaffold in index.ts, which must NOT clobber the curated default/style.css).
     createDefaultTheme(true);
+    // Restoring rewrites files inside THEMES_DIR without going through switchTheme, so nothing else
+    // would notice: the memoized scan would keep the pre-restore metadata (including the version the
+    // stylesheet URL is keyed by) and the public HTML would keep its cached copy. createDefaultTheme
+    // bumps the version; these two make the site actually serve the restored theme.
+    invalidateThemeScanCache();
+    const activeAfterRestore = await getActiveTheme();
+    if (activeAfterRestore && activeAfterRestore.slug === 'default') purgeFrontend(['settings'], ['/']);
     res.json({ success: true, message: 'Default theme restored in /themes/default' });
 }));
 

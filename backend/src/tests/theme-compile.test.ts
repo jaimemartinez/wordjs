@@ -25,11 +25,16 @@ const MANIFEST = {
     version: 1,
     source: 'backend/public/css/wordjs-ui.css',
     counts: { tokens: 4, varUses: 4, elements: 2 },
+    // consumers/declaredDefault are what the token-value grammar check reads: a token is
+    // checked against the properties that consume it, with the framework's own default as
+    // the control. --wjs-focus-ring reproduces the manifest's "model is wrong here" shape
+    // (its only consumer splices it into a box-shadow, so no bare value ever matches).
     tokens: {
-        '--wjs-color-primary': { group: 'color', declaredDefault: '#3b82f6', fallbacks: [], consumers: [] },
+        '--wjs-color-primary': { group: 'color', declaredDefault: '#3b82f6', fallbacks: [], consumers: [{ selector: '.btn-primary', property: 'color' }] },
         '--wjs-color-on-primary': { group: 'color', declaredDefault: '#ffffff', fallbacks: [], consumers: [] },
-        '--wjs-hero-bg': { group: 'hero', declaredDefault: '#ffffff', fallbacks: [], consumers: [] },
-        '--wjs-hero-button-background': { group: 'hero', declaredDefault: '#111827', fallbacks: [], consumers: [] }
+        '--wjs-hero-bg': { group: 'hero', declaredDefault: '#ffffff', fallbacks: [], consumers: [{ selector: '.wp-block-hero', property: 'background' }] },
+        '--wjs-hero-button-background': { group: 'hero', declaredDefault: '#111827', fallbacks: [], consumers: [] },
+        '--wjs-focus-ring': { group: 'color', declaredDefault: 'rgba(37, 99, 235, 0.35)', fallbacks: [], consumers: [{ selector: '.btn:focus-visible', property: 'box-shadow' }] }
     },
     elements: {
         hero: { selector: '.wp-block-hero', children: { button: { selector: '.wp-block-hero__button' } } },
@@ -66,6 +71,7 @@ const compile = (slug: string, extra: any = {}) =>
     compileTheme(slug, { themesDir: THEMES_DIR, manifestPath: MANIFEST_PATH, dryRun: true, ...extra });
 const stylePath = (slug: string) => path.join(THEMES_DIR, slug, 'style.css');
 const errsOf = (r: any, code: string) => r.diagnostics.filter((d: any) => d.level === 'error' && d.code === code);
+const warnsOf = (r: any, code: string) => r.diagnostics.filter((d: any) => d.level === 'warning' && d.code === code);
 
 describe('compileTheme (declarative theme compiler)', () => {
     after(() => {
@@ -95,6 +101,19 @@ describe('compileTheme (declarative theme compiler)', () => {
         const r = compile(slug, { derive: { ...STUB_DERIVE, deriveTokens: () => { called = true; return {}; } } });
         assert.strictEqual(errsOf(r, 'SEED_INVALID').length, 1, JSON.stringify(r.diagnostics));
         assert.strictEqual(called, false);
+    });
+
+    // deriveTokens() reads all four seeds, so a partial map used to reach it and surface the
+    // raw JS TypeError as the DERIVE_FAILED message.
+    it('refuses partial seeds with SEEDS_INCOMPLETE and never calls derive', () => {
+        const slug = writeTheme({ seeds: { primary: '#123456', bg: '#ffffff' } });
+        let called = false;
+        const r = compile(slug, { derive: { ...STUB_DERIVE, deriveTokens: (s: any) => { called = true; return { '--wjs-color-primary': s.primary }; } } });
+        const e = errsOf(r, 'SEEDS_INCOMPLETE');
+        assert.strictEqual(e.length, 1, JSON.stringify(r.diagnostics));
+        assert.match(e[0].message, /secondary, text/);
+        assert.strictEqual(called, false);
+        assert.strictEqual(errsOf(r, 'DERIVE_FAILED').length, 0, JSON.stringify(r.diagnostics));
     });
 
     it('emits the archetype CSS inside the block for a known archetype', () => {
@@ -185,6 +204,57 @@ describe('compileTheme (declarative theme compiler)', () => {
         const r = compile(slug);
         assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
         assert.ok(r.css.includes(`.wp-block-card { background-image: url(/themes/${slug}/bg.png) }`), r.css);
+    });
+
+    describe('token value grammar (warning-level, manifest consumers)', () => {
+        it('warns TOKEN_VALUE_GRAMMAR when no consuming property accepts the value', () => {
+            const slug = writeTheme({ tokens: { '--wjs-color-primary': '#4f46e' } }); // 5-digit hex
+            const r = compile(slug);
+            const w = warnsOf(r, 'TOKEN_VALUE_GRAMMAR');
+            assert.strictEqual(w.length, 1, JSON.stringify(r.diagnostics));
+            assert.strictEqual(w[0].path, 'tokens.--wjs-color-primary');
+            assert.match(w[0].message, /"color"/); // names a consuming property as the example
+            // Warning, not error: the token still compiles (heterogeneous consumers are possible).
+            assert.strictEqual(r.stats.errors, 0, JSON.stringify(r.diagnostics));
+            assert.ok(r.css.includes('  --wjs-color-primary: #4f46e;'), r.css);
+        });
+
+        it('runs the same check on style keys that resolve to a token', () => {
+            const slug = writeTheme({ styles: { hero: { bg: '#4f46e' } } });
+            const r = compile(slug);
+            const w = warnsOf(r, 'TOKEN_VALUE_GRAMMAR');
+            assert.strictEqual(w.length, 1, JSON.stringify(r.diagnostics));
+            assert.strictEqual(w[0].path, 'styles.hero.bg');
+            assert.match(w[0].message, /--wjs-hero-bg/);
+        });
+
+        it('stays silent when the manifest carries no usable model for the token', () => {
+            const slug = writeTheme({
+                tokens: {
+                    // Only consumer splices it into a box-shadow → even the framework default
+                    // fails the property grammar, so the check has no opinion here…
+                    '--wjs-focus-ring': '#4f46e',
+                    // …and a token no property consumes directly has nothing to check against.
+                    '--wjs-color-on-primary': '#4f46e'
+                }
+            });
+            const r = compile(slug);
+            assert.strictEqual(warnsOf(r, 'TOKEN_VALUE_GRAMMAR').length, 0, JSON.stringify(r.diagnostics));
+        });
+
+        it('has no opinion on var() token values, while var() in a declaration stays VALUE_INVALID', () => {
+            const slug = writeTheme({
+                tokens: { '--wjs-color-primary': 'var(--wjs-hero-bg)' },
+                styles: { card: { color: 'var(--wjs-color-primary)' } }
+            });
+            const r = compile(slug);
+            assert.strictEqual(warnsOf(r, 'TOKEN_VALUE_GRAMMAR').length, 0, JSON.stringify(r.diagnostics));
+            assert.ok(r.css.includes('  --wjs-color-primary: var(--wjs-hero-bg);'), r.css);
+            // Documented limitation: matchProperty models no substitution, so declarations
+            // cannot carry var() — the tokens map is the route for it.
+            assert.strictEqual(errsOf(r, 'VALUE_INVALID').length, 1, JSON.stringify(r.diagnostics));
+            assert.ok(!r.css.includes('.wp-block-card'), r.css);
+        });
     });
 
     describe('injection and abuse payloads never reach the css', () => {

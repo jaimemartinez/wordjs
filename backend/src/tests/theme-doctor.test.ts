@@ -301,6 +301,39 @@ describe('analyzeTheme (theme doctor)', () => {
         assert.match(drift.message, /recompile/);
     });
 
+    it('warns GENERATED_MARKERS when style.css carries a second generated block', () => {
+        const slug = writeTheme('', undefined, CLEAN_DECLARATIVE);
+        const block = dryCompile(slug).css;
+        // A stale duplicate sits AFTER the fresh one, so it wins the cascade until the next compile.
+        fs.writeFileSync(path.join(THEMES_DIR, slug, 'style.css'), `${block}\n\n${block}\n`);
+        const rep = doctor(slug);
+        assert.strictEqual(rep.errors.length, 0, JSON.stringify(rep.errors));
+        const w = rep.warnings.find((f: any) => f.code === 'GENERATED_MARKERS');
+        assert.ok(w, JSON.stringify(rep.warnings));
+        assert.deepStrictEqual(w.detail, { starts: 2, ends: 2 });
+        assert.match(w.message, new RegExp(`build theme ${slug}`));
+    });
+
+    it('warns GENERATED_MARKERS for an unclosed start marker, declarative sections or not', () => {
+        const slug = writeTheme(`/* @wjs-generated:start — truncated block */\n${CLEAN_CSS}`);
+        const rep = doctor(slug);
+        const w = rep.warnings.find((f: any) => f.code === 'GENERATED_MARKERS');
+        assert.ok(w, JSON.stringify(rep.warnings));
+        assert.deepStrictEqual(w.detail, { starts: 1, ends: 0 });
+        // Pure marker census: it does not depend on the theme having declarative sections.
+        assert.ok(!rep.warnings.some((f: any) => f.code === 'STALE_GENERATED'), JSON.stringify(rep.warnings));
+    });
+
+    it('surfaces a compiler token-value grammar finding as a DECLARATIVE_* WARNING', () => {
+        const slug = writeTheme(CLEAN_CSS, undefined, { tokens: { '--wjs-color-primary': '#4f46e' } });
+        const rep = doctor(slug);
+        assert.strictEqual(rep.errors.length, 0, JSON.stringify(rep.errors));
+        const w = rep.warnings.find((f: any) => f.code === 'DECLARATIVE_TOKEN_VALUE_GRAMMAR');
+        assert.ok(w, JSON.stringify(rep.warnings));
+        assert.match(w.message, /--wjs-color-primary/);
+        assert.strictEqual(w.detail.path, 'tokens.--wjs-color-primary');
+    });
+
     it('fails open when the compiler is absent: previous checks intact, no DECLARATIVE_* findings', () => {
         const slug = writeTheme(':root { --wjs-color-primry: #123456; }', undefined, {
             tokens: { '--wjs-color-primry': '#123456' }

@@ -61,6 +61,39 @@ describe('parseThemeLayout', () => {
         expect(parseThemeLayout({ footer: { columns: '2' } }).footer.columns).toBe(4);
     });
 
+    // containerWidth reaches an INLINE style (max-width on <main>), so it is the one string value a
+    // theme controls end-to-end: it must be a CSS length and nothing else.
+    it('accepts plain CSS lengths, percentages and a simple calc() for containerWidth', () => {
+        for (const width of ['72rem', '1200px', '100%', '90vw', '48.5em', '80VH', 'calc(100% - 2rem)', 'calc((100% - 4rem)/2)']) {
+            expect(parseThemeLayout({ containerWidth: width }).containerWidth).toBe(width);
+        }
+        // Surrounding whitespace is trimmed, not rejected.
+        expect(parseThemeLayout({ containerWidth: '  72rem  ' }).containerWidth).toBe('72rem');
+    });
+
+    it('drops a containerWidth that could smuggle CSS into the inline style', () => {
+        for (const width of [
+            '72rem; background: url(http://evil.example/x)',
+            '100px}body{display:none',
+            'url(http://evil.example/x)',
+            'var(--anything)',
+            'expression(alert(1))',
+            'calc(100%) ; color: red',
+            'calc(url(x))',
+            'calc()',
+            'calc(1e3px)',
+            '/* */72rem',
+            '72',           // unitless
+            'auto',         // keyword, not a length
+            '-10px',        // negative max-width
+            'a'.repeat(65) + 'px',
+            // A long digit run ending in garbage: the reject must be immediate (no backtracking blowup).
+            `calc(${'9'.repeat(40)}!)`,
+        ]) {
+            expect(parseThemeLayout({ containerWidth: width }).containerWidth).toBe(null);
+        }
+    });
+
     it('ignores non-object shapes entirely', () => {
         expect(parseThemeLayout('nonsense')).toEqual(DEFAULTS);
         expect(parseThemeLayout([])).toEqual(DEFAULTS);

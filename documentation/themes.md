@@ -76,8 +76,9 @@ marketplace** (see *Installing a Theme* below). A representative selection:
 | **sepia-press**     | Editorial Magazine | Serif headlines on warm paper               |
 
 > **`--wjs-` variable adoption.** All first-party themes ship the `--wjs-*` token set documented in
-> [`theming.md`](./theming.md) — from compact token-first themes (~20 declarations) up to heavily
-> parameterized ones (~270; e.g. `carbon-terminal` declares 172, the bundled `default` 75) —
+> [`theming.md`](./theming.md) — from compact token-first themes (17 declarations in `artisan-craft`)
+> up to heavily parameterized ones (270 in `paper-press`; `carbon-terminal` declares 172, the bundled
+> `default` 75) —
 > including the `--wjs-color-on-*` contrast set. The **default** theme's `:root` is entirely
 > `--wjs-*` (no older bare `--primary`/`--text` aliases remain). Copy any theme as a starting point.
 
@@ -208,7 +209,8 @@ level falls through to the next — fail-closed, never a partial render):
 1. **Site composition** — options `site_chrome_header` / `site_chrome_footer` (JSON strings),
    written only via `PUT /api/v1/chrome/:part` (admin; a 400 carries the validator's
    `errors: [{ code, path, message }]`) and cleared via `DELETE /api/v1/chrome/:part`. Both
-   travel in the public `/api/v1/settings` payload.
+   travel in the public `/api/v1/settings` payload — readable there, but **not writable** through
+   it (see below).
 2. **Theme composition** — `chrome/header.json` / `chrome/footer.json` inside the active theme,
    served statically at `/themes/<slug>/chrome/*.json`.
 3. **Layout variant** — `theme.json` `layout` (v2, previous section).
@@ -253,6 +255,24 @@ Minimal `chrome/header.json`:
 violations are **errors** (`CHROME_INVALID`, with the offending block path); a file that cannot
 be read or parsed is a **warning** (`CHROME_UNREADABLE`).
 
+### Options with a dedicated write API
+
+Four theme-related options are **readable** through `GET /api/v1/settings` (the SSR public layout
+needs them on first paint) but are **never writable through the generic settings API**. `PUT
+/api/v1/settings` silently skips them and `PUT /api/v1/settings/:key` answers **400
+`rest_invalid_param`** (`DEDICATED_WRITE_API` in `backend/src/routes/settings.ts`):
+
+| Option | Only writable through | Why a plain option write is not enough |
+| --- | --- | --- |
+| `site_chrome_header`, `site_chrome_footer` | `PUT`/`DELETE /api/v1/chrome/:part` | `core/chrome-validate.ts` is the write authority — the closed block allowlist, the href rules and the budgets above are enforced there. A raw option write stores an unvalidated composition on every public page. |
+| `template`, `stylesheet` | `POST /api/v1/themes/:slug/activate` (`switchTheme()`) | Activating a theme is much more than an option write: it also republishes the new theme's `layout` to `active_theme_layout`, clears the previous theme's customizer mods, re-initializes the theme engine (retiring the outgoing theme's isolated `functions.js` child) and fires `switch_theme` to purge the frontend. Written alone, the site serves the new theme's CSS with the old theme's structure and token overrides, and the replaced theme's code keeps running. |
+
+The same refusal holds on every other generic write path, so there is no side door: plugins
+holding `settings:write` cannot reach these keys through the options bridge
+(`isProtectedOption` in `backend/src/core/plugin-api.ts`), and a **site import**
+(`POST /api/v1/import`) skips them too, listing what it refused in
+`results.settings.skipped` (`backend/src/core/import-export.ts`).
+
 ### Theme customizer (live `--wjs-*` overrides)
 
 `/admin/themes/customize` lets an admin edit the active theme's `--wjs-*` tokens with a live `<iframe>`
@@ -268,8 +288,8 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 The narrative reference (core tables, alias/editor-internal rules, per-block groups) lives in
 [`theming.md`](./theming.md); the **complete machine-readable contract** is
 `backend/public/theme-tokens.json`, regenerated from `wordjs-ui.css` with
-`node scripts/generate-token-manifest.js`. The manifest currently tracks **717 tokens** and
-**1664 `var()` uses** across 64 name groups — mostly per-block groups such as `cta` (55),
+`node scripts/generate-token-manifest.js`. The manifest currently tracks **738 tokens** and
+**1691 `var()` uses** across 71 name groups — mostly per-block groups such as `cta` (55),
 `pricing` (49), `card` (40), `accordion` (38), `form` (37), `hero` (37), `audio` (34), `tabs` and
 `testimonial` (29 each), `search` (26), `button` (25).
 
@@ -471,13 +491,25 @@ A flat map. The name must exist in the token manifest (`backend/public/theme-tok
 738 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
 even before the manifest learns them. Editor-internal `--wjs-r-*` tokens are rejected. Values
 follow the portable token rules: non-empty, ≤ 120 chars, charset `#a-zA-Z0-9 ,.%()/_'"-`
-(spaces allowed), no backslash, no `//`, no `url()`.
+(spaces allowed), no backslash, no `//`, no `url()`, and every parenthesis and quote balanced.
+
+> **The charset has no `+` and no `*`.** A token value is emitted verbatim into `:root`, where
+> the consuming property's grammar is unknowable (one token feeds many properties), so the value
+> is constrained by charset instead of parsed. `-` and `/` are in the set, so `calc(100% - 2rem)`
+> and `calc(100%/3)` are fine, but **`calc()` with addition or multiplication does not fit in a
+> token** — `calc(50% + 8px)` and `calc(2 * 1.5rem)` are rejected as `TOKEN_VALUE_INVALID`. Put
+> the arithmetic in a `styles` declaration instead (those are parsed against the real property
+> grammar, where `+`/`*` are accepted), or pre-compute the value.
+>
+> `var(--wjs-…)` **is** allowed in a token value (it is inside the charset), so tokens may point
+> at other tokens — but see the opposite restriction for `styles` declarations below.
 
 ### `styles` — nested element styling
 
 Top-level keys are **themable elements**: every entry of the manifest's `elements` registry
-(33 block elements — `hero`, `card`, `button`, `nav`, `footer`, `posts-grid`, … each with a
-`selector` and optional `children`) plus three globals: `body` (selector `body`), `headings`
+(33 entries — 29 `.wp-block-*` blocks such as `hero`, `card`, `button`, `posts-grid`, … plus the
+four chrome entries `header`, `logo`, `nav` and `footer`, each with a `selector` and optional
+`children`) plus three globals: `body` (selector `body`), `headings`
 (`h1,h2,h3,h4,h5,h6`) and `links` (`a`). Inside an element you can nest:
 
 - **CSS properties** — `"background": "#0f172a"`, `"letter-spacing": "0.08em"`, …
@@ -512,6 +544,17 @@ assets (`/themes/<slug>/…`); `@import` and author-written selectors cannot be 
 Inside states and breakpoints everything is a declaration — `styles.hero.button.hover.background`
 becomes `.wp-block-hero__button:hover { background: … }` even though a `bg` token exists for the
 base level.
+
+> **`var()` is not accepted in a `styles` declaration value.** Grammar matching is what makes the
+> AST re-serialization safe, and a value containing `var()` cannot be matched against a property's
+> grammar — its substitution is only known at render time. css-tree reports *"Matching for a tree
+> with `var()` is not supported"*, which the compiler surfaces as `VALUE_INVALID`. So
+> `"styles": { "hero": { "box-shadow": "0 0 0 1px var(--wjs-border-subtle)" } }` fails to compile.
+> Workarounds, in order of preference: (1) use a key that **resolves to a token** so the value
+> lands in `:root` instead of in a declaration — token values *do* accept `var()`; (2) declare the
+> indirection in the `tokens` map and let `wordjs-ui.css` consume it; (3) write the literal value.
+> Hand-written CSS outside the `@wjs-generated` markers is unaffected — this limit applies only to
+> values the compiler generates.
 
 #### Caps
 
@@ -596,12 +639,14 @@ unpack via `installThemeFromZip()`), both admin-gated. The catalog origin is adm
 independent of the plugin marketplace via `GET`/`PUT /marketplace/themes/sources` (backed by the
 `marketplace_theme_sources` option).
 
-> **The first-party catalog is declarative.** Every generated theme in `marketplace/themes/` now
-> ships the hybrid declarative format: a `theme.json` with `generator: "wordjs"` plus `seeds`/
+> **The first-party catalog is migrating to the declarative format.** **40 of the 64**
+> marketplace themes ship it today: a `theme.json` with `generator: "wordjs"` plus `seeds` and
 > `archetype`, and a `style.css` whose manual section (header + font `@import`s) sits above the
-> compiled `@wjs-generated` block. New marketplace themes must follow the same declarative
-> `theme.json` contract; hand-authored themes still work everywhere else, but the doctor flags
-> them with an informational `LEGACY_THEME` finding to encourage migration.
+> compiled `@wjs-generated` block. The remaining 24 (`neo-digital`, `carbon-terminal`,
+> `paper-press`, …) are still hand-authored, as is the bundled `default`. New marketplace themes
+> must follow the declarative `theme.json` contract; hand-authored themes keep working everywhere
+> else, but the doctor flags them with an informational `LEGACY_THEME` finding to encourage
+> migration.
 
 ### From a ZIP upload
 
@@ -625,7 +670,9 @@ Any installed theme can be packaged back into a ZIP for backup or transfer via
 Under the hood, activation calls `switchTheme()` in `backend/src/core/themes.ts`, which writes
 the `template` and `stylesheet` options, publishes the new theme's `theme.json` `layout` to the
 `active_theme_layout` option, clears any customizer overrides (`active_theme_mods`), and
-re-initializes the (legacy) theme engine. On the
+re-initializes the (legacy) theme engine. `template`/`stylesheet` are activation's *output*, not
+an input you can set yourself: every generic option writer refuses them — see
+[Options with a dedicated write API](#options-with-a-dedicated-write-api). On the
 public site, `frontend/src/components/public/ThemeLoader.tsx` receives the active-theme slug **and
 version** resolved on the **server** (`app/(public)/layout.tsx` → `getSettings()` → `template` +
 `active_theme_version`) as `initialSlug` / `initialThemeVersion`, so the first

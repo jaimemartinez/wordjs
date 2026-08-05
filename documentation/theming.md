@@ -9,6 +9,11 @@ plus its own CSS for whatever the tokens don't parameterize (see *What tokens co
 > `seeds` / `archetype` / `tokens` / `styles` in its `theme.json` and have WordJS compile the
 > `style.css` block (`node backend/cli/wordjs.js build theme <slug>`). The full contract is
 > documented in **[themes.md — Declarative theming (`theme.json`)](themes.md#declarative-theming-themejson)**.
+> The compiler is stricter than plain CSS about what it will emit: token values use a portable
+> charset that has no `+` and no `*` (so `calc()` with addition or multiplication cannot live in a
+> token), and `styles` declaration values cannot contain `var()` (they are matched against the
+> property's grammar, which `var()` defeats). Hand-written CSS outside the generated block — the
+> rest of this page — has neither limit.
 
 ## How it fits together
 
@@ -97,14 +102,14 @@ token. These 21 are flagged `"alias"` in the manifest (see below).
 
 ### Per-block tokens (~600 more — see the manifest)
 
-The tables above are only the **core** tokens. Most of the framework's **717** tokens style
+The tables above are only the **core** tokens. Most of the framework's **738** tokens style
 individual visual-editor blocks (`--wjs-<block>-*`); they are documented exhaustively in the
 machine-readable manifest (next section), not here. Real group sizes, read from the manifest:
 `cta` 55 · `pricing` 49 · `card` 40 · `accordion` 38 · `form` 37 · `hero` 37 · `audio` 34 ·
 `tabs` 29 · `testimonial` 29 · `search` 26 · `button` 25 · `catposts` 24 · `stats` 22 ·
 `posts` 20 · `video` 20 · `heading` 14 · `table` 13 · `icon` 12 · `quote` 12 · `social` 8 ·
 `divider` 6 — plus smaller layout/shape groups (`columns`, `col`, `flex`, `grid`, `section`,
-`image`, `spacer`, …), 64 groups in total (a token's group is the first segment of its name).
+`image`, `spacer`, …), 71 groups in total (a token's group is the first segment of its name).
 
 ### Editor-internal tokens (`--wjs-r-*`) — never set these in a theme
 
@@ -146,17 +151,17 @@ too. That makes tokens a real starting point — but no first-party theme is tok
 - **Covered by tokens** — everything styled through `wordjs-ui.css`, i.e. content HTML, components,
   utilities and the editor blocks, plus the chrome colors/typography listed above.
 - **Still the theme's own CSS** — a distinctive chrome (header/nav/footer layout and decorations),
-  hero/section flourishes, narrow-viewport header-fit rules, and any look the ~720 tokens don't
-  parameterize. In practice first-party `style.css` files run ~100–520 lines, with `:root` blocks
-  declaring anywhere from ~20 to ~270 tokens (the bundled **default** declares 75 tokens in a
-  ~390-line stylesheet).
+  hero/section flourishes, narrow-viewport header-fit rules, and any look the 738 tokens don't
+  parameterize. In practice first-party `style.css` files run ~95–525 lines, with `:root` blocks
+  declaring anywhere from 17 to 270 tokens (the bundled **default** declares 75 tokens in a
+  ~400-line stylesheet).
 
 The complete machine-readable contract is `backend/public/theme-tokens.json` (next section).
 
 ## The machine-readable contract (`theme-tokens.json`)
 
 `backend/public/theme-tokens.json` is the generated, complete token contract — the source of truth
-whenever this document and the CSS disagree. Current counts: **717 tokens**, **1664 `var()` uses**,
+whenever this document and the CSS disagree. Current counts: **738 tokens**, **1691 `var()` uses**,
 **33 element entries**. For every token it records:
 
 - `group` — first segment of the name (`hero`, `cta`, `color`, `radius`, …);

@@ -24,13 +24,18 @@ import ChromeText from "./ChromeText";
 export interface ChromeRendererProps {
     data: ChromeData;
     bindings: ChromeBindings;
+    // Chrome slot this composition fills. Blocks that have no location prop of their own (logo, site
+    // title) need it to decide whether to emit the themes' header CSS hooks — those rules are written
+    // for the masthead and must not leak into a footer. Defaults to the header, the slot compositions
+    // target and the only one with theme hooks to preserve; the footer call site passes "footer".
+    location?: "header" | "footer";
 }
 
-export default function ChromeRenderer({ data, bindings }: ChromeRendererProps) {
-    return <>{data.content.map((block, i) => renderBlock(block, bindings, `c${i}`))}</>;
+export default function ChromeRenderer({ data, bindings, location = "header" }: ChromeRendererProps) {
+    return <>{data.content.map((block, i) => renderBlock(block, bindings, `c${i}`, location))}</>;
 }
 
-function renderBlock(block: ChromeBlock, bindings: ChromeBindings, fallbackKey: string): React.ReactNode {
+function renderBlock(block: ChromeBlock, bindings: ChromeBindings, fallbackKey: string, location: "header" | "footer"): React.ReactNode {
     const props = (block.props || {}) as Record<string, any>;
     const settings = bindings.settings || {};
     // The editor stamps a stable string id on every block; fall back to the positional key.
@@ -38,9 +43,9 @@ function renderBlock(block: ChromeBlock, bindings: ChromeBindings, fallbackKey: 
 
     switch (block.type) {
         case "ChromeLogo":
-            return <ChromeLogo key={key} size={props.size} logoUrl={settings.site_logo || null} siteTitle={settings.blogname || ""} />;
+            return <ChromeLogo key={key} size={props.size} location={location} logoUrl={settings.site_logo || null} siteTitle={settings.blogname || ""} />;
         case "ChromeSiteTitle":
-            return <ChromeSiteTitle key={key} showTagline={props.showTagline} siteTitle={settings.blogname || ""} tagline={settings.blogdescription || ""} />;
+            return <ChromeSiteTitle key={key} showTagline={props.showTagline} location={location} siteTitle={settings.blogname || ""} tagline={settings.blogdescription || ""} />;
         case "ChromeNav": {
             const items = props.location === "footer" ? bindings.menus.footer : bindings.menus.header;
             return <ChromeNav key={key} location={props.location} orientation={props.orientation} items={items || []} />;
@@ -58,7 +63,7 @@ function renderBlock(block: ChromeBlock, bindings: ChromeBindings, fallbackKey: 
         case "ChromeRow":
             return (
                 <ChromeRow key={key} align={props.align} gap={props.gap} wrap={props.wrap}>
-                    {(Array.isArray(props.items) ? (props.items as ChromeBlock[]) : []).map((child, i) => renderBlock(child, bindings, `${fallbackKey}.${i}`))}
+                    {(Array.isArray(props.items) ? (props.items as ChromeBlock[]) : []).map((child, i) => renderBlock(child, bindings, `${fallbackKey}.${i}`, location))}
                 </ChromeRow>
             );
         default:
