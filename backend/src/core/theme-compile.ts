@@ -1,0 +1,509 @@
+/**
+ * WordJS - Theme Compiler
+ * Compiles the declarative theme.json v1 contract (seeds / archetype / tokens / styles)
+ * into a marked, regenerable block inside the theme's style.css.
+ *
+ * Security posture: nothing user-controlled is ever concatenated into the output as-is.
+ * Token values are constrained to the F1 portable charset; declaration values are parsed
+ * with css-tree, matched against the property grammar and RE-SERIALIZED FROM THE AST —
+ * which is what kills `red;} body{...}` style injection. url() is allowed only for the
+ * theme's own /themes/<slug>/ assets. @import and author selectors cannot be expressed.
+ *
+ * compileTheme(dirOrSlug, { slug?, themesDir?, manifestPath?, dryRun?, derive? })
+ *   → { css, diagnostics, stats }        (css = the complete marked block)
+ * writeCompiled(dir, blockCss) swaps only the marked block in style.css (prepends when
+ * absent), preserving manual CSS outside the markers byte for byte. Atomic (tmp+rename).
+ */
+
+const fs = require('fs');
+const path = require('path');
+const csstree = require('css-tree');
+const { closestToken } = require('./theme-doctor');
+
+// Same cwd conventions as core/themes.ts (the backend always runs from backend/).
+const THEMES_DIR = path.resolve('./themes');
+const MANIFEST_PATH = path.resolve('./public/theme-tokens.json');
+
+interface Diagnostic {
+  level: 'error' | 'warning';
+  code: string;
+  path: string;
+  message: string;
+  suggestion?: string;
+}
+
+interface CompileStats {
+  tokens: number;
+  declarations: number;
+  rules: number;
+  errors: number;
+  warnings: number;
+}
+
+interface CompileResult {
+  css: string;
+  diagnostics: Diagnostic[];
+  stats: CompileStats;
+}
+
+interface CompileOpts {
+  slug?: string;
+  themesDir?: string;
+  manifestPath?: string;
+  dryRun?: boolean;
+  // Test escape hatch for the theme-derive contract ({ deriveTokens, archetypeCss,
+  // ARCHETYPE_NAMES }); production resolves ./theme-derive lazily at compile time.
+  derive?: any;
+}
+
+interface WalkCtx {
+  el: string;
+  child: string | null;
+  selector: string;
+  media: string | null;
+  state: string | null;
+  children: any;
+}
+
+// Same slug shape installThemeFromDir/theme-doctor enforce — containment under themesDir.
+const SLUG_RE = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
+// F1 sanitizer rules for portable token values (mirrors the customizer/doctor charset).
+const TOKEN_VALUE_RE = /^[#a-zA-Z0-9 ,.%()/_'"-]+$/;
+const TOKEN_NAME_RE = /^--wjs-[a-zA-Z0-9_-]+$/;
+const SEED_RE = /^#[0-9a-fA-F]{6}$/;
+const MAX_TOKEN_VALUE = 120;
+const MAX_DECL_VALUE = 300;
+const MAX_DECLARATIONS = 2000;
+const MAX_THEME_JSON = 256 * 1024;
+
+const GLOBAL_ELEMENTS: Record<string, string> = {
+  body: 'body',
+  headings: 'h1,h2,h3,h4,h5,h6',
+  links: 'a'
+};
+const STATES: Record<string, string> = { hover: ':hover', focus: ':focus', active: ':active', disabled: ':disabled' };
+// The framework's breakpoints — declaration order is also the emission order.
+const BREAKPOINTS: Record<string, string> = {
+  mobile: '(max-width: 767.98px)',
+  tablet: '(min-width: 768px) and (max-width: 1023.98px)',
+  desktop: '(min-width: 1024px)'
+};
+// Used only until theme-derive lands (it exports the authoritative ARCHETYPE_NAMES).
+const ARCHETYPE_FALLBACK = ['cyber', 'brutalist', 'editorial', 'glassmorphism', 'organic', 'obsidian'];
+
+const MARKER_START_PREFIX = '/* @wjs-generated:start';
+const MARKER_END = '/* @wjs-generated:end */';
+const markerStart = (slug: string): string =>
+  `/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme ${slug} */`;
+
+const isPlainObject = (v: any): boolean => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+// css-tree's lexer also knows legacy/nonstandard properties through its own patches (IE
+// `behavior` even matches url() syntax) — the contract admits only standard CSS, so the
+// accept-set is lexer-known ∩ mdn-data status "standard".
+let STANDARD_PROPS: Set<string> | null = null;
+function standardProps(): Set<string> {
+  if (!STANDARD_PROPS) {
+    const known: string[] = Object.keys(csstree.lexer.properties);
+    let mdn: any = null;
+    try { mdn = require('mdn-data/css/properties.json'); } catch { /* fall back to lexer-known */ }
+    STANDARD_PROPS = new Set(mdn ? known.filter((n: string) => mdn[n] && mdn[n].status === 'standard') : known);
+  }
+  return STANDARD_PROPS;
+}
+
+// F1 value rules shared by explicit tokens, style-resolved tokens and derived tokens.
+function tokenValueProblem(raw: any): string | null {
+  const value = typeof raw === 'number' ? String(raw) : raw;
+  if (typeof value !== 'string' || value.trim().length === 0) return 'must be a non-empty string';
+  if (value.length > MAX_TOKEN_VALUE) return `is longer than ${MAX_TOKEN_VALUE} chars`;
+  if (value.includes('\\')) return 'contains a backslash';
+  if (value.includes('//')) return 'contains "//"';
+  if (/url\s*\(/i.test(value)) return 'contains url() (not allowed in token values)';
+  if (!TOKEN_VALUE_RE.test(value)) return 'contains characters outside the portable token charset';
+  return null;
+}
+
+function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult {
+  const diagnostics: Diagnostic[] = [];
+  const stats: CompileStats = { tokens: 0, declarations: 0, rules: 0, errors: 0, warnings: 0 };
+
+  const push = (level: 'error' | 'warning', code: string, p: string, message: string, suggestion?: string | null): void => {
+    const d: Diagnostic = { level, code, path: p, message };
+    if (suggestion) d.suggestion = suggestion;
+    diagnostics.push(d);
+  };
+  const error = (code: string, p: string, message: string, suggestion?: string | null): void => push('error', code, p, message, suggestion);
+  const warning = (code: string, p: string, message: string, suggestion?: string | null): void => push('warning', code, p, message, suggestion);
+
+  const finish = (css: string): CompileResult => {
+    stats.errors = diagnostics.filter((d: Diagnostic) => d.level === 'error').length;
+    stats.warnings = diagnostics.length - stats.errors;
+    return { css, diagnostics, stats };
+  };
+
+  // --- resolve theme dir + slug (slug drives the url() policy and the start marker) ---
+  const looksLikePath = path.isAbsolute(dirOrSlug) || /[\\/]/.test(dirOrSlug);
+  const themeDir = looksLikePath
+    ? path.resolve(dirOrSlug)
+    : path.join(path.resolve(opts.themesDir || THEMES_DIR), dirOrSlug);
+  const slug: string = opts.slug || (looksLikePath ? path.basename(themeDir) : dirOrSlug);
+  if (!SLUG_RE.test(slug)) {
+    error('THEME_SLUG_INVALID', 'slug', `Invalid theme slug: ${JSON.stringify(slug)}`);
+    return finish('');
+  }
+
+  // --- manifest (fail-open to a diagnostics error: never throw out of the compiler) ---
+  let manifest: any;
+  try {
+    manifest = JSON.parse(fs.readFileSync(path.resolve(opts.manifestPath || MANIFEST_PATH), 'utf8'));
+  } catch { manifest = null; }
+  if (!manifest || !isPlainObject(manifest.tokens)) {
+    error('MANIFEST_MISSING', 'manifest', 'token manifest (public/theme-tokens.json) is missing or unreadable — cannot resolve tokens/elements');
+    return finish('');
+  }
+  const manifestTokens: any = manifest.tokens;
+  const manifestElements: any = isPlainObject(manifest.elements) ? manifest.elements : {};
+  // Editor-internal tokens are excluded from suggestions (declaring them is forbidden).
+  const tokenNames: string[] = Object.keys(manifestTokens).filter(
+    (n: string) => !(Array.isArray(manifestTokens[n].flags) && manifestTokens[n].flags.includes('editor-internal'))
+  );
+
+  // --- theme.json ---
+  const themeJsonPath = path.join(themeDir, 'theme.json');
+  let st: any = null;
+  try { st = fs.statSync(themeJsonPath); } catch { /* missing */ }
+  if (!st || !st.isFile()) {
+    error('THEME_JSON_MISSING', 'theme.json', `no theme.json at themes/${slug}`);
+    return finish('');
+  }
+  if (st.size > MAX_THEME_JSON) {
+    error('THEME_JSON_TOO_LARGE', 'theme.json', `theme.json is ${st.size} bytes (cap: ${MAX_THEME_JSON})`);
+    return finish('');
+  }
+  let themeJson: any;
+  try {
+    themeJson = JSON.parse(fs.readFileSync(themeJsonPath, 'utf8'));
+  } catch (e) {
+    error('THEME_JSON_INVALID', 'theme.json', `theme.json is not valid JSON: ${e.message}`);
+    return finish('');
+  }
+  if (!isPlainObject(themeJson)) {
+    error('THEME_JSON_INVALID', 'theme.json', 'theme.json must be a JSON object');
+    return finish('');
+  }
+
+  // --- emitters + global declaration cap ---
+  const rootTokens = new Map<string, string>();
+  // mediaKey '' = base rules; per media, selectors keep first-appearance order.
+  const buckets = new Map<string, Map<string, string[]>>();
+  let total = 0;
+  let capReported = false;
+  const reserve = (p: string): boolean => {
+    if (total >= MAX_DECLARATIONS) {
+      if (!capReported) {
+        capReported = true;
+        error('TOO_MANY_DECLARATIONS', p, `over the ${MAX_DECLARATIONS}-declaration cap — remaining declarations dropped`);
+      }
+      return false;
+    }
+    total++;
+    return true;
+  };
+  const addToken = (name: string, value: string, p: string): void => {
+    if (rootTokens.has(name) || reserve(p)) rootTokens.set(name, value);
+  };
+  const addDecl = (mediaKey: string, selector: string, prop: string, value: string, p: string): void => {
+    if (!reserve(p)) return;
+    let rules = buckets.get(mediaKey);
+    if (!rules) { rules = new Map(); buckets.set(mediaKey, rules); }
+    let list = rules.get(selector);
+    if (!list) { list = []; rules.set(selector, list); }
+    list.push(`${prop}: ${value}`);
+  };
+
+  // --- seeds → derived palette (theme-derive contract, lazy so tsc/boot never depend on it) ---
+  let derive: any = opts.derive || null;
+  if (!derive) {
+    try { derive = require('./theme-derive'); } catch { derive = null; }
+  }
+  const seeds: any = themeJson.seeds;
+  if (seeds !== undefined) {
+    if (!isPlainObject(seeds)) {
+      error('SEEDS_INVALID', 'seeds', '"seeds" must be an object of #rrggbb colors');
+    } else {
+      let seedsOk = true;
+      for (const k of ['primary', 'secondary', 'bg', 'text']) {
+        if (seeds[k] !== undefined && !SEED_RE.test(String(seeds[k]))) {
+          seedsOk = false;
+          error('SEED_INVALID', `seeds.${k}`, `seeds.${k} must be a #rrggbb color (got ${JSON.stringify(seeds[k])})`);
+        }
+      }
+      if (seedsOk) {
+        if (!derive || typeof derive.deriveTokens !== 'function') {
+          error('DERIVE_UNAVAILABLE', 'seeds', 'theme-derive is not available — seeds cannot be expanded into the palette');
+        } else {
+          let derived: any = null;
+          try { derived = derive.deriveTokens(seeds); } catch (e) {
+            error('DERIVE_FAILED', 'seeds', `deriveTokens threw: ${e.message}`);
+          }
+          if (derived !== null && !isPlainObject(derived)) {
+            error('DERIVE_FAILED', 'seeds', 'deriveTokens did not return a token map');
+          } else if (derived) {
+            for (const [name, value] of Object.entries(derived)) {
+              const problem = tokenValueProblem(value);
+              if (!TOKEN_NAME_RE.test(name) || problem) {
+                warning('DERIVED_TOKEN_INVALID', 'seeds', `derived token ${name} skipped${problem ? `: value ${problem}` : ': invalid name'}`);
+              } else {
+                addToken(name, String(value), 'seeds');
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // --- archetype (personality preset CSS from theme-derive) ---
+  let archetypeCssText = '';
+  const archetype: any = themeJson.archetype;
+  if (archetype !== undefined) {
+    const names: string[] = derive && Array.isArray(derive.ARCHETYPE_NAMES) ? derive.ARCHETYPE_NAMES : ARCHETYPE_FALLBACK;
+    if (typeof archetype !== 'string' || !names.includes(archetype)) {
+      const suggestion = typeof archetype === 'string' ? closestToken(archetype, names) : null;
+      error('ARCHETYPE_UNKNOWN', 'archetype', `"${archetype}" is not an archetype (${names.join(', ')})${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
+    } else if (!derive || typeof derive.archetypeCss !== 'function') {
+      error('DERIVE_UNAVAILABLE', 'archetype', 'theme-derive is not available — archetype CSS cannot be generated');
+    } else {
+      try { archetypeCssText = String(derive.archetypeCss(archetype, isPlainObject(seeds) ? seeds : {}) || ''); } catch (e) {
+        error('DERIVE_FAILED', 'archetype', `archetypeCss threw: ${e.message}`);
+      }
+      // Contract invariant for presets (no external @import); enforce it structurally.
+      if (/@import/i.test(archetypeCssText)) {
+        warning('ARCHETYPE_IMPORT_STRIPPED', 'archetype', 'archetype CSS contained @import — stripped');
+        archetypeCssText = archetypeCssText.replace(/@import[^;]*;?/gi, '');
+      }
+    }
+  }
+
+  // --- explicit tokens map ---
+  const tokensMap: any = themeJson.tokens;
+  if (tokensMap !== undefined) {
+    if (!isPlainObject(tokensMap)) {
+      error('TOKENS_INVALID', 'tokens', '"tokens" must be a flat { "--wjs-name": "value" } map');
+    } else {
+      for (const [name, raw] of Object.entries(tokensMap)) {
+        const p = `tokens.${name}`;
+        if (/^--wjs-r-/.test(name)) {
+          error('TOKEN_EDITOR_INTERNAL', p, `${name} is an editor-internal token — themes must not declare it`);
+          continue;
+        }
+        // --wjs-footer-* is the documented bridge family: valid even before the manifest
+        // learns it (the chrome reads those vars directly).
+        const isBridge = /^--wjs-footer-[a-zA-Z0-9_-]+$/.test(name);
+        if (!Object.prototype.hasOwnProperty.call(manifestTokens, name) && !isBridge) {
+          const suggestion = closestToken(name, tokenNames);
+          error('TOKEN_UNKNOWN', p, `${name} is not in the token manifest${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
+          continue;
+        }
+        if (!TOKEN_NAME_RE.test(name)) {
+          error('TOKEN_NAME_INVALID', p, `${name} is not a valid --wjs-* token name`);
+          continue;
+        }
+        const problem = tokenValueProblem(raw);
+        if (problem) {
+          error('TOKEN_VALUE_INVALID', p, `${name} value ${problem}`);
+          continue;
+        }
+        addToken(name, String(raw), p);
+      }
+    }
+  }
+
+  // --- styles: token-vs-declaration resolution -----------------------------------------
+
+  function validateDeclaration(prop: string, rawValue: string, p: string): string | null {
+    if (prop.startsWith('--')) {
+      error('PROPERTY_UNKNOWN', p, 'custom properties are only writable through "tokens" or token-resolving style keys');
+      return null;
+    }
+    if (!standardProps().has(prop)) {
+      const suggestion = closestToken(prop, Array.from(standardProps()));
+      error('PROPERTY_UNKNOWN', p, `"${prop}" is not a standard CSS property${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
+      return null;
+    }
+    if (rawValue.length > MAX_DECL_VALUE) {
+      error('VALUE_TOO_LONG', p, `value is ${rawValue.length} chars (cap: ${MAX_DECL_VALUE})`);
+      return null;
+    }
+    let ast: any;
+    try {
+      ast = csstree.parse(rawValue, { context: 'value' });
+    } catch (e) {
+      error('VALUE_INVALID', p, `value does not parse as CSS: ${e.rawMessage || e.message}`);
+      return null;
+    }
+    let badUrl: string | null = null;
+    csstree.walk(ast, {
+      visit: 'Url',
+      enter(node: any) {
+        const u = String(node.value);
+        if (badUrl === null && (u.includes('..') || u.includes('\\') || !u.startsWith(`/themes/${slug}/`))) badUrl = u;
+      }
+    });
+    if (badUrl !== null) {
+      error('URL_FORBIDDEN', p, `url(${badUrl}) — only this theme's own /themes/${slug}/ assets are allowed`);
+      return null;
+    }
+    const match = csstree.lexer.matchProperty(prop, ast);
+    if (match.error) {
+      error('VALUE_INVALID', p, `value rejected for "${prop}": ${String(match.error.rawMessage || match.error.message).split('\n')[0]}`);
+      return null;
+    }
+    // Serialize FROM THE AST — the author's raw string never reaches the output.
+    return csstree.generate(ast);
+  }
+
+  function handleProp(key: string, value: string, ctx: WalkCtx, p: string): void {
+    const prop = key.toLowerCase();
+    // Token resolution only at the base level: states/breakpoints are ALWAYS declarations.
+    if (!ctx.media && !ctx.state) {
+      const candidates = ctx.child
+        ? [`--wjs-${ctx.el}-${ctx.child}-${prop}`, `--wjs-${ctx.el}-${prop}`]
+        : [`--wjs-${ctx.el}-${prop}`];
+      const hit = candidates.find((c: string) => Object.prototype.hasOwnProperty.call(manifestTokens, c));
+      if (hit) {
+        const problem = tokenValueProblem(value);
+        if (problem) error('TOKEN_VALUE_INVALID', p, `resolves to ${hit} but the value ${problem}`);
+        else addToken(hit, value, p);
+        return;
+      }
+    }
+    const cssValue = validateDeclaration(prop, value, p);
+    if (cssValue === null) return;
+    const selector = ctx.state ? `${ctx.selector}${STATES[ctx.state]}` : ctx.selector;
+    addDecl(ctx.media || '', selector, prop, cssValue, p);
+  }
+
+  function walkStyleNode(node: any, ctx: WalkCtx, pathPrefix: string): void {
+    for (const [key, raw] of Object.entries(node)) {
+      const p = `${pathPrefix}.${key}`;
+      if (isPlainObject(raw)) {
+        if (Object.prototype.hasOwnProperty.call(STATES, key)) {
+          if (ctx.state) error('STYLE_UNKNOWN_KEY', p, 'states cannot nest inside states');
+          else walkStyleNode(raw, { ...ctx, state: key, children: null }, p);
+        } else if (Object.prototype.hasOwnProperty.call(BREAKPOINTS, key)) {
+          if (ctx.media || ctx.state) error('STYLE_UNKNOWN_KEY', p, 'breakpoints cannot nest inside states or other breakpoints');
+          else walkStyleNode(raw, { ...ctx, media: key }, p);
+        } else if (!ctx.child && ctx.children && isPlainObject(ctx.children[key]) && typeof ctx.children[key].selector === 'string') {
+          walkStyleNode(raw, { ...ctx, child: key, selector: ctx.children[key].selector }, p);
+        } else {
+          const valid = [
+            ...(ctx.children && !ctx.child ? Object.keys(ctx.children) : []),
+            ...Object.keys(STATES),
+            ...Object.keys(BREAKPOINTS)
+          ];
+          const suggestion = closestToken(key, valid);
+          error('STYLE_UNKNOWN_KEY', p, `"${key}" is not a child, state or breakpoint here${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
+        }
+      } else if (typeof raw === 'string' || typeof raw === 'number') {
+        handleProp(key, String(raw), ctx, p);
+      } else {
+        error('STYLE_INVALID_VALUE', p, 'style values must be strings/numbers (declarations) or nested objects');
+      }
+    }
+  }
+
+  const styles: any = themeJson.styles;
+  if (styles !== undefined) {
+    if (!isPlainObject(styles)) {
+      error('STYLES_INVALID', 'styles', '"styles" must be an object keyed by element');
+    } else {
+      for (const [el, node] of Object.entries(styles)) {
+        const p = `styles.${el}`;
+        let selector: string | null = null;
+        let children: any = null;
+        if (Object.prototype.hasOwnProperty.call(GLOBAL_ELEMENTS, el)) {
+          selector = GLOBAL_ELEMENTS[el];
+        } else if (isPlainObject(manifestElements[el]) && typeof manifestElements[el].selector === 'string') {
+          selector = manifestElements[el].selector;
+          children = isPlainObject(manifestElements[el].children) ? manifestElements[el].children : null;
+        }
+        if (selector === null) {
+          const suggestion = closestToken(el, [...Object.keys(manifestElements), ...Object.keys(GLOBAL_ELEMENTS)]);
+          error('ELEMENT_UNKNOWN', p, `"${el}" is not a themable element${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
+          continue;
+        }
+        if (!isPlainObject(node)) {
+          error('STYLE_INVALID_VALUE', p, `styles.${el} must be an object`);
+          continue;
+        }
+        walkStyleNode(node, { el, child: null, selector, media: null, state: null, children }, p);
+      }
+    }
+  }
+
+  // --- emit the marked block (deterministic order ⇒ recompiling is idempotent) ---
+  const lines: string[] = [markerStart(slug)];
+  if (rootTokens.size > 0) {
+    lines.push(':root {');
+    for (const [name, value] of rootTokens) lines.push(`  ${name}: ${value};`);
+    lines.push('}');
+  }
+  const emitRules = (rules: Map<string, string[]>, indent: string): void => {
+    for (const [selector, decls] of rules) {
+      lines.push(`${indent}${selector} { ${decls.join('; ')} }`);
+      stats.rules++;
+      stats.declarations += decls.length;
+    }
+  };
+  const base = buckets.get('');
+  if (base) emitRules(base, '');
+  for (const bp of Object.keys(BREAKPOINTS)) {
+    const rules = buckets.get(bp);
+    if (!rules) continue;
+    lines.push(`@media ${BREAKPOINTS[bp]} {`);
+    emitRules(rules, '  ');
+    lines.push('}');
+  }
+  if (archetypeCssText.trim().length > 0) lines.push(archetypeCssText.trim());
+  lines.push(MARKER_END);
+  const css = lines.join('\n');
+
+  stats.tokens = rootTokens.size;
+  if (!opts.dryRun) writeCompiled(themeDir, css);
+  return finish(css);
+}
+
+/**
+ * Replace the marked block in <dir>/style.css with `blockCss` (the full block including
+ * both markers). No block → the block is prepended; a missing style.css is created.
+ * Everything outside the markers is preserved byte for byte. Atomic within the theme dir.
+ */
+function writeCompiled(dir: string, blockCss: string): void {
+  const target = path.join(path.resolve(dir), 'style.css');
+  let existing: string | null = null;
+  try { existing = fs.readFileSync(target, 'utf8'); } catch { /* new file */ }
+  let next: string;
+  if (existing !== null) {
+    const start = existing.indexOf(MARKER_START_PREFIX);
+    const endAt = existing.indexOf(MARKER_END);
+    if (start !== -1 && endAt !== -1 && endAt >= start) {
+      next = existing.slice(0, start) + blockCss + existing.slice(endAt + MARKER_END.length);
+    } else {
+      next = existing.length > 0 ? `${blockCss}\n\n${existing}` : `${blockCss}\n`;
+    }
+  } else {
+    next = `${blockCss}\n`;
+  }
+  const tmp = `${target}.tmp-${process.pid}-${Date.now().toString(36)}`;
+  fs.writeFileSync(tmp, next, 'utf8');
+  try {
+    fs.renameSync(tmp, target);
+  } catch (e) {
+    try { fs.unlinkSync(tmp); } catch { /* ignore */ }
+    throw e;
+  }
+}
+
+module.exports = { compileTheme, writeCompiled };

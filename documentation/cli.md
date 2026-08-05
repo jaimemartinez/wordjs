@@ -72,7 +72,11 @@ The plugin-author DX tool. Plain Node — no ts-node registration needed. There 
 ```bash
 node backend/cli/wordjs.js create plugin my-plugin   # scaffold backend/plugins/my-plugin/
 node backend/cli/wordjs.js create theme  my-theme    # scaffold backend/themes/my-theme/
+node backend/cli/wordjs.js create theme  neon-shop --primary "#7c3aed" --secondary "#0ea5e9" \
+  --bg "#0b1020" --text "#e5e7eb" --archetype cyber  # …or generate it from 4 seed colors
+node backend/cli/wordjs.js build theme  neon-shop    # recompile theme.json → style.css block
 node backend/cli/wordjs.js pack my-plugin --build    # zip a plugin for distribution
+node backend/cli/wordjs.js doctor theme default      # lint a theme against the token contract
 node backend/cli/wordjs.js help
 ```
 
@@ -100,7 +104,13 @@ node frontend/scripts/generate-puck-plugin-registry.js
 
 ### `create theme <slug>`
 
-Scaffolds `backend/themes/<slug>/` with a `theme.json` (including the `layout` structure config the public shell honors: `containerWidth`, `sidebar`) and a `style.css` pre-seeded with the **full `--wjs-*` token block** — the token contract, copied from `backend/themes/default/style.css` — plus a commented chrome section (`--wjs-nav-*` / `--wjs-footer-*` tokens and the `.wjs-header-*`/footer hooks; see `backend/themes/midnight-luxury/style.css` for a complete real example). Details in `documentation/themes.md` / `documentation/theming.md`.
+Scaffolds `backend/themes/<slug>/` with a `theme.json` (including the `layout` structure config the public shell honors: `containerWidth`, `sidebar`) and a `style.css` pre-seeded with the **full `--wjs-*` token block** — the token contract, copied from `backend/themes/default/style.css` — plus a commented chrome section (`--wjs-nav-*` / `--wjs-footer-*` tokens and the `.wjs-header-*`/footer hooks; see `backend/themes/midnight-luxury/style.css` for a complete real example). `--name` / `--author` / `--description` set the `theme.json` metadata. Details in `documentation/themes.md` / `documentation/theming.md`.
+
+**Seeded (declarative) mode:** pass all four seed colors — `--primary --secondary --bg --text <#rrggbb>` (optionally `--archetype cyber|brutalist|editorial|glassmorphism|organic|obsidian`) — and instead of copying the template the CLI writes a **declarative `theme.json`** (`generator: "wordjs"` + `seeds`), compiles `style.css` from it via `core/theme-compile.ts`, and adds a `functions.js` stub. Contract reference: *Declarative theming (`theme.json`)* in `documentation/themes.md`.
+
+### `build theme <slug>`
+
+Recompiles an existing theme's `theme.json` (its `seeds` / `archetype` / `tokens` / `styles` sections) into the `/* @wjs-generated:start */ … /* @wjs-generated:end */` block of `backend/themes/<slug>/style.css`, replacing only that block — manual CSS outside the markers is preserved byte for byte (no markers yet → the block is prepended with a warning). Prints every compile diagnostic (`[CODE] path — message`, with closest-match suggestions); on errors it exits `1` **without writing**.
 
 ### `pack <slug> [--build] [--out <dir>]`
 
