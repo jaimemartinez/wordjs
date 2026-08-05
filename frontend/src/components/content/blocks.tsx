@@ -13,6 +13,7 @@ import React from "react";
 import { blockVars, cx, unit } from "@/components/puck/blockVars";
 import { sanitizeHTML } from "@/lib/sanitize";
 import { sizesForWidth } from "@/lib/imageSrcset";
+import SelfHostedVideo from "./SelfHostedVideo";
 
 export function HeadingBlock({ title, level, elementId, color, size, weight, tracking, css }: any) {
     const Tag = level as any;
@@ -555,6 +556,90 @@ export function CTABannerBlock({ title, subtitle, buttonText, buttonLink, varian
             >
                 {buttonText}
             </a>
+        </div>
+    );
+}
+
+export function VideoEmbedBlock({ url, poster, aspectRatio, radius, bg, css }: any) {
+    const vars = {
+        ...blockVars('video', { aspect: aspectRatio, radius: unit(radius), bg }),
+        ...css,
+    };
+
+    // A file served by THIS site plays inline in a real <video>, with no third party in
+    // the request path at all. Restricted to a root-relative path: that is same-origin by
+    // construction and safe to evaluate during SSR, where there is no window.location to
+    // compare an absolute URL against. '//host/x' is protocol-relative (i.e. remote) and
+    // is deliberately excluded.
+    const isSelfHosted = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
+    if (isSelfHosted) {
+        return (
+            <SelfHostedVideo
+                src={url}
+                poster={poster && poster.startsWith('/') && !poster.startsWith('//') ? poster : ''}
+                vars={vars}
+            />
+        );
+    }
+
+    // Convert regular YouTube URLs to embed format
+    let embedUrl = url;
+
+    if (url?.includes("youtube.com/watch")) {
+        const videoId = url.split("v=")[1]?.split("&")[0];
+        embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
+    } else if (url?.includes("youtu.be/")) {
+        const videoId = url.split("youtu.be/")[1]?.split("?")[0];
+        embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
+    } else if (url?.includes("youtube.com/embed/")) {
+        // Already an embed URL. Canonicalize the host to https://www.youtube.com so host
+        // variants (bare youtube.com, m.youtube.com, http://) still pass the allowlist
+        // below, preserving the existing embed UX, and add params if not present.
+        const path = url.split("youtube.com/embed/")[1] || "";
+        const hasQuery = path.includes("?");
+        embedUrl = `https://www.youtube.com/embed/${hasQuery ? path : `${path}?rel=0&modestbranding=1`}`;
+    } else if (url?.includes("vimeo.com/") && !url?.includes("player.vimeo.com")) {
+        const videoId = url.split("vimeo.com/")[1]?.split("?")[0];
+        embedUrl = `https://player.vimeo.com/video/${videoId}`;
+    }
+
+    // Validate the resolved embed URL against an allowlist of trusted embed
+    // providers (mirrors lib/sanitize.ts isAllowedIframeSrc): require https and a
+    // hostname in {www.youtube.com, player.vimeo.com}. Anything else (arbitrary src,
+    // javascript:/data: schemes, non-embed hosts) renders a placeholder, never an iframe.
+    const ALLOWED_EMBED_HOSTS = ["www.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com", "player.vimeo.com"];
+    let isAllowedEmbed = false;
+    try {
+        const parsed = new URL(embedUrl);
+        isAllowedEmbed = parsed.protocol === "https:" && ALLOWED_EMBED_HOSTS.includes(parsed.hostname.toLowerCase());
+    } catch {
+        isAllowedEmbed = false;
+    }
+
+    // Show placeholder if no URL or the URL is not a trusted embed
+    if (!url || !isAllowedEmbed) {
+        return (
+            <div className="wp-block-video-embed" style={vars}>
+                <div className="wp-block-video-embed__placeholder">
+                    <div>
+                        <i className="fa-solid fa-video" aria-hidden="true"></i>
+                        <p>{url ? "Unsupported video URL (use YouTube or Vimeo)" : "Enter a video URL"}</p>
+                    </div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="wp-block-video-embed" style={vars}>
+            <iframe
+                src={embedUrl}
+                sandbox="allow-scripts allow-same-origin allow-presentation"
+                allowFullScreen
+                allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                referrerPolicy="strict-origin-when-cross-origin"
+                loading="lazy"
+            />
         </div>
     );
 }

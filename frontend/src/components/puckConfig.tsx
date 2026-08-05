@@ -14,7 +14,7 @@ import { buildSrcSet, sizesForWidth, srcSetBelongsTo, rememberPickedMedia, getPi
 import { puckPluginComponents } from "../lib/puckPluginRegistry";
 import { CSSPropertiesControl } from "./puck/CSSControls";
 import { blockVars, cx, unit } from "./puck/blockVars";
-import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock } from "./content/blocks";
+import { HeadingBlock, TextBlock, ImageBlock, DividerBlock, ButtonBlock, SpacerBlock, SectionBlock, GridBlock, FlexRowBlock, ColumnsBlock, CardBlock, QuoteBlock, TableBlock, IconListBlock, SocialLinksBlock, StatsBlock, HTMLEmbedBlock, PricingTableBlock, TestimonialBlock, CTABannerBlock, VideoEmbedBlock } from "./content/blocks";
 import LinkField from "./puck/LinkField";
 import { withSharedBlockFields } from "./puck/VisibilityField";
 import { sanitizeHTML } from "@/lib/sanitize";
@@ -851,52 +851,8 @@ const AudioTransport = ({ src, title }: { src: string; title: string }) => {
  * (fullscreen, captions, PiP, volume, keyboard) is a much larger surface to get right than an audio
  * scrubber, and the native one is already correct and accessible.
  */
-const SelfHostedVideo = ({ src, poster, vars }: { src: string; poster: string; vars: React.CSSProperties }) => {
-    const ref = React.useRef<HTMLVideoElement | null>(null);
-    const [started, setStarted] = useState(false);
-    const [total, setTotal] = useState(NaN);
-
-    // The element is server-rendered, so `loadedmetadata` can fire BEFORE React hydrates and attaches
-    // its handler — the duration would then never arrive and the chip would never appear. Seed from
-    // the element on mount and keep a listener for the case where it has not loaded yet.
-    React.useEffect(() => {
-        const el = ref.current;
-        if (!el) return;
-        const onMeta = () => setTotal(el.duration);
-        if (el.readyState >= 1) onMeta();
-        el.addEventListener('loadedmetadata', onMeta);
-        return () => el.removeEventListener('loadedmetadata', onMeta);
-    }, [src]);
-
-    const start = () => {
-        setStarted(true);
-        const el = ref.current;
-        if (el) { el.play().catch(() => { /* the native controls are showing; they can press play */ }); }
-    };
-
-    return (
-        <div className={cx('wp-block-video-embed', started && 'is-playing')} style={vars}>
-            <video
-                ref={ref}
-                src={src}
-                poster={poster || undefined}
-                controls={started}
-                preload="metadata"
-                playsInline
-                onLoadedMetadata={(e) => setTotal(e.currentTarget.duration)}
-            />
-            {!started && (
-                <button type="button" className="wp-block-video-embed__cover" onClick={start} aria-label="Reproducir el vídeo">
-                    <span className="wp-block-video-embed__scrim" aria-hidden="true" />
-                    <span className="wp-block-video-embed__play" aria-hidden="true">
-                        <i className="fa-solid fa-play"></i>
-                    </span>
-                    {isFinite(total) && <span className="wp-block-video-embed__chip">{fmtTime(total)}</span>}
-                </button>
-            )}
-        </div>
-    );
-};
+// SelfHostedVideo moved to components/content/SelfHostedVideo.tsx (the VideoEmbed block's one
+// client island; the block render itself lives in components/content/blocks.tsx).
 
 // `: any` breaks the type-level self-reference introduced by the Symbol block's late-binding
 // getter (`() => baseConfig.components`) — the VALUE cycle is fine (resolved lazily at render).
@@ -1784,93 +1740,7 @@ const baseConfig: any = {
                 bg: "",
                 css: {}
             },
-            render: ({ url, poster, aspectRatio, radius, bg, css }: any) => {
-                const vars = {
-                    ...blockVars('video', { aspect: aspectRatio, radius: unit(radius), bg }),
-                    ...css,
-                };
-
-                // A file served by THIS site plays inline in a real <video>, with no third party in
-                // the request path at all. Restricted to a root-relative path: that is same-origin by
-                // construction and safe to evaluate during SSR, where there is no window.location to
-                // compare an absolute URL against. '//host/x' is protocol-relative (i.e. remote) and
-                // is deliberately excluded.
-                const isSelfHosted = typeof url === 'string' && url.startsWith('/') && !url.startsWith('//');
-                if (isSelfHosted) {
-                    return (
-                        <SelfHostedVideo
-                            src={url}
-                            poster={poster && poster.startsWith('/') && !poster.startsWith('//') ? poster : ''}
-                            vars={vars}
-                        />
-                    );
-                }
-
-                // Convert regular YouTube URLs to embed format
-                let embedUrl = url;
-                let isYouTube = false;
-
-                if (url?.includes("youtube.com/watch")) {
-                    const videoId = url.split("v=")[1]?.split("&")[0];
-                    embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
-                    isYouTube = true;
-                } else if (url?.includes("youtu.be/")) {
-                    const videoId = url.split("youtu.be/")[1]?.split("?")[0];
-                    embedUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1`;
-                    isYouTube = true;
-                } else if (url?.includes("youtube.com/embed/")) {
-                    // Already an embed URL. Canonicalize the host to https://www.youtube.com so host
-                    // variants (bare youtube.com, m.youtube.com, http://) still pass the allowlist
-                    // below, preserving the existing embed UX, and add params if not present.
-                    const path = url.split("youtube.com/embed/")[1] || "";
-                    const hasQuery = path.includes("?");
-                    embedUrl = `https://www.youtube.com/embed/${hasQuery ? path : `${path}?rel=0&modestbranding=1`}`;
-                    isYouTube = true;
-                } else if (url?.includes("vimeo.com/") && !url?.includes("player.vimeo.com")) {
-                    const videoId = url.split("vimeo.com/")[1]?.split("?")[0];
-                    embedUrl = `https://player.vimeo.com/video/${videoId}`;
-                }
-
-                // Validate the resolved embed URL against an allowlist of trusted embed
-                // providers (mirrors lib/sanitize.ts isAllowedIframeSrc): require https and a
-                // hostname in {www.youtube.com, player.vimeo.com}. Anything else (arbitrary src,
-                // javascript:/data: schemes, non-embed hosts) renders a placeholder, never an iframe.
-                const ALLOWED_EMBED_HOSTS = ["www.youtube.com", "youtube-nocookie.com", "www.youtube-nocookie.com", "player.vimeo.com"];
-                let isAllowedEmbed = false;
-                try {
-                    const parsed = new URL(embedUrl);
-                    isAllowedEmbed = parsed.protocol === "https:" && ALLOWED_EMBED_HOSTS.includes(parsed.hostname.toLowerCase());
-                } catch {
-                    isAllowedEmbed = false;
-                }
-
-                // Show placeholder if no URL or the URL is not a trusted embed
-                if (!url || !isAllowedEmbed) {
-                    return (
-                        <div className="wp-block-video-embed" style={vars}>
-                            <div className="wp-block-video-embed__placeholder">
-                                <div>
-                                    <i className="fa-solid fa-video" aria-hidden="true"></i>
-                                    <p>{url ? "Unsupported video URL (use YouTube or Vimeo)" : "Enter a video URL"}</p>
-                                </div>
-                            </div>
-                        </div>
-                    );
-                }
-
-                return (
-                    <div className="wp-block-video-embed" style={vars}>
-                        <iframe
-                            src={embedUrl}
-                            sandbox="allow-scripts allow-same-origin allow-presentation"
-                            allowFullScreen
-                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
-                            referrerPolicy="strict-origin-when-cross-origin"
-                            loading="lazy"
-                        />
-                    </div>
-                );
-            }
+            render: (props: any) => <VideoEmbedBlock {...props} />
         },
 
         AudioPlayer: {
