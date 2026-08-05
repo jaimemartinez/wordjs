@@ -19,57 +19,12 @@ import MSym from "../editor/MSym";
  * wipe classes added imperatively on any re-render; it never touches attributes it didn't render.
  */
 
-export type AnimSpec = {
-    type?:
-        | ""
-        | "fade"
-        | "fade-up"
-        | "fade-down"
-        | "fade-left"
-        | "fade-right"
-        | "zoom"
-        | "zoom-out"
-        | "blur"
-        | "rise"
-        | "flip"
-        | "reveal"
-        | "swing";
-    duration?: number;
-    delay?: number;
-    // ── Interacción de scroll (independiente de la entrada) ─────────────
-    // Scroll-driven effect via CSS `animation-timeline: view()`: progress follows the element's own
-    // journey through the viewport, forwards AND backwards, with no JS and no observer. Browsers
-    // without support simply skip it (@supports-gated in wordjs-ui.css).
-    scroll?: "" | "parallax" | "fade" | "scale" | "rotate";
-    /** Intensity 0–100 (default 30). Quantised to steps of ten — see animClasses. */
-    scrollAmount?: number;
-};
-
-/**
- * Classes the shared wrapper puts on the block for its animations.
- *
- * The scroll intensity travels as a DISCRETE class (`wjs-scroll-amt-10` … `-100`, steps of ten,
- * round(scrollAmount/10)*10 clamped to 10..100) rather than a CSS variable: the
- * withSharedBlockFields wrapper only applies this function's output as className — it has no
- * per-var style channel for this field — so each step class pins `--wjs-scroll-amt` in
- * wordjs-ui.css and the keyframes calc() from it.
- *
- * NOTE: the wrapper's animActive gate predates `scroll` and only renders these classes when an
- * entrance `type` is set. Blocks default to a subtle entrance, so in practice the scroll classes
- * reach the DOM unless the author explicitly picks "Ninguna" as entrance (a wrapper-side relax of
- * that gate is the pending half of scroll-only support).
- *
- * Output is byte-identical to the previous version whenever `scroll` is unset.
- */
-export const animClasses = (anim?: AnimSpec): string => {
-    const cls: string[] = [];
-    if (anim?.type) cls.push("wjs-anim", `wjs-anim-${anim.type}`);
-    if (anim?.scroll) {
-        const amt = Math.min(100, Math.max(10, Math.round((Number(anim.scrollAmount ?? 30) || 0) / 10) * 10));
-        cls.push("wjs-scroll", `wjs-scroll-${anim.scroll}`, `wjs-scroll-amt-${amt}`);
-    }
-    return cls.join(" ");
-};
+// AnimSpec + animClasses live in blockShell.ts (pure, server-safe) — re-exported here so
+// existing imports keep working. useEntranceAnimation below stays client-only.
+import { animClasses } from "./blockShell";
+import type { AnimSpec } from "./blockShell";
+export { animClasses };
+export type { AnimSpec };
 
 /** Event that re-arms every animated block so the author can watch the sequence again. */
 export const ANIM_REPLAY_EVENT = "wjs-anim-replay";
