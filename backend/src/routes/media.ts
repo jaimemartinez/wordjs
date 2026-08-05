@@ -453,10 +453,18 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
             const largeW = await getOption('large_size_w', 1024);
             const largeH = await getOption('large_size_h', 1024);
 
-            const sizeDefinitions = [
+            // The classic WordPress trio, PLUS a modern width ladder. The trio alone (150/300/1024)
+            // gives srcset almost nothing to choose from above 1024px, so a hero on a 1440px screen
+            // downloaded the ORIGINAL — often several megabytes. The ladder gives the browser real
+            // candidates at the widths screens actually use; buildSrcSet picks them up automatically
+            // (it takes any uncropped variant with a file + width) and skips anything wider than the
+            // source, so a small upload still produces only what it can.
+            const LADDER = [640, 960, 1280, 1920];
+            const sizeDefinitions: { name: string; w: number; h: number | null; crop: boolean }[] = [
                 { name: 'thumbnail', w: thumbW, h: thumbH, crop: true },
                 { name: 'medium', w: mediumW, h: mediumH, crop: false },
-                { name: 'large', w: largeW, h: largeH, crop: false }
+                { name: 'large', w: largeW, h: largeH, crop: false },
+                ...LADDER.map((w) => ({ name: `w${w}`, w, h: null, crop: false })),
             ];
 
             const dir = path.dirname(req.file.path);
@@ -468,15 +476,25 @@ router.post('/', authenticate, can('upload_files'), upload.single('file'), async
             // phone photos produced sideways thumbnails. Encodes run in parallel.
             const oriented = image.rotate();
             await Promise.all(sizeDefinitions.map(async (s) => {
-                // Skip if original is smaller than target
-                if (width <= s.w && height <= s.h && s.name !== 'thumbnail') return;
+                // Skip if the original is already smaller than the target — never upscale. A ladder
+                // entry constrains WIDTH only (h === null), so it is judged on width alone.
+                if (s.h === null) {
+                    if (width <= s.w) return;
+                } else if (width <= s.w && height <= s.h && s.name !== 'thumbnail') {
+                    return;
+                }
 
-                const sizeFilename = `${baseName}-${s.w}x${s.h}${ext}`;
+                // Ladder files are named by width alone: with fit:'inside' the height is derived
+                // from the source ratio, so a `<w>x<h>` name built from the TARGET would claim a
+                // height the file does not have.
+                const sizeFilename = s.h === null
+                    ? `${baseName}-${s.w}w${ext}`
+                    : `${baseName}-${s.w}x${s.h}${ext}`;
                 const sizePath = path.join(dir, sizeFilename);
 
                 const resizeOp = s.crop
-                    ? oriented.clone().resize(s.w, s.h, { fit: 'cover' })
-                    : oriented.clone().resize(s.w, s.h, { fit: 'inside', withoutEnlargement: true });
+                    ? oriented.clone().resize(s.w, s.h as number, { fit: 'cover' })
+                    : oriented.clone().resize(s.w, s.h ?? undefined, { fit: 'inside', withoutEnlargement: true });
 
                 const info = await resizeOp.toFile(sizePath);
 
