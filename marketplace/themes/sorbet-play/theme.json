@@ -1,6 +1,163 @@
 {
   "name": "Sorbet Play",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Tema Memphis pastel y juguetón: fresa, limón, menta y lavanda sobre lunares, con bordes de tinta gruesos, sombras duras y botones píldora.",
-  "author": "WordJS × Stitch"
+  "author": "WordJS × Stitch",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "centered",
+      "sticky": true,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 3
+    },
+    "sidebar": false,
+    "containerWidth": "74rem"
+  },
+  "seeds": {
+    "primary": "#ff85a1",
+    "secondary": "#4cc9f0",
+    "bg": "#fff5f7",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#fff5f7",
+    "--wjs-color-primary": "#ff85a1",
+    "--wjs-color-primary-dark": "#ff85a1",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#4cc9f0",
+    "--wjs-color-secondary-dark": "#4cc9f0",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#ff85a1",
+    "--wjs-font-family-heading": "'Comfortaa', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-font-family-base": "'Rubik', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "9999px",
+    "--wjs-radius-sm": "9999px",
+    "--wjs-radius-md": "9999px",
+    "--wjs-radius-lg": "9999px",
+    "--wjs-radius-pill": "9999px",
+    "--wjs-bg-surface-glass": "rgba(255,255,255,0.94)",
+    "--wjs-hero-bg": "#ffffff",
+    "--wjs-hero-gradient-angle": "135deg",
+    "--wjs-hero-gradient-from": "#fffdf0",
+    "--wjs-hero-gradient-to": "#eafaff",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#141414",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#141414",
+    "--wjs-hero-button-outline-border": "#141414",
+    "--wjs-hero-button-outline-bg": "#ffffff"
+  },
+  "styles": {
+    "hero": {
+      "height": "62vh",
+      "pad": "4.5rem 2.5rem",
+      "justify": "center",
+      "text-align": "center",
+      "measure": "46rem",
+      "radius": "36px",
+      "border-width": "3px",
+      "border-color": "#141414",
+      "shadow": "10px 10px 0 #ff85a1",
+      "title": {
+        "size": "clamp(2.5rem, 7vw, 5rem)",
+        "weight": "700",
+        "tracking": "-0.015em"
+      },
+      "subtitle": {
+        "size": "1.15rem",
+        "opacity": "0.8"
+      },
+      "actions": {
+        "justify": "center"
+      },
+      "button": {
+        "pad": "1.2rem 2.8rem",
+        "size": "1.08rem",
+        "weight": "700",
+        "radius": "9999px",
+        "leading": "1.1"
+      },
+      "mobile": {
+        "min-height": "54vh",
+        "padding": "3rem 1.4rem",
+        "box-shadow": "6px 6px 0 #ff85a1"
+      }
+    },
+    "button": {
+      "pad-x": "1.9rem",
+      "pad-y": "1rem",
+      "size": "1rem",
+      "weight": "700",
+      "radius": "9999px",
+      "border-width": "3px",
+      "border-color": "#141414",
+      "shadow": "4px 4px 0 #141414",
+      "hover-transform": "translate(2px, 2px)",
+      "hover-shadow": "2px 2px 0 #141414",
+      "outline-bg": "#ffffff",
+      "outline-border-color": "#141414",
+      "outline-color": "#141414"
+    },
+    "card": {
+      "radius": "30px",
+      "pad": "2rem",
+      "bg": "#ffffff",
+      "border-width": "3px",
+      "shadow": "8px 8px 0 #4cc9f0",
+      "hover-shadow": "4px 4px 0 #4cc9f0",
+      "hover-transform": "translate(4px, 4px)",
+      "desc-leading": "1.65",
+      "icon": {
+        "radius": "9999px",
+        "bg": "#fff0f4",
+        "color": "#141414",
+        "size": "3.4rem"
+      },
+      "title": {
+        "size": "1.4rem",
+        "weight": "700"
+      }
+    },
+    "stats": {
+      "value": {
+        "size": "clamp(2.5rem, 6vw, 4rem)",
+        "weight": "700",
+        "color": "#ff85a1"
+      },
+      "label": {
+        "size": "0.85rem",
+        "weight": "600",
+        "transform": "uppercase",
+        "tracking": "0.12em"
+      }
+    },
+    "quote": {
+      "size": "1.45rem",
+      "style": "normal",
+      "weight": "700",
+      "accent": "#4cc9f0",
+      "bar-width": "8px",
+      "mark-size": "4.5rem",
+      "mark-opacity": "0.18"
+    },
+    "footer": {
+      "bg": "#4cc9f0",
+      "text-body": "#0b3a47",
+      "text-heading": "#08252d"
+    },
+    "headings": {
+      "letter-spacing": "-0.015em"
+    },
+    "links": {
+      "font-weight": "600",
+      "text-decoration-thickness": "2px",
+      "text-underline-offset": "0.2em"
+    }
+  }
 }

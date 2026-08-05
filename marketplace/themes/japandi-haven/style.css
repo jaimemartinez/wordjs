@@ -1,371 +1,107 @@
-@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:wght@400;500;600;700&family=Hanken+Grotesk:wght@300;400;500;600&display=swap');
-
-/* =========================================
-   THEME: JAPANDI HAVEN (Interiors / Studio)
-   Concept: warm Japanese-Scandinavian minimalism.
-   Cream canvas, hairline borders, terracotta CTA,
-   bronze accents, Playfair Display serif headings
-   over Hanken Grotesk body. Flat, no shadows,
-   2px radii. Derived from the Stitch design
-   "Studio Kanso".
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme japandi-haven */
 :root {
-  /* ── Canonical palette ─────────────────────────────── */
-  --wjs-color-primary: #8b4e3b;          /* terracotta (design tertiary, CTA) */
-  --wjs-color-primary-dark: #6e3725;
-  --wjs-color-secondary: #725a39;        /* bronze (icons, quote marks) */
-  --wjs-color-secondary-dark: #584324;
-  --wjs-color-accent: #fbdbb0;           /* sand (selection / highlights) */
-  --wjs-color-success: #567a5b;
-  --wjs-color-danger: #ba1a1a;
-  --wjs-color-warning: #c08a3e;
-  --wjs-color-info: #5d7486;
-  --wjs-color-light: #f6f3f2;
-  --wjs-color-dark: #1c1b1b;
-  /* on-colors (max-contrast text on each solid color) */
-  --wjs-color-on-primary: #ffffff;
-  --wjs-color-on-secondary: #ffffff;
-  --wjs-color-on-accent: #281801;
-  --wjs-color-on-success: #ffffff;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #281801;
-  --wjs-color-on-info: #ffffff;
-  --wjs-color-on-light: #1c1b1b;
-  --wjs-color-on-dark: #ffffff;
-
-  /* ── Surfaces, text & borders ──────────────────────── */
   --wjs-bg-canvas: #fcf9f8;
-  --wjs-bg-surface: #fcf9f8;             /* cards sit on the muted section fill */
-  --wjs-bg-surface-glass: rgba(252, 249, 248, 0.9); /* scrolled public header */
-  --wjs-bg-muted: #f6f3f2;               /* surface-container-low sections */
-  --wjs-color-text-main: #1c1b1b;
-  --wjs-color-text-muted: #474741;
-  --wjs-color-heading: #1c1b1b;
+  --wjs-bg-surface: #f4f2f1;
+  --wjs-bg-surface-raised: #edeae9;
+  --wjs-color-primary: #8b4e3b;
+  --wjs-color-primary-dark: #8b4e3b;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #7d8471;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #141414;
+  --wjs-color-text-muted: #6c6b6b;
+  --wjs-color-heading: #141414;
   --wjs-color-link: #8b4e3b;
-  --wjs-color-link-hover: #6e3725;
-  --wjs-border-subtle: rgba(28, 27, 27, 0.1);  /* the design's hairline */
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(114, 90, 57, 0.25);
-  --wjs-container-max: 1280px;
-
-  /* ── Public footer chrome (read by the Footer component) */
-  --wjs-bg-footer: #f6f3f2;
-  --wjs-color-text-footer-main: #1c1b1b;
-  --wjs-color-text-footer-dim: #474741;
-
-  /* ── Typography ────────────────────────────────────── */
-  --wjs-font-family-base: 'Hanken Grotesk', system-ui, -apple-system, sans-serif;
-  --wjs-font-family-heading: 'Playfair Display', Georgia, serif;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.5;
-  --wjs-heading-weight: 500;
-  --wjs-heading-line-height: 1.2;
-  --wjs-h1: 2.5rem;                      /* measured render: h1 = headline-lg 40px, no tracking */
-  --wjs-h2: 2.5rem;                      /* headline-lg 40px */
-  --wjs-h3: 1.75rem;                     /* headline-md 28px */
-  --wjs-h4: 1.25rem;
-  --wjs-h5: 1.0625rem;
-  --wjs-h6: 0.875rem;
-
-  /* ── Shape & shadow (flat, no shadows) ─────────────── */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 2px;
-  --wjs-radius: 2px;                     /* rounded-DEFAULT 0.125rem */
+  --wjs-color-link-hover: #7d8471;
+  --wjs-border-subtle: #d2d0cf;
+  --wjs-outline: #a4a2a1;
+  --wjs-outline-variant: #d9d7d6;
+  --wjs-focus-ring: #8b4e3b;
+  --wjs-color-secondary: #7d8471;
+  --wjs-color-secondary-dark: #7d8471;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-font-family-heading: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-base: 'Karla', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
   --wjs-radius-md: 4px;
-  --wjs-radius-lg: 8px;
-  --wjs-radius-pill: 12px;               /* the design's "full" is 0.75rem */
-  --wjs-shadow-sm: 0 1px 2px rgba(28, 27, 27, 0.04);
-  --wjs-shadow: 0 2px 8px rgba(28, 27, 27, 0.05);
-  --wjs-shadow-md: 0 8px 24px rgba(28, 27, 27, 0.06);
-  --wjs-shadow-lg: 0 16px 40px rgba(28, 27, 27, 0.08);
-  /* hero/CTA/video buttons read --wjs-shadow-2 directly; the design is flat */
-  --wjs-shadow-2: none;
-
-  /* ══ Block tokens (values only; wordjs-ui.css owns the rules) ══ */
-
-  /* Buttons — hero primary CTA: terracotta, label-sm, square corners
-     (the render shows radius 0; the config's 2px never applies) */
-  --wjs-button-bg: #8b4e3b;
-  --wjs-button-color: #ffffff;
-  --wjs-button-family: 'Hanken Grotesk', sans-serif;
-  --wjs-button-size: 0.75rem;
-  --wjs-button-weight: 600;
-  --wjs-button-leading: 1.334;
-  --wjs-button-tracking: 0.1em;
-  --wjs-button-radius: 0;
-  --wjs-button-pad-x: 2rem;
-  --wjs-button-pad-y: 0.75rem;
-  --wjs-button-shadow: none;
-  --wjs-button-hover-bg: #96604e;        /* tertiary/90 over the cream canvas */
-  --wjs-button-hover-color: #ffffff;
-  --wjs-button-hover-shadow: none;
-  --wjs-button-hover-transform: none;
-
-  /* Hero — transparent over the cream canvas, left-aligned editorial layout */
-  --wjs-hero-bg: transparent;
+  --wjs-radius-lg: 4px;
+  --wjs-radius-pill: 4px;
+  --wjs-hero-bg: #fcf9f8;
+  --wjs-hero-gradient-from: #fcf9f8;
+  --wjs-hero-gradient-to: #fcf9f8;
+  --wjs-hero-color: #141414;
+  --wjs-hero-title-color: #8b4e3b;
+  --wjs-hero-subtitle-color: #141414;
+  --wjs-hero-button-outline-color: #8b4e3b;
+  --wjs-hero-button-outline-border: #8b4e3b;
+  --wjs-bg-surface-glass: #fcf9f8;
+  --wjs-bg-footer: #ece5dc;
+  --wjs-color-text-footer-main: #3d3630;
+  --wjs-color-text-footer-dim: #8a8078;
+  --wjs-header-offset: 5.5rem;
   --wjs-hero-gradient: none;
-  --wjs-hero-pad: 5rem 4rem;
-  --wjs-hero-radius: 0;
-  --wjs-hero-shadow: none;
+  --wjs-hero-height: auto;
+  --wjs-hero-pad: 4rem 1.5rem 3.25rem;
+  --wjs-hero-measure: 40rem;
   --wjs-hero-text-align: left;
   --wjs-hero-justify: flex-start;
   --wjs-hero-actions-justify: flex-start;
-  --wjs-hero-title-color: #1c1b1b;
-  --wjs-hero-title-size: 2.5rem;         /* headline-lg */
-  --wjs-hero-title-weight: 500;
-  --wjs-hero-subtitle-color: #474741;
-  --wjs-hero-subtitle-size: 1.125rem;
-  --wjs-hero-button-bg: #8b4e3b;
-  --wjs-hero-button-color: #ffffff;
-  --wjs-hero-button-radius: 0;
-  --wjs-hero-button-pad: 0.75rem 2rem;
-  --wjs-hero-button-size: 0.75rem;
-  --wjs-hero-button-weight: 600;
-  --wjs-hero-button-leading: 1.334;
-  --wjs-hero-button-outline-bg: transparent;
-  --wjs-hero-button-outline-border: rgba(28, 27, 27, 0.2);
-  --wjs-hero-button-outline-color: #1c1b1b;
-  --wjs-hero-button-outline-hover-bg: #e5e2e1;
-
-  /* Cards — transparent hairline panels that fill on hover */
-  --wjs-card-bg: transparent;
-  --wjs-card-border-width: 1px;
-  --wjs-card-border-color: rgba(28, 27, 27, 0.1);
-  --wjs-card-radius: 0;
-  --wjs-card-pad: 2rem;
+  --wjs-hero-title-size: clamp(1.55rem, 2.6vw, 2.05rem);
+  --wjs-hero-title-weight: 400;
+  --wjs-hero-title-tracking: 0.005em;
+  --wjs-hero-subtitle-size: 1.05rem;
+  --wjs-hero-subtitle-opacity: 0.78;
+  --wjs-hero-border-width: 0px;
+  --wjs-hero-radius: 0px;
+  --wjs-hero-shadow: none;
+  --wjs-hero-button-radius: 2px;
+  --wjs-hero-button-pad: 0.8rem 1.9rem;
+  --wjs-hero-button-weight: 400;
+  --wjs-hero-button-size: 0.9rem;
+  --wjs-quote-family: 'Newsreader', Georgia, 'Times New Roman', serif;
+  --wjs-quote-style: normal;
+  --wjs-quote-size: 1.2rem;
+  --wjs-quote-weight: 400;
+  --wjs-quote-bar-width: 1px;
+  --wjs-quote-tracking: 0.005em;
+  --wjs-card-radius: 4px;
   --wjs-card-shadow: none;
-  --wjs-card-hover-bg: #fcf9f8;
-  --wjs-card-hover-shadow: none;
-  --wjs-card-hover-transform: none;
-  --wjs-card-title-color: #1c1b1b;
-  --wjs-card-title-size: 1.75rem;
-  --wjs-card-title-weight: 500;
-  --wjs-card-desc-color: #474741;
-  --wjs-card-icon-bg: transparent;
-  --wjs-card-icon-color: #725a39;
-  --wjs-card-icon-radius: 0;
-  --wjs-card-icon-size: 2.5rem;
-  --wjs-card-icon-glyph: 2.25rem;        /* bare 36px glyph, 40px line box */
-
-  /* Pricing — cream cards, blush highlighted plan */
-  --wjs-pricing-bg: #fcf9f8;
-  --wjs-pricing-border-width: 1px;
-  --wjs-pricing-border-color: rgba(28, 27, 27, 0.1);
-  --wjs-pricing-radius: 2px;
-  --wjs-pricing-pad: 2rem;
-  --wjs-pricing-shadow: none;
-  --wjs-pricing-hover-shadow: var(--wjs-shadow);
-  --wjs-pricing-hover-transform: none;
-  --wjs-pricing-accent: #8b4e3b;
-  --wjs-pricing-name-color: #1c1b1b;
-  --wjs-pricing-name-family: 'Playfair Display', serif;
-  --wjs-pricing-name-size: 1.75rem;
-  --wjs-pricing-name-weight: 500;
-  --wjs-pricing-price-color: #1c1b1b;
-  --wjs-pricing-price-family: 'Playfair Display', serif;
-  --wjs-pricing-price-size: 2.5rem;
-  --wjs-pricing-price-weight: 500;
-  --wjs-pricing-period-color: #474741;
-  --wjs-pricing-feature-color: #474741;
-  --wjs-pricing-button-bg: transparent;
-  --wjs-pricing-button-border-color: rgba(28, 27, 27, 0.25);
-  --wjs-pricing-button-color: #1c1b1b;
-  --wjs-pricing-button-hover-bg: #e5e2e1;
-  --wjs-pricing-button-radius: 2px;
-  --wjs-pricing-button-weight: 600;
-  --wjs-pricing-button-on-accent: #ffffff;
-  --wjs-pricing-highlight-bg: #ffefeb;   /* tertiary-container */
-  --wjs-pricing-highlight-border-width: 1px;
-  --wjs-pricing-highlight-border-color: rgba(139, 78, 59, 0.25);
-  --wjs-pricing-highlight-color: #6e3725;
-  --wjs-pricing-highlight-name-color: #9e5d49;
-  --wjs-pricing-highlight-feature-color: #8a5140;
-  --wjs-pricing-highlight-scale: 1.03;
-  --wjs-pricing-highlight-shadow: var(--wjs-shadow-lg);
-  --wjs-pricing-highlight-button-bg: #8b4e3b;
-  --wjs-pricing-highlight-button-shadow: none;
-
-  /* Quote / testimonial — centered italic Playfair, bronze mark */
-  --wjs-quote-accent: #725a39;
-  --wjs-quote-bar-width: 0;
-  --wjs-quote-family: 'Playfair Display', serif;
-  --wjs-quote-style: italic;
-  --wjs-quote-size: 1.5rem;
-  --wjs-quote-color: #1c1b1b;
-  --wjs-quote-mark-opacity: 0.3;
-  --wjs-quote-cite-color: #474741;
-  --wjs-testimonial-bg: transparent;
-  --wjs-testimonial-border-width: 0;
-  --wjs-testimonial-shadow: none;
-  --wjs-testimonial-quote-family: 'Playfair Display', serif;
-  --wjs-testimonial-quote-style: italic;
-  --wjs-testimonial-quote-size: 1.75rem;
-  --wjs-testimonial-quote-color: #1c1b1b;
-  --wjs-testimonial-mark-color: #725a39;
-  --wjs-testimonial-mark-opacity: 0.3;
-  --wjs-testimonial-author-color: #1c1b1b;
-  --wjs-testimonial-author-family: 'Hanken Grotesk', sans-serif;
-  --wjs-testimonial-author-weight: 600;
-  --wjs-testimonial-role-color: #474741;
-  --wjs-testimonial-avatar-radius: 12px;
-
-  /* Search + form — the design's underline-only inputs */
-  --wjs-search-input-bg: transparent;
-  --wjs-search-input-border-width: 0;
-  --wjs-search-input-shadow: inset 0 -1px 0 rgba(120, 119, 112, 0.3);
-  --wjs-search-input-radius: 0;
-  --wjs-search-input-pad: 0.75rem 0;
-  --wjs-search-input-color: #1c1b1b;
-  --wjs-search-input-family: 'Hanken Grotesk', sans-serif;
-  --wjs-search-placeholder-color: rgba(71, 71, 65, 0.5);
-  --wjs-search-focus-color: #725a39;
-  --wjs-search-focus-ring: inset 0 -2px 0 #725a39;
-  --wjs-search-button-bg: #8b4e3b;
-  --wjs-search-button-color: #ffffff;
-  --wjs-search-button-family: 'Hanken Grotesk', sans-serif;
-  --wjs-search-button-weight: 600;
-  --wjs-search-button-tracking: 0.1em;
-  --wjs-search-button-radius: 0;
-  --wjs-search-button-pad: 0.75rem 1.5rem;
-  --wjs-form-label-color: #474741;
-  --wjs-form-submit-size: 0.75rem;       /* the submit is the label-sm CTA, not 1rem */
-
-  /* Accordion — hairline separators, serif headers */
-  --wjs-accordion-bg: transparent;
-  --wjs-accordion-item-bg: transparent;
-  --wjs-accordion-item-border-width: 1px;
-  --wjs-accordion-item-border-color: rgba(28, 27, 27, 0.1);
-  --wjs-accordion-item-radius: 2px;
-  --wjs-accordion-header-family: 'Playfair Display', serif;
-  --wjs-accordion-header-color: #1c1b1b;
-  --wjs-accordion-header-weight: 500;
-  --wjs-accordion-header-size: 1.25rem;
-  --wjs-accordion-icon-color: #725a39;
-  --wjs-accordion-panel-color: #474741;
-
-  /* Posts grid — cream cards, hairline, serif titles */
-  --wjs-posts-bg: #fcf9f8;
-  --wjs-posts-border-width: 1px;
-  --wjs-posts-border-color: rgba(28, 27, 27, 0.1);
-  --wjs-posts-radius: 2px;
-  --wjs-posts-shadow: none;
-  --wjs-posts-hover-shadow: var(--wjs-shadow-md);
-  --wjs-posts-hover-transform: none;
-  --wjs-posts-title-color: #1c1b1b;
-  --wjs-posts-title-weight: 500;
-  --wjs-posts-excerpt-color: #474741;
-  --wjs-posts-date-color: #725a39;
-  --wjs-posts-thumb-radius: 2px;
-
-  /* CTA banner — sand panel, terracotta button */
-  --wjs-cta-bg: #ffefeb;
-  --wjs-cta-color: #6e3725;
-  --wjs-cta-title-color: #1c1b1b;
-  --wjs-cta-title-family: 'Playfair Display', serif;
-  --wjs-cta-radius: 2px;
-  --wjs-cta-shadow: none;
-  --wjs-cta-button-bg: #8b4e3b;
-  --wjs-cta-button-color: #ffffff;
-  --wjs-cta-button-radius: 2px;
-  --wjs-cta-button-weight: 600;
-  --wjs-cta-button-tracking: 0.1em;
+  --wjs-card-border-width: 1px;
+  --wjs-card-bg: transparent;
+  --wjs-card-pad: 2.25rem;
+  --wjs-accordion-radius: 4px;
+  --wjs-accordion-shadow: none;
+  --wjs-accordion-item-border-width: 0px;
+  --wjs-accordion-separator-width: 1px;
+  --wjs-accordion-header-weight: 400;
+  --wjs-accordion-header-size: 1rem;
+  --wjs-accordion-header-transform: none;
+  --wjs-accordion-header-tracking: 0.01em;
+  --wjs-accordion-panel-family: 'Karla', 'Segoe UI', system-ui, sans-serif;
+  --wjs-tabs-radius: 0px;
+  --wjs-tabs-list-bg: transparent;
+  --wjs-tabs-list-border-width: 0px;
+  --wjs-tabs-active-shadow: none;
+  --wjs-tabs-transform: none;
+  --wjs-tabs-tracking: 0.02em;
+  --wjs-tabs-weight: 400;
 }
+body { font-size: 16px; line-height: 1.95 }
+h1,h2,h3,h4,h5,h6 { letter-spacing: 0.004em; line-height: 1.45; font-weight: 400 }
+.wjs-header-logo { font-family: "Newsreader",Georgia,"Times New Roman",serif; text-transform: uppercase; letter-spacing: 0.2em }
+footer { font-size: 0.9rem; line-height: 1.95; text-align: center }
+.wp-block-hero__title { line-height: 1.5; margin-bottom: 1.15rem }
+.wp-block-hero__subtitle { line-height: 1.98; max-width: 38rem }
+.wp-block-hero__actions { margin-top: 2.25rem }
+.wp-block-quote__cite { font-size: 0.82rem; letter-spacing: 0.08em; font-style: normal }
+.wp-block-card__title { font-family: "Newsreader",Georgia,"Times New Roman",serif; font-size: 1.1rem; font-weight: 400; letter-spacing: 0.01em }
+.wp-block-card__description { font-size: 0.92rem; line-height: 1.95 }
+.wp-block-button__link { border-radius: 2px; text-transform: none; letter-spacing: 0.02em; font-size: 0.9rem; font-weight: 400; padding: 0.8rem 1.9rem }
+.wp-block-posts-grid__card { border-radius: 4px; box-shadow: none; background: transparent }
+.wp-block-posts-grid__title { font-family: "Newsreader",Georgia,"Times New Roman",serif; font-size: 1.12rem; font-weight: 400; line-height: 1.55 }
+.wp-block-posts-grid__date { font-size: 0.78rem; letter-spacing: 0.1em }
+.wp-block-posts-grid__excerpt { font-size: 0.92rem; line-height: 1.95 }
+/* @wjs-generated:end */
 
-/* =========================================
-   SITE CHROME — public header
-   ========================================= */
-
-header {
-  border-bottom: 1px solid rgba(200, 199, 190, 0.3);
-}
-
-.wjs-header-logo span {
-  font-family: 'Playfair Display', Georgia, serif;
-  font-weight: 500;
-  font-size: 1.75rem;
-  letter-spacing: -0.01em;
-  color: #1c1b1b;
-}
-
-.wjs-header-nav a {
-  font-family: 'Hanken Grotesk', sans-serif;
-  font-size: 1rem;
-  font-weight: 400;
-  color: #474741;
-  transition: color 0.3s ease;
-}
-
-.wjs-header-nav a:hover {
-  color: #725a39;
-}
-
-.wjs-header-actions a {
-  background: #8b4e3b;
-  color: #ffffff;
-  font-family: 'Hanken Grotesk', sans-serif;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.1em;
-  padding: 0.5rem 1.5rem;
-  border-radius: 0;
-  transition: background-color 0.3s ease;
-}
-
-.wjs-header-actions a:hover {
-  background: #96604e;
-  color: #ffffff;
-}
-
-@media (max-width: 767.98px) {
-  .wjs-header-logo span {
-    font-size: 1.25rem;
-  }
-}
-
-/* =========================================
-   SITE CHROME — public footer
-   ========================================= */
-
-footer {
-  /* the social chips read this hover-surface token */
-  --wjs-bg-surface-hover: #eae7e7;
-  border-top: 1px solid rgba(200, 199, 190, 0.2);
-}
-
-footer h3 {
-  font-family: 'Playfair Display', Georgia, serif;
-  font-weight: 500;
-}
-
-footer h4 {
-  font-family: 'Hanken Grotesk', sans-serif;
-  font-size: 0.75rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  text-transform: uppercase;
-  color: #1c1b1b;
-}
-
-footer a {
-  transition: color 0.3s ease;
-}
-
-/* =========================================
-   DISTINCTIVE RULES — warm minimal details
-   ========================================= */
-
-::selection {
-  background: #fbdbb0;
-  color: #281801;
-}
-
-/* hairline-framed imagery, as in the design's hero and avatar */
-.wjs-content img {
-  border: 1px solid rgba(28, 27, 27, 0.08);
-  border-radius: 4px;
-}
-
-hr {
-  border-color: rgba(28, 27, 27, 0.1);
-}
+/* Japandi Haven — generated from a Stitch design system. Edit theme.json, then: wordjs build theme japandi-haven */

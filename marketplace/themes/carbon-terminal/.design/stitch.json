@@ -1,0 +1,29 @@
+{
+  "name": "stitch/carbon-terminal",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#22c55e",
+    "overridePrimaryColor": "#22c55e",
+    "overrideSecondaryColor": "#38bdf8",
+    "overrideNeutralColor": "#0b0f19",
+    "headlineFont": "JETBRAINS_MONO",
+    "headlineFontFamily": "JetBrains Mono",
+    "bodyFont": "JETBRAINS_MONO",
+    "bodyFontFamily": "JetBrains Mono",
+    "labelFont": "JETBRAINS_MONO",
+    "labelFontFamily": "JetBrains Mono",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#0b0f19",
+      "surface": "#0b0f19",
+      "on_surface": "#f5f5f4",
+      "on_background": "#f5f5f4",
+      "primary": "#22c55e",
+      "primary_container": "#22c55e",
+      "on_primary": "#0b0b0b",
+      "secondary": "#38bdf8",
+      "secondary_container": "#38bdf8",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

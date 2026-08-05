@@ -1,0 +1,28 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "sp-brandrow",
+        "align": "center",
+        "gap": "md",
+        "items": [
+          { "type": "ChromeLogo", "props": { "id": "sp-logo", "size": "lg" } }
+        ]
+      }
+    },
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "sp-navrow",
+        "align": "center",
+        "gap": "sm",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeNav", "props": { "id": "sp-nav", "location": "header", "orientation": "horizontal" } }
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "name": "stitch/midnight-signal",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#3b82f6",
+    "overridePrimaryColor": "#3b82f6",
+    "overrideSecondaryColor": "#22d3ee",
+    "overrideNeutralColor": "#020617",
+    "headlineFont": "SORA",
+    "headlineFontFamily": "Sora",
+    "bodyFont": "INTER",
+    "bodyFontFamily": "Inter",
+    "labelFont": "INTER",
+    "labelFontFamily": "Inter",
+    "roundness": "ROUND_TWELVE",
+    "namedColors": {
+      "background": "#020617",
+      "surface": "#020617",
+      "on_surface": "#f5f5f4",
+      "on_background": "#f5f5f4",
+      "primary": "#3b82f6",
+      "primary_container": "#3b82f6",
+      "on_primary": "#0b0b0b",
+      "secondary": "#22d3ee",
+      "secondary_container": "#22d3ee",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

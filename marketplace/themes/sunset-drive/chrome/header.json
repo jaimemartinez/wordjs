@@ -1,0 +1,39 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "sd-h-bar",
+        "align": "between",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "sd-h-left",
+              "align": "start",
+              "gap": "lg",
+              "items": [
+                { "type": "ChromeLogo", "props": { "id": "sd-h-logo", "size": "md" } },
+                { "type": "ChromeNav", "props": { "id": "sd-h-menu", "location": "header", "orientation": "horizontal" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "sd-h-right",
+              "align": "end",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSearch", "props": { "id": "sd-h-search", "placeholder": "Buscar artistas, EPs, mixes…" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

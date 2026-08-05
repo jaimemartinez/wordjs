@@ -1,0 +1,63 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "sp-foot-cols",
+        "align": "between",
+        "gap": "lg",
+        "wrap": true,
+        "items": [
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "sp-col-brand",
+              "align": "center",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSiteTitle", "props": { "id": "sp-brand", "showTagline": true } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "sp-col-nav",
+              "align": "center",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeText", "props": { "id": "sp-h-nav", "text": "A dónde ir" } },
+                { "type": "ChromeNav", "props": { "id": "sp-fnav", "location": "footer", "orientation": "vertical" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "sp-col-social",
+              "align": "center",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeText", "props": { "id": "sp-h-social", "text": "Hola, hola" } },
+                { "type": "ChromeSocials", "props": { "id": "sp-social", "source": "settings" } }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "sp-foot-bottom",
+        "align": "center",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeText", "props": { "id": "sp-copy", "text": "Hecho con mucho azúcar y WordJS" } }
+        ]
+      }
+    }
+  ]
+}

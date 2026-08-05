@@ -1,0 +1,29 @@
+{
+  "name": "stitch/clay-pop",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#66558c",
+    "overridePrimaryColor": "#66558c",
+    "overrideSecondaryColor": "#f0a202",
+    "overrideNeutralColor": "#efe7fb",
+    "headlineFont": "COMFORTAA",
+    "headlineFontFamily": "Comfortaa",
+    "bodyFont": "QUICKSAND",
+    "bodyFontFamily": "Quicksand",
+    "labelFont": "QUICKSAND",
+    "labelFontFamily": "Quicksand",
+    "roundness": "ROUND_FULL",
+    "namedColors": {
+      "background": "#efe7fb",
+      "surface": "#efe7fb",
+      "on_surface": "#141414",
+      "on_background": "#141414",
+      "primary": "#66558c",
+      "primary_container": "#66558c",
+      "on_primary": "#ffffff",
+      "secondary": "#f0a202",
+      "secondary_container": "#f0a202",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

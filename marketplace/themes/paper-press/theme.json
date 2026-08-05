@@ -1,6 +1,186 @@
 {
   "name": "Paper Press",
-  "version": "1.0.0",
+  "version": "1.0.4",
   "description": "Broadsheet clásico de periódico con serifas Bodoni, filetes de tinta, columnas y acento rojo editorial.",
-  "author": "WordJS × Stitch"
+  "author": "WordJS × Stitch",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "centered",
+      "sticky": false,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 4
+    },
+    "containerWidth": "78rem"
+  },
+  "seeds": {
+    "primary": "#930000",
+    "secondary": "#1f2937",
+    "bg": "#faf9f8",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#faf9f8",
+    "--wjs-color-primary": "#930000",
+    "--wjs-color-primary-dark": "#930000",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#1f2937",
+    "--wjs-color-secondary-dark": "#1f2937",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#930000",
+    "--wjs-font-family-heading": "'Bodoni Moda', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "'Source Serif 4', Georgia, 'Times New Roman', serif",
+    "--wjs-radius": "4px",
+    "--wjs-radius-sm": "4px",
+    "--wjs-radius-md": "4px",
+    "--wjs-radius-lg": "4px",
+    "--wjs-radius-pill": "4px",
+    "--wjs-hero-bg": "#faf9f8",
+    "--wjs-hero-gradient-from": "#faf9f8",
+    "--wjs-hero-gradient-to": "#faf9f8",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#930000",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#930000",
+    "--wjs-hero-button-outline-border": "#930000",
+    "--wjs-bg-surface-glass": "#faf9f8",
+    "--wjs-bg-footer": "#f3f2f1",
+    "--wjs-color-text-footer-main": "#141414",
+    "--wjs-color-text-footer-dim": "#5a5a5a",
+    "--wjs-hero-gradient": "none",
+    "--wjs-hero-height": "auto",
+    "--wjs-hero-pad": "2.75rem 0 1.75rem",
+    "--wjs-hero-measure": "100%",
+    "--wjs-hero-text-align": "left",
+    "--wjs-hero-justify": "flex-start",
+    "--wjs-hero-title-size": "clamp(2.75rem, 7vw, 5.25rem)",
+    "--wjs-hero-title-weight": "900",
+    "--wjs-hero-title-tracking": "-0.035em",
+    "--wjs-hero-subtitle-size": "1.0625rem",
+    "--wjs-hero-border-width": "0px",
+    "--wjs-hero-radius": "0px",
+    "--wjs-hero-shadow": "none"
+  },
+  "styles": {
+    "body": {
+      "font-size": "17px",
+      "line-height": "1.62"
+    },
+    "headings": {
+      "letter-spacing": "-0.022em",
+      "line-height": "1.08"
+    },
+    "logo": {
+      "font-family": "'Bodoni Moda', Georgia, 'Times New Roman', serif",
+      "text-transform": "uppercase",
+      "letter-spacing": "-0.015em"
+    },
+    "nav": {
+      "width": "100%",
+      "justify-content": "center",
+      "margin-top": "0.7rem",
+      "padding-top": "0.5rem",
+      "padding-bottom": "0.5rem",
+      "border-top": "1px solid #141414",
+      "border-bottom": "1px solid #141414",
+      "font-family": "'Source Serif 4', Georgia, 'Times New Roman', serif",
+      "font-size": "0.74rem",
+      "font-weight": "600",
+      "letter-spacing": "0.19em",
+      "text-transform": "uppercase"
+    },
+    "footer": {
+      "font-size": "0.86rem",
+      "letter-spacing": "0.005em"
+    },
+    "hero": {
+      "border-bottom": "1px solid #141414",
+      "title": {
+        "line-height": "0.95"
+      },
+      "subtitle": {
+        "max-width": "44rem",
+        "line-height": "1.5",
+        "margin-top": "1rem"
+      },
+      "actions": {
+        "display": "none"
+      }
+    },
+    "quote": {
+      "family": "'Bodoni Moda', Georgia, 'Times New Roman', serif",
+      "style": "italic",
+      "size": "1.45rem",
+      "bar-width": "3px",
+      "cite": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.14em",
+        "font-size": "0.72rem",
+        "font-style": "normal"
+      }
+    },
+    "card": {
+      "radius": "0px",
+      "shadow": "none",
+      "border-width": "1px",
+      "pad": "1.4rem",
+      "title": {
+        "font-size": "1.2rem",
+        "letter-spacing": "-0.015em"
+      },
+      "description": {
+        "font-size": "0.92rem",
+        "line-height": "1.55"
+      }
+    },
+    "button": {
+      "link": {
+        "border-radius": "0px",
+        "text-transform": "uppercase",
+        "letter-spacing": "0.14em",
+        "font-size": "0.74rem",
+        "font-weight": "700",
+        "padding": "0.7rem 1.4rem"
+      }
+    },
+    "posts-grid": {
+      "card": {
+        "border-radius": "0px",
+        "box-shadow": "none",
+        "border-bottom": "1px solid #d1d0cf",
+        "padding-bottom": "1.1rem"
+      },
+      "title": {
+        "font-size": "1.28rem",
+        "line-height": "1.15",
+        "letter-spacing": "-0.02em"
+      },
+      "date": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.14em",
+        "font-size": "0.68rem"
+      },
+      "excerpt": {
+        "font-size": "0.95rem",
+        "line-height": "1.5"
+      }
+    },
+    "stats": {
+      "bg": "transparent",
+      "radius": "0px",
+      "shadow": "none",
+      "border-width": "0px",
+      "value-family": "'Bodoni Moda', Georgia, 'Times New Roman', serif",
+      "value-weight": "900",
+      "value-tracking": "-0.03em",
+      "label-transform": "uppercase",
+      "label-tracking": "0.16em",
+      "label-size": "0.7rem"
+    }
+  }
 }

@@ -1,0 +1,29 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "ps-head",
+        "align": "between",
+        "gap": "md",
+        "wrap": false,
+        "items": [
+          { "type": "ChromeLogo", "props": { "id": "ps-logo", "size": "lg" } },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ps-head-end",
+              "align": "end",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeNav", "props": { "id": "ps-nav", "location": "header", "orientation": "horizontal" } },
+                { "type": "ChromeButton", "props": { "id": "ps-cta", "label": "Hablemos", "href": "/contacto", "variant": "primary" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

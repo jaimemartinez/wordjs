@@ -1,6 +1,163 @@
 {
   "name": "Clay Pop",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Claymorphism pastel con formas 3D blandas, esquinas ultra redondeadas y sombras dobles suaves.",
-  "author": "WordJS × Stitch"
+  "author": "WordJS × Stitch",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "classic",
+      "sticky": true,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "minimal"
+    },
+    "sidebar": false,
+    "containerWidth": "70rem"
+  },
+  "seeds": {
+    "primary": "#66558c",
+    "secondary": "#f0a202",
+    "bg": "#efe7fb",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#efe7fb",
+    "--wjs-color-primary": "#66558c",
+    "--wjs-color-primary-dark": "#66558c",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#f0a202",
+    "--wjs-color-secondary-dark": "#f0a202",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#66558c",
+    "--wjs-font-family-heading": "'Comfortaa', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-font-family-base": "'Quicksand', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "9999px",
+    "--wjs-radius-sm": "9999px",
+    "--wjs-radius-md": "9999px",
+    "--wjs-radius-lg": "9999px",
+    "--wjs-radius-pill": "9999px",
+    "--wjs-bg-surface-glass": "rgba(239,231,251,0.72)",
+    "--wjs-hero-bg": "#ffffff",
+    "--wjs-hero-gradient-angle": "160deg",
+    "--wjs-hero-gradient-from": "#ffffff",
+    "--wjs-hero-gradient-to": "#f6f0ff",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#66558c",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#66558c",
+    "--wjs-hero-button-outline-border": "#d9cdf0",
+    "--wjs-hero-button-outline-bg": "#ffffff"
+  },
+  "styles": {
+    "hero": {
+      "height": "66vh",
+      "pad": "5.5rem 3rem",
+      "justify": "center",
+      "text-align": "center",
+      "measure": "48rem",
+      "radius": "44px",
+      "shadow": "0 30px 60px rgba(102,85,140,0.20)",
+      "border-width": "0",
+      "title": {
+        "size": "clamp(2.75rem, 6.5vw, 4.75rem)",
+        "weight": "700",
+        "tracking": "-0.01em"
+      },
+      "subtitle": {
+        "size": "1.15rem",
+        "opacity": "0.75"
+      },
+      "actions": {
+        "justify": "center"
+      },
+      "button": {
+        "pad": "1.35rem 3rem",
+        "size": "1.1rem",
+        "weight": "700",
+        "radius": "9999px",
+        "leading": "1.1"
+      },
+      "mobile": {
+        "min-height": "56vh",
+        "padding": "3.25rem 1.5rem",
+        "border-radius": "32px"
+      }
+    },
+    "button": {
+      "pad-x": "2rem",
+      "pad-y": "1.05rem",
+      "size": "1.02rem",
+      "weight": "700",
+      "radius": "9999px",
+      "shadow": "0 14px 26px rgba(102,85,140,0.24)",
+      "hover-transform": "translateY(-3px)",
+      "hover-shadow": "0 20px 34px rgba(102,85,140,0.30)",
+      "outline-bg": "#ffffff",
+      "outline-border-color": "#d9cdf0",
+      "outline-color": "#66558c"
+    },
+    "card": {
+      "radius": "34px",
+      "pad": "2.25rem",
+      "bg": "#ffffff",
+      "border-width": "0",
+      "shadow": "0 22px 44px rgba(102,85,140,0.16)",
+      "hover-shadow": "0 30px 56px rgba(102,85,140,0.22)",
+      "hover-transform": "translateY(-5px)",
+      "desc-leading": "1.7",
+      "icon": {
+        "radius": "9999px",
+        "bg": "#f4efff",
+        "color": "#66558c",
+        "size": "3.5rem"
+      },
+      "title": {
+        "size": "1.35rem",
+        "weight": "700"
+      }
+    },
+    "accordion": {
+      "pad": "1.35rem 1.75rem",
+      "shadow": "0 14px 30px rgba(102,85,140,0.12)",
+      "item": {
+        "radius": "26px",
+        "gap": "0.9rem",
+        "bg": "#ffffff",
+        "border-width": "0"
+      },
+      "header": {
+        "radius": "26px",
+        "weight": "700",
+        "size": "1.05rem"
+      }
+    },
+    "search": {
+      "input": {
+        "radius": "9999px",
+        "pad": "0.95rem 1.5rem",
+        "bg": "#ffffff",
+        "border-width": "0"
+      },
+      "button": {
+        "radius": "9999px",
+        "pad": "0.95rem 1.75rem",
+        "weight": "700"
+      }
+    },
+    "footer": {
+      "bg": "#66558c",
+      "text-body": "#e4dcf3",
+      "text-heading": "#ffffff"
+    },
+    "headings": {
+      "letter-spacing": "-0.005em"
+    },
+    "body": {
+      "letter-spacing": "0.005em"
+    }
+  }
 }

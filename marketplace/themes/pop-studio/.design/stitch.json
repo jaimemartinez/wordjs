@@ -1,0 +1,29 @@
+{
+  "name": "stitch/pop-studio",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#ec4899",
+    "overridePrimaryColor": "#ec4899",
+    "overrideSecondaryColor": "#06b6d4",
+    "overrideNeutralColor": "#ffffff",
+    "headlineFont": "BRICOLAGE_GROTESQUE",
+    "headlineFontFamily": "Bricolage Grotesque",
+    "bodyFont": "DM_SANS",
+    "bodyFontFamily": "DM Sans",
+    "labelFont": "DM_SANS",
+    "labelFontFamily": "DM Sans",
+    "roundness": "ROUND_FULL",
+    "namedColors": {
+      "background": "#ffffff",
+      "surface": "#ffffff",
+      "on_surface": "#141414",
+      "on_background": "#141414",
+      "primary": "#ec4899",
+      "primary_container": "#ec4899",
+      "on_primary": "#ffffff",
+      "secondary": "#06b6d4",
+      "secondary_container": "#06b6d4",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

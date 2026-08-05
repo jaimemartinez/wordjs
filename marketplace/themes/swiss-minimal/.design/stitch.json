@@ -1,0 +1,29 @@
+{
+  "name": "stitch/swiss-minimal",
+  "designTheme": {
+    "colorMode": "LIGHT",
+    "customColor": "#e11d48",
+    "overridePrimaryColor": "#e11d48",
+    "overrideSecondaryColor": "#111111",
+    "overrideNeutralColor": "#ffffff",
+    "headlineFont": "ARIMO",
+    "headlineFontFamily": "Arimo",
+    "bodyFont": "ARIMO",
+    "bodyFontFamily": "Arimo",
+    "labelFont": "ARIMO",
+    "labelFontFamily": "Arimo",
+    "roundness": "ROUND_FOUR",
+    "namedColors": {
+      "background": "#ffffff",
+      "surface": "#ffffff",
+      "on_surface": "#141414",
+      "on_background": "#141414",
+      "primary": "#e11d48",
+      "primary_container": "#e11d48",
+      "on_primary": "#ffffff",
+      "secondary": "#111111",
+      "secondary_container": "#111111",
+      "on_secondary": "#ffffff"
+    }
+  }
+}

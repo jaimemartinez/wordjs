@@ -1,395 +1,228 @@
-@import url('https://fonts.googleapis.com/css2?family=Cormorant:wght@300;400;500;600;700&family=Montserrat:wght@300;400;500;600;700&display=swap');
-
-/* =========================================
-   THEME: NOIR & OR (Luxury / Elegant)
-   Concept: Gold on warm charcoal. Thin gold
-   hairlines, generous whitespace, large
-   light-weight serif headings, restrained
-   gold accent. Refined and premium.
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme noir-or */
 :root {
-  /* --- COLOR PALETTE: Gold on Charcoal --- */
-  --wjs-color-primary: #D4A24C;
-  /* Gold */
-  --wjs-color-primary-dark: #B8862F;
-  /* Antique Gold */
-
-  /* --- COLOR SEMANTICS --- */
-  --wjs-bg-canvas: #14110F;
-  /* the public header reads this; without it a dark theme paints a literal white bar */
-  --wjs-bg-surface-glass: rgba(20, 17, 15, 0.85);
-  /* Warm near-black */
-  --wjs-bg-surface: #1C1917;
-  /* Raised charcoal */
-
-  --wjs-color-text-main: #F5F1EA;
-  /* Warm ivory */
-  --wjs-color-text-muted: #A8A29E;
-  /* Stone */
-
-  --wjs-border-subtle: #2A2520;
-  /* Hairline border */
-
-  /* --- NAVIGATION CONFIG --- */
-  --wjs-nav-font-family: 'Montserrat', sans-serif;
-  --wjs-nav-font-size: 0.8125rem;
-  --wjs-nav-font-weight: 500;
-  --wjs-nav-text-transform: uppercase;
-  --wjs-nav-letter-spacing: 0.22em;
-  /* Wide luxury tracking */
-
-  --wjs-nav-color: #F5F1EA;
-  --wjs-nav-color-hover: #D4A24C;
-  /* Gold on hover */
-  --wjs-nav-transition: color 0.3s ease;
-
-  --wjs-logo-color: #D4A24C;
-
-  /* --- FOOTER CONFIG --- */
-  --wjs-footer-bg: #0E0C0A;
-  /* Deepest charcoal */
-  --wjs-footer-text-heading: #F5F1EA;
-  --wjs-footer-text-body: #A8A29E;
-  --wjs-footer-text-hover: #D4A24C;
-  --wjs-footer-icon-bg: #221E1A;
-  --wjs-footer-icon-color: #F5F1EA;
-
-  /* --- TYPOGRAPHY --- */
-  --wjs-font-family-base: 'Montserrat', sans-serif;
-
-  /* --- WordJS UI framework tokens --- */
-  --wjs-color-secondary: #8A6D3B;
-  --wjs-color-secondary-dark: #6B5429;
-  --wjs-color-accent: #E6C77A;
-  --wjs-color-success: #5BB97E;
-  --wjs-color-danger: #E26D6D;
-  --wjs-color-warning: #E0A93D;
-  --wjs-color-info: #6FB4D6;
-  --wjs-color-light: #F5F1EA;
-  --wjs-color-dark: #0E0C0A;
-  /* --- WordJS UI on-color tokens (auto: max-contrast text on each solid color) --- */
-  --wjs-color-on-primary: #161616;
-  --wjs-color-on-secondary: #ffffff;
-  --wjs-color-on-success: #161616;
-  --wjs-color-on-danger: #161616;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #161616;
-  --wjs-color-on-light: #161616;
-  --wjs-color-on-dark: #ffffff;
-
-  --wjs-bg-muted: #221E1A;
-  --wjs-color-heading: #F5F1EA;
-  --wjs-color-link: #D4A24C;
-  --wjs-color-link-hover: #E6C77A;
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(212, 162, 76, 0.3);
-
-  --wjs-font-family-heading: 'Cormorant', serif;
-  --wjs-font-family-mono: 'SFMono-Regular', Menlo, Consolas, monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.75;
-  --wjs-heading-weight: 400;
-  --wjs-heading-line-height: 1.15;
-  --wjs-h1: 3rem;
-  --wjs-h2: 2.25rem;
-  --wjs-h3: 1.75rem;
-  --wjs-h4: 1.375rem;
-  --wjs-h5: 1.125rem;
-  --wjs-h6: 0.9375rem;
-
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 1px;
-  --wjs-radius: 2px;
-  --wjs-radius-md: 2px;
+  --wjs-bg-canvas: #14110f;
+  --wjs-bg-surface: #221f1d;
+  --wjs-bg-surface-raised: #2e2b29;
+  --wjs-color-primary: #d4a24c;
+  --wjs-color-primary-dark: #d4a24c;
+  --wjs-color-on-primary: #0b0b0b;
+  --wjs-color-accent: #6b5836;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f5f5f4;
+  --wjs-color-text-muted: #a09e9d;
+  --wjs-color-heading: #f5f5f4;
+  --wjs-color-link: #d4a24c;
+  --wjs-color-link-hover: #6b5836;
+  --wjs-border-subtle: #3d3a38;
+  --wjs-outline: #6a6866;
+  --wjs-outline-variant: #363331;
+  --wjs-focus-ring: #d4a24c;
+  --wjs-color-secondary: #6b5836;
+  --wjs-color-secondary-dark: #6b5836;
+  --wjs-color-on-secondary: #0b0b0b;
+  --wjs-font-family-heading: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-base: 'Raleway', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 4px;
   --wjs-radius-lg: 4px;
-  --wjs-radius-pill: 999px;
-  --wjs-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --wjs-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
-  --wjs-shadow-md: 0 8px 28px rgba(0, 0, 0, 0.55);
-  --wjs-shadow-lg: 0 16px 40px rgba(0, 0, 0, 0.6);
-}
-
-/* =========================================
-   VISUAL OVERRIDES
-   ========================================= */
-
-body {
-  background-color: var(--wjs-bg-canvas) !important;
-  color: var(--wjs-color-text-main) !important;
-  font-family: var(--wjs-font-family-base) !important;
-  font-weight: 300;
-  line-height: 1.75;
-  letter-spacing: 0.01em;
-}
-
-/* GLOBAL: Minimal radius + one coherent shadow scale */
-* {
-  border-radius: 2px !important;
-  box-shadow: none !important;
-}
-
-/* Header: Charcoal with a single gold hairline rule */
-header {
-  background-color: var(--wjs-bg-canvas) !important;
-  border-bottom: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: inset 0 -1px 0 0 rgba(212, 162, 76, 0.25) !important;
-}
-
-header[class*='fixed'] {
-  background-color: rgba(20, 17, 15, 0.92) !important;
-  backdrop-filter: blur(10px) saturate(120%) !important;
-  border-bottom: 1px solid rgba(212, 162, 76, 0.25) !important;
-}
-
-/* Logo: Gold serif wordmark, light and elegant */
-.wjs-header-logo {
-  color: var(--wjs-logo-color) !important;
-  font-family: 'Cormorant', serif !important;
-  font-weight: 500 !important;
-  font-size: 1.6rem !important;
-  letter-spacing: 0.06em;
-}
-
-/* Nav Links: Uppercase, wide-tracked, gold on hover */
-.wjs-header-nav a {
-  font-family: var(--wjs-nav-font-family) !important;
-  font-size: var(--wjs-nav-font-size) !important;
-  font-weight: var(--wjs-nav-font-weight) !important;
-  color: var(--wjs-nav-color) !important;
-  text-transform: var(--wjs-nav-text-transform) !important;
-  letter-spacing: var(--wjs-nav-letter-spacing) !important;
-  transition: var(--wjs-nav-transition) !important;
-  text-decoration: none !important;
-  padding: 0 !important;
-}
-
-.wjs-header-nav a:hover {
-  color: var(--wjs-nav-color-hover) !important;
-}
-
-.wjs-header-nav a:focus-visible {
-  outline: 1px solid var(--wjs-color-primary) !important;
-  outline-offset: 4px !important;
-}
-
-/* Content: Large, light, elegant serif headings */
-h1,
-h2,
-h3 {
-  font-family: 'Cormorant', serif !important;
-  font-weight: 400 !important;
-  letter-spacing: 0.005em;
-  line-height: 1.15 !important;
-  color: var(--wjs-color-text-main) !important;
-}
-
-h1 {
-  font-weight: 500 !important;
-}
-
-/* Cards: Charcoal surface, thin border, soft depth */article {
-  background: var(--wjs-bg-surface) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
-  transition: border-color 0.3s ease, box-shadow 0.3s ease !important;
-}article:hover {
-  border-color: rgba(212, 162, 76, 0.45) !important;
-  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55) !important;
-}
-
-/* Footer: Deepest charcoal with a gold hairline top */
-footer {
-  background-color: var(--wjs-footer-bg) !important;
-  color: var(--wjs-footer-text-body) !important;
-  border-top: 1px solid rgba(212, 162, 76, 0.22) !important;
-}
-
-footer h3,
-footer h4 {
-  color: var(--wjs-footer-text-heading) !important;
-  font-family: 'Cormorant', serif !important;
-  font-weight: 500 !important;
-  text-transform: none;
-  letter-spacing: 0.04em;
-}
-
-footer a {
-  color: var(--wjs-footer-text-body) !important;
-  text-decoration: none !important;
-  transition: color 0.3s ease !important;
-}
-
-footer a:hover {
-  color: var(--wjs-footer-text-hover) !important;
-}
-
-/* Icons: Subtle inset, gold wash on hover */
-footer .w-10 {
-  background-color: var(--wjs-footer-icon-bg) !important;
-  color: var(--wjs-footer-icon-color) !important;
-  border: 1px solid var(--wjs-border-subtle) !important;
-  transition: background-color 0.3s ease, color 0.3s ease !important;
-}
-
-footer .w-10:hover {
-  background-color: var(--wjs-color-primary) !important;
-  color: #14110F !important;
-}
-
-/* ===== Mobile (auto responsive pass) ===== */
-@media (max-width: 767.98px) {
-
-  /* Nav links (drawer): 0.22em tracking + uppercase can push long labels
-     past a 375px viewport. Tighten the tracking (still airy, still luxury)
-     and let long items wrap instead of widening the drawer. !important is
-     needed because the desktop rule uses it; scoped to the nav only. */
-  .wjs-header-nav a {
-    letter-spacing: 0.12em !important;
-    white-space: normal !important;
-    overflow-wrap: break-word;
-  }
-
-  /* Accordion headers + tab buttons: uppercase 0.16em-tracked labels get
-     cramped on narrow screens — reduce tracking, guarantee wrapping. */
-  .wp-block-accordion__header,
-  .wp-block-tabs__tab {
-    letter-spacing: 0.1em;
-    white-space: normal;
-  }
-
-  /* Tab strip: if several tracked uppercase tabs exceed the viewport,
-     wrap them onto extra rows (inert unless the block lays tabs out
-     with flex, which it does). */
-  .wp-block-tabs__list {
-    flex-wrap: wrap;
-  }
-
-  /* CTA + search actions: uppercase with 0.14–0.18em tracking — tighten
-     so button labels fit narrow layouts and wrap rather than overflow. */
-  .wp-block-cta-banner__button,
-  .wp-block-search__button {
-    letter-spacing: 0.1em;
-    white-space: normal;
-  }
-}
-
-/* ══ BLOCK TOKENS ═══════════════════════════════════════════════════════════════════════
- * Lifted from this theme's former `.wp-block-*` rules. wordjs-ui.css owns the block RULES;
- * a theme owns only the VALUES, so a single block can still override any of them.
- * ════════════════════════════════════════════════════════════════════════════════════ */
-:root {
-  --wjs-card-bg: var(--wjs-bg-surface);
-  --wjs-card-border-width: 1px;
-  --wjs-card-border-color: var(--wjs-border-subtle);
-  --wjs-card-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --wjs-card-hover-border-color: rgba(212, 162, 76, 0.45);
-  --wjs-card-hover-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
-  --wjs-accordion-border-width: 1px;
-  --wjs-accordion-border-color: var(--wjs-border-subtle);
-  --wjs-accordion-bg: var(--wjs-bg-surface);
-  --wjs-accordion-header-bg: var(--wjs-bg-surface);
-  --wjs-accordion-header-color: var(--wjs-color-primary);
-  --wjs-accordion-header-border-width: 1px;
-  --wjs-accordion-header-border-color: var(--wjs-border-subtle);
-  --wjs-accordion-header-family: 'Montserrat', sans-serif;
-  --wjs-accordion-header-weight: 500;
-  --wjs-accordion-header-transform: uppercase;
-  --wjs-accordion-header-tracking: 0.16em;
-  --wjs-accordion-header-size: 0.8125rem;
-  --wjs-accordion-panel-bg: var(--wjs-bg-canvas);
-  --wjs-accordion-panel-color: var(--wjs-color-text-muted);
-  --wjs-tabs-list-border-width: 1px;
-  --wjs-tabs-list-border-color: var(--wjs-border-subtle);
-  --wjs-tabs-color: var(--wjs-color-text-muted);
-  --wjs-tabs-family: 'Montserrat', sans-serif;
-  --wjs-tabs-weight: 500;
+  --wjs-radius-pill: 4px;
+  --wjs-hero-bg: #14110f;
+  --wjs-hero-gradient-from: #14110f;
+  --wjs-hero-gradient-to: #14110f;
+  --wjs-hero-color: #f5f5f4;
+  --wjs-hero-title-color: #d4a24c;
+  --wjs-hero-subtitle-color: #f5f5f4;
+  --wjs-hero-button-outline-color: #d4a24c;
+  --wjs-hero-button-outline-border: #d4a24c;
+  --wjs-bg-surface-glass: rgba(20,17,15,0.94);
+  --wjs-bg-footer: #100e0c;
+  --wjs-color-text-footer-main: #efe9de;
+  --wjs-color-text-footer-dim: #8d8474;
+  --wjs-color-text-footer-heading: #d4a24c;
+  --wjs-hero-height: 42vh;
+  --wjs-hero-pad: 5.5rem 4rem;
+  --wjs-hero-measure: 34rem;
+  --wjs-hero-justify: flex-start;
+  --wjs-hero-text-align: left;
+  --wjs-hero-actions-justify: flex-start;
+  --wjs-hero-radius: 0;
+  --wjs-hero-shadow: none;
+  --wjs-hero-title-size: clamp(2.25rem, 4.6vw, 3.6rem);
+  --wjs-hero-title-weight: 400;
+  --wjs-hero-title-tracking: 0.012em;
+  --wjs-hero-subtitle-size: 1rem;
+  --wjs-hero-subtitle-opacity: 0.7;
+  --wjs-hero-button-bg: transparent;
+  --wjs-hero-button-color: #d4a24c;
+  --wjs-hero-button-radius: 0;
+  --wjs-hero-button-pad: 0.35rem 0;
+  --wjs-hero-button-size: 0.75rem;
+  --wjs-hero-button-weight: 500;
+  --wjs-hero-button-outline-bg: transparent;
+  --wjs-hero-button-outline-hover-bg: transparent;
+  --wjs-button-family: 'Raleway', 'Segoe UI', system-ui, sans-serif;
+  --wjs-button-radius: 0;
+  --wjs-button-transform: uppercase;
+  --wjs-button-tracking: 0.26em;
+  --wjs-button-size: 0.6875rem;
+  --wjs-button-weight: 600;
+  --wjs-button-pad-x: 0;
+  --wjs-button-pad-y: 0.4rem;
+  --wjs-button-bg: transparent;
+  --wjs-button-color: #d4a24c;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-bg: transparent;
+  --wjs-button-hover-color: #f0d9a8;
+  --wjs-button-hover-shadow: none;
+  --wjs-button-hover-transform: none;
+  --wjs-button-border-width: 0;
+  --wjs-card-bg: transparent;
+  --wjs-card-radius: 0;
+  --wjs-card-pad: 0 0 2.75rem;
+  --wjs-card-border-width: 0;
+  --wjs-card-shadow: none;
+  --wjs-card-hover-shadow: none;
+  --wjs-card-hover-transform: none;
+  --wjs-card-hover-bg: transparent;
+  --wjs-card-icon-bg: transparent;
+  --wjs-card-icon-color: #d4a24c;
+  --wjs-card-icon-radius: 0;
+  --wjs-card-icon-size: 2rem;
+  --wjs-card-title-size: 1.6rem;
+  --wjs-card-title-weight: 400;
+  --wjs-card-title-tracking: 0.012em;
+  --wjs-card-desc-size: 0.9375rem;
+  --wjs-card-desc-leading: 2;
+  --wjs-quote-family: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-size: 2.1rem;
+  --wjs-quote-weight: 400;
+  --wjs-quote-bar-width: 0;
+  --wjs-quote-accent: #d4a24c;
+  --wjs-quote-mark-size: 6rem;
+  --wjs-quote-mark-opacity: 0.2;
+  --wjs-quote-cite-size: 0.6875rem;
+  --wjs-stats-bg: transparent;
+  --wjs-stats-border-width: 0;
+  --wjs-stats-radius: 0;
+  --wjs-stats-shadow: none;
+  --wjs-stats-align: left;
+  --wjs-stats-pad: 0 0 0 2rem;
+  --wjs-stats-value-family: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-stats-value-size: 3.4rem;
+  --wjs-stats-value-weight: 400;
+  --wjs-stats-label-size: 0.625rem;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.3em;
+  --wjs-tabs-radius: 0;
+  --wjs-tabs-list-radius: 0;
+  --wjs-tabs-list-bg: transparent;
+  --wjs-tabs-size: 0.6875rem;
   --wjs-tabs-transform: uppercase;
-  --wjs-tabs-tracking: 0.16em;
-  --wjs-tabs-size: 0.8125rem;
-  --wjs-tabs-active-color: var(--wjs-color-primary);
-  --wjs-tabs-active-border-width: 1px;
-  --wjs-tabs-active-border-color: var(--wjs-color-primary);
-  --wjs-tabs-panel-bg: var(--wjs-bg-surface);
-  --wjs-tabs-panel-border-width: 0;
-  --wjs-tabs-panel-border-color: transparent;
-  --wjs-video-border-width: 1px;
-  --wjs-video-border-color: rgba(212, 162, 76, 0.35);
-  --wjs-video-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
-  --wjs-audio-bg: var(--wjs-bg-surface);
-  --wjs-audio-border-width: 1px;
-  --wjs-audio-border-color: var(--wjs-border-subtle);
-  --wjs-audio-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --wjs-pricing-bg: var(--wjs-bg-surface);
-  --wjs-pricing-border-width: 1px;
-  --wjs-pricing-border-color: var(--wjs-border-subtle);
-  --wjs-pricing-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --wjs-pricing-name-transform: none;
-  --wjs-pricing-name-tracking: 0.03em;
-  --wjs-pricing-name-color: var(--wjs-color-text-main);
-  --wjs-pricing-highlight-bg: linear-gradient(160deg, #1C1917 0%, #221E1A 100%);
-  --wjs-pricing-highlight-color: var(--wjs-color-text-main);
-  --wjs-pricing-highlight-scale: 1;
-  --wjs-pricing-highlight-border-width: 1px;
-  --wjs-pricing-highlight-border-color: var(--wjs-color-primary);
-  --wjs-pricing-highlight-shadow: 0 0 0 1px rgba(212, 162, 76, 0.35), 0 16px 40px rgba(0, 0, 0, 0.6);
-  --wjs-pricing-highlight-name-color: var(--wjs-color-primary);
-  --wjs-testimonial-bg: var(--wjs-bg-surface);
-  --wjs-testimonial-border-width: 2px;
-  --wjs-testimonial-border-color: var(--wjs-color-primary);
-  --wjs-testimonial-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --wjs-testimonial-mark-color: var(--wjs-color-primary);
-  --wjs-testimonial-mark-family: 'Cormorant', serif;
-  --wjs-cta-bg: linear-gradient(160deg, #1C1917 0%, #14110F 100%);
-  --wjs-cta-border-width: 1px;
-  --wjs-cta-border-color: rgba(212, 162, 76, 0.3);
-  --wjs-cta-title-family: 'Cormorant', serif;
-  --wjs-cta-title-weight: 400;
-  --wjs-cta-title-transform: none;
-  --wjs-cta-title-tracking: 0.01em;
-  --wjs-cta-title-color: var(--wjs-color-text-main);
-  --wjs-cta-button-bg: var(--wjs-color-primary);
-  --wjs-cta-button-color: #14110F;
-  --wjs-cta-button-transform: uppercase;
-  --wjs-cta-button-tracking: 0.18em;
-  --wjs-cta-button-family: 'Montserrat', sans-serif;
-  --wjs-cta-button-weight: 600;
-  --wjs-cta-button-size: 0.8125rem;
-  --wjs-cta-button-border-width: 1px;
-  --wjs-cta-button-border-color: var(--wjs-color-primary);
-  --wjs-cta-button-hover-bg: transparent;
-  --wjs-cta-button-hover-color: var(--wjs-color-primary);
-  --wjs-posts-bg: var(--wjs-bg-surface);
-  --wjs-posts-border-width: 1px;
-  --wjs-posts-border-color: var(--wjs-border-subtle);
-  --wjs-posts-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --wjs-posts-hover-border-color: rgba(212, 162, 76, 0.45);
-  --wjs-posts-hover-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
-  --wjs-catposts-heading-family: 'Cormorant', serif;
-  --wjs-catposts-heading-weight: 500;
-  --wjs-catposts-heading-transform: none;
-  --wjs-catposts-heading-tracking: 0.02em;
-  --wjs-catposts-heading-color: var(--wjs-color-text-main);
-  --wjs-catposts-heading-border-width: 1px;
-  --wjs-catposts-heading-border-color: rgba(212, 162, 76, 0.3);
-  --wjs-catposts-heading-pad: 10px;
-  --wjs-catposts-border-color: var(--wjs-border-subtle);
-  --wjs-catposts-link-weight: 400;
-  --wjs-catposts-link-color: var(--wjs-color-text-main);
-  --wjs-catposts-link-hover-color: var(--wjs-color-primary);
-  --wjs-search-input-bg: var(--wjs-bg-surface);
-  --wjs-search-input-color: var(--wjs-color-text-main);
-  --wjs-search-input-border-width: 1px;
-  --wjs-search-input-border-color: var(--wjs-border-subtle);
-  --wjs-search-placeholder-color: var(--wjs-color-text-muted);
-  --wjs-search-focus-color: var(--wjs-color-primary);
-  --wjs-search-focus-ring: 0 0 0 1px rgba(212, 162, 76, 0.4);
-  --wjs-search-button-bg: var(--wjs-color-primary-dark);
-  --wjs-search-button-color: #14110F;
+  --wjs-tabs-tracking: 0.26em;
+  --wjs-tabs-active-shadow: none;
+  --wjs-tabs-active-bg: transparent;
+  --wjs-tabs-active-color: #d4a24c;
+  --wjs-tabs-active-border-color: #d4a24c;
+  --wjs-accordion-radius: 0;
+  --wjs-accordion-item-radius: 0;
+  --wjs-accordion-item-bg: transparent;
+  --wjs-accordion-shadow: none;
+  --wjs-accordion-header-family: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-accordion-header-size: 1.15rem;
+  --wjs-accordion-header-weight: 400;
+  --wjs-accordion-header-radius: 0;
+  --wjs-accordion-icon-color: #d4a24c;
+  --wjs-accordion-separator-width: 1px;
+  --wjs-accordion-pad: 1.75rem 0;
+  --wjs-search-input-bg: transparent;
+  --wjs-search-input-radius: 0;
+  --wjs-search-button-radius: 0;
+  --wjs-search-button-bg: transparent;
+  --wjs-search-button-color: #d4a24c;
   --wjs-search-button-transform: uppercase;
-  --wjs-search-button-tracking: 0.14em;
-  --wjs-search-button-family: 'Montserrat', sans-serif;
-  --wjs-search-button-weight: 600;
-  --wjs-search-button-border-width: 1px;
-  --wjs-search-button-border-color: var(--wjs-color-primary-dark);
+  --wjs-search-button-tracking: 0.26em;
+  --wjs-posts-radius: 0;
+  --wjs-posts-shadow: none;
+  --wjs-posts-bg: transparent;
+  --wjs-posts-border-width: 0;
+  --wjs-posts-hover-shadow: none;
+  --wjs-posts-hover-transform: none;
+  --wjs-posts-thumb-radius: 0;
+  --wjs-posts-thumb-height: 22rem;
+  --wjs-posts-title-size: 1.7rem;
+  --wjs-posts-title-weight: 400;
+  --wjs-posts-gap: 4rem;
+  --wjs-posts-pad: 0;
+  --wjs-pricing-radius: 0;
+  --wjs-pricing-shadow: none;
+  --wjs-pricing-bg: transparent;
+  --wjs-pricing-border-width: 0;
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-shadow: none;
+  --wjs-pricing-highlight-bg: transparent;
+  --wjs-pricing-name-transform: uppercase;
+  --wjs-pricing-name-tracking: 0.3em;
+  --wjs-pricing-name-size: 0.625rem;
+  --wjs-pricing-price-family: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-pricing-price-weight: 400;
+  --wjs-pricing-price-size: 3.2rem;
+  --wjs-pricing-button-radius: 0;
+  --wjs-cta-bg: transparent;
+  --wjs-cta-gradient: none;
+  --wjs-cta-radius: 0;
+  --wjs-cta-shadow: none;
+  --wjs-cta-border-width: 0;
+  --wjs-cta-border-color: #3a2f1d;
+  --wjs-cta-pad: 4.5rem 0 0;
+  --wjs-cta-text-align: left;
+  --wjs-cta-title-family: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-cta-title-weight: 400;
+  --wjs-cta-title-size: 2.6rem;
+  --wjs-cta-button-radius: 0;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.26em;
+  --wjs-testimonial-bg: transparent;
+  --wjs-testimonial-radius: 0;
+  --wjs-testimonial-shadow: none;
+  --wjs-testimonial-border-width: 0;
+  --wjs-testimonial-pad: 0;
+  --wjs-testimonial-quote-family: 'EB Garamond', Georgia, 'Times New Roman', serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-quote-size: 1.6rem;
+  --wjs-testimonial-avatar-radius: 0;
+  --wjs-testimonial-mark-color: #d4a24c;
+  --wjs-testimonial-mark-size: 5rem;
+  --wjs-testimonial-role-size: 0.625rem;
+  --wjs-testimonial-role-transform: uppercase;
+  --wjs-testimonial-role-tracking: 0.28em;
+  --wjs-form-input-radius: 0;
+  --wjs-form-input-bg: transparent;
+  --wjs-form-submit-radius: 0;
+  --wjs-form-submit-shadow: none;
+  --wjs-form-label-size: 0.625rem;
+  --wjs-form-label-weight: 600;
+  --wjs-image-radius: 0;
+  --wjs-image-shadow: none;
+  --wjs-social-radius: 0;
+  --wjs-social-bg: transparent;
+  --wjs-social-color: #d4a24c;
 }
+body { line-height: 1.85 }
+h1,h2,h3,h4,h5,h6 { font-weight: 400; letter-spacing: 0.01em }
+.wjs-header-logo { font-family: "EB Garamond",Georgia,"Times New Roman",serif; letter-spacing: 0.36em; text-transform: uppercase }
+footer { font-size: 0.8125rem; letter-spacing: 0.08em; box-shadow: inset 0 2px 0 0#d4a24c }
+.wp-block-hero__title { line-height: 1.08; max-width: 20ch }
+.wp-block-hero__subtitle { max-width: 36ch; font-style: italic }
+.wp-block-hero__actions { margin-top: 2.5rem }
+.wp-block-hero__button { border: 0 solid transparent; border-bottom: 1px solid #d4a24c; box-shadow: none; text-transform: uppercase; letter-spacing: 0.28em }
+.wp-block-card__title { margin-top: 1.25rem }
+.wp-block-card { border-bottom: 1px solid #3a2f1d }
+.wp-block-stats__item { border-left: 1px solid #3a2f1d }
+.wp-block-quote { font-style: italic; padding-left: 0 }
+.wp-block-pricing__plan { border-right: 1px solid #3a2f1d }
+.wp-block-cta-banner { border-top: 1px solid #3a2f1d }
+/* @wjs-generated:end */
+
+/* Noir & Or — generated from a Stitch design system. Edit theme.json, then: wordjs build theme noir-or */

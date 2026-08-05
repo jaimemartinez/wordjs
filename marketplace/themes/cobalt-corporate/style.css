@@ -1,371 +1,284 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;600;700&display=swap');
-
-/* =========================================
-   THEME: COBALT CORPORATE (SaaS Glass Claro)
-   Concept: Corporate SaaS on a pale blue canvas.
-   Frosted-glass panels (white 70% + blur), cobalt
-   #00327d primary, teal/cyan secondaries, Outfit
-   headlines + Inter body, soft blue-tinted shadows,
-   generous 12-16px radii.
-   Converted from the Stitch "SaaS Glass" design.
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme cobalt-corporate */
 :root {
-  /* --- CANONICAL COLORS (from tailwind.config + markup) --- */
-  --wjs-color-primary: #00327d;
-  /* Deep cobalt (design "primary") */
-  --wjs-color-primary-dark: #00419e;
-  /* Hover cobalt (design on-primary-fixed-variant) */
-  --wjs-color-secondary: #00677e;
-  /* Teal (design "secondary") */
-  --wjs-color-secondary-dark: #004e5f;
-  /* Deep teal (design on-secondary-fixed-variant) */
-  --wjs-color-accent: #00d2fd;
-  /* Cyan (design secondary-container) */
-  --wjs-color-success: #16a34a;
-  --wjs-color-danger: #ba1a1a;
-  /* Design "error" */
-  --wjs-color-warning: #f59e0b;
-  --wjs-color-info: #0ea5e9;
-  --wjs-color-light: #f8f9ff;
-  /* Design surface */
-  --wjs-color-dark: #0b1c30;
-  /* Design on-surface */
-
-  /* --- ON-COLORS (max-contrast text per luminance) --- */
-  --wjs-color-on-primary: #ffffff;
-  --wjs-color-on-secondary: #ffffff;
-  --wjs-color-on-accent: #001f27;
-  /* Dark ink on bright cyan (design on-secondary-fixed) */
-  --wjs-color-on-success: #161616;
-  --wjs-color-on-danger: #ffffff;
-  --wjs-color-on-warning: #161616;
-  --wjs-color-on-info: #161616;
-  --wjs-color-on-light: #0b1c30;
-  --wjs-color-on-dark: #ffffff;
-
-  /* --- SURFACES / TEXT / BORDERS --- */
   --wjs-bg-canvas: #f8f9ff;
-  /* Pale blue canvas (design background) */
-  --wjs-bg-surface: #ffffff;
-  --wjs-bg-muted: #eff4ff;
-  /* Design surface-container-low */
-  --wjs-bg-surface-glass: rgba(248, 249, 255, 0.6);
-  /* Frosted header/panels (measured: design bg-surface/60 + blur) */
-  --wjs-bg-footer: #eff4ff;
-  /* Measured footer panel (design surface-container-low) */
-  --wjs-color-text-footer-main: #0b1c30;
-  --wjs-color-text-footer-dim: #434653;
-  --wjs-color-text-main: #0b1c30;
-  --wjs-color-text-muted: #434653;
-  /* Design on-surface-variant */
-  --wjs-color-heading: #0b1c30;
+  --wjs-bg-surface: #f1f2f7;
+  --wjs-bg-surface-raised: #e9eaf0;
+  --wjs-color-primary: #00327d;
+  --wjs-color-primary-dark: #00327d;
+  --wjs-color-on-primary: #ffffff;
+  --wjs-color-accent: #0ea5e9;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #141414;
+  --wjs-color-text-muted: #6b6b6d;
+  --wjs-color-heading: #141414;
   --wjs-color-link: #00327d;
-  --wjs-color-link-hover: #00419e;
-  --wjs-border-subtle: #c3c6d5;
-  /* Design outline-variant */
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(0, 50, 125, 0.3);
-
-  /* --- TYPOGRAPHY (Outfit headlines / Inter body) --- */
-  --wjs-font-family-base: 'Inter', system-ui, -apple-system, sans-serif;
-  --wjs-font-family-heading: 'Outfit', 'Inter', system-ui, sans-serif;
-  --wjs-font-family-mono: ui-monospace, 'SFMono-Regular', Menlo, Consolas, monospace;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.5;
-  /* Measured body 16px/24px */
-  --wjs-heading-weight: 600;
-  --wjs-heading-line-height: 1.15;
-  --wjs-h1: 3rem;
-  /* headline-xl 48px */
-  --wjs-h2: 2rem;
-  /* headline-lg 32px */
-  --wjs-h3: 1.5rem;
-  /* headline-md 24px */
-  --wjs-h4: 1.25rem;
-  --wjs-h5: 1.125rem;
-  --wjs-h6: 1rem;
-  --wjs-h1-tracking: -0.02em;
-  --wjs-h2-tracking: -0.01em;
-
-  /* --- SHAPE / SHADOW (glass language) --- */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 0.25rem;
-  --wjs-radius: 0.5rem;
-  --wjs-radius-md: 0.75rem;
-  --wjs-radius-lg: 1rem;
-  --wjs-radius-pill: 9999px;
-  --wjs-shadow-sm: 0 2px 8px rgba(0, 71, 171, 0.04);
-  --wjs-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
-  /* Design .glass-panel shadow */
-  --wjs-shadow-md: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
-  /* Design .glass-card-hover shadow */
-  --wjs-shadow-lg: 0 24px 60px 0 rgba(0, 71, 171, 0.12);
-
-  /* ── BLOCK TOKENS (derived from the design markup) ─────────────── */
-
-  /* Buttons — hero primary CTA: bg-primary px-8 py-4 rounded-xl,
-     label-md 14px/600/+0.05em, shadow-lg shadow-primary/20 */
-  --wjs-button-bg: #00327d;
-  --wjs-button-color: #ffffff;
-  --wjs-button-family: 'Inter', system-ui, sans-serif;
-  --wjs-button-size: 0.875rem;
-  --wjs-button-weight: 600;
-  --wjs-button-tracking: 0.05em;
-  --wjs-button-radius: 0.75rem;
-  --wjs-button-pad-x: 32px;
-  --wjs-button-pad-y: 16px;
-  --wjs-button-border-width: 0;
-  --wjs-button-border-color: transparent;
-  --wjs-button-shadow: 0 10px 15px -3px rgba(0, 50, 125, 0.2), 0 4px 6px -4px rgba(0, 50, 125, 0.2);
-  --wjs-button-hover-bg: #00419e;
-  --wjs-button-hover-color: #ffffff;
-  --wjs-button-hover-shadow: 0 20px 25px -5px rgba(0, 50, 125, 0.2);
-
-  /* Cards — .glass-panel rounded-2xl p-8 + .glass-card-hover */
-  --wjs-card-bg: rgba(255, 255, 255, 0.7);
-  --wjs-card-border-width: 1px;
-  --wjs-card-border-color: rgba(255, 255, 255, 0.8);
-  --wjs-card-radius: 1rem;
-  --wjs-card-pad: 2rem;
-  --wjs-card-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
-  --wjs-card-title-color: #0b1c30;
-  --wjs-card-title-size: 1.25rem;
-  --wjs-card-title-weight: 500;
-  --wjs-card-title-leading: 1.4;
-  --wjs-card-desc-color: #434653;
-  --wjs-card-icon-bg: rgba(0, 50, 125, 0.1);
-  --wjs-card-icon-color: #00327d;
-  --wjs-card-icon-radius: 0.75rem;
-  --wjs-card-hover-bg: rgba(255, 255, 255, 0.8);
-  --wjs-card-hover-border-color: rgba(255, 255, 255, 0.8);
-  --wjs-card-hover-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
-  --wjs-card-hover-transform: translateY(-4px);
-
-  /* Hero — light canvas hero, left aligned, dark ink text,
-     cobalt CTA + glass secondary CTA */
-  --wjs-hero-bg: transparent;
-  /* Measured: the design hero is transparent — the body aurora shows through */
-  --wjs-hero-pad: 64px 40px;
-  --wjs-hero-color: #0b1c30;
-  --wjs-hero-text-align: left;
-  --wjs-hero-actions-justify: flex-start;
-  --wjs-hero-title-color: #0b1c30;
-  --wjs-hero-title-size: 3rem;
-  --wjs-hero-title-weight: 600;
-  --wjs-hero-title-tracking: -0.02em;
-  --wjs-hero-subtitle-color: #434653;
-  --wjs-hero-subtitle-size: 1.125rem;
-  --wjs-hero-subtitle-opacity: 1;
-  --wjs-hero-radius: 0;
-  --wjs-hero-button-bg: #00327d;
-  --wjs-hero-button-color: #ffffff;
-  --wjs-hero-button-radius: 0.75rem;
-  --wjs-hero-button-pad: 16px 32px;
-  --wjs-hero-button-size: 0.875rem;
-  --wjs-hero-button-weight: 600;
-  --wjs-hero-button-outline-bg: rgba(255, 255, 255, 0.7);
-  --wjs-hero-button-outline-border: rgba(255, 255, 255, 0.8);
+  --wjs-color-link-hover: #0ea5e9;
+  --wjs-border-subtle: #cfd0d5;
+  --wjs-outline: #a1a2a6;
+  --wjs-outline-variant: #d6d7dc;
+  --wjs-focus-ring: #00327d;
+  --wjs-color-secondary: #0ea5e9;
+  --wjs-color-secondary-dark: #0ea5e9;
+  --wjs-color-on-secondary: #ffffff;
+  --wjs-font-family-heading: 'Outfit', 'Segoe UI', system-ui, sans-serif;
+  --wjs-font-family-base: 'Public Sans', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 4px;
+  --wjs-radius-lg: 4px;
+  --wjs-radius-pill: 4px;
+  --wjs-header-offset: 0rem;
+  --wjs-bg-surface-glass: rgba(255, 255, 255, 0.92);
+  --wjs-footer-bg: #00204f;
+  --wjs-footer-text-body: #b9c6dd;
+  --wjs-footer-text-heading: #ffffff;
+  --wjs-color-text-footer-dim: #7f92b3;
+  --wjs-xs: 6px;
+  --wjs-sm: 12px;
+  --wjs-md: 20px;
+  --wjs-lg: 32px;
+  --wjs-xl: 52px;
+  --wjs-2xl: 88px;
+  --wjs-h1: 3.25rem;
+  --wjs-h1-tracking: -0.03em;
+  --wjs-h1-leading: 1.1;
+  --wjs-h2: 2.125rem;
+  --wjs-h2-tracking: -0.02em;
+  --wjs-h3: 1.375rem;
+  --wjs-hero-bg: #f8f9ff;
+  --wjs-hero-gradient-angle: 160deg;
+  --wjs-hero-gradient-from: #ffffff;
+  --wjs-hero-gradient-to: #e8efff;
+  --wjs-hero-color: #141414;
+  --wjs-hero-title-color: #00327d;
+  --wjs-hero-subtitle-color: #141414;
   --wjs-hero-button-outline-color: #00327d;
-  --wjs-hero-button-outline-hover-bg: rgba(255, 255, 255, 0.85);
-
-  /* Pricing — glass panels; highlighted plan keyed on cobalt */
-  --wjs-pricing-accent: #00327d;
-  --wjs-pricing-bg: rgba(255, 255, 255, 0.7);
-  --wjs-pricing-border-width: 1px;
-  --wjs-pricing-border-color: rgba(255, 255, 255, 0.8);
-  --wjs-pricing-radius: 1rem;
-  --wjs-pricing-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
-  --wjs-pricing-name-color: #0b1c30;
-  --wjs-pricing-price-color: #00327d;
-  --wjs-pricing-feature-color: #434653;
-  --wjs-pricing-button-bg: rgba(0, 50, 125, 0.08);
-  --wjs-pricing-button-color: #00327d;
-  --wjs-pricing-button-border-color: rgba(0, 50, 125, 0.15);
-  --wjs-pricing-button-radius: 0.75rem;
-  --wjs-pricing-button-weight: 600;
-  --wjs-pricing-highlight-bg: rgba(255, 255, 255, 0.85);
-  --wjs-pricing-highlight-border-width: 1px;
-  --wjs-pricing-highlight-border-color: #00327d;
-  --wjs-pricing-highlight-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
-  --wjs-pricing-highlight-name-color: #00327d;
-  --wjs-pricing-highlight-button-bg: #00327d;
-  --wjs-pricing-button-on-accent: #ffffff;
-
-  /* Testimonial — big glass panel, italic Outfit quote,
-     giant watermark quote mark at primary/10 */
-  --wjs-testimonial-bg: rgba(255, 255, 255, 0.7);
-  --wjs-testimonial-border-width: 1px;
-  --wjs-testimonial-border-color: rgba(255, 255, 255, 0.8);
-  --wjs-testimonial-radius: 1.5rem;
-  --wjs-testimonial-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
-  --wjs-testimonial-quote-family: 'Outfit', system-ui, sans-serif;
-  --wjs-testimonial-quote-style: italic;
-  --wjs-testimonial-quote-color: #0b1c30;
-  --wjs-testimonial-quote-size: 1.5rem;
-  --wjs-testimonial-mark-color: #00327d;
-  --wjs-testimonial-mark-opacity: 0.1;
-  --wjs-testimonial-mark-size: 5rem;
-  --wjs-testimonial-author-color: #0b1c30;
-  --wjs-testimonial-role-color: #434653;
-
-  /* Blockquote */
-  --wjs-quote-accent: #00327d;
-  --wjs-quote-color: #0b1c30;
-  --wjs-quote-style: italic;
-  --wjs-quote-cite-color: #434653;
-
-  /* Search — inheritance source for all inputs: glass field,
-     cobalt pill button */
-  --wjs-search-input-bg: rgba(255, 255, 255, 0.7);
+  --wjs-hero-button-outline-border: #00327d;
+  --wjs-hero-height: 66vh;
+  --wjs-hero-pad: 4rem 2rem;
+  --wjs-hero-justify: center;
+  --wjs-hero-text-align: center;
+  --wjs-hero-measure: 52rem;
+  --wjs-hero-border-width: 1px;
+  --wjs-hero-border-color: #dbe4f5;
+  --wjs-hero-radius: 18px;
+  --wjs-hero-shadow: 0 24px 60px rgba(0, 50, 125, 0.10);
+  --wjs-hero-actions-justify: center;
+  --wjs-hero-title-size: clamp(2.25rem, 5vw, 3.4rem);
+  --wjs-hero-title-tracking: -0.03em;
+  --wjs-hero-title-weight: 700;
+  --wjs-hero-subtitle-size: 1.0625rem;
+  --wjs-hero-subtitle-opacity: 0.72;
+  --wjs-hero-button-pad: 14px 26px;
+  --wjs-hero-button-radius: 10px;
+  --wjs-hero-button-size: 0.9375rem;
+  --wjs-hero-button-weight: 600;
+  --wjs-hero-button-outline-hover-bg: rgba(0, 50, 125, 0.08);
+  --wjs-card-bg: #ffffff;
+  --wjs-card-border-width: 1px;
+  --wjs-card-border-color: #e2e8f5;
+  --wjs-card-radius: 14px;
+  --wjs-card-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --wjs-card-pad: 1.75rem;
+  --wjs-card-hover-bg: #ffffff;
+  --wjs-card-hover-border-color: #c9d8f2;
+  --wjs-card-hover-transform: translateY(-4px);
+  --wjs-card-hover-shadow: 0 18px 40px rgba(0, 50, 125, 0.12);
+  --wjs-card-title-size: 1.0625rem;
+  --wjs-card-title-weight: 600;
+  --wjs-card-icon-radius: 10px;
+  --wjs-card-icon-bg: #e8efff;
+  --wjs-card-icon-color: #00327d;
+  --wjs-button-radius: 10px;
+  --wjs-button-pad-x: 24px;
+  --wjs-button-pad-y: 12px;
+  --wjs-button-size: 0.9375rem;
+  --wjs-button-weight: 600;
+  --wjs-button-tracking: 0;
+  --wjs-button-transform: none;
+  --wjs-button-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+  --wjs-button-hover-transform: translateY(-1px);
+  --wjs-button-hover-shadow: 0 10px 24px rgba(0, 50, 125, 0.18);
+  --wjs-search-input-bg: #ffffff;
+  --wjs-search-input-border-color: #dbe4f5;
   --wjs-search-input-border-width: 1px;
-  --wjs-search-input-border-color: #c3c6d5;
-  --wjs-search-input-radius: 0.75rem;
-  --wjs-search-input-pad: 12px 16px;
-  --wjs-search-input-color: #0b1c30;
-  --wjs-search-placeholder-color: #737784;
-  --wjs-search-focus-color: #00327d;
-  --wjs-search-focus-ring: 0 0 0 3px rgba(0, 50, 125, 0.15);
-  --wjs-search-button-bg: #00327d;
-  --wjs-search-button-color: #ffffff;
-  --wjs-search-button-radius: 0.75rem;
-  --wjs-search-button-weight: 600;
-  --wjs-search-button-tracking: 0.05em;
-
-  /* Accordion — glass items, cobalt headers */
-  --wjs-accordion-bg: rgba(255, 255, 255, 0.7);
-  --wjs-accordion-border-width: 1px;
-  --wjs-accordion-border-color: rgba(255, 255, 255, 0.8);
-  --wjs-accordion-radius: 0.75rem;
-  --wjs-accordion-header-bg: transparent;
-  --wjs-accordion-header-color: #00327d;
-  --wjs-accordion-header-weight: 600;
-  --wjs-accordion-panel-bg: transparent;
-  --wjs-accordion-panel-color: #434653;
-
-  /* Posts grid — glass cards */
-  --wjs-posts-bg: rgba(255, 255, 255, 0.7);
-  --wjs-posts-border-width: 1px;
-  --wjs-posts-border-color: rgba(255, 255, 255, 0.8);
-  --wjs-posts-radius: 1rem;
-  --wjs-posts-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
-  --wjs-posts-hover-shadow: 0 12px 40px 0 rgba(0, 71, 171, 0.08);
-  --wjs-posts-title-color: #0b1c30;
-
-  /* CTA banner — cobalt→teal gradient (the hero's gradient text motif) */
+  --wjs-search-input-radius: 10px;
+  --wjs-search-button-radius: 10px;
+  --wjs-quote-style: normal;
+  --wjs-quote-bar-width: 3px;
+  --wjs-quote-accent: #0ea5e9;
+  --wjs-stats-bg: #ffffff;
+  --wjs-stats-border-width: 1px;
+  --wjs-stats-border-color: #e2e8f5;
+  --wjs-stats-radius: 14px;
+  --wjs-stats-shadow: 0 1px 2px rgba(16, 24, 40, 0.06);
+  --wjs-stats-value-color: #00327d;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.1em;
+  --wjs-stats-label-size: 0.75rem;
+  --wjs-tabs-radius: 10px;
+  --wjs-tabs-list-radius: 12px;
+  --wjs-tabs-list-bg: #eef3fd;
+  --wjs-tabs-list-pad: 4px;
+  --wjs-tabs-active-bg: #ffffff;
+  --wjs-tabs-active-shadow: 0 1px 2px rgba(16, 24, 40, 0.10);
+  --wjs-tabs-transform: none;
+  --wjs-accordion-radius: 14px;
+  --wjs-accordion-item-radius: 12px;
+  --wjs-accordion-item-border-color: #e2e8f5;
+  --wjs-accordion-header-transform: none;
+  --wjs-accordion-shadow: none;
+  --wjs-cta-radius: 18px;
   --wjs-cta-bg: #00327d;
-  --wjs-cta-gradient: linear-gradient(90deg, #00327d, #00677e);
-  --wjs-cta-title-color: #ffffff;
-  --wjs-cta-radius: 1rem;
-  --wjs-cta-button-bg: #ffffff;
-  --wjs-cta-button-color: #00327d;
-  --wjs-cta-button-radius: 0.75rem;
-  --wjs-cta-button-weight: 600;
-
-  /* Hero grid pattern (design .bg-grid-pattern) via the bg-image token */
-  --wjs-hero-bg-image: linear-gradient(to right, rgba(0, 50, 125, 0.05) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(0, 50, 125, 0.05) 1px, transparent 1px);
+  --wjs-cta-color: #ffffff;
+  --wjs-cta-button-radius: 10px;
+  --wjs-cta-button-transform: none;
+  --wjs-pricing-radius: 16px;
+  --wjs-pricing-border-color: #e2e8f5;
+  --wjs-pricing-highlight-border-color: #00327d;
+  --wjs-pricing-highlight-scale: 1.04;
+  --wjs-pricing-button-radius: 10px;
 }
-
-/* =========================================
-   SITE CHROME (no !important)
-   ========================================= */
-
-/* Header: frosted glass bar (bg driven by --wjs-bg-surface-glass) */
-header {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.4);
-}
-
-.wjs-header-logo span {
-  font-family: 'Outfit', system-ui, sans-serif;
-  font-weight: 700;
-  color: #00327d;
-}
-
-.wjs-header-nav a {
-  font-family: 'Inter', system-ui, sans-serif;
-  font-size: 0.875rem;
-  font-weight: 600;
-  letter-spacing: 0.05em;
-  color: #434653;
-  padding: 4px 8px;
-  border-radius: 0.25rem;
-  transition: color 0.3s ease, background-color 0.3s ease;
-}
-
-.wjs-header-nav a:hover {
-  color: #00327d;
-  background-color: rgba(0, 50, 125, 0.06);
-}
-
-/* Footer: pale panel (design surface-container-low, rounded top) */
-footer {
-  border-top-left-radius: 0.75rem;
-  border-top-right-radius: 0.75rem;
-}
-
-footer h3 {
-  font-family: 'Outfit', system-ui, sans-serif;
-  color: #00327d;
-}
-
-footer h4 {
-  font-family: 'Outfit', system-ui, sans-serif;
-  color: #0b1c30;
-}
-
-footer a {
-  font-size: 0.75rem;
-  /* Measured footer links 12px */
-  transition: color 0.3s ease, opacity 0.3s ease;
-}
-
-/* ===== Mobile fit (design's compact nav) ===== */
+body { line-height: 1.65 }
+.wjs-header-nav { gap: 2rem; font-size: 0.9375rem; font-weight: 500; letter-spacing: 0 }
+.wjs-header-logo { font-weight: 700; letter-spacing: -0.02em }
+footer { margin-top: 0; padding-top: 4rem; padding-bottom: 1.75rem; border-top-width: 0; font-size: 0.9375rem }
+.wp-block-hero__subtitle { max-width: 36rem; margin-left: auto; margin-right: auto }
+.wp-block-card__title { letter-spacing: -0.01em; line-height: 1.35 }
+h1,h2,h3,h4,h5,h6 { letter-spacing: -0.02em }
 @media (max-width: 767.98px) {
+  .wp-block-hero { padding: 3rem 1.25rem }
+}
+/* @wjs-generated:end */
 
-  .wjs-header-logo span {
-    font-size: 1.25rem;
+/* Cobalt Corporate — generated from a Stitch design system. Edit theme.json, then: wordjs build theme cobalt-corporate */
+
+/* =====================================================================
+   CHROME FINISH — hand-written, outside the generated block on purpose.
+   Targets the composable-chrome hook classes (.wjs-chrome-*), the
+   documented styling surface for a theme's chrome/*.json composition
+   (documentation/themes.md, "Composable chrome"). No !important: the
+   theme sheet is UNLAYERED and Tailwind utilities live in
+   @layer utilities, so these rules already win the cascade.
+   ===================================================================== */
+
+/* --- Masthead: a solid white bar PINNED to the top of the viewport. --
+   sticky (not fixed) keeps the header in flow, so no page ever slides
+   underneath it and no scroll listener is needed on the server render. */
+.wjs-chrome-header {
+  position: sticky;
+  top: 0;
+  padding: 0;
+  background: #ffffff;
+  box-shadow: 0 1px 0 #e5eaf5, 0 8px 24px rgba(16, 24, 40, 0.05);
+  border-bottom: 0;
+}
+.wjs-chrome-header .wjs-header-container {
+  padding-top: 0.875rem;
+  padding-bottom: 0.875rem;
+}
+.wjs-chrome-header .wjs-header-logo span {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--wjs-color-primary);
+}
+.wjs-header-nav a {
+  color: #3f4a5c;
+  padding: 0.45rem 0.65rem;
+  border-radius: 8px;
+  transition: color 0.15s ease, background-color 0.15s ease;
+}
+.wjs-header-nav a:hover {
+  color: var(--wjs-color-primary);
+  background-color: #eef3fd;
+}
+
+/* The one call to action in the masthead. */
+.wjs-chrome-header .wjs-chrome-button {
+  border-radius: 10px;
+  padding: 0.625rem 1.25rem;
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(16, 24, 40, 0.08);
+  transition: transform 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+}
+.wjs-chrome-header .wjs-chrome-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 24px rgba(0, 50, 125, 0.22);
+}
+
+/* --- Footer: four columns of links, then a quiet legal band. --------- */
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  gap: 2.5rem;
+  align-items: start;
+}
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child > .wjs-chrome-row {
+  display: block;
+  width: auto;
+}
+.wjs-chrome-footer .wjs-chrome-site-title a {
+  font-family: var(--wjs-font-family-heading);
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--wjs-footer-text-heading);
+}
+.wjs-chrome-footer .wjs-chrome-site-title span { max-width: 22rem; opacity: 0.75; }
+.wjs-chrome-footer .wjs-chrome-nav-vertical { gap: 0.65rem; }
+.wjs-chrome-footer .wjs-chrome-search input {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.18);
+  color: #ffffff;
+}
+.wjs-chrome-footer .wjs-chrome-search input::placeholder { color: #7f92b3; }
+.wjs-chrome-footer .wjs-chrome-socials a {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+}
+
+.wjs-chrome-footer .wjs-chrome-spacer {
+  display: block;
+  width: 100%;
+  height: 2.5rem;
+}
+/* The legal band: same blocks, read as links rather than as buttons. */
+.wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:last-child {
+  padding-top: 1.5rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.14);
+  font-size: 0.8125rem;
+  color: var(--wjs-color-text-footer-dim);
+}
+.wjs-chrome-footer .wjs-chrome-button {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  font-size: 0.8125rem;
+  font-weight: 400;
+  color: var(--wjs-color-text-footer-dim);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.wjs-chrome-footer .wjs-chrome-button:hover {
+  background: transparent;
+  color: #ffffff;
+}
+.wjs-chrome-footer .wjs-chrome-row .wjs-chrome-row { gap: 1.25rem; }
+
+@media (max-width: 1023.98px) {
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2rem;
   }
-
-  /* Drawer nav links may carry long labels — let them wrap */
-  .wjs-header-nav a {
-    white-space: normal;
+}
+@media (max-width: 767.98px) {
+  .wjs-chrome-footer .wjs-footer-container > .wjs-chrome-row:first-child {
+    grid-template-columns: minmax(0, 1fr);
   }
+  .wjs-chrome-header .wjs-chrome-button { padding: 0.5rem 0.9rem; font-size: 0.8125rem; }
 }
 
-/* =========================================
-   DISTINCTIVE RULES (glass signature)
-   ========================================= */
-
-/* Fixed aurora blobs behind the whole page (design background decorators) */
-body {
-  background-image:
-    radial-gradient(ellipse 50% 50% at -5% -5%, rgba(229, 238, 255, 0.9), transparent 70%),
-    radial-gradient(ellipse 55% 55% at 105% 105%, rgba(180, 235, 255, 0.45), transparent 70%);
-  background-attachment: fixed;
-}
-
-/* Blueprint grid inside the hero (multi-layer bg needs its tile size) */
-.wp-block-hero {
-  background-size: 40px 40px;
-}
-
-/* Frosted panels actually blur what's behind them */
-.wp-block-card,
-.wp-block-testimonial,
-.wp-block-pricing__plan {
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}
-
-/* Hero CTAs (measured): cobalt-tinted twin shadow on the solid button,
-   glass shadow + blur on the outline one */
-.wp-block-hero__button:not(.wp-block-hero__button--outline) {
-  box-shadow: 0 10px 15px -3px rgba(0, 50, 125, 0.2), 0 4px 6px -4px rgba(0, 50, 125, 0.2);
-}
-
-.wp-block-hero__button--outline {
-  box-shadow: 0 8px 32px 0 rgba(0, 71, 171, 0.05);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-}

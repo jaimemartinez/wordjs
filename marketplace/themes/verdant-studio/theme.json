@@ -1,6 +1,195 @@
 {
   "name": "Verdant Studio",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Botánico fresco con verdes profundos, formas píldora y tipografía Quicksand sobre lienzo marfil.",
-  "author": "WordJS × Stitch"
+  "author": "WordJS × Stitch",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "minimal",
+      "sticky": true,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 4
+    },
+    "sidebar": false,
+    "containerWidth": "88rem"
+  },
+  "seeds": {
+    "primary": "#2d4b3e",
+    "secondary": "#b08968",
+    "bg": "#faf9f5",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#faf9f5",
+    "--wjs-color-primary": "#2d4b3e",
+    "--wjs-color-primary-dark": "#2d4b3e",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#b08968",
+    "--wjs-color-secondary-dark": "#b08968",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#2d4b3e",
+    "--wjs-font-family-heading": "'Literata', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "'Epilogue', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "12px",
+    "--wjs-radius-sm": "12px",
+    "--wjs-radius-md": "12px",
+    "--wjs-radius-lg": "12px",
+    "--wjs-radius-pill": "12px",
+    "--wjs-bg-surface-glass": "rgba(250,249,245,0.90)",
+    "--wjs-hero-bg": "#243b31",
+    "--wjs-hero-gradient-angle": "200deg",
+    "--wjs-hero-gradient-from": "#2d4b3e",
+    "--wjs-hero-gradient-to": "#1b2d25",
+    "--wjs-hero-color": "#faf9f5",
+    "--wjs-hero-title-color": "#faf9f5",
+    "--wjs-hero-subtitle-color": "#cdd8d0",
+    "--wjs-hero-button-outline-color": "#faf9f5",
+    "--wjs-hero-button-outline-border": "#8ea395",
+    "--wjs-hero-button-outline-bg": "transparent"
+  },
+  "styles": {
+    "hero": {
+      "height": "92vh",
+      "pad": "4rem 3.5rem",
+      "justify": "flex-start",
+      "text-align": "left",
+      "measure": "52rem",
+      "radius": "0",
+      "border-width": "0",
+      "shadow": "none",
+      "align-items": "flex-end",
+      "title": {
+        "size": "clamp(3rem, 7vw, 6rem)",
+        "weight": "400",
+        "tracking": "-0.025em"
+      },
+      "subtitle": {
+        "size": "1.05rem",
+        "opacity": "0.86"
+      },
+      "actions": {
+        "justify": "flex-start"
+      },
+      "button": {
+        "bg": "transparent",
+        "color": "#faf9f5",
+        "pad": "1rem 2.4rem",
+        "size": "0.8rem",
+        "weight": "500",
+        "radius": "2px",
+        "leading": "1.2",
+        "border": "1px solid rgba(250, 249, 245, 0.55)",
+        "box-shadow": "none",
+        "letter-spacing": "0.2em",
+        "text-transform": "uppercase",
+        "hover": {
+          "background": "#faf9f5",
+          "color": "#1b2d25",
+          "transform": "none",
+          "filter": "none"
+        }
+      },
+      "mobile": {
+        "min-height": "78vh",
+        "padding": "3rem 1.5rem"
+      }
+    },
+    "button": {
+      "pad-x": "2.15rem",
+      "pad-y": "0.95rem",
+      "size": "0.8rem",
+      "weight": "500",
+      "radius": "2px",
+      "tracking": "0.2em",
+      "transform": "uppercase",
+      "shadow": "none",
+      "hover-shadow": "none",
+      "hover-transform": "none",
+      "outline-bg": "transparent",
+      "outline-border-color": "#2d4b3e",
+      "outline-color": "#2d4b3e"
+    },
+    "card": {
+      "radius": "2px",
+      "pad": "2rem",
+      "bg": "#ffffff",
+      "border-width": "1px",
+      "border-color": "#e2e0d7",
+      "shadow": "none",
+      "hover-border-color": "#2d4b3e",
+      "hover-shadow": "none",
+      "hover-transform": "none",
+      "desc-leading": "1.75",
+      "icon": {
+        "radius": "2px",
+        "bg": "#eef1ec",
+        "color": "#2d4b3e",
+        "size": "2.75rem"
+      },
+      "title": {
+        "size": "1.05rem",
+        "weight": "600",
+        "transform": "uppercase",
+        "tracking": "0.1em"
+      }
+    },
+    "posts-grid": {
+      "card": {
+        "border-radius": "2px"
+      },
+      "thumb": {
+        "border-radius": "2px"
+      },
+      "title": {
+        "font-size": "1.15rem",
+        "font-weight": "500"
+      },
+      "date": {
+        "font-size": "0.72rem",
+        "text-transform": "uppercase",
+        "letter-spacing": "0.18em"
+      }
+    },
+    "quote": {
+      "family": "'Literata', Georgia, serif",
+      "size": "1.65rem",
+      "style": "normal",
+      "weight": "400",
+      "accent": "#b08968",
+      "bar-width": "1px",
+      "mark-size": "3rem",
+      "mark-opacity": "0.1"
+    },
+    "stats": {
+      "value": {
+        "size": "clamp(2.5rem, 5vw, 3.75rem)",
+        "weight": "400",
+        "color": "#2d4b3e"
+      },
+      "label": {
+        "size": "0.7rem",
+        "transform": "uppercase",
+        "tracking": "0.2em"
+      }
+    },
+    "footer": {
+      "bg": "#1b2d25",
+      "text-body": "#b6c4bb",
+      "text-heading": "#faf9f5"
+    },
+    "headings": {
+      "font-weight": "400",
+      "letter-spacing": "-0.022em"
+    },
+    "links": {
+      "text-underline-offset": "0.26em",
+      "text-decoration-thickness": "1px"
+    }
+  }
 }

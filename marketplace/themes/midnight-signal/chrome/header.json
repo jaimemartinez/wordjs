@@ -1,0 +1,50 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "ms-h-bar",
+        "align": "between",
+        "gap": "md",
+        "items": [
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ms-h-left",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeLogo", "props": { "id": "ms-h-logo", "size": "sm" } },
+                { "type": "ChromeText", "props": { "id": "ms-h-kicker", "text": "KEYNOTE 2026" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ms-h-center",
+              "align": "center",
+              "gap": "md",
+              "items": [
+                { "type": "ChromeNav", "props": { "id": "ms-h-menu", "location": "header", "orientation": "horizontal" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ms-h-right",
+              "align": "end",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeButton", "props": { "id": "ms-h-specs", "label": "Especificaciones", "href": "/especificaciones", "variant": "ghost" } },
+                { "type": "ChromeButton", "props": { "id": "ms-h-cta", "label": "Reservar plaza", "href": "/reserva", "variant": "primary" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

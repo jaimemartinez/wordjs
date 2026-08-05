@@ -1,0 +1,29 @@
+{
+  "name": "stitch/midnight-luxury",
+  "designTheme": {
+    "colorMode": "DARK",
+    "customColor": "#d4af37",
+    "overridePrimaryColor": "#d4af37",
+    "overrideSecondaryColor": "#8a6f2e",
+    "overrideNeutralColor": "#0a0a0a",
+    "headlineFont": "PLAYFAIR_DISPLAY",
+    "headlineFontFamily": "Playfair Display",
+    "bodyFont": "MONTSERRAT",
+    "bodyFontFamily": "Montserrat",
+    "labelFont": "MONTSERRAT",
+    "labelFontFamily": "Montserrat",
+    "roundness": "ROUND_EIGHT",
+    "namedColors": {
+      "background": "#0a0a0a",
+      "surface": "#0a0a0a",
+      "on_surface": "#f5f5f4",
+      "on_background": "#f5f5f4",
+      "primary": "#d4af37",
+      "primary_container": "#d4af37",
+      "on_primary": "#0b0b0b",
+      "secondary": "#8a6f2e",
+      "secondary_container": "#8a6f2e",
+      "on_secondary": "#0b0b0b"
+    }
+  }
+}

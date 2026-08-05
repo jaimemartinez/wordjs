@@ -1,6 +1,189 @@
 {
   "name": "Sage Calm",
-  "version": "1.0.1",
+  "version": "1.0.4",
   "description": "Calm wellness theme — organic sage greens on soft cream.",
-  "author": "WordJS"
+  "author": "WordJS",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "classic",
+      "sticky": true,
+      "transparent": true
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 2
+    },
+    "sidebar": false,
+    "containerWidth": "68rem"
+  },
+  "seeds": {
+    "primary": "#3b7a57",
+    "secondary": "#c2703d",
+    "bg": "#f4f7f2",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#f4f7f2",
+    "--wjs-color-primary": "#3b7a57",
+    "--wjs-color-primary-dark": "#3b7a57",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#c2703d",
+    "--wjs-color-secondary-dark": "#c2703d",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#3b7a57",
+    "--wjs-font-family-heading": "'Literata', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "'Nunito Sans', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "12px",
+    "--wjs-radius-sm": "12px",
+    "--wjs-radius-md": "12px",
+    "--wjs-radius-lg": "12px",
+    "--wjs-radius-pill": "12px",
+    "--wjs-bg-surface-glass": "rgba(244,247,242,0.86)",
+    "--wjs-hero-bg": "#f4f7f2",
+    "--wjs-hero-gradient-angle": "180deg",
+    "--wjs-hero-gradient-from": "#f8fbf6",
+    "--wjs-hero-gradient-to": "#e6efe6",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#284b38",
+    "--wjs-hero-subtitle-color": "#48584d",
+    "--wjs-hero-button-outline-color": "#3b7a57",
+    "--wjs-hero-button-outline-border": "#3b7a57",
+    "--wjs-hero-button-outline-bg": "transparent"
+  },
+  "styles": {
+    "hero": {
+      "height": "86vh",
+      "pad": "8rem 2rem",
+      "justify": "center",
+      "text-align": "center",
+      "measure": "44rem",
+      "radius": "0",
+      "border-width": "0",
+      "shadow": "none",
+      "title": {
+        "size": "clamp(2.75rem, 5.2vw, 4.35rem)",
+        "weight": "400",
+        "tracking": "-0.02em"
+      },
+      "subtitle": {
+        "size": "1.18rem",
+        "opacity": "0.85"
+      },
+      "actions": {
+        "justify": "center"
+      },
+      "button": {
+        "bg": "transparent",
+        "color": "#3b7a57",
+        "pad": "1.05rem 2.75rem",
+        "size": "0.94rem",
+        "weight": "500",
+        "radius": "999px",
+        "leading": "1.2",
+        "border": "1px solid #3b7a57",
+        "box-shadow": "none",
+        "letter-spacing": "0.14em",
+        "text-transform": "uppercase",
+        "hover": {
+          "background": "#3b7a57",
+          "color": "#ffffff",
+          "transform": "none",
+          "filter": "none"
+        }
+      },
+      "mobile": {
+        "min-height": "70vh",
+        "padding": "5rem 1.5rem"
+      }
+    },
+    "button": {
+      "pad-x": "2rem",
+      "pad-y": "0.95rem",
+      "size": "0.92rem",
+      "weight": "600",
+      "radius": "999px",
+      "tracking": "0.12em",
+      "transform": "uppercase",
+      "shadow": "none",
+      "hover-shadow": "none",
+      "hover-transform": "none",
+      "outline-bg": "transparent",
+      "outline-border-color": "#3b7a57",
+      "outline-color": "#3b7a57"
+    },
+    "card": {
+      "radius": "14px",
+      "pad": "2.35rem",
+      "bg": "#ffffff",
+      "border-width": "1px",
+      "border-color": "#dde6dc",
+      "shadow": "none",
+      "hover-border-color": "#3b7a57",
+      "hover-shadow": "0 12px 28px rgba(59,122,87,0.10)",
+      "hover-transform": "none",
+      "desc-leading": "1.8",
+      "icon": {
+        "radius": "999px",
+        "bg": "#eef4ec",
+        "color": "#3b7a57",
+        "size": "3rem"
+      },
+      "title": {
+        "size": "1.3rem",
+        "weight": "500"
+      }
+    },
+    "quote": {
+      "family": "'Literata', Georgia, serif",
+      "size": "1.6rem",
+      "style": "italic",
+      "weight": "400",
+      "accent": "#c2703d",
+      "bar-width": "2px",
+      "mark-size": "3.5rem",
+      "mark-opacity": "0.12"
+    },
+    "testimonial": {
+      "quote": {
+        "size": "1.35rem",
+        "family": "'Literata', Georgia, serif"
+      },
+      "avatar": {
+        "size": "3.25rem"
+      }
+    },
+    "accordion": {
+      "item": {
+        "radius": "0",
+        "gap": "0",
+        "border-width": "0"
+      },
+      "separator-color": "#dde6dc",
+      "separator-width": "1px",
+      "header": {
+        "weight": "500",
+        "size": "1.08rem"
+      },
+      "pad": "1.5rem 0"
+    },
+    "footer": {
+      "bg": "#eaf1e8",
+      "text-body": "#4d5c51",
+      "text-heading": "#284b38"
+    },
+    "headings": {
+      "font-weight": "400",
+      "letter-spacing": "-0.018em"
+    },
+    "body": {
+      "line-height": "1.8"
+    },
+    "links": {
+      "text-underline-offset": "0.28em",
+      "text-decoration-thickness": "1px"
+    }
+  }
 }

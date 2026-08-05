@@ -1,6 +1,191 @@
 {
   "name": "Japandi Haven",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Minimalismo cálido japonés-escandinavo con serif Playfair, terracota y hairlines sobre lienzo crema.",
-  "author": "WordJS × Stitch"
+  "author": "WordJS × Stitch",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "minimal",
+      "sticky": true,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 1
+    },
+    "containerWidth": "60rem"
+  },
+  "seeds": {
+    "primary": "#8b4e3b",
+    "secondary": "#7d8471",
+    "bg": "#fcf9f8",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#fcf9f8",
+    "--wjs-color-primary": "#8b4e3b",
+    "--wjs-color-primary-dark": "#8b4e3b",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#7d8471",
+    "--wjs-color-secondary-dark": "#7d8471",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#8b4e3b",
+    "--wjs-font-family-heading": "'Newsreader', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "'Karla', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "4px",
+    "--wjs-radius-sm": "4px",
+    "--wjs-radius-md": "4px",
+    "--wjs-radius-lg": "4px",
+    "--wjs-radius-pill": "4px",
+    "--wjs-hero-bg": "#fcf9f8",
+    "--wjs-hero-gradient-from": "#fcf9f8",
+    "--wjs-hero-gradient-to": "#fcf9f8",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#8b4e3b",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#8b4e3b",
+    "--wjs-hero-button-outline-border": "#8b4e3b",
+    "--wjs-bg-surface-glass": "#fcf9f8",
+    "--wjs-bg-footer": "#ece5dc",
+    "--wjs-color-text-footer-main": "#3d3630",
+    "--wjs-color-text-footer-dim": "#8a8078",
+    "--wjs-header-offset": "5.5rem",
+    "--wjs-hero-gradient": "none",
+    "--wjs-hero-height": "auto",
+    "--wjs-hero-pad": "4rem 1.5rem 3.25rem",
+    "--wjs-hero-measure": "40rem",
+    "--wjs-hero-text-align": "left",
+    "--wjs-hero-justify": "flex-start",
+    "--wjs-hero-actions-justify": "flex-start",
+    "--wjs-hero-title-size": "clamp(1.55rem, 2.6vw, 2.05rem)",
+    "--wjs-hero-title-weight": "400",
+    "--wjs-hero-title-tracking": "0.005em",
+    "--wjs-hero-subtitle-size": "1.05rem",
+    "--wjs-hero-subtitle-opacity": "0.78",
+    "--wjs-hero-border-width": "0px",
+    "--wjs-hero-radius": "0px",
+    "--wjs-hero-shadow": "none",
+    "--wjs-hero-button-radius": "2px",
+    "--wjs-hero-button-pad": "0.8rem 1.9rem",
+    "--wjs-hero-button-weight": "400",
+    "--wjs-hero-button-size": "0.9rem"
+  },
+  "styles": {
+    "body": {
+      "font-size": "16px",
+      "line-height": "1.95"
+    },
+    "headings": {
+      "letter-spacing": "0.004em",
+      "line-height": "1.45",
+      "font-weight": "400"
+    },
+    "logo": {
+      "font-family": "'Newsreader', Georgia, 'Times New Roman', serif",
+      "text-transform": "uppercase",
+      "letter-spacing": "0.2em"
+    },
+    "footer": {
+      "font-size": "0.9rem",
+      "line-height": "1.95",
+      "text-align": "center"
+    },
+    "hero": {
+      "title": {
+        "line-height": "1.5",
+        "margin-bottom": "1.15rem"
+      },
+      "subtitle": {
+        "line-height": "1.98",
+        "max-width": "38rem"
+      },
+      "actions": {
+        "margin-top": "2.25rem"
+      }
+    },
+    "quote": {
+      "family": "'Newsreader', Georgia, 'Times New Roman', serif",
+      "style": "normal",
+      "size": "1.2rem",
+      "weight": "400",
+      "bar-width": "1px",
+      "tracking": "0.005em",
+      "cite": {
+        "font-size": "0.82rem",
+        "letter-spacing": "0.08em",
+        "font-style": "normal"
+      }
+    },
+    "card": {
+      "radius": "4px",
+      "shadow": "none",
+      "border-width": "1px",
+      "bg": "transparent",
+      "pad": "2.25rem",
+      "title": {
+        "font-family": "'Newsreader', Georgia, 'Times New Roman', serif",
+        "font-size": "1.1rem",
+        "font-weight": "400",
+        "letter-spacing": "0.01em"
+      },
+      "description": {
+        "font-size": "0.92rem",
+        "line-height": "1.95"
+      }
+    },
+    "button": {
+      "link": {
+        "border-radius": "2px",
+        "text-transform": "none",
+        "letter-spacing": "0.02em",
+        "font-size": "0.9rem",
+        "font-weight": "400",
+        "padding": "0.8rem 1.9rem"
+      }
+    },
+    "posts-grid": {
+      "card": {
+        "border-radius": "4px",
+        "box-shadow": "none",
+        "background": "transparent"
+      },
+      "title": {
+        "font-family": "'Newsreader', Georgia, 'Times New Roman', serif",
+        "font-size": "1.12rem",
+        "font-weight": "400",
+        "line-height": "1.55"
+      },
+      "date": {
+        "font-size": "0.78rem",
+        "letter-spacing": "0.1em"
+      },
+      "excerpt": {
+        "font-size": "0.92rem",
+        "line-height": "1.95"
+      }
+    },
+    "accordion": {
+      "radius": "4px",
+      "shadow": "none",
+      "item-border-width": "0px",
+      "separator-width": "1px",
+      "header-weight": "400",
+      "header-size": "1rem",
+      "header-transform": "none",
+      "header-tracking": "0.01em",
+      "panel-family": "'Karla', 'Segoe UI', system-ui, sans-serif"
+    },
+    "tabs": {
+      "radius": "0px",
+      "list-bg": "transparent",
+      "list-border-width": "0px",
+      "active-shadow": "none",
+      "transform": "none",
+      "tracking": "0.02em",
+      "weight": "400"
+    }
+  }
 }

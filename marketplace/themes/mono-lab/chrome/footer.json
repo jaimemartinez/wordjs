@@ -1,0 +1,60 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "ml-footer-grid",
+        "align": "start",
+        "gap": "lg",
+        "wrap": true,
+        "items": [
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-footer-c1",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSiteTitle", "props": { "id": "ml-footer-title", "showTagline": true } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-footer-c2",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeNav", "props": { "id": "ml-footer-nav", "location": "footer", "orientation": "vertical" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-footer-c3",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSearch", "props": { "id": "ml-footer-search", "placeholder": "Buscar en el índice" } }
+              ]
+            }
+          },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "ml-footer-c4",
+              "align": "start",
+              "gap": "sm",
+              "items": [
+                { "type": "ChromeSocials", "props": { "id": "ml-footer-socials", "source": "settings" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

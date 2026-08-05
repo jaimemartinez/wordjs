@@ -1,0 +1,28 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "cc-header-row",
+        "align": "between",
+        "gap": "lg",
+        "items": [
+          { "type": "ChromeLogo", "props": { "id": "cc-logo", "size": "md" } },
+          {
+            "type": "ChromeRow",
+            "props": {
+              "id": "cc-header-actions",
+              "align": "end",
+              "gap": "lg",
+              "items": [
+                { "type": "ChromeNav", "props": { "id": "cc-nav", "location": "header", "orientation": "horizontal" } },
+                { "type": "ChromeButton", "props": { "id": "cc-cta", "label": "Contacto", "href": "/contacto", "variant": "primary" } }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -1,415 +1,191 @@
-@import url('https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,opsz,wght@0,6..96,400..900;1,6..96,400..900&family=Montserrat:wght@400;500;600&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap');
-
-/* =========================================
-   THEME: ATELIER NOIR (Haute couture)
-   Concept: black & cream high fashion. Near-black
-   canvas, cream ink, gold leaf accents, razor-sharp
-   zero-radius edges, Bodoni Moda display serif,
-   Montserrat caps micro-labels, Source Serif 4 body.
-   Derived from the Stitch design "Alta Costura Noir".
-   ========================================= */
-
+/* @wjs-generated:start — compiled from theme.json; DO NOT EDIT inside. Edit theme.json and run: node backend/cli/wordjs.js build theme atelier-noir */
 :root {
-  /* ── Canonical palette ─────────────────────────────── */
-  --wjs-color-primary: #e9c349;          /* gold leaf (design tertiary, CTA) */
-  --wjs-color-primary-dark: #917400;
-  --wjs-color-secondary: #c9c6c2;        /* warm silver-cream */
-  --wjs-color-secondary-dark: #797777;
-  --wjs-color-accent: #ffe088;           /* pale gold */
-  --wjs-color-success: #b5c9a2;
-  --wjs-color-danger: #ffb4ab;
-  --wjs-color-warning: #d9a441;
-  --wjs-color-info: #9fb6c4;
-  --wjs-color-light: #e5e2e1;
-  --wjs-color-dark: #0e0e0e;
-  /* on-colors (max-contrast text on each solid color) */
-  --wjs-color-on-primary: #080500;
-  --wjs-color-on-secondary: #131313;
-  --wjs-color-on-accent: #241a00;
-  --wjs-color-on-success: #131313;
-  --wjs-color-on-danger: #690005;
-  --wjs-color-on-warning: #131313;
-  --wjs-color-on-info: #131313;
-  --wjs-color-on-light: #1c1b1b;
-  --wjs-color-on-dark: #e5e2e1;
-
-  /* ── Surfaces, text & borders ──────────────────────── */
   --wjs-bg-canvas: #131313;
-  --wjs-bg-surface: #0e0e0e;             /* surface-container-lowest panels */
-  --wjs-bg-surface-glass: rgba(19, 19, 19, 0.9); /* scrolled public header */
-  --wjs-bg-muted: #1c1b1b;
-  --wjs-color-text-main: #e5e2e1;
-  --wjs-color-text-muted: #c4c7c7;
-  --wjs-color-heading: #e5e2e1;
+  --wjs-bg-surface: #212121;
+  --wjs-bg-surface-raised: #2d2d2d;
+  --wjs-color-primary: #e9c349;
+  --wjs-color-primary-dark: #e9c349;
+  --wjs-color-on-primary: #0b0b0b;
+  --wjs-color-accent: #8c7a4b;
+  --wjs-color-on-accent: #ffffff;
+  --wjs-color-text-main: #f5f5f4;
+  --wjs-color-text-muted: #9f9f9f;
+  --wjs-color-heading: #f5f5f4;
   --wjs-color-link: #e9c349;
-  --wjs-color-link-hover: #ffe088;
-  --wjs-border-subtle: #2c2c2b;
-  --wjs-border-width: 1px;
-  --wjs-focus-ring: rgba(233, 195, 73, 0.35);
-  --wjs-container-max: 1440px;
-
-  /* ── Public footer chrome (read by the Footer component) */
-  --wjs-bg-footer: #0e0e0e;
-  --wjs-color-text-footer-main: #e5e2e1;
-  --wjs-color-text-footer-dim: #c4c7c7;
-
-  /* ── Typography ────────────────────────────────────── */
-  --wjs-font-family-base: 'Source Serif 4', Georgia, serif;
-  --wjs-font-family-heading: 'Bodoni Moda', 'Didot', Georgia, serif;
-  --wjs-font-size-base: 1rem;
-  --wjs-line-height-base: 1.5;
-  --wjs-heading-weight: 500;
-  --wjs-heading-line-height: 1.1;
-  /* Measured display h1: 120px @1280, 600, -0.05em over 0.92 leading */
-  --wjs-h1: clamp(3.5rem, 9.4vw, 7.5rem);
-  --wjs-h1-weight: 600;
-  --wjs-h1-leading: 0.92;
-  --wjs-h2: 3rem;                        /* headline-lg 48px */
-  --wjs-h3: 2rem;                        /* headline-md 32px */
-  --wjs-h4: 1.375rem;
-  --wjs-h5: 1.125rem;
-  --wjs-h6: 0.75rem;
-  --wjs-h1-tracking: -0.05em;
-
-  /* ── Shape & shadow (razor edges; the measured design is
-     entirely shadow-free — depth comes from hairlines alone) */
-  --wjs-spacer: 1rem;
-  --wjs-radius-sm: 0;
-  --wjs-radius: 0;
-  --wjs-radius-md: 0;
-  --wjs-radius-lg: 0;
-  --wjs-radius-pill: 9999px;
-  --wjs-shadow-sm: none;
-  --wjs-shadow: none;
-  --wjs-shadow-md: none;
-  --wjs-shadow-lg: none;
-
-  /* ══ Block tokens (values only; wordjs-ui.css owns the rules) ══ */
-
-  /* Buttons — cream slab that turns gold on hover (hero CTA) */
-  --wjs-button-bg: #e5e2e1;
-  --wjs-button-color: #131313;
-  --wjs-button-family: 'Montserrat', sans-serif;
-  --wjs-button-size: 0.75rem;
-  --wjs-button-weight: 500;
-  --wjs-button-tracking: 0.2em;
-  --wjs-button-transform: uppercase;
-  --wjs-button-radius: 0;
-  --wjs-button-pad-x: 2.5rem;
-  --wjs-button-pad-y: 1.25rem;
-  --wjs-button-shadow: none;
-  --wjs-button-hover-bg: #e9c349;
-  --wjs-button-hover-color: #080500;
-  --wjs-button-hover-shadow: none;
-  --wjs-button-hover-transform: none;
-
-  /* Hero — pitch-dark stage, monumental Bodoni title */
-  --wjs-hero-bg: #0e0e0e;
-  --wjs-hero-gradient: linear-gradient(180deg, rgba(19, 19, 19, 0.2) 0%, rgba(19, 19, 19, 0) 45%, rgba(19, 19, 19, 0.85) 100%);
-  --wjs-hero-pad: 8rem 1.5rem;
-  --wjs-hero-radius: 0;
+  --wjs-color-link-hover: #8c7a4b;
+  --wjs-border-subtle: #3c3c3c;
+  --wjs-outline: #696969;
+  --wjs-outline-variant: #353535;
+  --wjs-focus-ring: #e9c349;
+  --wjs-color-secondary: #8c7a4b;
+  --wjs-color-secondary-dark: #8c7a4b;
+  --wjs-color-on-secondary: #0b0b0b;
+  --wjs-font-family-heading: 'Bodoni Moda', Georgia, 'Times New Roman', serif;
+  --wjs-font-family-base: 'Hanken Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --wjs-radius: 4px;
+  --wjs-radius-sm: 4px;
+  --wjs-radius-md: 4px;
+  --wjs-radius-lg: 4px;
+  --wjs-radius-pill: 4px;
+  --wjs-hero-bg: #131313;
+  --wjs-hero-gradient-from: #131313;
+  --wjs-hero-gradient-to: #131313;
+  --wjs-hero-color: #f5f5f4;
+  --wjs-hero-title-color: #e9c349;
+  --wjs-hero-subtitle-color: #f5f5f4;
+  --wjs-hero-button-outline-color: #e9c349;
+  --wjs-hero-button-outline-border: #e9c349;
+  --wjs-bg-surface-glass: #131313;
+  --wjs-bg-footer: #0d0d0d;
+  --wjs-color-text-footer-main: #f5f5f4;
+  --wjs-color-text-footer-dim: #8b8578;
+  --wjs-color-text-footer-heading: #e9c349;
+  --wjs-hero-height: 80vh;
+  --wjs-hero-pad: 9rem 2rem;
+  --wjs-hero-measure: 60rem;
+  --wjs-hero-justify: center;
   --wjs-hero-text-align: center;
-  --wjs-hero-title-color: #e5e2e1;
-  --wjs-hero-title-size: clamp(3.5rem, 9.4vw, 7.5rem);
-  --wjs-hero-title-weight: 600;
-  --wjs-hero-title-tracking: -0.05em;
-  --wjs-hero-subtitle-color: #c9c6c5;
-  --wjs-hero-subtitle-size: 1.125rem;
-  --wjs-hero-button-bg: #e5e2e1;
-  --wjs-hero-button-color: #131313;
+  --wjs-hero-actions-justify: center;
+  --wjs-hero-radius: 0;
+  --wjs-hero-shadow: none;
+  --wjs-hero-title-size: clamp(3.25rem, 9vw, 7.5rem);
+  --wjs-hero-title-weight: 400;
+  --wjs-hero-title-tracking: -0.015em;
+  --wjs-hero-subtitle-size: 0.75rem;
+  --wjs-hero-subtitle-opacity: 0.72;
+  --wjs-hero-button-bg: transparent;
+  --wjs-hero-button-color: #e9c349;
   --wjs-hero-button-radius: 0;
-  --wjs-hero-button-pad: 1.25rem 2.5rem;
-  --wjs-hero-button-size: 0.75rem;
+  --wjs-hero-button-pad: 1.1rem 2.75rem;
+  --wjs-hero-button-size: 11px;
   --wjs-hero-button-weight: 500;
   --wjs-hero-button-outline-bg: transparent;
-  --wjs-hero-button-outline-border: rgba(229, 226, 225, 0.5);
-  --wjs-hero-button-outline-color: #e5e2e1;
-  --wjs-hero-button-outline-hover-bg: rgba(233, 195, 73, 0.08);
-
-  /* Cards — black panels, hairline that warms to gold */
-  --wjs-card-bg: #0e0e0e;
-  --wjs-card-border-width: 1px;
-  --wjs-card-border-color: rgba(68, 71, 72, 0.1);
+  --wjs-hero-button-outline-hover-bg: rgba(233,195,73,0.10);
+  --wjs-button-family: 'Hanken Grotesk', 'Segoe UI', system-ui, sans-serif;
+  --wjs-button-radius: 0;
+  --wjs-button-transform: uppercase;
+  --wjs-button-tracking: 0.3em;
+  --wjs-button-size: 11px;
+  --wjs-button-weight: 500;
+  --wjs-button-pad-x: 2.5rem;
+  --wjs-button-pad-y: 1.05rem;
+  --wjs-button-shadow: none;
+  --wjs-button-hover-shadow: none;
+  --wjs-button-hover-transform: none;
+  --wjs-card-bg: transparent;
   --wjs-card-radius: 0;
-  --wjs-card-pad: 3rem;
+  --wjs-card-pad: 2.75rem;
+  --wjs-card-border-width: 1px;
   --wjs-card-shadow: none;
-  --wjs-card-hover-border-color: rgba(233, 195, 73, 0.3);
   --wjs-card-hover-shadow: none;
   --wjs-card-hover-transform: none;
-  --wjs-card-title-color: #e5e2e1;
-  --wjs-card-title-size: 2rem;
-  --wjs-card-title-weight: 400;
-  --wjs-card-desc-color: #c4c7c7;
+  --wjs-card-hover-bg: transparent;
   --wjs-card-icon-bg: transparent;
   --wjs-card-icon-color: #e9c349;
   --wjs-card-icon-radius: 0;
-  --wjs-card-icon-size: 2.25rem;
-
-  /* Pricing — couture tiers, gold-framed highlight */
-  --wjs-pricing-bg: #0e0e0e;
-  --wjs-pricing-border-width: 1px;
-  --wjs-pricing-border-color: rgba(68, 71, 72, 0.25);
-  --wjs-pricing-radius: 0;
-  --wjs-pricing-pad: 3rem;
-  --wjs-pricing-shadow: none;
-  --wjs-pricing-hover-border-color: rgba(233, 195, 73, 0.3);
-  --wjs-pricing-hover-shadow: none;
-  --wjs-pricing-hover-transform: none;
-  --wjs-pricing-accent: #e9c349;
-  --wjs-pricing-name-color: #e5e2e1;
-  --wjs-pricing-name-family: 'Bodoni Moda', serif;
-  --wjs-pricing-name-size: 2rem;
-  --wjs-pricing-name-weight: 400;
-  --wjs-pricing-price-color: #e5e2e1;
-  --wjs-pricing-price-family: 'Bodoni Moda', serif;
-  --wjs-pricing-price-size: 3rem;
-  --wjs-pricing-price-weight: 500;
-  --wjs-pricing-period-color: #c4c7c7;
-  --wjs-pricing-feature-color: #c4c7c7;
-  --wjs-pricing-button-bg: transparent;
-  --wjs-pricing-button-border-color: rgba(229, 226, 225, 0.5);
-  --wjs-pricing-button-color: #e5e2e1;
-  --wjs-pricing-button-hover-bg: rgba(233, 195, 73, 0.1);
-  --wjs-pricing-button-radius: 0;
-  --wjs-pricing-button-weight: 500;
-  --wjs-pricing-button-on-accent: #080500;
-  --wjs-pricing-highlight-bg: #1c1b1b;
-  --wjs-pricing-highlight-border-width: 1px;
-  --wjs-pricing-highlight-border-color: #e9c349;
-  --wjs-pricing-highlight-color: #e5e2e1;
-  --wjs-pricing-highlight-name-color: #e9c349;
-  --wjs-pricing-highlight-feature-color: #c4c7c7;
-  --wjs-pricing-highlight-scale: 1.02;
-  --wjs-pricing-highlight-shadow: none;
-  --wjs-pricing-highlight-button-bg: #e9c349;
-  --wjs-pricing-highlight-button-shadow: none;
-
-  /* Quote / testimonial — monumental Bodoni, gold cite */
-  --wjs-quote-accent: #e9c349;
+  --wjs-card-title-size: 0.75rem;
+  --wjs-card-title-weight: 500;
+  --wjs-card-title-transform: uppercase;
+  --wjs-card-title-tracking: 0.26em;
+  --wjs-card-desc-size: 0.9375rem;
+  --wjs-quote-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif;
+  --wjs-quote-style: italic;
+  --wjs-quote-size: 1.85rem;
+  --wjs-quote-weight: 400;
   --wjs-quote-bar-width: 0;
-  --wjs-quote-family: 'Bodoni Moda', serif;
-  --wjs-quote-style: normal;
-  --wjs-quote-size: 2rem;
-  --wjs-quote-color: #e5e2e1;
-  --wjs-quote-mark-opacity: 0.5;
-  --wjs-quote-cite-color: #e9c349;
-  --wjs-testimonial-bg: #0e0e0e;
-  --wjs-testimonial-border-width: 1px;
-  --wjs-testimonial-border-color: rgba(68, 71, 72, 0.25);
-  --wjs-testimonial-quote-family: 'Bodoni Moda', serif;
-  --wjs-testimonial-quote-style: normal;
-  --wjs-testimonial-quote-size: 2rem;
-  --wjs-testimonial-quote-color: #e5e2e1;
-  --wjs-testimonial-mark-color: #e9c349;
-  --wjs-testimonial-mark-opacity: 0.5;
-  --wjs-testimonial-author-color: #e9c349;
-  --wjs-testimonial-author-family: 'Montserrat', sans-serif;
-  --wjs-testimonial-author-weight: 500;
-  --wjs-testimonial-role-color: #c4c7c7;
-  --wjs-testimonial-role-transform: uppercase;
-  --wjs-testimonial-role-tracking: 0.2em;
-  --wjs-testimonial-role-size: 0.75rem;
-
-  /* Search + form — underline-only inputs, cream slab submit */
-  --wjs-search-input-bg: transparent;
-  --wjs-search-input-border-width: 0;
-  --wjs-search-input-shadow: inset 0 -1px 0 rgba(196, 199, 199, 0.35);
-  --wjs-search-input-radius: 0;
-  --wjs-search-input-pad: 0.75rem 0;
-  --wjs-search-input-color: #e5e2e1;
-  --wjs-search-input-family: 'Source Serif 4', serif;
-  --wjs-search-placeholder-color: rgba(196, 199, 199, 0.5);
-  --wjs-search-focus-color: #e9c349;
-  --wjs-search-focus-ring: inset 0 -2px 0 #e9c349;
-  --wjs-search-button-bg: #e5e2e1;
-  --wjs-search-button-color: #131313;
-  --wjs-search-button-family: 'Montserrat', sans-serif;
-  --wjs-search-button-weight: 500;
-  --wjs-search-button-tracking: 0.2em;
-  --wjs-search-button-transform: uppercase;
-  --wjs-search-button-radius: 0;
-  --wjs-search-button-pad: 1.25rem 3rem;
-  --wjs-form-label-color: #c4c7c7;
-  --wjs-form-label-size: 0.75rem;
-  --wjs-form-submit-size: 0.75rem;
-  --wjs-form-submit-pad: 1.25rem 3rem;
-
-  /* Accordion — hairline registry, Montserrat caps headers */
-  --wjs-accordion-bg: transparent;
-  --wjs-accordion-item-bg: transparent;
-  --wjs-accordion-item-border-width: 1px;
-  --wjs-accordion-item-border-color: rgba(68, 71, 72, 0.3);
+  --wjs-quote-accent: #e9c349;
+  --wjs-quote-cite-size: 0.6875rem;
+  --wjs-quote-mark-opacity: 0.14;
+  --wjs-stats-bg: transparent;
+  --wjs-stats-border-width: 0;
+  --wjs-stats-radius: 0;
+  --wjs-stats-shadow: none;
+  --wjs-stats-value-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif;
+  --wjs-stats-value-size: 3.75rem;
+  --wjs-stats-value-weight: 400;
+  --wjs-stats-label-size: 0.625rem;
+  --wjs-stats-label-transform: uppercase;
+  --wjs-stats-label-tracking: 0.32em;
+  --wjs-tabs-radius: 0;
+  --wjs-tabs-list-radius: 0;
+  --wjs-tabs-list-bg: transparent;
+  --wjs-tabs-size: 0.6875rem;
+  --wjs-tabs-transform: uppercase;
+  --wjs-tabs-tracking: 0.24em;
+  --wjs-tabs-active-shadow: none;
+  --wjs-tabs-panel-radius: 0;
+  --wjs-accordion-radius: 0;
   --wjs-accordion-item-radius: 0;
-  --wjs-accordion-header-family: 'Montserrat', sans-serif;
+  --wjs-accordion-item-bg: transparent;
+  --wjs-accordion-shadow: none;
+  --wjs-accordion-header-size: 0.75rem;
   --wjs-accordion-header-transform: uppercase;
-  --wjs-accordion-header-tracking: 0.2em;
-  --wjs-accordion-header-size: 0.8125rem;
-  --wjs-accordion-header-color: #e5e2e1;
-  --wjs-accordion-header-weight: 500;
-  --wjs-accordion-icon-color: #e9c349;
-  --wjs-accordion-panel-color: #c4c7c7;
-
-  /* Posts grid — editorial black plates */
-  --wjs-posts-bg: #0e0e0e;
-  --wjs-posts-border-width: 1px;
-  --wjs-posts-border-color: rgba(68, 71, 72, 0.25);
+  --wjs-accordion-header-tracking: 0.22em;
+  --wjs-accordion-header-radius: 0;
+  --wjs-accordion-separator-width: 1px;
+  --wjs-search-input-bg: transparent;
+  --wjs-search-input-radius: 0;
+  --wjs-search-input-border-width: 1px;
+  --wjs-search-button-radius: 0;
+  --wjs-search-button-transform: uppercase;
+  --wjs-search-button-tracking: 0.24em;
   --wjs-posts-radius: 0;
   --wjs-posts-shadow: none;
-  --wjs-posts-hover-border-color: rgba(233, 195, 73, 0.3);
   --wjs-posts-hover-shadow: none;
   --wjs-posts-hover-transform: none;
-  --wjs-posts-title-color: #e5e2e1;
-  --wjs-posts-title-weight: 500;
-  --wjs-posts-excerpt-color: #c4c7c7;
-  --wjs-posts-date-color: #e9c349;
   --wjs-posts-thumb-radius: 0;
-  --wjs-posts-thumb-bg: linear-gradient(135deg, #1c1b1b, #2a2a2a);
-
-  /* CTA banner — the cream form panel of the design */
-  --wjs-cta-bg: #e5e2dd;
-  --wjs-cta-color: #1c1c19;
-  --wjs-cta-title-color: #1c1c19;
-  --wjs-cta-title-family: 'Bodoni Moda', serif;
+  --wjs-posts-title-size: 1.5rem;
+  --wjs-posts-title-weight: 400;
+  --wjs-pricing-radius: 0;
+  --wjs-pricing-shadow: none;
+  --wjs-pricing-highlight-scale: 1;
+  --wjs-pricing-highlight-shadow: none;
+  --wjs-pricing-name-transform: uppercase;
+  --wjs-pricing-name-tracking: 0.28em;
+  --wjs-pricing-name-size: 0.6875rem;
+  --wjs-pricing-price-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif;
+  --wjs-pricing-price-weight: 400;
+  --wjs-pricing-button-radius: 0;
+  --wjs-cta-bg: transparent;
+  --wjs-cta-gradient: none;
   --wjs-cta-radius: 0;
   --wjs-cta-shadow: none;
-  --wjs-cta-button-bg: #1c1c19;
-  --wjs-cta-button-color: #e5e2dd;
-  --wjs-cta-button-family: 'Montserrat', sans-serif;
-  --wjs-cta-button-size: 0.75rem;
-  --wjs-cta-button-weight: 500;
-  --wjs-cta-button-pad: 1.25rem 3rem;
-  --wjs-cta-button-transform: uppercase;
-  --wjs-cta-button-tracking: 0.2em;
+  --wjs-cta-border-width: 1px;
+  --wjs-cta-pad: 4rem;
+  --wjs-cta-title-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif;
+  --wjs-cta-title-weight: 400;
+  --wjs-cta-title-size: 2.5rem;
   --wjs-cta-button-radius: 0;
-  --wjs-cta-button-hover-bg: #e9c349;
-  --wjs-cta-button-hover-color: #080500;
+  --wjs-cta-button-transform: uppercase;
+  --wjs-cta-button-tracking: 0.28em;
+  --wjs-testimonial-bg: transparent;
+  --wjs-testimonial-radius: 0;
+  --wjs-testimonial-shadow: none;
+  --wjs-testimonial-border-width: 1px;
+  --wjs-testimonial-quote-family: 'Bodoni Moda', Georgia, 'Times New Roman', serif;
+  --wjs-testimonial-quote-style: italic;
+  --wjs-testimonial-avatar-radius: 0;
+  --wjs-testimonial-role-size: 0.625rem;
+  --wjs-testimonial-role-transform: uppercase;
+  --wjs-testimonial-role-tracking: 0.24em;
+  --wjs-form-input-radius: 0;
+  --wjs-form-submit-radius: 0;
+  --wjs-form-label-size: 0.6875rem;
+  --wjs-form-submit-shadow: none;
+  --wjs-image-radius: 0;
+  --wjs-image-shadow: none;
 }
+body { letter-spacing: 0.01em }
+h1,h2,h3,h4,h5,h6 { font-weight: 400; letter-spacing: -0.012em }
+.wjs-header-logo { font-family: "Bodoni Moda",Georgia,"Times New Roman",serif; letter-spacing: 0.3em; text-transform: uppercase }
+.wjs-header-nav { font-family: "Hanken Grotesk","Segoe UI",system-ui,sans-serif; font-size: 0.6875rem; letter-spacing: 0.42em; text-transform: uppercase }
+footer { text-align: center; font-size: 0.75rem; letter-spacing: 0.26em; text-transform: uppercase; box-shadow: inset 0 1px 0 0#2a2415 }
+.wp-block-hero__title { line-height: 0.94 }
+.wp-block-hero__subtitle { text-transform: uppercase; letter-spacing: 0.42em; font-weight: 500 }
+.wp-block-hero__actions { margin-top: 3.25rem }
+.wp-block-hero__button { border: 1px solid #e9c349; box-shadow: none; text-transform: uppercase; letter-spacing: 0.3em }
+.wp-block-card { border-style: solid }
+.wp-block-quote { font-style: italic }
+/* @wjs-generated:end */
 
-/* =========================================
-   SITE CHROME — public header
-   ========================================= */
-
-header {
-  border-bottom: 1px solid rgba(68, 71, 72, 0.2);
-}
-
-.wjs-header-logo span {
-  font-family: 'Bodoni Moda', 'Didot', Georgia, serif;
-  font-weight: 600;
-  font-size: 1.75rem;
-  letter-spacing: -0.02em;
-  color: #e5e2e1;
-}
-
-.wjs-header-nav a {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.6875rem;
-  font-weight: 600;
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
-  color: rgba(229, 226, 225, 0.7);
-  transition: color 0.3s ease;
-}
-
-.wjs-header-nav a:hover {
-  color: #e9c349;
-}
-
-.wjs-header-actions a {
-  background: #e9c349;
-  color: #080500;
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.75rem;
-  font-weight: 500;
-  letter-spacing: 0.2em;
-  text-transform: uppercase;
-  padding: 1rem 2rem;
-  border-radius: 0;
-  transition: opacity 0.3s ease;
-}
-
-.wjs-header-actions a:hover {
-  opacity: 0.9;
-  color: #080500;
-}
-
-@media (max-width: 767.98px) {
-  .wjs-header-logo span {
-    font-size: 1.25rem;
-  }
-}
-
-/* =========================================
-   SITE CHROME — public footer
-   ========================================= */
-
-footer {
-  --wjs-bg-surface-hover: #1c1b1b;
-  /* Measured: the footer is ruled off by a faint hairline */
-  border-top: 1px solid rgba(68, 71, 72, 0.1);
-}
-
-footer h3 {
-  font-family: 'Bodoni Moda', 'Didot', Georgia, serif;
-  font-weight: 600;
-  letter-spacing: -0.01em;
-}
-
-footer h4 {
-  font-family: 'Montserrat', sans-serif;
-  font-size: 0.75rem;
-  font-weight: 500;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: #e5e2e1;
-}
-
-footer a {
-  transition: color 0.3s ease;
-}
-
-footer a:hover {
-  color: #e9c349;
-}
-
-/* =========================================
-   DISTINCTIVE RULES — noir couture details
-   ========================================= */
-
-/* Measured hero: monumental Bodoni sits on a 0.92 leading (the
-   framework hardcodes 1.1), and every CTA label is Montserrat
-   caps — seams the framework does not expose as tokens. */
-.wp-block-hero__title {
-  line-height: 0.92;
-}
-
-.wp-block-hero__button {
-  font-family: 'Montserrat', sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-}
-
-.wjs-form-submit {
-  text-transform: uppercase;
-  letter-spacing: 0.2em;
-}
-
-::selection {
-  background: #e9c349;
-  color: #080500;
-}
-
-/* gold hairline rules, as the design's framed panels */
-hr {
-  border-color: rgba(233, 195, 73, 0.4);
-}
-
-/* moody editorial imagery: soften color until hover */
-.wjs-content img {
-  filter: grayscale(18%) contrast(1.02);
-  transition: filter 0.5s ease;
-}
-
-.wjs-content img:hover {
-  filter: none;
-}
+/* Atelier Noir — generated from a Stitch design system. Edit theme.json, then: wordjs build theme atelier-noir */

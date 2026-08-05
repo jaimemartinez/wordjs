@@ -1,6 +1,206 @@
 {
   "name": "Amber Workshop",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Taller artesanal en terracota y ámbar con tarjetas kraft texturizadas, serif Domine e hilos punteados.",
-  "author": "WordJS × Stitch"
+  "author": "WordJS × Stitch",
+  "generator": "wordjs",
+  "layout": {
+    "header": {
+      "variant": "classic",
+      "sticky": false,
+      "transparent": false
+    },
+    "footer": {
+      "variant": "columns",
+      "columns": 3
+    },
+    "containerWidth": "72rem"
+  },
+  "seeds": {
+    "primary": "#9a401f",
+    "secondary": "#b8863b",
+    "bg": "#fcf9f4",
+    "text": "#141414"
+  },
+  "tokens": {
+    "--wjs-bg-canvas": "#fcf9f4",
+    "--wjs-color-primary": "#9a401f",
+    "--wjs-color-primary-dark": "#9a401f",
+    "--wjs-color-on-primary": "#ffffff",
+    "--wjs-color-secondary": "#b8863b",
+    "--wjs-color-secondary-dark": "#b8863b",
+    "--wjs-color-on-secondary": "#ffffff",
+    "--wjs-color-text-main": "#141414",
+    "--wjs-color-heading": "#141414",
+    "--wjs-color-link": "#9a401f",
+    "--wjs-font-family-heading": "'Domine', Georgia, 'Times New Roman', serif",
+    "--wjs-font-family-base": "'Work Sans', 'Segoe UI', system-ui, sans-serif",
+    "--wjs-radius": "8px",
+    "--wjs-radius-sm": "8px",
+    "--wjs-radius-md": "8px",
+    "--wjs-radius-lg": "8px",
+    "--wjs-radius-pill": "8px",
+    "--wjs-hero-bg": "#fcf9f4",
+    "--wjs-hero-gradient-from": "#fcf9f4",
+    "--wjs-hero-gradient-to": "#fcf9f4",
+    "--wjs-hero-color": "#141414",
+    "--wjs-hero-title-color": "#9a401f",
+    "--wjs-hero-subtitle-color": "#141414",
+    "--wjs-hero-button-outline-color": "#9a401f",
+    "--wjs-hero-button-outline-border": "#9a401f",
+    "--wjs-bg-surface-glass": "#fcf9f4",
+    "--wjs-bg-footer": "#2a1c12",
+    "--wjs-color-text-footer-main": "#f3e4d1",
+    "--wjs-color-text-footer-dim": "#b99a76",
+    "--wjs-hero-gradient": "none",
+    "--wjs-hero-height": "auto",
+    "--wjs-hero-pad": "4.5rem 2.5rem",
+    "--wjs-hero-measure": "46rem",
+    "--wjs-hero-text-align": "left",
+    "--wjs-hero-justify": "flex-start",
+    "--wjs-hero-actions-justify": "flex-start",
+    "--wjs-hero-border-width": "3px",
+    "--wjs-hero-border-color": "#2a1c12",
+    "--wjs-hero-radius": "0px",
+    "--wjs-hero-shadow": "none",
+    "--wjs-hero-title-size": "clamp(2.3rem, 5vw, 3.6rem)",
+    "--wjs-hero-title-weight": "700",
+    "--wjs-hero-title-tracking": "-0.015em",
+    "--wjs-hero-subtitle-size": "1.1rem",
+    "--wjs-hero-button-radius": "0px",
+    "--wjs-hero-button-pad": "1rem 2.1rem",
+    "--wjs-hero-button-weight": "800",
+    "--wjs-hero-button-size": "0.82rem"
+  },
+  "styles": {
+    "body": {
+      "font-size": "16px",
+      "line-height": "1.68"
+    },
+    "headings": {
+      "letter-spacing": "-0.012em",
+      "line-height": "1.24",
+      "font-weight": "700"
+    },
+    "logo": {
+      "font-family": "'Domine', Georgia, 'Times New Roman', serif",
+      "text-transform": "uppercase",
+      "letter-spacing": "0.02em"
+    },
+    "nav": {
+      "font-size": "0.78rem",
+      "font-weight": "700",
+      "letter-spacing": "0.1em",
+      "text-transform": "uppercase"
+    },
+    "footer": {
+      "font-size": "0.92rem",
+      "line-height": "1.7"
+    },
+    "hero": {
+      "title": {
+        "line-height": "1.1",
+        "margin-bottom": "1.2rem"
+      },
+      "subtitle": {
+        "line-height": "1.66",
+        "max-width": "40rem"
+      },
+      "actions": {
+        "margin-top": "2.25rem"
+      },
+      "button": {
+        "border": "2px solid #2a1c12",
+        "text-transform": "uppercase",
+        "letter-spacing": "0.1em"
+      }
+    },
+    "quote": {
+      "family": "'Domine', Georgia, 'Times New Roman', serif",
+      "style": "normal",
+      "size": "1.3rem",
+      "weight": "700",
+      "bar-width": "6px",
+      "cite": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.1em",
+        "font-size": "0.75rem",
+        "font-weight": "700"
+      }
+    },
+    "card": {
+      "radius": "0px",
+      "shadow": "none",
+      "border-width": "2px",
+      "border-color": "#2a1c12",
+      "pad": "1.75rem",
+      "title": {
+        "font-family": "'Domine', Georgia, 'Times New Roman', serif",
+        "font-size": "1.18rem",
+        "font-weight": "700"
+      },
+      "description": {
+        "font-size": "0.95rem",
+        "line-height": "1.68"
+      }
+    },
+    "button": {
+      "link": {
+        "border-radius": "0px",
+        "border": "2px solid #2a1c12",
+        "text-transform": "uppercase",
+        "letter-spacing": "0.1em",
+        "font-size": "0.8rem",
+        "font-weight": "800",
+        "padding": "0.9rem 1.9rem"
+      }
+    },
+    "posts-grid": {
+      "card": {
+        "border-radius": "0px",
+        "box-shadow": "none",
+        "border": "2px solid #2a1c12"
+      },
+      "title": {
+        "font-family": "'Domine', Georgia, 'Times New Roman', serif",
+        "font-size": "1.2rem",
+        "font-weight": "700",
+        "line-height": "1.28"
+      },
+      "date": {
+        "text-transform": "uppercase",
+        "letter-spacing": "0.1em",
+        "font-size": "0.72rem",
+        "font-weight": "700"
+      },
+      "excerpt": {
+        "font-size": "0.95rem",
+        "line-height": "1.66"
+      }
+    },
+    "stats": {
+      "bg": "transparent",
+      "radius": "0px",
+      "shadow": "none",
+      "border-width": "3px",
+      "border-color": "#2a1c12",
+      "pad": "1.6rem",
+      "value-family": "'Domine', Georgia, 'Times New Roman', serif",
+      "value-weight": "700",
+      "label-transform": "uppercase",
+      "label-tracking": "0.12em",
+      "label-size": "0.74rem",
+      "label-weight": "700"
+    },
+    "tabs": {
+      "radius": "0px",
+      "list-radius": "0px",
+      "panel-radius": "0px",
+      "active-shadow": "none",
+      "transform": "uppercase",
+      "tracking": "0.1em",
+      "weight": "700",
+      "border-width": "2px"
+    }
+  }
 }

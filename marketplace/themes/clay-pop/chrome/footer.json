@@ -1,0 +1,19 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "cp-foot",
+        "align": "between",
+        "gap": "md",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeSiteTitle", "props": { "id": "cp-brand", "showTagline": false } },
+          { "type": "ChromeNav", "props": { "id": "cp-fnav", "location": "footer", "orientation": "horizontal" } },
+          { "type": "ChromeSocials", "props": { "id": "cp-social", "source": "settings" } }
+        ]
+      }
+    }
+  ]
+}

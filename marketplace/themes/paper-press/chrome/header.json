@@ -1,0 +1,41 @@
+{
+  "root": { "props": {} },
+  "content": [
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "pp-dateline",
+        "align": "between",
+        "gap": "sm",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeText", "props": { "id": "pp-edition", "text": "EDICIÓN DE HOY" } },
+          { "type": "ChromeText", "props": { "id": "pp-since", "text": "INDEPENDIENTE DESDE 1998" } }
+        ]
+      }
+    },
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "pp-masthead",
+        "align": "center",
+        "gap": "md",
+        "items": [
+          { "type": "ChromeLogo", "props": { "id": "pp-logo", "size": "lg" } }
+        ]
+      }
+    },
+    {
+      "type": "ChromeRow",
+      "props": {
+        "id": "pp-navrow",
+        "align": "center",
+        "gap": "lg",
+        "wrap": true,
+        "items": [
+          { "type": "ChromeNav", "props": { "id": "pp-nav", "location": "header", "orientation": "horizontal" } }
+        ]
+      }
+    }
+  ]
+}
