@@ -11,6 +11,10 @@
  *   node backend/cli/wordjs.js build theme <slug>       # recompile theme.json → style.css block
  *   node backend/cli/wordjs.js pack <slug> [--build] [--out <dir>]   # zip a plugin for distribution
  *   node backend/cli/wordjs.js doctor theme <slug>      # lint a theme against the token contract
+ *   node backend/cli/wordjs.js import stitch <slug>     # map a Stitch design system into theme.json
+ *       [--from <stitch.json>] [--name/--author/--description <text>]
+ *   node backend/cli/wordjs.js verify theme <slug>      # compare a theme with its Stitch design
+ *       [--against <stitch.json>]
  *
  * Templates live in backend/cli/templates/{plugin,theme}/ with __SLUG__ / __PASCAL__ / __NAME__
  * placeholders replaced in both file contents and file names.
@@ -316,6 +320,109 @@ function doctorTheme(slug) {
     if (report.errors.length > 0) process.exit(1);
 }
 
+/**
+ * Stitch design system → theme.json, mechanically. The mapping used to be done by hand, which is
+ * how a theme ended up with a hero title the same colour as its band; stitch-import owns it now and
+ * only emits tokens the manifest knows. Recompiles afterwards so style.css never lags theme.json.
+ */
+function importStitch(slug, args) {
+    if (!/^[a-zA-Z0-9_-]+$/.test(slug || '')) die(`Invalid theme slug '${slug}'.`);
+    const themeDir = path.join(THEMES_DIR, slug);
+    if (!fs.existsSync(themeDir)) die(`No theme at ${themeDir}. Scaffold it first: create theme ${slug}`);
+
+    const flags = parseFlags(args, ['from', 'name', 'author', 'description']);
+    // Default location doubles as provenance: a theme built from a design keeps it next to itself.
+    const designPath = flags.from
+        ? path.resolve(flags.from)
+        : path.join(themeDir, '.design', 'stitch.json');
+    let design;
+    try {
+        design = JSON.parse(fs.readFileSync(designPath, 'utf8'));
+    } catch (e) {
+        die(`Cannot read the design system at ${designPath} — ${e.message}`
+            + (flags.from ? '' : '\n   Save the get_project payload there, or pass --from <file>.'));
+    }
+
+    const { applyDesignToTheme } = loadCore('stitch-import');
+    let result;
+    try {
+        result = applyDesignToTheme(themeDir, design, { slug, manifestPath: MANIFEST_PATH, name: flags.name, author: flags.author, description: flags.description });
+    } catch (e) {
+        die(`Import failed — ${e.message}`);
+    }
+
+    const tokenCount = Object.keys((result.theme && result.theme.tokens) || {}).length;
+    console.log(`\n✅ themes/${slug}/theme.json — ${tokenCount} token(s) from ${path.relative(process.cwd(), designPath) || designPath}`);
+    if (result.preserved && result.preserved.length > 0) {
+        console.log(`   kept ${result.preserved.length} value(s) the design does not own: ${result.preserved.slice(0, 6).join(', ')}${result.preserved.length > 6 ? '…' : ''}`);
+    }
+    if (result.dropped && result.dropped.length > 0) {
+        console.log(`   ⚠️  ${result.dropped.length} mapped token(s) are not in the manifest and were skipped: ${result.dropped.slice(0, 6).join(', ')}${result.dropped.length > 6 ? '…' : ''}`);
+    }
+    for (const note of result.notes || []) console.log(`   ℹ️  ${note}`);
+
+    console.log('\nRecompiling…');
+    buildTheme(slug);
+}
+
+function verifyThemeCmd(slug, args) {
+    // Installed themes may use any slug the routes accept (not just kebab-case scaffolds).
+    if (!/^[a-zA-Z0-9_-]+$/.test(slug || '')) die(`Invalid theme slug '${slug}'.`);
+    const flags = parseFlags(args, ['against']);
+    const designPath = flags.against
+        ? path.resolve(flags.against)
+        : path.join(THEMES_DIR, slug, '.design', 'stitch.json');
+
+    let design;
+    try {
+        design = JSON.parse(fs.readFileSync(designPath, 'utf8'));
+    } catch (e) {
+        die(`Cannot read the design system at ${designPath} — ${e.message}`
+            + (flags.against ? '' : '\n   Themes built from Stitch keep it at themes/<slug>/.design/stitch.json; pass --against <file> for one stored elsewhere.'));
+    }
+
+    const { verifyTheme } = loadCore('theme-verify');
+    let report;
+    try {
+        report = verifyTheme(slug, design, { themesDir: THEMES_DIR, manifestPath: MANIFEST_PATH });
+    } catch (e) {
+        die(e.message);
+    }
+
+    // A design kept outside the repo reads better absolute than as a stack of '..'.
+    const shownPath = path.relative(process.cwd(), designPath);
+    console.log(`\n🔎 Theme verify — ${slug}`);
+    console.log(`   design: ${!shownPath || shownPath.startsWith('..') ? designPath : shownPath}\n`);
+
+    for (const m of report.mismatches) {
+        console.log(`❌ ${m.token}`);
+        console.log(`     expected  ${m.expected}   ← ${m.source}`);
+        console.log(`     actual    ${m.actual === null ? '(nothing declares it)' : m.actual}`);
+    }
+
+    // Not comparable — reported so a silent gap can never read as a pass.
+    const byReason = (r) => report.unmapped.filter((u) => u.reason === r);
+    const missing = byReason('design-missing');
+    if (missing.length > 0) {
+        console.log(`⚠️  ${missing.length} value(s) the design does not pin:`);
+        for (const u of missing) console.log(`     ${u.token}   ← ${u.source} (absent)`);
+    }
+    for (const u of byReason('no-rule')) {
+        console.log(`⚠️  ${u.source} has no mapping rule${u.token ? ` for ${u.token}` : ''}${u.note ? ` — ${u.note}` : ''}`);
+    }
+    const spare = byReason('no-token');
+    if (spare.length > 0) {
+        console.log(`ℹ️  ${spare.length} design value(s) no token consumes: ${spare.map((u) => u.source.replace(/^namedColors\./, '')).join(', ')}`);
+    }
+
+    console.log(`\n${report.matches.length} matched, ${report.mismatches.length} mismatched, ${report.unmapped.length} not comparable.`);
+    if (report.mismatches.length > 0) {
+        console.log(`\nFix themes/${slug}/theme.json, then recompile: node backend/cli/wordjs.js build theme ${slug}`);
+        process.exit(1);
+    }
+    console.log(`✅ themes/${slug} matches its design system.`);
+}
+
 function buildTheme(slug) {
     // Installed themes may use any slug the routes accept (not just kebab-case scaffolds).
     if (!/^[a-zA-Z0-9_-]+$/.test(slug || '')) die(`Invalid theme slug '${slug}'.`);
@@ -433,6 +540,10 @@ Usage (from the repo root):
                                                                markers is preserved; errors → no write)
   node backend/cli/wordjs.js pack <slug> [--build] [--out <dir>]  Zip a plugin for distribution
   node backend/cli/wordjs.js doctor theme <slug>               Lint a theme against the --wjs-* token contract
+  node backend/cli/wordjs.js verify theme <slug>               Compare the theme's compiled tokens with the
+    --against <stitch.json>                       Stitch design system it was built from (default:
+                                                  themes/<slug>/.design/stitch.json). Prints every
+                                                  token/expected/actual difference; exits 1 if any
 
 Examples:
   node backend/cli/wordjs.js create plugin my-plugin
@@ -441,6 +552,7 @@ Examples:
   node backend/cli/wordjs.js build theme  neon-shop
   node backend/cli/wordjs.js pack my-plugin --build
   node backend/cli/wordjs.js doctor theme default
+  node backend/cli/wordjs.js verify theme herbario
 
 Docs: documentation/cli.md · documentation/plugins.md · documentation/themes.md`);
 }
@@ -462,6 +574,10 @@ if (cmd === 'create' && argv[1] === 'plugin' && argv[2]) {
     pack(argv[1], argv.slice(2));
 } else if (cmd === 'doctor' && argv[1] === 'theme' && argv[2]) {
     doctorTheme(argv[2]);
+} else if (cmd === 'import' && argv[1] === 'stitch' && argv[2]) {
+    importStitch(argv[2], argv.slice(3));
+} else if (cmd === 'verify' && argv[1] === 'theme' && argv[2]) {
+    verifyThemeCmd(argv[2], argv.slice(3));
 } else if (cmd === 'help' || cmd === '--help' || cmd === '-h' || !cmd) {
     printHelp();
     if (!cmd) process.exit(1);

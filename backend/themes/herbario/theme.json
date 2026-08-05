@@ -1,14 +1,14 @@
 {
   "name": "Herbario",
-  "version": "1.0.4",
+  "version": "1.0.6",
   "description": "Botica herbal: verde bosque sobre papel crema, titulares en serif editorial y esquinas de 4px. Generado desde un sistema de diseño de Stitch.",
   "author": "WordJS × Stitch",
   "generator": "wordjs",
   "seeds": {
     "primary": "#2f5d50",
     "secondary": "#b4694a",
-    "bg": "#f6f1e7",
-    "text": "#1f2421"
+    "bg": "#fef9ef",
+    "text": "#1d1c16"
   },
   "layout": {
     "containerWidth": "1100px",
@@ -85,7 +85,10 @@
     "--wjs-hero-button-color": "#ffffff",
     "--wjs-hero-button-radius": "4px",
     "--wjs-hero-button-outline-color": "#2f5d50",
-    "--wjs-hero-button-outline-border": "#2f5d50"
+    "--wjs-hero-button-outline-border": "#2f5d50",
+    "--wjs-hero-bg-image": "none",
+    "--wjs-outline": "#717975",
+    "--wjs-2xl": "4.5rem"
   },
   "styles": {
     "headings": {
