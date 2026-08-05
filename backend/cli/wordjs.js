@@ -335,8 +335,9 @@ function buildTheme(slug) {
 
     // A theme that never opted into the declarative contract compiles to an empty block —
     // don't prepend one; only refresh a block that already exists.
+    const themeJsonPath = path.join(themeDir, 'theme.json');
     let themeJson = null;
-    try { themeJson = JSON.parse(fs.readFileSync(path.join(themeDir, 'theme.json'), 'utf8')); } catch { /* compile already diagnosed it */ }
+    try { themeJson = JSON.parse(fs.readFileSync(themeJsonPath, 'utf8')); } catch { /* compile already diagnosed it */ }
     const declarative = ['seeds', 'archetype', 'tokens', 'styles'].some((k) => themeJson && themeJson[k] !== undefined);
     if (!declarative && !hasBlock) {
         console.log(`ℹ️  themes/${slug}/theme.json has no declarative keys (seeds/archetype/tokens/styles) and style.css has no @wjs-generated block — nothing to build.`);
@@ -347,8 +348,27 @@ function buildTheme(slug) {
         console.log('⚠️  style.css has no @wjs-generated block yet — prepending it (existing CSS is preserved below it).');
     }
     writeCompiled(themeDir, result.css);
+
+    // The stylesheet URL is keyed by the theme's version, so a rebuild that leaves theme.json alone
+    // ships new CSS behind the old cache key — browsers keep the pre-build copy for up to an hour.
+    // The write API bumps the patch for exactly this reason; the CLI has to do the same.
+    let bumped = null;
+    try {
+        if (!themeJson) throw new Error('theme.json unreadable');
+        const parts = String(themeJson.version || '1.0.0').split('.');
+        if (parts.length === 3 && parts.every((p) => /^\d+$/.test(p))) {
+            bumped = `${parts[0]}.${parts[1]}.${Number(parts[2]) + 1}`;
+            themeJson.version = bumped;
+            fs.writeFileSync(themeJsonPath, JSON.stringify(themeJson, null, 2) + '\n');
+        }
+    } catch (e) {
+        console.warn(`⚠️  Could not bump theme.json version (${e.message}) — browsers may serve the previous CSS until it expires.`);
+        bumped = null;
+    }
+
     console.log(`\n✅ themes/${slug}/style.css — @wjs-generated block ${hasBlock ? 'regenerated' : 'added'}: ` +
-        `${result.stats.tokens} token(s), ${result.stats.rules} rule(s), ${result.stats.declarations} declaration(s), ${result.stats.warnings} warning(s).`);
+        `${result.stats.tokens} token(s), ${result.stats.rules} rule(s), ${result.stats.declarations} declaration(s), ${result.stats.warnings} warning(s).` +
+        (bumped ? `\n   theme.json version → ${bumped} (busts the cached stylesheet).` : ''));
 }
 
 function pack(slug, args) {
