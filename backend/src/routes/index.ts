@@ -104,14 +104,35 @@ router.get('/pages', (req: any, res: Response, next: NextFunction) => {
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 
-// Documentation
-const swaggerUi = require('swagger-ui-express');
-const swaggerSpecs = require('../config/swagger');
-const swaggerTheme = require('../config/swagger-theme');
+// Documentation — built LAZILY on the first /docs request. swaggerJsdoc parses every route and
+// model file to produce the spec, which every boot paid for a page only admins ever open. The
+// handler chain (authenticate → isAdmin) is unchanged and still runs before anything is built.
+let swaggerHandlers: any[] | null = null;
+function buildSwagger(): any[] {
+    if (swaggerHandlers) return swaggerHandlers;
+    const swaggerUi = require('swagger-ui-express');
+    const swaggerSpecs = require('../config/swagger');
+    const swaggerTheme = require('../config/swagger-theme');
+    swaggerHandlers = [
+        ...(Array.isArray(swaggerUi.serve) ? swaggerUi.serve : [swaggerUi.serve]),
+        swaggerUi.setup(swaggerSpecs, {
+            customCss: swaggerTheme,
+            customSiteTitle: "WordJS API Documentation",
+        }),
+    ];
+    return swaggerHandlers;
+}
 
-router.use('/docs', authenticate, isAdmin, swaggerUi.serve, swaggerUi.setup(swaggerSpecs, {
-    customCss: swaggerTheme,
-    customSiteTitle: "WordJS API Documentation"
-}));
+router.use('/docs', authenticate, isAdmin, (req: any, res: any, next: any) => {
+    const chain = buildSwagger();
+    let i = 0;
+    const run = (err?: any): void => {
+        if (err) return next(err);
+        const h = chain[i++];
+        if (!h) return next();
+        try { h(req, res, run); } catch (e) { next(e); }
+    };
+    run();
+});
 
 module.exports = router;

@@ -122,11 +122,30 @@ function parseThemeMetadata(themeDir: string, slug: string) {
  */
 const SCAN_TTL_MS = 60_000;
 let scanCache: { at: number; records: any[] } | null = null;
+const THEME_SCAN_CHANNEL = 'wjs:theme-scan-invalidate';
 
-/** Drop the memoized scan. MUST be called by every path that writes inside THEMES_DIR. */
-function invalidateThemeScanCache() {
+/**
+ * Drop the memoized scan. MUST be called by every path that writes inside THEMES_DIR.
+ *
+ * Also BROADCASTS so peer nodes drop theirs: a theme installed/switched/deleted through one replica
+ * used to stay invisible on the others for up to SCAN_TTL_MS (the memo is per-process). Reuses the
+ * object cache's pub/sub, which is a no-op when Redis isn't configured — single-node behaviour is
+ * unchanged, and the TTL remains the backstop for out-of-band disk edits either way.
+ */
+function invalidateThemeScanCache(broadcast = true) {
   scanCache = null;
+  if (!broadcast) return;
+  try {
+    const cache = require('./cache');
+    if (cache.pubsubAvailable && cache.pubsubAvailable()) cache.publish(THEME_SCAN_CHANNEL, '1');
+  } catch { /* cache module unavailable (unit tests) — local invalidation already happened */ }
 }
+
+// Peer invalidation. Subscribing is a no-op without Redis; `false` stops the echo from re-publishing.
+try {
+  const cache = require('./cache');
+  if (cache.subscribe) cache.subscribe(THEME_SCAN_CHANNEL, () => invalidateThemeScanCache(false));
+} catch { /* cache module unavailable */ }
 
 /**
  * Scan for installed themes
