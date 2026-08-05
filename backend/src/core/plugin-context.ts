@@ -114,7 +114,26 @@ function getPluginFromStack(stack?: string): string | null {
  * guards (secure-require, permission checks) so detached plugin code cannot escape the sandbox.
  */
 function getEffectivePlugin(): string | null {
-    const ctx = getCurrentPlugin() || getPluginFromStack();
+    const als = getCurrentPlugin();
+    if (als) return als;
+
+    // PERF: inside an isolated worker the answer is already known without walking a stack. The
+    // worker runs exactly ONE plugin and contains no core code, so the isolation markers below are
+    // authoritative — the stack scan could only ever agree with them. Consulting them FIRST skips a
+    // 200-frame Error.captureStackTrace (plus a prepareStackTrace override and per-frame realpath
+    // checks) on every ALS-less call in the child: option reads, env reads, detached callbacks.
+    // Same value, same fail-closed guarantee, no walk. The markers are read off `globalThis` for the
+    // reason spelled out below, and that reasoning is unchanged by consulting them earlier.
+    const gEarly: any = (typeof globalThis !== 'undefined') ? globalThis : {};
+    if (gEarly.__WORDJS_ISOLATED__ && typeof gEarly.__WORDJS_PLUGIN_SLUG__ === 'string') {
+        return gEarly.__WORDJS_PLUGIN_SLUG__;
+    }
+
+    // MAIN THREAD (host): the stack scan stays exactly where it was. It is the defense-in-depth that
+    // catches host-side theme/plugin frames, and removing it would rest on the claim that no
+    // in-process plugin code can ever exist — a security argument that belongs with a full
+    // adversarial re-run, not with a performance change.
+    const ctx = getPluginFromStack();
     if (ctx) return ctx;
     // FAIL-CLOSED inside an isolated plugin worker: the worker runs ONE plugin and contains NO
     // legitimate "core" code (core lives on the host, reached only via the RPC bridge). So any code
